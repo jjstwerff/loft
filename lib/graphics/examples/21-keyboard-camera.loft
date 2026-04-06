@@ -100,8 +100,9 @@ fn main() {
     graphics::gl_draw(kc_fvao, kc_fnv);
     // Scattered cubes
     for kc_ci in 0..12 {
-      kc_cx = sin(kc_ci as float * 1.3) * 6.0;
-      kc_cz = cos(kc_ci as float * 0.9) * 6.0;
+      kc_angle = kc_ci as float * 0.524;
+      kc_cx = sin(kc_angle) * 6.0;
+      kc_cz = cos(kc_angle) * 6.0;
       kc_cm = math::mat4_translate(kc_cx, 0.5, kc_cz);
       kc_cmvp = math::mat4_mul(kc_proj, math::mat4_mul(kc_view, kc_cm));
       graphics::gl_set_uniform_mat4(kc_shader, "uMVP", kc_cmvp.m);

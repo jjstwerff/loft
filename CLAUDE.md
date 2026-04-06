@@ -151,6 +151,32 @@ states that are harder to debug than the original problem.
 
 ---
 
+## Git safety — MANDATORY
+
+### Never use `git stash pop` or `git pull` with uncommitted changes
+
+**`git stash` + `git stash pop` is prohibited.**  Stash pop applies changes as a
+merge, which routinely produces conflicts across dozens of files.  A failed pop
+leaves the working directory in an unrecoverable state — all uncommitted work is
+destroyed.  This has caused complete loss of multi-hour sessions.
+
+**`git pull` with uncommitted changes is prohibited.**  Pull fetches and merges,
+which also conflicts with in-flight work.
+
+**Use these approaches instead:**
+
+- **To compare with main:** use `git diff main -- <file>` or
+  `git show origin/main:<file>` — no branch switch needed.
+- **To check if a bug is pre-existing:** commit current work first (even as WIP
+  on the feature branch), then compare.
+- **To update from remote:** commit first, then `git pull`, resolve if needed.
+- **To test on clean main:** commit, `git checkout main`, test, `git checkout -`
+  to return.
+
+The rule: **always commit before any operation that changes the working tree.**
+
+---
+
 ## Documentation index
 
 | File | Topic |
@@ -212,6 +238,9 @@ states that are harder to debug than the original problem.
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
 | [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
 | [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
+| [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |
+| [WEB_EXAMPLES.md](doc/claude/WEB_EXAMPLES.md) | Web gallery + unified rendering: native OpenGL / WebGL / GLB from one API |
+| [GAME_INFRA.md](doc/claude/GAME_INFRA.md) | Game infrastructure: sprites, tilemap, collision, audio, FFI, HTML export, warnings |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---

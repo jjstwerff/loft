@@ -6,15 +6,15 @@
 // https://creativecommons.org/licenses/by-nc/4.0/
 // This loft implementation is an independent adaptation for the loft graphics library.
 //
-// Demonstrates: UV-mapped textured cube using a procedural checkerboard.
-// Since we can't load PNG→GL directly yet, we generate a checkerboard
-// pattern as a Canvas and upload it as a texture.
+// Demonstrates: UV-mapped textured cube with procedural texture.
+// Generates a checkerboard pattern with a centered text label using
+// draw_text(), then uploads it as a GL texture for all six faces.
 //
 // Loft constructions used:
-//   canvas()               — create a procedural texture
-//   mesh_to_floats_uv      — flatten mesh with UV coordinates (stride=8)
-//   gl_upload_vertices(d,8) — enables pos(3)+normal(3)+uv(2) layout
-//   gl_set_uniform_int     — bind sampler2D to texture unit
+//   canvas(), draw_text        — procedural texture with text rendering
+//   mesh_to_floats_uv          — flatten mesh with UV coordinates (stride=8)
+//   gl_upload_canvas            — upload Canvas pixels as GL texture
+//   gl_upload_vertices(d,8)    — enables pos(3)+normal(3)+uv(2) layout
 use graphics;
 use mesh;
 use math;
@@ -48,25 +48,41 @@ void main() {{
 }}
 `;
 
-fn make_checkerboard() -> graphics::Canvas {
-  tc_c = graphics::canvas(64, 64, graphics::rgba(255, 255, 255, 255));
-  for tc_y in 0..64 {
-    for tc_x in 0..64 {
-      if (tc_x / 8 + tc_y / 8) % 2 == 0 {
-        tc_c.set_pixel(tc_x, tc_y, graphics::rgba(80, 80, 80, 255));
+fn make_texture(font: integer) -> graphics::Canvas {
+  tc_c = graphics::canvas(128, 128, graphics::rgba(255, 255, 255, 255));
+  // Draw checkerboard background
+  for tc_y in 0..128 {
+    for tc_x in 0..128 {
+      if (tc_x / 16 + tc_y / 16) % 2 == 0 {
+        tc_c.set_pixel(tc_x, tc_y, graphics::rgba(200, 200, 210, 255));
       }
     }
   }
+  // Draw "LOFT" label centered on white background strip
+  tc_c.fill_rect(14, 48, 100, 32, graphics::rgba(255, 255, 255, 255));
+  tw = graphics::gl_measure_text(font, "LOFT", 24.0) as integer;
+  tx = (128 - tw) / 2;
+  tc_c.draw_text(font, "LOFT", 24.0, tx, 52, graphics::rgba(40, 40, 120, 255));
   tc_c
 }
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "20 - Textured Cube (checkerboard)") {
+  if !graphics::gl_create_window(800, 600, "20 - Textured Cube") {
     println("Failed to create window"); return;
   }
-  // Create procedural texture
-  tc_check = make_checkerboard();
-  // Upload canvas as GL texture
+  // Load font
+  tc_font = graphics::gl_load_font("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf");
+  if tc_font < 0 {
+    tc_font = graphics::gl_load_font("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf");
+  }
+  if tc_font < 0 {
+    tc_font = graphics::gl_load_font("C:/Windows/Fonts/arial.ttf");
+  }
+  if tc_font < 0 {
+    println("No font found"); return;
+  }
+  // Create procedural texture with text label
+  tc_check = make_texture(tc_font);
   // Build mesh with UVs
   tc_m = mesh::cube();
   tc_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
@@ -78,7 +94,7 @@ fn main() {
     math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   tc_tex = graphics::gl_upload_canvas(tc_check.data, tc_check.width, tc_check.height);
   tc_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..5000 {
     if !graphics::gl_poll_events() { break }
     tc_t = (ticks() - tc_start) as float / 1000000.0;
     tc_model = math::mat4_rotate_y(tc_t * 0.5);

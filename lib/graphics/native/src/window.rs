@@ -85,7 +85,6 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
 
     unsafe {
         gl::Enable(gl::DEPTH_TEST);
-        gl::Enable(gl::CULL_FACE);
         gl::Viewport(0, 0, width as i32, height as i32);
         // Clear both front and back buffers to opaque black before the window
         // becomes visible, preventing see-through artifacts on compositors.

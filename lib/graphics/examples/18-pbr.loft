@@ -116,7 +116,6 @@ fn render_native_pbr() {
         pb_x = (pb_col - 2) as float * 1.2;
         pb_y = (pb_row - 2) as float * 1.2;
         pb_model = math::mat4_translate(pb_x, pb_y, 0.0);
-        pb_mvp = math::mat4_mul(pb_proj, math::mat4_mul(pb_view, pb_model));
         graphics::gl_set_uniform_mat4(pb_shader, "uModel", pb_model.m);
         graphics::gl_set_uniform_float(pb_shader, "uMetallic", pb_col as float / 4.0);
         graphics::gl_set_uniform_float(pb_shader, "uRoughness", 0.1 + pb_row as float * 0.2);
