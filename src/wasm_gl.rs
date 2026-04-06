@@ -76,13 +76,6 @@ pub fn register_wgl_natives(state: &mut crate::state::State) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Decode a base64 string to bytes.
-#[cfg(feature = "wasm")]
-fn decode_base64(input: &str) -> Option<Vec<u8>> {
-    // Use the existing base64 module in the loft crate.
-    Some(crate::base64::decode(input))
-}
-
 #[cfg(feature = "wasm")]
 fn gl_call(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
     crate::wasm::host_call_raw(method, args)
@@ -757,11 +750,14 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
     let path = *stores.get::<Str>(stack);
     #[cfg(feature = "wasm")]
     {
-        // Ask JS for binary asset data (base64-encoded).
+        // Ask JS for binary asset data (Uint8Array — no base64 overhead).
         let args = js_sys::Array::of1(&path.str().into());
         let result = gl_call("load_binary_asset", &args);
-        let data = if let Some(s) = result.as_string() {
-            decode_base64(&s)
+        let data = if wasm_bindgen::JsCast::is_instance_of::<js_sys::Uint8Array>(&result) {
+            let arr = js_sys::Uint8Array::from(result);
+            let mut buf = vec![0u8; arr.length() as usize];
+            arr.copy_to(&mut buf);
+            Some(buf)
         } else {
             None
         };
