@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Slot assignment failure analysis and design
 
 > **HISTORICAL** — All three bugs (A, B, C) documented here are fixed (A6.3a/b, two-zone redesign).

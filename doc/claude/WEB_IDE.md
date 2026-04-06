@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Loft Web IDE — Design Plan
 
 ## Overview

@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Runtime Logging Framework
 
 Documents the loft runtime logging system.

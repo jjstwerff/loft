@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Internal Implementation Modules
 
 This document covers source files that are part of the runtime and build infrastructure but are not directly part of the compiler pipeline or standard library API.

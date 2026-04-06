@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Test Coverage Gaps
 
 Last updated 2026-04-02.  Measurement with `cargo llvm-cov --summary-only`:

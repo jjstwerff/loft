@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # loft
 
 A programming language for making games that run in the browser.

@@ -272,7 +272,13 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
             continue;
         }
-        if !def.attributes.is_empty() {
+        // Only count user-visible parameters (skip hidden __work_* and
+        // __ref_* arguments added by text_return / ref_return).
+        let has_user_params = def
+            .attributes
+            .iter()
+            .any(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"));
+        if has_user_params {
             continue;
         }
         if def.position.file.starts_with("default/") {
@@ -326,7 +332,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
         writeln!(buf, "\nfn main() {{")?;
         writeln!(buf, "    let mut stores = Stores::new();")?;
         writeln!(buf, "    init(&mut stores);")?;
-        for (_, name) in &test_fns {
+        for (d_nr, name) in &test_fns {
             let user_name = name.strip_prefix("n_").unwrap_or(name);
             if expect_fail_fns
                 .iter()
@@ -334,7 +340,26 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             {
                 writeln!(buf, "    // skipped (EXPECT_FAIL): {name}")?;
             } else {
-                writeln!(buf, "    {name}(&mut stores);")?;
+                // Generate work-buffer locals for hidden __work_* / __ref_* parameters
+                // that text_return adds to text-returning functions.
+                let def = p.data.def(*d_nr);
+                let mut work_args = Vec::new();
+                for (i, attr) in def.attributes.iter().enumerate() {
+                    if attr.name.starts_with("__work_") {
+                        let wname = format!("_w_{user_name}_{i}");
+                        writeln!(buf, "    let mut {wname} = String::new();")?;
+                        work_args.push(format!("&mut {wname}"));
+                    } else if attr.name.starts_with("__ref_") {
+                        let wname = format!("_r_{user_name}_{i}");
+                        writeln!(buf, "    let mut {wname} = stores.null_named(\"{wname}\");")?;
+                        work_args.push(format!("{wname}"));
+                    }
+                }
+                if work_args.is_empty() {
+                    writeln!(buf, "    {name}(&mut stores);")?;
+                } else {
+                    writeln!(buf, "    {name}(&mut stores, {});", work_args.join(", "))?;
+                }
             }
         }
         writeln!(buf, "}}")?;

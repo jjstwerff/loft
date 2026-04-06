@@ -386,7 +386,8 @@ impl Lexer {
                             } else {
                                 self.err(
                                     Level::Error,
-                                    "Expected '\"' after '\\' in format expression",
+                                    &format!("Escape '\\{nc}' is not allowed inside a {{...}} format expression — \
+                                     use {{{{ to get a literal '{{' that won't start an expression"),
                                 );
                                 Lexer::none()
                             }

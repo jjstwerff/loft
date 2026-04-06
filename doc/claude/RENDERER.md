@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # High-Level Renderer Design
 
 Design for a renderer layer on top of the low-level GL bindings in `lib/graphics/`.

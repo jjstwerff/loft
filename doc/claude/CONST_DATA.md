@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Constant Data Initialisation Optimisation
 
 Design for bulk initialisation of constant data structures, reducing bytecode

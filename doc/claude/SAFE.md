@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Safety Analysis — Parallel Workers, Store Allocation, and Coroutines
 
 This document records safety analyses of the runtime memory model with
