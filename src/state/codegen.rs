@@ -1148,9 +1148,7 @@ impl State {
                     // When a Value::Null is passed as a typed argument, generate()
                     // pushes 0 bytes.  Emit the correct null sentinel for the
                     // expected type so the stack size matches.
-                    if parameters[a_nr] == Value::Null
-                        && stack.position == stack_before
-                    {
+                    if parameters[a_nr] == Value::Null && stack.position == stack_before {
                         self.emit_typed_null(stack, &a.typedef);
                     }
                     // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).

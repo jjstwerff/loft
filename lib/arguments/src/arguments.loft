@@ -161,20 +161,20 @@ pub fn error_msg(self: Args) -> text {
 
 pub fn help(self: Args) -> text {
   h = self.name + " " + self.version + "\n" + self.description + "\n";
-  h = h + "\nUsage: " + self.name + " [OPTIONS] [ARGS]\n\nOptions:\n";
+  h += "\nUsage: " + self.name + " [OPTIONS] [ARGS]\n\nOptions:\n";
   for hp in self.options {
-    h = h + "  ";
+    h += "  ";
     if !hp.short_name || len(hp.short_name) == 0 {
-      h = h + "    ";
+      h += "    ";
     } else {
-      h = h + "-" + hp.short_name + ", ";
+      h += "-" + hp.short_name + ", ";
     }
-    h = h + "--" + hp.long_name;
+    h += "--" + hp.long_name;
     if hp.kind == ArgKind.Value {
-      h = h + " <" + hp.arg_name + ">";
+      h += " <" + hp.arg_name + ">";
     }
-    if hp.mandatory { h = h + " (required)" }
-    h = h + "\n        " + hp.description + "\n";
+    if hp.mandatory { h += " (required)" }
+    h += "\n        " + hp.description + "\n";
   }
   h
 }

@@ -52,7 +52,24 @@ impl Parser {
             }
         } else if let Value::Insert(ls) = code {
             if op == "=" {
-                ls.insert(0, v_set(var_nr, Value::Text(String::new())));
+                // Detect `h = h + expr`: the first Insert entry is a self-append
+                // OpAppendText(var, Var(var)).  Converting to += semantics by
+                // removing the self-append and skipping the clear.  Without this,
+                // the clear destroys h's content before the append reads it.
+                let self_append = ls.first().is_some_and(|first| {
+                    if let Value::Call(_, args) = first {
+                        args.len() >= 2
+                            && args[0] == Value::Var(var_nr)
+                            && args[1] == Value::Var(var_nr)
+                    } else {
+                        false
+                    }
+                });
+                if self_append {
+                    ls.remove(0);
+                } else {
+                    ls.insert(0, v_set(var_nr, Value::Text(String::new())));
+                }
             }
         } else if op == "=" && var_nr != u16::MAX {
             *code = v_set(var_nr, code.clone());
