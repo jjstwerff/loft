@@ -23,37 +23,12 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## Public milestones
-
-Each milestone produces something visible that we can show to the world
-via GitHub Pages (`jjstwerff.github.io/loft/`) or itch.io.  These are
-the moments where people can see what loft does without installing anything.
-
-| # | Milestone | What people see | Depends on | Deploy to |
-|---|---|---|---|---|
-| P1 | **Language playground** | Type loft code, run it, see output — in the browser | W1 | GitHub Pages |
-| P2 | **Graphics gallery** | Static screenshots + source of all 23 examples | GAL.1 | GitHub Pages |
-| P3 | **Live graphics demos** | Examples running as WebGL in the browser | GL6.1-6.5, GAL.2 | GitHub Pages |
-| P4 | **Playable Breakout** | Click a link, play a game — first proof of the vision | G7, W1.1 | itch.io |
-| P5 | **Moros scene editor** | Build hex dungeon maps in the browser, export GLB | MO.12b | GitHub Pages |
-| P6 | **Moros with multiplayer** | DM + players share a live scene | SRV.3, GC.1 | hosted server |
-
-**P1** is the quickest win — the WASM `compile_and_run()` entry point exists,
-it just needs an HTML shell with a text editor and output panel.
-
-**P4** is the flagship — the first time someone plays a loft game in their
-browser via a shared link.  This is what goes on the README and social media.
-
-**P5** validates the full stack for a real application and gives the moros
-project a browser-based tool that DMs can use today.
-
----
-
 ## 0.8.4 — Renderer + WebGL + first playable game
 
 The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
+Items marked 🌐 produce something publicly visible on GitHub Pages or itch.io.
 
-### Theme 1: Unified renderer (native works → WebGL plugs in)
+### Step 1: Unified renderer (native works → WebGL plugs in)
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
@@ -62,7 +37,21 @@ The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
 | R3     | `render.run()`, `elapsed()`, `destroy()`               | S  | ✓      | RENDERER.md                |
 | R4     | Update examples 11, 19 to use renderer                 | S  | ✓      | examples/                  |
 
-### Theme 2: WebGL backend
+### Step 2: WASM in browser + language playground
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| W1     | WASM build + `compile_and_run()` in browser            | M  | ✓      | WASM.md, WEB_IDE.md M1     |
+| W1.P   | 🌐 **Language playground** — editor + output on GH Pages | S  | ✓      | WEB_IDE.md                 |
+
+### Step 3: Graphics gallery (static, no WebGL needed)
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
+| GAL.1P | 🌐 **Graphics gallery** — screenshots + source on GH Pages | S  | ✓      | WEB_EXAMPLES.md            |
+
+### Step 4: WebGL backend
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
@@ -71,28 +60,22 @@ The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
 | GL6.3  | Buffer upload + draw + requestAnimationFrame           | S  | ✓      | WEB_EXAMPLES.md            |
 | GL6.4  | Texture upload from Canvas (WebGL)                     | S  | ✓      | WEB_EXAMPLES.md            |
 | GL6.5  | Shader version patching (330 core → 300 es)            | S  | ✓      | WEB_EXAMPLES.md            |
-| GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | WEB_EXAMPLES.md            |
+| GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
+| GAL.2  | 🌐 **Live graphics demos** — examples in WebGL on GH Pages | M  | ✓      | WEB_EXAMPLES.md            |
 
-### Theme 3: Game infrastructure
+### Step 5: Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | G1     | Sprite sheet loading (atlas texture + UV rect lookup)  | S  | ✓      | GAME_INFRA.md              |
 | G2     | Sprite drawing (billboarded quads in 3D or 2D overlay) | S  | ✓      | GAME_INFRA.md              |
-| G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | ✓      |                            |
-| G4     | 2D collision detection (AABB + circle)                 | S  | ✓      |                            |
-| G5     | Audio: sound effect playback (Web Audio + native)      | S  | ✓      |                            |
-| G6     | Audio: background music with crossfade                 | S  | ✓      | G5                         |
-| G7     | First playable demo game (Breakout clone)              | M  | ✓      | R1, GL6.1, G1              |
-
-### Theme 4: Web deployment
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| W1     | WASM build + `compile_and_run()` in browser            | M  | ✓      | WASM.md, WEB_IDE.md M1     |
-| W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ✓      |                            |
-| GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
-| GAL.2  | Per-example pages with source + live WebGL             | M  | ✓      | WEB_EXAMPLES.md            |
+| G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | ✓      | GAME_INFRA.md              |
+| G4     | 2D collision detection (AABB + circle)                 | S  | ✓      | GAME_INFRA.md              |
+| G5     | Audio: sound effect playback (Web Audio + native)      | S  | ✓      | GAME_INFRA.md              |
+| G6     | Audio: background music with crossfade                 | S  | ✓      | GAME_INFRA.md              |
+| G7     | First playable demo game (Breakout clone)              | M  | ✓      | GAME_INFRA.md              |
+| W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ✓      | GAME_INFRA.md              |
+| G7.P   | 🌐 **Playable Breakout** — share link, anyone plays on itch.io | S  | ✓      |                            |
 
 ### Theme 5: Moros — hex RPG scene editor (first real application)
 
@@ -162,6 +145,7 @@ Design documents:
 | MO.12a | `scene-editor.html` — wire loft WASM to JS editor      | M  | ✓      | MO.W1, MO.E2  |
 | MO.12b | `scene-editor.html` — live 3D preview panel            | M  | ✓      | MO.W2, MO.9a  |
 | MO.12c | `scene-editor.html` — GLB export button                | S  | ✓      | MO.10, MO.12a |
+| MO.P   | 🌐 **Moros scene editor** — build hex maps on GH Pages  | S  | ✓      | MO.12b         |
 
 ### Remaining package/language items
 
@@ -229,6 +213,7 @@ Design documents:
 | GC.4   | Client-side prediction + reconciliation                | M  | ✓      | GAME_CLIENT_LIB.md  |
 | GC.5   | WASM script loading + Ed25519 verification             | M  | ✓      | GAME_CLIENT_LIB.md  |
 | GC.6   | Shared game logic + Tic-Tac-Toe demo                   | M  | ✓      | GAME_CLIENT_LIB.md  |
+| MP.P   | 🌐 **Moros multiplayer** — DM + players share live scene | S  | ✓      | hosted server       |
 
 ---
 
