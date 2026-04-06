@@ -3,9 +3,24 @@ render_with_liquid: false
 ---
 # loft
 
-A statically-typed scripting language with null safety, built-in collections, and parallel execution.
+A programming language for making games that run in the browser.
 
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-blue.svg)](LICENSE)
+
+---
+
+## Vision
+
+**Write a game in loft.  Share a link.  Anyone can play.**
+
+Loft is a statically-typed scripting language designed for small games and
+interactive experiences that run directly in the browser — no install, no app
+store, no engine download.  Your game compiles to WebAssembly + WebGL and
+deploys as static files on any web host.
+
+For developers who prefer desktop, the same code runs natively with OpenGL.
+For 3D artists, scenes export to standard GLB files viewable in Blender or
+any glTF viewer.  One language, three outputs.
 
 ---
 
@@ -34,40 +49,97 @@ distance: 5.0
 
 ---
 
-## Language features
+## Why loft?
 
-- **Static types** with inference — no type annotations required, mismatches caught at compile time
+### For game developers
+
+- **Browser-first** — games compile to WASM+WebGL and run in any modern browser
+- **Native option** — same code renders with OpenGL on desktop for low-latency development
+- **GLB export** — scenes with PBR materials and lights export to standard glTF 2.0
+- **Batteries included** — 2D canvas drawing, 3D mesh primitives, text rendering, PNG export
+- **No engine lock-in** — loft is a language, not a framework; you own your rendering pipeline
+
+### For language enthusiasts
+
+- **Static types with inference** — no annotations required, mismatches caught at compile time
 - **Null safety** — nullable values, null propagation, `?? default` recovery
 - **Structs and enums** — variants, methods, pattern matching
 - **Collections** — `vector<T>`, `sorted<T>`, `index<T>`, `hash<T>` with iterators and comprehensions
 - **String interpolation** — `"{expr}"` with format specifiers
 - **Parallel for** — `par(...)` distributes work across CPU cores
+- **Generators** — `iterator<T>` with `yield` for lazy sequences
+- **Lambdas and closures** — `|x| { x * 2 }` with capture
+- **Tuples** — multi-value returns with destructuring
 - **JSON** — serialise with `"{value:j}"`, deserialise with `Type.parse(json)`
-- **Match expressions** — pattern matching on enums, integers, text with guards and destructuring
-- **Lambdas and closures** — `fn(x: integer) -> integer { x * 2 }` or `|x| { x * 2 }`; lambdas capture outer variables and work with `map`/`filter`/`reduce`
-- **Generators** — `iterator<T>` return type with `yield`; lazy sequences and `yield from` delegation
-- **Tuples** — multi-value returns `(integer, text)`, destructuring `(a, b) = fn()`
 - **Native compilation** — compile to a native binary via `rustc` or to WebAssembly
-- **File I/O, logging, PNG images** — batteries included
+
+### For performance nerds
+
+Loft uses a **store-based memory model**: each collection lives in its own
+contiguous word-addressed block.  All records of a type sit together, so
+iterating a vector or walking a tree stays cache-local.  No pointer chasing,
+no per-element allocation.
+
+Parallel workers each receive a shallow copy with private allocation state,
+so `par(...)` loops avoid lock contention entirely — each core writes to its
+own slice without coordination.
 
 ---
 
-## What makes loft different
+## Graphics examples
 
-Most languages allocate each object separately on the heap — a struct here, a vector there, a string somewhere else. Traversing a data structure means chasing pointers scattered across memory, pulling in unrelated allocations that happen to live nearby. Cache lines fill with data you don't need.
+The `lib/graphics/examples/` directory contains 23 progressive examples from
+hello-triangle to PBR rendering with shadow mapping:
 
-Loft uses a **store-based memory model**: each named collection of records lives in its own contiguous word-addressed block (`Store`). All records of a given type sit together, so iterating a vector, walking a sorted tree, or scanning a hash table touches only the memory that matters. Unrelated structures stay out of the cache.
+| # | Example | What it shows |
+|---|---|---|
+| 01 | Hello Window | Window creation and event loop |
+| 02 | Hello Triangle | First triangle with vertex buffers |
+| 03 | Shaders | Per-vertex colors with interpolation |
+| 04 | Textures | Texture loading and UV mapping |
+| 05 | Transformations | MVP matrices, rotating cube |
+| 06 | Coordinate Systems | Multiple objects with transforms |
+| 07 | Camera | Orbiting camera with sin/cos |
+| 08 | Basic Lighting | Phong ambient + diffuse + specular |
+| 09 | Materials | Different shininess per object |
+| 10 | 2D Canvas | Software rasterization, PNG export |
+| 11 | Scene Graph | Multi-object GLB export with lights |
+| 12 | Multiple Lights | Directional + point lights |
+| 13 | Depth Testing | Depth buffer visualization |
+| 14 | Blending | Alpha transparency |
+| 15 | Face Culling | Back-face optimization |
+| 16 | Shadow Mapping | Two-pass depth shadows |
+| 17 | Post-Processing | Render-to-texture effects |
+| 18 | PBR | Physically based rendering grid |
+| 19 | Complete Scene | All techniques combined |
+| 20 | Textured Cube | Procedural texture with text |
+| 21 | Keyboard Camera | First-person controls |
+| 22 | Wireframe | Alternative draw modes |
+| 23 | Cleanup | GPU resource lifecycle |
 
-This has compounding benefits for collection-heavy algorithms:
+Run any example:
+```sh
+cd lib/graphics/examples
+./11-scene-graph.loft          # exports a GLB file
+./08-basic-lighting.loft       # opens a window with Phong lighting
+```
 
-- **Vectors** — elements are packed consecutively; no per-element allocation overhead.
-- **Sorted / index** — the red-black tree nodes for a `sorted<T>` or `index<T>` live in one store; tree traversal stays local.
-- **Hash tables** — the open-addressing table for `hash<T>` is a single flat array; probe chains don't escape the store.
-- **Structs in collections** — a `vector<Point>` stores all `Point` records back-to-back, not a vector of pointers to individually-allocated structs.
+---
 
-The allocator (`store.rs`) is a simple first-fit free-list over a doubling buffer. Allocation is fast, and because all records of a type share one store, the working set for any algorithm fits in fewer cache lines.
+## Get involved
 
-Parallel workers each receive a shallow copy of the store layout with private allocation state (`clone_for_worker`), so `par(...)` loops avoid lock contention entirely — each core writes to its own slice without coordination.
+Loft is an active project looking for contributors.  Areas where help is most
+valuable:
+
+- **WebGL backend** — implementing the browser rendering path so games run online
+- **Game library** — input handling, sprite sheets, tilemaps, collision detection
+- **Audio** — Web Audio API integration for music and sound effects
+- **Example games** — small playable demos that showcase the language
+- **Documentation** — tutorials, guides, and the online reference
+- **Language features** — REPL, package manager, IDE integration
+
+See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the contribution workflow
+and [PLANNING.md](doc/claude/PLANNING.md) for the feature backlog.
 
 ---
 
@@ -121,6 +193,7 @@ To build locally: `cargo run --bin gendoc`, then open `doc/index.html`.
 
 - **No REPL** — interactive mode is planned for 0.9.0
 - **No package manager** — libraries are loaded from local directories; `loft install` is planned for 0.8.4
+- **WebGL not yet implemented** — native OpenGL and GLB export work; browser rendering is the next major milestone
 
 ---
 
