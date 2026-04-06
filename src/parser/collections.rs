@@ -833,6 +833,11 @@ use #count instead"
             && self.vars.is_defined(existing_var)
             && !self.vars.var_type(existing_var).is_same(&var_tp)
             && !self.vars.var_type(existing_var).is_unknown()
+            // text_return converts text variables to RefVar(Text) work buffers
+            // for the return path.  When a for-loop variable was converted this
+            // way, the iterator still writes into it as text — this is correct
+            // (the work buffer IS the variable) so suppress the mismatch.
+            && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
         {
             diagnostic!(
                 self.lexer,
