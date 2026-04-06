@@ -494,6 +494,10 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
+// URL parameter: ?example=key pre-selects an example
+const urlParams = new URLSearchParams(window.location.search);
+const preselect = urlParams.get('example');
+
 // Examples (grouped with optgroup)
 for (const grp of EXAMPLE_GROUPS) {
   const og = document.createElement('optgroup');
@@ -520,6 +524,12 @@ exampleSelect.addEventListener('change', () => {
   }
   exampleSelect.value = '';
 });
+
+// Pre-select example from URL parameter
+if (preselect && EXAMPLES[preselect]) {
+  editor.value = EXAMPLES[preselect];
+  syncHighlight();
+}
 
 // ── Run ──────────────────────────────────────────────────────────────
 let loftReady = false;

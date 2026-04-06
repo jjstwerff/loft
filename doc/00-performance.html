@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loft - Performance</title>
 <link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;padding:1px 6px;background:#2563eb;color:#fff;border-radius:3px;text-decoration:none;font-size:0.75em;vertical-align:middle;margin-left:4px}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
 <nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <a href="report.html">Report a problem</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <span class="cur">Performance</span> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-parallel.html">Parallel</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
@@ -38,7 +39,7 @@
 
 <!-- 01 fibonacci: max=4819 -->
 <tr>
-  <td class="bench-name">01 fibonacci (recursive, n=38)</td>
+  <td class="bench-name">01 fibonacci (recursive, n=38) <a class="playground-link" href="playground.html?example=perf_fibonacci">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(3395/4819*120px)"></div><span class="bench-ms">3395 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">4819 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(169/4819*120px)"></div><span class="bench-ms">169 ms</span></div></td>
@@ -58,7 +59,7 @@
 
 <!-- 03 sieve: max=141 -->
 <tr>
-  <td class="bench-name">03 prime sieve (trial division, n=100 000)</td>
+  <td class="bench-name">03 prime sieve (trial division, n=100 000) <a class="playground-link" href="playground.html?example=perf_sieve">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(49/141*120px)"></div><span class="bench-ms">49 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">141 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(4/141*120px)"></div><span class="bench-ms">4 ms</span></div></td>
@@ -68,7 +69,7 @@
 
 <!-- 04 collatz: max=14379 -->
 <tr>
-  <td class="bench-name">04 Collatz lengths (1 .. 1 M)</td>
+  <td class="bench-name">04 Collatz lengths (1 .. 1 M) <a class="playground-link" href="playground.html?example=perf_collatz">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(7393/14379*120px)"></div><span class="bench-ms">7393 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">14 379 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(334/14379*120px)"></div><span class="bench-ms">334 ms</span></div></td>
@@ -78,7 +79,7 @@
 
 <!-- 05 mandelbrot: max=344 -->
 <tr>
-  <td class="bench-name">05 Mandelbrot (200×200, 256 iter)</td>
+  <td class="bench-name">05 Mandelbrot (200×200, 256 iter) <a class="playground-link" href="playground.html?example=perf_mandelbrot">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(135/344*120px)"></div><span class="bench-ms">135 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">344 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(7/344*120px)"></div><span class="bench-ms">7 ms</span></div></td>

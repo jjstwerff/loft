@@ -3029,126 +3029,6 @@ Writing to a read-only or invalid path also returns a FileResult. Always check `
 ```
 
 
-= Image
-
-Loft can load PNG files and access every pixel. Loading takes one function call; after that you can read dimensions, iterate pixels, and examine individual channels.
-
-=== Loading an Image
-
-Call `file(path).png()` to load a PNG into memory. The entire file is decoded at this point — width, height, and a flat vector of Pixel records are all available immediately.
-
-=== Dimensions and Name
-
-`img.width` and `img.height` give the pixel dimensions. `img.name` is the file name without the directory path.
-
-=== The Pixel Struct
-
-Each element of `img.data` is a `Pixel` with three fields:
-
-```
-r: integer limit(0, 255) not null — red channel
-g: integer limit(0, 255) not null — green channel
-b: integer limit(0, 255) not null — blue channel
-```
-
-Values range from 0 (no intensity) to 255 (full intensity).
-
-=== Pixel Access
-
-`img.data` is a `vector\<Pixel\>`. Access by coordinate:
-
-```
-img.data[y * img.width + x]
-```
-
-Iterate with a for loop to scan every pixel.
-
-=== Error Handling
-
-`png()` returns null when the file does not exist or cannot be decoded. Always check `!img` or `img == null` before accessing fields.
-
-```rust
-fn main() {
-```
-
-=== Loading an Image
-
-```rust
-  img = file("tests/example/map.png").png();
-  assert(img.width == 256, "width={img.width}");
-  assert(img.height == 256, "height={img.height}");
-  assert(img.name == "map.png", "name={img.name}");
-```
-
-=== Pixel Count
-
-Total pixels = width \* height.
-
-```rust
-  assert(img.data.len() == img.width * img.height, "pixel count");
-```
-
-=== Reading Individual Pixels
-
-The top-left pixel is at index 0.
-
-```rust
-  px = img.data[0];
-  assert(px.r >= 0 and px.r <= 255, "r in range");
-  assert(px.g >= 0 and px.g <= 255, "g in range");
-  assert(px.b >= 0 and px.b <= 255, "b in range");
-```
-
-Read a pixel at (x=128, y=128) — the center.
-
-```rust
-  center = img.data[128 * img.width + 128];
-  assert(center.r >= 0, "center pixel r valid");
-```
-
-=== Scanning Pixels
-
-Count pixels brighter than a threshold.  A simple brightness approximation: (r + g + b) / 3 \> threshold.
-
-```rust
-  bright_count = 0;
-  for img_px in img.data {
-    brightness = (img_px.r + img_px.g + img_px.b) / 3;
-    if brightness > 200 {
-      bright_count += 1;
-    }
-  }
-  assert(bright_count >= 0, "bright pixel count: {bright_count}");
-```
-
-=== Finding Dominant Channel
-
-Walk every pixel and find which channel has the highest total value.
-
-```rust
-  total_r = 0l;
-  total_g = 0l;
-  total_b = 0l;
-  for ch_px in img.data {
-    total_r += ch_px.r as long;
-    total_g += ch_px.g as long;
-    total_b += ch_px.b as long;
-  }
-  dominant = if total_r >= total_g and total_r >= total_b { "red" }
-    else if total_g >= total_b { "green" }
-    else { "blue" };
-  assert(dominant.len() > 0, "dominant channel: {dominant}");
-```
-
-=== Error Handling
-
-```rust
-  bad = file("no_such_image.png").png();
-  assert(bad == null, "png of missing file is null");
-}
-```
-
-
 = Lexer
 
 The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.
@@ -3935,110 +3815,6 @@ The log messages give you a record of exactly what the program did and where it 
 
 ```rust
   println("logging test passed");
-}
-```
-
-
-= Random
-
-Loft provides three functions for randomness:
-
-```
-rand(lo, hi)      — a random integer in [lo, hi] inclusive.
-rand_seed(seed)   — seed the random number generator for reproducible results.
-rand_indices(n)   — a vector of n integers [0..n-1] in a random order.
-```
-
-The generator is a fast PCG64 algorithm. Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.
-
-```rust
-fn main() {
-```
-
-=== Basic random integers
-
-'rand(lo, hi)' returns a uniformly distributed integer in \[lo, hi\]. Call 'rand_seed' first to choose the sequence.
-
-```rust
-  rand_seed(42);
-  r = rand(1, 6);
-```
-
-simulated die roll: 1..6
-
-```rust
-  assert(r >= 1 && r <= 6, "die roll out of range: {r}");
-```
-
-The same seed always produces the same sequence.
-
-```rust
-  rand_seed(0);
-  a = rand(0, 999);
-  rand_seed(0);
-  assert(rand(0, 999) == a, "seeded rand must be reproducible");
-```
-
-'rand' returns null when lo \> hi.
-
-```rust
-  assert(!rand(10, 5), "invalid range returns null");
-```
-
-=== Random ordering: rand_indices
-
-'rand_indices(n)' returns a vector containing 0, 1, ..., n-1 in a random order.  Use the indices to visit another collection in random order without copying it.
-
-```rust
-  rand_seed(7);
-  order = rand_indices(5);
-  assert(len(order) == 5, "size must be 5");
-```
-
-Every value 0..4 appears exactly once.
-
-```rust
-  items =["apple", "banana", "cherry", "date", "elderberry"];
-  seen =[for i in 0..5 {
-    false
-  }];
-  for idx in order {
-    seen[idx] = true;
-  }
-  all_seen = true;
-  for s in seen {
-    if !s {
-      all_seen = false
-    }
-  }
-  assert(all_seen, "rand_indices must cover all positions");
-```
-
-=== Sampling without replacement
-
-Pick k distinct items from a list by taking the first k indices.
-
-```rust
-  rand_seed(1);
-  indices = rand_indices(len(items));
-```
-
-Take the first 3 items in random order.
-
-```rust
-  picked = "";
-  for i in 0..3 {
-    if i > 0 {
-      picked += ", "
-    }
-    picked += items[indices[i]]
-  }
-```
-
-'picked' now contains 3 distinct fruit names in a random order.
-
-```rust
-  assert(len(picked) > 0, "should have picked some items: {picked}");
 }
 ```
 
@@ -5828,10 +5604,22 @@ pub fn is_whitespace(self: text) -> boolean
 True if all characters are whitespace. Use to detect blank lines.
 
 ```rust
+pub fn is_whitespace(self: character) -> boolean
+```
+
+True if the character is whitespace.
+
+```rust
 pub fn is_control(self: text) -> boolean
 ```
 
 True if all characters are control characters.
+
+```rust
+pub fn is_control(self: character) -> boolean
+```
+
+True if the character is a control character.
 
 ```rust
 pub fn join(parts: vector < text >, sep: text) -> text
@@ -5962,23 +5750,6 @@ pub struct EnvVariable {
 Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair.
 
 ```rust
-pub struct Pixel {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
-}
-```
-
-```rust
-pub struct Image {
-  name: text,
-  width: integer,
-  height: integer,
-  data: vector < Pixel >
-}
-```
-
-```rust
 pub enum Format {
   TextFile,
   LittleEndian,
@@ -6018,12 +5789,6 @@ pub struct File {
   next: long
 }
 ```
-
-```rust
-pub fn value(self: Pixel) -> integer
-```
-
-Returns the pixel colour as a packed 24-bit integer (0xRRGGBB). Use for fast colour comparison or storage.
 
 ```rust
 pub fn content(self: File) -> text
@@ -6075,12 +5840,6 @@ pub fn files(self: File) -> vector < File >
 pub fn write(self: File, v: text)
 ```
 
-```rust
-pub fn png(self: File) -> Image
-```
-
-Decodes a PNG file and returns an Image. Returns null if the file is not in text format. Use to load sprite sheets or textures.
-
 == Environment
 
 Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.
@@ -6118,26 +5877,6 @@ pub fn program_directory(v:  & text = "") -> text
 ```
 
 Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.
-
-== Random
-
-```rust
-pub fn rand(lo: integer, hi: integer) -> integer
-```
-
-Returns a random integer in \[lo, hi\] (inclusive). Returns null when lo \> hi or when either argument is null.
-
-```rust
-pub fn rand_seed(seed: long)
-```
-
-Seeds the thread-local random number generator with the given value. Call this before rand() or rand\_indices() to get reproducible sequences.
-
-```rust
-pub fn rand_indices(n: integer) -> vector < integer >
-```
-
-Returns a vector of n integers \[0, 1, ..., n-1\] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null.
 
 == Time
 
