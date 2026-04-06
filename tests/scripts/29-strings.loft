@@ -130,4 +130,3 @@ fn test_string_scope() {
   assert("{a} via {b}" == "136 via n:1=1 n:2=12 n:3=122 ", "string scope");
 }
 
-
