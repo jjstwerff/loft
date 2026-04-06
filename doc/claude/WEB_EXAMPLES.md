@@ -446,20 +446,92 @@ the interactive render loop runs.  No code changes needed.
 |---------|---------|-----|
 | 21 Keyboard Camera | `gl_key_pressed` / `gl_mouse_x/y` return stubs | Wire `keydown`/`keyup`/`mousemove` DOM events to a state map; `loftHost.gl_key_pressed(code)` reads the map |
 
-### Phase 3: File I/O + textures (GL7.1–GL7.4 — 4 more examples)
+### Phase 3: Asset loading via VIRT_FS (GL7.1–GL7.4 — 4 more examples)
 
-| Example | Blocker | Fix |
-|---------|---------|-----|
-| 04 Textures | `gl_load_texture("wall.jpg")` — no filesystem | Embed texture as base64 data URI or generate procedurally |
-| 10 2D Canvas | `save_png()` — writes to file | Render Canvas pixels to a `<canvas>` element or download as data URI |
-| 11 Scene Graph | GLB-only (no render loop) | Add interactive render loop like other examples |
-| 20 Textured Cube | `gl_load_font()` + text rasterization | Use HTML5 Canvas 2D `fillText` to rasterize, upload as texture |
+**Design principle:** examples run unchanged.  The native functions are
+implemented in WASM to work without filesystem access.  No example code
+is modified — the gallery page provides asset files through VIRT_FS.
+
+#### GL7.1 — `gl_load_texture` reads from VIRT_FS
+
+`gl_load_texture("wall.jpg")` calls a native function that reads and
+decodes an image file.  In WASM:
+
+1. The gallery page bundles asset files (images) into the `files` JSON
+   array alongside the `.loft` source, e.g.:
+   ```js
+   [{ name: "main.loft", content: source },
+    { name: "wall.jpg", content: base64data }]
+   ```
+2. `compile_and_start` populates VIRT_FS with all files.
+3. The WASM `wgl_load_texture` reads the image bytes from VIRT_FS via
+   `virt_fs_get("wall.jpg")`, decodes PNG/JPG in Rust (the `png` crate
+   is already compiled into the WASM binary), and uploads to WebGL via
+   `loftHost.gl_upload_rgba_texture(pixels, w, h)`.
+
+**Unlocks:** example 04 (textures).
+
+#### GL7.2 — `save_png` writes to download / VIRT_FS
+
+`canvas.save_png("file.png")` writes a PNG file.  In WASM:
+
+1. The WASM `wgl_save_png` encodes the Canvas pixel data to PNG bytes
+   (the `png` crate is already available).
+2. Calls `loftHost.download_file("file.png", bytes)` which triggers a
+   browser download via `URL.createObjectURL(new Blob([bytes]))`.
+3. Alternative: write to VIRT_FS for inspection without download.
+
+**Unlocks:** example 10 (2D canvas).
+
+#### GL7.3 — `gl_load_font` + text rasterization
+
+`gl_load_font("font.ttf")` loads a TrueType font for CPU rasterization.
+The native implementation uses the `fontdue` crate.  In WASM:
+
+**Option A (preferred):** Compile `fontdue` to WASM.  It is pure Rust
+with no system dependencies — it should compile to `wasm32-unknown-unknown`
+directly.  The font file is provided via VIRT_FS (same as textures).
+All text rasterization functions (`gl_measure_text`, `gl_text_height`,
+`rasterize_text_into`) work unchanged.
+
+**Option B (fallback):** Delegate to the browser's Canvas 2D API.
+`loftHost.gl_load_font(name)` maps to CSS `@font-face`.
+`loftHost.rasterize_text(text, size)` uses `CanvasRenderingContext2D.fillText`
+and returns pixel data.  This changes the rendering backend but keeps the
+loft API identical.
+
+**Unlocks:** example 20 (textured cube with text).
+
+#### GL7.4 — Example 11 needs a render loop
+
+Example 11 (scene graph) currently only exports GLB — it has no
+interactive render loop.  In WASM `arguments()` returns `[]`, so
+`--mode glb` is never selected, but there is no native render path
+either.
+
+**Fix:** Add an interactive render fallback to example 11, identical
+to how examples 02–09 work: `if mode != "glb" { render_native(scene) }`.
+This is a **one-line change to the example** — adding a render path
+that was always intended but not yet written.  The scene construction
+code is unchanged; only the entry point gains a `render_native` branch.
+
+This is **not** a WASM workaround — it makes the example more complete
+on native too.
 
 ### Phase 4: High-level renderer (GL8.1 — 1 more example)
 
-| Example | Blocker | Fix |
-|---------|---------|-----|
-| 24 Renderer Demo | `render::create_renderer()` + `render_loop()` | These call gl_* functions internally — if frame yield works, the renderer's `for` loop yields naturally. Main gap: `render.loft` compiles PBR + shadow shaders at init. Needs `gl_create_shader` patching (already done via GL6.5). |
+Example 24 uses `render::create_renderer()` + `render_loop()`.
+`render.loft` is pure loft code that calls `gl_*` functions internally.
+With frame yield, `render_loop`'s internal `for` loop yields at
+`gl_swap_buffers` naturally.  `create_renderer` compiles PBR + shadow
+shaders via `gl_create_shader` — shader version patching (GL6.5) is
+already done.
+
+**No new WASM code needed.**  If frame yield works and the gl_* bridge
+is complete, example 24 runs unchanged.  The only risk is that
+`render.loft` uses gl_* functions not yet tested end-to-end in the
+WebGL bridge (FBO setup, depth textures, multi-pass rendering).
+These are all implemented in the bridge; they just need testing.
 
 ### Summary: path to 24/24
 
@@ -467,5 +539,5 @@ the interactive render loop runs.  No code changes needed.
 |-------|----------|--------|------------|
 | Phase 1 | 18 of 24 | M (frame yield) | FY.1–FY.3 |
 | Phase 2 | +1 (19/24) | S (DOM events) | GL6.6 |
-| Phase 3 | +4 (23/24) | M (texture + font workarounds) | GL7.1–GL7.4 |
-| Phase 4 | +1 (24/24) | M (renderer integration) | GL8.1, FY.1 |
+| Phase 3 | +4 (23/24) | M (VIRT_FS asset loading) | GL7.1–GL7.4 |
+| Phase 4 | +1 (24/24) | S (testing only) | GL8.1, FY.1 |

@@ -53,25 +53,27 @@ Without this example 21 is dead; games are impossible.
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
 
-### 3. Textures, fonts, file I/O workarounds
+### 3. Asset loading via VIRT_FS — examples run unchanged
 
-These four examples need alternatives to native file access.
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL7.1  | Embedded textures for ex. 04 (data URI or procedural)  | S  | —      |                            |
-| GL7.2  | Canvas 2D → data URI for ex. 10 (replaces save_png)    | S  | —      |                            |
-| GL7.3  | Web font / canvas text rendering for ex. 20            | M  | —      |                            |
-| GL7.4  | Scene graph render loop for ex. 11 (currently GLB-only)| S  | —      |                            |
-
-### 4. High-level renderer in browser
-
-Example 24 uses `render.loft` which calls gl_* internally.  With frame
-yield this should work — the renderer's `for` loop yields naturally.
+Native functions implemented in WASM to read assets from VIRT_FS.
+Gallery provides asset files alongside .loft source.  No example
+code is modified.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL8.1  | `render.loft` WebGL integration for ex. 24             | M  | ✓      | RENDERER.md                |
+| GL7.1  | `gl_load_texture` reads image from VIRT_FS             | S  | ✓      | WEB_EXAMPLES.md            |
+| GL7.2  | `save_png` writes to browser download                  | S  | ✓      | WEB_EXAMPLES.md            |
+| GL7.3  | `gl_load_font` + text raster via fontdue-in-WASM       | M  | ✓      | WEB_EXAMPLES.md            |
+| GL7.4  | Add render loop to ex. 11 (native + WASM)              | XS | ✓      | WEB_EXAMPLES.md            |
+
+### 4. High-level renderer — test only
+
+`render.loft` is pure loft calling gl_*.  With frame yield + shader
+patching, example 24 should work unchanged.  No new code — just testing.
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GL8.1  | Verify `render.loft` works end-to-end in WebGL         | S  | ✓      | WEB_EXAMPLES.md            |
 
 ### 5. Publish: live graphics gallery (24/24)
 
