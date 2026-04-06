@@ -27,7 +27,8 @@ Unified renderer design (R1–R4), WASM build + playground (W1, W1.P),
 WebGL2 bridge with shader patching (GL6.1–GL6.5), gallery page (GAL.2),
 playground assert reporting, grouped examples, syntax highlighting,
 frame yield (FY.1–FY.3), keyboard+mouse input (GL6.6), asset loading
-(GL7.1–GL7.4), text self-concat fix (P114 partial).
+(GL7.1–GL7.4), renderer in WebGL (GL8.1), text self-concat fix (P114
+partial), 🌐 **live graphics gallery with all 24 examples** (GAL.3).
 
 ---
 
@@ -47,13 +48,7 @@ loft program.
 | P113   | `t = t[N..]` self-slice produces empty string          | S  | ✓      | PROBLEMS.md #113           |
 | P114   | `h = h + expr` on struct fields still broken           | S  | ✓      | PROBLEMS.md #114           |
 
-### 1. Publish live graphics gallery (24/24)
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| GAL.3  | 🌐 **Gallery with all 24 live examples** on GH Pages    | S  | ✓      | WEB_EXAMPLES.md            |
-
-### 2. Game infrastructure + first game
+### 1. Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
