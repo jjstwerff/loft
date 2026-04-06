@@ -81,16 +81,15 @@ Pre-built binaries on the [Releases](https://github.com/jjstwerff/loft/releases)
 
 ## Graphics examples
 
-23 progressive examples from hello-triangle to PBR with shadow mapping
-in `lib/graphics/examples/`:
+23 progressive examples from hello-triangle to PBR with shadow mapping:
 
 ```sh
-./11-scene-graph.loft          # exports a GLB file with lights
 ./08-basic-lighting.loft       # Phong lighting in a window
 ./20-textured-cube.loft        # procedural texture with text
+./11-scene-graph.loft          # exports a GLB file with lights
 ```
 
-See the full [example list](doc/claude/WEB_EXAMPLES.md#example-gallery).
+See the full [example list with screenshots](lib/graphics/examples/README.md).
 
 ---
 

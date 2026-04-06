@@ -37,6 +37,10 @@ reviewed, CI-green pull request.
 Rules:
 - Never `git commit` directly on `main`.
 - Never `git push` without an explicit user instruction.
+- **Never create a branch, push, or open a PR unless the user explicitly asks.**
+  Branching and pushing disrupt the development flow.  Work on the current
+  branch, commit locally, and wait for the user to say "push", "create PR",
+  or "merge" before touching the remote.
 - Never create a feature branch from another feature branch — always branch from `main`.
 - Merging to `main` is done via a GitHub pull request, not a local `git merge`.
 

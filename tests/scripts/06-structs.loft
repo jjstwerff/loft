@@ -289,3 +289,26 @@ fn dist2(self: MCPt) -> integer { self.x * self.x + self.y * self.y }
 fn test_method_on_constructor() {
   assert(MCPt { x: 3, y: 4 }.dist2() == 25, "method on constructor");
 }
+
+// Regression: borrowed loop variable whose dependency is allocated above
+// current TOS caused a subtract overflow in gen_set_first_ref_null.
+// The codegen now emits OpNullRefSentinel instead of OpCreateStack when
+// the dependency slot is above the stack position.
+struct DepItem { name: text, value: integer }
+struct DepContainer { items: vector<DepItem>, extra: vector<integer> }
+
+fn test_loop_dep_above_tos() {
+  c = DepContainer {};
+  c.items += [DepItem { name: "a", value: 10 }];
+  c.items += [DepItem { name: "b", value: 20 }];
+  c.items += [DepItem { name: "c", value: 30 }];
+  c.extra += [1, 2, 3];
+  total = 0;
+  names = "";
+  for it in c.items {
+    total += it.value;
+    names += it.name;
+  }
+  assert(total == 60, "total={total}");
+  assert(names == "abc", "names={names}");
+}

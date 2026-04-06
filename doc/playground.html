@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft Playground</title>
+<style>
+:root {
+  --bg: #1a1a2e;
+  --panel: #16213e;
+  --border: #2a3a5e;
+  --text: #e0e0e0;
+  --accent: #4fc3f7;
+  --btn: #2563eb;
+  --btn-hover: #3b82f6;
+  --output-bg: #0f0f1a;
+  --error: #ef5350;
+  --success: #66bb6a;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 18px; color: var(--accent); }
+header .subtitle { font-size: 13px; color: #8899aa; }
+.toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+button {
+  background: var(--btn);
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+button:hover { background: var(--btn-hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.panels {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.editor-panel, .output-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.editor-panel { border-right: 1px solid var(--border); }
+.panel-header {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8899aa;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+textarea {
+  flex: 1;
+  background: var(--output-bg);
+  color: var(--text);
+  border: none;
+  padding: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  tab-size: 2;
+}
+textarea:focus { outline: none; }
+#output {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.status {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 16px;
+}
+.status .ok { color: var(--success); }
+.status .err { color: var(--error); }
+.status .info { color: #8899aa; }
+#loading {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--accent);
+  z-index: 100;
+}
+</style>
+</head>
+<body>
+<div id="loading">Loading Loft runtime…</div>
+
+<header>
+  <h1>Loft Playground</h1>
+  <span class="subtitle">Write loft code, run it instantly</span>
+  <div class="toolbar">
+    <select id="examples">
+      <option value="">— Load example —</option>
+      <option value="hello">Hello World</option>
+      <option value="fibonacci">Fibonacci</option>
+      <option value="structs">Structs</option>
+      <option value="vectors">Vectors</option>
+      <option value="json">JSON</option>
+    </select>
+    <button id="run-btn" onclick="run()" disabled>▶ Run</button>
+  </div>
+</header>
+
+<div class="panels">
+  <div class="editor-panel">
+    <div class="panel-header">Source</div>
+    <textarea id="editor" spellcheck="false">fn main() {
+  println("Hello from Loft!")
+
+  for i in 1..11 {
+    if i % 3 == 0 and i % 5 == 0 {
+      println("FizzBuzz")
+    } else if i % 3 == 0 {
+      println("Fizz")
+    } else if i % 5 == 0 {
+      println("Buzz")
+    } else {
+      println("{i}")
+    }
+  }
+}</textarea>
+  </div>
+  <div class="output-panel">
+    <div class="panel-header">Output</div>
+    <textarea id="output" readonly></textarea>
+  </div>
+</div>
+
+<div class="status">
+  <span id="status" class="info">Ready</span>
+  <span id="timing" class="info"></span>
+</div>
+
+<script type="module">
+import init, { compile_and_run } from './pkg/loft.js';
+
+const examples = {
+  hello: `fn main() {
+  println("Hello from Loft!")
+  println("The answer is {6 * 7}")
+}`,
+  fibonacci: `fn fib(n: integer) -> integer {
+  if n <= 1 { return n; }
+  fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+  for i in 0..15 {
+    println("fib({i}) = {fib(i)}")
+  }
+}`,
+  structs: `struct Point { x: float, y: float }
+
+fn distance(a: Point, b: Point) -> float {
+  dx = a.x - b.x
+  dy = a.y - b.y
+  sqrt(dx * dx + dy * dy)
+}
+
+fn main() {
+  p1 = Point { x: 0.0, y: 0.0 }
+  p2 = Point { x: 3.0, y: 4.0 }
+  println("distance: {distance(p1, p2)}")
+  println("p1 = {p1}")
+  println("p2 = {p2}")
+}`,
+  vectors: `fn main() {
+  v = [3, 1, 4, 1, 5, 9, 2, 6]
+  println("original: {v}")
+  sort(v)
+  println("sorted:   {v}")
+  println("length:   {v.len()}")
+  println("sum:      {v.reduce(0, |a, x| { a + x })}")
+  evens = v.filter(|x| { x % 2 == 0 })
+  println("evens:    {evens}")
+  squares = v.map(|x| { x * x })
+  println("squares:  {squares}")
+}`,
+  json: `struct Person {
+  name: text,
+  age: integer
+}
+
+fn main() {
+  p = Person { name: "Alice", age: 30 }
+  json = "{p:j}"
+  println("JSON: {json}")
+  p2 = Person.parse(json)
+  println("Parsed: {p2}")
+  println("Name: {p2.name}, Age: {p2.age}")
+}`,
+};
+
+const editor = document.getElementById('editor');
+const output = document.getElementById('output');
+const status = document.getElementById('status');
+const timing = document.getElementById('timing');
+const runBtn = document.getElementById('run-btn');
+const exampleSelect = document.getElementById('examples');
+const loading = document.getElementById('loading');
+
+exampleSelect.addEventListener('change', () => {
+  const key = exampleSelect.value;
+  if (key && examples[key]) {
+    editor.value = examples[key];
+    output.value = '';
+    status.textContent = 'Ready';
+    status.className = 'info';
+    timing.textContent = '';
+  }
+  exampleSelect.value = '';
+});
+
+// Ctrl+Enter to run
+editor.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    run();
+  }
+  // Tab inserts 2 spaces
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const start = editor.selectionStart;
+    editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(editor.selectionEnd);
+    editor.selectionStart = editor.selectionEnd = start + 2;
+  }
+});
+
+let loftReady = false;
+
+async function initLoft() {
+  try {
+    await init();
+    loftReady = true;
+    runBtn.disabled = false;
+    loading.style.display = 'none';
+    status.textContent = 'Ready — Ctrl+Enter to run';
+    status.className = 'ok';
+  } catch (e) {
+    loading.textContent = 'Failed to load: ' + e.message;
+    status.textContent = 'Failed to load WASM';
+    status.className = 'err';
+  }
+}
+
+window.run = function() {
+  if (!loftReady) return;
+  output.value = '';
+  status.textContent = 'Running…';
+  status.className = 'info';
+  timing.textContent = '';
+  const src = editor.value;
+  const files = JSON.stringify([{ name: 'main.loft', content: src }]);
+  const t0 = performance.now();
+  let result;
+  try {
+    result = JSON.parse(compile_and_run(files));
+  } catch (e) {
+    output.value = 'Internal error: ' + e.message;
+    status.textContent = 'Error';
+    status.className = 'err';
+    return;
+  }
+  const elapsed = (performance.now() - t0).toFixed(1);
+  if (result.output) {
+    output.value = result.output;
+  }
+  if (result.diagnostics) {
+    if (output.value) output.value += '\n';
+    output.value += result.diagnostics;
+  }
+  if (result.success) {
+    status.textContent = 'Success';
+    status.className = 'ok';
+  } else {
+    status.textContent = 'Failed';
+    status.className = 'err';
+  }
+  timing.textContent = elapsed + ' ms';
+};
+
+initLoft();
+</script>
+</body>
+</html>

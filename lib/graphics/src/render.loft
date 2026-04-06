@@ -1,0 +1,233 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// High-level renderer — scene-driven PBR with shadows.
+// One call to render_frame() handles shadow pass, color pass, and buffer swap.
+// Design: doc/claude/RENDERER.md
+use graphics;
+use math;
+use mesh;
+use scene;
+
+// ── Built-in shaders ─────────────────────────────────────────────────────
+
+SHADOW_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uModel;
+uniform mat4 uLightVP;
+void main() {{ gl_Position = uLightVP * uModel * vec4(aPos, 1.0); }}
+`;
+
+SHADOW_FRAG = `
+#version 330 core
+void main() {{}}
+`;
+
+PBR_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform mat4 uLightVP;
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec4 vLightSpacePos;
+void main() {{
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vWorldPos = vec3(worldPos);
+    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+    vLightSpacePos = uLightVP * worldPos;
+    gl_Position = uProj * uView * worldPos;
+}}
+`;
+
+PBR_FRAG = `
+#version 330 core
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec4 vLightSpacePos;
+out vec4 FragColor;
+uniform vec3 uCamPos;
+uniform vec3 uLightDir;
+uniform vec3 uLightColor;
+uniform vec3 uColor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform sampler2D uShadowMap;
+uniform int uHasShadow;
+float shadow_calc(vec4 lsp) {{
+    vec3 proj = lsp.xyz / lsp.w;
+    proj = proj * 0.5 + 0.5;
+    if (proj.z > 1.0) return 0.0;
+    float closest = texture(uShadowMap, proj.xy).r;
+    float current = proj.z;
+    float bias = max(0.005 * (1.0 - dot(normalize(vNormal), normalize(-uLightDir))), 0.001);
+    return current - bias > closest ? 0.6 : 0.0;
+}}
+void main() {{
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(uCamPos - vWorldPos);
+    vec3 L = normalize(-uLightDir);
+    vec3 H = normalize(V + L);
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(N, H), 0.0), mix(8.0, 128.0, 1.0 - uRoughness));
+    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    float shadow = 0.0;
+    if (uHasShadow == 1) shadow = shadow_calc(vLightSpacePos);
+    vec3 ambient = uColor * mix(0.15, 0.08, uMetallic);
+    vec3 diffuse = uColor * diff * (1.0 - uMetallic * 0.7) * (1.0 - shadow);
+    vec3 specular = mix(vec3(0.04), uColor, uMetallic) * spec * (1.0 + fresnel) * (1.0 - shadow);
+    vec3 result = ambient + diffuse + specular;
+    // Tone mapping + gamma
+    result = result / (result + vec3(1.0));
+    result = pow(result, vec3(1.0 / 2.2));
+    FragColor = vec4(result, 1.0);
+}}
+`;
+
+// ── Renderer struct ──────────────────────────────────────────────────────
+
+pub struct Renderer {
+  width: integer not null,
+  height: integer not null,
+  pbr_shader: integer not null,
+  shadow_shader: integer not null,
+  shadow_fbo: integer not null,
+  shadow_tex: integer not null,
+  shadow_size: integer not null,
+  start_tick: long not null,
+  vaos: vector<integer>,
+  vert_counts: vector<integer>,
+  uploaded: boolean not null
+}
+
+// Create a renderer with a window.  Compiles built-in shaders, allocates
+// shadow map FBO.  Returns null on failure (no display).
+pub fn create_renderer(rw: integer, rh: integer, title: text) -> Renderer {
+  if !graphics::gl_create_window(rw, rh, title) {
+    return Renderer {};
+  }
+  rr_pbr = graphics::gl_create_shader(PBR_VERT, PBR_FRAG);
+  rr_shadow = graphics::gl_create_shader(SHADOW_VERT, SHADOW_FRAG);
+  rr_sz = 1024;
+  rr_dtex = graphics::gl_create_depth_texture(rr_sz, rr_sz);
+  rr_fbo = graphics::gl_create_framebuffer();
+  graphics::gl_framebuffer_texture(rr_fbo, 1, rr_dtex);
+  Renderer {
+    width: rw, height: rh,
+    pbr_shader: rr_pbr, shadow_shader: rr_shadow,
+    shadow_fbo: rr_fbo, shadow_tex: rr_dtex, shadow_size: rr_sz,
+    start_tick: ticks(),
+    uploaded: false
+  }
+}
+
+// Seconds since the renderer was created.
+pub fn elapsed(self: const Renderer) -> float {
+  (ticks() - self.start_tick) as float / 1000000.0
+}
+
+// Upload all meshes in the scene to GPU VAOs.
+pub fn upload_scene(self: Renderer, sc: const scene::Scene) {
+  for rm in sc.meshes {
+    rd = mesh::mesh_to_floats(rm);
+    rv = graphics::gl_upload_vertices(rd, 6);
+    rn = rm.triangles.len() * 3;
+    self.vaos += [rv];
+    self.vert_counts += [rn];
+  }
+  self.uploaded = true;
+}
+
+// Render one frame.  Returns false when close requested.
+pub fn render_frame(self: Renderer, sc: const scene::Scene,
+                    cam: const scene::Camera) -> boolean {
+  if !graphics::gl_poll_events() { return false; }
+  if !self.uploaded { self.upload_scene(sc); }
+  // Camera matrices
+  rf_view = math::mat4_look_at(cam.position, cam.target, math::vec3(0.0, 1.0, 0.0));
+  rf_proj = math::mat4_perspective(cam.fov * 0.01745, self.width as float / self.height as float,
+                                   cam.near, cam.far);
+  rf_eye = cam.position;
+  // Light — use first directional light or default
+  rf_has_shadow = 0;
+  rf_light_dir = math::vec3(-1.0, -2.0, -1.0);
+  rf_light_color = math::vec3(1.0, 1.0, 1.0);
+  rf_light_vp = math::mat4_identity();
+  for rl in sc.lights {
+    if rl.light_type == scene::Directional {
+      rf_light_dir = rl.direction;
+      rf_light_color = math::vec3(rl.color_r, rl.color_g, rl.color_b);
+      // Compute orthographic light VP for shadow mapping
+      rf_light_eye = math::vec3(-rf_light_dir.x * 10.0, -rf_light_dir.y * 10.0, -rf_light_dir.z * 10.0);
+      rf_light_view = math::mat4_look_at(rf_light_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
+      rf_light_proj = math::mat4_ortho(-12.0, 12.0, -12.0, 12.0, 0.1, 30.0);
+      rf_light_vp = math::mat4_mul(rf_light_proj, rf_light_view);
+      rf_has_shadow = 1;
+      break;
+    }
+  }
+  // Shadow pass
+  if rf_has_shadow == 1 {
+    graphics::gl_viewport(0, 0, self.shadow_size, self.shadow_size);
+    graphics::gl_bind_framebuffer(self.shadow_fbo);
+    graphics::gl_clear(graphics::rgba(0, 0, 0, 255));
+    graphics::gl_use_shader(self.shadow_shader);
+    graphics::gl_set_uniform_mat4(self.shadow_shader, "uLightVP", rf_light_vp.m);
+    for rn in sc.nodes {
+      graphics::gl_set_uniform_mat4(self.shadow_shader, "uModel", rn.transform.m);
+      if rn.mesh_idx >= 0 and rn.mesh_idx < self.vaos.len() {
+        graphics::gl_draw(self.vaos[rn.mesh_idx], self.vert_counts[rn.mesh_idx]);
+      }
+    }
+    graphics::gl_bind_framebuffer(0);
+    graphics::gl_viewport(0, 0, self.width, self.height);
+  }
+  // Color pass
+  graphics::gl_clear(graphics::rgba(20, 20, 25, 255));
+  graphics::gl_use_shader(self.pbr_shader);
+  graphics::gl_set_uniform_mat4(self.pbr_shader, "uView", rf_view.m);
+  graphics::gl_set_uniform_mat4(self.pbr_shader, "uProj", rf_proj.m);
+  graphics::gl_set_uniform_mat4(self.pbr_shader, "uLightVP", rf_light_vp.m);
+  graphics::gl_set_uniform_vec3(self.pbr_shader, "uCamPos", rf_eye.x, rf_eye.y, rf_eye.z);
+  graphics::gl_set_uniform_vec3(self.pbr_shader, "uLightDir", rf_light_dir.x, rf_light_dir.y, rf_light_dir.z);
+  graphics::gl_set_uniform_vec3(self.pbr_shader, "uLightColor", rf_light_color.x, rf_light_color.y, rf_light_color.z);
+  graphics::gl_set_uniform_int(self.pbr_shader, "uHasShadow", rf_has_shadow);
+  if rf_has_shadow == 1 {
+    graphics::gl_bind_texture(self.shadow_tex, 1);
+    graphics::gl_set_uniform_int(self.pbr_shader, "uShadowMap", 1);
+  }
+  for rn in sc.nodes {
+    if rn.mesh_idx >= 0 and rn.mesh_idx < self.vaos.len() {
+      rm = sc.materials[rn.material_idx];
+      graphics::gl_set_uniform_mat4(self.pbr_shader, "uModel", rn.transform.m);
+      graphics::gl_set_uniform_vec3(self.pbr_shader, "uColor", rm.base_color_r, rm.base_color_g, rm.base_color_b);
+      graphics::gl_set_uniform_float(self.pbr_shader, "uMetallic", rm.metallic);
+      graphics::gl_set_uniform_float(self.pbr_shader, "uRoughness", rm.roughness);
+      graphics::gl_draw(self.vaos[rn.mesh_idx], self.vert_counts[rn.mesh_idx]);
+    }
+  }
+  graphics::gl_swap_buffers();
+  true
+}
+
+// Convenience: render loop until close.
+pub fn render_loop(self: Renderer, sc: const scene::Scene, cam: const scene::Camera) {
+  for _ in 0..1000000 {
+    if !self.render_frame(sc, cam) { break; }
+  }
+}
+
+// Destroy GPU resources and close the window.
+pub fn destroy(self: Renderer) {
+  for rv in self.vaos {
+    graphics::gl_delete_vao(rv);
+  }
+  graphics::gl_delete_shader(self.pbr_shader);
+  graphics::gl_delete_shader(self.shadow_shader);
+  graphics::gl_delete_texture(self.shadow_tex);
+  graphics::gl_delete_framebuffer(self.shadow_fbo);
+  graphics::gl_destroy_window();
+}

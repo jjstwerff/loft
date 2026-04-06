@@ -118,9 +118,12 @@ give each item a traceable history.
    the change to a feature branch before anything else.
 2. **Never `git push` without an explicit user instruction** — see the Remote CI section
    of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
-3. Create branches from the tip of `main` using the naming convention in
+3. **Never create a branch, push, or open a PR unless the user explicitly asks.**
+   Branching and pushing disrupt the development flow.  Work on the current branch,
+   commit locally, and wait for the user to say "push", "create PR", or "merge".
+4. Create branches from the tip of `main` using the naming convention in
    [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
-4. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
+5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
 
 ---
 
