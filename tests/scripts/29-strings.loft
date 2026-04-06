@@ -154,3 +154,21 @@ fn test_loop_var_text_return() {
   assert(tr_join(["a", "b"]) == "[a][b]", "join={tr_join(["a", "b"])}");
 }
 
+// h = h + expr must preserve h's content (not clear before read).
+fn test_text_self_concat() {
+  h = "x";
+  h = h + "a";
+  assert(h == "xa", "simple: {h}");
+  h = h + "b" + "c";
+  assert(h == "xabc", "multi: {h}");
+}
+
+fn test_text_self_concat_loop() {
+  h = "start";
+  items = ["a", "b", "c"];
+  for item in items {
+    h = h + "." + item;
+  }
+  assert(h == "start.a.b.c", "loop: {h}");
+}
+
