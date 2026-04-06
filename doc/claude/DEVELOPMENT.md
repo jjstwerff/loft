@@ -75,21 +75,23 @@ Examples:
 If the previous sprint's PR has not been merged yet, wait for it.
 Never branch from another feature branch.
 
+**Do not create the branch yourself.**  Wait for the user to say
+"create a branch" — then follow the naming convention below.
+
 ```
 1. Merge the previous sprint's PR (wait for CI green)
-2. git checkout main && git pull     ← MANDATORY: start from merged main
-3. git checkout -b sprint-{N}-{description}
-4. For each item in the sprint (up to ~4):
+2. (user creates branch from main)
+3. For each item in the sprint (up to ~4):
    a. Write tests with @EXPECT_FAIL / @EXPECT_ERROR
    b. Implement the code change
    c. Remove annotations, verify tests pass
    d. Commit: "{ID}: {description}"
-5. Update all relevant documentation (see checklist below)
-6. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
-7. git push -u origin sprint-{N}-{description}
-8. gh pr create
-9. Wait for CI green on all 3 platforms
-10. gh pr merge --squash
+4. Update all relevant documentation (see checklist below)
+5. cargo fmt && cargo clippy --tests -- -D warnings && cargo test
+6. (user says "push" → git push -u origin {branch})
+7. (user says "create PR" → gh pr create)
+8. Wait for CI green on all 3 platforms
+9. (user says "merge" → gh pr merge --squash)
 ```
 
 ### Announce each step — MANDATORY
@@ -188,33 +190,15 @@ Examples:
 | A6.1 — Stack slot assign_slots standalone | `a6-1-assign-slots-standalone` |
 | N2 + N3 + N4 — output_init/output_set/format fixes | `n2-n3-n4-output-fixes` |
 
-Create the branch from the tip of `main`.  **Always start from a clean, up-to-date
-`main`** — if you are on a different branch, check for uncommitted documentation
-changes first and carry them over:
+Branches are created from the tip of `main`.  **Do not create branches
+yourself** — wait for the user to ask.  When they do:
 
-```bash
-# 1. Check for uncommitted changes on the current branch
-git status --short
+1. Commit any uncommitted work on the current branch first.
+2. `git checkout main && git pull`
+3. `git checkout -b {branch-name}` (only when the user says to)
 
-# 2. If doc/claude/*.md files were modified, save them before switching
-git stash push -m "doc changes" -- doc/claude/ CHANGELOG.md
-
-# 3. Switch to main and pull the latest merge
-git checkout main
-git pull
-
-# 4. Create the new feature branch
-git checkout -b p1-1-lambda-parser
-
-# 5. Restore the documentation changes into the new branch
-git stash pop
-```
-
-If the stash conflicts (the same doc was modified in main), resolve manually:
-keep the main version for sections you did not write, keep your additions.
-
-Skip steps 2 and 5 when there are no uncommitted documentation changes.
-Never create a feature branch from another feature branch.
+Never use `git stash`.  Never create a feature branch from another
+feature branch.
 
 ---
 
