@@ -104,7 +104,7 @@ fn main() {
     graphics::gl_clear(graphics::rgba(30, 30, 40, 255));
     graphics::gl_use_shader(pp_scene_shader);
     // Cube
-    pp_cm = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 0.0), math::mat4_rotate_y(pp_t));
+    pp_cm = math::mat4_trs(-1.0, 0.5, 0.0, pp_t, 1.0, 1.0, 1.0);
     pp_cmvp = math::mat4_mul(pp_proj, math::mat4_mul(pp_view, pp_cm));
     graphics::gl_set_uniform_mat4(pp_scene_shader, "uMVP", pp_cmvp.m);
     graphics::gl_set_uniform_mat4(pp_scene_shader, "uModel", pp_cm.m);

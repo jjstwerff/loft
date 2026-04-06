@@ -1124,6 +1124,35 @@ impl Lexer {
         }
     }
 
+    /// Like `has_token(">")` but also splits `>>` into `>` + `>` so that
+    /// nested generic types like `vector<vector<T>>` parse correctly.
+    pub fn has_closing_angle(&mut self) -> bool {
+        if self.peek_token(">") {
+            self.cont();
+            true
+        } else if let LexItem::Token(ref t) = self.peek.has
+            && t.starts_with('>')
+            && t.len() > 1
+        {
+            let rest = t[1..].to_string();
+            self.peek.has = LexItem::Token(rest);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Expect a closing `>` for generic types.  Like `token(">")` but handles
+    /// `>>` splitting for nested generics.
+    pub fn closing_angle(&mut self) -> bool {
+        if self.has_closing_angle() {
+            true
+        } else {
+            diagnostic!(self, Level::Error, "Expect token >");
+            false
+        }
+    }
+
     /// Shorthand test if the current element is a specific local keyword, so not one of the reserved
     pub fn has_keyword(&mut self, keyword: &'static str) -> bool {
         if self.peek.has == LexItem::Identifier(keyword.to_string()) {

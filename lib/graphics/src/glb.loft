@@ -207,15 +207,14 @@ fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
   mm[12] == 0.0 && mm[13] == 0.0 && mm[14] == 0.0 && mm[15] == 1.0
 }
 
-// Build a glTF "matrix" JSON property from a row-major Mat4.
-// glTF 2.0 uses column-major order: col0, col1, col2, col3.
+// Build a glTF "matrix" JSON property from a column-major Mat4.
+// glTF 2.0 also uses column-major order, so emit elements directly.
 fn glb_mat4_json(tr: math::Mat4) -> text {
   mm = tr.m;
-  // Transpose row-major → column-major
-  c0  = mm[0]  as single; c1  = mm[4]  as single; c2  = mm[8]  as single; c3  = mm[12] as single;
-  c4  = mm[1]  as single; c5  = mm[5]  as single; c6  = mm[9]  as single; c7  = mm[13] as single;
-  c8  = mm[2]  as single; c9  = mm[6]  as single; c10 = mm[10] as single; c11 = mm[14] as single;
-  c12 = mm[3]  as single; c13 = mm[7]  as single; c14 = mm[11] as single; c15 = mm[15] as single;
+  c0  = mm[0]  as single; c1  = mm[1]  as single; c2  = mm[2]  as single; c3  = mm[3]  as single;
+  c4  = mm[4]  as single; c5  = mm[5]  as single; c6  = mm[6]  as single; c7  = mm[7]  as single;
+  c8  = mm[8]  as single; c9  = mm[9]  as single; c10 = mm[10] as single; c11 = mm[11] as single;
+  c12 = mm[12] as single; c13 = mm[13] as single; c14 = mm[14] as single; c15 = mm[15] as single;
   result = "\"matrix\":[{c0:.6},{c1:.6},{c2:.6},{c3:.6},";
   result += "{c4:.6},{c5:.6},{c6:.6},{c7:.6},";
   result += "{c8:.6},{c9:.6},{c10:.6},{c11:.6},";
@@ -223,11 +222,41 @@ fn glb_mat4_json(tr: math::Mat4) -> text {
   result
 }
 
+fn glb_light_node_json(lt: scene::Light, li: integer) -> text {
+  lname = lt.name;
+  result = "{{\"name\":\"{lname}\",\"extensions\":{{\"KHR_lights_punctual\":{{\"light\":{li}}}}}";
+  if lt.light_type == scene::Point {
+    px = lt.position.x as single;
+    py = lt.position.y as single;
+    pz = lt.position.z as single;
+    result += ",\"translation\":[{px:.6},{py:.6},{pz:.6}]";
+  } else {
+    dir = math::normalize3(lt.direction);
+    dx = dir.x; dy = dir.y; dz = dir.z;
+    dot_val = -dz;
+    if dot_val < -0.9999 {
+      qx = 0.0 as single; qy = 1.0 as single; qz = 0.0 as single; qw = 0.0 as single;
+    } else if dot_val > 0.9999 {
+      qx = 0.0 as single; qy = 0.0 as single; qz = 0.0 as single; qw = 1.0 as single;
+    } else {
+      half = 1.0 + dot_val;
+      ax = dy; ay = -dx; az = 0.0;
+      inv_len = 1.0 / sqrt(ax * ax + ay * ay + az * az + half * half);
+      qx = (ax * inv_len) as single;
+      qy = (ay * inv_len) as single;
+      qz = (az * inv_len) as single;
+      qw = (half * inv_len) as single;
+    }
+    result += ",\"rotation\":[{qx:.6},{qy:.6},{qz:.6},{qw:.6}]";
+  }
+  result += "}}";
+  result
+}
+
 // Build the full glTF JSON for a Scene.
 // BIN layout: for each mesh in order — pos, norm, uv, idx (no padding between meshes).
 // accessor base = mesh_idx * 4; bufferView base = mesh_idx * 4.
 fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
-  nm = sc.meshes.len();
   sn = sc.name;
 
   // Build per-mesh material index: for each mesh, the material used by the
@@ -241,11 +270,40 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     mesh_mat[nd.mesh_idx] = nd.material_idx;
   }
 
-  // --- scene / scenes ---
+  n_lights = sc.lights.len();
+  n_nodes = sc.nodes.len();
+  total_nodes = n_nodes + n_lights;
+
+  // --- asset / extensions ---
   result = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"loft\"}},";
+  if n_lights > 0 {
+    result += "\"extensionsUsed\":[\"KHR_lights_punctual\"],";
+    result += "\"extensionsRequired\":[\"KHR_lights_punctual\"],";
+    result += "\"extensions\":{{\"KHR_lights_punctual\":{{\"lights\":[";
+    li = 0;
+    for lt in sc.lights {
+      if li > 0 { result += ","; }
+      ltname = lt.name;
+      cr = lt.color_r as single;
+      cg = lt.color_g as single;
+      cb = lt.color_b as single;
+      inten = lt.intensity as single;
+      if lt.light_type == scene::Point {
+        result += "{{\"name\":\"{ltname}\",\"type\":\"point\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
+      } else if lt.light_type == scene::Directional {
+        result += "{{\"name\":\"{ltname}\",\"type\":\"directional\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
+      } else {
+        result += "{{\"name\":\"{ltname}\",\"type\":\"spot\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
+      }
+      li = li + 1;
+    }
+    result += "]}}}},";
+  }
+
+  // --- scene / scenes ---
   result += "\"scene\":0,\"scenes\":[{{\"name\":\"{sn}\",\"nodes\":[";
   ni = 0;
-  for _ in sc.nodes {
+  for _sn_idx in 0..total_nodes {
     if ni > 0 { result += ","; }
     result += "{ni}";
     ni = ni + 1;
@@ -266,6 +324,14 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
       result += "{{\"name\":\"{ndname}\",\"mesh\":{mid},{mat_str}}}";
     }
     ni = ni + 1;
+  }
+  // --- light nodes ---
+  li = 0;
+  for lt in sc.lights {
+    if ni > 0 { result += ","; }
+    result += glb_light_node_json(lt, li);
+    ni = ni + 1;
+    li = li + 1;
   }
   result += "],";
 
@@ -306,7 +372,6 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     result += "{{\"bufferView\":{bv_uv},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC2\"}},";
     result += "{{\"bufferView\":{bv_idx},\"componentType\":5125,\"count\":{nidx},\"type\":\"SCALAR\"}}";
     mi = mi + 1;
-    if mi < nm { result += ","; }
   }
   result += "],";
 
@@ -331,7 +396,6 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     result += "{{\"buffer\":0,\"byteOffset\":{off_uv},\"byteLength\":{uv_bytes},\"target\":34962}},";
     result += "{{\"buffer\":0,\"byteOffset\":{off_idx},\"byteLength\":{idx_bytes},\"target\":34963}}";
     mi = mi + 1;
-    if mi < nm { result += ","; }
   }
   result += "],";
 

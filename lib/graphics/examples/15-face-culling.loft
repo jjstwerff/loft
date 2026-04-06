@@ -60,14 +60,14 @@ fn main() {
     graphics::gl_clear(graphics::rgba(25, 25, 30, 255));
     graphics::gl_use_shader(fc_shader);
     // Left cube: culling on (default)
-    fc_m1 = math::mat4_mul(math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(fc_t));
+    fc_m1 = math::mat4_trs(-1.5, 0.0, 0.0, fc_t, 1.0, 1.0, 1.0);
     fc_mvp1 = math::mat4_mul(fc_proj, math::mat4_mul(fc_view, fc_m1));
     graphics::gl_set_uniform_mat4(fc_shader, "uMVP", fc_mvp1.m);
     graphics::gl_set_uniform_vec3(fc_shader, "uColor", 0.2, 0.7, 0.9);
     graphics::gl_enable(graphics::GL_CULL_FACE);
     graphics::gl_draw(fc_vao, fc_nv);
     // Right cube: culling off (both faces visible)
-    fc_m2 = math::mat4_mul(math::mat4_translate(1.5, 0.0, 0.0), math::mat4_rotate_y(fc_t));
+    fc_m2 = math::mat4_trs(1.5, 0.0, 0.0, fc_t, 1.0, 1.0, 1.0);
     fc_mvp2 = math::mat4_mul(fc_proj, math::mat4_mul(fc_view, fc_m2));
     graphics::gl_set_uniform_mat4(fc_shader, "uMVP", fc_mvp2.m);
     graphics::gl_set_uniform_vec3(fc_shader, "uColor", 0.9, 0.5, 0.2);

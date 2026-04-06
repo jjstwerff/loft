@@ -246,12 +246,13 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     data.check_vector(c_nr, tp, &data.def(d_nr).position.clone());
                     tp
                 }
-                Type::Integer(minimum, _, _) => {
-                    let s = a_type.size(nullable);
+                Type::Integer(minimum, _, not_null) => {
+                    let field_nullable = nullable && !not_null;
+                    let s = a_type.size(field_nullable);
                     if s == 1 {
-                        database.byte(minimum, nullable)
+                        database.byte(minimum, field_nullable)
                     } else if s == 2 {
-                        database.short(minimum, nullable)
+                        database.short(minimum, field_nullable)
                     } else {
                         database.name("integer")
                     }

@@ -140,9 +140,7 @@ fn export_glb_pbr() {
         roughness: 0.1 + pb_r as float * 0.2 });
       pb_x = (pb_c - 2) as float * 1.2;
       pb_y = (pb_r - 2) as float * 1.2;
-      pb_s.add_node(scene::Node {
-        name: "s_{pb_r}_{pb_c}", mesh_idx: pb_si, material_idx: pb_mi,
-        transform: math::mat4_translate(pb_x, pb_y, 0.0) });
+      pb_s.add_node(scene::node_at("s_{pb_r}_{pb_c}", pb_si, pb_mi, math::mat4_translate(pb_x, pb_y, 0.0)));
     }
   }
   pb_s.add_camera(scene::Camera {

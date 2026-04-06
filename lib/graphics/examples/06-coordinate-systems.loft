@@ -88,9 +88,7 @@ fn render_native_coords() {
     graphics::gl_use_shader(cs_shader);
     for cs_pos in cs_positions {
       cs_angle = cs_t * (0.5 + cs_pos#index as float * 0.2);
-      cs_model = math::mat4_mul(
-        math::mat4_translate(cs_pos.x, cs_pos.y, cs_pos.z),
-        math::mat4_rotate_y(cs_angle));
+      cs_model = math::mat4_trs(cs_pos.x, cs_pos.y, cs_pos.z, cs_angle, 1.0, 1.0, 1.0);
       cs_mvp = math::mat4_mul(cs_proj, math::mat4_mul(cs_view, cs_model));
       graphics::gl_set_uniform_mat4(cs_shader, "uMVP", cs_mvp.m);
       graphics::gl_draw(cs_vao, cs_n_verts);
@@ -111,11 +109,7 @@ fn export_glb_coords() {
   cs_mati = cs_s.add_material(cs_mat);
   cs_positions = cube_positions();
   for cs_p in cs_positions {
-    cs_s.add_node(scene::Node {
-      name: "cube_{cs_p#index}",
-      mesh_idx: cs_mi, material_idx: cs_mati,
-      transform: math::mat4_translate(cs_p.x, cs_p.y, cs_p.z)
-    });
+    cs_s.add_node(scene::node_at("cube_{cs_p#index}", cs_mi, cs_mati, math::mat4_translate(cs_p.x, cs_p.y, cs_p.z)));
   }
   cs_s.add_camera(scene::Camera {
     name: "main", fov: 45.0, near: 0.1, far: 100.0,

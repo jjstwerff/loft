@@ -106,10 +106,7 @@ fn export_glb_lighting() {
     base_color_a: 1.0, metallic: 0.0, roughness: 0.6
   };
   bl_mati = bl_s.add_material(bl_mat);
-  bl_s.add_node(scene::Node {
-    name: "lit_cube", mesh_idx: bl_mi, material_idx: bl_mati,
-    transform: math::mat4_identity()
-  });
+  bl_s.add_node(scene::node_at("lit_cube", bl_mi, bl_mati, math::mat4_identity()));
   bl_s.add_camera(scene::Camera {
     name: "main", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(2.0, 2.0, 4.0),

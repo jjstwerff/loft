@@ -99,12 +99,7 @@ fn export_glb_cube() {
     roughness: 0.8
   };
   tc_mati = tc_s.add_material(tc_mat);
-  tc_s.add_node(scene::Node {
-    name: "cube",
-    mesh_idx: tc_mi,
-    material_idx: tc_mati,
-    transform: math::mat4_identity()
-  });
+  tc_s.add_node(scene::node_at("cube", tc_mi, tc_mati, math::mat4_identity()));
   tc_s.add_camera(scene::Camera {
     name: "main",
     fov: 45.0,

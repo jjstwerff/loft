@@ -69,12 +69,12 @@ fn main() {
     graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_fmvp.m);
     graphics::gl_draw(dt_pvao, dt_pnv);
     // Cube 1 — near
-    dt_m1 = math::mat4_mul(math::mat4_translate(-1.0, 0.5, 1.0), math::mat4_rotate_y(dt_t * 0.5));
+    dt_m1 = math::mat4_trs(-1.0, 0.5, 1.0, dt_t * 0.5, 1.0, 1.0, 1.0);
     dt_mvp1 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m1));
     graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp1.m);
     graphics::gl_draw(dt_cvao, dt_cnv);
     // Cube 2 — far
-    dt_m2 = math::mat4_mul(math::mat4_translate(1.5, 0.5, -2.0), math::mat4_rotate_y(dt_t * 0.3));
+    dt_m2 = math::mat4_trs(1.5, 0.5, -2.0, dt_t * 0.3, 1.0, 1.0, 1.0);
     dt_mvp2 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m2));
     graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp2.m);
     graphics::gl_draw(dt_cvao, dt_cnv);

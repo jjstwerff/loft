@@ -49,13 +49,13 @@ fn main() {
     graphics::gl_clear(graphics::rgba(20, 20, 25, 255));
     graphics::gl_use_shader(wf_shader);
     // Wireframe sphere on the left
-    wf_sm = math::mat4_mul(math::mat4_translate(-1.5, 0.0, 0.0), math::mat4_rotate_y(wf_t * 0.3));
+    wf_sm = math::mat4_trs(-1.5, 0.0, 0.0, wf_t * 0.3, 1.0, 1.0, 1.0);
     wf_smvp = math::mat4_mul(wf_proj, math::mat4_mul(wf_view, wf_sm));
     graphics::gl_set_uniform_mat4(wf_shader, "uMVP", wf_smvp.m);
     graphics::gl_set_uniform_vec3(wf_shader, "uColor", 0.2, 0.8, 1.0);
     graphics::gl_draw_mode(wf_svao, wf_snv, graphics::DRAW_LINES);
     // Point cloud cube on the right
-    wf_cm = math::mat4_mul(math::mat4_translate(1.5, 0.0, 0.0), math::mat4_rotate_y(wf_t * 0.5));
+    wf_cm = math::mat4_trs(1.5, 0.0, 0.0, wf_t * 0.5, 1.0, 1.0, 1.0);
     wf_cmvp = math::mat4_mul(wf_proj, math::mat4_mul(wf_view, wf_cm));
     graphics::gl_set_uniform_mat4(wf_shader, "uMVP", wf_cmvp.m);
     graphics::gl_set_uniform_vec3(wf_shader, "uColor", 1.0, 0.5, 0.2);

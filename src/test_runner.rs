@@ -155,17 +155,29 @@ pub(crate) fn run_tests(
             if let Some(rest) = comment.strip_prefix("@EXPECT_ERROR:") {
                 let sub = rest.trim();
                 if !sub.is_empty() {
-                    pending_error.push(sub.to_string());
+                    if in_header {
+                        ann.expect_errors.push(sub.to_string());
+                    } else {
+                        pending_error.push(sub.to_string());
+                    }
                 }
             } else if let Some(rest) = comment.strip_prefix("@EXPECT_WARNING:") {
                 let sub = rest.trim();
                 if !sub.is_empty() {
-                    pending_warning.push(sub.to_string());
+                    if in_header {
+                        ann.expect_warnings.push(sub.to_string());
+                    } else {
+                        pending_warning.push(sub.to_string());
+                    }
                 }
             } else if let Some(rest) = comment.strip_prefix("@EXPECT_FAIL:") {
                 let sub = rest.trim();
                 if !sub.is_empty() {
-                    pending_fail.push(sub.to_string());
+                    if in_header {
+                        ann.expect_fail_file.push(sub.to_string());
+                    } else {
+                        pending_fail.push(sub.to_string());
+                    }
                 }
             } else if comment.starts_with("@IGNORE") {
                 if in_header {
@@ -659,6 +671,10 @@ pub(crate) fn run_tests(
                 // Zero parameters — always a test entry point.
                 // Single vector<…> parameter — entry point when @ARGS provides argv.
                 let attrs = &def.attributes;
+                // Skip generator functions (return iterator<T>) — they're not tests.
+                if matches!(def.returned, crate::data::Type::Iterator(_, _)) {
+                    continue;
+                }
                 let callable = attrs.is_empty()
                     || (has_user_args
                         && attrs.len() == 1

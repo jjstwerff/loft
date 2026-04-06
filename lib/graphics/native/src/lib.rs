@@ -522,9 +522,17 @@ pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i3
         gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32);
         gl::FramebufferTexture2D(gl::FRAMEBUFFER, att, gl::TEXTURE_2D, tex as u32, 0);
         if attachment == 1 {
-            // Depth-only FBO: no color draw/read
-            gl::DrawBuffer(gl::NONE);
-            gl::ReadBuffer(gl::NONE);
+            let mut color_type: i32 = 0;
+            gl::GetFramebufferAttachmentParameteriv(
+                gl::FRAMEBUFFER,
+                gl::COLOR_ATTACHMENT0,
+                gl::FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+                &mut color_type,
+            );
+            if color_type == gl::NONE as i32 {
+                gl::DrawBuffer(gl::NONE);
+                gl::ReadBuffer(gl::NONE);
+            }
         }
         gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
     }
@@ -854,6 +862,38 @@ pub extern "C" fn loft_gl_upload_canvas(
     unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
 }
 
+/// Return the line height in pixels for a font at the given size.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_text_height(_font_idx: i32, size: f64) -> i32 {
+    (size as f32 * 1.2) as i32
+}
+
+/// Rasterize text and write alpha values (0-255) into a pre-allocated i32 buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_rasterize_text_into(
+    font_idx: i32,
+    text_ptr: *const u8,
+    text_len: usize,
+    size: f64,
+    buf_ptr: *const i32,
+    buf_count: u32,
+) -> i32 {
+    let s = unsafe { loft_ffi::text(text_ptr, text_len) };
+    let (bw, bh, bitmap) = text::rasterize_text(font_idx, s, size as f32);
+    let count = (bw * bh) as usize;
+    if count == 0 || buf_ptr.is_null() {
+        return 0;
+    }
+    let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut i32, buf_count as usize) };
+    for (i, &a) in bitmap.iter().enumerate() {
+        if i >= buf.len() {
+            break;
+        }
+        buf[i] = a as i32;
+    }
+    bw as i32
+}
+
 /// Set line width for GL_LINES rendering.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_line_width(width: f64) {
@@ -893,6 +933,8 @@ pub unsafe extern "C" fn loft_register_v1(
         reg!(b"loft_gl_bind_texture", loft_gl_bind_texture);
         reg!(b"loft_gl_delete_texture", loft_gl_delete_texture);
         reg!(b"loft_gl_load_font", loft_gl_load_font);
+        reg!(b"loft_text_height", loft_text_height);
+        reg!(b"loft_rasterize_text_into", loft_rasterize_text_into);
         reg!(b"loft_gl_measure_text", loft_gl_measure_text);
         reg!(b"loft_gl_rasterize_text", loft_gl_rasterize_text);
         reg!(b"loft_gl_free_bitmap", loft_gl_free_bitmap);
