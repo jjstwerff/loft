@@ -1524,6 +1524,16 @@ impl Parser {
                 possible.push(*pos);
             }
             for pos in possible {
+                // P111: skip OpEqBool when comparing character with text —
+                // prevents 'a' == "b" from resolving as true == true.
+                if self.data.def(pos).name == "OpEqBool"
+                    && types.len() >= 2
+                    && ((matches!(types[0], Type::Character) && matches!(types[1], Type::Text(_)))
+                        || (matches!(types[0], Type::Text(_))
+                            && matches!(types[1], Type::Character)))
+                {
+                    continue;
+                }
                 let tp = self.call_nr(code, pos, list, types, false);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
