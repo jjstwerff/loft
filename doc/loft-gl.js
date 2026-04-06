@@ -423,14 +423,12 @@ export function initLoftGL(canvas) {
       });
     },
 
-    // Binary asset loading (fonts, etc.) — returns base64 string or null.
-    // The Rust side decodes base64 to bytes.
+    // Binary asset loading (fonts, etc.) — returns Uint8Array or null.
     load_binary_asset(path) {
       const asset = ctrl.assets[path];
-      if (asset && asset.base64) return asset.base64;
-      // Try path variants
+      if (asset && asset.bytes) return asset.bytes;
       for (const [k, v] of Object.entries(ctrl.assets)) {
-        if (path.endsWith(k) && v.base64) return v.base64;
+        if (path.endsWith(k) && v.bytes) return v.bytes;
       }
       return null;
     },
