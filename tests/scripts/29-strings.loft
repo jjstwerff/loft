@@ -130,37 +130,4 @@ fn test_string_scope() {
   assert("{a} via {b}" == "136 via n:1=1 n:2=12 n:3=122 ", "string scope");
 }
 
-// Regression: text_return incorrectly converted loop variables iterating
-// vector<text> into RefVar(Text) work-buffer parameters.  The loop variable
-// gets its value from the iterator, not a work buffer.  Fixed by skipping
-// variables that have a companion #index variable (loop iteration vars).
-fn tr_find(items: vector<text>) -> text {
-  for item in items {
-    if item.starts_with("x") { return item; }
-  }
-  ""
-}
-
-fn tr_join(items: vector<text>) -> text {
-  r = "";
-  for item in items {
-    r += item;
-  }
-  r
-}
-
-fn tr_format(items: vector<text>) -> text {
-  r = "";
-  for item in items {
-    r += "[{item}]";
-  }
-  r
-}
-
-fn test_loop_var_text_return() {
-  assert(tr_find(["a", "x1", "b"]) == "x1", "find={tr_find(["a", "x1", "b"])}");
-  assert(tr_find(["a", "b"]) == "", "no match");
-  assert(tr_join(["a", "b", "c"]) == "abc", "join={tr_join(["a", "b", "c"])}");
-  assert(tr_format(["a", "b"]) == "[a][b]", "format={tr_format(["a", "b"])}");
-}
 

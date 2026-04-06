@@ -833,10 +833,6 @@ use #count instead"
             && self.vars.is_defined(existing_var)
             && !self.vars.var_type(existing_var).is_same(&var_tp)
             && !self.vars.var_type(existing_var).is_unknown()
-            // Skip RefVar work-buffer parameters added by text_return — they
-            // share the name with the loop variable but are hidden arguments,
-            // not user-defined variables.
-            && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
         {
             diagnostic!(
                 self.lexer,

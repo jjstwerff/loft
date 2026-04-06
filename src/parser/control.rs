@@ -1829,13 +1829,6 @@ impl Parser {
                 if self.captured_names.iter().any(|(name, _)| name == n) {
                     continue;
                 }
-                // Skip loop iteration variables — they get their value from
-                // the iterator, not from a work buffer.  Detected by the
-                // presence of a companion "{name}#index" variable.
-                let index_name = format!("{n}#index");
-                if self.vars.var(&index_name) != u16::MAX {
-                    continue;
-                }
                 if matches!(tp, Type::Text(_)) {
                     // create a new attribute with this name
                     let a = self.data.add_attribute(
