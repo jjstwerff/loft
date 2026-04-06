@@ -23,6 +23,32 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
+## Public milestones
+
+Each milestone produces something visible that we can show to the world
+via GitHub Pages (`jjstwerff.github.io/loft/`) or itch.io.  These are
+the moments where people can see what loft does without installing anything.
+
+| # | Milestone | What people see | Depends on | Deploy to |
+|---|---|---|---|---|
+| P1 | **Language playground** | Type loft code, run it, see output — in the browser | W1 | GitHub Pages |
+| P2 | **Graphics gallery** | Static screenshots + source of all 23 examples | GAL.1 | GitHub Pages |
+| P3 | **Live graphics demos** | Examples running as WebGL in the browser | GL6.1-6.5, GAL.2 | GitHub Pages |
+| P4 | **Playable Breakout** | Click a link, play a game — first proof of the vision | G7, W1.1 | itch.io |
+| P5 | **Moros scene editor** | Build hex dungeon maps in the browser, export GLB | MO.12b | GitHub Pages |
+| P6 | **Moros with multiplayer** | DM + players share a live scene | SRV.3, GC.1 | hosted server |
+
+**P1** is the quickest win — the WASM `compile_and_run()` entry point exists,
+it just needs an HTML shell with a text editor and output panel.
+
+**P4** is the flagship — the first time someone plays a loft game in their
+browser via a shared link.  This is what goes on the README and social media.
+
+**P5** validates the full stack for a real application and gives the moros
+project a browser-based tool that DMs can use today.
+
+---
+
 ## 0.8.4 — Renderer + WebGL + first playable game
 
 The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
