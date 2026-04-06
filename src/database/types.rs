@@ -85,13 +85,25 @@ impl Stores {
         }
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &self.types[structure as usize].parts
         {
-            for (f_nr, f) in fld.iter().enumerate() {
-                let fld_content = self.content(f.content);
-                if fld_content != u16::MAX && fld_content == self.content(content) {
-                    if others.is_empty() {
-                        others.push(u16::MAX);
+            // P110: only link fields that are indexing types (sorted, hash, index),
+            // not plain vectors. Two vector<integer> fields must NOT be linked —
+            // inserting into one must not propagate to the other.
+            let is_index_type = matches!(
+                self.types[content as usize].parts,
+                Parts::Sorted(_, _)
+                    | Parts::Ordered(_, _)
+                    | Parts::Hash(_, _)
+                    | Parts::Index(_, _, _)
+            );
+            if is_index_type {
+                for (f_nr, f) in fld.iter().enumerate() {
+                    let fld_content = self.content(f.content);
+                    if fld_content != u16::MAX && fld_content == self.content(content) {
+                        if others.is_empty() {
+                            others.push(u16::MAX);
+                        }
+                        linked.insert(f_nr as u16, fld.len() as u16);
                     }
-                    linked.insert(f_nr as u16, fld.len() as u16);
                 }
             }
         }
