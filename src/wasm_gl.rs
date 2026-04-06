@@ -65,12 +65,23 @@ pub fn register_wgl_natives(state: &mut crate::state::State) {
     state.replace_native("loft_gl_mouse_x", wgl_mouse_x);
     state.replace_native("loft_gl_mouse_y", wgl_mouse_y);
     state.replace_native("loft_gl_mouse_button", wgl_mouse_button);
-    // Text/font and PNG save: leave as panic stubs from register_native_stubs.
-    // These are not used in WebGL demos.  If called, the panic message
-    // clearly states the function is not available.
+    // GL7.2: PNG save
+    state.replace_native("loft_save_png", wgl_save_png);
+    // GL7.3: Font/text — delegate to JS host
+    state.replace_native("loft_gl_load_font", wgl_load_font);
+    state.replace_native("loft_gl_measure_text", wgl_measure_text);
+    state.replace_native("loft_text_height", wgl_text_height);
+    state.replace_native("loft_rasterize_text_into", wgl_rasterize_text_into);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Decode a base64 string to bytes.
+#[cfg(feature = "wasm")]
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    // Use the existing base64 module in the loft crate.
+    Some(crate::base64::decode(input))
+}
 
 #[cfg(feature = "wasm")]
 fn gl_call(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
@@ -160,6 +171,8 @@ fn wgl_swap_buffers(_stores: &mut Stores, _stack: &mut DbRef) {
     {
         let args = js_sys::Array::new();
         gl_call("gl_swap_buffers", &args);
+        // FY.1: signal the interpreter to yield back to JavaScript.
+        _stores.frame_yield = true;
     }
 }
 
@@ -535,9 +548,20 @@ fn wgl_create_color_texture(stores: &mut Stores, stack: &mut DbRef) {
 // ── Textures ─────────────────────────────────────────────────────────────────
 
 fn wgl_load_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let _path = *stores.get::<Str>(stack);
-    // File-based texture loading not supported in WASM yet
-    stores.put(stack, -1i32);
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        // GL7.1: Pass path to JS; the gallery pre-loads assets and decodes
+        // the image via the browser's native image decoder.
+        let args = js_sys::Array::of1(&path.str().into());
+        let result = gl_call("gl_load_texture", &args);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        stores.put(stack, -1i32);
+    }
 }
 
 fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
@@ -677,4 +701,211 @@ fn wgl_mouse_button(stores: &mut Stores, stack: &mut DbRef) {
     }
     #[cfg(not(feature = "wasm"))]
     stores.put(stack, 0i32);
+}
+
+// ── GL7.2: PNG save ──────────────────────────────────────────────────────────
+
+/// save_png_raw(path, width, height, data) -> boolean
+fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
+    let data_ref = *stores.get::<DbRef>(stack);
+    let height = *stores.get::<i32>(stack);
+    let width = *stores.get::<i32>(stack);
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        // Extract pixel data and pass to JS for download.
+        let allocs = &stores.allocations;
+        let store = &allocs[data_ref.store_nr as usize];
+        let v_rec = store.get_int(data_ref.rec, data_ref.pos) as u32;
+        let len = if v_rec == 0 {
+            0
+        } else {
+            store.get_int(v_rec, 4) as u32
+        };
+        let arr = js_sys::Uint32Array::new_with_length(len);
+        for i in 0..len {
+            let val = store.get_int(v_rec + 2 + i, 0) as u32;
+            arr.set_index(i, val);
+        }
+        let args = js_sys::Array::new();
+        args.push(&path.str().into());
+        args.push(&width.into());
+        args.push(&height.into());
+        args.push(&arr.into());
+        gl_call("save_png", &args);
+        stores.put(stack, true);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, width, height, data_ref);
+        stores.put(stack, false);
+    }
+}
+
+// ── GL7.3: Font / text (fontdue in WASM) ─────────────────────────────────────
+
+#[cfg(feature = "wasm")]
+use std::cell::RefCell;
+
+#[cfg(feature = "wasm")]
+thread_local! {
+    static FONTS: RefCell<Vec<fontdue::Font>> = const { RefCell::new(Vec::new()) };
+}
+
+/// gl_load_font(path) -> integer
+fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        // Ask JS for binary asset data (base64-encoded).
+        let args = js_sys::Array::of1(&path.str().into());
+        let result = gl_call("load_binary_asset", &args);
+        let data = if let Some(s) = result.as_string() {
+            decode_base64(&s)
+        } else {
+            None
+        };
+        let Some(bytes) = data else {
+            stores.put(stack, -1i32);
+            return;
+        };
+        let font =
+            match fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default()) {
+                Ok(f) => f,
+                Err(_) => {
+                    stores.put(stack, -1i32);
+                    return;
+                }
+            };
+        let idx = FONTS.with(|fonts| {
+            let mut fonts = fonts.borrow_mut();
+            let idx = fonts.len() as i32;
+            fonts.push(font);
+            idx
+        });
+        stores.put(stack, idx);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        stores.put(stack, -1i32);
+    }
+}
+
+/// gl_measure_text(font, content, size) -> float
+fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
+    let size = *stores.get::<f64>(stack);
+    let content = *stores.get::<Str>(stack);
+    let font_idx = *stores.get::<i32>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        let width: f64 = FONTS.with(|fonts| {
+            let fonts = fonts.borrow();
+            let Some(font) = fonts.get(font_idx as usize) else {
+                return 0.0;
+            };
+            content
+                .str()
+                .chars()
+                .map(|c| {
+                    let (metrics, _) = font.rasterize(c, size as f32);
+                    f64::from(metrics.advance_width)
+                })
+                .sum()
+        });
+        stores.put(stack, width);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (font_idx, content, size);
+        stores.put(stack, 0.0f64);
+    }
+}
+
+/// gl_text_height(font, size) -> integer
+fn wgl_text_height(stores: &mut Stores, stack: &mut DbRef) {
+    let size = *stores.get::<f64>(stack);
+    let _font_idx = *stores.get::<i32>(stack);
+    stores.put(stack, (size * 1.2) as i32);
+}
+
+/// rasterize_text_into(font, content, size, buf) -> integer (width)
+/// Rasterizes text into a pre-allocated loft vector<integer> of alpha values.
+fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
+    let buf_ref = *stores.get::<DbRef>(stack);
+    let size = *stores.get::<f64>(stack);
+    let content = *stores.get::<Str>(stack);
+    let font_idx = *stores.get::<i32>(stack);
+
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (buf_ref, size, content, font_idx);
+        stores.put(stack, 0i32);
+    }
+
+    #[cfg(feature = "wasm")]
+    {
+        let size_f32 = size as f32;
+        let text = content.str().to_string();
+        let (bw, _bh, pixels) = FONTS.with(|fonts| {
+            let fonts = fonts.borrow();
+            let Some(font) = fonts.get(font_idx as usize) else {
+                return (0u32, 0u32, Vec::new());
+            };
+            // Rasterize each glyph
+            let mut glyphs: Vec<(fontdue::Metrics, Vec<u8>)> = Vec::new();
+            let mut total_w = 0u32;
+            for c in text.chars() {
+                let (m, bmp) = font.rasterize(c, size_f32);
+                total_w += m.advance_width as u32;
+                glyphs.push((m, bmp));
+            }
+            let line_h = (size_f32 * 1.2) as u32;
+            if total_w == 0 || line_h == 0 {
+                return (0, 0, Vec::new());
+            }
+            let mut px = vec![0u8; (total_w * line_h) as usize];
+            let mut cx = 0u32;
+            for (m, bmp) in &glyphs {
+                let gw = m.width as u32;
+                let gh = m.height as u32;
+                let baseline = (size_f32 * 0.8) as i32;
+                let y_off = (baseline - m.height as i32 - m.ymin).max(0) as u32;
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let dx = cx + gx;
+                        let dy = y_off + gy;
+                        if dx < total_w && dy < line_h {
+                            let src = bmp[(gy * gw + gx) as usize];
+                            let di = (dy * total_w + dx) as usize;
+                            if di < px.len() {
+                                px[di] = src.max(px[di]);
+                            }
+                        }
+                    }
+                }
+                cx += m.advance_width as u32;
+            }
+            (total_w, line_h, px)
+        });
+
+        if bw == 0 || pixels.is_empty() {
+            stores.put(stack, 0i32);
+            return;
+        }
+
+        // Write alpha values into the loft vector<integer> buffer.
+        let allocs = &mut stores.allocations;
+        let store = &mut allocs[buf_ref.store_nr as usize];
+        let v_rec = store.get_int(buf_ref.rec, buf_ref.pos) as u32;
+        if v_rec != 0 {
+            let buf_len = store.get_int(v_rec, 4) as u32;
+            let count = pixels.len().min(buf_len as usize);
+            for i in 0..count {
+                store.set_int(v_rec, 8 + i as u32 * 4, i32::from(pixels[i]));
+            }
+        }
+
+        stores.put(stack, bw as i32);
+    } // cfg(feature = "wasm")
 }

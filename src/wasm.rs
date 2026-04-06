@@ -617,6 +617,158 @@ pub fn compile_and_run(files_json: &str) -> String {
     )
 }
 
+// ── FY.2–FY.3  Game session with frame yield ────────────────────────────────
+
+/// Persistent game session that survives across frame yields.
+/// Owns State and Data so raw pointers inside State remain valid.
+struct GameSession {
+    state: crate::state::State,
+    data: crate::data::Data,
+}
+
+thread_local! {
+    static GAME_SESSION: RefCell<Option<GameSession>> = RefCell::new(None);
+}
+
+/// Start a game session: parse, compile, execute until the first frame yield.
+/// Returns JSON `{"ok":true}` on success or `{"ok":false,"error":"..."}` on failure.
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn compile_and_start(files_json: &str) -> String {
+    // Dispose previous session.
+    GAME_SESSION.with(|gs| {
+        if gs.borrow().is_some() {
+            #[cfg(feature = "wasm")]
+            {
+                let args = js_sys::Array::new();
+                host_call_raw("gl_destroy_window", &args);
+            }
+            *gs.borrow_mut() = None;
+        }
+    });
+
+    let files = match parse_files_json(files_json) {
+        Ok(f) => f,
+        Err(e) => return format!("{{\"ok\":false,\"error\":{}}}", json_str(&e)),
+    };
+
+    let mut all_files: Vec<(String, String)> = DEFAULT_FILES
+        .iter()
+        .chain(GRAPHICS_LIB_FILES.iter())
+        .map(|(n, c)| (n.to_string(), (*c).to_string()))
+        .collect();
+    for (name, content) in &files {
+        all_files.push((name.clone(), content.clone()));
+    }
+    virt_fs_populate(&all_files);
+    let _ = output_take();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        use crate::compile::byte_code;
+        use crate::diagnostics::Level;
+        use crate::parser::Parser;
+        use crate::scopes;
+        use crate::state::State;
+
+        let mut p = Parser::new();
+        for (name, _) in DEFAULT_FILES {
+            p.parse(name, true);
+            if p.diagnostics.level() >= Level::Error {
+                return Err(p.diagnostics.to_string());
+            }
+        }
+        let main_name = VIRT_FS.with(|fs| {
+            fs.borrow()
+                .keys()
+                .filter(|k| !k.starts_with("default/"))
+                .min()
+                .cloned()
+        });
+        let Some(main_name) = main_name else {
+            return Err("no user file found".to_string());
+        };
+        p.parse(&main_name, false);
+        if p.diagnostics.level() >= Level::Error {
+            return Err(p.diagnostics.to_string());
+        }
+        scopes::check(&mut p.data);
+        if p.diagnostics.level() >= Level::Error {
+            return Err(p.diagnostics.to_string());
+        }
+        let mut state = State::new(p.database);
+        byte_code(&mut state, &mut p.data);
+        crate::wasm_gl::register_wgl_natives(&mut state);
+        state.execute_argv("main", &p.data, &[]);
+        // execute_argv returns either because the program finished or because
+        // frame_yield was set.  Store the session for resume_frame.
+        Ok(GameSession {
+            state,
+            data: p.data,
+        })
+    }));
+
+    virt_fs_clear();
+
+    match result {
+        Ok(Ok(session)) => {
+            let yielded = session.state.database.frame_yield;
+            GAME_SESSION.with(|gs| *gs.borrow_mut() = Some(session));
+            if yielded {
+                format!("{{\"ok\":true,\"running\":true}}")
+            } else {
+                let out = output_take();
+                GAME_SESSION.with(|gs| *gs.borrow_mut() = None);
+                format!(
+                    "{{\"ok\":true,\"running\":false,\"output\":{}}}",
+                    json_str(&out)
+                )
+            }
+        }
+        Ok(Err(diag)) => {
+            format!("{{\"ok\":false,\"error\":{}}}", json_str(&diag))
+        }
+        Err(_panic) => {
+            GAME_SESSION.with(|gs| *gs.borrow_mut() = None);
+            format!("{{\"ok\":false,\"error\":\"internal panic\"}}")
+        }
+    }
+}
+
+/// Resume execution after a frame yield.  Returns JSON:
+/// `{"running":true}` — yielded again, call on next requestAnimationFrame
+/// `{"running":false,"output":"..."}` — program finished
+/// `{"running":false,"error":"..."}` — program crashed
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub fn resume_frame() -> String {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        GAME_SESSION.with(|gs| {
+            let mut slot = gs.borrow_mut();
+            let Some(session) = slot.as_mut() else {
+                return format!("{{\"running\":false}}");
+            };
+            let still_running = session.state.resume();
+            if still_running {
+                format!("{{\"running\":true}}")
+            } else {
+                let out = output_take();
+                *slot = None;
+                format!("{{\"running\":false,\"output\":{}}}", json_str(&out))
+            }
+        })
+    }));
+    match result {
+        Ok(json) => json,
+        Err(_panic) => {
+            GAME_SESSION.with(|gs| *gs.borrow_mut() = None);
+            #[cfg(feature = "wasm")]
+            {
+                let args = js_sys::Array::new();
+                host_call_raw("gl_destroy_window", &args);
+            }
+            format!("{{\"running\":false,\"error\":\"internal panic\"}}")
+        }
+    }
+}
+
 /// Parse `[{name: string, content: string}]` JSON into a Vec of pairs.
 fn parse_files_json(json: &str) -> Result<Vec<(String, String)>, String> {
     let json = json.trim();

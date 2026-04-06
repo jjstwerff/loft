@@ -1295,6 +1295,10 @@ impl State {
                 trail_head = (trail_head + 1) % 16;
             }
             OPERATORS[op as usize](self);
+            // FY.1: frame yield — return to caller (JS requestAnimationFrame).
+            if self.database.frame_yield {
+                return;
+            }
             #[cfg(debug_assertions)]
             {
                 step += 1;
@@ -1331,8 +1335,31 @@ impl State {
         }
 
         // Fix #88: pop the synthetic entry-function frame.
+        if !self.database.frame_yield {
+            self.call_stack.pop();
+            self.database.parallel_ctx = None;
+        }
+    }
+
+    /// FY.2: Resume execution after a frame yield.  Returns `true` while the
+    /// program is still running, `false` when it finishes.
+    pub fn resume(&mut self) -> bool {
+        self.database.frame_yield = false;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            OPERATORS[op as usize](self);
+            if self.database.frame_yield {
+                return true; // yielded again — still running
+            }
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        // Program finished — clean up.
         self.call_stack.pop();
         self.database.parallel_ctx = None;
+        false
     }
 
     /// Snapshot the bytecode, text segment, and native-function library for

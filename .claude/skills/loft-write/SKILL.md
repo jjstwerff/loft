@@ -410,6 +410,77 @@ match shape {
 
 ---
 
+## Text assignment pitfalls
+
+**`t = t[3..]` clears t** — self-referencing text slice assignment clears the variable before reading the slice. Use a fresh variable:
+```loft
+// WRONG: produces empty string
+t = t[3..];
+
+// CORRECT: intermediate variable
+s = t[3..];
+t = s;
+```
+
+**`h = h + expr` works (fixed)** — the parser detects this self-append pattern and skips the clear. But `h += expr` is always safe and preferred.
+
+**Text in function return accumulates** — in a text-returning function, `t = s` may APPEND instead of replace due to the text_return work buffer. Use early `return` instead of reassignment:
+```loft
+// WRONG: may produce "// hellohello" in text-returning function
+fn strip(line: text) -> text {
+  t = line;
+  if t.starts_with("// ") { s = t[3..]; t = s; }
+  t
+}
+
+// CORRECT: return directly, don't reassign
+fn strip(line: text) -> text {
+  if line.starts_with("// ") { return line[3..]; }
+  line
+}
+```
+
+**`character == text` always returns true** — the operator resolver falls through to `OpEqBool`. Workaround: format the character as text first:
+```loft
+// WRONG: always true
+if c == some_text { }
+
+// CORRECT
+if "{c}" == some_text { }
+```
+
+---
+
+## File I/O patterns
+
+```loft
+// Read a file
+f = file("path/to/file.txt");
+content = f.content();         // full text content
+lines = f.lines();             // vector<text> of lines
+
+// Write a file
+out = file("output.txt");
+out.write(content);            // overwrites entire file
+
+// List directory
+dir = file("some/directory");
+for ef in dir.files() {
+  path = ef.path;              // full path
+  // Extract filename from path (no .name field)
+  fname = path;
+  for c in path {
+    if c == '/' { fname = path[c#next..]; }
+  }
+}
+
+// Check existence
+f = file("test.txt");
+if f.exists() { }
+```
+
+---
+
 ## Known error messages → causes → fixes
 
 | Error message | Cause | Fix |
@@ -427,6 +498,10 @@ match shape {
 | Parse error on local type annotation | Complex generic annotation on local var | Drop the annotation; let type be inferred |
 | `Unknown record N` on nested field access | `vec[i].struct_field.nested` — deep chained access on vector elements | Avoid deep chaining on vector elements (P105) |
 | `fl_validate: positive header` | Complex nested struct assignment (3+ levels) | Simplify nested struct operations (P106) |
+| `Variable 'x' cannot change type from text to null` | `x: text = null;` — typed null init rejected | Use `x = "";` or avoid initializing to null |
+| Empty result from `t = t[3..]` | Text self-slice clears before read | Use `s = t[3..]; t = s;` (intermediate variable) |
+| Doubled text in function return | Text-returning fn accumulates instead of replacing | Use `return expr;` instead of `t = expr; ... t` |
+| `character == text` always true | Operator resolves to OpEqBool (both truthy) | Use `"{c}" == t` to compare as text |
 
 ---
 
@@ -449,8 +524,11 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] Hash collections are struct fields, not standalone locals
 - [ ] No `arr[lo..hi]` passed as `vector<T>` argument — use index bounds
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
-- [ ] ~~Struct field names unique~~ (no longer required — field lookups are type-scoped)
 - [ ] All `use` imports appear before any other declarations
 - [ ] Long literals use `l` suffix where needed (`0l`, `1000l`)
 - [ ] `--path` ends with `/` in CLI calls
 - [ ] String type in struct fields is `text`, not `string`
+- [ ] No `t = t[N..]` self-slice — use intermediate variable
+- [ ] No `character == text` comparisons — use `"{c}" == t`
+- [ ] Text-returning functions use `return expr` not `t = expr; t`
+- [ ] Prefer `h += expr` over `h = h + expr` for text building

@@ -401,3 +401,143 @@ browser download.
 Steps W1-W3 deliver the renderer abstraction (desktop-only).
 Steps W4-W6 deliver the static gallery (no execution).
 Steps W7-W11 deliver the interactive web experience.
+
+---
+
+## WebGL compatibility matrix — all 24 examples
+
+Completed items (GL6.1–GL6.5, GAL.2) deliver the WebGL2 bridge and gallery page.
+The remaining work is phased by what blocks each example.
+
+### Phase 1: Frame yield + 18 interactive examples (FY.1–FY.3, GAL.3)
+
+The frame-yield design ([WASM.md § Frame Yield](WASM.md#frame-yield--browser-game-loop-via-interpreter-suspension))
+suspends the interpreter at `gl_swap_buffers` and resumes on `requestAnimationFrame`.
+With this, all examples that use a render loop and don't need file I/O work immediately.
+
+| Example | Status | Notes |
+|---------|--------|-------|
+| 01 Hello Window | Ready | Clear + event loop only |
+| 02 Hello Triangle | Ready | GLB export path skipped |
+| 03 Shaders | Ready | Vertex colors, stride=10 |
+| 05 Transformations | Ready | Animated rotation |
+| 06 Coordinate Systems | Ready | Multiple cubes, perspective |
+| 07 Camera | Ready | Orbiting camera |
+| 08 Basic Lighting | Ready | Phong shading |
+| 09 Materials | Ready | Cube + sphere, PBR uniforms |
+| 12 Multiple Lights | Ready | Multi-light shader |
+| 13 Depth Testing | Ready | Depth fog |
+| 14 Blending | Ready | Alpha blend, depth mask |
+| 15 Face Culling | Ready | Backface culling toggle |
+| 16 Shadow Mapping | Ready | 2-pass, depth FBO |
+| 17 Post-Processing | Ready | FBO + fullscreen quad |
+| 18 PBR | Ready | Cook-Torrance, 5×5 grid |
+| 19 Complete Scene | Ready | Full pipeline showcase |
+| 22 Wireframe | Ready | Lines + points modes |
+| 23 Cleanup | Ready | Resource lifecycle |
+
+GLB export: examples 02–19 accept `--mode glb` via `arguments()`.  In WASM
+`arguments()` returns an empty vector, so the GLB path is never taken — only
+the interactive render loop runs.  No code changes needed.
+
+### Phase 2: Keyboard + mouse input (GL6.6 — 1 more example)
+
+| Example | Blocker | Fix |
+|---------|---------|-----|
+| 21 Keyboard Camera | `gl_key_pressed` / `gl_mouse_x/y` return stubs | Wire `keydown`/`keyup`/`mousemove` DOM events to a state map; `loftHost.gl_key_pressed(code)` reads the map |
+
+### Phase 3: Asset loading via VIRT_FS (GL7.1–GL7.4 — 4 more examples)
+
+**Design principle:** examples run unchanged.  The native functions are
+implemented in WASM to work without filesystem access.  No example code
+is modified — the gallery page provides asset files through VIRT_FS.
+
+#### GL7.1 — `gl_load_texture` reads from VIRT_FS
+
+`gl_load_texture("wall.jpg")` calls a native function that reads and
+decodes an image file.  In WASM:
+
+1. The gallery page bundles asset files (images) into the `files` JSON
+   array alongside the `.loft` source, e.g.:
+   ```js
+   [{ name: "main.loft", content: source },
+    { name: "wall.jpg", content: base64data }]
+   ```
+2. `compile_and_start` populates VIRT_FS with all files.
+3. The WASM `wgl_load_texture` reads the image bytes from VIRT_FS via
+   `virt_fs_get("wall.jpg")`, decodes PNG/JPG in Rust (the `png` crate
+   is already compiled into the WASM binary), and uploads to WebGL via
+   `loftHost.gl_upload_rgba_texture(pixels, w, h)`.
+
+**Unlocks:** example 04 (textures).
+
+#### GL7.2 — `save_png` writes to download / VIRT_FS
+
+`canvas.save_png("file.png")` writes a PNG file.  In WASM:
+
+1. The WASM `wgl_save_png` encodes the Canvas pixel data to PNG bytes
+   (the `png` crate is already available).
+2. Calls `loftHost.download_file("file.png", bytes)` which triggers a
+   browser download via `URL.createObjectURL(new Blob([bytes]))`.
+3. Alternative: write to VIRT_FS for inspection without download.
+
+**Unlocks:** example 10 (2D canvas).
+
+#### GL7.3 — `gl_load_font` + text rasterization
+
+`gl_load_font("font.ttf")` loads a TrueType font for CPU rasterization.
+The native implementation uses the `fontdue` crate.  In WASM:
+
+**Option A (preferred):** Compile `fontdue` to WASM.  It is pure Rust
+with no system dependencies — it should compile to `wasm32-unknown-unknown`
+directly.  The font file is provided via VIRT_FS (same as textures).
+All text rasterization functions (`gl_measure_text`, `gl_text_height`,
+`rasterize_text_into`) work unchanged.
+
+**Option B (fallback):** Delegate to the browser's Canvas 2D API.
+`loftHost.gl_load_font(name)` maps to CSS `@font-face`.
+`loftHost.rasterize_text(text, size)` uses `CanvasRenderingContext2D.fillText`
+and returns pixel data.  This changes the rendering backend but keeps the
+loft API identical.
+
+**Unlocks:** example 20 (textured cube with text).
+
+#### GL7.4 — Example 11 needs a render loop
+
+Example 11 (scene graph) currently only exports GLB — it has no
+interactive render loop.  In WASM `arguments()` returns `[]`, so
+`--mode glb` is never selected, but there is no native render path
+either.
+
+**Fix:** Add an interactive render fallback to example 11, identical
+to how examples 02–09 work: `if mode != "glb" { render_native(scene) }`.
+This is a **one-line change to the example** — adding a render path
+that was always intended but not yet written.  The scene construction
+code is unchanged; only the entry point gains a `render_native` branch.
+
+This is **not** a WASM workaround — it makes the example more complete
+on native too.
+
+### Phase 4: High-level renderer (GL8.1 — 1 more example)
+
+Example 24 uses `render::create_renderer()` + `render_loop()`.
+`render.loft` is pure loft code that calls `gl_*` functions internally.
+With frame yield, `render_loop`'s internal `for` loop yields at
+`gl_swap_buffers` naturally.  `create_renderer` compiles PBR + shadow
+shaders via `gl_create_shader` — shader version patching (GL6.5) is
+already done.
+
+**No new WASM code needed.**  If frame yield works and the gl_* bridge
+is complete, example 24 runs unchanged.  The only risk is that
+`render.loft` uses gl_* functions not yet tested end-to-end in the
+WebGL bridge (FBO setup, depth textures, multi-pass rendering).
+These are all implemented in the bridge; they just need testing.
+
+### Summary: path to 24/24
+
+| Phase | Examples | Effort | Depends on |
+|-------|----------|--------|------------|
+| Phase 1 | 18 of 24 | M (frame yield) | FY.1–FY.3 |
+| Phase 2 | +1 (19/24) | S (DOM events) | GL6.6 |
+| Phase 3 | +4 (23/24) | M (VIRT_FS asset loading) | GL7.1–GL7.4 |
+| Phase 4 | +1 (24/24) | S (testing only) | GL8.1, FY.1 |

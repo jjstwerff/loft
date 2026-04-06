@@ -38,6 +38,47 @@ export function compile_and_run(files_json) {
 }
 
 /**
+ * Start a game session: parse, compile, execute until the first frame yield.
+ * Returns JSON `{"ok":true}` on success or `{"ok":false,"error":"..."}` on failure.
+ * @param {string} files_json
+ * @returns {string}
+ */
+export function compile_and_start(files_json) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(files_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.compile_and_start(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Resume execution after a frame yield.  Returns JSON:
+ * `{"running":true}` — yielded again, call on next requestAnimationFrame
+ * `{"running":false,"output":"..."}` — program finished
+ * `{"running":false,"error":"..."}` — program crashed
+ * @returns {string}
+ */
+export function resume_frame() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const ret = wasm.resume_frame();
+        deferred1_0 = ret[0];
+        deferred1_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+    }
+}
+
+/**
  * W1.18-2: Entry point called by each Worker Thread.  The JS worker loop calls
  * this with the function index and element range.  The worker reads from the
  * shared WASM memory (Store heap) and writes results directly back.
@@ -128,6 +169,14 @@ function __wbg_get_imports() {
             const ret = new Uint8Array(getArrayU8FromWasm0(arg0, arg1));
             return ret;
         },
+        __wbg_new_with_length_3301eabff12dda6d: function(arg0) {
+            const ret = new Float32Array(arg0 >>> 0);
+            return ret;
+        },
+        __wbg_new_with_length_aef51997e7ea422c: function(arg0) {
+            const ret = new Uint32Array(arg0 >>> 0);
+            return ret;
+        },
         __wbg_of_a96e15740cdace88: function(arg0) {
             const ret = Array.of(arg0);
             return ret;
@@ -142,6 +191,16 @@ function __wbg_get_imports() {
         },
         __wbg_prototypesetcall_3875d54d12ef2eec: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_push_d0006a37f9fcda6d: function(arg0, arg1) {
+            const ret = arg0.push(arg1);
+            return ret;
+        },
+        __wbg_set_index_65d2a995fe9f58d6: function(arg0, arg1, arg2) {
+            arg0[arg1 >>> 0] = arg2 >>> 0;
+        },
+        __wbg_set_index_798d032904959949: function(arg0, arg1, arg2) {
+            arg0[arg1 >>> 0] = arg2;
         },
         __wbg_static_accessor_GLOBAL_8dfb7f5e26ebe523: function() {
             const ret = typeof global === 'undefined' ? null : global;

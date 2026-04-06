@@ -918,6 +918,10 @@ pub fn page_html(title: &str, nav: &str, h1: &str, body: &str) -> String {
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
   <title>Loft - {title}</title>\n\
   <link rel=\"stylesheet\" href=\"style.css\">\n\
+  <style>.playground-link{{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;\
+background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}}\
+.playground-link:hover{{filter:brightness(1.15)}}\
+@media print{{.playground-link{{display:none}}}}</style>\n\
 </head>\n\
 <body>\n\
   <nav>{nav}</nav>\n\
@@ -925,6 +929,28 @@ pub fn page_html(title: &str, nav: &str, h1: &str, body: &str) -> String {
   <article>\n{body}\n  </article>\n\
   <script src=\"search-index.js\"></script>\n\
   <script src=\"search.js\"></script>\n\
+  <script>\n\
+(function(){{\n\
+  var m={{\"Keywords\":\"keywords\",\"Texts\":\"texts\",\"Integers\":\"integers\",\
+\"Boolean\":\"boolean\",\"Float\":\"float\",\"Functions\":\"functions\",\
+\"Vector\":\"vector\",\"Structs\":\"structs\",\"Enums\":\"enums\",\
+\"Sorted\":\"sorted\",\"Index\":\"index\",\"Hash\":\"hash\",\"File\":\"file\",\
+\"Lexer\":\"lexer\",\"Parser\":\"parser\",\"Libraries\":\"libraries\",\
+\"Store Locks\":\"store_locks\",\"Parallel execution\":\"parallel_execution\",\
+\"Logging\":\"logging\",\"Time\":\"time\",\"Safety\":\"safety\",\"JSON\":\"json\",\
+\"Generics\":\"generics\",\"Closures\":\"closures\",\"Coroutines\":\"coroutines\",\
+\"Tuples\":\"tuples\",\"Match\":\"match\",\"Formatting\":\"formatting\"}};\n\
+  var h=document.querySelector('h1');\n\
+  if(!h)return;\n\
+  var key=m[h.textContent];\n\
+  if(!key)return;\n\
+  var a=document.createElement('a');\n\
+  a.className='playground-link';\n\
+  a.href='playground.html?example='+key;\n\
+  a.textContent='\\u25B6 Try in Playground';\n\
+  h.parentNode.insertBefore(a,h.nextSibling);\n\
+}})();\n\
+  </script>\n\
 </body>\n\
 </html>\n"
     )

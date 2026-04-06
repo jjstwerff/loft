@@ -86,10 +86,7 @@ select {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-#gl-canvas {
-  max-width: 100%;
-  max-height: 100%;
-}
+#gl-canvas { max-width: 100%; max-height: 100%; }
 #source {
   flex: 1;
   background: var(--surface);
@@ -149,6 +146,7 @@ select {
   <div class="toolbar">
     <select id="examples"><option value="">-- Select example --</option></select>
     <button id="run-btn" onclick="runExample()" disabled>&#9654; Run</button>
+    <button id="stop-btn" onclick="loftGL.shouldClose=true">&#9632; Stop</button>
   </div>
 </header>
 
@@ -170,443 +168,62 @@ select {
 </div>
 
 <script type="module">
-import init, { compile_and_run } from './pkg/loft.js';
+import init, { compile_and_start, resume_frame } from './pkg/loft.js';
+import { initLoftGL } from '../lib/graphics/js/loft-gl.js';
+import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
 
-// ── Graphics examples (embedded) ────────────────────────────────────────────
-const EXAMPLES = {
-  '01-hello-window': `use graphics;
+// ── WebGL bridge from library ────────────────────────────────────────────────
+const canvas = document.getElementById('gl-canvas');
+let loftGL = null;
 
-fn main() {
-  if !graphics::gl_create_window(800, 600, "01 - Hello Window") {
-    println("Failed to create window");
-    return;
-  }
-  for _ in 0..60 {
-    if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
-}`,
-
-  '02-hello-triangle': `use graphics;
-use mesh;
-use math;
-
-VERT_SRC = \`
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-void main() {{
-    gl_Position = vec4(aPos, 1.0);
-}}
-\`;
-
-FRAG_SRC = \`
-#version 330 core
-out vec4 FragColor;
-void main() {{
-    FragColor = vec4(1.0, 0.5, 0.2, 1.0);
-}}
-\`;
-
-fn build_triangle() -> mesh::Mesh {
-  ht_m = mesh::mesh("triangle");
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3(-0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3( 0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3( 0.0,  0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.5, 1.0)));
-  ht_m.add_triangle(0, 1, 2);
-  ht_m
-}
-
-fn main() {
-  m_tri = build_triangle();
-  if !graphics::gl_create_window(800, 600, "02 - Hello Triangle") {
-    println("Failed to create window");
-    return;
-  }
-  shader = graphics::gl_create_shader(VERT_SRC, FRAG_SRC);
-  data = mesh::mesh_to_floats(m_tri);
-  vao = graphics::gl_upload_vertices(data, 6);
-  for _ in 0..60 {
-    if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
-    graphics::gl_use_shader(shader);
-    graphics::gl_draw(vao, 3);
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
-}`,
+// Asset map: example key → list of { name, type } to pre-load.
+// type: 'image' = decode as HTMLImageElement, 'binary' = store as base64.
+const ASSET_MAP = {
+  '04-textures': [{ name: 'wall.jpg', type: 'image' }],
+  '20-textured-cube': [{ name: 'DejaVuSans-Bold.ttf', type: 'binary' }],
+};
+const ASSET_BASE = '../lib/graphics/examples/';
+// Font search: example 20 tries system paths; map them to our served file.
+const FONT_ALIASES = {
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  'C:/Windows/Fonts/arial.ttf': 'DejaVuSans-Bold.ttf',
 };
 
-const EXAMPLE_LIST = [
-  { key: '01-hello-window', name: '01 - Hello Window' },
-  { key: '02-hello-triangle', name: '02 - Hello Triangle' },
-];
-
-// ── WebGL2 bridge ────────────────────────────────────────────────────────────
-const canvas = document.getElementById('gl-canvas');
-let gl = null;
-let programs = [];   // index → WebGLProgram
-let vaos = [];       // index → { vao, vertexCount }
-let textures = [];   // index → WebGLTexture
-let fbos = [];       // index → WebGLFramebuffer
-let frameCount = 0;
-
-function initGL() {
-  gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
-  if (!gl) {
-    console.error('WebGL2 not available');
-    return false;
-  }
-  return true;
-}
-
-// Map loft capability constants to WebGL
-function glCap(cap) {
-  switch (cap) {
-    case 1: return gl.DEPTH_TEST;
-    case 2: return gl.BLEND;
-    case 3: return gl.CULL_FACE;
-    default: return cap;
-  }
-}
-
-function glBlendFactor(f) {
-  switch (f) {
-    case 0: return gl.ZERO;
-    case 1: return gl.ONE;
-    case 2: return gl.SRC_ALPHA;
-    case 3: return gl.ONE_MINUS_SRC_ALPHA;
-    case 4: return gl.DST_ALPHA;
-    case 5: return gl.ONE_MINUS_DST_ALPHA;
-    default: return f;
+async function preloadAssets(exampleKey) {
+  if (!loftGL) return;
+  loftGL.assets = {};
+  const entries = ASSET_MAP[exampleKey];
+  if (!entries) return;
+  for (const entry of entries) {
+    if (entry.type === 'image') {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise(resolve => {
+        img.onload = resolve;
+        img.onerror = () => { console.warn('Failed to load:', entry.name); resolve(); };
+        img.src = ASSET_BASE + entry.name;
+      });
+      loftGL.assets[entry.name] = { image: img };
+      loftGL.assets['examples/' + entry.name] = { image: img };
+    } else if (entry.type === 'binary') {
+      try {
+        const resp = await fetch(ASSET_BASE + entry.name);
+        const buf = await resp.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        // Register under the filename and all known aliases
+        loftGL.assets[entry.name] = { base64: b64 };
+        for (const [alias, target] of Object.entries(FONT_ALIASES)) {
+          if (target === entry.name) {
+            loftGL.assets[alias] = { base64: b64 };
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load binary asset:', entry.name, e);
+      }
+    }
   }
 }
-
-function glDrawMode(mode) {
-  switch (mode) {
-    case 0: return gl.TRIANGLES;
-    case 1: return gl.LINES;
-    case 2: return gl.POINTS;
-    default: return gl.TRIANGLES;
-  }
-}
-
-// The loftHost interface — called by WASM via host_call
-window.loftHost = window.loftHost || {};
-Object.assign(window.loftHost, {
-  gl_create_window(w, h, title) {
-    canvas.width = w;
-    canvas.height = h;
-    if (!gl) initGL();
-    programs = [];
-    vaos = [];
-    textures = [];
-    fbos = [];
-    frameCount = 0;
-    gl.viewport(0, 0, w, h);
-    return true;
-  },
-
-  gl_poll_events() {
-    frameCount++;
-    return true;  // no close button in browser
-  },
-
-  gl_swap_buffers() {
-    gl.flush();
-  },
-
-  gl_clear(color) {
-    // color is packed as 0xRRGGBBAA (loft rgba format)
-    const r = ((color >>> 24) & 0xff) / 255;
-    const g = ((color >>> 16) & 0xff) / 255;
-    const b = ((color >>> 8)  & 0xff) / 255;
-    const a = (color & 0xff) / 255;
-    gl.clearColor(r, g, b, a);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  },
-
-  gl_destroy_window() {
-    // Clean up GL resources
-    for (const p of programs) if (p) gl.deleteProgram(p);
-    for (const v of vaos) if (v) gl.deleteVertexArray(v.vao);
-    for (const t of textures) if (t) gl.deleteTexture(t);
-    for (const f of fbos) if (f) gl.deleteFramebuffer(f);
-    programs = [];
-    vaos = [];
-    textures = [];
-    fbos = [];
-  },
-
-  gl_create_shader(vertSrc, fragSrc) {
-    const vs = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vs, vertSrc);
-    gl.compileShader(vs);
-    if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
-      console.error('Vertex shader error:', gl.getShaderInfoLog(vs));
-      gl.deleteShader(vs);
-      return -1;
-    }
-    const fs = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fs, fragSrc);
-    gl.compileShader(fs);
-    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-      console.error('Fragment shader error:', gl.getShaderInfoLog(fs));
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      return -1;
-    }
-    const prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.error('Link error:', gl.getProgramInfoLog(prog));
-      gl.deleteProgram(prog);
-      return -1;
-    }
-    const idx = programs.length;
-    programs.push(prog);
-    return idx;
-  },
-
-  gl_use_shader(program) {
-    if (program >= 0 && program < programs.length) {
-      gl.useProgram(programs[program]);
-    }
-  },
-
-  gl_upload_vertices(data, stride) {
-    // data is a Float32Array, stride is floats-per-vertex
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    const bytesPerVertex = stride * 4;
-    // Position: location 0, 3 floats
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, bytesPerVertex, 0);
-    if (stride >= 6) {
-      // Normal: location 1, 3 floats
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, bytesPerVertex, 12);
-    }
-    if (stride >= 8) {
-      // UV: location 2, 2 floats
-      gl.enableVertexAttribArray(2);
-      gl.vertexAttribPointer(2, 2, gl.FLOAT, false, bytesPerVertex, 24);
-    }
-    if (stride >= 10) {
-      // Color: location 3, 2 floats (or tangent)
-      gl.enableVertexAttribArray(3);
-      gl.vertexAttribPointer(3, 2, gl.FLOAT, false, bytesPerVertex, 32);
-    }
-    gl.bindVertexArray(null);
-    const vertexCount = data.length / stride;
-    const idx = vaos.length;
-    vaos.push({ vao, vbo, vertexCount });
-    return idx;
-  },
-
-  gl_draw(vaoIdx, vertexCount) {
-    if (vaoIdx >= 0 && vaoIdx < vaos.length) {
-      gl.bindVertexArray(vaos[vaoIdx].vao);
-      gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
-      gl.bindVertexArray(null);
-    }
-  },
-
-  gl_draw_mode(vaoIdx, vertexCount, mode) {
-    if (vaoIdx >= 0 && vaoIdx < vaos.length) {
-      gl.bindVertexArray(vaos[vaoIdx].vao);
-      gl.drawArrays(glDrawMode(mode), 0, vertexCount);
-      gl.bindVertexArray(null);
-    }
-  },
-
-  gl_draw_elements(vaoIdx, indexCount, mode) {
-    if (vaoIdx >= 0 && vaoIdx < vaos.length) {
-      gl.bindVertexArray(vaos[vaoIdx].vao);
-      gl.drawElements(glDrawMode(mode), indexCount, gl.UNSIGNED_INT, 0);
-      gl.bindVertexArray(null);
-    }
-  },
-
-  gl_draw_fullscreen_quad() {
-    // TODO: implement fullscreen quad for post-processing
-  },
-
-  gl_set_uniform_mat4(program, name, mat) {
-    if (program >= 0 && program < programs.length) {
-      const loc = gl.getUniformLocation(programs[program], name);
-      if (loc) gl.uniformMatrix4fv(loc, false, mat);
-    }
-  },
-
-  gl_set_uniform_float(program, name, val) {
-    if (program >= 0 && program < programs.length) {
-      const loc = gl.getUniformLocation(programs[program], name);
-      if (loc) gl.uniform1f(loc, val);
-    }
-  },
-
-  gl_set_uniform_int(program, name, val) {
-    if (program >= 0 && program < programs.length) {
-      const loc = gl.getUniformLocation(programs[program], name);
-      if (loc) gl.uniform1i(loc, val);
-    }
-  },
-
-  gl_set_uniform_vec3(program, name, x, y, z) {
-    if (program >= 0 && program < programs.length) {
-      const loc = gl.getUniformLocation(programs[program], name);
-      if (loc) gl.uniform3f(loc, x, y, z);
-    }
-  },
-
-  gl_enable(cap) { gl.enable(glCap(cap)); },
-  gl_disable(cap) { gl.disable(glCap(cap)); },
-
-  gl_blend_func(src, dst) {
-    gl.blendFunc(glBlendFactor(src), glBlendFactor(dst));
-  },
-
-  gl_cull_face(face) {
-    gl.cullFace(face === 1 ? gl.FRONT : gl.BACK);
-  },
-
-  gl_depth_mask(write) {
-    gl.depthMask(write);
-  },
-
-  gl_viewport(x, y, w, h) {
-    gl.viewport(x, y, w, h);
-  },
-
-  gl_line_width(width) {
-    gl.lineWidth(width);
-  },
-
-  gl_point_size(size) {
-    // WebGL does not support gl.pointSize; use gl_PointSize in vertex shader
-  },
-
-  gl_create_framebuffer() {
-    const fbo = gl.createFramebuffer();
-    const idx = fbos.length;
-    fbos.push(fbo);
-    return idx;
-  },
-
-  gl_bind_framebuffer(fboIdx) {
-    if (fboIdx === 0 || fboIdx === -1) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    } else if (fboIdx >= 0 && fboIdx < fbos.length) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[fboIdx]);
-    }
-  },
-
-  gl_framebuffer_texture(fboIdx, attachment, texIdx) {
-    if (fboIdx >= 0 && fboIdx < fbos.length && texIdx >= 0 && texIdx < textures.length) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbos[fboIdx]);
-      const attach = attachment === 1 ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0;
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, attach, gl.TEXTURE_2D, textures[texIdx], 0);
-    }
-  },
-
-  gl_create_depth_texture(w, h) {
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const idx = textures.length;
-    textures.push(tex);
-    return idx;
-  },
-
-  gl_create_color_texture(w, h) {
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    const idx = textures.length;
-    textures.push(tex);
-    return idx;
-  },
-
-  gl_upload_canvas(data, w, h) {
-    // data is Uint32Array of 0xAARRGGBB pixels → convert to RGBA bytes
-    const pixels = new Uint8Array(w * h * 4);
-    for (let i = 0; i < data.length; i++) {
-      const c = data[i];
-      pixels[i * 4 + 0] = (c >>> 16) & 0xff; // R
-      pixels[i * 4 + 1] = (c >>> 8) & 0xff;  // G
-      pixels[i * 4 + 2] = c & 0xff;           // B
-      pixels[i * 4 + 3] = (c >>> 24) & 0xff;  // A
-    }
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    const idx = textures.length;
-    textures.push(tex);
-    return idx;
-  },
-
-  gl_bind_texture(texIdx, unit) {
-    gl.activeTexture(gl.TEXTURE0 + unit);
-    if (texIdx >= 0 && texIdx < textures.length) {
-      gl.bindTexture(gl.TEXTURE_2D, textures[texIdx]);
-    }
-  },
-
-  gl_delete_texture(texIdx) {
-    if (texIdx >= 0 && texIdx < textures.length && textures[texIdx]) {
-      gl.deleteTexture(textures[texIdx]);
-      textures[texIdx] = null;
-    }
-  },
-
-  gl_delete_shader(progIdx) {
-    if (progIdx >= 0 && progIdx < programs.length && programs[progIdx]) {
-      gl.deleteProgram(programs[progIdx]);
-      programs[progIdx] = null;
-    }
-  },
-
-  gl_delete_vao(vaoIdx) {
-    if (vaoIdx >= 0 && vaoIdx < vaos.length && vaos[vaoIdx]) {
-      gl.deleteVertexArray(vaos[vaoIdx].vao);
-      gl.deleteBuffer(vaos[vaoIdx].vbo);
-      vaos[vaoIdx] = null;
-    }
-  },
-
-  gl_delete_framebuffer(fboIdx) {
-    if (fboIdx >= 0 && fboIdx < fbos.length && fbos[fboIdx]) {
-      gl.deleteFramebuffer(fbos[fboIdx]);
-      fbos[fboIdx] = null;
-    }
-  },
-
-  gl_key_pressed(keyCode) { return false; },
-  gl_mouse_x() { return 0.0; },
-  gl_mouse_y() { return 0.0; },
-  gl_mouse_button() { return 0; },
-});
 
 // ── UI ───────────────────────────────────────────────────────────────────────
 const exampleSelect = document.getElementById('examples');
@@ -617,9 +234,10 @@ const timingEl = document.getElementById('timing');
 const runBtn = document.getElementById('run-btn');
 
 let currentSource = '';
+let currentKey = '';
 let loftReady = false;
 
-for (const ex of EXAMPLE_LIST) {
+for (const ex of GALLERY_LIST) {
   const opt = document.createElement('option');
   opt.value = ex.key;
   opt.textContent = ex.name;
@@ -628,8 +246,9 @@ for (const ex of EXAMPLE_LIST) {
 
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
-  if (key && EXAMPLES[key]) {
-    currentSource = EXAMPLES[key];
+  if (key && GALLERY_EXAMPLES[key]) {
+    currentKey = key;
+    currentSource = GALLERY_EXAMPLES[key];
     sourceEl.textContent = currentSource;
     outputEl.textContent = '';
     statusEl.textContent = 'Ready';
@@ -638,20 +257,16 @@ exampleSelect.addEventListener('change', () => {
   }
 });
 
-// ── Run ──────────────────────────────────────────────────────────────────────
+// ── Init ─────────────────────────────────────────────────────────────────────
 async function initLoft() {
   try {
     await init();
     loftReady = true;
     runBtn.disabled = false;
     document.getElementById('loading').style.display = 'none';
+    loftGL = initLoftGL(canvas);
     statusEl.textContent = 'Ready';
     statusEl.className = 'ok';
-    // Initialize WebGL
-    if (!initGL()) {
-      statusEl.textContent = 'WebGL2 not available';
-      statusEl.className = 'err';
-    }
   } catch (e) {
     document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
     statusEl.textContent = 'Failed';
@@ -659,38 +274,78 @@ async function initLoft() {
   }
 }
 
-window.runExample = function() {
+// ── Run with frame yield ─────────────────────────────────────────────────────
+let animFrame = 0;
+let frameCount = 0;
+
+window.runExample = async function() {
   if (!loftReady || !currentSource) return;
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = 0; }
+  loftGL.shouldClose = false;
   outputEl.textContent = '';
-  statusEl.textContent = 'Running...';
+  statusEl.textContent = 'Loading assets...';
   statusEl.className = 'info';
   timingEl.textContent = '';
+  frameCount = 0;
 
+  // Pre-load assets for this example
+  const selectedKey = currentKey;
+  await preloadAssets(selectedKey);
+
+  statusEl.textContent = 'Compiling...';
   const files = JSON.stringify([{ name: 'main.loft', content: currentSource }]);
-  const t0 = performance.now();
   let result;
   try {
-    result = JSON.parse(compile_and_run(files));
+    result = JSON.parse(compile_and_start(files));
   } catch (e) {
     outputEl.textContent = 'Internal error: ' + e.message;
     statusEl.textContent = 'Error';
     statusEl.className = 'err';
     return;
   }
-  const elapsed = (performance.now() - t0).toFixed(1);
 
-  let out = result.output || '';
-  if (result.diagnostics) out += result.diagnostics;
-  outputEl.textContent = out;
-
-  if (result.success) {
-    statusEl.textContent = 'Ok';
-    statusEl.className = 'ok';
-  } else {
+  if (!result.ok) {
+    outputEl.textContent = result.error || 'Compilation failed';
     statusEl.textContent = 'Failed';
     statusEl.className = 'err';
+    return;
   }
-  timingEl.textContent = elapsed + ' ms';
+
+  if (!result.running) {
+    outputEl.textContent = result.output || '';
+    statusEl.textContent = 'Ok';
+    statusEl.className = 'ok';
+    return;
+  }
+
+  statusEl.textContent = 'Running';
+  statusEl.className = 'ok';
+  canvas.focus();
+
+  function frame() {
+    frameCount++;
+    let r;
+    try {
+      r = JSON.parse(resume_frame());
+    } catch (e) {
+      outputEl.textContent = 'Runtime error: ' + e.message;
+      statusEl.textContent = 'Error';
+      statusEl.className = 'err';
+      animFrame = 0;
+      return;
+    }
+    if (r.running && !loftGL.shouldClose) {
+      timingEl.textContent = `frame ${frameCount}`;
+      animFrame = requestAnimationFrame(frame);
+    } else {
+      animFrame = 0;
+      outputEl.textContent = r.output || r.error || '';
+      statusEl.textContent = r.error ? 'Error' : 'Done';
+      statusEl.className = r.error ? 'err' : 'ok';
+      timingEl.textContent = `${frameCount} frames`;
+    }
+  }
+  animFrame = requestAnimationFrame(frame);
 };
 
 initLoft();

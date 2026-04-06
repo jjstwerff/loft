@@ -742,6 +742,43 @@ impl State {
         }
     }
 
+    /// Emit a null sentinel for the given type onto the stack.
+    /// Used when Value::Null appears in a typed context (e.g. function argument).
+    fn emit_typed_null(&mut self, stack: &mut Stack, tp: &Type) {
+        match tp {
+            Type::Text(_) => {
+                stack.add_op("OpConvTextFromNull", self);
+            }
+            Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                stack.add_op("OpConvRefFromNull", self);
+            }
+            Type::Integer(_, _, _) | Type::Character => {
+                stack.add_op("OpConstInt", self);
+                self.code_add(i32::MIN);
+            }
+            Type::Long => {
+                stack.add_op("OpConstLong", self);
+                self.code_add(i64::MIN);
+            }
+            Type::Float => {
+                stack.add_op("OpConstFloat", self);
+                self.code_add(f64::NAN);
+            }
+            Type::Single => {
+                stack.add_op("OpConstSingle", self);
+                self.code_add(f32::NAN.to_bits());
+            }
+            Type::Boolean => {
+                stack.add_op("OpConstInt", self);
+                self.code_add(i32::MIN);
+            }
+            _ => {
+                // For other types, push a zero-filled DbRef as a generic null.
+                stack.add_op("OpNullRefSentinel", self);
+            }
+        }
+    }
+
     /// Adjust the slot position for a first-assignment variable.
     /// Case 1: pre-assigned above TOS → move down. Case 2: large type below TOS →
     /// override only if no child-scope overlap (A13 guard).
@@ -1108,6 +1145,12 @@ impl State {
                     tps.push(a.typedef.clone());
                 } else {
                     tps.push(self.generate(&parameters[a_nr], stack, false));
+                    // When a Value::Null is passed as a typed argument, generate()
+                    // pushes 0 bytes.  Emit the correct null sentinel for the
+                    // expected type so the stack size matches.
+                    if parameters[a_nr] == Value::Null && stack.position == stack_before {
+                        self.emit_typed_null(stack, &a.typedef);
+                    }
                     // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
                     // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
                     if matches!(a.typedef, Type::Function(_, _, _))

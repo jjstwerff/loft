@@ -21,41 +21,67 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 ---
 
-## 0.8.4 — Renderer + WebGL + first playable game
+## Completed (not on roadmap)
 
-The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
-Items marked 🌐 produce something publicly visible on GitHub Pages or itch.io.
+Unified renderer design (R1–R4), WASM build + playground (W1, W1.P),
+WebGL2 bridge with shader patching (GL6.1–GL6.5), gallery page (GAL.2),
+playground assert reporting, grouped examples, syntax highlighting.
 
-### Step 1: Unified renderer (native works → WebGL plugs in)
+---
 
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| R1     | `render.loft` — Renderer struct, built-in PBR shader   | M  | ✓      | RENDERER.md                |
-| R2     | Shadow pass + color pass in `render.frame()`           | M  | ✓      | RENDERER.md                |
-| R3     | `render.run()`, `elapsed()`, `destroy()`               | S  | ✓      | RENDERER.md                |
-| R4     | Update examples 11, 19 to use renderer                 | S  | ✓      | examples/                  |
+## 0.8.4 — All 24 OpenGL examples in browser + first playable game
 
-### Step 2: WASM in browser + language playground
+Everything needed before publishing the live graphics gallery, in order.
 
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| W1     | WASM build + `compile_and_run()` in browser            | M  | ✓      | WASM.md, WEB_IDE.md M1     |
-| W1.P   | 🌐 **Language playground** — editor + output on GH Pages | S  | ✓      | WEB_IDE.md                 |
+### 1. Frame yield — make the render loop work in WASM
 
-### Step 3: Graphics gallery (static, no WebGL needed)
+The interpreter pauses at `gl_swap_buffers` and returns to JavaScript.
+`requestAnimationFrame` calls `resume_frame` to continue.  Without this,
+no interactive example works in the browser.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
-| GAL.1P | 🌐 **Graphics gallery** — screenshots + source on GH Pages | S  | ✓      | WEB_EXAMPLES.md            |
+| FY.1   | Frame yield — interpreter pauses at `gl_swap_buffers`  | M  | ✓      | WASM.md § Frame Yield      |
+| FY.2   | `resume_frame` WASM export + JS frame loop             | S  | ✓      | WASM.md § Frame Yield      |
+| FY.3   | Session lifecycle (re-run disposal, panic recovery)     | S  | ✓      | WASM.md § Frame Yield      |
 
-### Step 4: WebGL backend
+### 2. Input — keyboard and mouse from DOM events
+
+Without this example 21 is dead; games are impossible.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
 
-### Step 5: Game infrastructure + first game
+### 3. Asset loading via VIRT_FS — examples run unchanged
+
+Native functions implemented in WASM to read assets from VIRT_FS.
+Gallery provides asset files alongside .loft source.  No example
+code is modified.
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GL7.1  | `gl_load_texture` reads image from VIRT_FS             | S  | ✓      | WEB_EXAMPLES.md            |
+| GL7.2  | `save_png` writes to browser download                  | S  | ✓      | WEB_EXAMPLES.md            |
+| GL7.3  | `gl_load_font` + text raster via fontdue-in-WASM       | M  | ✓      | WEB_EXAMPLES.md            |
+| GL7.4  | Add render loop to ex. 11 (native + WASM)              | XS | ✓      | WEB_EXAMPLES.md            |
+
+### 4. High-level renderer — test only
+
+`render.loft` is pure loft calling gl_*.  With frame yield + shader
+patching, example 24 should work unchanged.  No new code — just testing.
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GL8.1  | Verify `render.loft` works end-to-end in WebGL         | S  | ✓      | WEB_EXAMPLES.md            |
+
+### 5. Publish: live graphics gallery (24/24)
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GAL.3  | 🌐 **Gallery with all 24 live examples** on GH Pages    | S  | ✓      | WEB_EXAMPLES.md            |
+
+### 6. Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
@@ -67,59 +93,54 @@ Items marked 🌐 produce something publicly visible on GitHub Pages or itch.io.
 | G6     | Audio: background music with crossfade                 | S  | ✓      | GAME_INFRA.md              |
 | G7     | First playable demo game (Breakout clone)              | M  | ✓      | GAME_INFRA.md              |
 | W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ✓      | GAME_INFRA.md              |
-| G7.P   | 🌐 **Playable Breakout** — share link, anyone plays on itch.io | S  | ✓      |                            |
+| G7.P   | 🌐 **Playable Breakout** — share link on itch.io        | S  | ✓      |                            |
 
-### Theme 5: Moros — hex RPG scene editor (first real application)
+### Moros — hex RPG scene editor
 
 Moros is a browser-based tabletop RPG toolkit: a hex-grid scene editor and
-3D renderer.  It is the first real application built on loft's graphics and
-WASM stack, validating the full pipeline (loft → WASM → WebGL → browser).
+3D renderer.  First real application built on loft's graphics and WASM stack.
 
-Design documents:
-- `../moros/doc/claude/LOFT_LIBRARIES.md` — package APIs and type specs
-- `../moros/doc/claude/SCENE_EDITOR_PLAN.md` — 6-phase implementation plan
-- `../moros/doc/claude/SCENE_MAP.md` — hex/chunk data format
-- `../moros/doc/claude/SCENE_MAP_RENDER.md` — 3D geometry pseudocode
-- `../moros/doc/claude/OPEN_ISSUES.md` — designs for all open items
+Design: `../moros/doc/claude/` — LOFT_LIBRARIES, SCENE_EDITOR_PLAN,
+SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 
-#### Sprint A: Data model + 2D canvas (no loft WebGL needed)
+#### Sprint A: Data model + 2D canvas
 
 | ID     | Title                                                  | E  | Design | Depends on    |
 |--------|--------------------------------------------------------|----|--------|---------------|
 | MO.1a  | `moros_map` — Hex, Chunk, Map, HexAddress structs      | S  | ✓      |               |
 | MO.1b  | `moros_map` — MaterialDef, WallDef, ItemDef palettes   | S  | ✓      | MO.1a         |
 | MO.1c  | `moros_map` — SpawnPoint, NpcRoutine, NpcWaypoint      | S  | ✓      | MO.1a         |
-| MO.2   | `moros_map` — map_to_json/map_from_json serialization  | S  | ✓      | MO.1a         |
+| MO.2   | `moros_map` — map_to_json / map_from_json              | S  | ✓      | MO.1a         |
 | MO.C1  | `scene-canvas.js` — hex coordinate math + flat render  | M  | ✓      | MO.2          |
 | MO.C2  | `scene-canvas.js` — pan/zoom/hit-test                  | S  | ✓      | MO.C1         |
 | MO.C3  | `scene-canvas.js` — layer rendering with opacity       | S  | ✓      | MO.C1         |
 
-#### Sprint B: Editor tools (pure JS, no loft WASM needed)
+#### Sprint B: Editor tools
 
 | ID     | Title                                                  | E  | Design | Depends on    |
 |--------|--------------------------------------------------------|----|--------|---------------|
 | MO.E1  | `scene-editor.html` — shell page + toolbar + palettes  | M  | ✓      | MO.C1         |
 | MO.E2  | `scene-editor.js` — Select + Paint + Height tools      | M  | ✓      | MO.E1         |
 | MO.E3  | `scene-editor.js` — Wall + Item placement tools        | S  | ✓      | MO.E2         |
-| MO.E4  | `scene-editor.js` — undo/redo stack (JS-side)          | S  | ✓      | MO.E2         |
+| MO.E4  | `scene-editor.js` — undo/redo stack                    | S  | ✓      | MO.E2         |
 | MO.E5  | `scene-editor.js` — localStorage save/load             | S  | ✓      | MO.E2         |
 
-#### Sprint C: Loft backend (needs WASM build)
+#### Sprint C: Loft backend
 
 | ID     | Title                                                  | E  | Design | Depends on    |
 |--------|--------------------------------------------------------|----|--------|---------------|
-| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1a, W1     |
+| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1a         |
 | MO.4   | `moros_editor` — undo/redo stack (loft-side)           | S  | ✓      | MO.3          |
 | MO.5a  | `moros_editor` — slope tool                            | S  | ✓      | MO.3          |
 | MO.5b  | `moros_editor` — stencil stamping (12 orientations)    | M  | ✓      | MO.3          |
 | MO.6   | `moros_editor` — spawn/waypoint management             | S  | ✓      | MO.3          |
-| MO.W1  | WASM build: moros_map + moros_editor → .wasm           | S  | ✓      | MO.3, W1      |
+| MO.W1  | WASM build: moros_map + moros_editor → .wasm           | S  | ✓      | MO.3          |
 
-#### Sprint D: 3D renderer (needs loft renderer + WebGL)
+#### Sprint D: 3D renderer
 
 | ID     | Title                                                  | E  | Design | Depends on    |
 |--------|--------------------------------------------------------|----|--------|---------------|
-| MO.7a  | `moros_render` — hex surface geometry (flat + slope)   | M  | ✓      | MO.1a, R1     |
+| MO.7a  | `moros_render` — hex surface geometry (flat + slope)   | M  | ✓      | MO.1a         |
 | MO.7b  | `moros_render` — wall slab geometry (thin + thick)     | M  | ✓      | MO.7a         |
 | MO.7c  | `moros_render` — MeshBuilder batching + material sort  | S  | ✓      | MO.7a         |
 | MO.8a  | `moros_render` — linear stair steps                    | S  | ✓      | MO.7a         |
@@ -133,21 +154,21 @@ Design documents:
 | ID     | Title                                                  | E  | Design | Depends on    |
 |--------|--------------------------------------------------------|----|--------|---------------|
 | MO.10  | `moros_render` — GLB export (scene → file/base64)      | M  | ✓      | MO.7a         |
-| MO.W2  | WASM build: moros_render → .wasm                       | S  | ✓      | MO.7a, GL6.1  |
+| MO.W2  | WASM build: moros_render → .wasm                       | S  | ✓      | MO.7a         |
 | MO.12a | `scene-editor.html` — wire loft WASM to JS editor      | M  | ✓      | MO.W1, MO.E2  |
 | MO.12b | `scene-editor.html` — live 3D preview panel            | M  | ✓      | MO.W2, MO.9a  |
 | MO.12c | `scene-editor.html` — GLB export button                | S  | ✓      | MO.10, MO.12a |
-| MO.P   | 🌐 **Moros scene editor** — build hex maps on GH Pages  | S  | ✓      | MO.12b         |
+| MO.P   | 🌐 **Moros scene editor** on GH Pages                   | S  | ✓      | MO.12b         |
 
 ### Remaining package/language items
 
-| ID     | Title                                                  | E  | Design | Depends on | Source           |
-|--------|--------------------------------------------------------|----|--------|------------|------------------|
-| PKG.7  | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | PKG.3      | manifest.rs      |
-| FFI.1  | Generic type marshaller from `#native` signature       | MH | ✓      | EXT.1      | GAME_INFRA.md    |
-| FFI.2  | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | FFI.1      | GAME_INFRA.md    |
-| FFI.3  | Eliminate per-function glue in native.rs               | M  | ✓      | FFI.2      | GAME_INFRA.md    |
-| FFI.4  | Docs: zero-boilerplate native function guide           | S  | ✓      | FFI.3      | GAME_INFRA.md    |
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| PKG.7  | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
+| FFI.1  | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
+| FFI.2  | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
+| FFI.3  | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
+| FFI.4  | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
 
 ---
 
@@ -155,24 +176,12 @@ Design documents:
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
-| P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md § P2 |
-| L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md § L1 |
+| P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md      |
+| L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md      |
 | W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | GAME_INFRA.md    |
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
-
-### W-warn — Developer warnings
-
-| Warning | Example |
-|---------|---------|
-| Comparison always true/false | `x >= 0` when x is `integer not null` |
-| Unnecessary parentheses | `if (x > 0) { ... }` |
-| Empty loop/if body | `for x in v { }` |
-| Shadowed variable in same scope | `x = 1; x = "hello"` (type change) |
-| Unused import | `use lib;` but no `lib::` references |
-| Identical if/else branches | `if c { x } else { x }` |
-| Division by literal zero | `x / 0` |
 
 ---
 
@@ -182,29 +191,25 @@ Design documents:
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
-| W2     | Editor shell (CodeMirror 6 + Loft grammar)             | M  | ✓      | WEB_IDE.md M2    |
-| W3     | Symbol navigation (go-to-def, find-usages)             | M  | ✓      | WEB_IDE.md M3    |
-| W4     | Multi-file projects (IndexedDB)                        | M  | ✓      | WEB_IDE.md M4    |
-| W5     | Docs & examples browser                                | M  | ✓      | WEB_IDE.md M5    |
-| W6     | Export/import ZIP + PWA offline                         | M  | ✓      | WEB_IDE.md M6    |
+| W2     | Editor shell (CodeMirror 6 + Loft grammar)             | M  | ✓      | WEB_IDE.md       |
+| W3     | Symbol navigation (go-to-def, find-usages)             | M  | ✓      | WEB_IDE.md       |
+| W4     | Multi-file projects (IndexedDB)                        | M  | ✓      | WEB_IDE.md       |
+| W5     | Docs & examples browser                                | M  | ✓      | WEB_IDE.md       |
+| W6     | Export/import ZIP + PWA offline                         | M  | ✓      | WEB_IDE.md       |
 
-### Scene scripting — IDE + live game integration
-
-DMs and players write loft scripts in the browser IDE to add custom behaviour
-to scenes: triggered events, puzzle logic, NPC dialogue, environmental effects.
-Scripts compile to WASM in-browser and run inside the live game session.
+### Scene scripting
 
 | ID     | Title                                                  | E  | Design | Depends on         |
 |--------|--------------------------------------------------------|----|--------|--------------------|
 | SC.1   | Scene script API — hooks for hex enter/exit/interact   | M  | ✓      | MO.3, W2           |
-| SC.2   | IDE panel in scene editor — edit scripts per hex/scene  | M  | ✓      | W2, MO.E1          |
-| SC.3   | In-browser compile: script → WASM, hot-reload into game | M  | ✓      | W1, SC.1            |
-| SC.4   | Script sandbox — limited API, no file/network access   | S  | ✓      | SC.3               |
-| SC.5   | Built-in script templates (trap, door, dialogue, timer) | S  | ✓      | SC.1               |
-| SC.6   | Script sharing — attach scripts to scene JSON, load on join | S  | ✓ | SC.3, MO.2         |
-| SC.P   | 🌐 **Scriptable scenes** — DMs add custom logic in browser | S  | ✓ | SC.3, MO.P         |
+| SC.2   | IDE panel in scene editor                              | M  | ✓      | W2, MO.E1          |
+| SC.3   | In-browser compile + hot-reload                        | M  | ✓      | W1, SC.1            |
+| SC.4   | Script sandbox — limited API                           | S  | ✓      | SC.3               |
+| SC.5   | Built-in script templates                              | S  | ✓      | SC.1               |
+| SC.6   | Script sharing via scene JSON                          | S  | ✓      | SC.3, MO.2         |
+| SC.P   | 🌐 **Scriptable scenes** in browser                     | S  | ✓      | SC.3, MO.P         |
 
-### Multiplayer (server + client)
+### Multiplayer
 
 | ID     | Title                                                  | E  | Design | Source              |
 |--------|--------------------------------------------------------|----|--------|---------------------|
@@ -258,8 +263,9 @@ Scripts compile to WASM in-browser and run inside the live game session.
 | Renderer abstraction | [RENDERER.md](RENDERER.md) |
 | Web gallery + unified GL | [WEB_EXAMPLES.md](WEB_EXAMPLES.md) |
 | Graphics implementation | [OPENGL_IMPL.md](OPENGL_IMPL.md) |
+| WASM + frame yield | [WASM.md](WASM.md) |
+| Game infrastructure | [GAME_INFRA.md](GAME_INFRA.md) |
 | Package system | [PACKAGES.md](PACKAGES.md) |
-| WASM architecture | [WASM.md](WASM.md) |
 | Web IDE | [WEB_IDE.md](WEB_IDE.md) |
 | Server library | [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md) |
 | Game client library | [GAME_CLIENT_LIB.md](GAME_CLIENT_LIB.md) |

@@ -32,14 +32,12 @@
 <li><a href="#11-index">Index</a> — <span class="toc-desc">Fast lookup and range queries over records</span></li>
 <li><a href="#12-hash">Hash</a> — <span class="toc-desc">Instant key lookup with a hash table</span></li>
 <li><a href="#13-file">File</a> — <span class="toc-desc">File system — text, binary, and directory access.</span></li>
-<li><a href="#14-image">Image</a> — <span class="toc-desc">Reading and examining PNG files</span></li>
 <li><a href="#15-lexer">Lexer</a> — <span class="toc-desc">Lexer library.</span></li>
 <li><a href="#16-parser">Parser</a> — <span class="toc-desc">Parsing Loft source code programmatically</span></li>
 <li><a href="#17-libraries">Libraries</a> — <span class="toc-desc">Library system — importing and using external loft modules.</span></li>
 <li><a href="#18-locks">Store Locks</a> — <span class="toc-desc">Immutability with const and runtime store locks</span></li>
 <li><a href="#19-threading">Parallel execution</a> — <span class="toc-desc">Parallel processing with the par(...) for-loop clause</span></li>
 <li><a href="#20-logging">Logging</a> — <span class="toc-desc">Recording events with the logging system</span></li>
-<li><a href="#21-random">Random</a> — <span class="toc-desc">Random numbers and random ordering</span></li>
 <li><a href="#22-time">Time</a> — <span class="toc-desc">Wall-clock time and elapsed time</span></li>
 <li><a href="#23-safety">Safety</a> — <span class="toc-desc">Language traps and how to avoid them</span></li>
 <li><a href="#24-json">JSON</a> — <span class="toc-desc">JSON parsing and generation</span></li>
@@ -62,7 +60,6 @@
 <li class="toc-indent"><a href="#stdlib-field-iteration-support-types">Field iteration support types</a></li>
 <li class="toc-indent"><a href="#stdlib-file-system">File System</a></li>
 <li class="toc-indent"><a href="#stdlib-environment">Environment</a></li>
-<li class="toc-indent"><a href="#stdlib-random">Random</a></li>
 <li class="toc-indent"><a href="#stdlib-time">Time</a></li>
 </ul>
 </nav>
@@ -1130,66 +1127,6 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p>Writing to a read-only or invalid path also returns a FileResult. Always check <code>.ok()</code> after <code>delete</code>, <code>move</code>, <code>mkdir</code>, and <code>mkdir_all</code>.</p>
 <pre><code>}</code></pre>
 </section>
-<section class="print-section" id="14-image">
-<h1>Image</h1>
-<p>Loft can load PNG files and access every pixel. Loading takes one function call; after that you can read dimensions, iterate pixels, and examine individual channels.</p>
-<h2 id="loading-an-image">Loading an Image</h2>
-<p>Call <code>file(path).png()</code> to load a PNG into memory. The entire file is decoded at this point — width, height, and a flat vector of Pixel records are all available immediately.</p>
-<h2 id="dimensions-and-name">Dimensions and Name</h2>
-<p><code>img.width</code> and <code>img.height</code> give the pixel dimensions. <code>img.name</code> is the file name without the directory path.</p>
-<h2 id="the-pixel-struct">The Pixel Struct</h2>
-<p>Each element of <code>img.data</code> is a <code>Pixel</code> with three fields: r: integer limit(0, 255) not null — red channel g: integer limit(0, 255) not null — green channel b: integer limit(0, 255) not null — blue channel Values range from 0 (no intensity) to 255 (full intensity).</p>
-<h2 id="pixel-access">Pixel Access</h2>
-<p><code>img.data</code> is a <code>vector&lt;Pixel&gt;</code>. Access by coordinate: img.data[y * img.width + x] Iterate with a for loop to scan every pixel.</p>
-<h2 id="error-handling">Error Handling</h2>
-<p><code>png()</code> returns null when the file does not exist or cannot be decoded. Always check <code>!img</code> or <code>img == null</code> before accessing fields.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="loading-an-image">Loading an Image</h2>
-<pre><code>  img = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"tests/example/map.png"</span>).<span class="fn-call"><a href="stdlib-file-system.html">png</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.width == <span class="nm">256</span>, <span class="st">"width={img.width}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.height == <span class="nm">256</span>, <span class="st">"height={img.height}"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.name == <span class="st">"map.png"</span>, <span class="st">"name={img.name}"</span>);</code></pre>
-<h2 id="pixel-count">Pixel Count</h2>
-<p>Total pixels = width * height.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(img.data.<span class="bi"><a href="stdlib-text.html">len</a></span>() == img.width * img.height, <span class="st">"pixel count"</span>);</code></pre>
-<h2 id="reading-individual-pixels">Reading Individual Pixels</h2>
-<p>The top-left pixel is at index 0.</p>
-<pre><code>  px = img.data[<span class="nm">0</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.r &gt;= <span class="nm">0</span> <span class="kw">and</span> px.r &lt;= <span class="nm">255</span>, <span class="st">"r in range"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.g &gt;= <span class="nm">0</span> <span class="kw">and</span> px.g &lt;= <span class="nm">255</span>, <span class="st">"g in range"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(px.b &gt;= <span class="nm">0</span> <span class="kw">and</span> px.b &lt;= <span class="nm">255</span>, <span class="st">"b in range"</span>);</code></pre>
-<p>Read a pixel at (x=128, y=128) — the center.</p>
-<pre><code>  center = img.data[<span class="nm">128</span> * img.width + <span class="nm">128</span>];
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(center.r &gt;= <span class="nm">0</span>, <span class="st">"center pixel r valid"</span>);</code></pre>
-<h2 id="scanning-pixels">Scanning Pixels</h2>
-<p>Count pixels brighter than a threshold.  A simple brightness approximation: (r + g + b) / 3 &gt; threshold.</p>
-<pre><code>  bright_count = <span class="nm">0</span>;
-  <span class="kw">for</span> img_px <span class="kw">in</span> img.data {
-    brightness = (img_px.r + img_px.g + img_px.b) / <span class="nm">3</span>;
-    <span class="kw">if</span> brightness &gt; <span class="nm">200</span> {
-      bright_count += <span class="nm">1</span>;
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bright_count &gt;= <span class="nm">0</span>, <span class="st">"bright pixel count: {bright_count}"</span>);</code></pre>
-<h2 id="finding-dominant-channel">Finding Dominant Channel</h2>
-<p>Walk every pixel and find which channel has the highest total value.</p>
-<pre><code>  total_r = <span class="nm">0l</span>;
-  total_g = <span class="nm">0l</span>;
-  total_b = <span class="nm">0l</span>;
-  <span class="kw">for</span> ch_px <span class="kw">in</span> img.data {
-    total_r += ch_px.r <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
-    total_g += ch_px.g <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
-    total_b += ch_px.b <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">long</a></span>;
-  }
-  dominant = <span class="kw">if</span> total_r &gt;= total_g <span class="kw">and</span> total_r &gt;= total_b { <span class="st">"red"</span> }
-    <span class="kw">else</span> <span class="kw">if</span> total_g &gt;= total_b { <span class="st">"green"</span> }
-    <span class="kw">else</span> { <span class="st">"blue"</span> };
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dominant.<span class="bi"><a href="stdlib-text.html">len</a></span>() &gt; <span class="nm">0</span>, <span class="st">"dominant channel: {dominant}"</span>);</code></pre>
-<h2 id="error-handling">Error Handling</h2>
-<pre><code>  bad = <span class="bi"><a href="stdlib-file-system.html">file</a></span>(<span class="st">"no_such_image.png"</span>).<span class="fn-call"><a href="stdlib-file-system.html">png</a></span>();
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"png of missing file is null"</span>);
-}</code></pre>
-</section>
 <section class="print-section" id="15-lexer">
 <h1>Lexer</h1>
 <p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.</p>
@@ -1622,64 +1559,6 @@ per_site = 5       # suppress messages from the same source line after 5/minute
 </code></pre>
 <p>The log messages give you a record of exactly what the program did and where it went wrong, without cluttering the terminal during normal runs.</p>
 <pre><code>  <span class="fn-call"><a href="stdlib-output-and-diagnostics.html">println</a></span>(<span class="st">"logging test passed"</span>);
-}</code></pre>
-</section>
-<section class="print-section" id="21-random">
-<h1>Random</h1>
-<p>Loft provides three functions for randomness:</p>
-<pre><code>rand(lo, hi)      — a random integer in [lo, hi] inclusive.
-rand_seed(seed)   — seed the random number generator for reproducible results.
-rand_indices(n)   — a vector of n integers [0..n-1] in a random order.
-</code></pre>
-<p>The generator is a fast PCG64 algorithm. Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.</p>
-<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
-<h2 id="basic-random-integers">Basic random integers</h2>
-<p><code>rand(lo, hi)</code> returns a uniformly distributed integer in [lo, hi]. Call <code>rand_seed</code> first to choose the sequence.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">42</span>);
-  r = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">1</span>, <span class="nm">6</span>);</code></pre>
-<p>simulated die roll: 1..6</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r &gt;= <span class="nm">1</span> &amp;&amp; r &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {r}"</span>);</code></pre>
-<p>The same seed always produces the same sequence.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
-  a = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>);
-  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"seeded rand must be reproducible"</span>);</code></pre>
-<p><code>rand</code> returns null when lo &gt; hi.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"invalid range returns null"</span>);</code></pre>
-<h2 id="random-ordering-rand-indices">Random ordering: rand_indices</h2>
-<p><code>rand_indices(n)</code> returns a vector containing 0, 1, ..., n-1 in a random order.  Use the indices to visit another collection in random order without copying it.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">7</span>);
-  order = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="nm">5</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"size must be 5"</span>);</code></pre>
-<p>Every value 0..4 appears exactly once.</p>
-<pre><code>  items =[<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
-  seen =[<span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..5</span> {
-    <span class="kw">false</span>
-  }];
-  <span class="kw">for</span> idx <span class="kw">in</span> order {
-    seen[idx] = <span class="kw">true</span>;
-  }
-  all_seen = <span class="kw">true</span>;
-  <span class="kw">for</span> s <span class="kw">in</span> seen {
-    <span class="kw">if</span> !s {
-      all_seen = <span class="kw">false</span>
-    }
-  }
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover all positions"</span>);</code></pre>
-<h2 id="sampling-without-replacement">Sampling without replacement</h2>
-<p>Pick k distinct items from a list by taking the first k indices.</p>
-<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">1</span>);
-  indices = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
-<p>Take the first 3 items in random order.</p>
-<pre><code>  picked = <span class="st">""</span>;
-  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
-    <span class="kw">if</span> i &gt; <span class="nm">0</span> {
-      picked += <span class="st">", "</span>
-    }
-    picked += items[indices[i]]
-  }</code></pre>
-<p><code>picked</code> now contains 3 distinct fruit names in a random order.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);
 }</code></pre>
 </section>
 <section class="print-section" id="22-time">
@@ -2408,7 +2287,7 @@ for e in data#errors { log_warn(e) }
 
 <!-- 01 fibonacci: max=4819 -->
 <tr>
-  <td class="bench-name">01 fibonacci (recursive, n=38)</td>
+  <td class="bench-name">01 fibonacci (recursive, n=38) <a class="playground-link" href="playground.html?example=perf_fibonacci">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(3395/4819*120px)"></div><span class="bench-ms">3395 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">4819 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(169/4819*120px)"></div><span class="bench-ms">169 ms</span></div></td>
@@ -2428,7 +2307,7 @@ for e in data#errors { log_warn(e) }
 
 <!-- 03 sieve: max=141 -->
 <tr>
-  <td class="bench-name">03 prime sieve (trial division, n=100 000)</td>
+  <td class="bench-name">03 prime sieve (trial division, n=100 000) <a class="playground-link" href="playground.html?example=perf_sieve">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(49/141*120px)"></div><span class="bench-ms">49 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">141 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(4/141*120px)"></div><span class="bench-ms">4 ms</span></div></td>
@@ -2438,7 +2317,7 @@ for e in data#errors { log_warn(e) }
 
 <!-- 04 collatz: max=14379 -->
 <tr>
-  <td class="bench-name">04 Collatz lengths (1 .. 1 M)</td>
+  <td class="bench-name">04 Collatz lengths (1 .. 1 M) <a class="playground-link" href="playground.html?example=perf_collatz">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(7393/14379*120px)"></div><span class="bench-ms">7393 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">14 379 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(334/14379*120px)"></div><span class="bench-ms">334 ms</span></div></td>
@@ -2448,7 +2327,7 @@ for e in data#errors { log_warn(e) }
 
 <!-- 05 mandelbrot: max=344 -->
 <tr>
-  <td class="bench-name">05 Mandelbrot (200×200, 256 iter)</td>
+  <td class="bench-name">05 Mandelbrot (200×200, 256 iter) <a class="playground-link" href="playground.html?example=perf_mandelbrot">&#9654; Try</a></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar python"  style="width:calc(135/344*120px)"></div><span class="bench-ms">135 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar interp" style="width:120px"></div><span class="bench-ms">344 ms</span></div></td>
   <td><div class="bench-bar-wrap"><div class="bench-bar native" style="width:calc(7/344*120px)"></div><span class="bench-ms">7 ms</span></div></td>
@@ -2917,8 +2796,16 @@ for e in data#errors { log_warn(e) }
 <p>True if all characters are whitespace. Use to detect blank lines.</p>
 </div>
 <div class="item">
+<pre><code>pub fn is_whitespace(self: character) -&gt; boolean</code></pre>
+<p>True if the character is whitespace.</p>
+</div>
+<div class="item">
 <pre><code>pub fn is_control(self: text) -&gt; boolean</code></pre>
 <p>True if all characters are control characters.</p>
+</div>
+<div class="item">
+<pre><code>pub fn is_control(self: character) -&gt; boolean</code></pre>
+<p>True if the character is a control character.</p>
 </div>
 <div class="item">
 <pre><code>pub fn join(parts: vector &lt; text &gt;, sep: text) -&gt; text</code></pre>
@@ -3010,21 +2897,6 @@ for e in data#errors { log_warn(e) }
 <p>Types and functions for reading and writing files. A File value is obtained via file() and carries the path, format, and an internal reference. An environment variable as a name/value pair.</p>
 </div>
 <div class="item">
-<pre><code>pub struct Pixel {
-  r: integer limit(0, 255) not null,
-  g: integer limit(0, 255) not null,
-  b: integer limit(0, 255) not null
-}</code></pre>
-</div>
-<div class="item">
-<pre><code>pub struct Image {
-  name: text,
-  width: integer,
-  height: integer,
-  data: vector &lt; Pixel &gt;
-}</code></pre>
-</div>
-<div class="item">
 <pre><code>pub enum Format {
   TextFile,
   LittleEndian,
@@ -3060,10 +2932,6 @@ for e in data#errors { log_warn(e) }
 
   next: long
 }</code></pre>
-</div>
-<div class="item">
-<pre><code>pub fn value(self: Pixel) -&gt; integer</code></pre>
-<p>Returns the pixel colour as a packed 24-bit integer (0xRRGGBB). Use for fast colour comparison or storage.</p>
 </div>
 <div class="item">
 <pre><code>pub fn content(self: File) -&gt; text</code></pre>
@@ -3102,10 +2970,6 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn write(self: File, v: text)</code></pre>
 </div>
-<div class="item">
-<pre><code>pub fn png(self: File) -&gt; Image</code></pre>
-<p>Decodes a PNG file and returns an Image. Returns null if the file is not in text format. Use to load sprite sheets or textures.</p>
-</div>
 <h2 id="stdlib-environment">Environment</h2>
 <p class="section-desc">Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.</p>
 <div class="item">
@@ -3130,19 +2994,6 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn program_directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.</p>
-</div>
-<h2 id="stdlib-random">Random</h2>
-<div class="item">
-<pre><code>pub fn rand(lo: integer, hi: integer) -&gt; integer</code></pre>
-<p>Returns a random integer in [lo, hi] (inclusive). Returns null when lo &gt; hi or when either argument is null.</p>
-</div>
-<div class="item">
-<pre><code>pub fn rand_seed(seed: long)</code></pre>
-<p>Seeds the thread-local random number generator with the given value. Call this before rand() or rand_indices() to get reproducible sequences.</p>
-</div>
-<div class="item">
-<pre><code>pub fn rand_indices(n: integer) -&gt; vector &lt; integer &gt;</code></pre>
-<p>Returns a vector of n integers [0, 1, ..., n-1] in a random order. Useful for random iteration, shuffling, or sampling without replacement. Returns an empty vector when n is 0 or null.</p>
 </div>
 <h2 id="stdlib-time">Time</h2>
 <div class="item">
