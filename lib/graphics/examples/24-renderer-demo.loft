@@ -1,0 +1,42 @@
+#!/usr/bin/env -S loft --native
+// Renderer Demo
+//
+// Demonstrates the high-level renderer: build a scene with meshes,
+// materials, and lights, then render it with one call.  No shader code,
+// no MVP math, no FBO setup — the renderer handles everything.
+//
+// Loft constructions used:
+//   render::create_renderer, render_frame, destroy — lifecycle
+//   scene::Scene, node_at, material_color, material_metal — scene graph
+//   scene::directional_light, point_light — lighting
+//   math::mat4_trs, mat4_translate — transforms
+use mesh;
+use math;
+use scene;
+use render;
+
+fn main() {
+  // Build the scene
+  s = scene::Scene { name: "renderer_demo" };
+  s.add_mesh(mesh::plane("floor", 10.0, 10.0));
+  s.add_mesh(mesh::cube());
+  s.add_mesh(mesh::sphere("ball", 0.5, 20, 12));
+  s.add_material(scene::material_color("floor", 0.4, 0.4, 0.45));
+  s.add_material(scene::material_color("red", 0.9, 0.15, 0.1));
+  s.add_material(scene::material_metal("gold", 1.0, 0.84, 0.0, 0.1));
+  s.add_material(scene::material_metal("blue", 0.1, 0.3, 0.9, 0.2));
+  s.add_node(scene::node_at("floor", 0, 0, math::mat4_identity()));
+  s.add_node(scene::node_at("cube", 1, 1, math::mat4_trs(-1.5, 0.5, 0.0, 0.4, 1.0, 1.0, 1.0)));
+  s.add_node(scene::node_at("sphere", 2, 2, math::mat4_translate(1.5, 0.5, 0.0)));
+  s.add_node(scene::node_at("pillar", 1, 3, math::mat4_trs(0.0, 1.0, -2.0, 0.0, 0.4, 2.0, 0.4)));
+  s.add_light(scene::directional_light("sun", 1.0, 0.95, 0.9, 3.0,
+    math::normalize3(math::vec3(-1.0, -2.0, -1.5))));
+  cam = scene::Camera {
+    name: "main", fov: 50.0, near: 0.1, far: 100.0,
+    position: math::vec3(5.0, 4.0, 6.0),
+    target: math::vec3(0.0, 0.5, 0.0) };
+  // Render
+  r = render::create_renderer(800, 600, "24 - Renderer Demo");
+  r.render_loop(s, cam);
+  r.destroy();
+}

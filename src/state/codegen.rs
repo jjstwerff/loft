@@ -644,10 +644,18 @@ impl State {
             //
             // Argument: pos = (stack.position before this op) - dep[0].stack_pos
             //   → result.pos = stack_cur.pos + dep[0].stack_pos (points into dep's slot)
-            stack.add_op("OpCreateStack", self);
             let dep_pos = stack.function.stack(dep[0]);
-            let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-            self.code_add(before_stack - dep_pos);
+            let before_stack = stack.position;
+            if dep_pos > before_stack {
+                // Dependency not yet on the stack — use a null sentinel instead of
+                // CreateStack.  The variable will be overwritten by OpPutRef before
+                // any field access (e.g. loop variable assigned from iterator next).
+                stack.add_op("OpNullRefSentinel", self);
+            } else {
+                stack.add_op("OpCreateStack", self);
+                let after_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
+                self.code_add(after_stack - dep_pos);
+            }
         }
     }
 
