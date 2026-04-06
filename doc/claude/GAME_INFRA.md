@@ -252,6 +252,11 @@ timer, and volume interpolation per frame.
 
 ## G7 — First playable demo game
 
+**Frame loop:** The browser game loop uses the frame-yield design described in
+[WASM.md § Frame Yield](WASM.md#frame-yield--browser-game-loop-via-interpreter-suspension).
+The interpreter pauses at `gl_swap_buffers()` and JavaScript resumes it on
+each `requestAnimationFrame`.  Loft game code is identical on native and browser.
+
 A simple game that proves the full pipeline: loft → renderer → WebGL →
 browser.  Something a person can play in 30 seconds.
 

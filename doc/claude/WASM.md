@@ -15,6 +15,7 @@
 - [PNG Image Support in WASM](#png-image-support-in-wasm)
 - [Logging in WASM](#logging-in-wasm)
 - [Test Compatibility Matrix](#test-compatibility-matrix)
+- [Frame Yield — Browser Game Loop via Interpreter Suspension](#frame-yield--browser-game-loop-via-interpreter-suspension)
 - [See also](#see-also)
 
 ---
@@ -2731,6 +2732,194 @@ The threading test file exercises:
 
 **Effort:** H (as in ROADMAP.md — shared memory + Atomics protocol + WASM export plumbing)
 **Design:** ✓ (this section)
+
+---
+
+## Frame Yield — Browser Game Loop via Interpreter Suspension
+
+### Problem
+
+The loft interpreter runs synchronously to completion (`execute_argv` is a tight
+`while code_pos < len` loop).  In the browser, `requestAnimationFrame` is the only
+way to render frames and receive input.  A loft game loop like:
+
+```loft
+for _ in 0..3600 {
+  if !gl_poll_events() { break }
+  gl_clear(bg);
+  gl_draw(vao, count);
+  gl_swap_buffers();
+}
+```
+
+executes all 3 600 iterations in a single synchronous WASM call, blocking the
+browser's main thread for the entire duration.  Only the last frame is visible.
+No input is processed.
+
+### Design: yield at `gl_swap_buffers`
+
+The interpreter pauses mid-execution at frame boundaries and returns control to
+JavaScript.  JavaScript calls `requestAnimationFrame` and resumes the interpreter
+on the next frame.  Loft game code is **identical** on native and browser — no
+API changes, no callback pattern, no user-visible generators.
+
+### Alternatives considered and rejected
+
+| Approach | Why rejected |
+|---|---|
+| **JS-driven frame callback** (`fn frame(dt)` pattern) | Forces a different programming model; user must manage state between calls; native loop code doesn't work in browser |
+| **Web Worker + SharedArrayBuffer + Atomics.wait** | Requires COOP/COEP headers; WebGL context can't be used from a Worker (all GL calls must proxy to main thread); Safari support unreliable; massive complexity |
+| **Coroutine-based game loop** | Requires user to write `for frame in game_loop() { yield }` instead of a natural loop; awkward API that doesn't match native expectations |
+
+### Architecture
+
+```
+                         ┌─── Browser main thread ───┐
+                         │                           │
+  compile_and_run()      │   requestAnimationFrame   │
+         │               │          │                │
+         ▼               │          ▼                │
+  ┌─ execute_argv ─┐     │   ┌─ resume_frame ─┐     │
+  │  ...opcodes... │     │   │  clear yield    │     │
+  │  gl_clear()    │     │   │  ...opcodes...  │     │
+  │  gl_draw()     │     │   │  gl_clear()     │     │
+  │  gl_swap()     │     │   │  gl_draw()      │     │
+  │  ► YIELD ◄     │─────│──►│  gl_swap()      │     │
+  │  (return)      │     │   │  ► YIELD ◄      │─────│──► next rAF
+  └────────────────┘     │   └─────────────────┘     │
+                         └───────────────────────────┘
+```
+
+### Implementation steps
+
+#### Step 1: State persistence across yields
+
+`State` (bytecode stream, stack, code_pos, call frames) must survive between
+calls.  Store the active `State` in a `thread_local!` in `wasm.rs` alongside
+the existing `OUTPUT` and `VIRT_FS` thread-locals.
+
+```rust
+thread_local! {
+    static GAME_STATE: RefCell<Option<GameSession>> = RefCell::new(None);
+}
+
+struct GameSession {
+    state: State,
+    data: Data,
+    database: Stores,
+}
+```
+
+#### Step 2: Yield flag on Stores
+
+Add `pub frame_yield: bool` to `Stores` (or `State`).  Default `false`.
+
+The WASM `wgl_swap_buffers` implementation sets `stores.frame_yield = true`
+after calling the JavaScript `gl_swap_buffers`.
+
+#### Step 3: Yield check in `execute_argv`
+
+In the main interpreter loop (`src/state/mod.rs`, `execute_argv`), check the
+flag after each opcode dispatch:
+
+```rust
+while self.code_pos < bytecode_len {
+    let op = *self.code::<u8>();
+    OPERATORS[op as usize](self);
+
+    // Frame yield: return to JavaScript for requestAnimationFrame
+    if self.database.frame_yield {
+        self.database.frame_yield = false;
+        return;  // code_pos, stack, call frames all preserved in self
+    }
+}
+```
+
+When `execute_argv` returns early, the loft program is **suspended** — its
+stack, call frames, local variables, and code position are all intact inside
+`State`.  The next call to `execute_argv` (or a thin `resume` wrapper) picks
+up from the exact instruction after `gl_swap_buffers`.
+
+#### Step 4: Resume export
+
+Add a new WASM export that JavaScript calls on each `requestAnimationFrame`:
+
+```rust
+#[wasm_bindgen]
+pub fn resume_frame() -> bool {
+    GAME_STATE.with(|gs| {
+        let mut session = gs.borrow_mut();
+        let Some(s) = session.as_mut() else { return false };
+        s.state.execute_continue(&s.data);
+        !s.state.is_finished()
+    })
+}
+```
+
+Returns `true` while the game is still running, `false` when the loft program
+completes (loop finished, window closed, etc.).
+
+#### Step 5: JavaScript frame loop
+
+```javascript
+async function runGame(source) {
+  const files = JSON.stringify([{ name: 'main.loft', content: source }]);
+  compile_and_start(files);  // parses, compiles, starts execute_argv
+  function frame() {
+    if (resume_frame()) {
+      requestAnimationFrame(frame);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+```
+
+#### Step 6: Input integration
+
+`gl_poll_events` reads the current input state from JavaScript (key map,
+mouse position) on each call.  Since the interpreter yields between frames,
+JavaScript has time to process DOM events between `resume_frame` calls.
+The existing `loftHost.gl_key_pressed` / `gl_mouse_x` / `gl_mouse_y`
+functions already return the current state — they just need DOM event
+listeners to keep that state updated (see GL6.6 in GAME_INFRA.md).
+
+### Scope of changes
+
+| File | Change |
+|---|---|
+| `src/database/mod.rs` | Add `pub frame_yield: bool` to `Stores` |
+| `src/state/mod.rs` | Check `frame_yield` in `execute_argv` loop; add `execute_continue` |
+| `src/wasm.rs` | Add `GAME_STATE` thread-local; new exports `compile_and_start`, `resume_frame` |
+| `src/wasm_gl.rs` | `wgl_swap_buffers` sets `stores.frame_yield = true` |
+| `doc/gallery.html` | Use `requestAnimationFrame` loop with `resume_frame` |
+
+### Native behaviour
+
+On native, `frame_yield` is never set (the native `gl_swap_buffers` calls
+glutin's swap which blocks until vsync).  `execute_argv` runs to completion
+as before.  No change to native execution.
+
+### Performance
+
+The yield check is one `if` per opcode — a predictable branch that is almost
+always not-taken.  Cost: ~1 ns per opcode on modern CPUs, invisible compared
+to the opcode dispatch itself.
+
+### Limitations
+
+- **One game session at a time.** The thread-local holds a single `State`.
+  Multiple simultaneous games would need a session ID or separate Web Workers.
+- **No input between opcodes.** Input is sampled at `gl_poll_events`, not
+  continuously.  This is identical to native behaviour and standard for games.
+- **Error handling across yields.** A panic inside the interpreter during
+  `resume_frame` must be caught and reported to JavaScript. The existing
+  `catch_unwind` pattern in `compile_and_run` applies here too.
+
+### Effort
+
+**S–M** — The interpreter change is ~20 lines. The WASM exports are ~40 lines.
+The gallery JavaScript is ~15 lines.  The main work is testing and edge cases
+(program completion, error recovery, multiple runs).
 
 ---
 
