@@ -680,10 +680,12 @@ pub fn compile_and_start(files_json: &str) -> String {
                 return Err(p.diagnostics.to_string());
             }
         }
+        let lib_set: std::collections::HashSet<&str> =
+            GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
         let main_name = VIRT_FS.with(|fs| {
             fs.borrow()
                 .keys()
-                .filter(|k| !k.starts_with("default/"))
+                .filter(|k| !k.starts_with("default/") && !lib_set.contains(k.as_str()))
                 .min()
                 .cloned()
         });
@@ -900,10 +902,12 @@ fn run_pipeline() -> (String, bool, Vec<AssertResult>) {
             return (p.diagnostics.to_string(), true, Vec::new());
         }
     }
+    let lib_names: std::collections::HashSet<&str> =
+        GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
     let main_name = VIRT_FS.with(|fs| {
         fs.borrow()
             .keys()
-            .filter(|k| !k.starts_with("default/"))
+            .filter(|k| !k.starts_with("default/") && !lib_names.contains(k.as_str()))
             .min()
             .cloned()
     });
