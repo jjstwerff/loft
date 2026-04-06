@@ -1400,18 +1400,17 @@ impl Parser {
             self.lexer.pos()
         );
         for p in res {
-            let elem_known = if ed_nr == u32::from(u16::MAX)
-                || self.data.def(ed_nr).known_type == u16::MAX
-            {
-                0
-            } else if let Type::Vector(elem_tp, _) = in_t {
-                // For vector-typed elements, resolve the inner vector's database
-                // type correctly (not the generic "vector" definition's known_type).
-                let ek = self.database.db_type(elem_tp, &self.data);
-                self.database.vector(ek)
-            } else {
-                self.data.def(ed_nr).known_type
-            };
+            let elem_known =
+                if ed_nr == u32::from(u16::MAX) || self.data.def(ed_nr).known_type == u16::MAX {
+                    0
+                } else if let Type::Vector(elem_tp, _) = in_t {
+                    // For vector-typed elements, resolve the inner vector's database
+                    // type correctly (not the generic "vector" definition's known_type).
+                    let ek = self.database.db_type(elem_tp, &self.data);
+                    self.database.vector(ek)
+                } else {
+                    self.data.def(ed_nr).known_type
+                };
             let known = Value::Int(i32::from(self.database.vector(elem_known)));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
