@@ -41,6 +41,201 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
+| 110 | Vector push in for loop produces shifted/garbage values | **High** | Pre-allocate with comprehension, assign by index |
+| 111 | `character == text` comparison always returns true | Medium | Format char first: `"{c}" == t` |
+| 112 | Text return accumulation in text-returning functions | Medium | Use `return expr` not `t = expr; ... t` |
+| 113 | `t = t[N..]` self-slice produces empty string | Medium | Use intermediate variable: `s = t[N..]; t = s` |
+| 114 | `h = h + expr` clears h before reading *(partially fixed)* | Medium | *(Fixed for plain variables)* — use `h += expr` for struct fields |
+
+---
+
+## Text and Vector Bugs (110–114)
+
+All five bugs share a root cause area: the parser's handling of text and vector
+operations inside loops and across function returns.  They should be investigated
+and fixed together.
+
+### 110. Vector push in for loop produces shifted/garbage values
+
+**Severity:** High — silent data corruption, no error or crash.
+
+**Reproducer:**
+```loft
+struct S { vals: vector<integer> }
+fn main() {
+  s = S { vals: [] };
+  for vi in 0..3 {
+    s.vals += [vi * 10];
+  }
+  // Expected: [0, 10, 20]
+  // Actual:   [0, 0, 10] or garbage like [0, 1070799360, 10]
+  assert("{s.vals}" == "[0,10,20]", "got {s.vals}");
+}
+```
+
+**Root cause:** When `self.field += [expr]` is inside a `for` loop, the vector
+append operation reads a stale value of `expr` — the value from the previous
+iteration or an uninitialized slot.  The flat variable namespace causes the
+expression temporary to share a stack slot with the loop variable.
+
+**Fix strategy:**
+1. In `src/parser/operators.rs` or `src/state/codegen.rs`, ensure vector append
+   expressions inside loops get their own evaluation slot that doesn't conflict
+   with the loop iteration variable.
+2. Alternatively, fix the slot allocator in `src/variables/slots.rs` to detect
+   this overlap and assign separate slots.
+
+**Test:**  Add to `tests/scripts/` — vector push inside for loop on a struct
+field, verify values match.
+
+**Workaround:** Pre-allocate with comprehension, assign by index:
+```loft
+s.vals = [for _ in 0..3 { 0 }];
+for vi in 0..3 { s.vals[vi] = vi * 10; }
+```
+
+---
+
+### 111. `character == text` comparison always returns true
+
+**Severity:** Medium — logic bug, silent wrong result.
+
+**Reproducer:**
+```loft
+fn main() {
+  assert('a' == "b", "should be false but is true");
+}
+```
+
+**Root cause:** The operator resolver in `src/parser/mod.rs` `call_op` tries
+each `OpEq*` operator.  `OpEqText` fails (no character→text conversion).
+`OpEqInt` fails (text→integer doesn't exist).  `OpEqBool` succeeds because
+both character and text can be converted to boolean via `OpConvBoolFromCharacter`
+and `OpConvBoolFromText`.  Any non-null character is true, any non-empty text
+is true, so `true == true` → `true`.
+
+**Fix strategy:** In `src/parser/mod.rs` `call_op`, when testing operator
+candidates, skip `OpEqBool` if neither original operand is boolean.  This
+prevents the fallback to truthiness comparison for incompatible types.
+Alternatively, add `OpConvTextFromCharacter` to `default/01_code.loft` so
+`OpEqText` matches (character converts to single-char text, then text==text).
+
+**Test:** `assert(!('a' == "b"))` and `assert('x' == "x")`.
+
+**Workaround:** `"{c}" == text_value`
+
+---
+
+### 112. Text return accumulation in text-returning functions
+
+**Severity:** Medium — produces doubled/garbled text from functions.
+
+**Reproducer:**
+```loft
+fn strip(line: text) -> text {
+  t = line;
+  if t.starts_with("// ") {
+    s = t[3..];
+    t = s;
+  }
+  t
+}
+fn main() {
+  // Expected: "hello"
+  // Actual:   "// hellohello"
+  assert(strip("// hello") == "hello", "got: {strip("// hello")}");
+}
+```
+
+**Root cause:** In text-returning functions, the parser creates a "work text"
+buffer (a hidden variable) that accumulates the return value.  Assignment
+`t = s` is converted to `OpAppendText(work, s)` instead of replacing the
+work buffer.  The original `t` content remains in the buffer, and `s` is
+appended to it.
+
+**Fix strategy:** In `src/parser/operators.rs` `assign_text`, when `op == "="`
+and the target is the implicit text return variable, emit `OpClearText` before
+the append — or better, detect that the assignment is a full replacement (not
+concatenation) and emit a direct copy instead of append.
+
+**Test:** Function that conditionally modifies a text variable and returns it.
+
+**Workaround:** Use `return expr` directly instead of assigning to a variable:
+```loft
+fn strip(line: text) -> text {
+  if line.starts_with("// ") { return line[3..]; }
+  line
+}
+```
+
+---
+
+### 113. `t = t[N..]` self-slice produces empty string
+
+**Severity:** Medium — silent data loss.
+
+**Reproducer:**
+```loft
+fn main() {
+  t = "hello world";
+  t = t[6..];
+  // Expected: "world"
+  // Actual:   ""
+  assert(t == "world", "got: '{t}'");
+}
+```
+
+**Root cause:** Same as #114.  The parser converts `t = t[6..]` to: clear `t`,
+then read `t[6..]` (which is now empty), assign to `t`.  The clear happens
+before the slice reads the original value.
+
+**Fix strategy:** Same fix as #114 — detect self-reference in the RHS and
+skip the clear.  The self-append detection added for `h = h + expr` does not
+cover slice operations because the RHS is not an `Insert` list but a
+`Value::Call(OpSlice, ...)`.
+
+Extend the detection in `assign_text` to recognize `Value::Call` where any
+argument is `Value::Var(var_nr)` — if the assignment target appears anywhere
+in the RHS expression, use a work text for the intermediate result.
+
+**Test:** `t = t[N..]` and `t = t[..N]` produce correct substrings.
+
+**Workaround:** `s = t[6..]; t = s;`
+
+---
+
+### 114. `h = h + expr` clears h before reading (partially fixed)
+
+**Severity:** Medium — partially fixed for plain variables, still broken for
+struct field access inside loops.
+
+**Current state:** The self-append detection in `src/parser/operators.rs`
+`assign_text` (lines 53–68) correctly identifies `h = h + expr` for plain
+local variables and skips the clear.  But for struct fields like
+`self.field = self.field + expr`, the `to` argument is a `Value::Call`
+(field access), not `Value::Var`, so the detection doesn't match.
+
+**Reproducer:**
+```loft
+struct Builder { text_buf: text }
+fn main() {
+  b = Builder { text_buf: "hello" };
+  b.text_buf = b.text_buf + " world";
+  // Expected: "hello world"
+  // Actual:   " world"
+  assert(b.text_buf == "hello world", "got: '{b.text_buf}'");
+}
+```
+
+**Fix strategy:** Extend the self-append detection to handle the struct field
+case.  When `to` is `Value::Call` (field setter) and the first element of the
+`Insert` list references the same field path, treat as `+=`.  Alternatively,
+always use `+=` for struct field text concatenation, which already works
+correctly (the `+=` path in `assign_text` lines 36–51).
+
+**Test:** Struct field text concat with `= h +` and `+=` produce same result.
+
+**Workaround:** Use `h += expr` instead of `h = h + expr`.
 
 ---
 

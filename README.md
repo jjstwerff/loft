@@ -77,17 +77,24 @@ Pre-built binaries on the [Releases](https://github.com/jjstwerff/loft/releases)
 
 ---
 
+## Try it now
+
+**[Playground](https://jjstwerff.github.io/loft/playground.html)** — write and run loft code in the browser, no install needed.
+
+**[Graphics Gallery](https://jjstwerff.github.io/loft/gallery.html)** — 24 interactive OpenGL examples running live in WebGL.
+
 ## Graphics examples
 
-23 progressive examples from hello-triangle to PBR with shadow mapping:
+24 progressive examples from hello-triangle to PBR with shadow mapping.
+All run natively and [live in the browser](https://jjstwerff.github.io/loft/gallery.html):
 
 ```sh
 ./08-basic-lighting.loft       # Phong lighting in a window
-./20-textured-cube.loft        # procedural texture with text
-./11-scene-graph.loft          # exports a GLB file with lights
+./24-renderer-demo.loft        # PBR scene with shadows — no shader code
+./21-keyboard-camera.loft      # WASD + mouse drag first-person camera
 ```
 
-See the full [example list with screenshots](lib/graphics/examples/README.md).
+See the full [example list](lib/graphics/examples/README.md).
 
 ---
 
