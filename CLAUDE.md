@@ -151,6 +151,32 @@ states that are harder to debug than the original problem.
 
 ---
 
+## Git safety — MANDATORY
+
+### Never use `git stash pop` or `git pull` with uncommitted changes
+
+**`git stash` + `git stash pop` is prohibited.**  Stash pop applies changes as a
+merge, which routinely produces conflicts across dozens of files.  A failed pop
+leaves the working directory in an unrecoverable state — all uncommitted work is
+destroyed.  This has caused complete loss of multi-hour sessions.
+
+**`git pull` with uncommitted changes is prohibited.**  Pull fetches and merges,
+which also conflicts with in-flight work.
+
+**Use these approaches instead:**
+
+- **To compare with main:** use `git diff main -- <file>` or
+  `git show origin/main:<file>` — no branch switch needed.
+- **To check if a bug is pre-existing:** commit current work first (even as WIP
+  on the feature branch), then compare.
+- **To update from remote:** commit first, then `git pull`, resolve if needed.
+- **To test on clean main:** commit, `git checkout main`, test, `git checkout -`
+  to return.
+
+The rule: **always commit before any operation that changes the working tree.**
+
+---
+
 ## Documentation index
 
 | File | Topic |
