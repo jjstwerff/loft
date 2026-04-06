@@ -49,11 +49,38 @@ Items marked 🌐 produce something publicly visible on GitHub Pages or itch.io.
 | GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
 | GAL.1P | 🌐 **Graphics gallery** — screenshots + source on GH Pages | S  | ✓      | WEB_EXAMPLES.md            |
 
-### Step 4: WebGL backend
+### Step 4: WebGL — all 24 examples in browser
+
+Phase 1 (18 examples — interactive rendering works, GLB export skipped):
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| FY.1   | Frame yield — interpreter pauses at `gl_swap_buffers`  | M  | ✓      | WASM.md § Frame Yield      |
+| FY.2   | `resume_frame` WASM export + JS `requestAnimationFrame`| S  | ✓      | WASM.md § Frame Yield      |
+| FY.3   | Session lifecycle (re-run disposal, panic recovery)     | S  | ✓      | WASM.md § Frame Yield      |
+| GLB.W  | Skip `--mode glb` path in WASM (`arguments()` → empty) | XS | —      |                            |
+| GAL.3  | 🌐 Gallery with 18 live interactive examples            | S  | ✓      | WEB_EXAMPLES.md            |
+
+Phase 2 (input — 1 more example):
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
+
+Phase 3 (file I/O + textures — 4 more examples):
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GL7.1  | Embedded textures (data URI or procedural) for ex. 04  | S  | —      |                            |
+| GL7.2  | Canvas 2D → PNG data URI for ex. 10                    | S  | —      |                            |
+| GL7.3  | Web font / canvas text rendering for ex. 20            | M  | —      |                            |
+| GL7.4  | Scene graph render loop for ex. 11 (currently GLB-only)| S  | —      |                            |
+
+Phase 4 (high-level renderer — 1 more example):
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GL8.1  | `render.loft` WebGL integration for ex. 24             | M  | ✓      | RENDERER.md                |
 
 ### Step 5: Game infrastructure + first game
 

@@ -305,6 +305,51 @@ pub fn gl_mouse_button() -> integer;
 Key codes use the same constants (`KEY_W`, `KEY_A`, etc.) on both backends.
 The WebGL backend maps DOM `event.code` strings to the same integer codes.
 
+**Implementation (JavaScript side, in gallery.html):**
+
+```javascript
+const keys = new Set();
+let mouseX = 0, mouseY = 0, mouseBtn = 0;
+
+canvas.addEventListener('keydown', e => {
+  keys.add(mapKeyCode(e.code));
+  e.preventDefault();
+});
+canvas.addEventListener('keyup', e => keys.delete(mapKeyCode(e.code)));
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouseX = e.clientX - r.left;
+  mouseY = e.clientY - r.top;
+});
+canvas.addEventListener('mousedown', e => mouseBtn |= (1 << e.button));
+canvas.addEventListener('mouseup', e => mouseBtn &= ~(1 << e.button));
+canvas.tabIndex = 0;  // make canvas focusable for keyboard events
+
+function mapKeyCode(code) {
+  // Map DOM code strings to loft key constants
+  // ASCII letters: 'KeyA'→65, 'KeyB'→66, etc.
+  // Special: ArrowUp→128, ArrowDown→129, ArrowLeft→130, ArrowRight→131,
+  //          ShiftLeft/Right→132, ControlLeft/Right→133
+  if (code.startsWith('Key')) return code.charCodeAt(3);
+  if (code.startsWith('Digit')) return code.charCodeAt(5);
+  const special = { ArrowUp:128, ArrowDown:129, ArrowLeft:130, ArrowRight:131,
+                    ShiftLeft:132, ShiftRight:132, ControlLeft:133, ControlRight:133,
+                    Space:32, Enter:13, Escape:27, Tab:9 };
+  return special[code] || 0;
+}
+
+loftHost.gl_key_pressed = (code) => keys.has(code);
+loftHost.gl_mouse_x = () => mouseX;
+loftHost.gl_mouse_y = () => mouseY;
+loftHost.gl_mouse_button = () => mouseBtn;
+```
+
+**Depends on:** Frame yield (FY.1) — without yielding between frames, DOM events
+are never processed.  With frame yield, the browser handles events between
+`resume_frame` calls.
+
+**Unlocks:** Example 21 (keyboard camera), and all future interactive games.
+
 ---
 
 ## W1.1 — Single-file HTML export

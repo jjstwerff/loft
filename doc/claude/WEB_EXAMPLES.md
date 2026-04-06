@@ -401,3 +401,71 @@ browser download.
 Steps W1-W3 deliver the renderer abstraction (desktop-only).
 Steps W4-W6 deliver the static gallery (no execution).
 Steps W7-W11 deliver the interactive web experience.
+
+---
+
+## WebGL compatibility matrix — all 24 examples
+
+Completed items (GL6.1–GL6.5, GAL.2) deliver the WebGL2 bridge and gallery page.
+The remaining work is phased by what blocks each example.
+
+### Phase 1: Frame yield + 18 interactive examples (FY.1–FY.3, GAL.3)
+
+The frame-yield design ([WASM.md § Frame Yield](WASM.md#frame-yield--browser-game-loop-via-interpreter-suspension))
+suspends the interpreter at `gl_swap_buffers` and resumes on `requestAnimationFrame`.
+With this, all examples that use a render loop and don't need file I/O work immediately.
+
+| Example | Status | Notes |
+|---------|--------|-------|
+| 01 Hello Window | Ready | Clear + event loop only |
+| 02 Hello Triangle | Ready | GLB export path skipped |
+| 03 Shaders | Ready | Vertex colors, stride=10 |
+| 05 Transformations | Ready | Animated rotation |
+| 06 Coordinate Systems | Ready | Multiple cubes, perspective |
+| 07 Camera | Ready | Orbiting camera |
+| 08 Basic Lighting | Ready | Phong shading |
+| 09 Materials | Ready | Cube + sphere, PBR uniforms |
+| 12 Multiple Lights | Ready | Multi-light shader |
+| 13 Depth Testing | Ready | Depth fog |
+| 14 Blending | Ready | Alpha blend, depth mask |
+| 15 Face Culling | Ready | Backface culling toggle |
+| 16 Shadow Mapping | Ready | 2-pass, depth FBO |
+| 17 Post-Processing | Ready | FBO + fullscreen quad |
+| 18 PBR | Ready | Cook-Torrance, 5×5 grid |
+| 19 Complete Scene | Ready | Full pipeline showcase |
+| 22 Wireframe | Ready | Lines + points modes |
+| 23 Cleanup | Ready | Resource lifecycle |
+
+GLB export: examples 02–19 accept `--mode glb` via `arguments()`.  In WASM
+`arguments()` returns an empty vector, so the GLB path is never taken — only
+the interactive render loop runs.  No code changes needed.
+
+### Phase 2: Keyboard + mouse input (GL6.6 — 1 more example)
+
+| Example | Blocker | Fix |
+|---------|---------|-----|
+| 21 Keyboard Camera | `gl_key_pressed` / `gl_mouse_x/y` return stubs | Wire `keydown`/`keyup`/`mousemove` DOM events to a state map; `loftHost.gl_key_pressed(code)` reads the map |
+
+### Phase 3: File I/O + textures (GL7.1–GL7.4 — 4 more examples)
+
+| Example | Blocker | Fix |
+|---------|---------|-----|
+| 04 Textures | `gl_load_texture("wall.jpg")` — no filesystem | Embed texture as base64 data URI or generate procedurally |
+| 10 2D Canvas | `save_png()` — writes to file | Render Canvas pixels to a `<canvas>` element or download as data URI |
+| 11 Scene Graph | GLB-only (no render loop) | Add interactive render loop like other examples |
+| 20 Textured Cube | `gl_load_font()` + text rasterization | Use HTML5 Canvas 2D `fillText` to rasterize, upload as texture |
+
+### Phase 4: High-level renderer (GL8.1 — 1 more example)
+
+| Example | Blocker | Fix |
+|---------|---------|-----|
+| 24 Renderer Demo | `render::create_renderer()` + `render_loop()` | These call gl_* functions internally — if frame yield works, the renderer's `for` loop yields naturally. Main gap: `render.loft` compiles PBR + shadow shaders at init. Needs `gl_create_shader` patching (already done via GL6.5). |
+
+### Summary: path to 24/24
+
+| Phase | Examples | Effort | Depends on |
+|-------|----------|--------|------------|
+| Phase 1 | 18 of 24 | M (frame yield) | FY.1–FY.3 |
+| Phase 2 | +1 (19/24) | S (DOM events) | GL6.6 |
+| Phase 3 | +4 (23/24) | M (texture + font workarounds) | GL7.1–GL7.4 |
+| Phase 4 | +1 (24/24) | M (renderer integration) | GL8.1, FY.1 |
