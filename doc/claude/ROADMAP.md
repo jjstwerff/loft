@@ -57,6 +57,29 @@ The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
 | G4     | Audio playback (Web Audio API + native)                | M  | —      |                            |
 | G5     | First playable demo game                               | M  | —      |                            |
 
+### Theme 5: Moros — hex RPG scene system (first real application)
+
+Moros is a browser-based tabletop RPG toolkit: a hex-grid scene editor and
+3D renderer.  It is the first real application built on loft's graphics and
+WASM stack, validating the full pipeline (loft → WASM → WebGL → browser).
+Design: `../moros/doc/claude/LOFT_LIBRARIES.md`.
+
+| ID     | Title                                                  | E  | Design | Depends on    | Source                     |
+|--------|--------------------------------------------------------|----|--------|---------------|----------------------------|
+| MO.1   | `moros_map` package — hex/chunk/palette/spawn types    | M  | ✓      |               | moros/lib/moros_map/       |
+| MO.2   | `moros_map` JSON serialization (map_to_json/from_json) | S  | ✓      | MO.1          | moros/lib/moros_map/       |
+| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1          | moros/lib/moros_editor/    |
+| MO.4   | `moros_editor` — undo/redo stack                       | S  | ✓      | MO.3          | moros/lib/moros_editor/    |
+| MO.5   | `moros_editor` — slope tool + stencil stamping         | M  | ✓      | MO.3          | moros/lib/moros_editor/    |
+| MO.6   | `moros_editor` — spawn/waypoint/NPC routine management | S  | ✓      | MO.3          | moros/lib/moros_editor/    |
+| MO.7   | `moros_render` — hex surface + wall geometry generation | H  | ✓      | MO.1, R1      | moros/lib/moros_render/    |
+| MO.8   | `moros_render` — stair geometry (linear/spiral/arc)    | M  | ✓      | MO.7          | moros/lib/moros_render/    |
+| MO.9   | `moros_render` — camera orbit/pan/zoom + hex picking   | M  | ✓      | MO.7, GL6.6   | moros/lib/moros_render/    |
+| MO.10  | `moros_render` — GLB export (scene → file/base64)      | M  | ✓      | MO.7          | moros/lib/moros_render/    |
+| MO.11  | WASM build: all 3 packages compile to .wasm            | M  | ✓      | W1, GL6.1     | moros/Makefile             |
+| MO.12  | `scene-editor.html` — editor UI + live 3D preview      | H  | ✓      | MO.3, MO.7    | moros/html/                |
+| MO.13  | Developer art materials + procedural swatches           | S  | ✓      | MO.7          | moros/lib/moros_render/    |
+
 ### Theme 4: Web deployment
 
 | ID     | Title                                                  | E  | Design | Source                     |
