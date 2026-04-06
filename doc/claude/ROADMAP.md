@@ -45,26 +45,26 @@ The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
 | GL6.3  | Buffer upload + draw + requestAnimationFrame           | S  | ✓      | WEB_EXAMPLES.md            |
 | GL6.4  | Texture upload from Canvas (WebGL)                     | S  | ✓      | WEB_EXAMPLES.md            |
 | GL6.5  | Shader version patching (330 core → 300 es)            | S  | ✓      | WEB_EXAMPLES.md            |
-| GL6.6  | Keyboard + mouse input via DOM events                  | S  | ~      | WEB_EXAMPLES.md            |
+| GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | WEB_EXAMPLES.md            |
 
 ### Theme 3: Game infrastructure
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| G1     | Sprite sheet loading (atlas texture + UV rect lookup)  | S  | ~      | render.loft                |
-| G2     | Sprite drawing (billboarded quads in 3D or 2D overlay) | S  | ~      | render.loft                |
-| G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | —      |                            |
-| G4     | 2D collision detection (AABB + circle)                 | S  | —      |                            |
-| G5     | Audio: sound effect playback (Web Audio + native)      | S  | —      |                            |
-| G6     | Audio: background music with crossfade                 | S  | —      | G5                         |
-| G7     | First playable demo game (simple, proves the pipeline) | M  | —      | R1, GL6.1, G1              |
+| G1     | Sprite sheet loading (atlas texture + UV rect lookup)  | S  | ✓      | GAME_INFRA.md              |
+| G2     | Sprite drawing (billboarded quads in 3D or 2D overlay) | S  | ✓      | GAME_INFRA.md              |
+| G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | ✓      |                            |
+| G4     | 2D collision detection (AABB + circle)                 | S  | ✓      |                            |
+| G5     | Audio: sound effect playback (Web Audio + native)      | S  | ✓      |                            |
+| G6     | Audio: background music with crossfade                 | S  | ✓      | G5                         |
+| G7     | First playable demo game (Breakout clone)              | M  | ✓      | R1, GL6.1, G1              |
 
 ### Theme 4: Web deployment
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | W1     | WASM build + `compile_and_run()` in browser            | M  | ✓      | WASM.md, WEB_IDE.md M1     |
-| W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ~      |                            |
+| W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ✓      |                            |
 | GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
 | GAL.2  | Per-example pages with source + live WebGL             | M  | ✓      | WEB_EXAMPLES.md            |
 
@@ -142,10 +142,10 @@ Design documents:
 | ID     | Title                                                  | E  | Design | Depends on | Source           |
 |--------|--------------------------------------------------------|----|--------|------------|------------------|
 | PKG.7  | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | PKG.3      | manifest.rs      |
-| FFI.1  | Generic type marshaller from `#native` signature       | MH | —      | EXT.1      | native.rs        |
-| FFI.2  | Generic cdylib loader — scan exports, HashMap          | S  | —      | FFI.1      | extensions.rs    |
-| FFI.3  | Eliminate per-function glue in native.rs               | M  | —      | FFI.2      | native.rs        |
-| FFI.4  | Docs: zero-boilerplate native function guide           | S  | —      | FFI.3      | EXTERNAL_LIBS.md |
+| FFI.1  | Generic type marshaller from `#native` signature       | MH | ✓      | EXT.1      | GAME_INFRA.md    |
+| FFI.2  | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | FFI.1      | GAME_INFRA.md    |
+| FFI.3  | Eliminate per-function glue in native.rs               | M  | ✓      | FFI.2      | GAME_INFRA.md    |
+| FFI.4  | Docs: zero-boilerplate native function guide           | S  | ✓      | FFI.3      | GAME_INFRA.md    |
 
 ---
 
@@ -155,7 +155,7 @@ Design documents:
 |--------|--------------------------------------------------------|----|--------|------------------|
 | P2     | REPL / interactive mode                                | M  | ✓      | PLANNING.md § P2 |
 | L1     | Error recovery after token failures                    | M  | ✓      | PLANNING.md § L1 |
-| W-warn | Developer warnings (Clippy-inspired)                   | M  | —      | see below        |
+| W-warn | Developer warnings (Clippy-inspired)                   | M  | ✓      | GAME_INFRA.md    |
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
