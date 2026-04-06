@@ -1,0 +1,62 @@
+// Generate doc/examples.js from tests/docs/*.loft
+// Run: loft scripts/build-playground-examples.loft
+
+fn json_escape(s: text) -> text {
+  r = "";
+  for c in s {
+    if c == '\\' { r += "\\\\"; }
+    else if c == '"' { r += "\\\""; }
+    else if c == '\n' { r += "\\n"; }
+    else if c == '\t' { r += "\\t"; }
+    else { r += "{c}"; }
+  }
+  r
+}
+
+fn main() {
+  out = file("doc/examples.js");
+  out += `
+    // Auto-generated — regenerate with: loft scripts/build-playground-examples.loft
+    export const EXAMPLES = {{
+  `;
+  list = "";
+  count = 0;
+  for f in file("tests/docs").files() {
+    path = "{f.path}";
+    if !path.ends_with(".loft") or path.ends_with("/.loft") { continue; }
+    lines = f.lines();
+    base = path[path.find("/") + 1..path.len() - 5];
+    if base.find("/") >= 0 { base = base[base.find("/") + 1..]; }
+    name = base;
+    code = "";
+    in_header = true;
+    for line in lines {
+      if in_header {
+        pos = line.find("@NAME:");
+        if pos >= 0 { name = line[pos + 7..]; }
+        if line.starts_with("//") or line.len() == 0 { continue; }
+        in_header = false;
+      }
+      if code.len() > 0 { code += "\n"; }
+      code += line;
+    }
+    key = name.to_lowercase().replace(" ", "_");
+    escaped = json_escape(code);
+    out += `
+      "{key}": "{escaped}",
+    `;
+    list += `
+      {{ key: "{key}", name: "{name}" }},
+    `;
+    count += 1;
+  }
+  out += `
+    }};
+    export const EXAMPLE_LIST = [
+  `;
+  out += list;
+  out += `
+    ];
+  `;
+  println("Generated doc/examples.js — {count} examples");
+}
