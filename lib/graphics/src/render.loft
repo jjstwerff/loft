@@ -131,12 +131,13 @@ pub fn elapsed(self: const Renderer) -> float {
 
 // Upload all meshes in the scene to GPU VAOs.
 pub fn upload_scene(self: Renderer, sc: const scene::Scene) {
-  for rm in sc.meshes {
-    rd = mesh::mesh_to_floats(rm);
-    rv = graphics::gl_upload_vertices(rd, 6);
-    rn = rm.triangles.len() * 3;
-    self.vaos += [rv];
-    self.vert_counts += [rn];
+  // Pre-allocate with zeros, then overwrite by index — avoids loop push bug
+  self.vaos = [for _ in 0..sc.meshes.len() { 0 }];
+  self.vert_counts = [for _ in 0..sc.meshes.len() { 0 }];
+  for up_i in 0..sc.meshes.len() {
+    up_data = mesh::mesh_to_floats(sc.meshes[up_i]);
+    self.vert_counts[up_i] = up_data.len() / 6;
+    self.vaos[up_i] = graphics::gl_upload_vertices(up_data, 6);
   }
   self.uploaded = true;
 }

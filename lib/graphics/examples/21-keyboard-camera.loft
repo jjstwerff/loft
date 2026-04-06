@@ -55,6 +55,9 @@ fn main() {
   kc_cam_y = 2.0;
   kc_cam_z = 8.0;
   kc_cam_yaw = 0.0;
+  kc_cam_pitch = 0.0;
+  kc_last_mx = graphics::gl_mouse_x();
+  kc_last_my = graphics::gl_mouse_y();
   kc_last_tick = ticks();
   graphics::gl_enable(graphics::GL_CULL_FACE);
   for _ in 0..100000 {
@@ -88,8 +91,19 @@ fn main() {
     if graphics::gl_key_pressed(graphics::KEY_E) { kc_cam_y += kc_speed }
     if graphics::gl_key_pressed(graphics::KEY_LEFT) { kc_cam_yaw -= 2.0 * kc_dt }
     if graphics::gl_key_pressed(graphics::KEY_RIGHT) { kc_cam_yaw += 2.0 * kc_dt }
+    // Mouse drag: left button rotates yaw/pitch
+    kc_mx = graphics::gl_mouse_x();
+    kc_my = graphics::gl_mouse_y();
+    if graphics::gl_mouse_button() & 1 != 0 {
+      kc_cam_yaw += (kc_mx - kc_last_mx) * 0.0025;
+      kc_cam_pitch -= (kc_my - kc_last_my) * 0.0025;
+      if kc_cam_pitch > 1.4 { kc_cam_pitch = 1.4; }
+      if kc_cam_pitch < -1.4 { kc_cam_pitch = -1.4; }
+    }
+    kc_last_mx = kc_mx;
+    kc_last_my = kc_my;
     kc_eye = math::vec3(kc_cam_x, kc_cam_y, kc_cam_z);
-    kc_target = math::vec3(kc_cam_x + kc_fwd_x, kc_cam_y, kc_cam_z + kc_fwd_z);
+    kc_target = math::vec3(kc_cam_x + kc_fwd_x * cos(kc_cam_pitch), kc_cam_y + sin(kc_cam_pitch), kc_cam_z + kc_fwd_z * cos(kc_cam_pitch));
     kc_view = math::mat4_look_at(kc_eye, kc_target, math::vec3(0.0, 1.0, 0.0));
     graphics::gl_clear(graphics::rgba(40, 50, 60, 255));
     graphics::gl_use_shader(kc_shader);
