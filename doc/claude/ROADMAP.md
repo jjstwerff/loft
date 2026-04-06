@@ -51,34 +51,13 @@ The 0.8.4 milestone delivers the core promise: a loft game running in a browser.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| G1     | Sprite sheet loading + drawing (atlas UV mapping)      | M  | —      |                            |
-| G2     | Tilemap rendering (grid-based 2D)                      | M  | —      |                            |
-| G3     | 2D collision detection (AABB + circle)                 | S  | —      |                            |
-| G4     | Audio playback (Web Audio API + native)                | M  | —      |                            |
-| G5     | First playable demo game                               | M  | —      |                            |
-
-### Theme 5: Moros — hex RPG scene system (first real application)
-
-Moros is a browser-based tabletop RPG toolkit: a hex-grid scene editor and
-3D renderer.  It is the first real application built on loft's graphics and
-WASM stack, validating the full pipeline (loft → WASM → WebGL → browser).
-Design: `../moros/doc/claude/LOFT_LIBRARIES.md`.
-
-| ID     | Title                                                  | E  | Design | Depends on    | Source                     |
-|--------|--------------------------------------------------------|----|--------|---------------|----------------------------|
-| MO.1   | `moros_map` package — hex/chunk/palette/spawn types    | M  | ✓      |               | moros/lib/moros_map/       |
-| MO.2   | `moros_map` JSON serialization (map_to_json/from_json) | S  | ✓      | MO.1          | moros/lib/moros_map/       |
-| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1          | moros/lib/moros_editor/    |
-| MO.4   | `moros_editor` — undo/redo stack                       | S  | ✓      | MO.3          | moros/lib/moros_editor/    |
-| MO.5   | `moros_editor` — slope tool + stencil stamping         | M  | ✓      | MO.3          | moros/lib/moros_editor/    |
-| MO.6   | `moros_editor` — spawn/waypoint/NPC routine management | S  | ✓      | MO.3          | moros/lib/moros_editor/    |
-| MO.7   | `moros_render` — hex surface + wall geometry generation | H  | ✓      | MO.1, R1      | moros/lib/moros_render/    |
-| MO.8   | `moros_render` — stair geometry (linear/spiral/arc)    | M  | ✓      | MO.7          | moros/lib/moros_render/    |
-| MO.9   | `moros_render` — camera orbit/pan/zoom + hex picking   | M  | ✓      | MO.7, GL6.6   | moros/lib/moros_render/    |
-| MO.10  | `moros_render` — GLB export (scene → file/base64)      | M  | ✓      | MO.7          | moros/lib/moros_render/    |
-| MO.11  | WASM build: all 3 packages compile to .wasm            | M  | ✓      | W1, GL6.1     | moros/Makefile             |
-| MO.12  | `scene-editor.html` — editor UI + live 3D preview      | H  | ✓      | MO.3, MO.7    | moros/html/                |
-| MO.13  | Developer art materials + procedural swatches           | S  | ✓      | MO.7          | moros/lib/moros_render/    |
+| G1     | Sprite sheet loading (atlas texture + UV rect lookup)  | S  | ~      | render.loft                |
+| G2     | Sprite drawing (billboarded quads in 3D or 2D overlay) | S  | ~      | render.loft                |
+| G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | —      |                            |
+| G4     | 2D collision detection (AABB + circle)                 | S  | —      |                            |
+| G5     | Audio: sound effect playback (Web Audio + native)      | S  | —      |                            |
+| G6     | Audio: background music with crossfade                 | S  | —      | G5                         |
+| G7     | First playable demo game (simple, proves the pipeline) | M  | —      | R1, GL6.1, G1              |
 
 ### Theme 4: Web deployment
 
@@ -88,6 +67,75 @@ Design: `../moros/doc/claude/LOFT_LIBRARIES.md`.
 | W1.1   | Single-file HTML export (`loft --html game.loft`)      | M  | ~      |                            |
 | GAL.1  | Example gallery build script + index.html              | S  | ✓      | WEB_EXAMPLES.md            |
 | GAL.2  | Per-example pages with source + live WebGL             | M  | ✓      | WEB_EXAMPLES.md            |
+
+### Theme 5: Moros — hex RPG scene editor (first real application)
+
+Moros is a browser-based tabletop RPG toolkit: a hex-grid scene editor and
+3D renderer.  It is the first real application built on loft's graphics and
+WASM stack, validating the full pipeline (loft → WASM → WebGL → browser).
+
+Design documents:
+- `../moros/doc/claude/LOFT_LIBRARIES.md` — package APIs and type specs
+- `../moros/doc/claude/SCENE_EDITOR_PLAN.md` — 6-phase implementation plan
+- `../moros/doc/claude/SCENE_MAP.md` — hex/chunk data format
+- `../moros/doc/claude/SCENE_MAP_RENDER.md` — 3D geometry pseudocode
+- `../moros/doc/claude/OPEN_ISSUES.md` — designs for all open items
+
+#### Sprint A: Data model + 2D canvas (no loft WebGL needed)
+
+| ID     | Title                                                  | E  | Design | Depends on    |
+|--------|--------------------------------------------------------|----|--------|---------------|
+| MO.1a  | `moros_map` — Hex, Chunk, Map, HexAddress structs      | S  | ✓      |               |
+| MO.1b  | `moros_map` — MaterialDef, WallDef, ItemDef palettes   | S  | ✓      | MO.1a         |
+| MO.1c  | `moros_map` — SpawnPoint, NpcRoutine, NpcWaypoint      | S  | ✓      | MO.1a         |
+| MO.2   | `moros_map` — map_to_json/map_from_json serialization  | S  | ✓      | MO.1a         |
+| MO.C1  | `scene-canvas.js` — hex coordinate math + flat render  | M  | ✓      | MO.2          |
+| MO.C2  | `scene-canvas.js` — pan/zoom/hit-test                  | S  | ✓      | MO.C1         |
+| MO.C3  | `scene-canvas.js` — layer rendering with opacity       | S  | ✓      | MO.C1         |
+
+#### Sprint B: Editor tools (pure JS, no loft WASM needed)
+
+| ID     | Title                                                  | E  | Design | Depends on    |
+|--------|--------------------------------------------------------|----|--------|---------------|
+| MO.E1  | `scene-editor.html` — shell page + toolbar + palettes  | M  | ✓      | MO.C1         |
+| MO.E2  | `scene-editor.js` — Select + Paint + Height tools      | M  | ✓      | MO.E1         |
+| MO.E3  | `scene-editor.js` — Wall + Item placement tools        | S  | ✓      | MO.E2         |
+| MO.E4  | `scene-editor.js` — undo/redo stack (JS-side)          | S  | ✓      | MO.E2         |
+| MO.E5  | `scene-editor.js` — localStorage save/load             | S  | ✓      | MO.E2         |
+
+#### Sprint C: Loft backend (needs WASM build)
+
+| ID     | Title                                                  | E  | Design | Depends on    |
+|--------|--------------------------------------------------------|----|--------|---------------|
+| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1a, W1     |
+| MO.4   | `moros_editor` — undo/redo stack (loft-side)           | S  | ✓      | MO.3          |
+| MO.5a  | `moros_editor` — slope tool                            | S  | ✓      | MO.3          |
+| MO.5b  | `moros_editor` — stencil stamping (12 orientations)    | M  | ✓      | MO.3          |
+| MO.6   | `moros_editor` — spawn/waypoint management             | S  | ✓      | MO.3          |
+| MO.W1  | WASM build: moros_map + moros_editor → .wasm           | S  | ✓      | MO.3, W1      |
+
+#### Sprint D: 3D renderer (needs loft renderer + WebGL)
+
+| ID     | Title                                                  | E  | Design | Depends on    |
+|--------|--------------------------------------------------------|----|--------|---------------|
+| MO.7a  | `moros_render` — hex surface geometry (flat + slope)   | M  | ✓      | MO.1a, R1     |
+| MO.7b  | `moros_render` — wall slab geometry (thin + thick)     | M  | ✓      | MO.7a         |
+| MO.7c  | `moros_render` — MeshBuilder batching + material sort  | S  | ✓      | MO.7a         |
+| MO.8a  | `moros_render` — linear stair steps                    | S  | ✓      | MO.7a         |
+| MO.8b  | `moros_render` — spiral newel + grand arc treads        | M  | ✓      | MO.8a         |
+| MO.9a  | `moros_render` — camera orbit/pan/zoom                 | S  | ✓      | MO.7a, GL6.6  |
+| MO.9b  | `moros_render` — hex picking (screen ray → hex addr)   | M  | ✓      | MO.9a         |
+| MO.13  | Developer art — flat-shade colours + procedural swatches| S  | ✓      | MO.7a         |
+
+#### Sprint E: Export + integration
+
+| ID     | Title                                                  | E  | Design | Depends on    |
+|--------|--------------------------------------------------------|----|--------|---------------|
+| MO.10  | `moros_render` — GLB export (scene → file/base64)      | M  | ✓      | MO.7a         |
+| MO.W2  | WASM build: moros_render → .wasm                       | S  | ✓      | MO.7a, GL6.1  |
+| MO.12a | `scene-editor.html` — wire loft WASM to JS editor      | M  | ✓      | MO.W1, MO.E2  |
+| MO.12b | `scene-editor.html` — live 3D preview panel            | M  | ✓      | MO.W2, MO.9a  |
+| MO.12c | `scene-editor.html` — GLB export button                | S  | ✓      | MO.10, MO.12a |
 
 ### Remaining package/language items
 
