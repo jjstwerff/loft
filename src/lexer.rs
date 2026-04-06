@@ -1003,6 +1003,19 @@ impl Lexer {
     }
 
     pub fn switch(&mut self, filename: &str) {
+        // W1.9: try VIRT_FS first (WASM has no real filesystem for library files).
+        #[cfg(feature = "wasm")]
+        if let Some(content) = crate::wasm::virt_fs_get(filename) {
+            self.lines = Box::new(
+                content
+                    .lines()
+                    .map(|l| Ok(l.to_string()))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
+            self.restart(filename);
+            return;
+        }
         let Ok(fp) = File::open(filename) else {
             self.diagnostics
                 .add(Level::Fatal, &format!("Unknown file:{filename}"));
