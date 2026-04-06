@@ -25,63 +25,35 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 Unified renderer design (R1–R4), WASM build + playground (W1, W1.P),
 WebGL2 bridge with shader patching (GL6.1–GL6.5), gallery page (GAL.2),
-playground assert reporting, grouped examples, syntax highlighting.
+playground assert reporting, grouped examples, syntax highlighting,
+frame yield (FY.1–FY.3), keyboard+mouse input (GL6.6), asset loading
+(GL7.1–GL7.4), text self-concat fix (P114 partial).
 
 ---
 
-## 0.8.4 — All 24 OpenGL examples in browser + first playable game
+## 0.8.4 — Bug fixes + all 24 OpenGL examples in browser
 
-Everything needed before publishing the live graphics gallery, in order.
+### 0. Language bug fixes (text + vector)
 
-### 1. Frame yield — make the render loop work in WASM
-
-The interpreter pauses at `gl_swap_buffers` and returns to JavaScript.
-`requestAnimationFrame` calls `resume_frame` to continue.  Without this,
-no interactive example works in the browser.
+Five related bugs in the parser/codegen that produce silent data corruption.
+Must be fixed before the gallery is published — they affect any non-trivial
+loft program.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| FY.1   | Frame yield — interpreter pauses at `gl_swap_buffers`  | M  | ✓      | WASM.md § Frame Yield      |
-| FY.2   | `resume_frame` WASM export + JS frame loop             | S  | ✓      | WASM.md § Frame Yield      |
-| FY.3   | Session lifecycle (re-run disposal, panic recovery)     | S  | ✓      | WASM.md § Frame Yield      |
+| P110   | Vector push in for loop: shifted/garbage values        | M  | ✓      | PROBLEMS.md #110           |
+| P111   | `character == text` always true                        | S  | ✓      | PROBLEMS.md #111           |
+| P112   | Text return accumulation in functions                  | M  | ✓      | PROBLEMS.md #112           |
+| P113   | `t = t[N..]` self-slice produces empty string          | S  | ✓      | PROBLEMS.md #113           |
+| P114   | `h = h + expr` on struct fields still broken           | S  | ✓      | PROBLEMS.md #114           |
 
-### 2. Input — keyboard and mouse from DOM events
-
-Without this example 21 is dead; games are impossible.
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
-
-### 3. Asset loading via VIRT_FS — examples run unchanged
-
-Native functions implemented in WASM to read assets from VIRT_FS.
-Gallery provides asset files alongside .loft source.  No example
-code is modified.
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL7.1  | `gl_load_texture` reads image from VIRT_FS             | S  | ✓      | WEB_EXAMPLES.md            |
-| GL7.2  | `save_png` writes to browser download                  | S  | ✓      | WEB_EXAMPLES.md            |
-| GL7.3  | `gl_load_font` + text raster via fontdue-in-WASM       | M  | ✓      | WEB_EXAMPLES.md            |
-| GL7.4  | Add render loop to ex. 11 (native + WASM)              | XS | ✓      | WEB_EXAMPLES.md            |
-
-### 4. High-level renderer — test only
-
-`render.loft` is pure loft calling gl_*.  With frame yield + shader
-patching, example 24 should work unchanged.  No new code — just testing.
-
-| ID     | Title                                                  | E  | Design | Source                     |
-|--------|--------------------------------------------------------|----|--------|----------------------------|
-| GL8.1  | Verify `render.loft` works end-to-end in WebGL         | S  | ✓      | WEB_EXAMPLES.md            |
-
-### 5. Publish: live graphics gallery (24/24)
+### 1. Publish live graphics gallery (24/24)
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GAL.3  | 🌐 **Gallery with all 24 live examples** on GH Pages    | S  | ✓      | WEB_EXAMPLES.md            |
 
-### 6. Game infrastructure + first game
+### 2. Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
