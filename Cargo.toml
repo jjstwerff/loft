@@ -27,7 +27,8 @@ path = "src/gendoc.rs"
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = []
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
-                "dep:js-sys", "dep:web-sys", "png", "dep:fontdue"]
+                "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
+                "dep:console_error_panic_hook"]
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
 png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
@@ -50,6 +51,7 @@ web-sys            = { version = "0.3", optional = true, features = ["console"] 
 wasm-bindgen-rayon = { version = "1.2", optional = true }
 libloading         = { version = "0.8", optional = true }
 loft-ffi           = { path = "loft-ffi" }
+console_error_panic_hook = { version = "0.1", optional = true }
 ureq               = { version = "2", optional = true }
 zip                = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 

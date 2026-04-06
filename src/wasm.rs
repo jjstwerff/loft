@@ -561,6 +561,8 @@ const GRAPHICS_LIB_FILES: &[(&str, &str)] = &[
 /// ```
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn compile_and_run(files_json: &str) -> String {
+    #[cfg(feature = "wasm")]
+    console_error_panic_hook::set_once();
     // Parse the JSON input.
     let files = match parse_files_json(files_json) {
         Ok(f) => f,
@@ -634,6 +636,8 @@ thread_local! {
 /// Returns JSON `{"ok":true}` on success or `{"ok":false,"error":"..."}` on failure.
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn compile_and_start(files_json: &str) -> String {
+    #[cfg(feature = "wasm")]
+    console_error_panic_hook::set_once();
     // Dispose previous session.
     GAME_SESSION.with(|gs| {
         if gs.borrow().is_some() {
