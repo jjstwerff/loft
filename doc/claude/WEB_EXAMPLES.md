@@ -8,9 +8,56 @@ unifying the rendering backend across native OpenGL, WebGL, and GLB export.
 
 ---
 
+## Project goals
+
+### Primary: browser games for the wider public
+
+Loft's main graphics goal is enabling **small games that run in a browser**.
+The audience is the general public — people who click a link and immediately
+play, with no install, no toolchain, no GPU driver.  WebGL2 in every modern
+browser is the delivery platform.
+
+This means:
+
+- **WebGL is the first-class target.**  Every rendering feature must work in
+  the browser.  If something works natively but not in WebGL, it is incomplete.
+- **The game loop, input, audio, and rendering all run in WASM+WebGL.**
+  The loft interpreter (or native-compiled WASM) drives the game; the browser
+  provides the display surface and input events.
+- **Share and play in one click.**  A loft game compiles to a single `.html`
+  page (or a small set of static files) that anyone can host on GitHub Pages,
+  itch.io, or any web server.
+
+### Secondary: native OpenGL for enthusiasts
+
+Desktop rendering via native OpenGL is supported for developers who want:
+
+- **Low-latency, full-screen rendering** without browser overhead.
+- **LearnOpenGL-style tutorials** that teach graphics programming concepts
+  with direct GL access (the existing 23 examples serve this role).
+- **Offline tools** — headless GLB export, procedural texture generation,
+  batch rendering pipelines.
+
+Native OpenGL is not a prerequisite for browser games.  The two paths share
+the same loft-level API but compile to different backends.
+
+### Design consequence
+
+Every abstraction is designed **WebGL-first, native-compatible**:
+
+| Decision | Rationale |
+|---|---|
+| Shader version patching (330 → 300 es) | One source, both targets |
+| No GL extensions beyond WebGL2 core | Browser must work |
+| Frame loop via `render.frame()` not `while true` | Maps to `requestAnimationFrame` |
+| Input via `gl.key_pressed()` not OS-specific APIs | Maps to DOM events |
+| Audio via a future `audio.loft` module | Maps to Web Audio API |
+| Asset loading via virtual filesystem | Maps to fetch + IndexedDB |
+
+---
+
 ## Contents
 
-- [Motivation](#motivation)
 - [Example gallery](#example-gallery)
 - [Unified rendering abstraction](#unified-rendering-abstraction)
 - [Scene-level API](#scene-level-api)
