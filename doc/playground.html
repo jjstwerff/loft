@@ -129,11 +129,6 @@ textarea:focus { outline: none; }
   <div class="toolbar">
     <select id="examples">
       <option value="">— Load example —</option>
-      <option value="hello">Hello World</option>
-      <option value="fibonacci">Fibonacci</option>
-      <option value="structs">Structs</option>
-      <option value="vectors">Vectors</option>
-      <option value="json">JSON</option>
     </select>
     <button id="run-btn" onclick="run()" disabled>▶ Run</button>
   </div>
@@ -143,17 +138,17 @@ textarea:focus { outline: none; }
   <div class="editor-panel">
     <div class="panel-header">Source</div>
     <textarea id="editor" spellcheck="false">fn main() {
-  println("Hello from Loft!")
+  println("Hello from Loft!");
 
   for i in 1..11 {
     if i % 3 == 0 and i % 5 == 0 {
-      println("FizzBuzz")
+      println("FizzBuzz");
     } else if i % 3 == 0 {
-      println("Fizz")
+      println("Fizz");
     } else if i % 5 == 0 {
-      println("Buzz")
+      println("Buzz");
     } else {
-      println("{i}")
+      println("{i}");
     }
   }
 }</textarea>
@@ -171,63 +166,7 @@ textarea:focus { outline: none; }
 
 <script type="module">
 import init, { compile_and_run } from './pkg/loft.js';
-
-const examples = {
-  hello: `fn main() {
-  println("Hello from Loft!")
-  println("The answer is {6 * 7}")
-}`,
-  fibonacci: `fn fib(n: integer) -> integer {
-  if n <= 1 { return n; }
-  fib(n - 1) + fib(n - 2)
-}
-
-fn main() {
-  for i in 0..15 {
-    println("fib({i}) = {fib(i)}")
-  }
-}`,
-  structs: `struct Point { x: float, y: float }
-
-fn distance(a: Point, b: Point) -> float {
-  dx = a.x - b.x
-  dy = a.y - b.y
-  sqrt(dx * dx + dy * dy)
-}
-
-fn main() {
-  p1 = Point { x: 0.0, y: 0.0 }
-  p2 = Point { x: 3.0, y: 4.0 }
-  println("distance: {distance(p1, p2)}")
-  println("p1 = {p1}")
-  println("p2 = {p2}")
-}`,
-  vectors: `fn main() {
-  v = [3, 1, 4, 1, 5, 9, 2, 6]
-  println("original: {v}")
-  sort(v)
-  println("sorted:   {v}")
-  println("length:   {v.len()}")
-  println("sum:      {v.reduce(0, |a, x| { a + x })}")
-  evens = v.filter(|x| { x % 2 == 0 })
-  println("evens:    {evens}")
-  squares = v.map(|x| { x * x })
-  println("squares:  {squares}")
-}`,
-  json: `struct Person {
-  name: text,
-  age: integer
-}
-
-fn main() {
-  p = Person { name: "Alice", age: 30 }
-  json = "{p:j}"
-  println("JSON: {json}")
-  p2 = Person.parse(json)
-  println("Parsed: {p2}")
-  println("Name: {p2.name}, Age: {p2.age}")
-}`,
-};
+import { EXAMPLES, EXAMPLE_LIST } from './examples.js';
 
 const editor = document.getElementById('editor');
 const output = document.getElementById('output');
@@ -237,10 +176,18 @@ const runBtn = document.getElementById('run-btn');
 const exampleSelect = document.getElementById('examples');
 const loading = document.getElementById('loading');
 
+// Populate example dropdown from the generated list.
+for (const ex of EXAMPLE_LIST) {
+  const opt = document.createElement('option');
+  opt.value = ex.key;
+  opt.textContent = ex.name;
+  exampleSelect.appendChild(opt);
+}
+
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
-  if (key && examples[key]) {
-    editor.value = examples[key];
+  if (key && EXAMPLES[key]) {
+    editor.value = EXAMPLES[key];
     output.value = '';
     status.textContent = 'Ready';
     status.className = 'info';
