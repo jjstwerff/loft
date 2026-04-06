@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # WASM Runtime — Virtual Filesystem, Host Bridges, and Node.js Testing
 
 ## Contents

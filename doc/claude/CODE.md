@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Code Rules
 
 Rules for all Rust and loft code in this project.

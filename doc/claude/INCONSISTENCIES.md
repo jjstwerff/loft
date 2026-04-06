@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Loft Language Design Inconsistencies
 
 This document catalogues asymmetries, surprising behaviours, and design tensions in the

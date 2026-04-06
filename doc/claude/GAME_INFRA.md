@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Game Infrastructure — Design
 
 Designs for all game infrastructure, audio, FFI, and tooling items on the

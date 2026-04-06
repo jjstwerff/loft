@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Threading Interface
 
 ## Contents

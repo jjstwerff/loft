@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Web Example Gallery & Unified Rendering Design
 
 Design for presenting loft graphics examples as interactive web pages and

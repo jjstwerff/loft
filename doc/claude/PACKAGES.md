@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Library Package Format
 
 Design for a unified packaging format that supports pure-loft libraries,

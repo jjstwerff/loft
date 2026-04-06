@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Lifetime — Dependency Tracking and Scope-Based Freeing
 
 How the `dep` field on `Type::Text`, `Type::Reference`, `Type::Vector`, and other

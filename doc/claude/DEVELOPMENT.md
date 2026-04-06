@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Development Workflow
 
 Step-by-step process for taking a PLANNING.md item from backlog to merged.

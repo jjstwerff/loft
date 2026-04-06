@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # WASM Filesystem Bridge — Separately Testable Steps
 
 ## Overview

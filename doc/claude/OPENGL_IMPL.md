@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # OpenGL / Drawing Library — Implementation Checklist
 
 Ordered implementation steps, each small enough to write and verify independently.

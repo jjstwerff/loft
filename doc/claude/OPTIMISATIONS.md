@@ -1,6 +1,4 @@
----
-render_with_liquid: false
----
+
 # Runtime Optimisation Opportunities
 
 This document audits the interpreter runtime for concrete performance improvements,
