@@ -169,7 +169,7 @@ select {
 
 <script type="module">
 import init, { compile_and_start, resume_frame } from './pkg/loft.js';
-import { initLoftGL } from '../lib/graphics/js/loft-gl.js';
+import { initLoftGL } from './loft-gl.js';
 import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
 
 // ── WebGL bridge from library ────────────────────────────────────────────────
@@ -182,7 +182,7 @@ const ASSET_MAP = {
   '04-textures': [{ name: 'wall.jpg', type: 'image' }],
   '20-textured-cube': [{ name: 'DejaVuSans-Bold.ttf', type: 'binary' }],
 };
-const ASSET_BASE = '../lib/graphics/examples/';
+const ASSET_BASE = './assets/';
 // Font search: example 20 tries system paths; map them to our served file.
 const FONT_ALIASES = {
   '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
