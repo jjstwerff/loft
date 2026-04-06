@@ -6,7 +6,8 @@
 // any GPU or windowing system — ideal for headless/server rendering.
 //
 // Run:
-//   loft examples/11-scene-graph.loft   -- exports 11-scene.glb
+//   loft examples/11-scene-graph.loft              -- native render
+//   loft examples/11-scene-graph.loft --mode glb   -- exports 11-scene.glb
 //
 // Loft constructions used:
 //   Scene, Node, Camera, Material — scene graph types
@@ -19,6 +20,7 @@ use mesh;
 use math;
 use scene;
 use glb;
+use render;
 
 fn main() {
   sg_s = scene::Scene { name: "demo_scene" };
@@ -58,6 +60,18 @@ fn main() {
     name: "main", fov: 50.0, near: 0.1, far: 100.0,
     position: math::vec3(5.0, 4.0, 6.0),
     target: math::vec3(0.0, 0.5, 0.0) });
-  glb::save_scene_glb(sg_s, "11-scene.glb");
-  println("Exported 11-scene.glb (floor + 3 objects + 5 arc spheres + 2 lights + camera)");
+  sg_mode = "native";
+  for sg_arg in arguments() {
+    if sg_arg == "--mode" { sg_mode = ""; }
+    else if sg_mode == "" { sg_mode = sg_arg; }
+  }
+  if sg_mode == "glb" {
+    glb::save_scene_glb(sg_s, "11-scene.glb");
+    println("Exported 11-scene.glb (floor + 3 objects + 5 arc spheres + 2 lights + camera)");
+  } else {
+    sg_cam = sg_s.cameras[0];
+    sg_r = render::create_renderer(800, 600, "11 - Scene Graph");
+    sg_r.render_loop(sg_s, sg_cam);
+    sg_r.destroy();
+  }
 }

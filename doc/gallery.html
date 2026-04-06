@@ -170,81 +170,7 @@ select {
 <script type="module">
 import init, { compile_and_start, resume_frame } from './pkg/loft.js';
 import { initLoftGL } from '../lib/graphics/js/loft-gl.js';
-
-// ── Examples ─────────────────────────────────────────────────────────────────
-const EXAMPLES = {
-  '01-hello-window': `use graphics;
-
-fn main() {
-  if !graphics::gl_create_window(800, 600, "01 - Hello Window") {
-    println("Failed to create window");
-    return;
-  }
-  for _ in 0..60 {
-    if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
-}`,
-
-  '02-hello-triangle': `use graphics;
-use mesh;
-use math;
-
-VERT_SRC = \`
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-void main() {{
-    gl_Position = vec4(aPos, 1.0);
-}}
-\`;
-
-FRAG_SRC = \`
-#version 330 core
-out vec4 FragColor;
-void main() {{
-    FragColor = vec4(1.0, 0.5, 0.2, 1.0);
-}}
-\`;
-
-fn build_triangle() -> mesh::Mesh {
-  ht_m = mesh::mesh("triangle");
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3(-0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3( 0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
-    math::vec3( 0.0,  0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.5, 1.0)));
-  ht_m.add_triangle(0, 1, 2);
-  ht_m
-}
-
-fn main() {
-  m_tri = build_triangle();
-  if !graphics::gl_create_window(800, 600, "02 - Hello Triangle") {
-    println("Failed to create window");
-    return;
-  }
-  shader = graphics::gl_create_shader(VERT_SRC, FRAG_SRC);
-  data = mesh::mesh_to_floats(m_tri);
-  vao = graphics::gl_upload_vertices(data, 6);
-  for _ in 0..60 {
-    if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
-    graphics::gl_use_shader(shader);
-    graphics::gl_draw(vao, 3);
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
-}`,
-};
-
-const EXAMPLE_LIST = [
-  { key: '01-hello-window', name: '01 - Hello Window' },
-  { key: '02-hello-triangle', name: '02 - Hello Triangle' },
-];
+import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
 
 // ── WebGL bridge from library ────────────────────────────────────────────────
 const canvas = document.getElementById('gl-canvas');
@@ -261,7 +187,7 @@ const runBtn = document.getElementById('run-btn');
 let currentSource = '';
 let loftReady = false;
 
-for (const ex of EXAMPLE_LIST) {
+for (const ex of GALLERY_LIST) {
   const opt = document.createElement('option');
   opt.value = ex.key;
   opt.textContent = ex.name;
@@ -270,8 +196,8 @@ for (const ex of EXAMPLE_LIST) {
 
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
-  if (key && EXAMPLES[key]) {
-    currentSource = EXAMPLES[key];
+  if (key && GALLERY_EXAMPLES[key]) {
+    currentSource = GALLERY_EXAMPLES[key];
     sourceEl.textContent = currentSource;
     outputEl.textContent = '';
     statusEl.textContent = 'Ready';
