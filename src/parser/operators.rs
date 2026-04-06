@@ -8,6 +8,17 @@ use super::{
     Level, OPERATORS, Parser, Type, Value, diagnostic_format, rename, v_block, v_if, v_set,
 };
 
+/// P113: check if a Value tree contains a reference to the given variable.
+fn code_references_var(code: &Value, var_nr: u16) -> bool {
+    match code {
+        Value::Var(v) => *v == var_nr,
+        Value::Call(_, args) => args.iter().any(|a| code_references_var(a, var_nr)),
+        Value::Set(_, inner) => code_references_var(inner, var_nr),
+        Value::Insert(ls) => ls.iter().any(|v| code_references_var(v, var_nr)),
+        _ => false,
+    }
+}
+
 // Operator parsing and type dispatch.
 
 impl Parser {
@@ -72,7 +83,20 @@ impl Parser {
                 }
             }
         } else if op == "=" && var_nr != u16::MAX {
-            *code = v_set(var_nr, code.clone());
+            // P113: detect self-reference (t = t[N..], t = fn(t), etc.)
+            // If the RHS reads from the same variable being assigned, use a
+            // work text to avoid the clear-before-read problem.
+            if code_references_var(code, var_nr) {
+                let work = self.vars.work_text(&mut self.lexer);
+                let ls = vec![
+                    self.cl("OpClearText", &[Value::Var(work)]),
+                    self.cl("OpAppendText", &[Value::Var(work), code.clone()]),
+                    v_set(var_nr, Value::Var(work)),
+                ];
+                *code = Value::Insert(ls);
+            } else {
+                *code = v_set(var_nr, code.clone());
+            }
         } else if *tp == Type::Character {
             *code = self.cl("OpAppendCharacter", &[Value::Var(var_nr), code.clone()]);
         } else {

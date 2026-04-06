@@ -36,17 +36,13 @@ partial), 🌐 **live graphics gallery with all 24 examples** (GAL.3).
 
 ### 0. Language bug fixes (text + vector)
 
-Five related bugs in the parser/codegen that produce silent data corruption.
-Must be fixed before the gallery is published — they affect any non-trivial
-loft program.
+Two remaining bugs that produce silent data corruption. P111, P113, P114
+are fixed. These two need deeper slot allocator / codegen work.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
-| P110   | Vector push in for loop: shifted/garbage values        | M  | ✓      | PROBLEMS.md #110           |
-| P111   | `character == text` always true                        | S  | ✓      | PROBLEMS.md #111           |
+| P110   | Vector push in for loop: shifted/garbage values        | H  | ✓      | PROBLEMS.md #110           |
 | P112   | Text return accumulation in functions                  | M  | ✓      | PROBLEMS.md #112           |
-| P113   | `t = t[N..]` self-slice produces empty string          | S  | ✓      | PROBLEMS.md #113           |
-| P114   | `h = h + expr` on struct fields still broken           | S  | ✓      | PROBLEMS.md #114           |
 
 ### 1. Game infrastructure + first game
 

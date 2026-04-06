@@ -42,10 +42,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 | 110 | Vector push in for loop produces shifted/garbage values | **High** | Pre-allocate with comprehension, assign by index |
-| 111 | `character == text` comparison always returns true | Medium | Format char first: `"{c}" == t` |
+| 111 | ~~`character == text` comparison always returns true~~ | ~~Medium~~ | **Fixed** — now produces compile error; use `"{c}" == t` |
 | 112 | Text return accumulation in text-returning functions | Medium | Use `return expr` not `t = expr; ... t` |
-| 113 | `t = t[N..]` self-slice produces empty string | Medium | Use intermediate variable: `s = t[N..]; t = s` |
-| 114 | `h = h + expr` clears h before reading *(partially fixed)* | Medium | *(Fixed for plain variables)* — use `h += expr` for struct fields |
+| 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
+| 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
 
 ---
 
@@ -55,35 +55,41 @@ All five bugs share a root cause area: the parser's handling of text and vector
 operations inside loops and across function returns.  They should be investigated
 and fixed together.
 
-### 110. Vector push in for loop produces shifted/garbage values
+### 110. Multiple struct field vector appends produce extra/garbage elements
 
 **Severity:** High — silent data corruption, no error or crash.
 
-**Reproducer:**
+**Reproducer (no loop needed):**
 ```loft
-struct S { vals: vector<integer> }
+struct R { a: vector<integer>, b: vector<integer> }
 fn main() {
-  s = S { vals: [] };
-  for vi in 0..3 {
-    s.vals += [vi * 10];
-  }
-  // Expected: [0, 10, 20]
-  // Actual:   [0, 0, 10] or garbage like [0, 1070799360, 10]
+  r = R { a: [], b: [] };
+  r.a += [0];
+  r.b += [100];
+  r.a += [1];
+  r.b += [200];
+  // Expected: a=[0,1] b=[100,200]
+  // Actual:   a=[0,1] b=[100,0,200]
   assert("{s.vals}" == "[0,10,20]", "got {s.vals}");
 }
 ```
 
-**Root cause:** When `self.field += [expr]` is inside a `for` loop, the vector
-append operation reads a stale value of `expr` — the value from the previous
-iteration or an uninitialized slot.  The flat variable namespace causes the
-expression temporary to share a stack slot with the loop variable.
+**Root cause:** The temporary work vector created for the `[expr]` literal
+in `p.b += [expr]` is not cleared between uses.  When another struct field
+append (`p.a += [x]`) runs between two `p.b` appends, the temp vector for
+`b` retains stale data from the previous operation.  This is the same
+pattern as the text return accumulation bug (#112) — a work variable
+shared across operations that should be independent.
+
+The bug reproduces WITHOUT a loop — it's a fundamental issue with interleaved
+struct field vector appends.
 
 **Fix strategy:**
-1. In `src/parser/operators.rs` or `src/state/codegen.rs`, ensure vector append
-   expressions inside loops get their own evaluation slot that doesn't conflict
-   with the loop iteration variable.
-2. Alternatively, fix the slot allocator in `src/variables/slots.rs` to detect
-   this overlap and assign separate slots.
+1. In the parser/codegen, ensure the temp vector created for `[expr]` in
+   a `+=` operation is properly cleared (OpClearVector or fresh allocation)
+   each time it's used.
+2. Alternatively, track which work variables belong to which `+=` expression
+   and prevent reuse across different field appends on the same struct.
 
 **Test:**  Add to `tests/scripts/` — vector push inside for loop on a struct
 field, verify values match.

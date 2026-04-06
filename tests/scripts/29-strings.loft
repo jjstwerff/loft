@@ -172,3 +172,13 @@ fn test_text_self_concat_loop() {
   assert(h == "start.a.b.c", "loop: {h}");
 }
 
+// P113: t = t[N..] must preserve content (not clear before read).
+fn test_text_self_slice() {
+  ss = "hello world";
+  ss = ss[6..];
+  assert(ss == "world", "self-slice: {ss}");
+  ss2 = "abcdef";
+  ss2 = ss2[..3];
+  assert(ss2 == "abc", "self-slice-end: {ss2}");
+}
+

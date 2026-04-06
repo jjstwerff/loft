@@ -23,8 +23,7 @@ fn test_local_vector_push() {
   assert("{lv}" == "[0,10,20,30,40]", "local push: {lv}");
 }
 
-// Two field pushes in one loop — THE BUG.
-// @EXPECT_FAIL: two struct field vector pushes in one loop
+// Two field pushes in one loop — was the P110 bug, now fixed.
 fn test_two_field_push() {
   p = Pair { a: [], b: [] };
   for tp in 0..3 {
