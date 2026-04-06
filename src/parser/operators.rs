@@ -88,10 +88,11 @@ impl Parser {
             // work text to avoid the clear-before-read problem.
             if code_references_var(code, var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
-                let mut ls = Vec::new();
-                ls.push(self.cl("OpClearText", &[Value::Var(work)]));
-                ls.push(self.cl("OpAppendText", &[Value::Var(work), code.clone()]));
-                ls.push(v_set(var_nr, Value::Var(work)));
+                let ls = vec![
+                    self.cl("OpClearText", &[Value::Var(work)]),
+                    self.cl("OpAppendText", &[Value::Var(work), code.clone()]),
+                    v_set(var_nr, Value::Var(work)),
+                ];
                 *code = Value::Insert(ls);
             } else {
                 *code = v_set(var_nr, code.clone());
