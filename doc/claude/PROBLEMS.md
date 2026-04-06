@@ -42,10 +42,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 | 110 | Vector push in for loop produces shifted/garbage values | **High** | Pre-allocate with comprehension, assign by index |
-| 111 | `character == text` comparison always returns true | Medium | Format char first: `"{c}" == t` |
+| 111 | ~~`character == text` comparison always returns true~~ | ~~Medium~~ | **Fixed** — now produces compile error; use `"{c}" == t` |
 | 112 | Text return accumulation in text-returning functions | Medium | Use `return expr` not `t = expr; ... t` |
-| 113 | `t = t[N..]` self-slice produces empty string | Medium | Use intermediate variable: `s = t[N..]; t = s` |
-| 114 | `h = h + expr` clears h before reading *(partially fixed)* | Medium | *(Fixed for plain variables)* — use `h += expr` for struct fields |
+| 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
+| 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
 
 ---
 
