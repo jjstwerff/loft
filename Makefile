@@ -1,7 +1,7 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages serve wasm
 
 all:
 	rustfmt src/*.rs --edition 2024
@@ -58,6 +58,14 @@ quick:
 profile:
 	RUSTFLAGS=-g cargo build --release >result.txt 2>&1
 	flamegraph -o profiler.svg -- target/release/loft auto
+
+wasm:
+	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
+
+serve:
+	@echo "Playground: http://localhost:8000/playground.html"
+	@echo "Gallery:    http://localhost:8000/gallery.html"
+	cd doc && python3 -m http.server 8000
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg

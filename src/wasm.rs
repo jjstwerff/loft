@@ -561,6 +561,8 @@ const GRAPHICS_LIB_FILES: &[(&str, &str)] = &[
 /// ```
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn compile_and_run(files_json: &str) -> String {
+    #[cfg(feature = "wasm")]
+    console_error_panic_hook::set_once();
     // Parse the JSON input.
     let files = match parse_files_json(files_json) {
         Ok(f) => f,
@@ -634,6 +636,8 @@ thread_local! {
 /// Returns JSON `{"ok":true}` on success or `{"ok":false,"error":"..."}` on failure.
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub fn compile_and_start(files_json: &str) -> String {
+    #[cfg(feature = "wasm")]
+    console_error_panic_hook::set_once();
     // Dispose previous session.
     GAME_SESSION.with(|gs| {
         if gs.borrow().is_some() {
@@ -676,10 +680,12 @@ pub fn compile_and_start(files_json: &str) -> String {
                 return Err(p.diagnostics.to_string());
             }
         }
+        let lib_set: std::collections::HashSet<&str> =
+            GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
         let main_name = VIRT_FS.with(|fs| {
             fs.borrow()
                 .keys()
-                .filter(|k| !k.starts_with("default/"))
+                .filter(|k| !k.starts_with("default/") && !lib_set.contains(k.as_str()))
                 .min()
                 .cloned()
         });
@@ -896,10 +902,12 @@ fn run_pipeline() -> (String, bool, Vec<AssertResult>) {
             return (p.diagnostics.to_string(), true, Vec::new());
         }
     }
+    let lib_names: std::collections::HashSet<&str> =
+        GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
     let main_name = VIRT_FS.with(|fs| {
         fs.borrow()
             .keys()
-            .filter(|k| !k.starts_with("default/"))
+            .filter(|k| !k.starts_with("default/") && !lib_names.contains(k.as_str()))
             .min()
             .cloned()
     });

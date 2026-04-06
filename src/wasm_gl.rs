@@ -97,12 +97,10 @@ fn extract_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Array {
         return js_sys::Float32Array::new_with_length(0);
     }
     let len = store.get_int(v_rec, 4) as u32;
-    // Each f32 is 4 bytes, stored starting at offset 8 in the vector record.
-    // Element size for single is 1 word (4 bytes).
-    let data_start = 8u32; // vector data starts after (rec_ptr=4, len=4)
+    // Elements stored at byte offset 8+ within the vector data record.
     let arr = js_sys::Float32Array::new_with_length(len);
     for i in 0..len {
-        let val = store.get_single(v_rec + data_start / 4 + i, 0);
+        let val = store.get_single(v_rec, 8 + i * 4);
         arr.set_index(i, val);
     }
     arr
@@ -119,12 +117,10 @@ fn extract_f64_as_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Ar
         return js_sys::Float32Array::new_with_length(0);
     }
     let len = store.get_int(v_rec, 4) as u32;
-    // Each f64 is 8 bytes = 2 words.
-    let data_start = 8u32;
+    // Each f64 is 8 bytes, stored at byte offset 8+ within the vector data record.
     let arr = js_sys::Float32Array::new_with_length(len);
     for i in 0..len {
-        let word_offset = data_start / 4 + i * 2;
-        let val = store.get_float(v_rec + word_offset, 0);
+        let val = store.get_float(v_rec, 8 + i * 8);
         arr.set_index(i, val as f32);
     }
     arr
@@ -574,7 +570,7 @@ fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
         };
         let arr = js_sys::Uint32Array::new_with_length(len);
         for i in 0..len {
-            let val = store.get_int(v_rec + 2 + i, 0) as u32;
+            let val = store.get_int(v_rec, 8 + i * 4) as u32;
             arr.set_index(i, val);
         }
         let args = js_sys::Array::of3(&arr.into(), &width.into(), &height.into());
@@ -717,7 +713,7 @@ fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
         };
         let arr = js_sys::Uint32Array::new_with_length(len);
         for i in 0..len {
-            let val = store.get_int(v_rec + 2 + i, 0) as u32;
+            let val = store.get_int(v_rec, 8 + i * 4) as u32;
             arr.set_index(i, val);
         }
         let args = js_sys::Array::new();
