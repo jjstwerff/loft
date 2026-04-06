@@ -27,7 +27,7 @@ path = "src/gendoc.rs"
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
 threading    = []
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
-                "dep:js-sys", "dep:web-sys", "png"]
+                "dep:js-sys", "dep:web-sys", "png", "dep:fontdue"]
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
 png          = ["dep:png"]
 mmap         = ["dep:mmap-storage"]
@@ -39,6 +39,7 @@ registry     = ["dep:ureq", "dep:zip"]
 rand_core          = { version = "0.9", optional = true }
 rand_pcg           = { version = "0.9", optional = true }
 png                = { version = "0.17", optional = true }
+fontdue            = { version = "0.9", optional = true }
 mmap-storage       = { version = "0.10", optional = true }
 dirs               = "5"
 wasm-bindgen       = { version = "0.2", optional = true }

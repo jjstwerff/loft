@@ -176,6 +176,55 @@ import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
 const canvas = document.getElementById('gl-canvas');
 let loftGL = null;
 
+// Asset map: example key → list of { name, type } to pre-load.
+// type: 'image' = decode as HTMLImageElement, 'binary' = store as base64.
+const ASSET_MAP = {
+  '04-textures': [{ name: 'wall.jpg', type: 'image' }],
+  '20-textured-cube': [{ name: 'DejaVuSans-Bold.ttf', type: 'binary' }],
+};
+const ASSET_BASE = '../lib/graphics/examples/';
+// Font search: example 20 tries system paths; map them to our served file.
+const FONT_ALIASES = {
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  'C:/Windows/Fonts/arial.ttf': 'DejaVuSans-Bold.ttf',
+};
+
+async function preloadAssets(exampleKey) {
+  if (!loftGL) return;
+  loftGL.assets = {};
+  const entries = ASSET_MAP[exampleKey];
+  if (!entries) return;
+  for (const entry of entries) {
+    if (entry.type === 'image') {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise(resolve => {
+        img.onload = resolve;
+        img.onerror = () => { console.warn('Failed to load:', entry.name); resolve(); };
+        img.src = ASSET_BASE + entry.name;
+      });
+      loftGL.assets[entry.name] = { image: img };
+      loftGL.assets['examples/' + entry.name] = { image: img };
+    } else if (entry.type === 'binary') {
+      try {
+        const resp = await fetch(ASSET_BASE + entry.name);
+        const buf = await resp.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        // Register under the filename and all known aliases
+        loftGL.assets[entry.name] = { base64: b64 };
+        for (const [alias, target] of Object.entries(FONT_ALIASES)) {
+          if (target === entry.name) {
+            loftGL.assets[alias] = { base64: b64 };
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load binary asset:', entry.name, e);
+      }
+    }
+  }
+}
+
 // ── UI ───────────────────────────────────────────────────────────────────────
 const exampleSelect = document.getElementById('examples');
 const sourceEl = document.getElementById('source');
@@ -185,6 +234,7 @@ const timingEl = document.getElementById('timing');
 const runBtn = document.getElementById('run-btn');
 
 let currentSource = '';
+let currentKey = '';
 let loftReady = false;
 
 for (const ex of GALLERY_LIST) {
@@ -197,6 +247,7 @@ for (const ex of GALLERY_LIST) {
 exampleSelect.addEventListener('change', () => {
   const key = exampleSelect.value;
   if (key && GALLERY_EXAMPLES[key]) {
+    currentKey = key;
     currentSource = GALLERY_EXAMPLES[key];
     sourceEl.textContent = currentSource;
     outputEl.textContent = '';
@@ -227,16 +278,21 @@ async function initLoft() {
 let animFrame = 0;
 let frameCount = 0;
 
-window.runExample = function() {
+window.runExample = async function() {
   if (!loftReady || !currentSource) return;
   if (animFrame) { cancelAnimationFrame(animFrame); animFrame = 0; }
   loftGL.shouldClose = false;
   outputEl.textContent = '';
-  statusEl.textContent = 'Compiling...';
+  statusEl.textContent = 'Loading assets...';
   statusEl.className = 'info';
   timingEl.textContent = '';
   frameCount = 0;
 
+  // Pre-load assets for this example
+  const selectedKey = currentKey;
+  await preloadAssets(selectedKey);
+
+  statusEl.textContent = 'Compiling...';
   const files = JSON.stringify([{ name: 'main.loft', content: currentSource }]);
   let result;
   try {
