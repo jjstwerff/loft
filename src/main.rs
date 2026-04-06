@@ -1689,6 +1689,49 @@ fn main() {
                 eprintln!("loft: native code generation failed: {e}");
                 std::process::exit(1);
             }
+            // For test-only files (no fn main()), generate a main() that calls
+            // all zero-parameter user functions as test entry points.
+            let main_nr = p.data.def_nr("n_main");
+            if main_nr >= end_def {
+                use std::io::Write;
+                let mut test_fns: Vec<(u32, String)> = Vec::new();
+                for d_nr in start_def..end_def {
+                    let def = p.data.def(d_nr);
+                    if !matches!(def.def_type, crate::data::DefType::Function) { continue; }
+                    if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") { continue; }
+                    if def.position.file.starts_with("default/") { continue; }
+                    let has_user_params = def.attributes.iter()
+                        .any(|a| !a.name.starts_with("__work_") && !a.name.starts_with("__ref_"));
+                    if has_user_params { continue; }
+                    test_fns.push((d_nr, def.name.clone()));
+                }
+                if !test_fns.is_empty() {
+                    let _ = writeln!(f, "\nfn main() {{");
+                    let _ = writeln!(f, "    let mut stores = Stores::new();");
+                    let _ = writeln!(f, "    init(&mut stores);");
+                    for (d_nr, name) in &test_fns {
+                        let def = p.data.def(*d_nr);
+                        let mut work_args = Vec::new();
+                        for (i, attr) in def.attributes.iter().enumerate() {
+                            if attr.name.starts_with("__work_") {
+                                let wname = format!("_w_{i}");
+                                let _ = writeln!(f, "    let mut {wname} = String::new();");
+                                work_args.push(format!("&mut {wname}"));
+                            } else if attr.name.starts_with("__ref_") {
+                                let wname = format!("_r_{i}");
+                                let _ = writeln!(f, "    let mut {wname} = stores.null_named(\"{wname}\");");
+                                work_args.push(format!("{wname}"));
+                            }
+                        }
+                        if work_args.is_empty() {
+                            let _ = writeln!(f, "    {name}(&mut stores);");
+                        } else {
+                            let _ = writeln!(f, "    {name}(&mut stores, {});", work_args.join(", "));
+                        }
+                    }
+                    let _ = writeln!(f, "}}");
+                }
+            }
         }
         if native_emit.is_some() {
             return; // --native-emit: just write the file, don't compile

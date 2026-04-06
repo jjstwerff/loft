@@ -30,7 +30,13 @@ impl Debug for Diagnostics {
 
 impl Display for Diagnostics {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write_str(&format!("{:?}", self.lines))
+        for (i, line) in self.lines.iter().enumerate() {
+            if i > 0 {
+                fmt.write_str("\n")?;
+            }
+            fmt.write_str(line)?;
+        }
+        Ok(())
     }
 }
 

@@ -1991,6 +1991,78 @@ impl Parser {
         self.parse_call_diagnostic(val, name, &list, &types, &call_pos)
     }
 
+    /// Extract the assert condition expression from the source line.
+    /// Reads the line at `pos.file:pos.line`, finds `assert(`, and extracts
+    /// the text up to the matching `)`.
+    fn extract_assert_expr(&self, pos: &crate::lexer::Position) -> String {
+        let line = self.read_source_line(&pos.file, pos.line);
+        // Find "assert(" and extract the condition
+        if let Some(start) = line.find("assert(") {
+            let after = start + 7; // skip "assert("
+            let bytes = line.as_bytes();
+            let mut depth = 1;
+            let mut end = after;
+            while end < bytes.len() && depth > 0 {
+                match bytes[end] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    b'"' => {
+                        // Skip string literals
+                        end += 1;
+                        while end < bytes.len() && bytes[end] != b'"' {
+                            if bytes[end] == b'\\' { end += 1; }
+                            end += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                if depth > 0 { end += 1; }
+            }
+            let expr = line[after..end].trim();
+            // If it contains a comma, only take up to the first top-level comma
+            // (the rest is the user message argument).
+            let mut comma_depth = 0;
+            for (i, b) in expr.bytes().enumerate() {
+                match b {
+                    b'(' | b'[' | b'{' => comma_depth += 1,
+                    b')' | b']' | b'}' => comma_depth -= 1,
+                    b',' if comma_depth == 0 => return expr[..i].trim().to_string(),
+                    b'"' => {
+                        // skip — don't count commas inside strings
+                        // (simplified: the expression without message has no commas at top level)
+                    }
+                    _ => {}
+                }
+            }
+            expr.to_string()
+        } else {
+            "assert failure".to_string()
+        }
+    }
+
+    /// Read a single source line from a file (or VirtFS under WASM).
+    fn read_source_line(&self, file: &str, line: u32) -> String {
+        #[cfg(feature = "wasm")]
+        {
+            if let Some(content) = crate::wasm::virt_fs_get(file) {
+                return content
+                    .lines()
+                    .nth(line as usize - 1)
+                    .unwrap_or("")
+                    .to_string();
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(file) {
+            content
+                .lines()
+                .nth(line as usize - 1)
+                .unwrap_or("")
+                .to_string()
+        } else {
+            String::new()
+        }
+    }
+
     // <call> ::= [ <expression> { ',' <expression> } ] ')'
     pub(crate) fn parse_call_diagnostic(
         &mut self,
@@ -2006,7 +2078,9 @@ impl Parser {
             let message = if list.len() > 1 {
                 list[1].clone()
             } else {
-                Value::str("assert failure")
+                // Extract the assert expression from the source line.
+                let expr = self.extract_assert_expr(call_pos);
+                Value::str(&expr)
             };
             if self.first_pass {
                 *val = Value::Null;

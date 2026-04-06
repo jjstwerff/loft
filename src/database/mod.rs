@@ -133,6 +133,11 @@ pub struct Stores {
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
     pub had_fatal: bool,
+    /// When true, assert() reports results (pass/fail) to `assert_results`
+    /// instead of panicking on failure.  Used by the WASM playground.
+    pub report_asserts: bool,
+    /// Structured assert results: (passed, message, file, line).
+    pub assert_results: Vec<(bool, String, String, u32)>,
     /// Monotonic timestamp captured at `Stores::new()`.  Used by `ticks()` to return
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
@@ -174,6 +179,8 @@ impl Clone for Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            report_asserts: false,
+            assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
             #[cfg(feature = "wasm")]
@@ -427,6 +434,8 @@ impl Stores {
             parallel_ctx: None,
             logger: None,
             had_fatal: false,
+            report_asserts: false,
+            assert_results: Vec::new(),
             #[cfg(not(feature = "wasm"))]
             start_time: Instant::now(),
             #[cfg(feature = "wasm")]
