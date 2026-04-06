@@ -309,3 +309,29 @@ fn test_merge_sort() {
   assert(out[0] == 1, "first={out[0]}");
   assert(out[7] == 9, "last={out[7]}");
 }
+
+// Regression: vector<vector<T>> deep copy — elements must preserve their
+// full content after being copied into the outer vector.
+fn vov_make() -> vector<single> {
+  [1.0f, 2.0f, 3.0f]
+}
+
+fn test_vector_of_vectors() {
+  a = vov_make();
+  b = vov_make();
+  vv = [a, b];
+  assert(vv.len() == 2, "outer={vv.len()}");
+  assert(vv[0].len() == 3, "inner0={vv[0].len()}");
+  assert(vv[1].len() == 3, "inner1={vv[1].len()}");
+  assert(vv[0][0] == 1.0f, "val00={vv[0][0]}");
+  assert(vv[1][2] == 3.0f, "val12={vv[1][2]}");
+}
+
+fn test_vector_of_vectors_append() {
+  vv = [];
+  vv += [vov_make()];
+  vv += [vov_make()];
+  assert(vv.len() == 2, "len={vv.len()}");
+  assert(vv[0].len() == 3, "inner0={vv[0].len()}");
+  assert(vv[1].len() == 3, "inner1={vv[1].len()}");
+}
