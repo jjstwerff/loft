@@ -29,28 +29,33 @@ playground assert reporting, grouped examples, syntax highlighting.
 
 ---
 
-## 0.8.4 — All examples in browser + first playable game
+## 0.8.4 — All 24 OpenGL examples in browser + first playable game
 
-### Frame yield — interactive WebGL (18 of 24 examples)
+Everything needed before publishing the live graphics gallery, in order.
+
+### 1. Frame yield — make the render loop work in WASM
 
 The interpreter pauses at `gl_swap_buffers` and returns to JavaScript.
-`requestAnimationFrame` calls `resume_frame` to continue.  Loft game
-code is identical on native and browser.
+`requestAnimationFrame` calls `resume_frame` to continue.  Without this,
+no interactive example works in the browser.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | FY.1   | Frame yield — interpreter pauses at `gl_swap_buffers`  | M  | ✓      | WASM.md § Frame Yield      |
 | FY.2   | `resume_frame` WASM export + JS frame loop             | S  | ✓      | WASM.md § Frame Yield      |
 | FY.3   | Session lifecycle (re-run disposal, panic recovery)     | S  | ✓      | WASM.md § Frame Yield      |
-| GAL.3  | 🌐 Gallery with 18 live interactive examples            | S  | ✓      | WEB_EXAMPLES.md            |
 
-### Input (1 more example)
+### 2. Input — keyboard and mouse from DOM events
+
+Without this example 21 is dead; games are impossible.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GL6.6  | Keyboard + mouse input via DOM events                  | S  | ✓      | GAME_INFRA.md              |
 
-### Textures + file I/O workarounds (4 more examples)
+### 3. Textures, fonts, file I/O workarounds
+
+These four examples need alternatives to native file access.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
@@ -59,13 +64,22 @@ code is identical on native and browser.
 | GL7.3  | Web font / canvas text rendering for ex. 20            | M  | —      |                            |
 | GL7.4  | Scene graph render loop for ex. 11 (currently GLB-only)| S  | —      |                            |
 
-### High-level renderer in browser (1 more example → 24/24)
+### 4. High-level renderer in browser
+
+Example 24 uses `render.loft` which calls gl_* internally.  With frame
+yield this should work — the renderer's `for` loop yields naturally.
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
 | GL8.1  | `render.loft` WebGL integration for ex. 24             | M  | ✓      | RENDERER.md                |
 
-### Game infrastructure + first game
+### 5. Publish: live graphics gallery (24/24)
+
+| ID     | Title                                                  | E  | Design | Source                     |
+|--------|--------------------------------------------------------|----|--------|----------------------------|
+| GAL.3  | 🌐 **Gallery with all 24 live examples** on GH Pages    | S  | ✓      | WEB_EXAMPLES.md            |
+
+### 6. Game infrastructure + first game
 
 | ID     | Title                                                  | E  | Design | Source                     |
 |--------|--------------------------------------------------------|----|--------|----------------------------|
