@@ -65,9 +65,13 @@ pub fn register_wgl_natives(state: &mut crate::state::State) {
     state.replace_native("loft_gl_mouse_x", wgl_mouse_x);
     state.replace_native("loft_gl_mouse_y", wgl_mouse_y);
     state.replace_native("loft_gl_mouse_button", wgl_mouse_button);
-    // Text/font and PNG save: leave as panic stubs from register_native_stubs.
-    // These are not used in WebGL demos.  If called, the panic message
-    // clearly states the function is not available.
+    // GL7.2: PNG save
+    state.replace_native("loft_save_png", wgl_save_png);
+    // GL7.3: Font/text — delegate to JS host
+    state.replace_native("loft_gl_load_font", wgl_load_font);
+    state.replace_native("loft_gl_measure_text", wgl_measure_text);
+    state.replace_native("loft_text_height", wgl_text_height);
+    state.replace_native("loft_rasterize_text_into", wgl_rasterize_text_into);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -537,9 +541,20 @@ fn wgl_create_color_texture(stores: &mut Stores, stack: &mut DbRef) {
 // ── Textures ─────────────────────────────────────────────────────────────────
 
 fn wgl_load_texture(stores: &mut Stores, stack: &mut DbRef) {
-    let _path = *stores.get::<Str>(stack);
-    // File-based texture loading not supported in WASM yet
-    stores.put(stack, -1i32);
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        // GL7.1: Pass path to JS; the gallery pre-loads assets and decodes
+        // the image via the browser's native image decoder.
+        let args = js_sys::Array::of1(&path.str().into());
+        let result = gl_call("gl_load_texture", &args);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        stores.put(stack, -1i32);
+    }
 }
 
 fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
@@ -678,5 +693,116 @@ fn wgl_mouse_button(stores: &mut Stores, stack: &mut DbRef) {
         stores.put(stack, result.as_f64().unwrap_or(0.0) as i32);
     }
     #[cfg(not(feature = "wasm"))]
+    stores.put(stack, 0i32);
+}
+
+// ── GL7.2: PNG save ──────────────────────────────────────────────────────────
+
+/// save_png_raw(path, width, height, data) -> boolean
+fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
+    let data_ref = *stores.get::<DbRef>(stack);
+    let height = *stores.get::<i32>(stack);
+    let width = *stores.get::<i32>(stack);
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        // Extract pixel data and pass to JS for download.
+        let allocs = &stores.allocations;
+        let store = &allocs[data_ref.store_nr as usize];
+        let v_rec = store.get_int(data_ref.rec, data_ref.pos) as u32;
+        let len = if v_rec == 0 {
+            0
+        } else {
+            store.get_int(v_rec, 4) as u32
+        };
+        let arr = js_sys::Uint32Array::new_with_length(len);
+        for i in 0..len {
+            let val = store.get_int(v_rec + 2 + i, 0) as u32;
+            arr.set_index(i, val);
+        }
+        let args = js_sys::Array::new();
+        args.push(&path.str().into());
+        args.push(&width.into());
+        args.push(&height.into());
+        args.push(&arr.into());
+        gl_call("save_png", &args);
+        stores.put(stack, true);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (path, width, height, data_ref);
+        stores.put(stack, false);
+    }
+}
+
+// ── GL7.3: Font / text ───────────────────────────────────────────────────────
+
+/// gl_load_font(path) -> integer
+fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
+    let path = *stores.get::<Str>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of1(&path.str().into());
+        let result = gl_call("gl_load_font", &args);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = path;
+        stores.put(stack, -1i32);
+    }
+}
+
+/// gl_measure_text(font, content, size) -> float
+fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
+    let size = *stores.get::<f64>(stack);
+    let content = *stores.get::<Str>(stack);
+    let font = *stores.get::<i32>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of3(&font.into(), &content.str().into(), &size.into());
+        let result = gl_call("gl_measure_text", &args);
+        stores.put(stack, result.as_f64().unwrap_or(0.0));
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (font, content, size);
+        stores.put(stack, 0.0f64);
+    }
+}
+
+/// gl_text_height(font, size) -> integer
+fn wgl_text_height(stores: &mut Stores, stack: &mut DbRef) {
+    let size = *stores.get::<f64>(stack);
+    let font = *stores.get::<i32>(stack);
+    #[cfg(feature = "wasm")]
+    {
+        let args = js_sys::Array::of2(&font.into(), &size.into());
+        let result = gl_call("gl_text_height", &args);
+        stores.put(stack, result.as_f64().unwrap_or(0.0) as i32);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (font, size);
+        stores.put(stack, 0i32);
+    }
+}
+
+/// rasterize_text_into(font, content, size, buf) -> integer (width)
+fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
+    let _buf_ref = *stores.get::<DbRef>(stack);
+    let size = *stores.get::<f64>(stack);
+    let content = *stores.get::<Str>(stack);
+    let font = *stores.get::<i32>(stack);
+    // Text rasterization is complex — return 0 (no text rendered) for now.
+    // The draw_text loft function checks the return and skips if <= 0.
+    #[cfg(feature = "wasm")]
+    {
+        let _ = (font, content, size);
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let _ = (font, content, size);
+    }
     stores.put(stack, 0i32);
 }
