@@ -963,11 +963,8 @@ impl State {
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Call(fn_nr, _) = value
             && stack.data.def(*fn_nr).name.starts_with("n_")
+            && stack.data.def(*fn_nr).code != Value::Null
         {
-            // First assignment `d = func(...)` where func is a user/method function
-            // returning a Reference. Operators (Op*) and interface stubs (i_*) are excluded.
-            // O-B2: if func has no Reference params, adopt the returned store.
-            // Otherwise deep copy to prevent aliasing with a parameter's store.
             let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
                 matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
