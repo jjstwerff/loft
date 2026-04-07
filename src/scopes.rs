@@ -662,18 +662,7 @@ impl Scopes {
                 let in_ret = tp.depend().contains(&v)
                     || data.def(self.d_nr).returned.depend().contains(&v)
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                // Issue #120: suppress FreeRef for __ref_N work variables in
-                // functions that return a Reference/Vector. These variables
-                // may hold data aliased by the return value — freeing them
-                // destroys the data before the caller can read it.
-                let is_ret_work_ref = to_scope == 1
-                    && matches!(
-                        data.def(self.d_nr).returned,
-                        Type::Reference(_, _) | Type::Vector(_, _)
-                    )
-                    && function.name(v).starts_with("__ref_");
-                let emit =
-                    dep.is_empty() && !in_ret && !is_ret_work_ref && !function.is_skip_free(v);
+                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -1009,11 +998,7 @@ fn check_ref_leaks(
             continue; // ownership transferred to caller
         }
         if let Type::Reference(_, dep) = function.tp(v) {
-            // Issue #120: __ref_N work variables in Reference/Vector-returning
-            // functions may deliberately skip FreeRef to avoid use-after-free.
-            let is_ret_work_ref = function.name(v).starts_with("__ref_")
-                && matches!(ret_type, Type::Reference(_, _) | Type::Vector(_, _));
-            if dep.is_empty() && !ret_deps.contains(&v) && !freed.contains(&v) && !is_ret_work_ref {
+            if dep.is_empty() && !ret_deps.contains(&v) && !freed.contains(&v) {
                 panic!(
                     "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
                      '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \

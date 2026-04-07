@@ -262,11 +262,25 @@ impl Parser {
             } else if let Type::Reference(_, ls) = t {
                 // Issue #120: when filter_hidden stripped the deps from a
                 // Reference return type, recover work-ref variables from the
-                // return expression's Call arguments so ref_return can promote
-                // them to hidden parameters (preventing use-after-free).
+                // return expression. First try Call arguments, then fall back
+                // to promoting ALL non-argument __ref_N work-refs.
                 if ls.is_empty() && !l.is_empty() {
                     let last = &l[l.len() - 1];
-                    let extra = Self::collect_hidden_ref_args(last, &self.data);
+                    let mut extra = Self::collect_hidden_ref_args(last, &self.data);
+                    if extra.is_empty() {
+                        // Fallback: promote any __ref_N that isn't already
+                        // an argument. Covers struct constructors and bare
+                        // variable returns where collect_hidden_ref_args
+                        // doesn't find a Call.
+                        for v in 0..self.vars.count() {
+                            if self.vars.name(v).starts_with("__ref_")
+                                && !self.vars.is_argument(v)
+                                && matches!(self.vars.tp(v), Type::Reference(_, _))
+                            {
+                                extra.push(v);
+                            }
+                        }
+                    }
                     if !extra.is_empty() {
                         self.ref_return(&extra);
                     }
