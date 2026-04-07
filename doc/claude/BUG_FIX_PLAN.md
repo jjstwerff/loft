@@ -147,13 +147,11 @@ The struct field case now works. Update detail section from
 
 ## New issues discovered during optimisation work
 
-### P116. Struct return aliasing — **HIGH PRIORITY**
+### P116. Struct return aliasing — **FIXED**
 
-`x = func(s)` where `func` returns a Reference parameter aliases
-the store instead of deep copying.  Partially fixed: codegen branch
-added for `n_*` functions, needs regression testing.
-
-**Files:** `src/state/codegen.rs` (`gen_set_first_at_tos` new branch)
+Codegen branch added for `n_*` user functions returning References.
+Deep copy for functions with ref params, adoption for safe cases.
+Tested in `tests/scripts/34-alias-copy.loft`.
 
 ### P117. Struct return store leak — **MEDIUM**
 
@@ -161,11 +159,10 @@ After `OpCopyRecord` in `gen_set_first_ref_copy`, the callee's
 source store is never freed.  O-B2 adoption fixes this for functions
 without Reference params.  Remaining: functions WITH Reference params.
 
-### P118. Threading regression — **MEDIUM**
+### P118. Threading regression — **FIXED**
 
-`22-threading.loft` panics "Incomplete record" after P64/P66 changes.
-Not yet diagnosed.  May be a pre-existing issue exposed by assertion
-ordering change, or a subtle interaction with parallel worker stores.
+O-B2 branch matched native runtime functions (`n_parallel_for`).
+Fixed by adding `code != Value::Null` guard.
 
 ---
 
@@ -177,8 +174,9 @@ ordering change, or a subtle interaction with parallel worker stores.
 | **2: Moderate** | ~~P60~~, ~~P64+P66~~, ~~P108~~ | All fixed |
 | **3: Deferred** | P22, P54, P55, P61, P79, P85, P86, P89, P90, P91, P92 | — |
 | **4: Update docs** | P114 | XS |
-| **5: New** | P116 (aliasing), P117 (leak), P118 (threading) | S + M + M |
+| **5: New** | ~~P116~~, P117, ~~P118~~ | ~~S~~ + M + ~~S~~ |
 
-**Status:** Tiers 1–2 complete. P116 partially implemented (codegen
-branch exists, needs testing). P117 partially fixed by O-B2 adoption.
-P118 needs investigation.
+**Status:** Tiers 1–2 complete. P116 and P118 fixed. P117 (store leak)
+remaining — partially mitigated by O-B2 adoption for no-ref-param funcs.
+Pre-existing file test failures (`file_debug`, `file_write_error`,
+`file_exists`) are P117 symptoms.

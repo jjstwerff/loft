@@ -47,7 +47,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
 | 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
-| 116 | `x = func(s)` where func returns a struct param aliases the store | **High** | Wrap in explicit local: `tmp = func(s); x = tmp` forces copy via O-B1 |
+| 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 
@@ -182,41 +182,17 @@ function entry, and redirects all references.  No manual workaround needed.
 
 ---
 
-### 116. `x = func(s)` where func returns a struct parameter aliases the store
+### 116. ~~`x = func(s)` where func returns a struct parameter aliases the store~~
 
-**Severity:** High — mutation of `x` silently corrupts `s`.
+**FIXED** in `src/state/codegen.rs`.
 
-**Reproducer:**
-```loft
-struct Point { x: float not null, y: float not null }
-fn identity(p: Point) -> Point { p }
-fn test() {
-  orig = Point { x: 1.0, y: 2.0 };
-  copy = identity(orig);
-  copy.x = 99.0;
-  assert(orig.x == 1.0, "FAILS: orig.x is 99.0");
-}
-```
+Added new branch in `gen_set_first_at_tos` for `Type::Reference +
+Value::Call(n_*, ...)` where the function has a code body (not native).
+Functions with Reference parameters emit deep copy via
+`gen_set_first_ref_call_copy`. Functions without Reference params adopt
+the returned store directly (O-B2 optimisation).
 
-**Root cause:** `gen_set_first_at_tos` in `codegen.rs` has branches for
-`Call(OpCopyRecord, ...)`, `Var(src)`, and `TupleGet(...)` — all emit deep
-copies.  But `Call(user_func, ...)` returning a Reference falls to the
-catch-all `generate(value)`, which just executes the call and uses the
-returned DbRef directly — aliasing the parameter's store.
-
-The parser's `copy_ref` at `collections.rs:287` only wraps NON-variable
-targets: `!matches!(to, Value::Var(_))`.  Variable-target assignments skip
-the OpCopyRecord wrapper entirely.
-
-**Fix path:** Add a new branch in `gen_set_first_at_tos` for
-`Type::Reference + Value::Call(n_*, ...)` where the function name starts
-with `n_` (user functions).  If the function has Reference parameters,
-emit `OpConvRefFromNull` + `OpDatabase` + `OpCopyRecord` (deep copy).
-If no Reference parameters, adopt the returned store (O-B2 optimisation).
-
-Partially implemented in the current code but needs regression testing.
-
-**Files:** `src/state/codegen.rs` (new branch + `gen_set_first_ref_call_copy`)
+Guard `code != Value::Null` excludes native/stub functions (P118 fix).
 
 ---
 
