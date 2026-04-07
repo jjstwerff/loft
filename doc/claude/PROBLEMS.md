@@ -25,11 +25,11 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
-| 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
-| 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
+| 58 | ~~Silent `Type::Unknown(0)` variable creation on unresolved names~~ | ~~High~~ | **Fixed** — `known_var_or_type` now called on assignment RHS |
+| 60 | ~~No recursion depth limit~~ | ~~Medium~~ | **Fixed** — runtime call depth limit (500) with clear panic |
 | 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
-| 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
-| 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
+| 64 | ~~Overflow risk in store offset arithmetic~~ | ~~Medium~~ | **Fixed** — `checked_offset()` uses u64 with assert |
+| 66 | ~~Integer cast truncation in vector index/size~~ | ~~Medium~~ | **Fixed** — `checked_vec_pos()`/`checked_vec_cap()` use u64 |
 | 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
@@ -37,16 +37,19 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
+| 103 | ~~Inline vector concat in compound assignment~~ | ~~Medium~~ | **Fixed** — now a compile error instead of warning |
 | 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
-| 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
+| 108 | ~~`f#next` initial seek on fresh read handle~~ | ~~Low~~ | **Fixed** — seek applied on first file open |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
 | 110 | ~~Vector push corrupts sibling struct fields~~ | ~~**High**~~ | **Fixed** — `other_indexes` no longer links plain vector fields |
 | 111 | ~~`character == text` comparison always returns true~~ | ~~Medium~~ | **Fixed** — now produces compile error; use `"{c}" == t` |
 | 112 | ~~Text return accumulation in text-returning functions~~ | ~~Medium~~ | **Fixed** — always clear RefVar(Text) before append |
 | 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
 | 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
-| 115 | Text parameter reassignment/append segfaults | Medium | Compile error; copy to local first |
+| 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
+| 116 | `x = func(s)` where func returns a struct param aliases the store | **High** | Wrap in explicit local: `tmp = func(s); x = tmp` forces copy via O-B1 |
+| 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
+| 118 | `22-threading.loft` regressed with "Incomplete record" after P64/P66 changes | Medium | Revert checked_offset / checked_vec changes for investigation |
 
 ---
 
@@ -168,38 +171,101 @@ fields.  Verified: `b.buf = b.buf + " world"` produces `"hello world"`.
 
 ---
 
-### 115. Text parameter reassignment/append segfaults
+### 115. ~~Text parameter reassignment/append segfaults~~
 
-**Severity:** Medium — segfault on `param = "new"` or `param += "more"`.
+**FIXED** in `src/parser/expressions.rs`, `src/variables/mod.rs`,
+`src/parser/definitions.rs`, `src/state/codegen.rs`.
+
+Text arguments are now auto-promoted to local String on first mutation.
+The parser creates a shadow local `__tp_<name>`, copies the argument at
+function entry, and redirects all references.  No manual workaround needed.
+
+---
+
+### 116. `x = func(s)` where func returns a struct parameter aliases the store
+
+**Severity:** High — mutation of `x` silently corrupts `s`.
 
 **Reproducer:**
 ```loft
-fn modify(s: text) -> text {
-  s = "modified";   // SIGSEGV
-  s
+struct Point { x: float not null, y: float not null }
+fn identity(p: Point) -> Point { p }
+fn test() {
+  orig = Point { x: 1.0, y: 2.0 };
+  copy = identity(orig);
+  copy.x = 99.0;
+  assert(orig.x == 1.0, "FAILS: orig.x is 99.0");
 }
 ```
 
-**Root cause:** Text arguments occupy 12-byte `Str` (ptr + len) slots on the
-stack.  `OpClearText` and `OpAppendText` expect 24-byte `String` (owned heap
-buffer) slots.  Writing 24 bytes to a 12-byte slot corrupts the stack.
+**Root cause:** `gen_set_first_at_tos` in `codegen.rs` has branches for
+`Call(OpCopyRecord, ...)`, `Var(src)`, and `TupleGet(...)` — all emit deep
+copies.  But `Call(user_func, ...)` returning a Reference falls to the
+catch-all `generate(value)`, which just executes the call and uses the
+returned DbRef directly — aliasing the parameter's store.
 
-**Current fix:** Compile error instead of segfault:
-```
-Error: Cannot reassign text parameter 's'; copy to a local variable first
+The parser's `copy_ref` at `collections.rs:287` only wraps NON-variable
+targets: `!matches!(to, Value::Var(_))`.  Variable-target assignments skip
+the OpCopyRecord wrapper entirely.
+
+**Fix path:** Add a new branch in `gen_set_first_at_tos` for
+`Type::Reference + Value::Call(n_*, ...)` where the function name starts
+with `n_` (user functions).  If the function has Reference parameters,
+emit `OpConvRefFromNull` + `OpDatabase` + `OpCopyRecord` (deep copy).
+If no Reference parameters, adopt the returned store (O-B2 optimisation).
+
+Partially implemented in the current code but needs regression testing.
+
+**Files:** `src/state/codegen.rs` (new branch + `gen_set_first_ref_call_copy`)
+
+---
+
+### 117. Struct-returning functions leak the callee's store after deep copy
+
+**Severity:** Medium — stores accumulate linearly with struct-returning calls.
+
+**Symptom:** Each call to a struct-returning function (e.g. `make_point()`)
+allocates a store in the callee that is never freed.  The `in_ret` check in
+`scopes.rs:662` prevents `OpFreeRef` on the return variable.  After the caller
+deep-copies via `OpCopyRecord`, the source store is orphaned.
+
+**Reproducer:** Run any program with many struct-returning calls and observe
+store count growing via `LOFT_STORE_LOG=1`.
+
+**Fix path:** O-B2 (return store adoption) fixes this for functions without
+Reference parameters by adopting the store instead of copying.  For functions
+WITH Reference parameters, the source store after OpCopyRecord must be explicitly
+freed — requires preserving the source DbRef across the copy or adding an
+`OpMoveRecord` variant.
+
+**Files:** `src/state/codegen.rs` (`gen_set_first_ref_copy`)
+
+---
+
+### 118. `22-threading.loft` regression after P64/P66 checked arithmetic
+
+**Severity:** Medium — threading tests panic with "Incomplete record".
+
+**Symptom:** `cargo run -- tests/scripts/22-threading.loft` panics at
+`store.rs:197` (`assert!(size >= 1, "Incomplete record")`).  The backtrace
+shows `database → claim` called with `size == 0`.
+
+**Root cause:** Not yet fully diagnosed.  The `checked_offset` /
+`checked_vec_cap` / `checked_vec_pos` functions introduced by P64/P66 are
+mathematically equivalent to the original expressions.  The regression may
+be from a subtle interaction with the parallel worker's store cloning or
+from a pre-existing issue exposed by the new assertion ordering.
+
+**Reproducer:**
+```bash
+cargo run --bin loft -- tests/scripts/22-threading.loft
 ```
 
-**Workaround:**
-```loft
-fn modify(s: text) -> text {
-  local = s;         // copies Str to local String
-  local = "modified"; // operates on 24-byte String slot
-  local
-}
-```
+**Fix path:** Run with `LOFT_STORE_LOG=1` and `RUST_BACKTRACE=full` to
+identify which `claim(0)` call triggers the panic.  Compare the bytecode
+and execution trace between the working (pre-P64) and failing versions.
 
-**Future:** Auto-promote text arguments to local String on first mutation
-(needs slot allocator changes to assign a fresh stack position).
+**Files:** `src/store.rs`, `src/vector.rs`, `src/state/mod.rs` (parallel worker)
 
 ---
 
@@ -658,7 +724,7 @@ restoring the ascending walk direction — which is correct for a reversed desce
 
 ---
 
-### 103. Inline vector concat in compound assignment expression *(mitigated)*
+### 103. ~~Inline vector concat in compound assignment expression~~ *(fixed)*
 
 **Symptom:** `result = f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns wrong
 value.  Each call works correctly in isolation.
@@ -668,22 +734,13 @@ that temporarily grows the stack.  When this Block appears inside an assignment
 expression, `gen_set_first_at_tos` / `OpFreeStack` miscomputes the stack offset,
 placing the result at the wrong position.
 
-**Mitigation:** A compile-time warning is now emitted when vector concatenation
-appears inline in an expression: *"vector concatenation in an expression creates
-a temporary; assign to a variable first for correct results in compound
-expressions"*.
-
-**Workaround:** Assign the concat result to a variable first:
+**FIXED** in `src/parser/vectors.rs` — upgraded from warning to compile error.
+Inline vector concat `[a] + [b]` now produces a compile error. Users must
+assign the concat to a variable first:
 ```loft
 combined = [1,2,3] + [4,5];
 result = f([1,2,3,4,5]) + 100 * f(combined);  // correct
 ```
-
-**Test:** `tests/scripts/70-ignored-struct-method-bugs.loft::test_vector_combined_expression` (`@EXPECT_FAIL`).
-
-**Full fix path:** Restructure `generate_block` to account for function-scoped
-variable allocations (`__vdb_N`, `_vec_N`) inside expression Blocks, or hoist
-database allocation out of the Block into the function preamble.
 
 ---
 
@@ -775,28 +832,13 @@ The extra `+` is consumed so parsing recovers cleanly.
 
 ---
 
-### 108. `f#next` initial seek on fresh read-only file handle
+### 108. ~~`f#next` initial seek on fresh read-only file handle~~
 
-**Symptom:** After opening a file handle for reading and immediately setting
-`f#next = N as long`, subsequent `f#read(4)` calls still return bytes from
-position 0 instead of position N.
+**FIXED** in `src/state/io.rs`.
 
-**Workaround:** Read at least one byte before seeking.  Use sequential reads to
-advance the position; then `f#next = pos` to seek forward from the current position.
-```loft
-// WRONG — reads 4 bytes starting at offset 0, not 12:
-f#next = 12l;
-val = f#read(4) as i32;
-
-// CORRECT — read sequentially first:
-f#read(4) as i32;  // bytes 0-3
-f#read(4) as i32;  // bytes 4-7
-f#read(4) as i32;  // bytes 8-11
-val = f#read(4) as i32;  // bytes 12-15
-```
-
-**Discovered:** Sprint 8 GLB tests.  `f#next = N` after prior reads (forward seek)
-works correctly; it is only the very first operation that fails.
+After `File::open()` / `File::create()`, the stored `next_pos` is now applied
+via `seek(SeekFrom::Start(next_pos))` on first open.  Both `read_file()` and
+`write_file()` are fixed.
 
 ---
 

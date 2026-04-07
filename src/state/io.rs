@@ -135,7 +135,11 @@ impl State {
                         .to_owned()
                 };
                 match File::create(&file_name) {
-                    Ok(f) => {
+                    Ok(mut f) => {
+                        // P108: apply stored seek position on first open.
+                        if next_pos != 0 {
+                            let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                        }
                         self.database
                             .store_mut(&file)
                             .set_int(file.rec, file.pos + 28, f_nr);
@@ -246,7 +250,11 @@ impl State {
             let mut file_ref = store.get_int(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
                 let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
-                if let Ok(f) = File::open(file_name) {
+                if let Ok(mut f) = File::open(file_name) {
+                    // P108: apply stored seek position on first open.
+                    if next_pos != 0 {
+                        let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                    }
                     store.set_int(file.rec, file.pos + 28, f_nr);
                     self.database.files.push(Some(f));
                 }

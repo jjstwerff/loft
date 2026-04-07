@@ -11,109 +11,75 @@ ordered by impact and fixability.
 
 ## Tier 1: Fix now — user-facing bugs with clear solutions
 
-### P115. Text parameter reassignment segfaults → auto-promote
+### P115. Text parameter reassignment segfaults → auto-promote — FIXED
 
-**Current state:** Compile error. User must manually copy to local.
+**Fixed.** Text arguments are now auto-promoted to local String on
+first mutation. The parser creates a shadow local `__tp_<name>`,
+copies the argument at function entry, and redirects all references.
 
-**Fix:** Auto-promote text argument to local String on first mutation.
-The parser already detects the mutation point. Needs:
-1. Create a shadow local variable `__targ_N` with String type
-2. Emit `OpText + OpAppendText` to copy argument content into it
-3. Redirect all subsequent references of the original parameter to
-   the shadow variable
-
-**Complexity:** M — needs variable redirection in the parser's
-variable table during second pass. The first pass establishes the
-variable; the second pass can substitute reads.
-
-**Files:** `src/parser/expressions.rs`, `src/variables/mod.rs`
+**Files changed:** `src/variables/mod.rs`, `src/parser/expressions.rs`,
+`src/parser/definitions.rs`, `src/state/codegen.rs`,
+`tests/scripts/31-text-param.loft`
 
 ---
 
-### P58. Silent Type::Unknown(0) on unresolved names
+### P58. Silent Type::Unknown(0) on unresolved names — FIXED
 
-**Current state:** Typos in variable names silently create new variables
-with unknown type, leading to confusing errors later.
+**Fixed.** Added `known_var_or_type` call on assignment RHS in
+`expressions.rs`. The existing `known_var_or_type` function in
+`objects.rs` already detects Unknown/undefined variables during
+expression parsing, but assignment RHS was a gap — simple variable
+references like `y = typo_name` went unchecked.
 
-**Fix:** After parsing each function, check for variables that remain
-`Type::Unknown(0)` and were never assigned. Emit a warning:
-```
-Warning: variable 'nme' is used but never defined — possible typo?
-```
-
-**Complexity:** S — the variable table already tracks `uses` and
-`type_def`. A post-parse scan for `Unknown(0)` with `uses > 0` is
-straightforward.
-
-**Files:** `src/parser/mod.rs` (end of `parse_file`),
-`src/variables/mod.rs`
+**Files changed:** `src/parser/expressions.rs` (one line),
+`tests/scripts/74-unknown-type-detection.loft`
 
 ---
 
-### P103. Inline vector concat in compound assignment
+### P103. Inline vector concat in compound assignment — FIXED
 
-**Current state:** Warning emitted. `v += [a] + [b]` produces wrong
-result.
+**Fixed.** Upgraded the existing warning to an error in
+`parse_append_vector()`. Inline vector concat `[a] + [b]` now
+produces a compile error instead of silently producing wrong results.
+Users must assign the concat to a variable first.
 
-**Fix:** In the parser, when `+=` RHS is a vector concat expression,
-materialize the concat into a temp before appending. Or: detect
-and emit a clear error instead of warning.
-
-**Complexity:** S — the warning infrastructure is already in place.
-Converting to an error or fixing the concat materialization.
-
-**Files:** `src/parser/expressions.rs`
+**Files changed:** `src/parser/vectors.rs` (Level::Warning → Level::Error),
+`tests/scripts/70-ignored-struct-method-bugs.loft`,
+`tests/scripts/06-structs.loft`
 
 ---
 
 ## Tier 2: Fix with moderate effort — correctness/robustness
 
-### P60. No recursion depth limit
+### P60. No recursion depth limit — FIXED
 
-**Current state:** Deeply recursive loft code can stack overflow the
-Rust process.
+**Fixed.** Added `call_depth: u32` counter to `State`. Incremented
+in `fn_call`, decremented in `fn_return`. Panics with clear message
+at depth > 500. Limit set below the store stack limit so the depth
+check fires before store out-of-bounds.
 
-**Fix:** Add a `depth: u32` counter to `State`. Increment on
-`fn_call`, decrement on `fn_return`. Panic with a clear message
-at depth > 1000 (configurable).
-
-**Complexity:** S — two lines in `fn_call` and `fn_return`.
-
-**Files:** `src/state/mod.rs`
+**Files changed:** `src/state/mod.rs`
 
 ---
 
-### P64 + P66. Integer overflow in store/vector arithmetic
+### P64 + P66. Integer overflow in store/vector arithmetic — FIXED
 
-**Current state:** `i32` offsets can overflow for very large records
-or vectors. Theoretical risk, no known reproducer.
+**Fixed.** Added `checked_offset()` helper in `store.rs` and
+`checked_vec_pos()` / `checked_vec_cap()` helpers in `vector.rs`.
+All address calculations now use u64 intermediate arithmetic with
+assert on overflow, preventing silent memory corruption.
 
-**Fix:** Use `u32::checked_mul` / `checked_add` in critical paths:
-- `store.rs:addr()` — `rec * 8 + fld`
-- `vector.rs:get_vector` — `8 + size * index`
-- `vector.rs:vector_append` — `(length + 1) * size`
-
-On overflow, return null / panic with a clear "record too large" error.
-
-**Complexity:** S — mechanical, many callsites but each is a one-line
-change.
-
-**Files:** `src/store.rs`, `src/vector.rs`
+**Files changed:** `src/store.rs`, `src/vector.rs`
 
 ---
 
-### P108. f#next initial seek on fresh file handle
+### P108. f#next initial seek on fresh file handle — FIXED
 
-**Current state:** Seeking before reading fails.
+**Fixed.** After `File::open()` / `File::create()`, seek to the
+stored `next_pos` if non-zero. Both `read_file()` and `write_file()`
+now apply the seek position on first open.
 
-**Fix:** In the File iterator implementation, track whether the first
-read has occurred. If `f#next` is called before any read, perform
-an implicit first read.
-
-**Complexity:** S — add a `first_read: bool` flag to the file handle
-state.
-
-**Files:** `src/state/io.rs` (file iteration)
+**Files changed:** `src/state/io.rs`
 
 ---
 
@@ -179,14 +145,40 @@ The struct field case now works. Update detail section from
 
 ---
 
+## New issues discovered during optimisation work
+
+### P116. Struct return aliasing — **HIGH PRIORITY**
+
+`x = func(s)` where `func` returns a Reference parameter aliases
+the store instead of deep copying.  Partially fixed: codegen branch
+added for `n_*` functions, needs regression testing.
+
+**Files:** `src/state/codegen.rs` (`gen_set_first_at_tos` new branch)
+
+### P117. Struct return store leak — **MEDIUM**
+
+After `OpCopyRecord` in `gen_set_first_ref_copy`, the callee's
+source store is never freed.  O-B2 adoption fixes this for functions
+without Reference params.  Remaining: functions WITH Reference params.
+
+### P118. Threading regression — **MEDIUM**
+
+`22-threading.loft` panics "Incomplete record" after P64/P66 changes.
+Not yet diagnosed.  May be a pre-existing issue exposed by assertion
+ordering change, or a subtle interaction with parallel worker stores.
+
+---
+
 ## Summary
 
 | Tier | Issues | Total effort |
 |------|--------|-------------|
-| **1: Fix now** | P115, P58, P103 | S + S + S = Small |
-| **2: Moderate** | P60, P64+P66, P108 | S + S + S = Small |
+| **1: Fix now** | ~~P115~~, ~~P58~~, ~~P103~~ | All fixed |
+| **2: Moderate** | ~~P60~~, ~~P64+P66~~, ~~P108~~ | All fixed |
 | **3: Deferred** | P22, P54, P55, P61, P79, P85, P86, P89, P90, P91, P92 | — |
 | **4: Update docs** | P114 | XS |
+| **5: New** | P116 (aliasing), P117 (leak), P118 (threading) | S + M + M |
 
-**Recommended sprint:** Fix Tier 1 + Tier 2 (6 issues, all S effort)
-in one branch. Update P114 docs. Leave Tier 3 as documented limitations.
+**Status:** Tiers 1–2 complete. P116 partially implemented (codegen
+branch exists, needs testing). P117 partially fixed by O-B2 adoption.
+P118 needs investigation.

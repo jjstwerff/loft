@@ -243,7 +243,7 @@ fn vec_sum(r: vector<integer>) -> integer {
   res
 }
 
-// @EXPECT_FAIL: vector argument
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 fn test_vector_argument() {
   assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
 }

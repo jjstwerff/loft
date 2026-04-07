@@ -4,11 +4,34 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::checked_conversions)]
 
 use crate::keys;
 use crate::keys::{Content, DbRef, Key};
 use crate::store::Store;
 use std::cmp::Ordering;
+
+/// P66: checked vector position — `8 + index * size` using u64 to detect overflow.
+#[inline]
+fn checked_vec_pos(index: u32, size: u32) -> u32 {
+    let pos = u64::from(index) * u64::from(size) + 8;
+    assert!(
+        pos <= u64::from(u32::MAX),
+        "Vector position overflow: index={index} size={size}"
+    );
+    pos as u32
+}
+
+/// P66: checked vector capacity — `(count * size + 15) / 8` using u64.
+#[inline]
+fn checked_vec_cap(count: u32, size: u32) -> u32 {
+    let bytes = u64::from(count) * u64::from(size) + 15;
+    assert!(
+        bytes <= u64::from(u32::MAX),
+        "Vector capacity overflow: count={count} size={size}"
+    );
+    (bytes / 8) as u32
+}
 
 // TODO change slice to its own vector on updating it
 pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) -> DbRef {
@@ -26,21 +49,21 @@ pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
     let new_length;
     if vec_rec == 0 {
         // claim a new array with minimal 11 elements
-        vec_rec = store.claim((11 * size + 15) / 8);
+        vec_rec = store.claim(checked_vec_cap(11, size));
         store.set_int(db.rec, db.pos, vec_rec as i32);
         new_length = 1;
     } else {
         new_length = len + 1;
-        let new_vec = store.resize(vec_rec, (new_length * size + 15) / 8);
+        let new_vec = store.resize(vec_rec, checked_vec_cap(new_length, size));
         if new_vec != vec_rec {
             store.set_int(db.rec, db.pos, new_vec as i32);
             vec_rec = new_vec;
         }
         store.copy_block(
             new_vec,
-            8 + size as isize * real as isize,
+            checked_vec_pos(real as u32, size) as isize,
             new_vec,
-            8 + size as isize * (real as isize + 1),
+            checked_vec_pos(real as u32 + 1, size) as isize,
             (len as isize - real as isize) * size as isize,
         );
     }
@@ -48,7 +71,7 @@ pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
     DbRef {
         store_nr: db.store_nr,
         rec: vec_rec,
-        pos: 8 + real as u32 * size,
+        pos: checked_vec_pos(real as u32, size),
     }
 }
 
@@ -71,7 +94,7 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
     }
     // Match vector_append's minimum of 11 elements to avoid OOB on remove/shift.
     let alloc_count = count.max(11);
-    let words = (alloc_count * elem_size + 15) / 8;
+    let words = checked_vec_cap(alloc_count, elem_size);
     let new_rec = store.claim(words);
     store.set_int(db.rec, db.pos, new_rec as i32);
     store.set_int(new_rec, 4, 0); // length = 0
@@ -89,13 +112,13 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     let mut vec_rec = store.get_int(db.rec, db.pos) as u32;
     let pos = if vec_rec == 0 {
         // new array
-        vec_rec = store.claim((11 * size + 15) / 8); // minimal 11 elements
+        vec_rec = store.claim(checked_vec_cap(11, size)); // minimal 11 elements
         store.set_int(db.rec, db.pos, vec_rec as i32);
         store.set_int(vec_rec, 4, 0); // initial length
         0
     } else {
         let length = store.get_int(vec_rec, 4) as u32;
-        let new_vec = store.resize(vec_rec, ((length + 1) * size + 15) / 8);
+        let new_vec = store.resize(vec_rec, checked_vec_cap(length + 1, size));
         if new_vec != vec_rec {
             store.set_int(db.rec, db.pos, new_vec as i32);
             vec_rec = new_vec;
@@ -105,7 +128,7 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     DbRef {
         store_nr: db.store_nr,
         rec: vec_rec,
-        pos: 8 + pos * size,
+        pos: checked_vec_pos(pos, size),
     }
 }
 
@@ -126,7 +149,7 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     let mut sorted_rec = store.get_int(db.rec, db.pos) as u32;
     // Claim a record at the back of the current structure or create a new structure.
     if sorted_rec == 0 {
-        sorted_rec = store.claim((12 * size + 15) / 8);
+        sorted_rec = store.claim(checked_vec_cap(12, size));
         store.set_int(db.rec, db.pos, sorted_rec as i32);
         // Set initial length to 0
         store.set_int(sorted_rec, 4, 0);
@@ -138,7 +161,7 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         }
     } else {
         let length = store.get_int(sorted_rec, 4) as u32;
-        let new_sorted = store.resize(sorted_rec, ((length + 2) * size + 15) / 8);
+        let new_sorted = store.resize(sorted_rec, checked_vec_cap(length + 2, size));
         if new_sorted != sorted_rec {
             store.set_int(db.rec, db.pos, new_sorted as i32);
             sorted_rec = new_sorted;
@@ -147,7 +170,7 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
         DbRef {
             store_nr: db.store_nr,
             rec: sorted_rec,
-            pos: 8 + (length + 1) * size,
+            pos: checked_vec_pos(length + 1, size),
         }
     }
 }
@@ -160,7 +183,7 @@ pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Stor
         keys::mut_store(sorted, stores).set_int(sorted_rec, 4, 1);
         return;
     }
-    let latest_pos = 8 + (length + 1) * size;
+    let latest_pos = checked_vec_pos(length + 1, size);
     let rec = DbRef {
         store_nr: sorted.store_nr,
         rec: sorted_rec,
@@ -174,9 +197,9 @@ pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Stor
         // create space to write the new record to
         store.copy_block(
             sorted_rec,
-            (8 + pos * size) as isize,
+            checked_vec_pos(pos, size) as isize,
             sorted_rec,
-            (8 + (pos + 1) * size) as isize,
+            checked_vec_pos(pos + 1, size) as isize,
             ((end_pos - pos) * size) as isize,
         );
     }
@@ -185,7 +208,7 @@ pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Stor
         sorted_rec,
         latest_pos as isize,
         sorted_rec,
-        (8 + pos * size) as isize,
+        checked_vec_pos(pos, size) as isize,
         size as isize,
     );
     store.set_int(sorted_rec, 4, (length + 1) as i32);
@@ -274,7 +297,7 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
         DbRef {
             store_nr: db.store_nr,
             rec: v_rec,
-            pos: 8 + size * f as u32,
+            pos: checked_vec_pos(f as u32, size),
         }
     }
 }
@@ -294,9 +317,9 @@ pub fn remove_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
     if len - i > 1 {
         store.copy_block(
             vec_rec,
-            8 + size as isize * (i as isize + 1),
+            checked_vec_pos(i as u32 + 1, size) as isize,
             vec_rec,
-            8 + size as isize * i as isize,
+            checked_vec_pos(i as u32, size) as isize,
             (len as isize - i as isize) * size as isize,
         );
     }

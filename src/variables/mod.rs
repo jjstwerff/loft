@@ -77,6 +77,9 @@ pub struct Variable {
     /// `u16::MAX` means `assign_slots` has not run yet.  Shown as `pre:` in `validate_slots`
     /// diagnostics when it differs from the final `stack_pos`.
     pub pre_assigned_pos: u16,
+    /// P115: if this variable is a shadow local promoted from a text argument,
+    /// `promoted_from` holds the var_nr of the original argument. `u16::MAX` = not promoted.
+    pub promoted_from: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -682,6 +685,7 @@ impl Function {
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
+            promoted_from: u16::MAX,
         });
         v
     }
@@ -709,6 +713,7 @@ impl Function {
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
+            promoted_from: u16::MAX,
         });
         v
     }
@@ -734,6 +739,7 @@ impl Function {
             first_def: u32::MAX,
             last_use: 0,
             pre_assigned_pos: u16::MAX,
+            promoted_from: u16::MAX,
         });
         v
     }
@@ -807,6 +813,10 @@ impl Function {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].const_param
     }
 
+    pub fn is_captured(&self, var_nr: u16) -> bool {
+        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].captured
+    }
+
     /// Returns the appropriate error noun for a const-modification diagnostic.
     /// Parameters say "const parameter"; local variables say "const variable".
     pub fn const_kind(&self, var_nr: u16) -> &'static str {
@@ -815,6 +825,40 @@ impl Function {
         } else {
             "const variable"
         }
+    }
+
+    // P115: text argument auto-promotion helpers
+
+    pub fn set_promoted_from(&mut self, shadow: u16, original: u16) {
+        self.variables[shadow as usize].promoted_from = original;
+    }
+
+    #[allow(dead_code)]
+    pub fn promoted_from(&self, v: u16) -> u16 {
+        self.variables[v as usize].promoted_from
+    }
+
+    /// Returns (shadow_var_nr, original_arg_var_nr) pairs for promoted text arguments.
+    pub fn promoted_text_args(&self) -> Vec<(u16, u16)> {
+        self.variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.promoted_from != u16::MAX)
+            .map(|(i, v)| (i as u16, v.promoted_from))
+            .collect()
+    }
+
+    pub fn remap_name(&mut self, name: &str, new_var: u16) {
+        self.names.insert(name.to_string(), new_var);
+    }
+
+    #[allow(dead_code)]
+    pub fn rename(&mut self, v: u16, new_name: &str) {
+        self.variables[v as usize].name = new_name.to_string();
+    }
+
+    pub fn mark_used(&mut self, v: u16) {
+        self.variables[v as usize].uses += 1;
     }
 
     pub fn var_source(&self, var_nr: u16) -> (u32, u32) {
