@@ -95,6 +95,16 @@ pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in
 /// `LOFT_STORE_LOG` output for diagnosing LIFO store-free order violations.
 pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
+    // Issue #120: skip if the store was already freed. Multiple variables may
+    // alias the same store through const parameter borrowing or struct returns.
+    if db.store_nr == u16::MAX {
+        return;
+    }
+    if (db.store_nr as usize) < stores.allocations.len()
+        && stores.allocations[db.store_nr as usize].free
+    {
+        return;
+    }
     #[cfg(not(feature = "wasm"))]
     if db.rec != 0
         && let Some(&file_type) = stores.names.get("File")

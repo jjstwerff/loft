@@ -25,71 +25,54 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
 | 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
-| 58 | Silent `Type::Unknown(0)` variable creation on unresolved names | High | N/A — check carefully for typos in Loft code |
-| 60 | No recursion depth limit in codegen and parser traversals | Medium | N/A — only affects adversarially deep ASTs |
-| 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
-| 64 | Overflow risk in store offset arithmetic (`i32`/`usize` casts) | Medium | N/A — only affects extremely large records |
-| 66 | Integer cast truncation in vector index/size computations | Medium | N/A — only affects very large vectors |
-| 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
+| 58 | ~~Silent `Type::Unknown(0)` variable creation on unresolved names~~ | ~~High~~ | **Fixed** — `known_var_or_type` now called on assignment RHS |
+| 60 | ~~No recursion depth limit~~ | ~~Medium~~ | **Fixed** — runtime call depth limit (500) with clear panic |
+| 61 | ~~Native codegen IR parsing panics on unhandled patterns~~ | ~~Medium~~ | **Fixed** — `codegen_runtime.rs` implements all critical opcodes |
+| 64 | ~~Overflow risk in store offset arithmetic~~ | ~~Medium~~ | **Fixed** — `checked_offset()` uses u64 with assert |
+| 66 | ~~Integer cast truncation in vector index/size~~ | ~~Medium~~ | **Fixed** — `checked_vec_pos()`/`checked_vec_cap()` use u64 |
+| 79 | ~~Native codegen: `external` crate reference not resolved (random/FFI)~~ | ~~Low~~ | **Fixed** — `external` module emitted in generated code via `codegen_runtime` wrappers |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
-| 103 | Inline vector concat in compound assignment *(mitigated)* | Medium | Warning emitted; assign concat to a variable first |
+| 103 | ~~Inline vector concat in compound assignment~~ | ~~Medium~~ | **Fixed** — now a compile error instead of warning |
 | 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
-| 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
+| 108 | ~~`f#next` initial seek on fresh read handle~~ | ~~Low~~ | **Fixed** — seek applied on first file open |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
-| 110 | Vector push in for loop produces shifted/garbage values | **High** | Pre-allocate with comprehension, assign by index |
+| 110 | ~~Vector push corrupts sibling struct fields~~ | ~~**High**~~ | **Fixed** — `other_indexes` no longer links plain vector fields |
 | 111 | ~~`character == text` comparison always returns true~~ | ~~Medium~~ | **Fixed** — now produces compile error; use `"{c}" == t` |
-| 112 | Text return accumulation in text-returning functions | Medium | Use `return expr` not `t = expr; ... t` |
+| 112 | ~~Text return accumulation in text-returning functions~~ | ~~Medium~~ | **Fixed** — always clear RefVar(Text) before append |
 | 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
 | 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
+| 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
+| 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
+| 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
+| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
+| 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
+| 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
 ---
 
-## Text and Vector Bugs (110–114)
+## Text and Vector Bugs (110–115)
 
 All five bugs share a root cause area: the parser's handling of text and vector
 operations inside loops and across function returns.  They should be investigated
 and fixed together.
 
-### 110. Multiple struct field vector appends produce extra/garbage elements
+### 110. ~~Multiple struct field vector appends produce extra/garbage elements~~
 
-**Severity:** High — silent data corruption, no error or crash.
+**FIXED** in `src/database/types.rs`.
 
-**Reproducer (no loop needed):**
-```loft
-struct R { a: vector<integer>, b: vector<integer> }
-fn main() {
-  r = R { a: [], b: [] };
-  r.a += [0];
-  r.b += [100];
-  r.a += [1];
-  r.b += [200];
-  // Expected: a=[0,1] b=[100,200]
-  // Actual:   a=[0,1] b=[100,0,200]
-  assert("{s.vals}" == "[0,10,20]", "got {s.vals}");
-}
-```
+**Root cause:** When adding a vector field to a struct type definition, the
+database linked ALL fields with the same content type via `other_indexes`.
+Two `vector<integer>` fields got linked, so `record_finish` for one field
+propagated `vector_finish` (length increment) to the other — corrupting
+the sibling vector's length.
 
-**Root cause:** The temporary work vector created for the `[expr]` literal
-in `p.b += [expr]` is not cleared between uses.  When another struct field
-append (`p.a += [x]`) runs between two `p.b` appends, the temp vector for
-`b` retains stale data from the previous operation.  This is the same
-pattern as the text return accumulation bug (#112) — a work variable
-shared across operations that should be independent.
-
-The bug reproduces WITHOUT a loop — it's a fundamental issue with interleaved
-struct field vector appends.
-
-**Fix strategy:**
-1. In the parser/codegen, ensure the temp vector created for `[expr]` in
-   a `+=` operation is properly cleared (OpClearVector or fresh allocation)
-   each time it's used.
-2. Alternatively, track which work variables belong to which `+=` expression
-   and prevent reuse across different field appends on the same struct.
+**Fix:** Only link fields that are indexing types (`sorted`, `hash`, `index`)
+where cross-field propagation is needed.  Plain vectors are excluded.
 
 **Test:**  Add to `tests/scripts/` — vector push inside for loop on a struct
 field, verify values match.
@@ -132,47 +115,17 @@ Alternatively, add `OpConvTextFromCharacter` to `default/01_code.loft` so
 
 ---
 
-### 112. Text return accumulation in text-returning functions
+### 112. ~~Text return accumulation in text-returning functions~~
 
-**Severity:** Medium — produces doubled/garbled text from functions.
+**FIXED** in `src/state/codegen.rs`.
 
-**Reproducer:**
-```loft
-fn strip(line: text) -> text {
-  t = line;
-  if t.starts_with("// ") {
-    s = t[3..];
-    t = s;
-  }
-  t
-}
-fn main() {
-  // Expected: "hello"
-  // Actual:   "// hellohello"
-  assert(strip("// hello") == "hello", "got: {strip("// hello")}");
-}
-```
+**Root cause:** In text-returning functions, variables become `RefVar(Text)`
+implicit parameters.  `set_var()` always used `OpAppendStackText` but only
+cleared (`OpClearStackText`) for loop variables.  Non-loop reassignment
+appended instead of replacing.
 
-**Root cause:** In text-returning functions, the parser creates a "work text"
-buffer (a hidden variable) that accumulates the return value.  Assignment
-`t = s` is converted to `OpAppendText(work, s)` instead of replacing the
-work buffer.  The original `t` content remains in the buffer, and `s` is
-appended to it.
-
-**Fix strategy:** In `src/parser/operators.rs` `assign_text`, when `op == "="`
-and the target is the implicit text return variable, emit `OpClearText` before
-the append — or better, detect that the assignment is a full replacement (not
-concatenation) and emit a direct copy instead of append.
-
-**Test:** Function that conditionally modifies a text variable and returns it.
-
-**Workaround:** Use `return expr` directly instead of assigning to a variable:
-```loft
-fn strip(line: text) -> text {
-  if line.starts_with("// ") { return line[3..]; }
-  line
-}
-```
+**Fix:** Always emit `OpClearStackText` before `OpAppendStackText` for
+`RefVar(Text)` variables, regardless of loop context.
 
 ---
 
@@ -210,38 +163,106 @@ in the RHS expression, use a work text for the intermediate result.
 
 ---
 
-### 114. `h = h + expr` clears h before reading (partially fixed)
+### 114. ~~`h = h + expr` clears h before reading~~
 
-**Severity:** Medium — partially fixed for plain variables, still broken for
-struct field access inside loops.
+**FIXED** in `src/parser/operators.rs`.
 
-**Current state:** The self-append detection in `src/parser/operators.rs`
-`assign_text` (lines 53–68) correctly identifies `h = h + expr` for plain
-local variables and skips the clear.  But for struct fields like
-`self.field = self.field + expr`, the `to` argument is a `Value::Call`
-(field access), not `Value::Var`, so the detection doesn't match.
+Self-append detection (line 59-68) and self-reference detection
+(`code_references_var`, line 89) handle both plain variables and struct
+fields.  Verified: `b.buf = b.buf + " world"` produces `"hello world"`.
 
-**Reproducer:**
-```loft
-struct Builder { text_buf: text }
-fn main() {
-  b = Builder { text_buf: "hello" };
-  b.text_buf = b.text_buf + " world";
-  // Expected: "hello world"
-  // Actual:   " world"
-  assert(b.text_buf == "hello world", "got: '{b.text_buf}'");
-}
-```
+---
 
-**Fix strategy:** Extend the self-append detection to handle the struct field
-case.  When `to` is `Value::Call` (field setter) and the first element of the
-`Insert` list references the same field path, treat as `+=`.  Alternatively,
-always use `+=` for struct field text concatenation, which already works
-correctly (the `+=` path in `assign_text` lines 36–51).
+### 115. ~~Text parameter reassignment/append segfaults~~
 
-**Test:** Struct field text concat with `= h +` and `+=` produce same result.
+**FIXED** in `src/parser/expressions.rs`, `src/variables/mod.rs`,
+`src/parser/definitions.rs`, `src/state/codegen.rs`.
 
-**Workaround:** Use `h += expr` instead of `h = h + expr`.
+Text arguments are now auto-promoted to local String on first mutation.
+The parser creates a shadow local `__tp_<name>`, copies the argument at
+function entry, and redirects all references.  No manual workaround needed.
+
+---
+
+### 116. ~~`x = func(s)` where func returns a struct parameter aliases the store~~
+
+**FIXED** in `src/state/codegen.rs`.
+
+Added new branch in `gen_set_first_at_tos` for `Type::Reference +
+Value::Call(n_*, ...)` where the function has a code body (not native).
+Functions with Reference parameters emit deep copy via
+`gen_set_first_ref_call_copy`. Functions without Reference params adopt
+the returned store directly (O-B2 optimisation).
+
+Guard `code != Value::Null` excludes native/stub functions (P118 fix).
+
+---
+
+### 117. Struct-returning functions with text params leak stores
+
+**Severity:** Medium — stores accumulate for functions like `file()`.
+
+**Symptom:** `f = file("path")` leaks store because `f`'s type has
+`dep=[__ref_1]` (text-return work variable). Scopes.rs sees non-empty
+deps and skips OpFreeRef, treating `f` as a borrowed reference.
+
+**Root cause:** `call_dependencies` / `resolve_deps` propagates deps
+from text-return work variables (`__ref_N`) into the struct return type.
+The File struct COPIES the text into its store (OpSetText deep copy),
+so the dep is spurious — but the dep system doesn't distinguish copies
+from shared references.
+
+**Affected tests:** `file_write_error`, `file_exists_true/false`,
+`file_debug` — all fail with "Database N not correctly freed".
+
+**Attempted fix:** Filtering `__ref_N` deps in `get_free_vars` fixed
+the file tests but caused "Double free" in `issue_84_merge_sort` —
+the filter was too broad, removing genuine deps for recursive structs.
+
+**Attempted fixes and why they fail:**
+
+1. **Filtering __ref_N deps in get_free_vars (scopes.rs):** Fixed file
+   tests but caused double-free in merge_sort (recursive vector returns)
+   and double-free in native codegen (which reads the same IR).
+
+2. **Empty deps in add_defaults line 1797:** Fixed file tests but caused
+   use-after-free in null-coalescing tests. The `vec![vr]` dep keeps the
+   work ref alive while the returned struct is constructed. Removing it
+   breaks patterns where the work ref IS the returned store.
+
+3. **Filtering text deps in ref_return:** Doesn't help because the
+   spurious dep comes from `add_defaults` (caller side), not `ref_return`
+   (callee side). The variables in `ref_return`'s `ls` are struct-typed.
+
+**Root cause:** The dep at `add_defaults:1797` (`vec![vr]`) is
+load-bearing — removing it causes use-after-free (stack store freed
+during execution) and breaks null-coalescing. The dep keeps the
+return-store work ref alive, which is correct when the function
+returns THROUGH the work ref. But for O-B2 adoption (no-ref-param
+functions), the work ref is unused — the callee's store is adopted
+directly. The dep is only spurious in the O-B2 case.
+
+**Correct fix:** In the O-B2 codegen path (`gen_set_first_at_tos`),
+after adopting the callee's store, emit `OpFreeRef` for the unused
+`__ref_N` work variable. This frees the work ref that was allocated
+by `add_defaults` but never used (O-B2 bypasses it). The dep stays
+in the type system (keeping the broader lifetime model intact), but
+the unused work ref store is explicitly cleaned up.
+
+**Detection:** Runtime warning at program exit (`execute_argv`) and
+compile-time `check_ref_leaks` P117 warning are in place.
+
+**Files:** `src/state/codegen.rs` (O-B2 adoption path)
+
+---
+
+### 118. ~~`22-threading.loft` regression~~
+
+**FIXED.** The O-B2 codegen branch matched `n_parallel_for` and
+`n_parallel_for_light` — native runtime functions with `code == Value::Null`.
+The adoption path generated bytecode that skipped the store allocation these
+functions depend on. Fix: added `code != Value::Null` guard to exclude
+stub/native function definitions from the O-B2 branch.
 
 ---
 
@@ -297,26 +318,17 @@ is a field on the returned value, not global state.  See WEB_SERVICES.md Approac
 ## Interpreter Robustness
 
 
-### 61. Native codegen IR parsing panics on unhandled patterns
+### 61. Native codegen IR parsing panics on unhandled patterns *(fixed)*
 
-**Severity:** Medium — only affects the `--native` code path, which is not yet the default.
+**Fixed.** All critical opcodes now have implementations in `src/codegen_runtime.rs`:
+`OpDatabase`, `OpNewRecord`, `OpFinishRecord`, `OpFreeRef`, `OpCopyRecord`,
+`OpGetTextSub`, `OpLengthCharacter`, `OpGetFileText`, `OpTruncateFile`,
+`OpInsertVector`, `OpSortVector`, `OpIterate`, `OpStep`, `OpGetRecord`,
+`OpSizeofRef`, `OpFormatDatabase`, and `cr_call_push`/`CallGuard` for stack traces.
 
-**Location:** `src/generation/:1396,1422,1437,1448,1470,1500`
-
-**Symptom:** `panic!("Could not parse {vals:?}")` when the native code generator
-encounters an IR pattern it does not recognise.  This is an exhaustiveness gap in the
-native emitter, not in the interpreter.
-
-**Root cause:** The IR → Rust source emitter has `panic!` catch-alls for value patterns
-that have not been implemented yet.  Adding new IR opcodes or IR value shapes without
-updating the emitter leaves silent coverage gaps that manifest as panics at native
-codegen time (i.e., compile time for the `--native` path, not interpreter runtime).
-
-**Fix path:** When implementing native codegen for a new opcode or value kind (N9 in the
-roadmap), add the corresponding arm to every dispatch site in `generation/`.  An
-exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arms first.
-
-**Effort:** Low per opcode; Medium to reach full coverage (tracked as N9).
+The generated native code uses `use loft::codegen_runtime::*;` to import all
+implementations.  Remaining unimplemented opcodes (parallel blocks, some hash/index
+ops) are low-priority and tracked under N9.
 
 ---
 
@@ -428,14 +440,12 @@ to worry about.
 
 ## Native Codegen Blockers
 
-### 79. `external` crate reference unresolved
+### 79. `external` crate reference unresolved *(fixed)*
 
-**Symptom:** `error[E0433]: failed to resolve: use of unresolved module external` in
-`21-random.loft`.
-
-**Fix path:** The random number extension uses an `external` FFI crate that is not included in
-the native codegen output.  Either bundle the implementation in `codegen_runtime` or emit the
-necessary `extern` block in the generated file.
+**Fixed.** The native codegen now emits a local `mod external` block
+(`src/generation/mod.rs:416-419`) that wraps `codegen_runtime::cr_rand_seed` and
+`cr_rand_int`.  The `#rust` templates in `default/01_code.loft` reference
+`external::rand_seed()` and `external::rand_int()` which resolve to these wrappers.
 
 ---
 
@@ -700,7 +710,7 @@ restoring the ascending walk direction — which is correct for a reversed desce
 
 ---
 
-### 103. Inline vector concat in compound assignment expression *(mitigated)*
+### 103. ~~Inline vector concat in compound assignment expression~~ *(fixed)*
 
 **Symptom:** `result = f([1,2,3,4,5]) + 100 * f([1,2,3] + [4,5])` returns wrong
 value.  Each call works correctly in isolation.
@@ -710,22 +720,13 @@ that temporarily grows the stack.  When this Block appears inside an assignment
 expression, `gen_set_first_at_tos` / `OpFreeStack` miscomputes the stack offset,
 placing the result at the wrong position.
 
-**Mitigation:** A compile-time warning is now emitted when vector concatenation
-appears inline in an expression: *"vector concatenation in an expression creates
-a temporary; assign to a variable first for correct results in compound
-expressions"*.
-
-**Workaround:** Assign the concat result to a variable first:
+**FIXED** in `src/parser/vectors.rs` — upgraded from warning to compile error.
+Inline vector concat `[a] + [b]` now produces a compile error. Users must
+assign the concat to a variable first:
 ```loft
 combined = [1,2,3] + [4,5];
 result = f([1,2,3,4,5]) + 100 * f(combined);  // correct
 ```
-
-**Test:** `tests/scripts/70-ignored-struct-method-bugs.loft::test_vector_combined_expression` (`@EXPECT_FAIL`).
-
-**Full fix path:** Restructure `generate_block` to account for function-scoped
-variable allocations (`__vdb_N`, `_vec_N`) inside expression Blocks, or hoist
-database allocation out of the Block into the function preamble.
 
 ---
 
@@ -817,28 +818,13 @@ The extra `+` is consumed so parsing recovers cleanly.
 
 ---
 
-### 108. `f#next` initial seek on fresh read-only file handle
+### 108. ~~`f#next` initial seek on fresh read-only file handle~~
 
-**Symptom:** After opening a file handle for reading and immediately setting
-`f#next = N as long`, subsequent `f#read(4)` calls still return bytes from
-position 0 instead of position N.
+**FIXED** in `src/state/io.rs`.
 
-**Workaround:** Read at least one byte before seeking.  Use sequential reads to
-advance the position; then `f#next = pos` to seek forward from the current position.
-```loft
-// WRONG — reads 4 bytes starting at offset 0, not 12:
-f#next = 12l;
-val = f#read(4) as i32;
-
-// CORRECT — read sequentially first:
-f#read(4) as i32;  // bytes 0-3
-f#read(4) as i32;  // bytes 4-7
-f#read(4) as i32;  // bytes 8-11
-val = f#read(4) as i32;  // bytes 12-15
-```
-
-**Discovered:** Sprint 8 GLB tests.  `f#next = N` after prior reads (forward seek)
-works correctly; it is only the very first operation that fails.
+After `File::open()` / `File::create()`, the stored `next_pos` is now applied
+via `seek(SeekFrom::Start(next_pos))` on first open.  Both `read_file()` and
+`write_file()` are fixed.
 
 ---
 
@@ -859,6 +845,106 @@ positive header 0 (should be free)` followed by a crash.
 - `src/parser/vectors.rs` `parse_vector`: added `set_skip_free(elm)` when `is_field = true`.
 
 **Discovered:** Sprint 8 GLB transform test.  **Test:** `/tmp/p109_repro.loft`.
+
+### 119. Native OpenGL programs segfault (heap corruption) *(fixed)*
+
+**Symptom:** Running `02-hello-triangle.loft` or other OpenGL examples in `--interpret`
+mode segfaulted. The crash occurred when calling native functions like
+`loft_gl_upload_vertices` and `loft_gl_set_uniform_mat4`.
+
+**Root cause:** Two interpreter-aware native functions (`n_gl_upload_vertices` and
+`n_gl_set_uniform_mat4`) were registered in `wire_native_fns` under their `n_` prefix
+names, but the `#native` annotations in `.loft` files reference them with the `loft_`
+prefix. When the interpreter looked up `loft_gl_upload_vertices` in the registry, it
+found no match and fell back to `try_dlsym`, which resolved the raw C-ABI version
+(`loft_gl_upload_vertices` — the non-store-aware function taking raw pointers). Calling
+a raw-pointer function with store-based interpreter arguments caused heap corruption and
+segfault.
+
+The `n_`-prefixed functions exist specifically for the interpreter path: they accept
+`LoftStore` + `LoftRef` parameters and use the auto-marshaller to safely access store
+data. The `loft_`-prefixed versions are for the compiled/native path and take raw
+pointers directly.
+
+**Fix:** In `lib/graphics/native/src/lib.rs`, changed two `reg!()` calls to register
+the `n_` implementations under their `loft_` names:
+- `reg!(b"loft_gl_upload_vertices", n_gl_upload_vertices);`
+- `reg!(b"loft_gl_set_uniform_mat4", n_gl_set_uniform_mat4);`
+
+This ensures the auto-marshaller finds the correct store-aware function before the
+`dlsym` fallback is tried.
+
+**Remaining risk:** Verify that the `#native` annotation string for `set_uniform_mat4`
+in `graphics.loft` matches the registered name exactly (`loft_gl_set_mat4` vs
+`loft_gl_set_uniform_mat4` — a potential secondary mismatch). Any future `n_`-prefixed
+functions must also be registered under `loft_` names manually; there is no generic
+prefix-fallback in the symbol lookup.
+
+**Test:** `02-hello-triangle.loft` with `--interpret` — renders 300 frames without
+crash.
+
+### 120. Struct constructor doesn't deep-copy vector fields into struct store
+
+**Symptom:** Vector fields in returned structs are empty (length=0) or contain
+garbage. Causes black textures in GL examples and use-after-free crashes when
+the struct is used inside loops.
+
+**Minimal reproducer:** `lib/graphics/examples/test_mat4_crash.loft`:
+```loft
+struct BigBox {
+    width: integer,
+    height: integer,
+    data: vector<integer>
+}
+fn make_big() -> BigBox {
+    d: vector<integer> = [];
+    for y in 0..4 {
+        for x in 0..4 { d += [x + y * 4]; }
+    }
+    BigBox { width: 4, height: 4, data: d }
+}
+fn main() {
+    b = make_big();
+    println("data len={b.data.len()}");   // prints 0, should be 16
+}
+```
+
+**Also:** `tests/native_loader.rs::vec_from_returned_struct_heavy` — headless test.
+
+**Root cause:** When `BigBox { width: 4, height: 4, data: d }` constructs the
+struct, it allocates a new store (store 2) for the BigBox record and copies the
+scalar fields (`width`, `height`) by value. But the `data` field is a
+`vector<integer>` — the constructor only copies the **vector record pointer** (an
+i32) from the stack store into the struct store. The actual vector data remains
+in the stack store (store 1000/1).
+
+When `make_big()` returns:
+1. The callee's stack is unwound → vector data in the stack store is lost
+2. `gen_set_first_ref_call_copy` deep-copies the struct from store 2 to the
+   caller's store via `OpCopyRecord`
+3. `copy_claims_seq_vector` reads the vector pointer from store 2, but it
+   points to data in the (now-unwound) stack store → `length=0`
+
+Scalar fields survive because they're copied by value. Vector fields are
+pointers that become dangling after stack unwind.
+
+**Blocks:** All OpenGL examples using struct returns with vector fields
+(textured cube, breakout, scene graph). Also `Mat4 { m: vector<float> }` in
+`math::mat4_mul`, `ortho()`, etc.
+
+**Related:** Issue #117 (store leaks) and #119 (native registration).
+
+**Fix direction:** The struct constructor must deep-copy vector field data
+into the struct's own store, not just copy the pointer. This should happen at
+the `FinishRecord` or `SetField` level — when a vector-typed field is assigned,
+the vector data should be `copy_claims_seq_vector`'d from the source store
+into the struct's store.
+
+**Mitigations applied (partial):**
+- Tolerate double-free in `free_ref` (skip already-freed stores)
+- Loop pre-init hoists Reference variables to pre-loop scope
+- `is_ret_work_ref` suppresses FreeRef for `__ref_N` in return path
+- `gen_set_first_ref_call_copy` always deep-copies struct returns
 
 ---
 

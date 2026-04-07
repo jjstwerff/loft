@@ -1210,7 +1210,36 @@ impl Parser {
                 | Type::Spacial(_, _, _)
                 | Type::Index(_, _, _)
         ) {
-            list.push(value.clone());
+            // Issue #120: for vector fields assigned from a bare variable
+            // (e.g. `BigBox { data: d }`), parse_operators overwrites the
+            // field ref with Var(d) — no copy operation is generated.
+            // Emit OpAppendVector to deep-copy the source vector into the
+            // struct's field so the data is independent of the source store.
+            if let Type::Vector(ref content, _) = td {
+                if !self.first_pass && matches!(value, Value::Var(_)) {
+                    let pos = self
+                        .database
+                        .position(self.data.def(td_nr).known_type, field);
+                    let elem_tp = self.data.def(self.data.type_def_nr(content)).known_type;
+                    let vec_tp = self.database.vector(elem_tp);
+                    let field_ref = self.cl(
+                        "OpGetField",
+                        &[
+                            code.clone(),
+                            Value::Int(i32::from(pos)),
+                            Value::Int(i32::from(vec_tp)),
+                        ],
+                    );
+                    list.push(self.cl(
+                        "OpAppendVector",
+                        &[field_ref, value.clone(), Value::Int(i32::from(elem_tp))],
+                    ));
+                } else {
+                    list.push(value.clone());
+                }
+            } else {
+                list.push(value.clone());
+            }
         } else if let Value::Insert(ops) = value {
             for o in ops {
                 list.push(o.clone());

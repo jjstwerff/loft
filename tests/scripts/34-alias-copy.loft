@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// O-B2 safety: function WITH ref param must deep copy (prevent aliasing).
+// Native codegen doesn't have this fix yet:
+// @EXPECT_FAIL: native alias copy
+
+struct AcPoint {
+  x: float not null,
+  y: float not null
+}
+
+fn ac_make(ac_x: float, ac_y: float) -> AcPoint {
+  AcPoint { x: ac_x, y: ac_y }
+}
+
+fn ac_identity(ac_p: AcPoint) -> AcPoint { ac_p }
+
+fn test_aliased_return_copies() {
+  ac_orig = ac_make(1.0, 2.0);
+  ac_copy = ac_identity(ac_orig);
+  // Must be independent — mutation of copy must not affect original.
+  ac_copy.x = 99.0;
+  assert(ac_orig.x == 1.0, "alias orig.x: {ac_orig.x}");
+  assert(ac_copy.x == 99.0, "alias copy.x: {ac_copy.x}");
+}

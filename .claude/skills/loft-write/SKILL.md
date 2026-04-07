@@ -499,9 +499,10 @@ if f.exists() { }
 | `Unknown record N` on nested field access | `vec[i].struct_field.nested` — deep chained access on vector elements | Avoid deep chaining on vector elements (P105) |
 | `fl_validate: positive header` | Complex nested struct assignment (3+ levels) | Simplify nested struct operations (P106) |
 | `Variable 'x' cannot change type from text to null` | `x: text = null;` — typed null init rejected | Use `x = "";` or avoid initializing to null |
-| Empty result from `t = t[3..]` | Text self-slice clears before read | Use `s = t[3..]; t = s;` (intermediate variable) |
-| Doubled text in function return | Text-returning fn accumulates instead of replacing | Use `return expr;` instead of `t = expr; ... t` |
-| `character == text` always true | Operator resolves to OpEqBool (both truthy) | Use `"{c}" == t` to compare as text |
+| ~~Empty result from `t = t[3..]`~~ | ~~Text self-slice clears before read~~ | **Fixed** — work text for self-referencing assignments |
+| ~~Doubled text in function return~~ | ~~Text-returning fn accumulates~~ | **Fixed** — always clear RefVar(Text) before append |
+| `character == text` always true | Now a compile error | Use `"{c}" == t` to compare as text |
+| `Cannot reassign text parameter` | Text params are 12-byte Str, not 24-byte String | Copy to local first: `local = param; local = ...` |
 
 ---
 
@@ -528,7 +529,9 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] Long literals use `l` suffix where needed (`0l`, `1000l`)
 - [ ] `--path` ends with `/` in CLI calls
 - [ ] String type in struct fields is `text`, not `string`
-- [ ] No `t = t[N..]` self-slice — use intermediate variable
-- [ ] No `character == text` comparisons — use `"{c}" == t`
-- [ ] Text-returning functions use `return expr` not `t = expr; t`
+- [ ] ~~No `t = t[N..]` self-slice~~ — **fixed**, works directly now
+- [ ] No `character == text` comparisons — use `"{c}" == t` (compile error)
+- [ ] ~~Text-returning functions~~ — **fixed**, `t = expr; t` works now
 - [ ] Prefer `h += expr` over `h = h + expr` for text building
+- [ ] Never reassign or `+=` a text parameter — copy to local first
+- [ ] Struct params are passed by reference — mutations visible to caller

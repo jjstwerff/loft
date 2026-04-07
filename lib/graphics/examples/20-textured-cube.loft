@@ -79,7 +79,7 @@ fn main() {
     tc_font = graphics::gl_load_font("C:/Windows/Fonts/arial.ttf");
   }
   if tc_font < 0 {
-    println("No font found"); return;
+    println("Warning: No font found — text label will be missing");
   }
   // Create procedural texture with text label
   tc_check = make_texture(tc_font);

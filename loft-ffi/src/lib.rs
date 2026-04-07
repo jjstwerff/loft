@@ -19,6 +19,7 @@
 
 use std::cell::RefCell;
 
+
 // ── Null sentinels ─────────────────────────────────────────────────────
 
 /// Null sentinel for `integer` (loft `i32`).
@@ -567,6 +568,235 @@ pub unsafe fn text_opt<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     }
 }
 
+/// Generate an interpreter-aware wrapper for a C-ABI function that takes
+/// one vector parameter.  The wrapper receives `LoftStore + LoftRef`,
+/// extracts the raw data pointer and element count, and forwards to
+/// the original C-ABI function.
+///
+/// Syntax: `vec_wrapper!(n_name, loft_name(params) -> ret)`
+///
+/// Use `vec<T>` to mark the vector parameter.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// loft_ffi::vec_wrapper!(n_gl_upload_canvas, loft_gl_upload_canvas(
+///     data: vec<i32>, width: i32, height: i32) -> i32);
+///
+/// loft_ffi::vec_wrapper!(n_save_png, loft_save_png(
+///     path_ptr: *const u8, path_len: usize, w: i32, h: i32, data: vec<i32>) -> bool);
+/// ```
+#[macro_export]
+macro_rules! vec_wrapper {
+    // With return type
+    ($n_name:ident, $loft_name:ident ( $($params:tt)* ) -> $ret:ty) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, -> $ret, before = [], after = [], rest = [ $($params)* ]);
+    };
+    // Void return
+    ($n_name:ident, $loft_name:ident ( $($params:tt)* )) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, ->, before = [], after = [], rest = [ $($params)* ]);
+    };
+
+    // ── @parse: find the vec<T> parameter ────────────────────────────
+
+    // Found vec<T> with trailing comma — parse remaining into "after"
+    (@parse $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [],
+        rest = [ $vp:ident : vec < $elem:ty > , $($rest:tt)* ]
+    ) => {
+        $crate::vec_wrapper!(@after $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* ],
+            after = [],
+            vec = [ $vp $elem ],
+            rest = [ $($rest)* ]
+        );
+    };
+
+    // Found vec<T> as last param
+    (@parse $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [],
+        rest = [ $vp:ident : vec < $elem:ty > ]
+    ) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* ],
+            after = [],
+            rest = [ @VEC $vp $elem ]
+        );
+    };
+
+    // Scalar param with trailing comma — accumulate into "before"
+    (@parse $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [],
+        rest = [ $pn:ident : $pt:ty , $($rest:tt)* ]
+    ) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* $pn : $pt , ],
+            after = [],
+            rest = [ $($rest)* ]
+        );
+    };
+
+    // Scalar param as last — accumulate into "before"
+    (@parse $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [],
+        rest = [ $pn:ident : $pt:ty ]
+    ) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* $pn : $pt , ],
+            after = [],
+            rest = []
+        );
+    };
+
+    // ── @after: parse params after the vec ─────────────────────────
+
+    // Scalar with trailing comma
+    (@after $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [ $($ap:tt)* ],
+        vec = [ $vp:ident $elem:ty ],
+        rest = [ $pn:ident : $pt:ty , $($rest:tt)* ]
+    ) => {
+        $crate::vec_wrapper!(@after $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* ],
+            after = [ $($ap)* $pn : $pt , ],
+            vec = [ $vp $elem ],
+            rest = [ $($rest)* ]
+        );
+    };
+
+    // Scalar as last
+    (@after $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [ $($ap:tt)* ],
+        vec = [ $vp:ident $elem:ty ],
+        rest = [ $pn:ident : $pt:ty ]
+    ) => {
+        $crate::vec_wrapper!(@after $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* ],
+            after = [ $($ap)* $pn : $pt , ],
+            vec = [ $vp $elem ],
+            rest = []
+        );
+    };
+
+    // Terminal — all after params parsed
+    (@after $n_name:ident, $loft_name:ident, -> $($ret:ty)?,
+        before = [ $($bp:tt)* ],
+        after = [ $($ap:tt)* ],
+        vec = [ $vp:ident $elem:ty ],
+        rest = []
+    ) => {
+        $crate::vec_wrapper!(@parse $n_name, $loft_name, -> $($ret)?,
+            before = [ $($bp)* ],
+            after = [ $($ap)* ],
+            rest = [ @VEC $vp $elem ]
+        );
+    };
+
+    // ── @parse terminal with vec found — emit ────────────────────────
+
+    // With return type
+    (@parse $n_name:ident, $loft_name:ident, -> $ret:ty,
+        before = [ $($bpn:ident : $bpt:ty ,)* ],
+        after = [ $($apn:ident : $apt:ty ,)* ],
+        rest = [ @VEC $vp:ident $elem:ty ]
+    ) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $n_name(
+            __store: $crate::LoftStore,
+            $( $bpn : $bpt, )*
+            __vec_ref: $crate::LoftRef,
+            $( $apn : $apt, )*
+        ) -> $ret {
+            let __count = unsafe { __store.vector_len(&__vec_ref) } as u32;
+            let __ptr = unsafe { __store.vector_data_ptr(&__vec_ref) } as *const $elem;
+            $loft_name($( $bpn, )* __ptr, __count, $( $apn, )*)
+        }
+    };
+
+    // Void return
+    (@parse $n_name:ident, $loft_name:ident, -> ,
+        before = [ $($bpn:ident : $bpt:ty ,)* ],
+        after = [ $($apn:ident : $apt:ty ,)* ],
+        rest = [ @VEC $vp:ident $elem:ty ]
+    ) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $n_name(
+            __store: $crate::LoftStore,
+            $( $bpn : $bpt, )*
+            __vec_ref: $crate::LoftRef,
+            $( $apn : $apt, )*
+        ) {
+            let __count = unsafe { __store.vector_len(&__vec_ref) } as u32;
+            let __ptr = unsafe { __store.vector_data_ptr(&__vec_ref) } as *const $elem;
+            $loft_name($( $bpn, )* __ptr, __count, $( $apn, )*)
+        }
+    };
+}
+
+// ── Registration macro ────────────────────────────────────────────────
+
+/// Generate a `loft_register_v1` entry point that registers native functions.
+///
+/// Each entry is a function identifier.  The registration name is derived
+/// automatically from the identifier via `stringify!`, so the Rust function
+/// name **must** match the `#native "..."` annotation in the `.loft` file.
+///
+/// For the rare case where the Rust function name differs from the
+/// registration name (e.g. an interpreter-aware `n_` variant registered
+/// under a `loft_` name), use the `name => fn` form.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// loft_ffi::loft_register! {
+///     loft_gl_clear,                                  // name = "loft_gl_clear"
+///     loft_gl_draw,                                   // name = "loft_gl_draw"
+///     loft_gl_upload_vertices => n_gl_upload_vertices, // name = "loft_gl_upload_vertices"
+/// }
+/// ```
+#[macro_export]
+macro_rules! loft_register {
+    ( $( $name:ident $( => $func:ident )? ),* $(,)? ) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn loft_register_v1(
+            __loft_reg_cb: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
+            __loft_reg_ctx: *mut (),
+        ) {
+            unsafe {
+                $(
+                    $crate::loft_register!(@one __loft_reg_cb, __loft_reg_ctx, $name $( => $func )?);
+                )*
+            }
+        }
+    };
+
+    // Internal: same-name registration (common case).
+    (@one $cb:ident, $ctx:ident, $name:ident) => {
+        $cb(
+            stringify!($name).as_ptr(),
+            stringify!($name).len(),
+            $name as *const (),
+            $ctx,
+        )
+    };
+
+    // Internal: remapped registration (name differs from function).
+    (@one $cb:ident, $ctx:ident, $name:ident => $func:ident) => {
+        $cb(
+            stringify!($name).as_ptr(),
+            stringify!($name).len(),
+            $func as *const (),
+            $ctx,
+        )
+    };
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -679,5 +909,21 @@ mod tests {
         let store = test_store(&mut buf);
         unsafe { store.set_byte(2, 8, 0, 255) };
         assert_eq!(unsafe { store.get_byte(2, 8, 0) }, 255);
+    }
+
+    // Test vec_wrapper! macro
+    #[unsafe(no_mangle)]
+    fn loft_test_sum(ptr: *const i32, count: u32, offset: i32) -> i32 {
+        let data = unsafe { std::slice::from_raw_parts(ptr, count as usize) };
+        data.iter().sum::<i32>() + offset
+    }
+
+    vec_wrapper!(n_test_sum, loft_test_sum(data: vec<i32>, offset: i32) -> i32);
+
+    #[test]
+    fn vec_wrapper_generates_n_function() {
+        let data = [1i32, 2, 3];
+        let result = loft_test_sum(data.as_ptr(), 3, 10);
+        assert_eq!(result, 16); // 1+2+3+10
     }
 }

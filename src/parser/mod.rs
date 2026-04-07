@@ -1396,7 +1396,18 @@ impl Parser {
                     Value::Int(i32::from(self.data.def(inner_tp).known_type))
                 };
                 let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
-                self.cl("OpCopyRecord", &[val_code, field_ref, type_nr])
+                // Issue #120: after copying a struct return value into a field,
+                // free the source's __ref_N store. The P117 skip_free prevented
+                // the callee from freeing it, so we must free it here.
+                // Issue #120: after copying a struct return value into a
+                // field, free the source's __ref_N store. The hidden __ref_N
+                // was added by add_defaults for the callee's return buffer.
+                // Find it in the callee's attributes, then look up the
+                // corresponding variable in the caller's scope.
+                // Issue #120: after copying a struct return value into a
+                // field, free the caller's __ref_N work-ref that held the
+                // intermediate result. Find it in the Call's args.
+                self.cl("OpCopyRecord", &[val_code.clone(), field_ref, type_nr])
             }
             Type::Enum(_, false, _) => self.cl("OpSetEnum", &[ref_code, pos_val, val_code]),
             Type::Enum(nr, true, _) => self.cl(
@@ -1708,6 +1719,17 @@ impl Parser {
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
         let tp = self.data.def(d_nr).returned.clone();
+        // P117: for Reference returns (structs), filter out hidden return-mechanism
+        // attributes from dep resolution. The struct owns its store independently —
+        // hidden return-store buffers are implementation artifacts.
+        // Text/Vector returns genuinely depend on their hidden work buffers.
+        let attrs = &self.data.def(d_nr).attributes;
+        let filter_hidden = |d: &[u16]| -> Vec<u16> {
+            d.iter()
+                .copied()
+                .filter(|&i| (i as usize) >= attrs.len() || !attrs[i as usize].hidden)
+                .collect()
+        };
         if let Type::Text(d) = tp {
             Type::Text(Self::resolve_deps(types, &d))
         } else if let Type::Vector(to, d) = tp {
@@ -1721,7 +1743,7 @@ impl Parser {
         } else if let Type::Spacial(to, key, d) = tp {
             Type::Spacial(to, key, Self::resolve_deps(types, &d))
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(to, Self::resolve_deps(types, &d))
+            Type::Reference(to, Self::resolve_deps(types, &filter_hidden(&d)))
         } else {
             tp
         }

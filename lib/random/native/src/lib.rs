@@ -52,3 +52,9 @@ pub unsafe extern "C" fn n_rand_indices(mut store: LoftStore, n: i32) -> LoftRef
     }
     vec
 }
+
+loft_ffi::loft_register! {
+    n_rand,
+    n_rand_seed,
+    n_rand_indices,
+}

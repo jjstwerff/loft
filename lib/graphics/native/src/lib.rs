@@ -8,7 +8,6 @@
 
 use glutin::prelude::*;
 use std::cell::RefCell;
-use std::ffi::CString;
 use std::time::Duration;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -288,23 +287,6 @@ pub extern "C" fn loft_gl_draw(vao: u32, n_vertices: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_gl_set_uniform_mat4(
-    program: u32,
-    name_ptr: *const u8,
-    name_len: usize,
-    data: *const f32,
-) {
-    let name = unsafe { loft_ffi::text(name_ptr, name_len) };
-    let c_name = CString::new(name).unwrap_or_default();
-    unsafe {
-        let loc = gl::GetUniformLocation(program, c_name.as_ptr());
-        if loc >= 0 {
-            gl::UniformMatrix4fv(loc, 1, gl::FALSE, data);
-        }
-    }
-}
-
 // ── Store-aware GL functions (interpreter cdylib path — LoftStore/LoftRef) ───
 //
 // These are called at runtime by the interpreter via dynamic library loading.
@@ -332,7 +314,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
 /// Interpreter path: receives LoftStore + LoftRef for the mat vector.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn n_gl_set_uniform_mat4(
+pub unsafe extern "C" fn n_gl_set_mat4(
     store: loft_ffi::LoftStore,
     program: i32,
     name_ptr: *const u8,
@@ -838,7 +820,6 @@ pub extern "C" fn loft_gl_load_texture(
 }
 
 /// Upload Canvas pixel data (0xAARRGGBB packed i32s) as a GL RGBA texture.
-/// Native compilation path: receives raw pointer + count.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_upload_canvas(
     data_ptr: *const i32,
@@ -852,7 +833,6 @@ pub extern "C" fn loft_gl_upload_canvas(
         return 0;
     }
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
-    // Flip rows: canvas (0,0) is top-left, GL texture (0,0) is bottom-left.
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in (0..h).rev() {
         for x in 0..w {
@@ -865,6 +845,23 @@ pub extern "C" fn loft_gl_upload_canvas(
     }
     unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
 }
+
+// Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
+// Cannot use vec_wrapper! because the auto-marshaller's store snapshot
+// may be stale for canvas data (issue #120 store lifecycle).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn n_gl_upload_canvas(
+    store: loft_ffi::LoftStore,
+    data: loft_ffi::LoftRef,
+    width: i32,
+    height: i32,
+) -> i32 {
+    let count = unsafe { store.vector_len(&data) } as u32;
+    let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i32;
+    loft_gl_upload_canvas(data_ptr, count, width, height)
+}
+loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i32, height: i32, data: vec<i32>) -> bool);
+loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i32, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i32>) -> i32);
 
 /// Return the line height in pixels for a font at the given size.
 #[unsafe(no_mangle)]
@@ -912,81 +909,63 @@ pub extern "C" fn loft_gl_point_size(size: f64) {
 
 // ── Registration ────────────────────────────────────────────────────────
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn loft_register_v1(
-    register: unsafe extern "C" fn(*const u8, usize, *const (), *mut ()),
-    ctx: *mut (),
-) {
-    macro_rules! reg {
-        ($name:expr, $fn:ident) => {
-            register($name.as_ptr(), $name.len(), $fn as *const (), ctx)
-        };
-    }
-    unsafe {
-        reg!(b"loft_gl_create_window", loft_gl_create_window);
-        reg!(b"loft_gl_poll_events", loft_gl_poll_events);
-        reg!(b"loft_gl_swap_buffers", loft_gl_swap_buffers);
-        reg!(b"loft_gl_clear", loft_gl_clear);
-        reg!(b"loft_gl_destroy_window", loft_gl_destroy_window);
-        reg!(b"loft_gl_create_shader", loft_gl_create_shader);
-        reg!(b"loft_gl_use_shader", loft_gl_use_shader);
-        reg!(b"loft_gl_upload_mesh", loft_gl_upload_mesh);
-        reg!(b"loft_gl_draw", loft_gl_draw);
-        reg!(b"loft_gl_set_uniform_mat4", loft_gl_set_uniform_mat4);
-        reg!(b"loft_gl_upload_texture", loft_gl_upload_texture);
-        reg!(b"loft_gl_bind_texture", loft_gl_bind_texture);
-        reg!(b"loft_gl_delete_texture", loft_gl_delete_texture);
-        reg!(b"loft_gl_load_font", loft_gl_load_font);
-        reg!(b"loft_text_height", loft_text_height);
-        reg!(b"loft_rasterize_text_into", loft_rasterize_text_into);
-        reg!(b"loft_gl_measure_text", loft_gl_measure_text);
-        reg!(b"loft_gl_rasterize_text", loft_gl_rasterize_text);
-        reg!(b"loft_gl_free_bitmap", loft_gl_free_bitmap);
-        reg!(b"n_gl_upload_vertices", n_gl_upload_vertices);
-        reg!(b"n_gl_set_uniform_mat4", n_gl_set_uniform_mat4);
-        // Uniform helpers
-        reg!(b"loft_gl_set_uniform_float", loft_gl_set_uniform_float);
-        reg!(b"loft_gl_set_uniform_int", loft_gl_set_uniform_int);
-        reg!(b"loft_gl_set_uniform_vec3", loft_gl_set_uniform_vec3);
-        // GL state
-        reg!(b"loft_gl_enable", loft_gl_enable);
-        reg!(b"loft_gl_disable", loft_gl_disable);
-        reg!(b"loft_gl_blend_func", loft_gl_blend_func);
-        reg!(b"loft_gl_cull_face", loft_gl_cull_face);
-        reg!(b"loft_gl_depth_mask", loft_gl_depth_mask);
-        reg!(b"loft_gl_viewport", loft_gl_viewport);
-        // Framebuffer objects
-        reg!(b"loft_gl_create_framebuffer", loft_gl_create_framebuffer);
-        reg!(b"loft_gl_bind_framebuffer", loft_gl_bind_framebuffer);
-        reg!(b"loft_gl_framebuffer_texture", loft_gl_framebuffer_texture);
-        reg!(b"loft_gl_create_depth_texture", loft_gl_create_depth_texture);
-        reg!(b"loft_gl_create_color_texture", loft_gl_create_color_texture);
-        reg!(b"loft_gl_draw_fullscreen_quad", loft_gl_draw_fullscreen_quad);
-        // Input
-        reg!(b"loft_gl_key_pressed", loft_gl_key_pressed);
-        reg!(b"loft_gl_mouse_x", loft_gl_mouse_x);
-        reg!(b"loft_gl_mouse_y", loft_gl_mouse_y);
-        reg!(b"loft_gl_mouse_button", loft_gl_mouse_button);
-        // Indexed drawing & draw modes
-        reg!(b"loft_gl_draw_elements", loft_gl_draw_elements);
-        reg!(b"loft_gl_draw_mode", loft_gl_draw_mode);
-        // Cleanup
-        reg!(b"loft_gl_delete_shader", loft_gl_delete_shader);
-        reg!(b"loft_gl_delete_vao", loft_gl_delete_vao);
-        reg!(b"loft_gl_delete_framebuffer", loft_gl_delete_framebuffer);
-        // Text texture
-        reg!(b"loft_gl_upload_alpha_texture", loft_gl_upload_alpha_texture);
-        reg!(b"loft_gl_text_texture", loft_gl_text_texture);
-        // Rendering hints
-        reg!(b"loft_gl_line_width", loft_gl_line_width);
-        reg!(b"loft_gl_point_size", loft_gl_point_size);
-        // Texture loading
-        reg!(b"loft_gl_load_texture", loft_gl_load_texture);
-        // Canvas → GL texture
-        reg!(b"loft_gl_upload_canvas", loft_gl_upload_canvas);
-        // PNG export
-        reg!(b"loft_save_png", loft_save_png);
-    }
+loft_ffi::loft_register! {
+    loft_gl_create_window,
+    loft_gl_poll_events,
+    loft_gl_swap_buffers,
+    loft_gl_clear,
+    loft_gl_destroy_window,
+    loft_gl_create_shader,
+    loft_gl_use_shader,
+    loft_gl_draw,
+    loft_gl_bind_texture,
+    loft_gl_delete_texture,
+    loft_gl_load_font,
+    loft_text_height,
+    loft_rasterize_text_into => n_rasterize_text_into,
+    loft_gl_measure_text,
+    // Interpreter-aware versions (store + ref args instead of raw pointers)
+    loft_gl_upload_vertices => n_gl_upload_vertices,
+    loft_gl_set_mat4 => n_gl_set_mat4,
+    // Uniform helpers
+    loft_gl_set_uniform_float,
+    loft_gl_set_uniform_int,
+    loft_gl_set_uniform_vec3,
+    // GL state
+    loft_gl_enable,
+    loft_gl_disable,
+    loft_gl_blend_func,
+    loft_gl_cull_face,
+    loft_gl_depth_mask,
+    loft_gl_viewport,
+    // Framebuffer objects
+    loft_gl_create_framebuffer,
+    loft_gl_bind_framebuffer,
+    loft_gl_framebuffer_texture,
+    loft_gl_create_depth_texture,
+    loft_gl_create_color_texture,
+    loft_gl_draw_fullscreen_quad,
+    // Input
+    loft_gl_key_pressed,
+    loft_gl_mouse_x,
+    loft_gl_mouse_y,
+    loft_gl_mouse_button,
+    // Indexed drawing & draw modes
+    loft_gl_draw_elements,
+    loft_gl_draw_mode,
+    // Cleanup
+    loft_gl_delete_shader,
+    loft_gl_delete_vao,
+    loft_gl_delete_framebuffer,
+    // Rendering hints
+    loft_gl_line_width,
+    loft_gl_point_size,
+    // Texture loading
+    loft_gl_load_texture,
+    // Canvas → GL texture (interpreter-aware: store + ref for vector)
+    loft_gl_upload_canvas => n_gl_upload_canvas,
+    // PNG export
+    loft_save_png => n_save_png,
 }
 
 // ── Text / Font C-ABI exports (GL3) ─────────────────────────────────────

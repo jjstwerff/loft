@@ -687,10 +687,13 @@ impl Scopes {
             // A5.6-text: free the closure DbRef embedded at offset+4 in a fn-ref slot.
             // The 16-byte fn-ref stack slot is reclaimed by FreeStack, but the closure
             // store record at offset+4 must be explicitly freed via OpFreeRef.
-            if let Type::Function(_, _, dep) = function.tp(v) {
+            if let Type::Function(_, _, _) = function.tp(v) {
+                // fn-ref variables OWN their closure store. The dep list
+                // tracks captured variables, not store borrowing. Always
+                // emit OpFreeRef unless the fn-ref is the return value.
                 let in_ret =
                     tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
-                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
+                let emit = !in_ret && !function.is_skip_free(v);
                 if emit {
                     if scope_debug {
                         eprintln!(
@@ -794,7 +797,9 @@ impl Scopes {
                     self.find_first_ref_vars(op, function, result);
                 }
             }
-            // Do NOT recurse into Value::Loop.
+            // Do NOT recurse into Value::Loop — loop-interior Reference
+            // variables are handled by the Loop handler in scan() which
+            // pre-inits them at the pre-loop scope (issue #120).
             _ => {}
         }
     }
@@ -995,12 +1000,9 @@ fn check_ref_leaks(
         if v == direct_ret_var {
             continue; // ownership transferred to caller
         }
-        if let Type::Reference(_, dep) = function.tp(v)
-            && dep.is_empty()
-            && !ret_deps.contains(&v)
-            && !freed.contains(&v)
-        {
-            panic!(
+        if let Type::Reference(_, dep) = function.tp(v) {
+            assert!(
+                !dep.is_empty() || ret_deps.contains(&v) || freed.contains(&v),
                 "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
                  '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
                  This is likely a scope-registration bug: the variable was registered \
@@ -1008,6 +1010,28 @@ fn check_ref_leaks(
                 function.name(v),
                 fn_name
             );
+            // P117: warn about variables with deps that are only text-return work refs.
+            // These deps are spurious (struct copies the text), but OpFreeRef is still
+            // skipped, causing a store leak at runtime.
+            if !dep.is_empty()
+                && !ret_deps.contains(&v)
+                && !freed.contains(&v)
+                && dep.iter().all(|d| {
+                    function.name(*d).starts_with("__ref_")
+                        || function.name(*d).starts_with("__rref_")
+                })
+            {
+                eprintln!(
+                    "[check_ref_leaks] Warning: Reference variable '{}' (var_nr={v}) in \
+                     function '{}' has only text-work deps {:?} — likely spurious. \
+                     Store will leak at runtime (P117).",
+                    function.name(v),
+                    fn_name,
+                    dep.iter()
+                        .map(|d| function.name(*d).to_string())
+                        .collect::<Vec<_>>(),
+                );
+            }
         }
     }
 }

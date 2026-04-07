@@ -127,6 +127,8 @@ pub struct State {
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
+    /// P60: runtime call depth counter. Panics at MAX_CALL_DEPTH.
+    pub(crate) call_depth: u32,
     /// A15: number of arms in the current `parallel {}` block.
     pub(crate) parallel_n_arms: u8,
     /// A15: bytecode offsets for each arm (relative to join point).
@@ -174,10 +176,16 @@ impl State {
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
         }
     }
+
+    /// P60: maximum runtime call depth before panicking.
+    /// Set below the store stack limit (~8000 bytes / ~8 bytes per frame)
+    /// so the depth check fires before a store out-of-bounds panic.
+    const MAX_CALL_DEPTH: u32 = 500;
 
     pub fn static_fn(&mut self, name: &str, call: Call) {
         let lib = Arc::make_mut(&mut self.library);
@@ -221,6 +229,9 @@ impl State {
     /// * `d_nr` - definition number of the called function.
     /// * `args_size` - total byte size of all parameters.
     /// * `to` - the code position where the called function resides.
+    ///
+    /// # Panics
+    /// When call depth exceeds `MAX_CALL_DEPTH` (possible infinite recursion).
     pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
         let args_base = self.stack_pos - u32::from(args_size);
         // Find the nearest source line at or before the current code position.
@@ -232,6 +243,12 @@ impl State {
             .range(..=self.code_pos)
             .next_back()
             .map_or(0, |(_, &v)| v);
+        self.call_depth += 1;
+        assert!(
+            self.call_depth <= Self::MAX_CALL_DEPTH,
+            "Recursion depth limit exceeded ({}) — possible infinite recursion",
+            Self::MAX_CALL_DEPTH
+        );
         self.call_stack.push(CallFrame {
             d_nr,
             call_pos: self.code_pos,
@@ -357,6 +374,7 @@ impl State {
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
         self.call_stack.pop();
+        self.call_depth = self.call_depth.saturating_sub(1);
     }
 
     // ── CO1.1 — Coroutine frame helpers ─────────────────────────────────────
@@ -1341,6 +1359,31 @@ impl State {
         }
     }
 
+    /// Check that all stores have been freed. Call after the last
+    /// `execute_argv` to detect store leaks. Panics in debug builds
+    /// if any stores are still alive (except the stack store).
+    pub fn check_store_leaks(&self) {
+        let mut leaked = Vec::new();
+        for (s_nr, s) in self.database.allocations.iter().enumerate() {
+            if s_nr == 0 {
+                continue; // stack store — always alive
+            }
+            if !s.free {
+                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
+            }
+        }
+        if !leaked.is_empty() {
+            let count = leaked.len();
+            let preview = if count <= 5 {
+                leaked.join(", ")
+            } else {
+                format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
+            };
+            let msg = format!("{count} stores not freed at program exit: {preview}");
+            eprintln!("Warning: {msg}");
+        }
+    }
+
     /// FY.2: Resume execution after a frame yield.  Returns `true` while the
     /// program is still running, `false` when it finishes.
     pub fn resume(&mut self) -> bool {
@@ -1418,6 +1461,7 @@ impl State {
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
         }

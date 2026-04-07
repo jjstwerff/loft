@@ -135,7 +135,11 @@ impl State {
                         .to_owned()
                 };
                 match File::create(&file_name) {
-                    Ok(f) => {
+                    Ok(mut f) => {
+                        // P108: apply stored seek position on first open.
+                        if next_pos != 0 {
+                            let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                        }
                         self.database
                             .store_mut(&file)
                             .set_int(file.rec, file.pos + 28, f_nr);
@@ -246,7 +250,11 @@ impl State {
             let mut file_ref = store.get_int(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
                 let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
-                if let Ok(f) = File::open(file_name) {
+                if let Ok(mut f) = File::open(file_name) {
+                    // P108: apply stored seek position on first open.
+                    if next_pos != 0 {
+                        let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                    }
                     store.set_int(file.rec, file.pos + 28, f_nr);
                     self.database.files.push(Some(f));
                 }
@@ -421,6 +429,16 @@ impl State {
             self.free_coroutine(db.rec as usize);
             return;
         }
+        // Issue #120: skip if the store was already freed. This can happen when
+        // multiple variables alias the same store through const parameter
+        // borrowing — the first FreeRef frees it, and subsequent FreeRefs for
+        // aliased variables must be no-ops.
+        if db.store_nr != u16::MAX
+            && (db.store_nr as usize) < self.database.allocations.len()
+            && self.database.allocations[db.store_nr as usize].free
+        {
+            return;
+        }
         #[cfg(not(feature = "wasm"))]
         if db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")
@@ -480,10 +498,12 @@ impl State {
     pub fn database(&mut self) {
         let var = *self.code::<u16>();
         let db_tp = *self.code::<u16>();
+        let code_pos = self.code_pos;
         let size = self.database.size(db_tp);
         let db = *self.get_var::<DbRef>(var);
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));
+        self.database.allocations[r.store_nr as usize].created_at = code_pos;
         self.database
             .store_mut(&r)
             .set_int(r.rec, 4, i32::from(db_tp));
@@ -930,9 +950,13 @@ impl State {
     }
 
     pub fn copy_record(&mut self) {
-        let tp = *self.code::<u16>();
+        let raw_tp = *self.code::<u16>();
+        // Issue #120: high bit of tp signals "free source store after copy".
+        let free_source = raw_tp & 0x8000 != 0;
+        let tp = raw_tp & 0x7FFF;
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
+        let code_pos = self.code_pos;
         let size = u32::from(self.database.size(tp));
         // P109: free any nested vectors/strings already owned by the destination
         // before overwriting it, to prevent double-free and leaks when a struct
@@ -940,6 +964,18 @@ impl State {
         self.database.remove_claims(&to, tp);
         self.database.copy_block(&data, &to, size);
         self.database.copy_claims(&data, &to, tp);
+        // Record which bytecode position performed this deep copy.
+        self.database.allocations[to.store_nr as usize].last_op_at = code_pos;
+        // Issue #120: free the source store after deep copy when the caller
+        // knows the source is a temporary (callee's return store) that would
+        // otherwise leak because is_ret_work_ref suppresses its OpFreeRef.
+        if free_source
+            && data.store_nr != to.store_nr
+            && data.store_nr != 0
+            && !self.database.allocations[data.store_nr as usize].free
+        {
+            self.database.free(&data);
+        }
     }
 
     pub fn hash_add(&mut self) {

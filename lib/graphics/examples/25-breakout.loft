@@ -1,0 +1,250 @@
+#!/usr/bin/env -S loft --native
+// Breakout — First Playable Game
+//
+// A classic brick-breaker game. Move the paddle with arrow keys or A/D.
+// Break all bricks to win. Don't let the ball fall!
+//
+// Demonstrates: 2D game loop, input handling, collision detection,
+// simple rendering with colored rectangles.
+//
+// Loft constructions used:
+//   gl_key_pressed    — real-time keyboard input
+//   gl_draw           — render colored quads
+//   ticks()           — frame-independent movement
+//   struct + vector   — game state management
+use graphics;
+use math;
+
+// ── Shaders ──────────────────────────────────────────────────────────
+
+VERT_2D = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}}
+`;
+
+FRAG_2D = `
+#version 330 core
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() {{
+    FragColor = vec4(uColor, 1.0);
+}}
+`;
+
+// ── Game constants ───────────────────────────────────────────────────
+
+SCREEN_W = 800.0;
+SCREEN_H = 600.0;
+PADDLE_W = 100.0;
+PADDLE_H = 15.0;
+PADDLE_Y = 560.0;
+PADDLE_SPEED = 500.0;
+BALL_SIZE = 10.0;
+BALL_SPEED = 350.0;
+BRICK_ROWS = 5;
+BRICK_COLS = 10;
+BRICK_W = 72.0;
+BRICK_H = 20.0;
+BRICK_PAD = 4.0;
+BRICK_TOP = 50.0;
+
+// ── Helper: orthographic projection ──────────────────────────────────
+
+fn ortho() -> math::Mat4 {
+  // Maps (0,0)-(800,600) to clip space (-1,-1)-(1,1), Y down
+  math::Mat4 { m: [
+    2.0 / SCREEN_W, 0.0, 0.0, 0.0,
+    0.0, -2.0 / SCREEN_H, 0.0, 0.0,
+    0.0, 0.0, -1.0, 0.0,
+    -1.0, 1.0, 0.0, 1.0
+  ] }
+}
+
+fn rect_mvp(proj: const math::Mat4, bx: float, by: float, bw: float, bh: float) -> math::Mat4 {
+  model = math::Mat4 { m: [
+    bw, 0.0, 0.0, 0.0,
+    0.0, bh, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    bx, by, 0.0, 1.0
+  ] };
+  math::mat4_mul(proj, model)
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+
+fn main() {
+  if !graphics::gl_create_window(800, 600, "25 - Breakout") {
+    println("Failed to create window");
+    return;
+  }
+
+  br_shader = graphics::gl_create_shader(VERT_2D, FRAG_2D);
+
+  // Unit quad: two triangles covering (0,0)-(1,1)
+  br_quad_data = [
+    0.0f, 0.0f, 0.0f,
+    1.0f, 0.0f, 0.0f,
+    1.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 0.0f,
+    1.0f, 1.0f, 0.0f,
+    0.0f, 1.0f, 0.0f
+  ];
+  br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
+  br_proj = ortho();
+
+  // Paddle state
+  br_px = (SCREEN_W - PADDLE_W) / 2.0;
+
+  // Ball state
+  br_bx = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
+  br_by = PADDLE_Y - 30.0;
+  br_bdx = BALL_SPEED * 0.7;
+  br_bdy = 0.0 - BALL_SPEED;
+
+  // Bricks: 1 = alive, 0 = destroyed
+  br_bricks = [for _ in 0..BRICK_ROWS * BRICK_COLS { 1 }];
+  br_alive = BRICK_ROWS * BRICK_COLS;
+
+  // Brick colors per row
+  br_colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
+  br_colors_g = [0.2, 0.6, 0.8, 0.9, 0.5];
+  br_colors_b = [0.2, 0.1, 0.2, 0.3, 0.9];
+
+  br_last = ticks();
+  br_lives = 3;
+  br_won = false;
+
+  graphics::gl_disable(graphics::GL_DEPTH_TEST);
+
+  for _ in 0..1000000 {
+    if !graphics::gl_poll_events() { break; }
+    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
+
+    // Delta time
+    br_now = ticks();
+    br_dt = (br_now - br_last) as float / 1000000.0;
+    br_last = br_now;
+    if br_dt > 0.05 { br_dt = 0.05; }  // cap to prevent tunneling
+
+    if !br_won && br_lives > 0 {
+      // ── Input ──────────────────────────────────────────────────
+      if graphics::gl_key_pressed(graphics::KEY_LEFT) || graphics::gl_key_pressed(graphics::KEY_A) {
+        br_px -= PADDLE_SPEED * br_dt;
+      }
+      if graphics::gl_key_pressed(graphics::KEY_RIGHT) || graphics::gl_key_pressed(graphics::KEY_D) {
+        br_px += PADDLE_SPEED * br_dt;
+      }
+      if br_px < 0.0 { br_px = 0.0; }
+      if br_px > SCREEN_W - PADDLE_W { br_px = SCREEN_W - PADDLE_W; }
+
+      // ── Ball movement ──────────────────────────────────────────
+      br_bx += br_bdx * br_dt;
+      br_by += br_bdy * br_dt;
+
+      // Wall bounces
+      if br_bx < 0.0 { br_bx = 0.0; br_bdx = abs(br_bdx); }
+      if br_bx > SCREEN_W - BALL_SIZE { br_bx = SCREEN_W - BALL_SIZE; br_bdx = 0.0 - abs(br_bdx); }
+      if br_by < 0.0 { br_by = 0.0; br_bdy = abs(br_bdy); }
+
+      // Paddle collision
+      if br_bdy > 0.0
+        && br_by + BALL_SIZE >= PADDLE_Y
+        && br_by + BALL_SIZE <= PADDLE_Y + PADDLE_H
+        && br_bx + BALL_SIZE >= br_px
+        && br_bx <= br_px + PADDLE_W
+      {
+        br_bdy = 0.0 - abs(br_bdy);
+        // Angle based on where ball hits paddle
+        br_hit = (br_bx + BALL_SIZE / 2.0 - br_px) / PADDLE_W;
+        br_bdx = BALL_SPEED * (br_hit - 0.5) * 1.8;
+        br_by = PADDLE_Y - BALL_SIZE;
+      }
+
+      // Ball fell off bottom
+      if br_by > SCREEN_H {
+        br_lives -= 1;
+        br_bx = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
+        br_by = PADDLE_Y - 30.0;
+        br_bdx = BALL_SPEED * 0.7;
+        br_bdy = 0.0 - BALL_SPEED;
+      }
+
+      // ── Brick collision ────────────────────────────────────────
+      for br_row in 0..BRICK_ROWS {
+        for br_col in 0..BRICK_COLS {
+          br_idx = br_row * BRICK_COLS + br_col;
+          if br_bricks[br_idx] == 1 {
+            br_bkx = (br_col as float) * (BRICK_W + BRICK_PAD) + 12.0;
+            br_bky = (br_row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
+            // AABB overlap test
+            if br_bx + BALL_SIZE > br_bkx
+              && br_bx < br_bkx + BRICK_W
+              && br_by + BALL_SIZE > br_bky
+              && br_by < br_bky + BRICK_H
+            {
+              br_bricks[br_idx] = 0;
+              br_alive -= 1;
+              // Bounce: determine which side was hit
+              br_overlap_x = min(br_bx + BALL_SIZE - br_bkx, br_bkx + BRICK_W - br_bx);
+              br_overlap_y = min(br_by + BALL_SIZE - br_bky, br_bky + BRICK_H - br_by);
+              if br_overlap_x < br_overlap_y {
+                br_bdx = 0.0 - br_bdx;
+              } else {
+                br_bdy = 0.0 - br_bdy;
+              }
+            }
+          }
+        }
+      }
+
+      if br_alive == 0 { br_won = true; }
+    }
+
+    // ── Render ─────────────────────────────────────────────────────
+    graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
+    graphics::gl_use_shader(br_shader);
+
+    // Draw bricks
+    for br_dr in 0..BRICK_ROWS {
+      for br_dc in 0..BRICK_COLS {
+        if br_bricks[br_dr * BRICK_COLS + br_dc] == 1 {
+          br_dx = (br_dc as float) * (BRICK_W + BRICK_PAD) + 12.0;
+          br_dy = (br_dr as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
+          br_mvp = rect_mvp(br_proj, br_dx, br_dy, BRICK_W, BRICK_H);
+          graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
+          graphics::gl_set_uniform_vec3(br_shader, "uColor",
+            br_colors_r[br_dr], br_colors_g[br_dr], br_colors_b[br_dr]);
+          graphics::gl_draw(br_vao, 6);
+        }
+      }
+    }
+
+    // Draw paddle
+    br_mvp = rect_mvp(br_proj, br_px, PADDLE_Y, PADDLE_W, PADDLE_H);
+    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
+    graphics::gl_set_uniform_vec3(br_shader, "uColor", 0.8, 0.8, 0.9);
+    graphics::gl_draw(br_vao, 6);
+
+    // Draw ball
+    br_mvp = rect_mvp(br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE);
+    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
+    graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 1.0, 1.0);
+    graphics::gl_draw(br_vao, 6);
+
+    // Draw lives indicator (small squares in top-right)
+    for br_li in 0..br_lives {
+      br_mvp = rect_mvp(br_proj, SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0);
+      graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
+      graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 0.3, 0.3);
+      graphics::gl_draw(br_vao, 6);
+    }
+
+    graphics::gl_swap_buffers();
+  }
+
+  graphics::gl_destroy_window();
+}

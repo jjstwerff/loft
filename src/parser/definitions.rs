@@ -686,6 +686,15 @@ impl Parser {
                     }
                 }
             }
+            // P115: re-apply name remaps for promoted text arguments in second pass.
+            if !self.first_pass {
+                for (shadow, original) in self.vars.promoted_text_args() {
+                    let orig_name = self.vars.name(original).to_string();
+                    self.vars.remap_name(&orig_name, shadow);
+                    // Mark original as used so test_used doesn't warn.
+                    self.vars.mark_used(original);
+                }
+            }
             self.parse_code();
             // C47.4: reset transient closure state after each function body.
             // Without this, a lambda inside make_adder leaks last_closure_work_var

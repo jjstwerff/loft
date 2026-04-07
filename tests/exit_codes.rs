@@ -24,14 +24,16 @@ fn workspace_root() -> std::path::PathBuf {
 fn warning_only_program_exits_zero() {
     let script = workspace_root().join("tests/scripts/46-caveats.loft");
     let out = Command::new(loft_bin())
+        .arg("--interpret")
         .arg(&script)
         .current_dir(workspace_root())
         .output()
         .expect("failed to invoke loft binary");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
-        "expected exit 0 for warnings-only program, got {:?}; stdout={stdout:?}",
+        "expected exit 0 for warnings-only program, got {:?}; stdout={stdout:?}; stderr={stderr:?}",
         out.status.code()
     );
     assert!(
@@ -48,6 +50,7 @@ fn parse_error_exits_nonzero() {
     let path = dir.join("loft_l7_test_parse_error.loft");
     std::fs::write(&path, "fn main() { x = 1\n").expect("write temp file");
     let out = Command::new(loft_bin())
+        .arg("--interpret")
         .arg(&path)
         .current_dir(workspace_root())
         .output()

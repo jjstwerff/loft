@@ -9,6 +9,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::checked_conversions)]
 
 #[cfg(feature = "mmap")]
 use mmap_storage::file::Storage as MmapStorage;
@@ -57,6 +58,12 @@ pub struct Store {
     pub generation: u32,
     /// A14.1: when true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
+    /// Bytecode position that allocated this store (via OpDatabase).
+    /// Used for diagnostics when a store is leaked at program exit.
+    pub created_at: u32,
+    /// Bytecode position of the last significant operation on this store
+    /// (OpCopyRecord, OpFreeRef skip, ref_count change, etc.).
+    pub last_op_at: u32,
 }
 
 impl Debug for Store {
@@ -118,6 +125,8 @@ impl Store {
             free: true,
             locked: false,
             borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
             free_root: 0,
             generation: 0,
         };
@@ -153,6 +162,8 @@ impl Store {
             free_root: 0,
             generation: 0,
             borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
         };
         if init {
             store.init();
@@ -447,6 +458,8 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             generation: self.generation,
             borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
         }
     }
 
@@ -468,6 +481,8 @@ impl Store {
             free_root: 0,
             generation: self.generation,
             borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
         }
     }
 
@@ -490,6 +505,8 @@ impl Store {
             free_root: self.free_root,
             generation: self.generation,
             borrowed: true,
+            created_at: 0,
+            last_op_at: 0,
         }
     }
 
@@ -839,10 +856,21 @@ impl Store {
 
     // ---- End of LLRB free-space tree -----------------------------------------
 
+    /// P64: checked offset calculation — `rec * 8 + fld` using u64 to detect overflow.
+    #[inline]
+    fn checked_offset(rec: u32, fld: u32) -> isize {
+        let off = u64::from(rec) * 8 + u64::from(fld);
+        assert!(
+            off <= isize::MAX as u64,
+            "Store offset overflow: rec={rec} fld={fld}"
+        );
+        off as isize
+    }
+
     #[inline]
     pub fn addr<T>(&self, rec: u32, fld: u32) -> &T {
         debug_assert!(
-            rec as isize * 8 + fld as isize + std::mem::size_of::<T>() as isize
+            Self::checked_offset(rec, fld) + std::mem::size_of::<T>() as isize
                 <= self.size as isize * 8,
             "Store read out of bounds: rec={rec} fld={fld} size={} store_size={}",
             std::mem::size_of::<T>(),
@@ -852,8 +880,13 @@ impl Store {
         // rec=0 and rec=1 are special (store header / primary record).
         #[cfg(debug_assertions)]
         if rec > 1 && fld > 0 {
-            let rec_header =
-                unsafe { std::ptr::read_unaligned(self.ptr.add(rec as usize * 8).cast::<i32>()) };
+            let rec_header = unsafe {
+                std::ptr::read_unaligned(
+                    self.ptr
+                        .add(Self::checked_offset(rec, 0) as usize)
+                        .cast::<i32>(),
+                )
+            };
             let rec_size = rec_header.unsigned_abs() as isize * 8;
             debug_assert!(
                 (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,
@@ -861,7 +894,7 @@ impl Store {
             );
         }
         unsafe {
-            let off = self.ptr.offset(rec as isize * 8 + fld as isize).cast::<T>();
+            let off = self.ptr.offset(Self::checked_offset(rec, fld)).cast::<T>();
             off.as_mut().expect("Reference")
         }
     }
@@ -870,7 +903,7 @@ impl Store {
     pub fn addr_mut<T>(&mut self, rec: u32, fld: u32) -> &mut T {
         debug_assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
         debug_assert!(
-            rec as isize * 8 + fld as isize + std::mem::size_of::<T>() as isize
+            Self::checked_offset(rec, fld) + std::mem::size_of::<T>() as isize
                 <= self.size as isize * 8,
             "Store write out of bounds: rec={rec} fld={fld} size={} store_size={}",
             std::mem::size_of::<T>(),
@@ -878,8 +911,13 @@ impl Store {
         );
         #[cfg(debug_assertions)]
         if rec > 1 && fld > 0 {
-            let rec_header =
-                unsafe { std::ptr::read_unaligned(self.ptr.add(rec as usize * 8).cast::<i32>()) };
+            let rec_header = unsafe {
+                std::ptr::read_unaligned(
+                    self.ptr
+                        .add(Self::checked_offset(rec, 0) as usize)
+                        .cast::<i32>(),
+                )
+            };
             let rec_size = rec_header.unsigned_abs() as isize * 8;
             debug_assert!(
                 (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,
@@ -888,7 +926,7 @@ impl Store {
         }
         assert!(!self.locked, "Write to locked store at rec={rec} fld={fld}");
         unsafe {
-            let off = self.ptr.offset(rec as isize * 8 + fld as isize).cast::<T>();
+            let off = self.ptr.offset(Self::checked_offset(rec, fld)).cast::<T>();
             off.as_mut().expect("Reference")
         }
     }

@@ -82,6 +82,10 @@ impl Parser {
             for wt in self.vars.work_texts() {
                 ls.insert(0, v_set(wt, Value::Text(String::new())));
             }
+            // P115: copy text arguments into promoted shadow locals at function entry.
+            for (shadow, original) in self.vars.promoted_text_args() {
+                ls.insert(0, v_set(shadow, Value::Var(original)));
+            }
             for r in self.vars.work_references() {
                 if !self.vars.is_argument(r)
                     && self.vars.tp(r).depend().is_empty()
@@ -133,6 +137,10 @@ impl Parser {
             // release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
             // P58: detect variables that remain Unknown(0) after the second pass.
             // These are names from the first pass that were never resolved — likely typos.
+            // Note: `known_var_or_type()` in objects.rs already emits "Unknown variable"
+            // during expression parsing for variables with Unknown type or undefined status.
+            // This post-parse check catches the complementary case: variables that were
+            // assigned (is_defined) but whose type remained Unknown after both passes.
             if !self.first_pass {
                 let n_vars = self.vars.next_var();
                 for v_nr in 0..n_vars {
@@ -463,6 +471,8 @@ use a separate collection or add after the loop"
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
+        // P58: check RHS of assignment for unresolved variables.
+        self.known_var_or_type(code);
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
         }
@@ -503,7 +513,26 @@ use a separate collection or add after the loop"
         }
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
-            self.assign_text(code, &s_type, to, op, var_nr);
+            // P115: auto-promote text argument to local String on first mutation.
+            let effective_var = if self.first_pass
+                && var_nr != u16::MAX
+                && self.vars.is_argument(var_nr)
+                && !self.vars.is_const_param(var_nr)
+                && (op == "=" || op == "+=")
+            {
+                let name = self.vars.name(var_nr).to_string();
+                let shadow = self.vars.add_variable(
+                    &format!("__tp_{name}"),
+                    &Type::Text(Vec::new()),
+                    &mut self.lexer,
+                );
+                self.vars.set_promoted_from(shadow, var_nr);
+                self.vars.remap_name(&name, shadow);
+                shadow
+            } else {
+                var_nr
+            };
+            self.assign_text(code, &s_type, to, op, effective_var);
             return Type::Void;
         }
         if self.assign_refvar_text(code, f_type, &s_type, op, var_nr) {

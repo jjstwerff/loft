@@ -111,7 +111,10 @@ fn print_help() {
         "  --format <file>               format file in-place (use - to read stdin/write stdout)"
     );
     println!("  --format-check <file>         exit 1 if file is not in canonical format");
-    println!("  --native                      compile to native Rust via rustc and run");
+    println!(
+        "  --interpret                   run in interpreter/bytecode mode (native is default)"
+    );
+    println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
     println!("  --native-emit [out.rs]        write generated Rust source and exit");
@@ -1125,7 +1128,7 @@ fn main() {
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
     let mut format_mode: Option<(&'static str, String)> = None;
-    let mut native_mode = false;
+    let mut native_mode = true;
     let mut native_release = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -1176,6 +1179,8 @@ fn main() {
             let path = argv.get(i).cloned().unwrap_or_default();
             i += 1;
             format_mode = Some(("check", path));
+        } else if a == "--interpret" || a == "--bytecode" {
+            native_mode = false;
         } else if a == "--native" {
             native_mode = true;
         } else if a == "--native-release" {
@@ -1208,7 +1213,7 @@ fn main() {
                 .is_some_and(|s| s == "--native" || s == "--no-warnings")
             {
                 if argv[i] == "--native" {
-                    native_mode = true;
+                    // Note: --tests forces interpreter mode; this is a no-op.
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
                 }
@@ -1219,6 +1224,7 @@ fn main() {
                 i += 1;
             }
             tests_dir = Some(path);
+            native_mode = false; // test runner uses interpreter
         } else if a == "--no-warnings" {
             no_warnings = true;
         } else if a == "--check" || a == "check" {
@@ -1298,6 +1304,8 @@ fn main() {
                 lib_dirs.push(abs_src);
             }
             tests_dir = Some(test_target);
+            // Test runner uses the interpreter internally.
+            native_mode = false;
         } else if a == "install" {
             let arg = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                 i += 1;
@@ -1497,6 +1505,14 @@ fn main() {
                             }
                         }
                     }
+                    // Auto-add lib/ subdirectory for package imports.
+                    let lib_dir = search.join("lib");
+                    if lib_dir.is_dir() {
+                        let ls = lib_dir.to_string_lossy().to_string();
+                        if !lib_dirs.contains(&ls) {
+                            lib_dirs.push(ls);
+                        }
+                    }
                     break;
                 }
                 if !search.pop() {
@@ -1506,6 +1522,17 @@ fn main() {
         }
     }
 
+    // Canonicalize library paths so relative --lib dirs resolve correctly
+    // regardless of working directory changes during parsing.
+    let lib_dirs: Vec<String> = lib_dirs
+        .into_iter()
+        .map(|d| {
+            std::fs::canonicalize(&d)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&d))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
     p.parse_dir(&(dir + "default"), true, false).unwrap();
@@ -1523,6 +1550,11 @@ fn main() {
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
+    // Set source_dir for the source_dir() built-in.
+    state.database.source_dir = std::path::Path::new(&abs_file)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     compile::byte_code(&mut state, &mut p.data);
     // A7.2: load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
@@ -1639,6 +1671,23 @@ fn main() {
             }
         }
         return;
+    }
+
+    // Check rustc availability; fall back to interpreter if not found.
+    if native_mode && native_emit.is_none() {
+        if let Err(e) = std::process::Command::new("rustc")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!("Warning: rustc not found, falling back to interpreter mode");
+            } else {
+                eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+            }
+            native_mode = false;
+        }
     }
 
     // Native codegen pipeline: --native or --native-emit
@@ -1911,18 +1960,42 @@ fn main() {
 
     let main_nr = p.data.def_nr("n_main");
     if main_nr == u32::MAX {
-        // No main() — run all zero-parameter user functions (test_* style).
+        // No main() — wrap each zero-parameter user function in a synthetic
+        // main() that calls it. This ensures proper scope cleanup: stores
+        // allocated by struct-returning functions are freed when the caller's
+        // variables go out of scope, before the leak check runs.
+        let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);
             if def.name.starts_with("n_")
                 && !def.name.starts_with("n___lambda_")
                 && matches!(def.def_type, data::DefType::Function)
                 && def.attributes.is_empty()
+                && matches!(def.returned, data::Type::Void)
                 && !def.position.file.starts_with("default/")
             {
                 let name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-                state.execute(name, &p.data);
+                test_names.push(name.to_string());
             }
+        }
+        // Build a single main() that calls all test functions in sequence.
+        // This gives each call a proper scope for store cleanup.
+        let mut calls = String::new();
+        for name in &test_names {
+            calls.push_str(name);
+            calls.push_str("();\n");
+        }
+        if !calls.is_empty() {
+            let wrapper = format!("fn main() {{\n{calls}}}");
+            let mut wp = parser::Parser::new();
+            wp.data = p.data;
+            wp.database = state.database;
+            wp.parse_str(&wrapper, "test_wrapper", false);
+            scopes::check(&mut wp.data);
+            state.database = wp.database;
+            compile::byte_code(&mut state, &mut wp.data);
+            p.data = wp.data;
+            state.execute_argv("main", &p.data, &[]);
         }
     } else if std::env::var("LOFT_LOG").is_ok() {
         let config = log_config::LogConfig::from_env();
@@ -1933,7 +2006,13 @@ fn main() {
         }
     } else {
         state.execute_argv("main", &p.data, &user_args);
+        // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
+        // causing execute_argv to return. Resume until the program finishes.
+        while state.database.frame_yield {
+            state.resume();
+        }
     }
+    state.check_store_leaks();
     if state.database.had_fatal {
         std::process::exit(1);
     }

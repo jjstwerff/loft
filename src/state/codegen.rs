@@ -37,13 +37,12 @@ impl State {
         }
         let is_empty_stub =
             matches!(&stack.data.def(def_nr).code, Value::Block(bl) if bl.operators.is_empty());
-        for a in 0..stack.data.def(def_nr).attributes.len() as u16 {
-            let n = &stack.data.def(def_nr).attributes[a as usize].name;
-            let v = stack.function.var(n);
-            if v != u16::MAX {
-                stack.function.set_stack_pos(v, stack.position);
-                stack.position += size(stack.function.tp(v), &Context::Argument);
-            }
+        // P115: use arguments() instead of names map lookup — the names map may
+        // redirect promoted text parameters to shadow locals.
+        let args = stack.function.arguments();
+        for v in &args {
+            stack.function.set_stack_pos(*v, stack.position);
+            stack.position += size(stack.function.tp(*v), &Context::Argument);
         }
         let start = self.code_pos;
         self.arguments = stack.position;
@@ -961,6 +960,34 @@ impl State {
             // T1.8c: tuple destructuring `(q1, q2) = expr` — when an element
             // is Type::Reference, deep-copy the record to avoid aliasing.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
+        } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+            && let Value::Call(fn_nr, _) = value
+            && stack.data.def(*fn_nr).name.starts_with("n_")
+            && stack.data.def(*fn_nr).code != Value::Null
+        {
+            // P117: when the callee has no visible Reference params, the
+            // caller and callee share __ref_N's store. No deep copy needed
+            // since OpAppendVector in handle_field already deep-copies vector
+            // field data into the struct's store during construction.
+            let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
+                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+            });
+            if !has_ref_params {
+                self.generate(value, stack, false);
+                // Suppress OpFreeRef for __ref_N to prevent double-free —
+                // the caller now owns this store.
+                if let Value::Call(_, args) = value {
+                    for arg in args {
+                        if let Value::Var(wv) = arg {
+                            if stack.function.name(*wv).starts_with("__ref_") {
+                                stack.function.set_skip_free(*wv);
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
+            }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
@@ -985,6 +1012,31 @@ impl State {
 
     /// First-assignment reference copy from a Call(OpCopyRecord, ...).
     fn gen_set_first_ref_copy(&mut self, stack: &mut Stack, d_nr: u32, value: &Value) {
+        // O-B2: if the source is a call to a function with no Reference parameters,
+        // the returned store is always fresh — adopt it directly instead of deep copying.
+        // This eliminates both the copy overhead and the store leak.
+        if let Value::Call(_, args) = value
+            && !args.is_empty()
+            && let Value::Call(inner_nr, _) = &args[0]
+            && matches!(
+                stack.data.def(*inner_nr).returned,
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            let has_ref_params = stack
+                .data
+                .def(*inner_nr)
+                .attributes
+                .iter()
+                .any(|a| matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _)));
+            if !has_ref_params {
+                // Safe: function has no Reference params, cannot return an aliased store.
+                // Generate just the inner call — its result DbRef becomes v's value.
+                self.generate(&args[0], stack, false);
+                return;
+            }
+        }
+        // Fallback: allocate fresh store + deep copy (source store may alias a parameter).
         stack.add_op("OpConvRefFromNull", self);
         stack.add_op("OpDatabase", self);
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
@@ -995,6 +1047,19 @@ impl State {
 
     /// First-assignment reference copy from another variable of the same type.
     fn gen_set_first_ref_var_copy(&mut self, stack: &mut Stack, v: u16, src: u16, d_nr: u32) {
+        // O-B1: last-use move — if source is only read once (this assignment),
+        // transfer the DbRef instead of deep copying. Skip the source's OpFreeRef.
+        if stack.function.uses(src) == 1
+            && !stack.function.is_argument(src)
+            && !stack.function.is_captured(src)
+        {
+            let src_pos = stack.position - stack.function.stack(src);
+            stack.add_op("OpVarRef", self);
+            self.code_add(src_pos);
+            stack.position += size_of::<crate::keys::DbRef>() as u16;
+            stack.function.set_skip_free(src);
+            return;
+        }
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
         stack.add_op("OpDatabase", self);
@@ -1025,6 +1090,27 @@ impl State {
         let copy_val = Value::Call(
             copy_nr,
             vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+        );
+        self.generate(&copy_val, stack, false);
+    }
+
+    /// First-assignment reference from a function call — deep copy to prevent aliasing.
+    /// Sets the high bit on the type parameter to signal OpCopyRecord to free the
+    /// source store after copying (issue #120 — prevents callee store leak).
+    fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
+        let tp_nr = stack.data.def(d_nr).known_type;
+        stack.add_op("OpConvRefFromNull", self);
+        stack.add_op("OpDatabase", self);
+        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(tp_nr);
+        let copy_nr = stack.data.def_nr("OpCopyRecord");
+        // TODO: High bit = free source store after copy.
+        // Currently disabled because freeing the source store causes
+        // corruption when the store is reused in a loop (issue #120).
+        let tp_with_free = i32::from(tp_nr);
+        let copy_val = Value::Call(
+            copy_nr,
+            vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
         );
         self.generate(&copy_val, stack, false);
     }
