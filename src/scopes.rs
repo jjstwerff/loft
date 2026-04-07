@@ -659,9 +659,17 @@ impl Scopes {
                 // declared return type.  When a closure escapes via implicit return,
                 // the block result type may lack the dep that was propagated to the
                 // function's declared return type (vectors.rs:704-711).
-                let in_ret = tp.depend().contains(&v)
-                    || data.def(self.d_nr).returned.depend().contains(&v)
-                    || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
+                // Check if variable v is part of the return value.
+                // At function scope exit (to_scope == 1), tp is the function's
+                // declared return type whose depend() contains ATTRIBUTE indices,
+                // not variable numbers. Only check ret_var's deps (which are
+                // variable numbers) to avoid false matches (issue #120).
+                let in_ret = if to_scope == 1 {
+                    ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v)
+                } else {
+                    tp.depend().contains(&v)
+                        || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v)
+                };
                 let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
