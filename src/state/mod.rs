@@ -1359,12 +1359,22 @@ impl State {
             // P117: validate all stores are freed at program exit.
             // Free the stack store first (it's always store 0).
             self.database.allocations[0].free = true;
+            let mut leaked = Vec::new();
             for (s_nr, s) in self.database.allocations.iter().enumerate() {
                 if !s.free {
-                    eprintln!(
-                        "Warning: store {s_nr} not freed at program exit (possible resource leak)"
-                    );
+                    leaked.push(format!(
+                        "{}(created:{}, last_op:{}, refs:{})",
+                        s_nr, s.created_at, s.last_op_at, s.ref_count
+                    ));
                 }
+            }
+            if !leaked.is_empty() {
+                let msg = format!(
+                    "Stores not freed at program exit: {} (possible resource leak)",
+                    leaked.join(", ")
+                );
+                // TODO: make this a debug_assert once all store leaks are fixed.
+                eprintln!("Warning: {msg}");
             }
         }
     }

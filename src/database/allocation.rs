@@ -43,6 +43,9 @@ impl Stores {
         let store = &mut self.allocations[slot as usize];
         assert!(store.free, "Allocating a used store");
         store.free = false;
+        store.ref_count = 1;
+        store.created_at = 0;
+        store.last_op_at = 0;
         let rec = if size == u32::MAX {
             0
         } else {
@@ -97,16 +100,24 @@ impl Stores {
             }
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
-        debug_assert!(!self.allocations[al as usize].free, "Double free store");
-        // S36: clear the lock before marking free.  When a function with a `const`
-        // reference parameter auto-locks the store at entry, it may not unlock before
-        // returning (the auto-lock is inserted by the parser but no matching unlock is
-        // emitted).  If the store is then freed while still locked, `find_free_slot`
-        // will select the slot for reuse and `database_named` will call `init()` on it,
-        // which panics: "Write to locked store".  Freeing a store implicitly ends its
-        // ownership, so the lock is moot and must be cleared here.
-        self.allocations[al as usize].unlock();
-        self.allocations[al as usize].free = true;
+        // Issue #120: decrement reference count. Only free when it reaches 0.
+        // Multiple variables may alias the same store through const borrowing.
+        let store = &mut self.allocations[al as usize];
+        if store.ref_count > 1 {
+            store.ref_count -= 1;
+            if std::env::var("LOFT_STORE_LOG").is_ok() {
+                eprintln!(
+                    "[store] decref store={al} ref_count={} (created_at={}, last_op={})",
+                    store.ref_count, store.created_at, store.last_op_at
+                );
+            }
+            return;
+        }
+        store.ref_count = 0;
+        debug_assert!(!store.free, "Double free store");
+        // S36: clear the lock before marking free.
+        store.unlock();
+        store.free = true;
         // S29 (P1-R4 M4-b): mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
         self.set_free_bit(al);

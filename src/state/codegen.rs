@@ -1075,6 +1075,8 @@ impl State {
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
+    /// Sets the high bit on the type parameter to signal OpCopyRecord to free the
+    /// source store after copying (issue #120 — prevents callee store leak).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
@@ -1082,9 +1084,13 @@ impl State {
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
+        // TODO: High bit = free source store after copy.
+        // Currently disabled because freeing the source store causes
+        // corruption when the store is reused in a loop (issue #120).
+        let tp_with_free = i32::from(tp_nr);
         let copy_val = Value::Call(
             copy_nr,
-            vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
+            vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
         );
         self.generate(&copy_val, stack, false);
     }

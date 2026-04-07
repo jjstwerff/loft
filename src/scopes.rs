@@ -199,54 +199,19 @@ impl Scopes {
             Value::Var(ov) => Value::Var(*self.var_mapping.get(ov).unwrap_or(ov)),
             Value::Set(ov, value) => self.scan_set(*ov, value, function, data),
             Value::Loop(lp) => {
-                // Issue #120: find Reference/Vector/Text variables first
-                // assigned inside if blocks in this loop body and pre-init
-                // them at the CURRENT scope (before entering the loop scope).
-                // Without this, scan_if hoists them to the loop scope, and
-                // free_vars at loop-body exit frees them per-iteration —
-                // causing use-after-free when the return value's store is
-                // shared with a const-borrowed argument.
-                let mut loop_pre_inits: Vec<u16> = Vec::new();
-                for op in &lp.operators {
-                    self.find_first_ref_vars(op, function, &mut loop_pre_inits);
-                }
-                let mut pre_init_ops: Vec<Value> = Vec::new();
-                for &v in &loop_pre_inits {
-                    // Only hoist Reference/Vector variables, not Text.
-                    // Text variables inside loops are safe to free per-iteration.
-                    // Reference variables may alias outer stores through const
-                    // borrowing and must survive loop iterations.
-                    if !self.var_scope.contains_key(&v)
-                        && matches!(
-                            function.tp(v),
-                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                        )
-                    {
-                        self.var_scope.insert(v, self.scope);
-                        self.var_order.push(v);
-                        pre_init_ops.push(v_set(v, Value::Null));
-                    }
-                }
-
                 let scope = self.enter_scope();
                 self.loops.push(scope);
                 function.mark_loop_scope(scope);
                 let ls = self.convert(lp, function, data);
                 self.loops.pop();
                 self.exit_scope();
-                let loop_value = Value::Loop(Box::new(Block {
+                Value::Loop(Box::new(Block {
                     operators: ls,
                     result: Type::Void,
                     name: lp.name,
                     scope,
                     var_size: 0,
-                }));
-                if pre_init_ops.is_empty() {
-                    loop_value
-                } else {
-                    pre_init_ops.push(loop_value);
-                    Value::Insert(pre_init_ops)
-                }
+                }))
             }
             Value::If(test, t_val, f_val) => self.scan_if(test, t_val, f_val, function, data),
             Value::Break(lv) => {
