@@ -1356,6 +1356,14 @@ impl State {
         if !self.database.frame_yield {
             self.call_stack.pop();
             self.database.parallel_ctx = None;
+            // P117: validate all stores are freed at program exit.
+            // Free the stack store first (it's always store 0).
+            self.database.allocations[0].free = true;
+            for (s_nr, s) in self.database.allocations.iter().enumerate() {
+                if !s.free {
+                    eprintln!("Warning: store {s_nr} not freed at program exit (possible resource leak)");
+                }
+            }
         }
     }
 
