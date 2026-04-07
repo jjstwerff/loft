@@ -1975,6 +1975,11 @@ fn main() {
         }
     } else {
         state.execute_argv("main", &p.data, &user_args);
+        // FY.3: native desktop frame loop — gl_swap_buffers sets frame_yield,
+        // causing execute_argv to return. Resume until the program finishes.
+        while state.database.frame_yield {
+            state.resume();
+        }
     }
     if state.database.had_fatal {
         std::process::exit(1);
