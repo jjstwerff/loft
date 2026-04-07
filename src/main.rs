@@ -111,7 +111,8 @@ fn print_help() {
         "  --format <file>               format file in-place (use - to read stdin/write stdout)"
     );
     println!("  --format-check <file>         exit 1 if file is not in canonical format");
-    println!("  --native                      compile to native Rust via rustc and run");
+    println!("  --interpret                   run in interpreter/bytecode mode (native is default)");
+    println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
     println!("  --native-emit [out.rs]        write generated Rust source and exit");
@@ -1125,7 +1126,7 @@ fn main() {
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
     let mut format_mode: Option<(&'static str, String)> = None;
-    let mut native_mode = false;
+    let mut native_mode = true;
     let mut native_release = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
@@ -1176,6 +1177,8 @@ fn main() {
             let path = argv.get(i).cloned().unwrap_or_default();
             i += 1;
             format_mode = Some(("check", path));
+        } else if a == "--interpret" || a == "--bytecode" {
+            native_mode = false;
         } else if a == "--native" {
             native_mode = true;
         } else if a == "--native-release" {
@@ -1208,7 +1211,7 @@ fn main() {
                 .is_some_and(|s| s == "--native" || s == "--no-warnings")
             {
                 if argv[i] == "--native" {
-                    native_mode = true;
+                    // Note: --tests forces interpreter mode; this is a no-op.
                 } else if argv[i] == "--no-warnings" {
                     no_warnings = true;
                 }
@@ -1219,6 +1222,7 @@ fn main() {
                 i += 1;
             }
             tests_dir = Some(path);
+            native_mode = false; // test runner uses interpreter
         } else if a == "--no-warnings" {
             no_warnings = true;
         } else if a == "--check" || a == "check" {
@@ -1298,6 +1302,8 @@ fn main() {
                 lib_dirs.push(abs_src);
             }
             tests_dir = Some(test_target);
+            // Test runner uses the interpreter internally.
+            native_mode = false;
         } else if a == "install" {
             let arg = if argv.get(i).is_some_and(|s| !s.starts_with('-')) {
                 i += 1;
@@ -1497,6 +1503,14 @@ fn main() {
                             }
                         }
                     }
+                    // Auto-add lib/ subdirectory for package imports.
+                    let lib_dir = search.join("lib");
+                    if lib_dir.is_dir() {
+                        let ls = lib_dir.to_string_lossy().to_string();
+                        if !lib_dirs.contains(&ls) {
+                            lib_dirs.push(ls);
+                        }
+                    }
                     break;
                 }
                 if !search.pop() {
@@ -1506,6 +1520,17 @@ fn main() {
         }
     }
 
+    // Canonicalize library paths so relative --lib dirs resolve correctly
+    // regardless of working directory changes during parsing.
+    let lib_dirs: Vec<String> = lib_dirs
+        .into_iter()
+        .map(|d| {
+            std::fs::canonicalize(&d)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&d))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
     let mut p = parser::Parser::new();
     p.lib_dirs = lib_dirs;
     p.parse_dir(&(dir + "default"), true, false).unwrap();
@@ -1639,6 +1664,23 @@ fn main() {
             }
         }
         return;
+    }
+
+    // Check rustc availability; fall back to interpreter if not found.
+    if native_mode && native_emit.is_none() {
+        if let Err(e) = std::process::Command::new("rustc")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eprintln!("Warning: rustc not found, falling back to interpreter mode");
+            } else {
+                eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+            }
+            native_mode = false;
+        }
     }
 
     // Native codegen pipeline: --native or --native-emit
