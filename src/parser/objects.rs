@@ -1220,8 +1220,8 @@ impl Parser {
                     let pos = self
                         .database
                         .position(self.data.def(td_nr).known_type, field);
-                    let tp_nr = self.data.def(self.data.type_def_nr(content)).known_type;
-                    let vec_tp = self.database.vector(tp_nr);
+                    let elem_tp = self.data.def(self.data.type_def_nr(content)).known_type;
+                    let vec_tp = self.database.vector(elem_tp);
                     let field_ref = self.cl(
                         "OpGetField",
                         &[
@@ -1232,7 +1232,7 @@ impl Parser {
                     );
                     list.push(self.cl(
                         "OpAppendVector",
-                        &[field_ref, value.clone(), Value::Int(i32::from(tp_nr))],
+                        &[field_ref, value.clone(), Value::Int(i32::from(elem_tp))],
                     ));
                 } else {
                     list.push(value.clone());

@@ -1006,16 +1006,15 @@ fn check_ref_leaks(
             continue; // ownership transferred to caller
         }
         if let Type::Reference(_, dep) = function.tp(v) {
-            if dep.is_empty() && !ret_deps.contains(&v) && !freed.contains(&v) {
-                panic!(
-                    "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
-                     '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
-                     This is likely a scope-registration bug: the variable was registered \
-                     in an inner block scope that is not reachable from function-exit cleanup.",
-                    function.name(v),
-                    fn_name
-                );
-            }
+            assert!(
+                !dep.is_empty() || ret_deps.contains(&v) || freed.contains(&v),
+                "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
+                 '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
+                 This is likely a scope-registration bug: the variable was registered \
+                 in an inner block scope that is not reachable from function-exit cleanup.",
+                function.name(v),
+                fn_name
+            );
             // P117: warn about variables with deps that are only text-return work refs.
             // These deps are spurious (struct copies the text), but OpFreeRef is still
             // skipped, causing a store leak at runtime.

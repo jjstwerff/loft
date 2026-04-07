@@ -168,6 +168,8 @@ impl Stores {
         // const parameter borrowing, the first FreeRef frees the store.
         // Subsequent accesses from aliased variables should not panic.
         // The proper fix is store reference counting; for now, tolerate this.
+        // Clippy: return is intentional — early exit from the function.
+        #[allow(clippy::needless_return)]
         if self.allocations[db.store_nr as usize].free {
             return;
         }

@@ -273,6 +273,10 @@ pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
 ///
 /// Functions already registered by `native::init()` are skipped — their
 /// stubs were never created by `register_native_stubs`.
+///
+/// # Panics
+/// Panics if a symbol is found via dlsym but the library used `loft_register_v1`
+/// (indicating a registration bug — issue #119).
 #[cfg(feature = "native-extensions")]
 pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
     // Phase 1: resolve any missing symbols via dlsym.
@@ -318,18 +322,14 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         // Resolve via dlsym (no locks held).
         for sym in to_resolve {
             if let Some(ptr) = try_dlsym(&sym) {
-                if has_v1 {
-                    // The library used loft_register_v1 but didn't register
-                    // this symbol — this is a registration bug (issue #119).
-                    // The dlsym fallback would find a raw C-ABI version with
-                    // the wrong signature, causing heap corruption or segfault.
-                    panic!(
-                        "native symbol '{}' was not registered via loft_register_v1 \
-                         but was found via dlsym. This is a registration bug — \
-                         add reg!(b\"{}\", <fn>) to loft_register_v1.",
-                        sym, sym
-                    );
-                }
+                // The library used loft_register_v1 but didn't register
+                // this symbol — this is a registration bug (issue #119).
+                assert!(
+                    !has_v1,
+                    "native symbol '{sym}' was not registered via loft_register_v1 \
+                     but was found via dlsym. This is a registration bug — \
+                     add reg!(b\"{sym}\", <fn>) to loft_register_v1.",
+                );
                 let mut rg = NATIVE_REGISTRY
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
