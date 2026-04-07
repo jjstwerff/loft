@@ -391,6 +391,32 @@ impl Scopes {
         if self.var_scope.contains_key(&v) && *value == Value::Null {
             return Value::Insert(Vec::new());
         }
+        // When the assignment is from a function call whose callee has visible
+        // Reference parameters, codegen will deep-copy the result into a fresh
+        // store.  The variable is then independent — clear its dep so
+        // get_free_vars emits OpFreeRef for it.
+        if let Type::Reference(d_nr, ref dep) = function.tp(v).clone() {
+            if !dep.is_empty() {
+                let is_deep_copied_call = match value {
+                    Value::Call(fn_nr, _) => {
+                        let def = data.def(*fn_nr);
+                        def.name.starts_with("n_")
+                            && def.code != Value::Null
+                            && def.attributes.iter().any(|a| {
+                                !a.hidden
+                                    && matches!(
+                                        a.typedef,
+                                        Type::Reference(_, _) | Type::Enum(_, true, _)
+                                    )
+                            })
+                    }
+                    _ => false,
+                };
+                if is_deep_copied_call {
+                    function.set_type(v, Type::Reference(d_nr, vec![]));
+                }
+            }
+        }
         // remember the scope of the variable
         let mut depend = Vec::new();
         for d in function.tp(v).depend() {
