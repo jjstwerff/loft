@@ -196,25 +196,35 @@ Guard `code != Value::Null` excludes native/stub functions (P118 fix).
 
 ---
 
-### 117. Struct-returning functions leak the callee's store after deep copy
+### 117. Struct-returning functions with text params leak stores
 
-**Severity:** Medium — stores accumulate linearly with struct-returning calls.
+**Severity:** Medium — stores accumulate for functions like `file()`.
 
-**Symptom:** Each call to a struct-returning function (e.g. `make_point()`)
-allocates a store in the callee that is never freed.  The `in_ret` check in
-`scopes.rs:662` prevents `OpFreeRef` on the return variable.  After the caller
-deep-copies via `OpCopyRecord`, the source store is orphaned.
+**Symptom:** `f = file("path")` leaks store because `f`'s type has
+`dep=[__ref_1]` (text-return work variable). Scopes.rs sees non-empty
+deps and skips OpFreeRef, treating `f` as a borrowed reference.
 
-**Reproducer:** Run any program with many struct-returning calls and observe
-store count growing via `LOFT_STORE_LOG=1`.
+**Root cause:** `call_dependencies` / `resolve_deps` propagates deps
+from text-return work variables (`__ref_N`) into the struct return type.
+The File struct COPIES the text into its store (OpSetText deep copy),
+so the dep is spurious — but the dep system doesn't distinguish copies
+from shared references.
 
-**Fix path:** O-B2 (return store adoption) fixes this for functions without
-Reference parameters by adopting the store instead of copying.  For functions
-WITH Reference parameters, the source store after OpCopyRecord must be explicitly
-freed — requires preserving the source DbRef across the copy or adding an
-`OpMoveRecord` variant.
+**Affected tests:** `file_write_error`, `file_exists_true/false`,
+`file_debug` — all fail with "Database N not correctly freed".
 
-**Files:** `src/state/codegen.rs` (`gen_set_first_ref_copy`)
+**Attempted fix:** Filtering `__ref_N` deps in `get_free_vars` fixed
+the file tests but caused "Double free" in `issue_84_merge_sort` —
+the filter was too broad, removing genuine deps for recursive structs.
+
+**Correct fix path:** Modify `call_dependencies` / `resolve_deps` in
+`src/parser/mod.rs:1709-1750` to NOT propagate deps from `RefVar(Text)`
+parameters into `Reference` return types. The struct's text fields are
+copies, not shared references. Requires distinguishing text-copy deps
+from genuine reference deps at the type propagation level, not at the
+freeing level.
+
+**Files:** `src/parser/mod.rs` (`resolve_deps`, `call_dependencies`)
 
 ---
 
