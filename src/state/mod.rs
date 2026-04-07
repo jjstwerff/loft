@@ -1373,7 +1373,8 @@ impl State {
                     "Stores not freed at program exit: {} (possible resource leak)",
                     leaked.join(", ")
                 );
-                // TODO: make this a debug_assert once all store leaks are fixed.
+                debug_assert!(false, "{msg}");
+                #[cfg(not(debug_assertions))]
                 eprintln!("Warning: {msg}");
             }
         }
