@@ -1255,6 +1255,23 @@ impl Parser {
                     exp_tp.show(&self.data, &self.vars)
                 );
             }
+            // Issue #120: when a Reference field is initialized from a function
+            // call, the callee's return store is orphaned after OpCopyRecord.
+            // Capture the call result in a work_ref variable so scopes.rs
+            // emits OpFreeRef for it automatically at end of scope.
+            // Mark as inline_ref so the null-init uses OpNullRefSentinel
+            // (no store allocation) — PutRef overwrites it with the call result.
+            // Guard with !first_pass so the work_ref counter stays consistent
+            // across passes (the Call node may not exist on pass 1).
+            if !self.first_pass
+                && matches!(td, Type::Reference(_, _))
+                && matches!(value, Value::Call(_, _))
+            {
+                let w = self.vars.work_refs(&exp_tp, &mut self.lexer);
+                self.vars.mark_inline_ref(w);
+                list.push(v_set(w, value.clone()));
+                *value = Value::Var(w);
+            }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));
         }
     }

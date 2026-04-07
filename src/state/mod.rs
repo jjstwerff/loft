@@ -1380,7 +1380,11 @@ impl State {
                 format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
             };
             let msg = format!("{count} stores not freed at program exit: {preview}");
-            eprintln!("Warning: {msg}");
+            if cfg!(debug_assertions) {
+                panic!("{msg}");
+            } else {
+                eprintln!("Warning: {msg}");
+            }
         }
     }
 
