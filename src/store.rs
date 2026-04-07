@@ -58,10 +58,6 @@ pub struct Store {
     pub generation: u32,
     /// A14.1: when true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
-    /// Issue #120: reference count for this store. Incremented by OpDatabase/adoption,
-    /// decremented by OpFreeRef. Only freed when it reaches 0. Prevents use-after-free
-    /// when multiple variables alias the same store through const borrowing.
-    pub ref_count: u32,
     /// Bytecode position that allocated this store (via OpDatabase).
     /// Used for diagnostics when a store is leaked at program exit.
     pub created_at: u32,
@@ -129,7 +125,6 @@ impl Store {
             free: true,
             locked: false,
             borrowed: false,
-            ref_count: 1,
             created_at: 0,
             last_op_at: 0,
             free_root: 0,
@@ -167,7 +162,6 @@ impl Store {
             free_root: 0,
             generation: 0,
             borrowed: false,
-            ref_count: 1,
             created_at: 0,
             last_op_at: 0,
         };
@@ -464,7 +458,6 @@ impl Store {
             free_root: 0, // workers never claim/delete; no free tree needed
             generation: self.generation,
             borrowed: false,
-            ref_count: 1,
             created_at: 0,
             last_op_at: 0,
         }
@@ -488,7 +481,6 @@ impl Store {
             free_root: 0,
             generation: self.generation,
             borrowed: false,
-            ref_count: 1,
             created_at: 0,
             last_op_at: 0,
         }
@@ -513,7 +505,6 @@ impl Store {
             free_root: self.free_root,
             generation: self.generation,
             borrowed: true,
-            ref_count: 1,
             created_at: 0,
             last_op_at: 0,
         }

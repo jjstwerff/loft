@@ -1363,8 +1363,8 @@ impl State {
             for (s_nr, s) in self.database.allocations.iter().enumerate() {
                 if !s.free {
                     leaked.push(format!(
-                        "{}(created:{}, last_op:{}, refs:{})",
-                        s_nr, s.created_at, s.last_op_at, s.ref_count
+                        "{}(created:{}, last_op:{})",
+                        s_nr, s.created_at, s.last_op_at
                     ));
                 }
             }

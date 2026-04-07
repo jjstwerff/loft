@@ -43,7 +43,6 @@ impl Stores {
         let store = &mut self.allocations[slot as usize];
         assert!(store.free, "Allocating a used store");
         store.free = false;
-        store.ref_count = 1;
         store.created_at = 0;
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
@@ -100,20 +99,7 @@ impl Stores {
             }
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
-        // Issue #120: decrement reference count. Only free when it reaches 0.
-        // Multiple variables may alias the same store through const borrowing.
         let store = &mut self.allocations[al as usize];
-        if store.ref_count > 1 {
-            store.ref_count -= 1;
-            if std::env::var("LOFT_STORE_LOG").is_ok() {
-                eprintln!(
-                    "[store] decref store={al} ref_count={} (created_at={}, last_op={})",
-                    store.ref_count, store.created_at, store.last_op_at
-                );
-            }
-            return;
-        }
-        store.ref_count = 0;
         debug_assert!(!store.free, "Double free store");
         // S36: clear the lock before marking free.
         store.unlock();
