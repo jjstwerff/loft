@@ -147,7 +147,8 @@ enum ArgT {
     F64,
     Bool,
     Text,
-    Ref, // DbRef — struct, vector, collection handle
+    Ref, // DbRef — struct reference (rec/pos point to the struct)
+    Vec, // DbRef — vector reference (indirect: dereference rec/pos to get data record)
 }
 
 /// Mirror of `loft_ffi::LoftStr` — `#[repr(C)]` so layout matches.
@@ -221,12 +222,12 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
             Type::Text(_) => ArgT::Text,
             Type::Enum(_, false, _) => ArgT::I32, // simple enum tag
             Type::Reference(_, _)
-            | Type::Vector(_, _)
             | Type::Enum(_, true, _)
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Spacial(_, _, _) => ArgT::Ref,
+            Type::Vector(_, _) => ArgT::Vec,
             _ => return None,
         };
         params.push(t);
@@ -241,12 +242,12 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
         Type::Text(_) => Some(ArgT::Text),
         Type::Enum(_, false, _) => Some(ArgT::I32),
         Type::Reference(_, _)
-        | Type::Vector(_, _)
         | Type::Enum(_, true, _)
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _) => Some(ArgT::Ref),
+        Type::Vector(_, _) => Some(ArgT::Vec),
         _ => return None,
     };
     Some(NativeSig { params, ret })
@@ -304,9 +305,31 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         drop(reg_guard);
         drop(stub_guard);
 
+        // Check if any library used loft_register_v1 (i.e. registry is non-empty).
+        // If so, dlsym fallback is a registration bug — the library chose
+        // the registration protocol, so all its symbols should be registered.
+        let has_v1 = {
+            let rg = NATIVE_REGISTRY
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            rg.as_ref().is_some_and(|r| !r.is_empty())
+        };
+
         // Resolve via dlsym (no locks held).
         for sym in to_resolve {
             if let Some(ptr) = try_dlsym(&sym) {
+                if has_v1 {
+                    // The library used loft_register_v1 but didn't register
+                    // this symbol — this is a registration bug (issue #119).
+                    // The dlsym fallback would find a raw C-ABI version with
+                    // the wrong signature, causing heap corruption or segfault.
+                    panic!(
+                        "native symbol '{}' was not registered via loft_register_v1 \
+                         but was found via dlsym. This is a registration bug — \
+                         add reg!(b\"{}\", <fn>) to loft_register_v1.",
+                        sym, sym
+                    );
+                }
                 let mut rg = NATIVE_REGISTRY
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -422,6 +445,19 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
             ArgT::Ref => {
                 let r = *stores.get::<crate::keys::DbRef>(stack);
                 ArgVal::Ref(r.store_nr, r.rec, r.pos)
+            }
+            ArgT::Vec => {
+                // Vector refs are indirect: the DbRef on the stack points to
+                // a location that *contains* the vector data record number.
+                // Dereference to get the actual vector record, matching how
+                // vector::length_vector works (get_int(rec, pos) -> vec_rec).
+                let r = *stores.get::<crate::keys::DbRef>(stack);
+                if r.rec == 0 || r.pos == 0 {
+                    ArgVal::Ref(r.store_nr, 0, 0)
+                } else {
+                    let vec_rec = stores.store(&r).get_int(r.rec, r.pos) as u32;
+                    ArgVal::Ref(r.store_nr, vec_rec, 0)
+                }
             }
         };
         args.push(val);
@@ -556,6 +592,16 @@ fn dispatch_call(
     ret: Option<ArgT>,
 ) {
     use crate::keys::Str;
+
+    // Normalize Vec → Ref for dispatch matching. The vector dereference
+    // already happened during argument extraction, so Vec and Ref have
+    // identical calling conventions at this point.
+    let norm_params: Vec<ArgT> = params
+        .iter()
+        .map(|t| if *t == ArgT::Vec { ArgT::Ref } else { *t })
+        .collect();
+    let params = &norm_params[..];
+    let ret = ret.map(|t| if t == ArgT::Vec { ArgT::Ref } else { t });
 
     // Set up thread-local so FFI callbacks can reach the stores.
     // Uses a guard to ensure cleanup even if a native call panics.
@@ -712,6 +758,11 @@ fn dispatch_call(
             let f: extern "C" fn(i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
             stores.put(stack, f(i32_arg!(0), i32_arg!(1)));
         }
+        // (i32, f64) -> i32
+        (&[ArgT::I32, ArgT::F64], Some(ArgT::I32)) => {
+            let f: extern "C" fn(i32, f64) -> i32 = unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(i32_arg!(0), f64_arg!(1)));
+        }
         // (i32, i32) -> void
         (&[ArgT::I32, ArgT::I32], None) => {
             let f: extern "C" fn(i32, i32) = unsafe { std::mem::transmute(fp) };
@@ -753,11 +804,10 @@ fn dispatch_call(
         }
         // (i32, text, f64) -> f64  (e.g. gl_measure_text: i32, text, f32→f32)
         (&[ArgT::I32, ArgT::Text, ArgT::F64], Some(ArgT::F64)) => {
-            let f: extern "C" fn(i32, *const u8, usize, f32) -> f32 =
+            let f: extern "C" fn(i32, *const u8, usize, f64) -> f64 =
                 unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
-            let result = f64::from(f(i32_arg!(0), p, l, f64_arg!(2) as f32));
-            stores.put(stack, result);
+            stores.put(stack, f(i32_arg!(0), p, l, f64_arg!(2)));
         }
         // (f64) -> f64
         (&[ArgT::F64], Some(ArgT::F64)) => {
@@ -1000,6 +1050,19 @@ fn dispatch_call(
             let (p, l) = text_arg!(0);
             push_loft_ref(stores, stack, f(ls, p, l));
         }
+        // (I32, Ref, I32) -> I32  (e.g. scalar + vector + scalar)
+        (&[ArgT::I32, ArgT::Ref, ArgT::I32], Some(ArgT::I32)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(i32, LoftStore, LoftRef, i32) -> i32 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(i32_arg!(0), ls, ref_arg!(1), i32_arg!(2)));
+        }
+        // (I32, Ref, I32) -> void
+        (&[ArgT::I32, ArgT::Ref, ArgT::I32], None) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(i32, LoftStore, LoftRef, i32) = unsafe { std::mem::transmute(fp) };
+            f(i32_arg!(0), ls, ref_arg!(1), i32_arg!(2));
+        }
         // ── F32 patterns ─────────────────────────────────────────────
         // (F32) -> F32
         (&[ArgT::F32], Some(ArgT::F32)) => {
@@ -1054,6 +1117,198 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
             f(i32_arg!(0), p, l, f64_arg!(2), f64_arg!(3), f64_arg!(4));
+        }
+        // ── Graphics/canvas patterns ──────────────────────────────────
+        // (Ref, I32, I32) -> I32  (e.g. get_pixel)
+        (&[ArgT::Ref, ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32) -> i32 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2)));
+        }
+        // (Ref, I32, I32, I32) -> void  (e.g. set_pixel, blend_pixel)
+        (&[ArgT::Ref, ArgT::I32, ArgT::I32, ArgT::I32], None) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3));
+        }
+        // (Ref, I32, I32, I32, I32) -> void  (e.g. hline, vline, draw_circle)
+        (&[ArgT::Ref, ArgT::I32, ArgT::I32, ArgT::I32, ArgT::I32], None) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                i32_arg!(2),
+                i32_arg!(3),
+                i32_arg!(4),
+            );
+        }
+        // (Ref, I32, I32, I32, I32, I32) -> void  (e.g. fill_rect, draw_line)
+        (
+            &[
+                ArgT::Ref,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+            ],
+            None,
+        ) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                i32_arg!(2),
+                i32_arg!(3),
+                i32_arg!(4),
+                i32_arg!(5),
+            );
+        }
+        // (Ref, I32, I32, I32, I32, I32, I32) -> void  (e.g. fill_triangle)
+        (
+            &[
+                ArgT::Ref,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+            ],
+            None,
+        ) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                i32_arg!(2),
+                i32_arg!(3),
+                i32_arg!(4),
+                i32_arg!(5),
+                i32_arg!(6),
+            );
+        }
+        // (Ref, I32, I32, I32, I32, I32, I32, I32) -> void
+        (
+            &[
+                ArgT::Ref,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+            ],
+            None,
+        ) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32, i32, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                i32_arg!(2),
+                i32_arg!(3),
+                i32_arg!(4),
+                i32_arg!(5),
+                i32_arg!(6),
+                i32_arg!(7),
+            );
+        }
+        // (Ref, I32, I32, I32, I32, I32, I32, I32, I32, I32) -> void  (e.g. draw_bezier)
+        (
+            &[
+                ArgT::Ref,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+            ],
+            None,
+        ) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, i32, i32, i32, i32, i32, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                i32_arg!(2),
+                i32_arg!(3),
+                i32_arg!(4),
+                i32_arg!(5),
+                i32_arg!(6),
+                i32_arg!(7),
+                i32_arg!(8),
+                i32_arg!(9),
+            );
+        }
+        // (Text, I32, I32, Ref) -> Bool  (e.g. save_png_raw)
+        (&[ArgT::Text, ArgT::I32, ArgT::I32, ArgT::Ref], Some(ArgT::Bool)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, *const u8, usize, i32, i32, LoftRef) -> bool =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(0);
+            stores.put(stack, f(ls, p, l, i32_arg!(1), i32_arg!(2), ref_arg!(3)));
+        }
+        // (Ref, Text) -> Bool  — already covered at line ~1003
+        // (Ref, I32, I32) -> I32  (e.g. gl_upload_canvas)
+        // Already covered by (Ref, I32, I32) -> I32 above
+        //
+        // (I32, Text, F64, Ref) -> I32  (e.g. rasterize_text_into)
+        (&[ArgT::I32, ArgT::Text, ArgT::F64, ArgT::Ref], Some(ArgT::I32)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, i32, *const u8, usize, f64, LoftRef) -> i32 =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(1);
+            stores.put(stack, f(ls, i32_arg!(0), p, l, f64_arg!(2), ref_arg!(3)));
+        }
+        // (Ref, I32, Text, F64, I32, I32, I32) -> void  (e.g. draw_text)
+        (
+            &[
+                ArgT::Ref,
+                ArgT::I32,
+                ArgT::Text,
+                ArgT::F64,
+                ArgT::I32,
+                ArgT::I32,
+                ArgT::I32,
+            ],
+            None,
+        ) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, *const u8, usize, f64, i32, i32, i32) =
+                unsafe { std::mem::transmute(fp) };
+            let (p, l) = text_arg!(2);
+            f(
+                ls,
+                ref_arg!(0),
+                i32_arg!(1),
+                p,
+                l,
+                f64_arg!(3),
+                i32_arg!(4),
+                i32_arg!(5),
+                i32_arg!(6),
+            );
         }
         _ => {
             let sig_str: Vec<String> = params.iter().map(|t| format!("{t:?}")).collect();

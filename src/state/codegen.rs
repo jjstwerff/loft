@@ -965,29 +965,9 @@ impl State {
             && stack.data.def(*fn_nr).name.starts_with("n_")
             && stack.data.def(*fn_nr).code != Value::Null
         {
-            // P117: exclude hidden return-store buffers from ref param check.
-            let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
-                !a.hidden
-                    && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            });
-            if !has_ref_params {
-                self.generate(value, stack, false);
-                // P117: f and __ref_N share the same store (callee writes into
-                // __ref_N's buffer). Now that f has empty deps (hidden attrs
-                // filtered), scopes.rs emits OpFreeRef(f). Suppress the
-                // scopes-generated OpFreeRef(__ref_N) to prevent double-free.
-                if let Value::Call(_, args) = value {
-                    for arg in args {
-                        if let Value::Var(wv) = arg {
-                            if stack.function.name(*wv).starts_with("__ref_") {
-                                stack.function.set_skip_free(*wv);
-                            }
-                        }
-                    }
-                }
-            } else {
-                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
-            }
+            // Always deep-copy struct returns to prevent use-after-free
+            // when the callee's store is freed after return (issue #120).
+            self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
@@ -1018,11 +998,17 @@ impl State {
         if let Value::Call(_, args) = value
             && !args.is_empty()
             && let Value::Call(inner_nr, _) = &args[0]
-            && matches!(stack.data.def(*inner_nr).returned, Type::Reference(_, _) | Type::Enum(_, true, _))
+            && matches!(
+                stack.data.def(*inner_nr).returned,
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            )
         {
-            let has_ref_params = stack.data.def(*inner_nr).attributes.iter().any(|a| {
-                matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            });
+            let has_ref_params = stack
+                .data
+                .def(*inner_nr)
+                .attributes
+                .iter()
+                .any(|a| matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _)));
             if !has_ref_params {
                 // Safe: function has no Reference params, cannot return an aliased store.
                 // Generate just the inner call — its result DbRef becomes v's value.
@@ -1089,13 +1075,7 @@ impl State {
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
-    fn gen_set_first_ref_call_copy(
-        &mut self,
-        stack: &mut Stack,
-        v: u16,
-        value: &Value,
-        d_nr: u32,
-    ) {
+    fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
         stack.add_op("OpDatabase", self);

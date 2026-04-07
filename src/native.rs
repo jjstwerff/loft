@@ -56,6 +56,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
     ("n_program_directory", n_program_directory),
+    ("n_source_dir", n_source_dir),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
     #[cfg(feature = "threading")]
@@ -409,6 +410,13 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
     let v_v = stores.store_mut(&v_v).addr_mut::<String>(v_v.rec, v_v.pos);
     let new_value = { Stores::os_executable(v_v) };
     stores.put(stack, new_value);
+}
+
+/// Return the directory of the main source file being executed.
+fn n_source_dir(stores: &mut Stores, stack: &mut DbRef) {
+    stores.scratch.clear();
+    stores.scratch.push(stores.source_dir.clone());
+    stores.put(stack, Str::new(&stores.scratch[0]));
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.

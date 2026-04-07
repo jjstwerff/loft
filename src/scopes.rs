@@ -199,19 +199,54 @@ impl Scopes {
             Value::Var(ov) => Value::Var(*self.var_mapping.get(ov).unwrap_or(ov)),
             Value::Set(ov, value) => self.scan_set(*ov, value, function, data),
             Value::Loop(lp) => {
+                // Issue #120: find Reference/Vector/Text variables first
+                // assigned inside if blocks in this loop body and pre-init
+                // them at the CURRENT scope (before entering the loop scope).
+                // Without this, scan_if hoists them to the loop scope, and
+                // free_vars at loop-body exit frees them per-iteration —
+                // causing use-after-free when the return value's store is
+                // shared with a const-borrowed argument.
+                let mut loop_pre_inits: Vec<u16> = Vec::new();
+                for op in &lp.operators {
+                    self.find_first_ref_vars(op, function, &mut loop_pre_inits);
+                }
+                let mut pre_init_ops: Vec<Value> = Vec::new();
+                for &v in &loop_pre_inits {
+                    // Only hoist Reference/Vector variables, not Text.
+                    // Text variables inside loops are safe to free per-iteration.
+                    // Reference variables may alias outer stores through const
+                    // borrowing and must survive loop iterations.
+                    if !self.var_scope.contains_key(&v)
+                        && matches!(
+                            function.tp(v),
+                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                        )
+                    {
+                        self.var_scope.insert(v, self.scope);
+                        self.var_order.push(v);
+                        pre_init_ops.push(v_set(v, Value::Null));
+                    }
+                }
+
                 let scope = self.enter_scope();
                 self.loops.push(scope);
                 function.mark_loop_scope(scope);
                 let ls = self.convert(lp, function, data);
                 self.loops.pop();
                 self.exit_scope();
-                Value::Loop(Box::new(Block {
+                let loop_value = Value::Loop(Box::new(Block {
                     operators: ls,
                     result: Type::Void,
                     name: lp.name,
                     scope,
                     var_size: 0,
-                }))
+                }));
+                if pre_init_ops.is_empty() {
+                    loop_value
+                } else {
+                    pre_init_ops.push(loop_value);
+                    Value::Insert(pre_init_ops)
+                }
             }
             Value::If(test, t_val, f_val) => self.scan_if(test, t_val, f_val, function, data),
             Value::Break(lv) => {
@@ -662,7 +697,21 @@ impl Scopes {
                 let in_ret = tp.depend().contains(&v)
                     || data.def(self.d_nr).returned.depend().contains(&v)
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
+                // Issue #120: when a function implicitly returns a Call that
+                // produces a Reference result, the work-ref variable holding
+                // that result is not identified by returned_var.  If ret_var
+                // is unknown and the function returns a Reference/Vector,
+                // suppress FreeRef for __ref_N work variables — they hold the
+                // return value and must survive until the caller reads it.
+                let is_ret_work_ref = ret_var == u16::MAX
+                    && to_scope == 1
+                    && matches!(
+                        data.def(self.d_nr).returned,
+                        Type::Reference(_, _) | Type::Vector(_, _)
+                    )
+                    && function.name(v).starts_with("__ref_");
+                let emit =
+                    dep.is_empty() && !in_ret && !is_ret_work_ref && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \
@@ -794,7 +843,9 @@ impl Scopes {
                     self.find_first_ref_vars(op, function, result);
                 }
             }
-            // Do NOT recurse into Value::Loop.
+            // Do NOT recurse into Value::Loop — loop-interior Reference
+            // variables are handled by the Loop handler in scan() which
+            // pre-inits them at the pre-loop scope (issue #120).
             _ => {}
         }
     }
@@ -996,7 +1047,11 @@ fn check_ref_leaks(
             continue; // ownership transferred to caller
         }
         if let Type::Reference(_, dep) = function.tp(v) {
-            if dep.is_empty() && !ret_deps.contains(&v) && !freed.contains(&v) {
+            // Issue #120: __ref_N work variables in Reference/Vector-returning
+            // functions may deliberately skip FreeRef to avoid use-after-free.
+            let is_ret_work_ref = function.name(v).starts_with("__ref_")
+                && matches!(ret_type, Type::Reference(_, _) | Type::Vector(_, _));
+            if dep.is_empty() && !ret_deps.contains(&v) && !freed.contains(&v) && !is_ret_work_ref {
                 panic!(
                     "[check_ref_leaks] Reference variable '{}' (var_nr={v}) in function \
                      '{}' has no OpFreeRef — it is in scope {scope} but was never freed. \
@@ -1012,8 +1067,10 @@ fn check_ref_leaks(
             if !dep.is_empty()
                 && !ret_deps.contains(&v)
                 && !freed.contains(&v)
-                && dep.iter().all(|d| function.name(*d).starts_with("__ref_")
-                    || function.name(*d).starts_with("__rref_"))
+                && dep.iter().all(|d| {
+                    function.name(*d).starts_with("__ref_")
+                        || function.name(*d).starts_with("__rref_")
+                })
             {
                 eprintln!(
                     "[check_ref_leaks] Warning: Reference variable '{}' (var_nr={v}) in \
@@ -1021,7 +1078,9 @@ fn check_ref_leaks(
                      Store will leak at runtime (P117).",
                     function.name(v),
                     fn_name,
-                    dep.iter().map(|d| function.name(*d).to_string()).collect::<Vec<_>>(),
+                    dep.iter()
+                        .map(|d| function.name(*d).to_string())
+                        .collect::<Vec<_>>(),
                 );
             }
         }

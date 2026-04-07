@@ -111,7 +111,9 @@ fn print_help() {
         "  --format <file>               format file in-place (use - to read stdin/write stdout)"
     );
     println!("  --format-check <file>         exit 1 if file is not in canonical format");
-    println!("  --interpret                   run in interpreter/bytecode mode (native is default)");
+    println!(
+        "  --interpret                   run in interpreter/bytecode mode (native is default)"
+    );
     println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
@@ -1548,6 +1550,11 @@ fn main() {
     }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
+    // Set source_dir for the source_dir() built-in.
+    state.database.source_dir = std::path::Path::new(&abs_file)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     compile::byte_code(&mut state, &mut p.data);
     // A7.2: load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.

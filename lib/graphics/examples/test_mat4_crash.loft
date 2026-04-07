@@ -1,0 +1,24 @@
+struct BigBox {
+    width: integer,
+    height: integer,
+    data: vector<integer>
+}
+
+fn make_big() -> BigBox {
+    d: vector<integer> = [];
+    for i in 0..256 {
+        d += [i];
+    }
+    b = BigBox { width: 16, height: 16, data: d };
+    n = b.data.len();
+    println("inside make_big: data len={n}");
+    b
+}
+
+fn main() {
+    b = make_big();
+    println("w={b.width} h={b.height}");
+    n = b.data.len();
+    println("after return: data len={n}");
+    println("data[0]={b.data[0]} data[255]={b.data[255]}");
+}

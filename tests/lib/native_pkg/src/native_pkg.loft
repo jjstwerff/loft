@@ -1,5 +1,29 @@
-// Native extension test package for A7.2 tests.
-// Declares a function backed by a native Rust implementation.
+// Native extension test package — tests all common FFI patterns.
 
+// Pattern 1: scalar -> scalar
 pub fn ext_add_one(x: integer) -> integer not null;
-#native "n_ext_add_one"
+#native "loft_ext_add_one"
+
+// Pattern 2: vector<integer> -> scalar
+pub fn ext_vec_sum(data: vector<integer>) -> integer not null;
+#native "loft_ext_vec_sum"
+
+// Pattern 3: vector<single> -> scalar
+pub fn ext_vec_sum_f32(data: vector<single>) -> integer not null;
+#native "loft_ext_vec_sum_f32"
+
+// Pattern 4: scalar + vector<integer> -> scalar
+pub fn ext_offset_sum(offset: integer, data: vector<integer>) -> integer not null;
+#native "loft_ext_offset_sum"
+
+// Pattern 5: scalar + vector<integer> + scalar -> scalar
+pub fn ext_sandwich_sum(a: integer, data: vector<integer>, b: integer) -> integer not null;
+#native "loft_ext_sandwich_sum"
+
+// Pattern 6: vector from struct field
+pub fn ext_struct_vec_len(data: vector<integer>) -> integer not null;
+#native "loft_ext_struct_vec_len"
+
+// Pattern 7: vector in loop
+pub fn ext_loop_vec_sum(data: vector<integer>) -> integer not null;
+#native "loft_ext_loop_vec_sum"

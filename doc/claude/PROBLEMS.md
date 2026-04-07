@@ -27,10 +27,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
 | 58 | ~~Silent `Type::Unknown(0)` variable creation on unresolved names~~ | ~~High~~ | **Fixed** — `known_var_or_type` now called on assignment RHS |
 | 60 | ~~No recursion depth limit~~ | ~~Medium~~ | **Fixed** — runtime call depth limit (500) with clear panic |
-| 61 | Native codegen IR parsing panics on unhandled patterns | Medium | N/A — only affects `--native` path (not yet default) |
+| 61 | ~~Native codegen IR parsing panics on unhandled patterns~~ | ~~Medium~~ | **Fixed** — `codegen_runtime.rs` implements all critical opcodes |
 | 64 | ~~Overflow risk in store offset arithmetic~~ | ~~Medium~~ | **Fixed** — `checked_offset()` uses u64 with assert |
 | 66 | ~~Integer cast truncation in vector index/size~~ | ~~Medium~~ | **Fixed** — `checked_vec_pos()`/`checked_vec_cap()` use u64 |
-| 79 | Native codegen: `external` crate reference not resolved (random/FFI) | Low | `--native` only; affects `21-random.loft` |
+| 79 | ~~Native codegen: `external` crate reference not resolved (random/FFI)~~ | ~~Low~~ | **Fixed** — `external` module emitted in generated code via `codegen_runtime` wrappers |
 | 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
 | 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
@@ -49,7 +49,9 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
+| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
+| 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
 ---
 
@@ -316,26 +318,17 @@ is a field on the returned value, not global state.  See WEB_SERVICES.md Approac
 ## Interpreter Robustness
 
 
-### 61. Native codegen IR parsing panics on unhandled patterns
+### 61. Native codegen IR parsing panics on unhandled patterns *(fixed)*
 
-**Severity:** Medium — only affects the `--native` code path, which is not yet the default.
+**Fixed.** All critical opcodes now have implementations in `src/codegen_runtime.rs`:
+`OpDatabase`, `OpNewRecord`, `OpFinishRecord`, `OpFreeRef`, `OpCopyRecord`,
+`OpGetTextSub`, `OpLengthCharacter`, `OpGetFileText`, `OpTruncateFile`,
+`OpInsertVector`, `OpSortVector`, `OpIterate`, `OpStep`, `OpGetRecord`,
+`OpSizeofRef`, `OpFormatDatabase`, and `cr_call_push`/`CallGuard` for stack traces.
 
-**Location:** `src/generation/:1396,1422,1437,1448,1470,1500`
-
-**Symptom:** `panic!("Could not parse {vals:?}")` when the native code generator
-encounters an IR pattern it does not recognise.  This is an exhaustiveness gap in the
-native emitter, not in the interpreter.
-
-**Root cause:** The IR → Rust source emitter has `panic!` catch-alls for value patterns
-that have not been implemented yet.  Adding new IR opcodes or IR value shapes without
-updating the emitter leaves silent coverage gaps that manifest as panics at native
-codegen time (i.e., compile time for the `--native` path, not interpreter runtime).
-
-**Fix path:** When implementing native codegen for a new opcode or value kind (N9 in the
-roadmap), add the corresponding arm to every dispatch site in `generation/`.  An
-exhaustive match (replacing `_ => panic!`) would be cleaner but requires all arms first.
-
-**Effort:** Low per opcode; Medium to reach full coverage (tracked as N9).
+The generated native code uses `use loft::codegen_runtime::*;` to import all
+implementations.  Remaining unimplemented opcodes (parallel blocks, some hash/index
+ops) are low-priority and tracked under N9.
 
 ---
 
@@ -447,14 +440,12 @@ to worry about.
 
 ## Native Codegen Blockers
 
-### 79. `external` crate reference unresolved
+### 79. `external` crate reference unresolved *(fixed)*
 
-**Symptom:** `error[E0433]: failed to resolve: use of unresolved module external` in
-`21-random.loft`.
-
-**Fix path:** The random number extension uses an `external` FFI crate that is not included in
-the native codegen output.  Either bundle the implementation in `codegen_runtime` or emit the
-necessary `extern` block in the generated file.
+**Fixed.** The native codegen now emits a local `mod external` block
+(`src/generation/mod.rs:416-419`) that wraps `codegen_runtime::cr_rand_seed` and
+`cr_rand_int`.  The `#rust` templates in `default/01_code.loft` reference
+`external::rand_seed()` and `external::rand_int()` which resolve to these wrappers.
 
 ---
 
@@ -854,6 +845,106 @@ positive header 0 (should be free)` followed by a crash.
 - `src/parser/vectors.rs` `parse_vector`: added `set_skip_free(elm)` when `is_field = true`.
 
 **Discovered:** Sprint 8 GLB transform test.  **Test:** `/tmp/p109_repro.loft`.
+
+### 119. Native OpenGL programs segfault (heap corruption) *(fixed)*
+
+**Symptom:** Running `02-hello-triangle.loft` or other OpenGL examples in `--interpret`
+mode segfaulted. The crash occurred when calling native functions like
+`loft_gl_upload_vertices` and `loft_gl_set_uniform_mat4`.
+
+**Root cause:** Two interpreter-aware native functions (`n_gl_upload_vertices` and
+`n_gl_set_uniform_mat4`) were registered in `wire_native_fns` under their `n_` prefix
+names, but the `#native` annotations in `.loft` files reference them with the `loft_`
+prefix. When the interpreter looked up `loft_gl_upload_vertices` in the registry, it
+found no match and fell back to `try_dlsym`, which resolved the raw C-ABI version
+(`loft_gl_upload_vertices` — the non-store-aware function taking raw pointers). Calling
+a raw-pointer function with store-based interpreter arguments caused heap corruption and
+segfault.
+
+The `n_`-prefixed functions exist specifically for the interpreter path: they accept
+`LoftStore` + `LoftRef` parameters and use the auto-marshaller to safely access store
+data. The `loft_`-prefixed versions are for the compiled/native path and take raw
+pointers directly.
+
+**Fix:** In `lib/graphics/native/src/lib.rs`, changed two `reg!()` calls to register
+the `n_` implementations under their `loft_` names:
+- `reg!(b"loft_gl_upload_vertices", n_gl_upload_vertices);`
+- `reg!(b"loft_gl_set_uniform_mat4", n_gl_set_uniform_mat4);`
+
+This ensures the auto-marshaller finds the correct store-aware function before the
+`dlsym` fallback is tried.
+
+**Remaining risk:** Verify that the `#native` annotation string for `set_uniform_mat4`
+in `graphics.loft` matches the registered name exactly (`loft_gl_set_mat4` vs
+`loft_gl_set_uniform_mat4` — a potential secondary mismatch). Any future `n_`-prefixed
+functions must also be registered under `loft_` names manually; there is no generic
+prefix-fallback in the symbol lookup.
+
+**Test:** `02-hello-triangle.loft` with `--interpret` — renders 300 frames without
+crash.
+
+### 120. Struct constructor doesn't deep-copy vector fields into struct store
+
+**Symptom:** Vector fields in returned structs are empty (length=0) or contain
+garbage. Causes black textures in GL examples and use-after-free crashes when
+the struct is used inside loops.
+
+**Minimal reproducer:** `lib/graphics/examples/test_mat4_crash.loft`:
+```loft
+struct BigBox {
+    width: integer,
+    height: integer,
+    data: vector<integer>
+}
+fn make_big() -> BigBox {
+    d: vector<integer> = [];
+    for y in 0..4 {
+        for x in 0..4 { d += [x + y * 4]; }
+    }
+    BigBox { width: 4, height: 4, data: d }
+}
+fn main() {
+    b = make_big();
+    println("data len={b.data.len()}");   // prints 0, should be 16
+}
+```
+
+**Also:** `tests/native_loader.rs::vec_from_returned_struct_heavy` — headless test.
+
+**Root cause:** When `BigBox { width: 4, height: 4, data: d }` constructs the
+struct, it allocates a new store (store 2) for the BigBox record and copies the
+scalar fields (`width`, `height`) by value. But the `data` field is a
+`vector<integer>` — the constructor only copies the **vector record pointer** (an
+i32) from the stack store into the struct store. The actual vector data remains
+in the stack store (store 1000/1).
+
+When `make_big()` returns:
+1. The callee's stack is unwound → vector data in the stack store is lost
+2. `gen_set_first_ref_call_copy` deep-copies the struct from store 2 to the
+   caller's store via `OpCopyRecord`
+3. `copy_claims_seq_vector` reads the vector pointer from store 2, but it
+   points to data in the (now-unwound) stack store → `length=0`
+
+Scalar fields survive because they're copied by value. Vector fields are
+pointers that become dangling after stack unwind.
+
+**Blocks:** All OpenGL examples using struct returns with vector fields
+(textured cube, breakout, scene graph). Also `Mat4 { m: vector<float> }` in
+`math::mat4_mul`, `ortho()`, etc.
+
+**Related:** Issue #117 (store leaks) and #119 (native registration).
+
+**Fix direction:** The struct constructor must deep-copy vector field data
+into the struct's own store, not just copy the pointer. This should happen at
+the `FinishRecord` or `SetField` level — when a vector-typed field is assigned,
+the vector data should be `copy_claims_seq_vector`'d from the source store
+into the struct's store.
+
+**Mitigations applied (partial):**
+- Tolerate double-free in `free_ref` (skip already-freed stores)
+- Loop pre-init hoists Reference variables to pre-loop scope
+- `is_ret_work_ref` suppresses FreeRef for `__ref_N` in return path
+- `gen_set_first_ref_call_copy` always deep-copies struct returns
 
 ---
 

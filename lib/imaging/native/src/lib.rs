@@ -101,3 +101,8 @@ pub unsafe extern "C" fn n_save_png(
     let rgb_data = unsafe { std::slice::from_raw_parts(ptr, (expected * 3) as usize) };
     encode_png(path, w, h, rgb_data)
 }
+
+loft_ffi::loft_register! {
+    n_load_png,
+    n_save_png,
+}

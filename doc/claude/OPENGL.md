@@ -1553,3 +1553,28 @@ default = ["opengl"]
 ```
 
 A headless (GLB-only) build needs neither feature.
+
+---
+
+## Known issues
+
+### Store leaks in interpreter mode
+
+Running OpenGL examples with `--interpret` produces store-not-freed warnings on exit:
+```
+Warning: store 1 not freed at program exit (possible resource leak)
+Warning: store 3 not freed at program exit (possible resource leak)
+...
+```
+
+Each render frame allocates temporary stores for intermediate values (vertices,
+matrices, shader uniforms) that are not freed before program exit. This is related
+to issue #117 (struct-returning functions leak callee stores after deep copy) but
+is amplified by the render loop — one or more stores leak per frame.
+
+**Impact:** Informational only. Memory grows over time but is reclaimed on exit.
+Not visible in compiled mode (native codegen uses stack allocation).
+
+**Fix direction:** Track store ownership through the render loop and ensure
+per-frame temporaries are freed. May require the interpreter to recognise
+single-use return stores and free them after consumption.

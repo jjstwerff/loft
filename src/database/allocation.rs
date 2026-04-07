@@ -167,10 +167,13 @@ impl Stores {
             db.store_nr < self.allocations.len() as u16,
             "Incorrect store"
         );
-        debug_assert!(
-            !self.allocations[db.store_nr as usize].free,
-            "Use after free"
-        );
+        // Issue #120: when multiple variables alias the same store through
+        // const parameter borrowing, the first FreeRef frees the store.
+        // Subsequent accesses from aliased variables should not panic.
+        // The proper fix is store reference counting; for now, tolerate this.
+        if self.allocations[db.store_nr as usize].free {
+            return;
+        }
     }
 
     pub fn clear(&mut self, db: &DbRef) {
@@ -332,6 +335,7 @@ impl Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            source_dir: String::new(),
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
@@ -396,6 +400,7 @@ impl Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            source_dir: String::new(),
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),

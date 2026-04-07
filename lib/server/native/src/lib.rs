@@ -270,4 +270,17 @@ pub extern "C" fn n_ws_close(handle: i32) {
     });
 }
 
-// No loft_register_v1 needed — the interpreter finds n_* exports via dlsym.
+loft_ffi::loft_register! {
+    n_tcp_listen,
+    n_tcp_accept,
+    n_tcp_method,
+    n_tcp_path,
+    n_tcp_body,
+    n_tcp_respond,
+    n_tcp_close,
+    n_ws_upgrade,
+    n_ws_recv,
+    n_ws_message,
+    n_ws_send,
+    n_ws_close,
+}

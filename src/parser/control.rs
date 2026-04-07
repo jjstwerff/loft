@@ -257,8 +257,22 @@ impl Parser {
         if self.data.def_type(self.context) != DefType::Generic {
             if let Type::Text(ls) = t {
                 self.text_return(ls);
-            } else if let Type::Reference(_, ls) | Type::Vector(_, ls) = t {
+            } else if let Type::Vector(_, ls) = t {
                 self.ref_return(ls);
+            } else if let Type::Reference(_, ls) = t {
+                // Issue #120: when filter_hidden stripped the deps from a
+                // Reference return type, recover work-ref variables from the
+                // return expression's Call arguments so ref_return can promote
+                // them to hidden parameters (preventing use-after-free).
+                if ls.is_empty() && !l.is_empty() {
+                    let last = &l[l.len() - 1];
+                    let extra = Self::collect_hidden_ref_args(last, &self.data);
+                    if !extra.is_empty() {
+                        self.ref_return(&extra);
+                    }
+                } else {
+                    self.ref_return(ls);
+                }
             }
         }
         tp
@@ -1850,6 +1864,49 @@ impl Parser {
                 }
             }
             self.data.definitions[self.context as usize].returned = Type::Text(dep);
+        }
+    }
+
+    /// Walk a return expression to find work-ref variables passed as hidden
+    /// Reference arguments to struct-returning calls.  Used by `block_result`
+    /// to recover deps that `filter_hidden` stripped from the return type.
+    /// Issue #120: without this, the work-ref stays a local and gets freed
+    /// before the caller reads the return value.
+    fn collect_hidden_ref_args(val: &Value, data: &crate::data::Data) -> Vec<u16> {
+        match val {
+            Value::Call(d_nr, args) => {
+                let mut result = Vec::new();
+                let attrs = &data.def(*d_nr).attributes;
+                for (i, attr) in attrs.iter().enumerate() {
+                    if attr.hidden && matches!(attr.typedef, Type::Reference(_, _)) {
+                        if let Some(Value::Var(v)) = args.get(i) {
+                            result.push(*v);
+                        }
+                    }
+                }
+                result
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last() {
+                    Self::collect_hidden_ref_args(last, data)
+                } else {
+                    vec![]
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last() {
+                    Self::collect_hidden_ref_args(last, data)
+                } else {
+                    vec![]
+                }
+            }
+            Value::Set(_, inner) => Self::collect_hidden_ref_args(inner, data),
+            Value::If(_, t, f) => {
+                let mut r = Self::collect_hidden_ref_args(t, data);
+                r.extend(Self::collect_hidden_ref_args(f, data));
+                r
+            }
+            _ => vec![],
         }
     }
 

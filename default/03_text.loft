@@ -127,3 +127,7 @@ pub fn user_directory(v:  & text = "") -> text;
 // Use to locate assets bundled alongside the program.
 pub fn program_directory(v:  & text = "") -> text;
 #rust"Stores::os_executable_native()"
+// Returns the directory containing the main source file being executed.
+// Use to locate data files relative to the script, regardless of working directory.
+pub fn source_dir() -> text;
+#rust"Stores::source_dir_native()"

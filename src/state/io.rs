@@ -429,6 +429,16 @@ impl State {
             self.free_coroutine(db.rec as usize);
             return;
         }
+        // Issue #120: skip if the store was already freed. This can happen when
+        // multiple variables alias the same store through const parameter
+        // borrowing — the first FreeRef frees it, and subsequent FreeRefs for
+        // aliased variables must be no-ops.
+        if db.store_nr != u16::MAX
+            && (db.store_nr as usize) < self.database.allocations.len()
+            && self.database.allocations[db.store_nr as usize].free
+        {
+            return;
+        }
         #[cfg(not(feature = "wasm"))]
         if db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")

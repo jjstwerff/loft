@@ -1361,7 +1361,9 @@ impl State {
             self.database.allocations[0].free = true;
             for (s_nr, s) in self.database.allocations.iter().enumerate() {
                 if !s.free {
-                    eprintln!("Warning: store {s_nr} not freed at program exit (possible resource leak)");
+                    eprintln!(
+                        "Warning: store {s_nr} not freed at program exit (possible resource leak)"
+                    );
                 }
             }
         }

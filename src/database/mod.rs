@@ -133,6 +133,9 @@ pub struct Stores {
     /// (where the error is logged instead of aborting).  `main.rs` checks this after
     /// execution and exits with code 1 so shell scripts can detect failure.
     pub had_fatal: bool,
+    /// Directory of the main source file being executed.
+    /// Set by `main.rs` after parsing; used by `source_dir()` built-in.
+    pub source_dir: String,
     /// FY.1: When true, the interpreter loop yields back to the caller.
     /// Set by `gl_swap_buffers` in WASM mode; cleared by `resume_frame`.
     pub frame_yield: bool,
@@ -182,6 +185,7 @@ impl Clone for Stores {
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
+            source_dir: String::new(),
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
@@ -438,6 +442,7 @@ impl Stores {
             parallel_ctx: None,
             logger: None,
             had_fatal: false,
+            source_dir: String::new(),
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),

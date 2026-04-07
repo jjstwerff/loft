@@ -864,8 +864,13 @@ impl Store {
         // rec=0 and rec=1 are special (store header / primary record).
         #[cfg(debug_assertions)]
         if rec > 1 && fld > 0 {
-            let rec_header =
-                unsafe { std::ptr::read_unaligned(self.ptr.add(Self::checked_offset(rec, 0) as usize).cast::<i32>()) };
+            let rec_header = unsafe {
+                std::ptr::read_unaligned(
+                    self.ptr
+                        .add(Self::checked_offset(rec, 0) as usize)
+                        .cast::<i32>(),
+                )
+            };
             let rec_size = rec_header.unsigned_abs() as isize * 8;
             debug_assert!(
                 (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,
@@ -890,8 +895,13 @@ impl Store {
         );
         #[cfg(debug_assertions)]
         if rec > 1 && fld > 0 {
-            let rec_header =
-                unsafe { std::ptr::read_unaligned(self.ptr.add(Self::checked_offset(rec, 0) as usize).cast::<i32>()) };
+            let rec_header = unsafe {
+                std::ptr::read_unaligned(
+                    self.ptr
+                        .add(Self::checked_offset(rec, 0) as usize)
+                        .cast::<i32>(),
+                )
+            };
             let rec_size = rec_header.unsigned_abs() as isize * 8;
             debug_assert!(
                 (fld as isize + std::mem::size_of::<T>() as isize) <= rec_size,

@@ -91,4 +91,7 @@ thread_local! {
     static LAST_BODY: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-// No loft_register_v1 needed — the interpreter finds n_* exports via dlsym.
+loft_ffi::loft_register! {
+    n_http_do,
+    n_http_body,
+}

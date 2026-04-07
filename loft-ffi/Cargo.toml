@@ -12,3 +12,5 @@ categories = ["api-bindings"]
 
 [lib]
 name = "loft_ffi"
+
+[dependencies]
