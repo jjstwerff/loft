@@ -1362,9 +1362,7 @@ impl State {
             let mut leaked = Vec::new();
             for (s_nr, s) in self.database.allocations.iter().enumerate() {
                 if !s.free {
-                    leaked.push(format!(
-                        "{}(bc:{})", s_nr, s.created_at
-                    ));
+                    leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
                 }
             }
             if !leaked.is_empty() {
@@ -1372,12 +1370,9 @@ impl State {
                 let preview = if count <= 5 {
                     leaked.join(", ")
                 } else {
-                    format!("{} ... and {} more",
-                        leaked[..5].join(", "), count - 5)
+                    format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
                 };
-                let msg = format!(
-                    "{count} stores not freed at program exit: {preview}"
-                );
+                let msg = format!("{count} stores not freed at program exit: {preview}");
                 debug_assert!(false, "{msg}");
                 #[cfg(not(debug_assertions))]
                 eprintln!("Warning: {msg}");

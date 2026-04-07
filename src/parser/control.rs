@@ -266,21 +266,7 @@ impl Parser {
                 // to promoting ALL non-argument __ref_N work-refs.
                 if ls.is_empty() && !l.is_empty() {
                     let last = &l[l.len() - 1];
-                    let mut extra = Self::collect_hidden_ref_args(last, &self.data);
-                    if extra.is_empty() {
-                        // Fallback: promote any __ref_N that isn't already
-                        // an argument. Covers struct constructors and bare
-                        // variable returns where collect_hidden_ref_args
-                        // doesn't find a Call.
-                        for v in 0..self.vars.count() {
-                            if self.vars.name(v).starts_with("__ref_")
-                                && !self.vars.is_argument(v)
-                                && matches!(self.vars.tp(v), Type::Reference(_, _))
-                            {
-                                extra.push(v);
-                            }
-                        }
-                    }
+                    let extra = Self::collect_hidden_ref_args(last, &self.data);
                     if !extra.is_empty() {
                         self.ref_return(&extra);
                     }
