@@ -829,10 +829,19 @@ pub extern "C" fn loft_gl_upload_canvas(
 ) -> i32 {
     let w = width as u32;
     let h = height as u32;
+    eprintln!(
+        "[gl_upload_canvas] ptr={:?} count={} w={} h={} null={}",
+        data_ptr, data_count, w, h, data_ptr.is_null()
+    );
     if w == 0 || h == 0 || data_count < w * h {
+        eprintln!("[gl_upload_canvas] REJECTED");
         return 0;
     }
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
+    eprintln!(
+        "[gl_upload_canvas] first_pixel=0x{:08x} last_pixel=0x{:08x}",
+        pixels[0], pixels[(w * h - 1) as usize]
+    );
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in (0..h).rev() {
         for x in 0..w {
@@ -843,7 +852,9 @@ pub extern "C" fn loft_gl_upload_canvas(
             rgba.push(((px >> 24) & 0xFF) as u8);  // A
         }
     }
-    unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
+    let tex_id = unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) };
+    eprintln!("[gl_upload_canvas] tex_id={}", tex_id);
+    tex_id as i32
 }
 
 // Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
@@ -974,10 +985,12 @@ loft_ffi::loft_register! {
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
-    match std::fs::read(path) {
+    let result = match std::fs::read(path) {
         Ok(data) => text::load_font_bytes(&data),
         Err(_) => -1,
-    }
+    };
+    eprintln!("[gl_load_font] path='{}' -> {}", path, result);
+    result
 }
 
 /// Measure text width in pixels at the given font size.
@@ -990,7 +1003,9 @@ pub extern "C" fn loft_gl_measure_text(
     size: f64,
 ) -> f64 {
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
-    text::measure_text(font_idx, s, size as f32) as f64
+    let result = text::measure_text(font_idx, s, size as f32) as f64;
+    eprintln!("[gl_measure_text] font={} text='{}' size={} -> {}", font_idx, s, size, result);
+    result
 }
 
 /// Rasterize text into an alpha bitmap.

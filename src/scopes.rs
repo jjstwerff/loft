@@ -662,14 +662,11 @@ impl Scopes {
                 let in_ret = tp.depend().contains(&v)
                     || data.def(self.d_nr).returned.depend().contains(&v)
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                // Issue #120: when a function implicitly returns a Call that
-                // produces a Reference result, the work-ref variable holding
-                // that result is not identified by returned_var.  If ret_var
-                // is unknown and the function returns a Reference/Vector,
-                // suppress FreeRef for __ref_N work variables — they hold the
-                // return value and must survive until the caller reads it.
-                let is_ret_work_ref = ret_var == u16::MAX
-                    && to_scope == 1
+                // Issue #120: suppress FreeRef for __ref_N work variables in
+                // functions that return a Reference/Vector. These variables
+                // may hold data aliased by the return value — freeing them
+                // destroys the data before the caller can read it.
+                let is_ret_work_ref = to_scope == 1
                     && matches!(
                         data.def(self.d_nr).returned,
                         Type::Reference(_, _) | Type::Vector(_, _)
