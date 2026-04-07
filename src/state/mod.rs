@@ -1363,15 +1363,20 @@ impl State {
             for (s_nr, s) in self.database.allocations.iter().enumerate() {
                 if !s.free {
                     leaked.push(format!(
-                        "{}(created:{}, last_op:{})",
-                        s_nr, s.created_at, s.last_op_at
+                        "{}(bc:{})", s_nr, s.created_at
                     ));
                 }
             }
             if !leaked.is_empty() {
-                let msg = format!(
-                    "Stores not freed at program exit: {} (possible resource leak)",
+                let count = leaked.len();
+                let preview = if count <= 5 {
                     leaked.join(", ")
+                } else {
+                    format!("{} ... and {} more",
+                        leaked[..5].join(", "), count - 5)
+                };
+                let msg = format!(
+                    "{count} stores not freed at program exit: {preview}"
                 );
                 debug_assert!(false, "{msg}");
                 #[cfg(not(debug_assertions))]
