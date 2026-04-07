@@ -579,6 +579,9 @@ pub struct Attribute {
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
     primary: bool,
+    /// P117: hidden return-mechanism parameter added by `text_return` or `ref_return`.
+    /// Not a user-declared parameter — should be excluded from dep propagation.
+    pub hidden: bool,
     /// The initial value of this attribute if it is not given.
     pub value: Value,
     /// A constraint expression checked on every field write.
@@ -922,6 +925,7 @@ impl Data {
             init: false,
             nullable: true,
             primary: false,
+            hidden: false,
             value: Value::Null,
             check: Value::Null,
             check_message: Value::Null,

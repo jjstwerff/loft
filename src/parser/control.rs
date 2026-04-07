@@ -1837,6 +1837,8 @@ impl Parser {
                         n,
                         Type::RefVar(Box::new(Type::Text(Vec::new()))),
                     );
+                    // P117: mark as hidden return-mechanism parameter
+                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                     self.vars
@@ -1845,6 +1847,8 @@ impl Parser {
                     let a = self
                         .data
                         .add_attribute(&mut self.lexer, self.context, n, tp.clone());
+                    // P117: mark as hidden return-mechanism parameter
+                    self.data.definitions[self.context as usize].attributes[a].hidden = true;
                     self.vars.become_argument(*v);
                     dep.push(a as u16);
                 }
@@ -1872,6 +1876,8 @@ impl Parser {
                 let a = self
                     .data
                     .add_attribute(&mut self.lexer, self.context, n, ret.clone());
+                // P117: mark as hidden return-mechanism parameter
+                self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
             }

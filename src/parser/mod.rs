@@ -1708,6 +1708,17 @@ impl Parser {
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
         let tp = self.data.def(d_nr).returned.clone();
+        // P117: for Reference returns (structs), filter out hidden return-mechanism
+        // attributes from dep resolution. The struct owns its store independently —
+        // hidden return-store buffers are implementation artifacts.
+        // Text/Vector returns genuinely depend on their hidden work buffers.
+        let attrs = &self.data.def(d_nr).attributes;
+        let filter_hidden = |d: &[u16]| -> Vec<u16> {
+            d.iter()
+                .copied()
+                .filter(|&i| (i as usize) >= attrs.len() || !attrs[i as usize].hidden)
+                .collect()
+        };
         if let Type::Text(d) = tp {
             Type::Text(Self::resolve_deps(types, &d))
         } else if let Type::Vector(to, d) = tp {
@@ -1721,7 +1732,7 @@ impl Parser {
         } else if let Type::Spacial(to, key, d) = tp {
             Type::Spacial(to, key, Self::resolve_deps(types, &d))
         } else if let Type::Reference(to, d) = tp {
-            Type::Reference(to, Self::resolve_deps(types, &d))
+            Type::Reference(to, Self::resolve_deps(types, &filter_hidden(&d)))
         } else {
             tp
         }
