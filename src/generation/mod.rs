@@ -1029,15 +1029,7 @@ extern crate loft;"
                 let elem = Self::vector_elem_rust_type(elem_tp);
                 writeln!(
                     w,
-                    "  eprintln!(\"[native vec extract] {var}: store={{}} rec={{}} pos={{}}\", var_{var}.store_nr, var_{var}.rec, var_{var}.pos);"
-                )?;
-                writeln!(
-                    w,
                     "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_int(var_{var}.rec, var_{var}.pos) as u32;"
-                )?;
-                writeln!(
-                    w,
-                    "  eprintln!(\"[native vec extract] {var}: vec_rec={{}}\", _vr_{var});"
                 )?;
                 writeln!(
                     w,
