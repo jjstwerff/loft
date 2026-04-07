@@ -158,38 +158,13 @@ in the RHS expression, use a work text for the intermediate result.
 
 ---
 
-### 114. `h = h + expr` clears h before reading (partially fixed)
+### 114. ~~`h = h + expr` clears h before reading~~
 
-**Severity:** Medium — partially fixed for plain variables, still broken for
-struct field access inside loops.
+**FIXED** in `src/parser/operators.rs`.
 
-**Current state:** The self-append detection in `src/parser/operators.rs`
-`assign_text` (lines 53–68) correctly identifies `h = h + expr` for plain
-local variables and skips the clear.  But for struct fields like
-`self.field = self.field + expr`, the `to` argument is a `Value::Call`
-(field access), not `Value::Var`, so the detection doesn't match.
-
-**Reproducer:**
-```loft
-struct Builder { text_buf: text }
-fn main() {
-  b = Builder { text_buf: "hello" };
-  b.text_buf = b.text_buf + " world";
-  // Expected: "hello world"
-  // Actual:   " world"
-  assert(b.text_buf == "hello world", "got: '{b.text_buf}'");
-}
-```
-
-**Fix strategy:** Extend the self-append detection to handle the struct field
-case.  When `to` is `Value::Call` (field setter) and the first element of the
-`Insert` list references the same field path, treat as `+=`.  Alternatively,
-always use `+=` for struct field text concatenation, which already works
-correctly (the `+=` path in `assign_text` lines 36–51).
-
-**Test:** Struct field text concat with `= h +` and `+=` produce same result.
-
-**Workaround:** Use `h += expr` instead of `h = h + expr`.
+Self-append detection (line 59-68) and self-reference detection
+(`code_references_var`, line 89) handle both plain variables and struct
+fields.  Verified: `b.buf = b.buf + " world"` produces `"hello world"`.
 
 ---
 
