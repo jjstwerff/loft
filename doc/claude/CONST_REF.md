@@ -159,14 +159,156 @@ if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
 5. Test: function modifying a struct AFTER passing it as const to another
    function sees the mutation — verify correct aliasing semantics
 
+## Phase 2: Auto-const inference — no source changes needed
+
+### The opportunity
+
+Most struct parameters are never mutated but aren't marked `const`.
+Every such parameter is deep-copied unnecessarily.  If the compiler
+can infer that a parameter is never written, it can apply the same
+optimization automatically.
+
+**Examples that benefit immediately (no code changes):**
+- `mat4_mul(a: Mat4, b: Mat4)` — both read-only → no copies
+- `mesh_to_floats(m: Mesh)` — mesh is read-only → no copy
+- `render_frame(scene: Scene, camera: Camera)` — read-only in render loop
+- Any getter/accessor on structs
+
+### The timing problem
+
+The mutation analysis (`find_written_vars()` in `parser/mod.rs:2481`)
+already identifies which variables are written.  But it runs AFTER
+the second pass completes — by then OpCopyRecord has already been
+emitted.
+
+### Solution: use the two-pass design
+
+```
+First pass:   parse function body → type inference (no codegen)
+              → run find_written_vars()
+              → mark unwritten Reference params as auto_const
+Second pass:  parse function body → codegen
+              → gen_set_first_at_tos checks auto_const
+              → skip OpCopyRecord for auto_const params
+```
+
+The first pass already walks the entire function body.  We just add
+the mutation analysis at its end and store the result on the Variable.
+
+### Implementation
+
+#### Step 1: Add `auto_const` flag to Variable
+
+**File:** `src/variables/mod.rs`
+
+```rust
+pub struct Variable {
+    // ... existing fields ...
+    pub auto_const: bool,  // inferred: param never written in function body
+}
+```
+
+Default `false`.  Set to `true` at end of first pass for Reference
+parameters that `find_written_vars()` did not include in its result set.
+
+#### Step 2: Run mutation analysis at end of first pass
+
+**File:** `src/parser/mod.rs`, in `parse_file()` or at the end of
+each function's first-pass parsing.
+
+```rust
+if self.first_pass {
+    let written = self.find_written_vars(&function_body);
+    for param_nr in function_params {
+        if matches!(self.vars.tp(param_nr), Type::Reference(_, _))
+            && !written.contains(&param_nr)
+            && !self.vars.is_argument_mut(param_nr)  // not &T
+        {
+            self.vars.set_auto_const(param_nr, true);
+        }
+    }
+}
+```
+
+#### Step 3: Use auto_const in codegen
+
+**File:** `src/state/codegen.rs`, in `gen_set_first_at_tos`
+
+```rust
+if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+    && (stack.function.is_const_param(v) || stack.function.is_auto_const(v))
+    && let Value::Var(src) = value
+{
+    // Const or auto-const: borrow caller's reference, no deep copy.
+    let src_pos = stack.position - stack.function.stack(*src);
+    stack.add_op("OpVarRef", self);
+    self.code_add(src_pos);
+    return;
+}
+```
+
+### What constitutes a write
+
+`find_written_vars()` already correctly detects:
+
+| Operation | Detected as write? |
+|---|---|
+| `param = value` | Yes |
+| `param.field = value` | Yes (recursively finds `param`) |
+| `param += [elem]` | Yes (vector append operators) |
+| Passing as `&T` to another function | Yes (mutable reference) |
+| Passing as `T` or `const T` | No (value/const — no mutation) |
+| Reading `param.field` | No |
+| Passing to `println("{param}")` | No |
+
+### Scope
+
+This optimization applies to ALL functions automatically — no `const`
+keyword needed.  The explicit `const` keyword remains useful for:
+- Documentation: makes intent clear to the reader
+- Error prevention: catches accidental mutations at compile time
+- Functions where mutation analysis is conservative (e.g., recursion)
+
+### Safety
+
+Same as Phase 1 — the caller's scope outlives the callee, and the
+parameter is provably never written.  The analysis is conservative:
+if `find_written_vars()` can't prove a variable is unwritten (e.g.,
+passed to a function whose body hasn't been analyzed yet), it stays
+in the written set and the copy is kept.
+
+### Risks
+
+- **False positives from `find_written_vars()`:** The analysis may
+  over-report writes (conservative).  This is SAFE — it just means
+  some optimizable cases are missed, never that a written variable
+  is incorrectly skipped.
+- **Cross-function analysis:** Currently per-function only.  A
+  parameter passed to another function as `T` (not `&T`) is not
+  considered written — this is correct because the callee gets a
+  copy.
+- **Recursion:** A function calling itself with a parameter doesn't
+  constitute a write to the parameter.  This is correct.
+
+### Performance estimate
+
+| Codebase area | Functions affected | Copies eliminated |
+|---|---|---|
+| math.loft (`mat4_*`) | ~15 functions | 2-4 Mat4 copies each |
+| mesh.loft (`mesh_to_*`) | ~5 functions | Mesh struct copies |
+| scene.loft (accessors) | ~10 functions | Scene/Node/Material |
+| render.loft (render loop) | 3 functions | Scene + Camera per frame |
+| User game code | All struct-taking functions | Varies |
+
+**Conservative estimate:** 50-80% of all struct parameter copies
+eliminated without any source code changes.
+
 ## Future work
 
-- **O2:** Extend to `const vector<T>` parameters that are indexed but never
-  pushed to — skip the vector store allocation.
-- **O3:** Auto-detect const-ness for non-annotated parameters that are
-  never mutated within the function body (whole-program analysis).
-- **O4:** Native codegen: emit `&T` instead of `T` for const params in
-  generated Rust code.
+- **O4:** Native codegen: emit `&T` instead of `T` for auto-const
+  params in generated Rust code.
+- **O5:** Extend auto-const to vectors: skip store allocation for
+  vectors that are indexed but never pushed to.
 
 ## Related
 
