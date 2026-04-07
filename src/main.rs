@@ -1960,18 +1960,42 @@ fn main() {
 
     let main_nr = p.data.def_nr("n_main");
     if main_nr == u32::MAX {
-        // No main() — run all zero-parameter user functions (test_* style).
+        // No main() — wrap each zero-parameter user function in a synthetic
+        // main() that calls it. This ensures proper scope cleanup: stores
+        // allocated by struct-returning functions are freed when the caller's
+        // variables go out of scope, before the leak check runs.
+        let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);
             if def.name.starts_with("n_")
                 && !def.name.starts_with("n___lambda_")
                 && matches!(def.def_type, data::DefType::Function)
                 && def.attributes.is_empty()
+                && matches!(def.returned, data::Type::Void)
                 && !def.position.file.starts_with("default/")
             {
                 let name = def.name.strip_prefix("n_").unwrap_or(&def.name);
-                state.execute(name, &p.data);
+                test_names.push(name.to_string());
             }
+        }
+        // Build a single main() that calls all test functions in sequence.
+        // This gives each call a proper scope for store cleanup.
+        let mut calls = String::new();
+        for name in &test_names {
+            calls.push_str(name);
+            calls.push_str("();\n");
+        }
+        if !calls.is_empty() {
+            let wrapper = format!("fn main() {{\n{calls}}}");
+            let mut wp = parser::Parser::new();
+            wp.data = p.data;
+            wp.database = state.database;
+            wp.parse_str(&wrapper, "test_wrapper", false);
+            scopes::check(&mut wp.data);
+            state.database = wp.database;
+            compile::byte_code(&mut state, &mut wp.data);
+            p.data = wp.data;
+            state.execute_argv("main", &p.data, &[]);
         }
     } else if std::env::var("LOFT_LOG").is_ok() {
         let config = log_config::LogConfig::from_env();
@@ -1988,6 +2012,7 @@ fn main() {
             state.resume();
         }
     }
+    state.check_store_leaks();
     if state.database.had_fatal {
         std::process::exit(1);
     }

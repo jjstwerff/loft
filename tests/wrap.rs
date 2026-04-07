@@ -864,6 +864,8 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
                 failures.join("; ")
             )));
         }
+        // Check for store leaks after all test functions have run.
+        state.check_store_leaks();
     }
     Ok(())
 }

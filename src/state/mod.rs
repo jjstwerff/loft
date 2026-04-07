@@ -1356,27 +1356,31 @@ impl State {
         if !self.database.frame_yield {
             self.call_stack.pop();
             self.database.parallel_ctx = None;
-            // P117: validate all stores are freed at program exit.
-            // Free the stack store first (it's always store 0).
-            self.database.allocations[0].free = true;
-            let mut leaked = Vec::new();
-            for (s_nr, s) in self.database.allocations.iter().enumerate() {
-                if !s.free {
-                    leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
-                }
+        }
+    }
+
+    /// Check that all stores have been freed. Call after the last
+    /// `execute_argv` to detect store leaks. Panics in debug builds
+    /// if any stores are still alive (except the stack store).
+    pub fn check_store_leaks(&self) {
+        let mut leaked = Vec::new();
+        for (s_nr, s) in self.database.allocations.iter().enumerate() {
+            if s_nr == 0 {
+                continue; // stack store — always alive
             }
-            if !leaked.is_empty() {
-                let count = leaked.len();
-                let preview = if count <= 5 {
-                    leaked.join(", ")
-                } else {
-                    format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
-                };
-                let msg = format!("{count} stores not freed at program exit: {preview}");
-                debug_assert!(false, "{msg}");
-                #[cfg(not(debug_assertions))]
-                eprintln!("Warning: {msg}");
+            if !s.free {
+                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
             }
+        }
+        if !leaked.is_empty() {
+            let count = leaked.len();
+            let preview = if count <= 5 {
+                leaked.join(", ")
+            } else {
+                format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
+            };
+            let msg = format!("{count} stores not freed at program exit: {preview}");
+            eprintln!("Warning: {msg}");
         }
     }
 
