@@ -232,19 +232,25 @@ the filter was too broad, removing genuine deps for recursive structs.
    spurious dep comes from `add_defaults` (caller side), not `ref_return`
    (callee side). The variables in `ref_return`'s `ls` are struct-typed.
 
-**Correct fix path:** The dep at `add_defaults:1797` (`vec![vr]`) serves
-two purposes: (a) keeps work ref alive for null-coalescing patterns where
-the work ref IS the returned store, and (b) spuriously prevents freeing
-for struct returns where the struct COPIES from the work ref. The fix
-must distinguish these: when the callee constructs an independent struct
-(owns its store), the dep should not propagate. When the callee returns
-the work ref's store directly, the dep must stay.
+**Root cause:** The dep at `add_defaults:1797` (`vec![vr]`) is
+load-bearing — removing it causes use-after-free (stack store freed
+during execution) and breaks null-coalescing. The dep keeps the
+return-store work ref alive, which is correct when the function
+returns THROUGH the work ref. But for O-B2 adoption (no-ref-param
+functions), the work ref is unused — the callee's store is adopted
+directly. The dep is only spurious in the O-B2 case.
+
+**Correct fix:** In the O-B2 codegen path (`gen_set_first_at_tos`),
+after adopting the callee's store, emit `OpFreeRef` for the unused
+`__ref_N` work variable. This frees the work ref that was allocated
+by `add_defaults` but never used (O-B2 bypasses it). The dep stays
+in the type system (keeping the broader lifetime model intact), but
+the unused work ref store is explicitly cleaned up.
 
 **Detection:** Runtime warning at program exit (`execute_argv`) and
 compile-time `check_ref_leaks` P117 warning are in place.
 
-**Files:** `src/parser/mod.rs:1797` (`add_defaults`), needs type-level
-support to distinguish copy-from-workref vs is-workref patterns.
+**Files:** `src/state/codegen.rs` (O-B2 adoption path)
 
 ---
 
