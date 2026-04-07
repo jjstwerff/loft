@@ -41,55 +41,33 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
 | 108 | `f#next` initial seek on fresh read handle does not work | Low | Read at least one byte before seeking; use sequential reads |
 | 109 | ~~Struct field reassignment corrupts store when field contains nested vector~~ | ~~High~~ | **Fixed** — `set_skip_free(elm)` in `parse_vector` + `remove_claims` in `copy_record` |
-| 110 | Vector push in for loop produces shifted/garbage values | **High** | Pre-allocate with comprehension, assign by index |
+| 110 | ~~Vector push corrupts sibling struct fields~~ | ~~**High**~~ | **Fixed** — `other_indexes` no longer links plain vector fields |
 | 111 | ~~`character == text` comparison always returns true~~ | ~~Medium~~ | **Fixed** — now produces compile error; use `"{c}" == t` |
-| 112 | Text return accumulation in text-returning functions | Medium | Use `return expr` not `t = expr; ... t` |
+| 112 | ~~Text return accumulation in text-returning functions~~ | ~~Medium~~ | **Fixed** — always clear RefVar(Text) before append |
 | 113 | ~~`t = t[N..]` self-slice produces empty string~~ | ~~Medium~~ | **Fixed** — work text used for self-referencing assignments |
 | 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
+| 115 | Text parameter reassignment/append segfaults | Medium | Compile error; copy to local first |
 
 ---
 
-## Text and Vector Bugs (110–114)
+## Text and Vector Bugs (110–115)
 
 All five bugs share a root cause area: the parser's handling of text and vector
 operations inside loops and across function returns.  They should be investigated
 and fixed together.
 
-### 110. Multiple struct field vector appends produce extra/garbage elements
+### 110. ~~Multiple struct field vector appends produce extra/garbage elements~~
 
-**Severity:** High — silent data corruption, no error or crash.
+**FIXED** in `src/database/types.rs`.
 
-**Reproducer (no loop needed):**
-```loft
-struct R { a: vector<integer>, b: vector<integer> }
-fn main() {
-  r = R { a: [], b: [] };
-  r.a += [0];
-  r.b += [100];
-  r.a += [1];
-  r.b += [200];
-  // Expected: a=[0,1] b=[100,200]
-  // Actual:   a=[0,1] b=[100,0,200]
-  assert("{s.vals}" == "[0,10,20]", "got {s.vals}");
-}
-```
+**Root cause:** When adding a vector field to a struct type definition, the
+database linked ALL fields with the same content type via `other_indexes`.
+Two `vector<integer>` fields got linked, so `record_finish` for one field
+propagated `vector_finish` (length increment) to the other — corrupting
+the sibling vector's length.
 
-**Root cause:** The temporary work vector created for the `[expr]` literal
-in `p.b += [expr]` is not cleared between uses.  When another struct field
-append (`p.a += [x]`) runs between two `p.b` appends, the temp vector for
-`b` retains stale data from the previous operation.  This is the same
-pattern as the text return accumulation bug (#112) — a work variable
-shared across operations that should be independent.
-
-The bug reproduces WITHOUT a loop — it's a fundamental issue with interleaved
-struct field vector appends.
-
-**Fix strategy:**
-1. In the parser/codegen, ensure the temp vector created for `[expr]` in
-   a `+=` operation is properly cleared (OpClearVector or fresh allocation)
-   each time it's used.
-2. Alternatively, track which work variables belong to which `+=` expression
-   and prevent reuse across different field appends on the same struct.
+**Fix:** Only link fields that are indexing types (`sorted`, `hash`, `index`)
+where cross-field propagation is needed.  Plain vectors are excluded.
 
 **Test:**  Add to `tests/scripts/` — vector push inside for loop on a struct
 field, verify values match.
@@ -132,47 +110,17 @@ Alternatively, add `OpConvTextFromCharacter` to `default/01_code.loft` so
 
 ---
 
-### 112. Text return accumulation in text-returning functions
+### 112. ~~Text return accumulation in text-returning functions~~
 
-**Severity:** Medium — produces doubled/garbled text from functions.
+**FIXED** in `src/state/codegen.rs`.
 
-**Reproducer:**
-```loft
-fn strip(line: text) -> text {
-  t = line;
-  if t.starts_with("// ") {
-    s = t[3..];
-    t = s;
-  }
-  t
-}
-fn main() {
-  // Expected: "hello"
-  // Actual:   "// hellohello"
-  assert(strip("// hello") == "hello", "got: {strip("// hello")}");
-}
-```
+**Root cause:** In text-returning functions, variables become `RefVar(Text)`
+implicit parameters.  `set_var()` always used `OpAppendStackText` but only
+cleared (`OpClearStackText`) for loop variables.  Non-loop reassignment
+appended instead of replacing.
 
-**Root cause:** In text-returning functions, the parser creates a "work text"
-buffer (a hidden variable) that accumulates the return value.  Assignment
-`t = s` is converted to `OpAppendText(work, s)` instead of replacing the
-work buffer.  The original `t` content remains in the buffer, and `s` is
-appended to it.
-
-**Fix strategy:** In `src/parser/operators.rs` `assign_text`, when `op == "="`
-and the target is the implicit text return variable, emit `OpClearText` before
-the append — or better, detect that the assignment is a full replacement (not
-concatenation) and emit a direct copy instead of append.
-
-**Test:** Function that conditionally modifies a text variable and returns it.
-
-**Workaround:** Use `return expr` directly instead of assigning to a variable:
-```loft
-fn strip(line: text) -> text {
-  if line.starts_with("// ") { return line[3..]; }
-  line
-}
-```
+**Fix:** Always emit `OpClearStackText` before `OpAppendStackText` for
+`RefVar(Text)` variables, regardless of loop context.
 
 ---
 
@@ -242,6 +190,41 @@ correctly (the `+=` path in `assign_text` lines 36–51).
 **Test:** Struct field text concat with `= h +` and `+=` produce same result.
 
 **Workaround:** Use `h += expr` instead of `h = h + expr`.
+
+---
+
+### 115. Text parameter reassignment/append segfaults
+
+**Severity:** Medium — segfault on `param = "new"` or `param += "more"`.
+
+**Reproducer:**
+```loft
+fn modify(s: text) -> text {
+  s = "modified";   // SIGSEGV
+  s
+}
+```
+
+**Root cause:** Text arguments occupy 12-byte `Str` (ptr + len) slots on the
+stack.  `OpClearText` and `OpAppendText` expect 24-byte `String` (owned heap
+buffer) slots.  Writing 24 bytes to a 12-byte slot corrupts the stack.
+
+**Current fix:** Compile error instead of segfault:
+```
+Error: Cannot reassign text parameter 's'; copy to a local variable first
+```
+
+**Workaround:**
+```loft
+fn modify(s: text) -> text {
+  local = s;         // copies Str to local String
+  local = "modified"; // operates on 24-byte String slot
+  local
+}
+```
+
+**Future:** Auto-promote text arguments to local String on first mutation
+(needs slot allocator changes to assign a fresh stack position).
 
 ---
 
