@@ -92,7 +92,9 @@ fn load_one_registers_native_functions() {
     let lib_path = match fixture_lib_path() {
         Some(p) => p,
         None => {
-            eprintln!("skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release");
+            eprintln!(
+                "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+            );
             return;
         }
     };
@@ -152,7 +154,9 @@ fn registry_takes_priority_over_dlsym() {
     let lib_path = match fixture_lib_path() {
         Some(p) => p,
         None => {
-            eprintln!("skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release");
+            eprintln!(
+                "skipping: fixture cdylib not built — run: cd tests/lib/native_pkg/native && cargo build --release"
+            );
             return;
         }
     };
@@ -297,11 +301,7 @@ fn run_native_test(native_decl: &str, source: &str) {
     p.parse_str(native_decl, "native_decl", false);
     p.parse_str(source, "test", false);
     let has_errors = p.diagnostics.lines().iter().any(|l| l.starts_with("Error"));
-    assert!(
-        !has_errors,
-        "diagnostics: {:?}",
-        p.diagnostics.lines()
-    );
+    assert!(!has_errors, "diagnostics: {:?}", p.diagnostics.lines());
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
