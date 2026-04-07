@@ -659,17 +659,9 @@ impl Scopes {
                 // declared return type.  When a closure escapes via implicit return,
                 // the block result type may lack the dep that was propagated to the
                 // function's declared return type (vectors.rs:704-711).
-                // Check if variable v is part of the return value.
-                // At function scope exit (to_scope == 1), tp is the function's
-                // declared return type whose depend() contains ATTRIBUTE indices,
-                // not variable numbers. Only check ret_var's deps (which are
-                // variable numbers) to avoid false matches (issue #120).
-                let in_ret = if to_scope == 1 {
-                    ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v)
-                } else {
-                    tp.depend().contains(&v)
-                        || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v)
-                };
+                let in_ret = tp.depend().contains(&v)
+                    || data.def(self.d_nr).returned.depend().contains(&v)
+                    || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
                 let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
@@ -695,10 +687,13 @@ impl Scopes {
             // A5.6-text: free the closure DbRef embedded at offset+4 in a fn-ref slot.
             // The 16-byte fn-ref stack slot is reclaimed by FreeStack, but the closure
             // store record at offset+4 must be explicitly freed via OpFreeRef.
-            if let Type::Function(_, _, dep) = function.tp(v) {
+            if let Type::Function(_, _, _) = function.tp(v) {
+                // fn-ref variables OWN their closure store. The dep list
+                // tracks captured variables, not store borrowing. Always
+                // emit OpFreeRef unless the fn-ref is the return value.
                 let in_ret =
                     tp.depend().contains(&v) || data.def(self.d_nr).returned.depend().contains(&v);
-                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
+                let emit = !in_ret && !function.is_skip_free(v);
                 if emit {
                     if scope_debug {
                         eprintln!(

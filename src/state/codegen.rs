@@ -965,9 +965,29 @@ impl State {
             && stack.data.def(*fn_nr).name.starts_with("n_")
             && stack.data.def(*fn_nr).code != Value::Null
         {
-            // Always deep-copy struct returns to prevent use-after-free
-            // when the callee's store is freed after return (issue #120).
-            self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
+            // P117: when the callee has no visible Reference params, the
+            // caller and callee share __ref_N's store. No deep copy needed
+            // since OpAppendVector in handle_field already deep-copies vector
+            // field data into the struct's store during construction.
+            let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
+                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+            });
+            if !has_ref_params {
+                self.generate(value, stack, false);
+                // Suppress OpFreeRef for __ref_N to prevent double-free —
+                // the caller now owns this store.
+                if let Value::Call(_, args) = value {
+                    for arg in args {
+                        if let Value::Var(wv) = arg {
+                            if stack.function.name(*wv).starts_with("__ref_") {
+                                stack.function.set_skip_free(*wv);
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
+            }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {

@@ -10,9 +10,14 @@ extern crate loft;
 
 use loft::manifest::{Manifest, read_manifest};
 use loft::parser::Parser;
+use std::sync::Mutex;
 
 mod common;
 use common::cached_default;
+
+// Native extension tests share global state (NATIVE_REGISTRY, STUB_SYMBOLS,
+// LOADED_LIBS) so they must run sequentially within this test binary.
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // A7.2.1: manifest `native` field is parsed and accessible
@@ -89,6 +94,8 @@ fn load_one_registers_native_functions() {
     use loft::scopes;
     use loft::state::State;
 
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let lib_path = match fixture_lib_path() {
         Some(p) => p,
         None => {
@@ -150,6 +157,8 @@ fn registry_takes_priority_over_dlsym() {
     use loft::extensions;
     use loft::scopes;
     use loft::state::State;
+
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let lib_path = match fixture_lib_path() {
         Some(p) => p,
@@ -285,6 +294,8 @@ fn run_native_test(native_decl: &str, source: &str) {
     use loft::extensions;
     use loft::scopes;
     use loft::state::State;
+
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let lib_path = match fixture_lib_path() {
         Some(p) => p,
