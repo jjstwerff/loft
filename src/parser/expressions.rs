@@ -503,6 +503,21 @@ use a separate collection or add after the loop"
         }
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
+            // P115: text arguments are 12-byte Str, not 24-byte String.
+            // Reassignment/append crashes — emit a compile error with workaround.
+            if !self.first_pass
+                && var_nr != u16::MAX
+                && self.vars.is_argument(var_nr)
+                && (op == "=" || op == "+=")
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot reassign text parameter '{}'; \
+                     copy to a local variable first",
+                    self.vars.name(var_nr)
+                );
+            }
             self.assign_text(code, &s_type, to, op, var_nr);
             return Type::Void;
         }

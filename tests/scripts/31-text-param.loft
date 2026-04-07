@@ -1,0 +1,38 @@
+// Test for text parameter handling.
+// P115: reassigning or appending to a text parameter segfaults because
+// OpClearText treats the 12-byte Str slot as a 24-byte String.
+
+// P115: text argument reassignment/append now produces a compile error
+// instead of a segfault.
+// @EXPECT_ERROR: Cannot reassign text parameter
+fn tp_bad_reassign(tp_br: text) {
+  tp_br = "modified";
+}
+
+// @EXPECT_ERROR: Cannot reassign text parameter
+fn tp_bad_append(tp_ba: text) {
+  tp_ba += " world";
+}
+
+// Workaround: copy to local, then modify.
+fn test_text_param_workaround() {
+  tp_result = tp_copy_and_modify("hello");
+  assert(tp_result == "hello world", "workaround: {tp_result}");
+}
+
+fn tp_copy_and_modify(tp_orig: text) -> text {
+  tp_local = tp_orig;
+  tp_local += " world";
+  tp_local
+}
+
+// Read-only text parameter works fine.
+fn test_text_param_read() {
+  assert(tp_len("hello") == 5, "len");
+  assert(tp_first("hello") == "h", "first");
+  assert(tp_concat("hello", " world") == "hello world", "concat");
+}
+
+fn tp_len(tp_s: text) -> integer { len(tp_s) }
+fn tp_first(tp_s: text) -> text { tp_s[0..1] }
+fn tp_concat(tp_a: text, tp_b: text) -> text { tp_a + tp_b }
