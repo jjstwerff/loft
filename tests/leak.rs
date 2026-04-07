@@ -1,59 +1,62 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Minimal reproduction of store leak in block-copy optimisation (O-B2).
+//! Store leak regression tests.
+//!
+//! Runs loft scripts and asserts no stores are leaked at program exit.
 
 extern crate loft;
 
-mod testing;
-
 use loft::compile::byte_code;
+use loft::data::DefType;
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
-#[path = "common/mod.rs"]
 mod common;
 use common::cached_default;
 
-/// Nested struct return leaks inner stores: `make_pt` allocates a store
-/// for the returned Pt, but when the call is used as a field initializer
-/// in a Box constructor, the inner store is never freed.
-#[test]
-fn nested_struct_return_leak() {
+/// Run all zero-parameter test functions in a script and check for store leaks.
+fn run_leak_check(path: &str) {
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
-    p.parse_str(
-        r#"
-struct Pt { x: float not null, y: float not null }
-struct Rect { pos: Pt, size: Pt }
-
-fn make_pt(a: float, b: float) -> Pt {
-  Pt { x: a, y: b }
-}
-
-fn make_rect(rx: float, ry: float, rw: float, rh: float) -> Rect {
-  Rect { pos: make_pt(rx, ry), size: make_pt(rw, rh) }
-}
-
-pub fn test() {
-  r = make_rect(1.0, 2.0, 10.0, 20.0);
-  assert(r.pos.x == 1.0, "x");
-}
-"#,
-        "leak_test",
-        false,
-    );
+    let start_def = p.data.definitions();
+    p.parse(path, false);
     assert!(
         p.diagnostics.is_empty(),
-        "parse errors: {:?}",
+        "{path}: parse errors: {:?}",
         p.diagnostics.lines()
     );
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
-    state.execute("test", &p.data);
+    let end_def = p.data.definitions();
+    let mut ran = 0;
+    for d_nr in start_def..end_def {
+        let def = p.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+            continue;
+        }
+        if !def.attributes.is_empty() {
+            continue;
+        }
+        if def.position.file.starts_with("default/") {
+            continue;
+        }
+        let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+        state.execute(user_name, &p.data);
+        ran += 1;
+    }
+    assert!(ran > 0, "{path}: no entry-point functions found");
     state.check_store_leaks();
+}
+
+#[test]
+fn block_copy_opt_no_leak() {
+    run_leak_check("tests/scripts/33-block-copy-opt.loft");
 }
