@@ -2,12 +2,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-# Const Inference — Lock Stores for Provably Unwritten Parameters
+# Struct Passing, Copies, and Optimization Opportunities
 
 ## Loft parameter semantics
 
 Loft passes ALL struct parameters by reference (shared DbRef).  There
-is no implicit copy.  This is by design — mutation is the default:
+is no implicit copy on function calls.  Mutation is the default:
 
 ```loft
 fn modify(s: Point) { s.x = 99.0; }
@@ -26,153 +26,202 @@ The three parameter modes:
 | `param: &T` | Mutable reference — same as above, explicit | No |
 | `param: const T` | Read-only reference — store locked, writes panic | Yes |
 
-**There is no value-copy mode for structs.** All three modes share the
-caller's store.  `const` adds a runtime lock that prevents writes.
+---
 
-## The optimization opportunity
+## Where copies actually happen
 
-Since there's no copying to eliminate, the optimization is different from
-what was originally planned.  Instead:
+Copies are NOT on parameter passing.  They happen on **first local
+variable assignment** and **return values**.
 
-**Auto-lock stores for parameters that are provably never written.**
+### Copy landscape
 
-When a function takes a struct parameter and never mutates it (no field
-writes, no passing as `&T`, no vector appends), the store can be locked
-automatically — giving the same protection as `const` without requiring
-the keyword.
+| Situation | What happens | Cost |
+|---|---|---|
+| Parameter passing | DbRef shared (12 bytes) | **Zero** |
+| Vector element `v[i]` | DbRef pointer arithmetic | **Zero** |
+| For-loop iteration | DbRef per element | **Zero** |
+| Local reassignment `x = y` | DbRef overwrite | **Zero** |
+| **First assignment `x = func()`** | OpCopyRecord deep copy | **Expensive** |
+| **First assignment `x = y`** (same struct type) | OpCopyRecord deep copy | **Expensive** |
+| **Return values** | copy_block (byte copy) | **Moderate** |
+| Const lock check | Bool assert per write | Negligible |
 
-### Benefits
+### When OpCopyRecord fires
 
-1. **Safety:** catches accidental mutations that the programmer didn't
-   intend — the store lock makes them a runtime error instead of silent
-   corruption of the caller's data.
-2. **Documentation:** the compiler can emit warnings like "parameter 'p'
-   is never mutated — consider adding `const`" to encourage explicit
-   annotation.
-3. **Future copy-on-write:** if loft ever adds value semantics for structs,
-   auto-const parameters can skip the copy since they're provably unwritten.
+Only three cases in `gen_set_first_at_tos` (codegen.rs):
 
-### Non-benefits (corrected from earlier analysis)
+1. **`x = func_returning_struct()`** — function return assigned to new
+   local variable.  Emits OpConvRefFromNull + OpDatabase + OpCopyRecord.
+   Deep copies all fields including nested vectors, text, sub-structs.
 
-- ~~Skip OpCopyRecord~~ — there IS no OpCopyRecord for plain parameters.
-  Structs are already passed by reference.
-- ~~Save 15 KB/frame~~ — no copies happen, so nothing to save.
+2. **`x = y`** where both are same struct type and x is uninitialized —
+   same deep copy to give x its own independent store.
 
-## Auto-const inference
+3. **Tuple destructuring** `(a, b) = expr` where an element is a
+   Reference — deep copy for the extracted element.
 
-### The opportunity
+### What OpCopyRecord costs
 
-Most struct parameters are never mutated but aren't marked `const`.
-Without the lock, accidental mutations silently corrupt the caller's
-data.  If the compiler infers that a parameter is never written, it
-can auto-lock the store — catching bugs and enabling future
-copy-on-write.
+Runtime at `state/io.rs:932`:
+```
+copy_block(&data, &to, size)     — raw byte copy of struct fields
+copy_claims(&data, &to, tp)      — deep copy of nested structures
+```
 
-**Examples that benefit immediately:**
-- `mat4_mul(a: Mat4, b: Mat4)` — both read-only → auto-locked
-- `mesh_to_floats(m: Mesh)` — read-only → auto-locked
-- `render_frame(scene: Scene, camera: Camera)` — read-only in render loop
-- Any getter/accessor on structs
+For `Mat4` (16 × f64 + vector wrapper): ~128 bytes + vector record.
+For `Scene` with meshes/materials/nodes: hundreds of bytes + all vectors.
 
-### Passing a param as plain `T` to another function
+### Return value copy (latent issue)
 
-Since ALL struct parameters are mutable references, passing a param
-to another function as plain `T` allows that function to mutate it.
-`find_written_vars()` currently does NOT flag this as a write — it
-treats plain `T` as value passing.
+`state/mod.rs:1032` copies return values with `copy_block` only — no
+`copy_claims`.  This is a shallow byte copy.  If a returned struct
+contains owned nested references (vectors, text), the returned DbRef
+shares them with the callee's about-to-be-freed store.  **Potential
+use-after-free for complex return types.**
 
-**This is incorrect for auto-const inference.** If `reader(s)` passes
-`s` to `mutator(s)` which writes `s.x = 99`, then `s` IS effectively
-written.  The analysis must be conservative:
+---
 
-- Passing as `T` to a function whose const-ness is UNKNOWN → treat
-  as potentially written → do NOT auto-lock
-- Passing as `T` to a function whose param is known `const` or
-  inferred auto-const → safe, not a write
-- Passing as `&T` → always a write (explicit intent)
+## Optimization 1: Move semantics for return values
 
-This requires **cross-function analysis** or a conservative default
-(only auto-lock when the param is never passed to ANY function).
+### Problem
+
+`br_mvp = rect_mvp(proj, x, y, w, h)` — called 60×/frame in Breakout.
+Each call: callee constructs Mat4, returns it, caller OpCopyRecord deep
+copies it into `br_mvp`'s store.  The callee's original is immediately
+freed.  The copy is wasted — the data could transfer ownership.
+
+### Fix: return slot pre-allocation (destination passing)
+
+The caller pre-allocates the destination store and passes a DbRef to the
+callee.  The callee writes directly into it.  No copy on return.
+
+```
+Before:                              After:
+  callee: build Mat4 in local store    callee: build Mat4 in caller's store
+  return: copy_block to caller         return: nothing (already there)
+  caller: OpCopyRecord to br_mvp      caller: nothing (already in br_mvp)
+```
+
+This pattern already exists for text-returning functions
+(`try_text_dest_pass` in codegen.rs).  Extending it to struct returns
+is the natural next step.
 
 ### Implementation
 
-#### Step 1: Add `auto_const` flag to Variable
+**File:** `src/state/codegen.rs`
 
-**File:** `src/variables/mod.rs`
+1. When generating a function call whose return type is `Reference`:
+   - If the result is assigned to a local variable (`x = func(...)`),
+     pass `x`'s store DbRef as a hidden first parameter
+   - The callee writes into that store instead of its own local
+   - Return is a no-op (data already in the right place)
 
+2. Requires the callee to be aware of the destination.  Two options:
+   - **Implicit:** codegen detects struct construction and redirects writes
+   - **Explicit:** new `__dest` hidden parameter (like text_return)
+
+### Impact
+
+| Function | Calls/frame | Bytes saved per call |
+|---|---|---|
+| `rect_mvp()` | 60 | ~128 bytes + vector overhead |
+| `mat4_mul()` | 60 | ~128 bytes |
+| `mat4_perspective()` | 1 | ~128 bytes |
+| `mat4_look_at()` | 1 | ~128 bytes |
+
+**~15 KB/frame** eliminated in Breakout.  Proportionally more in the
+renderer (PBR pass constructs Mat4 per node).
+
+---
+
+## Optimization 2: Last-use move (elide copy when source dies)
+
+### Problem
+
+```loft
+a = Point { x: 1.0, y: 2.0 };
+b = a;       // OpCopyRecord — deep copy
+// a is never used again
+```
+
+The copy is unnecessary — `a`'s store could be transferred to `b`.
+
+### Fix: last-use analysis
+
+If `x = y` and `y` is never read again after this point (last use),
+transfer `y`'s DbRef to `x` and null out `y`.  No copy needed.
+
+The variable liveness analysis in `src/variables/` already tracks
+`first_def` and `last_use`.  If `last_use(y) == current_statement`,
+it's safe to move.
+
+### Implementation
+
+**File:** `src/state/codegen.rs`, in `gen_set_first_at_tos`
+
+Before emitting OpCopyRecord for `x = y`:
 ```rust
-pub struct Variable {
-    // ... existing fields ...
-    pub auto_const: bool,  // inferred: param never written in function body
+if let Value::Var(src) = value
+    && stack.function.last_use(*src) == current_def_position
+{
+    // Move: transfer src's DbRef to x, no copy
+    let src_pos = stack.position - stack.function.stack(*src);
+    stack.add_op("OpVarRef", self);
+    self.code_add(src_pos);
+    // Mark src as moved — OpFreeRef will skip it
+    return;
 }
 ```
 
-#### Step 2: Mutation analysis at end of first pass
+### Impact
 
-**File:** `src/parser/mod.rs`
+Eliminates copies for temporary struct results that are immediately
+assigned and never reused.  Common in builder patterns:
 
-After first-pass parsing of each function, identify unwritten params:
-
-```rust
-if self.first_pass {
-    let written = self.find_written_vars(&function_body);
-    for param_nr in function_params {
-        if matches!(self.vars.tp(param_nr), Type::Reference(_, _))
-            && !written.contains(&param_nr)
-            && !self.param_escapes_to_function(param_nr, &function_body)
-        {
-            self.vars.set_auto_const(param_nr, true);
-        }
-    }
-}
+```loft
+m = mat4_translate(1.0, 2.0, 3.0);      // result → m (move, no copy)
+mvp = mat4_mul(proj, mat4_mul(view, m)); // inner result → temp (move)
 ```
 
-`param_escapes_to_function` checks if the param is passed as a
-non-const argument to any function call.  Conservative: if we can't
-prove the callee won't mutate, assume it will.
+---
 
-#### Step 3: Lock stores for auto-const params at runtime
+## Optimization 3: Auto-const inference (safety, not performance)
 
-**File:** `src/state/codegen.rs` or runtime
+### Purpose
 
-When entering a function, emit store-lock for auto-const params:
+Not a performance optimization (parameters aren't copied).  Instead:
+auto-lock stores for provably unwritten parameters to catch accidental
+mutation bugs at runtime.
 
-```rust
-if stack.function.is_auto_const(v) {
-    // Lock the store to catch accidental mutations at runtime
-    store.lock();
-}
-```
+### When to auto-lock
 
-This provides the same protection as explicit `const` — writes
-panic with "Write to locked store".
+A struct parameter can be auto-locked when:
+- Never directly written (`param.field = x`)
+- Never appended to (`param.vec += [x]`)
+- Never passed as `&T` to another function
+- **Never passed as plain `T` to a non-const function** (conservative —
+  callee might mutate through the shared reference)
 
-### What constitutes a write (conservative)
+### Implementation
 
-| Operation | Blocks auto-const? |
-|---|---|
-| `param.field = value` | Yes |
-| `param += [elem]` | Yes |
-| Passing as `&T` to a function | Yes |
-| Passing as `T` to a non-const function | **Yes** (conservative) |
-| Passing as `T` to a `const T` function | No |
-| Reading `param.field` | No |
-| Passing to `println("{param}")` | No |
+1. Add `auto_const: bool` to Variable
+2. Run `find_written_vars()` at end of first pass
+3. Add escape analysis: check if param is passed to any function call
+   where the receiving parameter is not `const`
+4. Lock store at function entry for auto-const params
 
 ### Compiler warning
 
-When auto-const inference succeeds, emit a developer warning:
-
+When inference succeeds:
 ```
 Warning: parameter 's' is never mutated — consider adding 'const'
 ```
 
-This nudges programmers toward explicit annotation, which is better
-documentation and enables the compiler to enforce at parse time.
+---
 
-## Test cases for safety verification
+## Test cases
 
-### Test 1: plain param mutation is visible to caller (current behavior)
+### Test 1: mutation through plain parameter (current behavior, correct)
 
 ```loft
 struct S { x: integer not null }
@@ -184,9 +233,7 @@ fn main() {
 }
 ```
 
-This is CORRECT — loft passes by reference.
-
-### Test 2: const param locks the store
+### Test 2: const parameter locks store
 
 ```loft
 struct S { x: integer not null }
@@ -197,51 +244,60 @@ fn main() {
 }
 ```
 
-### Test 3: const param prevents writes (runtime panic)
+### Test 3: const prevents mutation via &T (runtime panic)
 
 ```loft
 struct S { x: integer not null }
 fn mutate_ref(m: &S) { m.x = 99; }
 fn bad(s: const S) { mutate_ref(s); }
-fn main() {
-  p = S { x: 1 };
-  bad(p);  // should panic: "Write to locked store"
-}
+fn main() { bad(S { x: 1 }); }
+// Panics: "Write to locked store"
 ```
 
-### Test 4: auto-const param passed to non-const function (must NOT lock)
+### Test 4: escape to non-const blocks auto-lock
 
 ```loft
 struct S { x: integer not null }
-fn helper(s: S) { s.x = 42; }  // mutates!
+fn helper(s: S) { s.x = 42; }
 fn caller(s: S) {
-  // s is never directly written in caller...
-  helper(s);  // ...but helper mutates it
-  // auto-const must NOT lock s because it escapes to a non-const function
+  helper(s);  // s escapes to mutable function — cannot auto-lock
 }
 ```
 
-### Test 5: auto-const param only read — safe to lock
+### Test 5: return value copy (current behavior)
 
 ```loft
-struct S { x: integer not null }
-fn getter(s: S) -> integer { s.x }
-fn caller(s: S) -> integer {
-  // s is never written, never escapes to a mutable function
-  // auto-const CAN lock s safely
-  getter(s) + 1  // getter is also auto-const
+struct Point { x: float not null, y: float not null }
+fn make() -> Point { Point { x: 1.0, y: 2.0 } }
+fn main() {
+  p = make();       // OpCopyRecord fires here
+  q = p;            // OpCopyRecord fires here
+  q.x = 99.0;
+  assert(p.x == 1.0, "p isolated from q after copy");
 }
 ```
 
-## Future work
+### Test 6: move optimization target
 
-- **Cross-function const propagation:** once auto-const is inferred
-  for function A, callers of A can treat its params as const when
-  deciding their own auto-const status.  Iterative fixpoint analysis.
-- **Copy-on-write semantics:** if loft ever adds value semantics for
-  structs, auto-const params can skip the copy entirely.
-- **Native codegen:** emit `&T` for const/auto-const params in
-  generated Rust code.
+```loft
+fn make() -> Point { Point { x: 1.0, y: 2.0 } }
+fn main() {
+  p = make();       // Could be a move (no copy) if dest-passing works
+  println("{p.x}");
+}
+```
+
+---
+
+## Priority order
+
+| # | Optimization | Impact | Effort | Risk |
+|---|---|---|---|---|
+| 1 | Return slot / destination passing | ~15 KB/frame in games | M | Low — text_return already does this |
+| 2 | Last-use move for `x = y` | Eliminates temp copies | S | Low — liveness data available |
+| 3 | Auto-const inference | Safety, not perf | M | Medium — needs escape analysis |
+
+---
 
 ## Related
 
