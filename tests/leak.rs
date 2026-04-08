@@ -130,6 +130,62 @@ pub fn test() {
     );
 }
 
+/// Simulate the breakout frame loop: outer loop with struct reassignment
+/// inside nested loops, reading vectors in the same scope.
+/// This catches use-after-free when freed stores get recycled.
+#[test]
+fn breakout_frame_loop() {
+    run_leak_check_str(
+        r#"
+struct Mat4 { m: vector<float> }
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
+  model = make_mat4(bx, by);
+  mat4_mul(proj, model)
+}
+pub fn test() {
+  bricks = [for _ in 0..12 { 1 }];
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  colors = [0.9, 0.2, 0.3];
+  // Simulate 3 frames
+  for frame in 0..3 {
+    // Draw bricks (nested loop with vector read + struct reassign)
+    for row in 0..3 {
+      for col in 0..4 {
+        if bricks[row * 4 + col] == 1 {
+          mvp = rect_mvp(proj, col as float, row as float);
+          assert(len(mvp.m) == 16, "f{frame} mvp.m len");
+          assert(mvp.m[0] == col as float, "f{frame} mvp col={col}");
+        }
+      }
+    }
+    // Draw paddle
+    mvp = rect_mvp(proj, 4.0, 5.0);
+    assert(mvp.m[0] == 4.0, "f{frame} paddle");
+    // Draw ball
+    mvp = rect_mvp(proj, 6.0, 7.0);
+    assert(mvp.m[0] == 6.0, "f{frame} ball");
+    // Draw lives (loop with struct reassign)
+    for li in 0..3 {
+      mvp = rect_mvp(proj, 7.0 - li as float, 0.0);
+      assert(mvp.m[0] == 7.0 - li as float, "f{frame} life {li}");
+    }
+    // Verify vectors are intact
+    assert(bricks[0] == 1, "f{frame} bricks[0]");
+    assert(colors[0] == 0.9, "f{frame} colors[0]");
+    assert(proj.m[0] == 1.0, "f{frame} proj intact");
+  }
+}
+"#,
+    );
+}
+
 /// Simulate multiple frame iterations — run the brick loop twice,
 /// verify data integrity is preserved between iterations.
 #[test]
