@@ -120,6 +120,16 @@ SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 | FFI.3  | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
 | FFI.4  | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
 
+### Game performance
+
+These apply to all deployment targets (native + WASM browser).  Interpreter-only
+items (W3 frame-aware dispatch, W4 opcode redesign) are tracked in OPTIMISATIONS.md.
+
+| ID   | Title                                                            | E  | Design | Source           |
+|------|------------------------------------------------------------------|----|--------|------------------|
+| W.G1 | GL overhead: cache uniform locations + direct wasm_bindgen imports | S  |        | OPTIMISATIONS.md |
+| W.G2 | Game object store pooling — plain-data memset pool (S29 already handles general case) | M  |        | OPTIMISATIONS.md |
+
 ---
 
 ## 0.9.0 — Polish + developer experience
