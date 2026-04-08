@@ -415,14 +415,15 @@ impl Scopes {
         // vars so native codegen doesn't free the store before the return value
         // reaches the caller.  Mirrors the interpreter codegen skip_free at
         // state/codegen.rs:1043-1050.
-        if matches!(function.tp(v), Type::Reference(_, _) | Type::Enum(_, true, _))
-            && let Value::Call(fn_nr, args) = value
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && let Value::Call(fn_nr, args) = value
             && data.def(*fn_nr).name.starts_with("n_")
             && data.def(*fn_nr).code != Value::Null
         {
             let has_ref_params = data.def(*fn_nr).attributes.iter().any(|a| {
-                !a.hidden
-                    && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
             if !has_ref_params {
                 for arg in args {
