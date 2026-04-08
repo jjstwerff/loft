@@ -288,7 +288,10 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([])
+    HashSet::from([
+        // Requires lib_dirs (graphics, math, yield_test) — tested via leak.rs instead.
+        "85-yield-resume.loft",
+    ])
 }
 
 macro_rules! script_test {
