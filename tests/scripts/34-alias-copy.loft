@@ -1,8 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // O-B2 safety: function WITH ref param must deep copy (prevent aliasing).
-// Native codegen doesn't have this fix yet:
-// @EXPECT_FAIL: native alias copy
 
 struct AcPoint {
   x: float not null,

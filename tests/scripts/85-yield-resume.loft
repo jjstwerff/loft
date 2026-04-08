@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Reproduce the breakout yield/resume bug locally.
+// Uses the REAL math library (Mat4, mat4_mul) to match the exact
+// type schema and store allocation order from the graphics examples.
+use graphics;
+use math;
+use yield_test;
+
+fn ortho() -> math::Mat4 {
+  math::Mat4 { m: [
+    2.0, 0.0, 0.0, 0.0,
+    0.0, -2.0, 0.0, 0.0,
+    0.0, 0.0, -1.0, 0.0,
+    -1.0, 1.0, 0.0, 1.0
+  ] }
+}
+
+fn rect_mvp(proj: const math::Mat4, bx: float, by: float, bw: float, bh: float) -> math::Mat4 {
+  model = math::Mat4 { m: [
+    bw, 0.0, 0.0, 0.0,
+    0.0, bh, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    bx, by, 0.0, 1.0
+  ] };
+  math::mat4_mul(proj, model)
+}
+
+fn main() {
+  br_proj = ortho();
+  br_bricks = [for _ in 0..50 { 1 }];
+  br_colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
+  br_colors_g = [0.2, 0.6, 0.8, 0.9, 0.5];
+  br_colors_b = [0.2, 0.1, 0.2, 0.3, 0.9];
+  br_alive = 50;
+  br_px = 350.0;
+  br_bx = 395.0;
+  br_by = 530.0;
+  br_lives = 3;
+  br_mvp = math::mat4_identity();
+
+  for _ in 0..1000000 {
+    // Draw bricks
+    for br_dr in 0..5 {
+      for br_dc in 0..10 {
+        if br_bricks[br_dr * 10 + br_dc] == 1 {
+          br_dx = (br_dc as float) * 76.0 + 12.0;
+          br_dy = (br_dr as float) * 24.0 + 50.0;
+          br_mvp = rect_mvp(br_proj, br_dx, br_dy, 72.0, 20.0);
+          // simulate gl_set_uniform_mat4 + gl_draw
+          assert(len(br_mvp.m) == 16, "brick mvp");
+        }
+      }
+    }
+    // Draw paddle
+    br_mvp = rect_mvp(br_proj, br_px, 560.0, 100.0, 15.0);
+    assert(len(br_mvp.m) == 16, "paddle mvp");
+    // Draw ball
+    br_mvp = rect_mvp(br_proj, br_bx, br_by, 10.0, 10.0);
+    assert(len(br_mvp.m) == 16, "ball mvp");
+    // Draw lives
+    for br_li in 0..br_lives {
+      br_mvp = rect_mvp(br_proj, 780.0 - br_li as float * 18.0, 10.0, 12.0, 12.0);
+      assert(len(br_mvp.m) == 16, "life mvp");
+    }
+    // Verify proj intact
+    assert(br_proj.m[0] == 2.0, "proj.m[0]={br_proj.m[0]}");
+    assert(br_proj.m[5] == -2.0, "proj.m[5]={br_proj.m[5]}");
+    // Yield
+    yield_test::yield_frame();
+  }
+}
