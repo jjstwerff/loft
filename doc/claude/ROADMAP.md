@@ -131,6 +131,8 @@ items (W3 frame-aware dispatch, W4 opcode redesign) are tracked in OPTIMISATIONS
 | W.G2 | Game object store pooling — plain-data memset pool (S29 already handles general case) | M  |        | OPTIMISATIONS.md |
 | W.G3 | `vector<byte>` type — zero-copy pixel/canvas/text transfer       | M  | ✓      | PERFORMANCE.md   |
 | W.G4 | Zero-copy vertex upload via WASM memory view (`Float32Array`)    | S  | ✓      | PERFORMANCE.md   |
+| V1   | In-place sort/reverse — raw slice, no intermediate Vec           | S  | ✓      | PERFORMANCE.md   |
+| V2   | Binary vector bulk write — one claim + memcpy for plain-data     | S  | ✓      | PERFORMANCE.md   |
 
 ---
 
