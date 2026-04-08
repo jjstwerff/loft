@@ -22,8 +22,6 @@ struct Scopes {
     var_order: Vec<u16>,
     /// Variables that are redefined after running out-of-scope get copied with this mapping.
     var_mapping: HashMap<u16, u16>,
-    /// Variables that have been assigned a non-null value (first real assignment done).
-    var_assigned: HashSet<u16>,
     /// The scopes of the currently traversed loops.
     loops: Vec<u16>,
     /// Recursion depth counter for `scan`; reset to 0 when scope analysis starts.
@@ -44,7 +42,6 @@ pub fn check(data: &mut Data) {
             var_scope: BTreeMap::new(),
             var_order: Vec::new(),
             var_mapping: HashMap::new(),
-            var_assigned: HashSet::new(),
             loops: vec![],
             scan_depth: 0,
         };
@@ -436,28 +433,12 @@ impl Scopes {
                 self.var_order.push(d);
             }
         }
-        // Free before reassignment when the variable already holds a real value
-        // (not just a null-init) and owns its store (dep empty).
-        let needs_pre_free = self.var_assigned.contains(&v)
-            && matches!(function.tp(v), Type::Reference(_, dep) | Type::Enum(_, true, dep) if dep.is_empty())
-            && !function.is_skip_free(v);
-        if *value != Value::Null {
-            self.var_assigned.insert(v);
-        }
         if !self.var_scope.contains_key(&v) {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);
         }
         if depend.is_empty() {
-            let set = Value::Set(v, Box::new(self.scan(value, function, data)));
-            if needs_pre_free {
-                Value::Insert(vec![
-                    Value::Call(data.def_nr("OpFreeRef"), vec![Value::Var(v)]),
-                    set,
-                ])
-            } else {
-                set
-            }
+            Value::Set(v, Box::new(self.scan(value, function, data)))
         } else {
             let mut ls = Vec::new();
             for d in depend {

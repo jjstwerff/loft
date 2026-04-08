@@ -863,6 +863,22 @@ impl State {
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
             }
+            // Free the old store before reassigning an owned Reference.
+            // The variable is fully initialized (is_stack_allocated=true)
+            // so it holds a valid DbRef.  Prevents store leaks when
+            // struct-returning functions are called in loops.
+            if matches!(
+                stack.function.tp(v),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) && stack.function.tp(v).depend().is_empty()
+            {
+                let free_pos = stack.position - stack.function.stack(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(free_pos);
+                // add_op("OpVarRef") already adjusted stack.position (+12 for DbRef)
+                stack.add_op("OpFreeRef", self);
+                // add_op("OpFreeRef") already adjusted stack.position (-12 for DbRef)
+            }
             self.set_var(stack, v, value);
         } else {
             // First allocation — slot pre-assigned by assign_slots.
