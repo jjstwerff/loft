@@ -23,6 +23,8 @@ design for each planned improvement.
 - [Design: W1 — wasm string representation](#design-w1--wasm-string-representation)
 - [Design: W2 — zero-copy vertex upload via WASM memory view](#design-w2--zero-copy-vertex-upload-via-wasm-memory-view)
 - [Design: W3 — `vector<byte>` type and zero-copy pixel transfer](#design-w3--vectorbyte-type-and-zero-copy-pixel-transfer)
+- [Design: V1 — In-place sort and reverse via raw slice](#design-v1--in-place-sort-and-reverse-via-raw-slice)
+- [Design: V2 — Binary vector bulk write](#design-v2--binary-vector-bulk-write)
 - [Improvement priority order](#improvement-priority-order)
 - [See also](#see-also)
 
@@ -1083,6 +1085,212 @@ the flip inside the WebGL driver with no per-pixel Rust/JS work.
 
 ---
 
+## Design: V1 — In-place sort and reverse via raw slice
+
+**Affected operations:** `sort()` and `rev()` on all vector types
+**Expected gain:** Eliminates one full O(N) allocation + one O(N) write-back per sort/reverse call; ~2× faster for large vectors
+**Cost:** Small — localised change to `src/vector.rs`; no type-system or API changes
+
+### Background
+
+`sort_vector` in `src/vector.rs:526–584` sorts a primitive vector by:
+1. Collecting all N elements into an intermediate `Vec<T>` via element-by-element `get_*` calls
+2. Calling `sort_unstable` on the intermediate Vec
+3. Writing results back to the store via element-by-element `set_*` calls
+
+For `elem_size = 4` (integers, singles):
+
+```rust
+// current — two O(N) passes through get/set indirection
+let mut vals: Vec<i32> = (0..len).map(|i| store.get_int(v_rec, 8 + i * 4)).collect();
+vals.sort_unstable();
+for (i, &v) in vals.iter().enumerate() { store.set_int(v_rec, 8 + i * 4, v); }
+```
+
+`reverse_vector` in `src/vector.rs:598–619` swaps elements from both ends using three
+byte-copy loops per swap — each copying `elem_size` bytes via `get_byte`/`set_byte`.
+
+### Why in-place is possible
+
+The loft `Store` is contiguous memory: `store.ptr: *mut u8`.  Vector elements for
+`vector<integer>` / `vector<single>` / `vector<float>` / `vector<long>` are packed
+at `store.ptr + v_rec*8 + 8` with no gaps.  A raw slice over this region has exactly
+the layout that `sort_unstable` and `std::ptr::swap_nonoverlapping` need.
+
+### Design
+
+**Sort — zero intermediate allocation:**
+
+```rust
+// src/vector.rs — sort_vector, elem_size = 4 case
+let base = unsafe { store.ptr.add(v_rec as usize * 8 + 8) };
+match elem_size {
+    1 => {
+        let s = unsafe { std::slice::from_raw_parts_mut(base, len as usize) };
+        s.sort_unstable();
+    }
+    4 if !is_float => {
+        let s = unsafe { std::slice::from_raw_parts_mut(base as *mut i32, len as usize) };
+        s.sort_unstable();
+    }
+    4 => {  // single (f32)
+        let s = unsafe { std::slice::from_raw_parts_mut(base as *mut f32, len as usize) };
+        s.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Greater));
+    }
+    8 if !is_float => {
+        let s = unsafe { std::slice::from_raw_parts_mut(base as *mut i64, len as usize) };
+        s.sort_unstable();
+    }
+    8 => {  // float (f64)
+        let s = unsafe { std::slice::from_raw_parts_mut(base as *mut f64, len as usize) };
+        s.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Greater));
+    }
+    _ => {}
+}
+```
+
+The store's alignment guarantee (`Layout::from_size_align(size*8, 8)`) ensures the
+pointer is 8-byte aligned, which satisfies the alignment requirement of all primitive
+types up to `f64`/`i64`.
+
+**Reverse — `swap_nonoverlapping` per pair:**
+
+```rust
+// replace the three byte loops with one raw swap
+let base = unsafe { store.ptr.add(v_rec as usize * 8 + 8) };
+while lo < hi {
+    unsafe {
+        std::ptr::swap_nonoverlapping(
+            base.add(lo as usize * elem_size as usize),
+            base.add(hi as usize * elem_size as usize),
+            elem_size as usize,
+        );
+    }
+    lo += 1; hi -= 1;
+}
+```
+
+`swap_nonoverlapping` lowers to one load + one store per element on x86 (the compiler
+generates `xchg` or paired `mov`s), vs 3 × `elem_size` individual byte accesses.
+
+### Safety
+
+The raw slice is valid for the duration of the sort call.  No other reference to
+`store.ptr` exists simultaneously because `sort_vector` and `reverse_vector` take
+an exclusive `&mut [Store]` borrow.  The alignment property is guaranteed by
+`Store::new` which uses `Layout::from_size_align(size * 8, 8)`.
+
+### Files to change
+
+| File | Change |
+|---|---|
+| `src/vector.rs` | Replace `sort_vector` collection + write-back with raw slice sort; replace `reverse_vector` byte loops with `swap_nonoverlapping` |
+
+---
+
+## Design: V2 — Binary vector bulk write
+
+**Affected operations:** binary file read, HTTP response body parsing, any `file_from_bytes` / `write_data` for `Parts::Vector` of a primitive type
+**Expected gain:** O(N) `vector_append` + `vector_finish` calls → one `store.claim` + one `copy_nonoverlapping`; eliminates potential O(N²) store resizing
+**Cost:** Small — change to `src/database/io.rs` and `src/codegen_runtime.rs`
+
+### Background
+
+`database/io.rs:310–327` and `codegen_runtime.rs:920–928` both write binary data
+into a loft vector by appending elements one at a time:
+
+```rust
+// current — each vector_append may trigger store resize
+let n_elems = data.len() / elem_size as usize;
+for i in 0..n_elems {
+    let elem_ref = vector::vector_append(self, elem_size, &mut self.allocations);
+    let slice = &data[i * elem_size..(i + 1) * elem_size];
+    self.write_data(&elem_ref, elem_tp, little_endian, slice);
+    vector::vector_finish(self, &mut self.allocations);
+}
+```
+
+`vector_append` searches for or extends a free block each iteration.  For N=10 000
+elements each of size 4 bytes, this is 10 000 LLRB tree queries or linear scans.
+In the worst case (store at capacity) each call triggers `store.resize()` → `realloc`.
+The pattern is O(N²) in the number of resize operations.
+
+### When bulk copy is safe
+
+Bulk copy is safe when the element type is a plain primitive with `binary_size ==
+elem_size` and no owned fields (no `text`, no nested `reference`).  The existing
+`binary_size()` helper already determines this.  A simple gate:
+
+```rust
+fn is_bulk_copyable(stores: &Stores, elem_tp: u16, elem_size: u32) -> bool {
+    stores.binary_size(elem_tp) == elem_size as usize
+        && matches!(stores.types[elem_tp as usize].parts,
+            Parts::Base | Parts::Byte(..) | Parts::Short(..))
+}
+```
+
+Struct types with all-primitive fields also qualify if `binary_size(struct_tp) ==
+elem_size`, which `binary_size` already computes recursively.
+
+### Design
+
+```rust
+// src/database/io.rs — bulk path for plain-data vectors
+if is_bulk_copyable(self, elem_tp, elem_size) && !little_endian == cfg!(target_endian = "little") {
+    // Pre-claim space for all elements in one shot.
+    let words = (n_elems as u32 * elem_size).div_ceil(8) + 1;
+    let body_rec = self.store_mut(r).claim(words);
+    // Set vector header: length field at body_rec + 4.
+    self.store_mut(r).set_int(body_rec, 4, n_elems as i32);
+    self.store_mut(r).set_int(r.rec, r.pos, body_rec as i32);
+    // Bulk copy all element bytes in one call.
+    let dst = unsafe {
+        self.allocations[r.store_nr as usize].ptr
+            .add(body_rec as usize * 8 + 8)
+    };
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
+} else {
+    // Existing element-by-element path for complex types or big-endian data.
+    for i in 0..n_elems { ... }
+}
+```
+
+The endian check (`!little_endian == cfg!(target_endian = "little")`) ensures the
+bulk path only fires when no byte-swapping is needed.  Loft runs on x86-64 and WASM
+(both little-endian), so for the common case `little_endian = true` + LE host the
+condition is always satisfied for primitive types.
+
+### Read-side bulk path
+
+The symmetric read in `database/io.rs:150–157` — collecting elements from a vector
+into a `Vec<u8>` — can use the same approach: when the element type is bulk-copyable,
+append all bytes with one `extend_from_slice`:
+
+```rust
+if is_bulk_copyable(self, elem_tp, elem_size) {
+    let store = &self.allocations[r.store_nr as usize];
+    let byte_count = length as usize * elem_size as usize;
+    let src = unsafe {
+        std::slice::from_raw_parts(
+            store.ptr.add(v_rec as usize * 8 + 8),
+            byte_count,
+        )
+    };
+    data.extend_from_slice(src);
+} else {
+    for i in 0..length { ... }
+}
+```
+
+### Files to change
+
+| File | Change |
+|---|---|
+| `src/database/io.rs` | Add `is_bulk_copyable`; bulk-write and bulk-read paths for `Parts::Vector` |
+| `src/codegen_runtime.rs` | Same bulk-write path in `file_from_bytes` |
+
+---
+
 ## Improvement priority order
 
 | Priority | Item | Target | Expected gain | Cost |
@@ -1091,15 +1299,18 @@ the flip inside the WebGL driver with no per-pixel Rust/JS work.
 | 2 | N1 — Direct collection emit | 08, 09, 10 native | 5–15× data-struct native | High |
 | 3 | **W3 — `vector<byte>` + zero-copy pixel** | canvas upload, text raster, PNG | Eliminates 2 full-image loops per upload | Small–Medium |
 | 4 | **W2 — zero-copy vertex upload** | mesh load, scene rebuild | Eliminates O(N) wasm-bindgen transitions | Small |
-| 5 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
-| 6 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
-| 7 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
-| 8 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 9 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+| 5 | **V1 — In-place sort/reverse** | all `sort()` + `rev()` calls | Eliminates intermediate Vec + write-back | Small |
+| 6 | **V2 — Binary vector bulk write** | file I/O, asset load, HTTP body | O(N) append → 1 claim + 1 memcpy | Small |
+| 7 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
+| 8 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
+| 9 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
+| 10 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
+| 11 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
-W3 and W2 move up because they are small-effort, high-impact changes specific to
-the game/graphics path and do not touch the interpreter core.  P1 remains the
-highest-priority interpreter change because it benefits every tight loop.
+W3/W2/V1/V2 cluster ahead of P2/N2 because all four are small-scope changes that
+touch one file each and do not disturb the interpreter core.  P1 remains the
+highest-priority interpreter change.  V1 and V2 benefit all targets (interpreter,
+native, WASM) wherever vectors are sorted or binary I/O is performed.
 
 ---
 
