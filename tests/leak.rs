@@ -90,6 +90,7 @@ fn reassign_struct_in_loop() {
 
 /// Breakout pattern: struct with vector field, reassigned in nested loop
 /// while other vectors are read in the same loop.
+/// Verifies both leak-free AND data integrity after each reassignment.
 #[test]
 fn breakout_pattern() {
     run_leak_check_str(
@@ -106,18 +107,67 @@ fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
   mat4_mul(proj, model)
 }
 pub fn test() {
-  bricks = [for _ in 0..10 { 1 }];
+  bricks = [for _ in 0..12 { 1 }];
   proj = make_mat4(1.0, 1.0);
   mvp = make_mat4(0.0, 0.0);
+  drawn = 0;
   for row in 0..3 {
     for col in 0..4 {
-      if bricks[row * 4 + col] == 1 {
-        mvp = rect_mvp(proj, col as float, row as float);
-        assert(mvp.m[0] >= 0.0, "m0");
-      }
+      assert(bricks[row * 4 + col] == 1, "brick[{row},{col}] should be 1");
+      mvp = rect_mvp(proj, col as float, row as float);
+      assert(len(mvp.m) == 16, "mvp.m should have 16 elements, got {len(mvp.m)}");
+      assert(mvp.m[0] == col as float, "mvp.m[0] should be {col}, got {mvp.m[0]}");
+      assert(mvp.m[5] == row as float, "mvp.m[5] should be {row}, got {mvp.m[5]}");
+      drawn += 1;
     }
   }
-  assert(bricks[0] == 1, "bricks intact");
+  assert(drawn == 12, "should draw 12 bricks, drew {drawn}");
+  // Verify proj wasn't corrupted by the loop
+  assert(proj.m[0] == 1.0, "proj.m[0] intact: {proj.m[0]}");
+  assert(len(proj.m) == 16, "proj.m len intact: {len(proj.m)}");
+}
+"#,
+    );
+}
+
+/// Simulate multiple frame iterations — run the brick loop twice,
+/// verify data integrity is preserved between iterations.
+#[test]
+fn breakout_two_frames() {
+    run_leak_check_str(
+        r#"
+struct Mat4 { m: vector<float> }
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
+  model = make_mat4(bx, by);
+  mat4_mul(proj, model)
+}
+pub fn test() {
+  bricks = [for _ in 0..12 { 1 }];
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  // "Frame 1"
+  for row in 0..3 {
+    for col in 0..4 {
+      assert(bricks[row * 4 + col] == 1, "f1 brick[{row},{col}]");
+      mvp = rect_mvp(proj, col as float, row as float);
+      assert(mvp.m[0] == col as float, "f1 mvp col={col}");
+    }
+  }
+  // "Frame 2" — same loop again, verify no corruption
+  for row2 in 0..3 {
+    for col2 in 0..4 {
+      assert(bricks[row2 * 4 + col2] == 1, "f2 brick[{row2},{col2}]");
+      mvp = rect_mvp(proj, col2 as float, row2 as float);
+      assert(mvp.m[0] == col2 as float, "f2 mvp col={col2}");
+    }
+  }
+  assert(proj.m[0] == 1.0, "proj intact");
 }
 "#,
     );
