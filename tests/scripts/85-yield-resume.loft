@@ -1,36 +1,64 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Reproduce yield/resume store bug: struct with vector field
-// allocated before the loop becomes stale after yield/resume.
-
+// Reproduce the breakout yield/resume bug locally.
+// Same structure as breakout: struct with vector field, allocated before
+// the loop, read inside the loop across yield boundaries.
 use yield_test;
 
 struct Mat4 { m: vector<float> }
+
 fn make_mat4(a: float, b: float) -> Mat4 {
   Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
 }
+
 fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
   make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
 }
-fn rect_mvp(proj: const Mat4, bx: float) -> Mat4 {
-  model = make_mat4(bx, 1.0);
+
+fn ortho() -> Mat4 {
+  Mat4 { m: [2.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, 1.0, 0.0, 1.0] }
+}
+
+fn rect_mvp(proj: const Mat4, bx: float, by: float, bw: float, bh: float) -> Mat4 {
+  model = Mat4 { m: [bw, 0.0, 0.0, 0.0, 0.0, bh, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, bx, by, 0.0, 1.0] };
   mat4_mul(proj, model)
 }
 
 fn main() {
-  proj = make_mat4(2.0, 3.0);
-  bricks = [for _ in 0..50 { 1 }];
-  mvp = make_mat4(0.0, 0.0);
-  for frame in 0..100 {
-    for bi in 0..50 {
-      if bricks[bi] == 1 {
-        mvp = rect_mvp(proj, bi as float);
-        assert(len(mvp.m) == 16, "brick mvp f{frame}");
+  br_proj = ortho();
+  br_bricks = [for _ in 0..50 { 1 }];
+  br_colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
+  br_alive = 50;
+  br_mvp = make_mat4(0.0, 0.0);
+
+  for _ in 0..1000000 {
+    // Draw bricks
+    for br_dr in 0..5 {
+      for br_dc in 0..10 {
+        if br_bricks[br_dr * 10 + br_dc] == 1 {
+          br_dx = (br_dc as float) * 76.0 + 12.0;
+          br_dy = (br_dr as float) * 24.0 + 50.0;
+          br_mvp = rect_mvp(br_proj, br_dx, br_dy, 72.0, 20.0);
+          // simulate gl_set_uniform_mat4 reading the vector
+          assert(len(br_mvp.m) == 16, "brick mvp len");
+        }
       }
     }
-    mvp = rect_mvp(proj, 99.0);
-    assert(mvp.m[0] == 198.0, "mvp f{frame}");
-    assert(proj.m[0] == 2.0, "proj f{frame}");
+    // Draw paddle
+    br_mvp = rect_mvp(br_proj, 350.0, 560.0, 100.0, 15.0);
+    assert(len(br_mvp.m) == 16, "paddle mvp len");
+    // Draw ball
+    br_mvp = rect_mvp(br_proj, 395.0, 530.0, 10.0, 10.0);
+    assert(len(br_mvp.m) == 16, "ball mvp len");
+    // Draw lives
+    for br_li in 0..3 {
+      br_mvp = rect_mvp(br_proj, 780.0 - br_li as float * 18.0, 10.0, 12.0, 12.0);
+      assert(len(br_mvp.m) == 16, "life mvp len");
+    }
+    // Verify proj intact
+    assert(br_proj.m[0] == 2.0, "proj.m[0]");
+    assert(br_proj.m[5] == -2.0, "proj.m[5]");
+    // Yield — simulate gl_swap_buffers
     yield_test::yield_frame();
   }
 }

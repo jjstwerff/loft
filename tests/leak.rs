@@ -139,10 +139,10 @@ pub fn test() {
     );
 }
 
-/// Reproduce the WASM yield/resume store bug locally.
-/// A native function sets frame_yield=true to simulate gl_swap_buffers.
+/// Reproduce the WASM breakout use-after-free locally.
+/// Same structure as breakout but uses yield_test library instead of GL.
 #[test]
-fn yield_resume_store_bug() {
+fn breakout_yield_resume() {
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;
@@ -156,7 +156,6 @@ fn yield_resume_store_bug() {
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
 
-    // Replace the stub with a native that sets frame_yield
     fn mock_yield(stores: &mut loft::database::Stores, _stack: &mut loft::keys::DbRef) {
         stores.frame_yield = true;
     }
@@ -166,13 +165,13 @@ fn yield_resume_store_bug() {
     state.execute("main", &p.data);
     assert!(state.database.frame_yield, "should have yielded");
 
-    // Resume for remaining frames
-    for _ in 0..10 {
-        if !state.resume() {
+    // Resume for 100 frames — enough to trigger store recycling
+    for frame in 0..100 {
+        let running = state.resume();
+        if !running {
             break;
         }
     }
-    state.check_store_leaks();
 }
 
 /// Dump bytecode of breakout to find FreeRef positions

@@ -1,47 +1,96 @@
-// Test library simulating the graphics library's native function count
-// The presence of many #native declarations affects store allocation order
+// Test library simulating the graphics library's ~45 native function declarations.
+// The number and types of #native declarations affect store allocation order,
+// which can expose use-after-free bugs that only manifest at specific store counts.
 
 pub fn yield_frame();
 #native "mock_yield_frame"
 
-// Dummy natives to match graphics library's ~45 native declarations
-pub fn dummy_native_01(a: integer) -> integer;
-#native "mock_dummy_01"
-pub fn dummy_native_02(a: integer) -> integer;
-#native "mock_dummy_02"
-pub fn dummy_native_03(a: integer) -> integer;
-#native "mock_dummy_03"
-pub fn dummy_native_04(a: integer) -> integer;
-#native "mock_dummy_04"
-pub fn dummy_native_05(a: integer) -> integer;
-#native "mock_dummy_05"
-pub fn dummy_native_06(a: integer) -> integer;
-#native "mock_dummy_06"
-pub fn dummy_native_07(a: integer) -> integer;
-#native "mock_dummy_07"
-pub fn dummy_native_08(a: integer) -> integer;
-#native "mock_dummy_08"
-pub fn dummy_native_09(a: integer) -> integer;
-#native "mock_dummy_09"
-pub fn dummy_native_10(a: integer) -> integer;
-#native "mock_dummy_10"
-pub fn dummy_native_11(a: integer) -> integer;
-#native "mock_dummy_11"
-pub fn dummy_native_12(a: integer) -> integer;
-#native "mock_dummy_12"
-pub fn dummy_native_13(a: integer) -> integer;
-#native "mock_dummy_13"
-pub fn dummy_native_14(a: integer) -> integer;
-#native "mock_dummy_14"
-pub fn dummy_native_15(a: integer) -> integer;
-#native "mock_dummy_15"
-pub fn dummy_native_16(a: integer) -> integer;
-#native "mock_dummy_16"
-pub fn dummy_native_17(a: integer) -> integer;
-#native "mock_dummy_17"
-pub fn dummy_native_18(a: integer) -> integer;
-#native "mock_dummy_18"
-pub fn dummy_native_19(a: integer) -> integer;
-#native "mock_dummy_19"
-pub fn dummy_native_20(a: integer) -> integer;
-#native "mock_dummy_20"
+// Simulate gl_create_window(w,h,title) -> boolean
+pub fn mock_gl_create(w: integer, h: integer, t: text) -> boolean;
+#native "mock_gl_create"
+pub fn mock_gl_poll() -> boolean;
+#native "mock_gl_poll"
+pub fn mock_gl_clear(c: integer);
+#native "mock_gl_clear"
+pub fn mock_gl_swap();
+#native "mock_gl_swap"
+pub fn mock_gl_destroy();
+#native "mock_gl_destroy"
+pub fn mock_gl_shader(v: text, f: text) -> integer;
+#native "mock_gl_shader"
+pub fn mock_gl_use(s: integer);
+#native "mock_gl_use"
+pub fn mock_gl_upload(d: const vector<single>, n: integer) -> integer;
+#native "mock_gl_upload"
+pub fn mock_gl_draw(v: integer, n: integer);
+#native "mock_gl_draw"
+pub fn mock_gl_mat4(s: integer, n: text, m: const vector<float>);
+#native "mock_gl_mat4"
+pub fn mock_gl_vec3(s: integer, n: text, r: float, g: float, b: float);
+#native "mock_gl_vec3"
+pub fn mock_gl_disable(c: integer);
+#native "mock_gl_disable"
+pub fn mock_gl_enable(c: integer);
+#native "mock_gl_enable"
+pub fn mock_gl_key(k: integer) -> boolean;
+#native "mock_gl_key"
+pub fn mock_gl_tex(p: text) -> integer;
+#native "mock_gl_tex"
+pub fn mock_gl_bind(t: integer);
+#native "mock_gl_bind"
+pub fn mock_gl_viewport(x: integer, y: integer, w: integer, h: integer);
+#native "mock_gl_viewport"
+pub fn mock_gl_blend(s: integer, d: integer);
+#native "mock_gl_blend"
+pub fn mock_gl_depth(f: integer);
+#native "mock_gl_depth"
+pub fn mock_gl_cull(f: integer);
+#native "mock_gl_cull"
+pub fn mock_gl_fbo() -> integer;
+#native "mock_gl_fbo"
+pub fn mock_gl_fbo_bind(f: integer);
+#native "mock_gl_fbo_bind"
+pub fn mock_gl_fbo_tex(f: integer, t: integer);
+#native "mock_gl_fbo_tex"
+pub fn mock_gl_fbo_depth(f: integer, w: integer, h: integer);
+#native "mock_gl_fbo_depth"
+pub fn mock_save_png(p: text, w: integer, h: integer, d: const vector<integer>) -> boolean;
+#native "mock_save_png"
+pub fn mock_gl_read_pixels(x: integer, y: integer, w: integer, h: integer) -> vector<integer>;
+#native "mock_gl_read_pixels"
+pub fn mock_gl_line_width(w: float);
+#native "mock_gl_line_width"
+pub fn mock_gl_polygon_mode(f: integer, m: integer);
+#native "mock_gl_polygon_mode"
+pub fn mock_gl_set_int(s: integer, n: text, v: integer);
+#native "mock_gl_set_int"
+pub fn mock_gl_set_float(s: integer, n: text, v: float);
+#native "mock_gl_set_float"
+pub fn mock_gl_mouse_x() -> float;
+#native "mock_gl_mouse_x"
+pub fn mock_gl_mouse_y() -> float;
+#native "mock_gl_mouse_y"
+pub fn mock_gl_scroll_y() -> float;
+#native "mock_gl_scroll_y"
+pub fn mock_gl_time() -> float;
+#native "mock_gl_time"
+pub fn mock_gl_upload_indices(d: const vector<integer>) -> integer;
+#native "mock_gl_upload_indices"
+pub fn mock_gl_draw_indexed(v: integer, i: integer, n: integer);
+#native "mock_gl_draw_indexed"
+pub fn mock_gl_gen_mipmap(t: integer);
+#native "mock_gl_gen_mipmap"
+pub fn mock_gl_tex_data(w: integer, h: integer, d: const vector<integer>) -> integer;
+#native "mock_gl_tex_data"
+pub fn mock_gl_active_tex(u: integer);
+#native "mock_gl_active_tex"
+pub fn mock_gl_depth_mask(f: boolean);
+#native "mock_gl_depth_mask"
+pub fn mock_gl_stencil(f: integer);
+#native "mock_gl_stencil"
+pub fn mock_gl_stencil_func(f: integer, r: integer, m: integer);
+#native "mock_gl_stencil_func"
+pub fn mock_gl_stencil_op(s: integer, d: integer, p: integer);
+#native "mock_gl_stencil_op"
+pub fn mock_gl_scissor(x: integer, y: integer, w: integer, h: integer);
+#native "mock_gl_scissor"
