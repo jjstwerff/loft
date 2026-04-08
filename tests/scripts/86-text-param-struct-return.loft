@@ -1,0 +1,117 @@
+// Tests for issue #117: struct-returning functions with text params must not leak stores.
+// Covers: single call, loop reassignment, multiple text params, text variable (not literal),
+// chained calls, nested loops, multiple live variables simultaneously.
+
+struct Item {
+    label: text,
+    value: integer not null,
+}
+
+struct Pair {
+    first: text,
+    second: text,
+}
+
+fn make_item(label: text, n: integer) -> Item {
+    Item { label: label, value: n }
+}
+
+fn make_pair(a: text, b: text) -> Pair {
+    Pair { first: a, second: b }
+}
+
+fn prefix_item(prefix: text, n: integer) -> Item {
+    make_item("{prefix}_{n}", n)
+}
+
+// 1. Basic single call — verify data, no leak
+fn test_single_call() {
+    it = make_item("hello", 42);
+    assert(it.label == "hello", "single call label");
+    assert(it.value == 42, "single call value");
+}
+
+// 2. Loop reassignment — same var reassigned each iteration
+fn test_loop_reassign() {
+    p117_a_it = make_item("init", 0);
+    for p117_a_i in 1..=5 {
+        p117_a_it = make_item("iter", p117_a_i);
+    }
+    assert(p117_a_it.label == "iter", "loop reassign label");
+    assert(p117_a_it.value == 5, "loop reassign value");
+}
+
+// 3. Two text params
+fn test_two_text_params() {
+    p = make_pair("foo", "bar");
+    assert(p.first == "foo", "two text params first");
+    assert(p.second == "bar", "two text params second");
+}
+
+// 4. Loop reassignment with two text params
+fn test_two_text_params_loop() {
+    p117_b_p = make_pair("x", "y");
+    for p117_b_i in 0..4 {
+        p117_b_p = make_pair("a{p117_b_i}", "b{p117_b_i}");
+    }
+    assert(p117_b_p.first == "a3", "two text loop first");
+    assert(p117_b_p.second == "b3", "two text loop second");
+}
+
+// 5. Text variable (not literal) as param
+fn test_text_variable_param() {
+    p117_lbl = "dynamic";
+    p117_num = 7;
+    dyn_it = make_item(p117_lbl, p117_num);
+    assert(dyn_it.label == "dynamic", "text variable param label");
+    assert(dyn_it.value == 7, "text variable param value");
+}
+
+// 6. Chained calls (outer calls inner, both take text)
+fn test_chained_calls() {
+    ch_it = prefix_item("pre", 99);
+    assert(ch_it.label == "pre_99", "chained label");
+    assert(ch_it.value == 99, "chained value");
+}
+
+// 7. Chained calls in a loop
+fn test_chained_calls_loop() {
+    p117_c_it = prefix_item("p", 0);
+    for p117_c_i in 1..=3 {
+        p117_c_it = prefix_item("q", p117_c_i);
+    }
+    assert(p117_c_it.label == "q_3", "chained loop label");
+    assert(p117_c_it.value == 3, "chained loop value");
+}
+
+// 8. Nested loops with text param struct return
+fn test_nested_loops() {
+    p117_n_sum = 0;
+    for p117_n_row in 0..3 {
+        for p117_n_col in 0..3 {
+            p117_n_it = make_item("cell", p117_n_row * 3 + p117_n_col);
+            p117_n_sum += p117_n_it.value;
+        }
+    }
+    // 0+1+2+3+4+5+6+7+8 = 36
+    assert(p117_n_sum == 36, "nested loops sum");
+}
+
+// 9. Multiple live variables simultaneously
+fn test_multiple_live_vars() {
+    p117_m_a = make_item("alpha", 1);
+    p117_m_b = make_item("beta", 2);
+    p117_m_c = make_item("gamma", 3);
+    assert(p117_m_a.label == "alpha", "multi live a");
+    assert(p117_m_b.label == "beta", "multi live b");
+    assert(p117_m_c.label == "gamma", "multi live c");
+    assert(p117_m_a.value + p117_m_b.value + p117_m_c.value == 6, "multi live sum");
+}
+
+// 10. Text-only struct (no integer fields)
+fn test_text_only_struct() {
+    for p117_t_i in 0..4 {
+        p117_t_p = make_pair("hello{p117_t_i}", "world{p117_t_i}");
+        assert(p117_t_p.first == "hello{p117_t_i}", "text only first");
+    }
+}
