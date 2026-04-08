@@ -409,6 +409,33 @@ impl Scopes {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);
         }
+        // When a Reference variable is assigned from a user-function call with no
+        // visible Reference params (O-B2 adoption), the callee's __ref_N work-ref
+        // store IS the returned struct's store.  Suppress FreeRef on those __ref_N
+        // vars so native codegen doesn't free the store before the return value
+        // reaches the caller.  Mirrors the interpreter codegen skip_free at
+        // state/codegen.rs:1043-1050.
+        if matches!(
+            function.tp(v),
+            Type::Reference(_, _) | Type::Enum(_, true, _)
+        ) && let Value::Call(fn_nr, args) = value
+            && data.def(*fn_nr).name.starts_with("n_")
+            && data.def(*fn_nr).code != Value::Null
+        {
+            let has_ref_params = data.def(*fn_nr).attributes.iter().any(|a| {
+                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+            });
+            if !has_ref_params {
+                for arg in args {
+                    if let Value::Var(wv) = arg {
+                        let wv = *self.var_mapping.get(wv).unwrap_or(wv);
+                        if function.name(wv).starts_with("__ref_") {
+                            function.set_skip_free(wv);
+                        }
+                    }
+                }
+            }
+        }
         if depend.is_empty() {
             Value::Set(v, Box::new(self.scan(value, function, data)))
         } else {
