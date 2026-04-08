@@ -148,6 +148,8 @@ fn breakout_yield_resume() {
     p.data = data;
     p.database = db;
     p.lib_dirs.push("tests/lib".to_string());
+    p.lib_dirs.push("lib".to_string());
+    p.lib_dirs.push("lib/graphics/src".to_string());
     p.parse("tests/scripts/85-yield-resume.loft", false);
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         panic!("parse errors: {:?}", p.diagnostics.lines());
@@ -166,7 +168,7 @@ fn breakout_yield_resume() {
     assert!(state.database.frame_yield, "should have yielded");
 
     // Resume for 100 frames — enough to trigger store recycling
-    for frame in 0..100 {
+    for _frame in 0..1000 {
         let running = state.resume();
         if !running {
             break;
@@ -181,6 +183,8 @@ fn dump_breakout_bytecode() {
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
+    p.lib_dirs.push("lib".to_string());
+    p.lib_dirs.push("lib/graphics/src".to_string());
     p.parse("lib/graphics/examples/25-breakout.loft", false);
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
@@ -189,8 +193,9 @@ fn dump_breakout_bytecode() {
     config.phases.bytecode = true;
     config.phases.ir = false;
     config.show_all_functions = false;
-    config.show_functions = None;
+    config.show_functions = Some(vec!["n_main".to_string()]);
     for l in p.diagnostics.lines() { eprintln!("DIAG: {l}"); }
+    loft::compile::show_code(&mut std::io::stderr(), &mut state, &mut p.data, &config).ok();
     use loft::data::DefType;
     for d_nr in 0..p.data.definitions() {
         let def = p.data.def(d_nr);
