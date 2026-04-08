@@ -344,7 +344,10 @@ impl Drop for Test {
             state.execute_log(&mut w, "test", &config, &p.data).unwrap();
         }
         #[cfg(not(debug_assertions))]
-        state.execute("test", &p.data);
+        {
+            state.execute("test", &p.data);
+            state.check_store_leaks();
+        }
     }
 }
 

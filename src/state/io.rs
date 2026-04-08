@@ -451,39 +451,7 @@ impl State {
                 }
             }
         }
-        if std::env::var("LOFT_STORE_DEBUG").is_ok() && db.store_nr == 14 {
-            let (fn_name, offset) = if !self.data_ptr.is_null() {
-                let data = unsafe { &*self.data_ptr };
-                let d_nr = Self::fn_d_nr_for_pos(self.code_pos, data);
-                if d_nr != u32::MAX {
-                    (data.def(d_nr).name.clone(), self.code_pos - data.def(d_nr).code_position)
-                } else {
-                    ("?".to_string(), 0)
-                }
-            } else {
-                ("?".to_string(), 0)
-            };
-            eprintln!("[store14] FREE rec={} pos={} bc={} fn={fn_name}+{offset}",
-                     db.rec, db.pos, self.code_pos);
-        }
-        #[cfg(feature = "wasm")]
-        if db.store_nr == 14 {
-            let (fn_name, offset) = if !self.data_ptr.is_null() {
-                let data = unsafe { &*self.data_ptr };
-                let d_nr = Self::fn_d_nr_for_pos(self.code_pos, data);
-                if d_nr != u32::MAX {
-                    (data.def(d_nr).name.clone(), self.code_pos - data.def(d_nr).code_position)
-                } else {
-                    ("?".to_string(), 0)
-                }
-            } else {
-                ("?".to_string(), 0)
-            };
-            web_sys::console::error_1(
-                &format!("[store14] FREE rec={} pos={} bc={} fn={fn_name}+{offset}",
-                         db.rec, db.pos, self.code_pos).into(),
-            );
-        }
+        self.ref_positions.remove(&db.store_nr);
         self.database.free(&db);
     }
 
@@ -537,6 +505,7 @@ impl State {
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
+        self.ref_positions.insert(r.store_nr, self.call_depth);
         self.database
             .store_mut(&r)
             .set_int(r.rec, 4, i32::from(db_tp));

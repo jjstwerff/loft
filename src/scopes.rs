@@ -1055,7 +1055,7 @@ fn check_ref_leaks(
                         || function.name(*d).starts_with("__rref_")
                 })
             {
-                eprintln!(
+                panic!(
                     "[check_ref_leaks] Warning: Reference variable '{}' (var_nr={v}) in \
                      function '{}' has only text-work deps {:?} — likely spurious. \
                      Store will leak at runtime (P117).",

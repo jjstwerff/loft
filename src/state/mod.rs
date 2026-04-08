@@ -113,6 +113,9 @@ pub struct State {
     pub library: Arc<Vec<Call>>,
     pub library_names: HashMap<String, u16>,
     pub(crate) text_positions: BTreeSet<u32>,
+    /// Debug: tracks every allocated store_nr → call_depth at allocation time.
+    /// Used in `fn_return` to detect stores that were never freed (orphaned leaks).
+    pub(crate) ref_positions: BTreeMap<u16, u32>,
     pub(crate) line_numbers: BTreeMap<u32, u32>,
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
@@ -168,6 +171,7 @@ impl State {
             library: Arc::new(Vec::new()),
             library_names: HashMap::new(),
             text_positions: BTreeSet::new(),
+            ref_positions: BTreeMap::new(),
             line_numbers: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
@@ -356,7 +360,7 @@ impl State {
     pub fn fn_return(&mut self, ret: u16, value: u8, discard: u16) {
         let pos = self.stack_pos;
         self.stack_pos -= u32::from(discard);
-        // Clean up any text positions in the discarded range.  This can happen
+        // Clean up any text positions in the discarded range. This can happen
         // when conditional match arms with field bindings produce text values —
         // the scope analysis may not emit OpFreeText for all branches.
         if cfg!(debug_assertions) {
@@ -373,6 +377,50 @@ impl State {
         self.stack_pos += u32::from(ret);
         self.code_pos = *self.get_var::<u32>(0);
         self.copy_result(value, pos, fn_stack);
+        // Debug: check for stores allocated at this call depth that were never freed.
+        // After copy_result, stack_pos == fn_stack + value (value = bytes actually copied).
+        // We need to exclude any store that IS the return value — it will be owned by
+        // the caller and freed there.
+        //
+        // Known return layouts that embed a store:
+        //   value == 12: direct DbRef (struct/reference) — the DbRef itself is the store
+        //   value == 16: fn-ref [d_nr: i32, closure: DbRef] — closure starts at offset 4
+        //     In both cases get_var::<DbRef>(12) gives us the relevant DbRef because:
+        //     - value=12: reads at stack_pos-12 = fn_stack (the DbRef itself)
+        //     - value=16: reads at stack_pos-12 = fn_stack+4 (the embedded closure DbRef)
+        if cfg!(debug_assertions) {
+            let depth = self.call_depth;
+            let db_ref_size = size_of::<DbRef>() as u16; // 12
+            let ret_store_nr: Option<u16> = if value as u16 == db_ref_size
+                || value as usize == 16
+            {
+                // get_var(12) reads at stack_pos-12; safe since stack_pos = fn_stack+value >= 12
+                let db = *self.get_var::<DbRef>(db_ref_size);
+                if db.store_nr != u16::MAX {
+                    Some(db.store_nr)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let mut leaked: Vec<u16> = Vec::new();
+            for (&nr, &d) in &self.ref_positions {
+                if d == depth
+                    && Some(nr) != ret_store_nr
+                    && (nr as usize) < self.database.allocations.len()
+                    && !self.database.allocations[nr as usize].free
+                {
+                    leaked.push(nr);
+                }
+            }
+            self.ref_positions.retain(|_, d| *d != depth);
+            assert!(
+                leaked.is_empty(),
+                "Store leak at fn_return (call_depth={depth}): \
+                 unfreed store_nr(s) {leaked:?}"
+            );
+        }
         self.call_stack.pop();
         self.call_depth = self.call_depth.saturating_sub(1);
     }
@@ -1468,6 +1516,7 @@ impl State {
             calls: HashMap::new(),
             types: HashMap::new(),
             text_positions: BTreeSet::new(),
+            ref_positions: BTreeMap::new(),
             line_numbers: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
