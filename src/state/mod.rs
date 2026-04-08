@@ -1363,6 +1363,12 @@ impl State {
     /// `execute_argv` to detect store leaks. Panics in debug builds
     /// if any stores are still alive (except the stack store).
     pub fn check_store_leaks(&self) {
+        self.check_store_leaks_context("");
+    }
+
+    /// Like `check_store_leaks` but includes `context` (e.g. function name)
+    /// in the message for easier diagnosis.
+    pub fn check_store_leaks_context(&self, context: &str) {
         let mut leaked = Vec::new();
         for (s_nr, s) in self.database.allocations.iter().enumerate() {
             if s_nr == 0 {
@@ -1379,7 +1385,12 @@ impl State {
             } else {
                 format!("{} ... and {} more", leaked[..5].join(", "), count - 5)
             };
-            let msg = format!("{count} stores not freed at program exit: {preview}");
+            let ctx = if context.is_empty() {
+                String::new()
+            } else {
+                format!(" after {context}")
+            };
+            let msg = format!("{count} stores not freed{ctx}: {preview}");
             if cfg!(debug_assertions) {
                 panic!("{msg}");
             } else {

@@ -49,11 +49,12 @@ fn run_leak_check(path: &str) {
     p.database = db;
     let start_def = p.data.definitions();
     p.parse(path, false);
-    assert!(
-        p.diagnostics.is_empty(),
-        "{path}: parse errors: {:?}",
-        p.diagnostics.lines()
-    );
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
+        panic!(
+            "{path}: parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+    }
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
@@ -76,10 +77,10 @@ fn run_leak_check(path: &str) {
         }
         let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
         state.execute(user_name, &p.data);
+        state.check_store_leaks_context(&format!("{path}::{user_name}"));
         ran += 1;
     }
     assert!(ran > 0, "{path}: no entry-point functions found");
-    state.check_store_leaks();
 }
 
 #[test]
@@ -90,6 +91,11 @@ fn block_copy_opt_no_leak() {
 #[test]
 fn field_iter_no_leak() {
     run_leak_check("tests/scripts/45-field-iter.loft");
+}
+
+#[test]
+fn index_range_no_leak() {
+    run_leak_check("tests/scripts/62-index-range-queries.loft");
 }
 
 #[test]
