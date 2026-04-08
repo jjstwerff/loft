@@ -57,8 +57,10 @@ impl Stores {
         };
         #[cfg(feature = "wasm")]
         if result.store_nr == 14 {
+            // Capture a pseudo-backtrace by logging the allocation context
             web_sys::console::warn_1(
-                &format!("[store14] ALLOC rec={} size={size} name={name}", result.rec).into(),
+                &format!("[store14] ALLOC rec={} size={size} name={name} max={}",
+                         result.rec, self.max).into(),
             );
         }
         if std::env::var("LOFT_STORE_LOG").is_ok() {

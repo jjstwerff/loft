@@ -81,6 +81,127 @@ fn run_leak_check(path: &str) {
     assert!(ran > 0, "{path}: no entry-point functions found");
 }
 
+/// Replicate the WASM breakout store 14 use-after-free.
+/// proj is allocated once, its store gets recycled for temporaries
+/// in sub-loops, then proj.m is read after the temporary is freed.
+#[test]
+fn wasm_store_recycling_bug() {
+    run_leak_check_str(
+        r#"
+struct Mat4 { m: vector<float> }
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+fn ortho() -> Mat4 {
+  Mat4 { m: [2.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, 1.0, 0.0, 1.0] }
+}
+fn rect_mvp(proj: const Mat4, bx: float, by: float, bw: float, bh: float) -> Mat4 {
+  model = Mat4 { m: [bw, 0.0, 0.0, 0.0, 0.0, bh, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, bx, by, 0.0, 1.0] };
+  mat4_mul(proj, model)
+}
+pub fn test() {
+  proj = ortho();
+  bricks = [for _ in 0..50 { 1 }];
+  colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
+  lives = 3;
+  mvp = make_mat4(0.0, 0.0);
+  // Simulate 1000 frames
+  for frame in 0..1000 {
+    // Draw bricks (50 iterations)
+    for dr in 0..5 {
+      for dc in 0..10 {
+        if bricks[dr * 10 + dc] == 1 {
+          mvp = rect_mvp(proj, dc as float * 72.0, dr as float * 20.0, 72.0, 20.0);
+          assert(len(mvp.m) == 16, "f{frame} brick mvp");
+        }
+      }
+    }
+    // Draw paddle
+    mvp = rect_mvp(proj, 350.0, 560.0, 100.0, 15.0);
+    assert(len(mvp.m) == 16, "f{frame} paddle mvp");
+    // Draw ball
+    mvp = rect_mvp(proj, 395.0, 530.0, 10.0, 10.0);
+    assert(len(mvp.m) == 16, "f{frame} ball mvp");
+    // Draw lives
+    for li in 0..lives {
+      mvp = rect_mvp(proj, 780.0 - li as float * 18.0, 10.0, 12.0, 12.0);
+      assert(len(mvp.m) == 16, "f{frame} life {li}");
+    }
+    // Verify proj intact after all draws
+    assert(proj.m[0] == 2.0, "f{frame} proj.m[0]={proj.m[0]}");
+    assert(proj.m[5] == -2.0, "f{frame} proj.m[5]={proj.m[5]}");
+  }
+}
+"#,
+    );
+}
+
+/// Reproduce the WASM yield/resume store bug locally.
+/// A native function sets frame_yield=true to simulate gl_swap_buffers.
+#[test]
+fn yield_resume_store_bug() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse("tests/scripts/85-yield-resume.loft", false);
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
+        panic!("parse errors: {:?}", p.diagnostics.lines());
+    }
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // Replace the stub with a native that sets frame_yield
+    fn mock_yield(stores: &mut loft::database::Stores, _stack: &mut loft::keys::DbRef) {
+        stores.frame_yield = true;
+    }
+    state.replace_native("mock_yield_frame", mock_yield);
+
+    // First execute — runs until first yield
+    state.execute("main", &p.data);
+    assert!(state.database.frame_yield, "should have yielded");
+
+    // Resume for remaining frames
+    for _ in 0..10 {
+        if !state.resume() {
+            break;
+        }
+    }
+    state.check_store_leaks();
+}
+
+/// Dump bytecode of breakout to find FreeRef positions
+#[test]
+fn dump_breakout_bytecode() {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse("lib/graphics/examples/25-breakout.loft", false);
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::from_env();
+    config.phases.bytecode = true;
+    config.phases.ir = false;
+    config.show_all_functions = false;
+    config.show_functions = None;
+    for l in p.diagnostics.lines() { eprintln!("DIAG: {l}"); }
+    use loft::data::DefType;
+    for d_nr in 0..p.data.definitions() {
+        let def = p.data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) { continue; }
+        if def.position.file.starts_with("default/") { continue; }
+        let cp = def.code_position;
+        eprintln!("  fn {} at bc={cp} file={}", def.name, def.position.file);
+    }
+}
+
 // ── Active leak investigations go below ─────────────────────────────
 
 #[test]

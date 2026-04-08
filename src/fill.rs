@@ -1637,10 +1637,13 @@ fn get_vector(s: &mut State) {
         && (v_r.store_nr as usize) < s.database.allocations.len()
         && s.database.allocations[v_r.store_nr as usize].free
     {
+        // Log which store was freed and when
+        let created = s.database.allocations[v_r.store_nr as usize].created_at;
+        let last_op = s.database.allocations[v_r.store_nr as usize].last_op_at;
         web_sys::console::error_1(
             &format!(
-                "get_vector: about to use-after-free store={} rec={} pos={} index={} bc={}",
-                v_r.store_nr, v_r.rec, v_r.pos, v_index, s.code_pos
+                "get_vector: USE-AFTER-FREE store={} rec={} pos={} index={} bc={} created_at={} last_op_at={}",
+                v_r.store_nr, v_r.rec, v_r.pos, v_index, s.code_pos, created, last_op
             )
             .into(),
         );

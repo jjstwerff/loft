@@ -1,0 +1,47 @@
+// Test library simulating the graphics library's native function count
+// The presence of many #native declarations affects store allocation order
+
+pub fn yield_frame();
+#native "mock_yield_frame"
+
+// Dummy natives to match graphics library's ~45 native declarations
+pub fn dummy_native_01(a: integer) -> integer;
+#native "mock_dummy_01"
+pub fn dummy_native_02(a: integer) -> integer;
+#native "mock_dummy_02"
+pub fn dummy_native_03(a: integer) -> integer;
+#native "mock_dummy_03"
+pub fn dummy_native_04(a: integer) -> integer;
+#native "mock_dummy_04"
+pub fn dummy_native_05(a: integer) -> integer;
+#native "mock_dummy_05"
+pub fn dummy_native_06(a: integer) -> integer;
+#native "mock_dummy_06"
+pub fn dummy_native_07(a: integer) -> integer;
+#native "mock_dummy_07"
+pub fn dummy_native_08(a: integer) -> integer;
+#native "mock_dummy_08"
+pub fn dummy_native_09(a: integer) -> integer;
+#native "mock_dummy_09"
+pub fn dummy_native_10(a: integer) -> integer;
+#native "mock_dummy_10"
+pub fn dummy_native_11(a: integer) -> integer;
+#native "mock_dummy_11"
+pub fn dummy_native_12(a: integer) -> integer;
+#native "mock_dummy_12"
+pub fn dummy_native_13(a: integer) -> integer;
+#native "mock_dummy_13"
+pub fn dummy_native_14(a: integer) -> integer;
+#native "mock_dummy_14"
+pub fn dummy_native_15(a: integer) -> integer;
+#native "mock_dummy_15"
+pub fn dummy_native_16(a: integer) -> integer;
+#native "mock_dummy_16"
+pub fn dummy_native_17(a: integer) -> integer;
+#native "mock_dummy_17"
+pub fn dummy_native_18(a: integer) -> integer;
+#native "mock_dummy_18"
+pub fn dummy_native_19(a: integer) -> integer;
+#native "mock_dummy_19"
+pub fn dummy_native_20(a: integer) -> integer;
+#native "mock_dummy_20"
