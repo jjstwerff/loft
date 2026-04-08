@@ -15,6 +15,25 @@ use loft::state::State;
 mod common;
 use common::cached_default;
 
+/// Run inline loft code (must define `fn test()`) and check for store leaks.
+fn run_leak_check_str(code: &str) {
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse_str(code, "leak_test", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("test", &p.data);
+    state.check_store_leaks();
+}
+
 /// Run all test_* / main functions in a script and check for store leaks.
 fn run_leak_check(path: &str) {
     let mut p = Parser::new();
@@ -69,4 +88,29 @@ fn field_iter_no_leak() {
 #[test]
 fn index_range_no_leak() {
     run_leak_check("tests/scripts/62-index-range-queries.loft");
+}
+
+#[test]
+fn iterator_protocol_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Counter { current: integer, limit: integer }
+
+fn next(self: Counter) -> integer {
+  val = self.current;
+  self.current = val + 1;
+  if val >= self.limit { return null; }
+  val
+}
+
+pub fn test() {
+  c = Counter { current: 0, limit: 2 };
+  total = 0;
+  for x in c {
+    total += x;
+  }
+  assert(total == 1, "sum: {total}");
+}
+"#,
+    );
 }
