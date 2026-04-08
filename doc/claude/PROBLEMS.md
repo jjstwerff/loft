@@ -31,12 +31,12 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 64 | ~~Overflow risk in store offset arithmetic~~ | ~~Medium~~ | **Fixed** — `checked_offset()` uses u64 with assert |
 | 66 | ~~Integer cast truncation in vector index/size~~ | ~~Medium~~ | **Fixed** — `checked_vec_pos()`/`checked_vec_cap()` use u64 |
 | 79 | ~~Native codegen: `external` crate reference not resolved (random/FFI)~~ | ~~Low~~ | **Fixed** — `external` module emitted in generated code via `codegen_runtime` wrappers |
-| 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
-| 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
+| 85 | ~~Struct-enum local variable leaks stack space (debug assertion)~~ | ~~Low~~ | **Fixed** — C41; test: `71-caveats-problems.loft::test_p85_struct_enum_local` |
+| 86 | ~~Lambda capture produced misleading codegen self-reference error~~ | ~~Low~~ | **Fixed** — A5.1 emits clear "closure capture not yet supported" error |
 | 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
 | 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
 | 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
-| 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
+| 92 | ~~`stack_trace()` in parallel workers returns empty~~ | ~~Low~~ | **Fixed** — S21; test: `threading::parallel_stack_trace_non_empty` |
 | 103 | ~~Inline vector concat in compound assignment~~ | ~~Medium~~ | **Fixed** — now a compile error instead of warning |
 | 107 | ~~`++` return expression + struct parameter bug~~ | ~~Medium~~ | **Fixed** — parser now rejects `++` with a clear error |
 | 108 | ~~`f#next` initial seek on fresh read handle~~ | ~~Low~~ | **Fixed** — seek applied on first file open |
@@ -49,7 +49,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
-| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
+| 120 | ~~Use-after-free: struct return inside `if` block in loop frees borrowed store~~ | ~~**High**~~ | **Fixed** — store freeing on struct reassignment; tests: `native_loader::vec_from_returned_struct*` |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -453,7 +453,7 @@ to worry about.
 
 
 
-### 85. Struct-enum local variable leaks stack space *(fixed, C41)*
+### 85. ~~Struct-enum local variable leaks stack space~~ *(fixed, C41)*
 
 **Test:** `tests/scripts/71-caveats-problems.loft::test_p85_struct_enum_local` (passes — guard).
 
@@ -495,7 +495,7 @@ interval so the existing cleanup path handles them.
 
 ---
 
-### 86. Lambda capture produced misleading codegen self-reference error
+### 86. ~~Lambda capture produced misleading codegen self-reference error~~ *(fixed, A5.1)*
 
 **Symptom:** A lambda that referenced an outer-scope variable crashed in codegen with:
 
@@ -605,19 +605,13 @@ matching the `init(expr)` path.  **Test:** `tests/scripts/72-parse-error-caveats
 
 ---
 
-### 92. `stack_trace()` in parallel workers returns empty
+### 92. ~~`stack_trace()` in parallel workers returns empty~~ *(fixed, S21)*
 
-**Symptom:** Calling `stack_trace()` from inside a parallel `for` loop body returns
-an empty vector.  The function does not panic — it silently produces zero frames.
+**Fixed.** `data_ptr` is now set from `ParallelCtx.data` at the start of each
+`execute_at` variant so workers can take call-stack snapshots.
 
-**Root cause:** The `execute_at` / `execute_at_raw` / `execute_at_ref` functions used
-by parallel workers do not set `State.data_ptr`.  The `static_call` snapshot check
-sees `data_ptr.is_null()` and skips the snapshot.
-
-**Workaround:** Call `stack_trace()` from the main thread only.
-
-**Fix path:** Set `data_ptr` from the `ParallelCtx.data` pointer at the start of each
-`execute_at` variant, or pass it through the `WorkerProgram` struct.
+**Test:** `tests/threading::parallel_stack_trace_non_empty` (passes — asserts `n > 0`
+frames per worker).
 
 **Discovered:** 2026-03-26, during fix #87/#88 implementation review.
 
@@ -883,68 +877,16 @@ prefix-fallback in the symbol lookup.
 **Test:** `02-hello-triangle.loft` with `--interpret` — renders 300 frames without
 crash.
 
-### 120. Struct constructor doesn't deep-copy vector fields into struct store
+### 120. ~~Struct constructor doesn't deep-copy vector fields into struct store~~ *(fixed)*
 
-**Symptom:** Vector fields in returned structs are empty (length=0) or contain
-garbage. Causes black textures in GL examples and use-after-free crashes when
-the struct is used inside loops.
+**Fixed** by the `fix: free old store on struct reassignment` commit series
+(commits `43fc82c`, `8618cce`, `b3964ec` on `first-game`).
 
-**Minimal reproducer:** `lib/graphics/examples/test_mat4_crash.loft`:
-```loft
-struct BigBox {
-    width: integer,
-    height: integer,
-    data: vector<integer>
-}
-fn make_big() -> BigBox {
-    d: vector<integer> = [];
-    for y in 0..4 {
-        for x in 0..4 { d += [x + y * 4]; }
-    }
-    BigBox { width: 4, height: 4, data: d }
-}
-fn main() {
-    b = make_big();
-    println("data len={b.data.len()}");   // prints 0, should be 16
-}
-```
-
-**Also:** `tests/native_loader.rs::vec_from_returned_struct_heavy` — headless test.
-
-**Root cause:** When `BigBox { width: 4, height: 4, data: d }` constructs the
-struct, it allocates a new store (store 2) for the BigBox record and copies the
-scalar fields (`width`, `height`) by value. But the `data` field is a
-`vector<integer>` — the constructor only copies the **vector record pointer** (an
-i32) from the stack store into the struct store. The actual vector data remains
-in the stack store (store 1000/1).
-
-When `make_big()` returns:
-1. The callee's stack is unwound → vector data in the stack store is lost
-2. `gen_set_first_ref_call_copy` deep-copies the struct from store 2 to the
-   caller's store via `OpCopyRecord`
-3. `copy_claims_seq_vector` reads the vector pointer from store 2, but it
-   points to data in the (now-unwound) stack store → `length=0`
-
-Scalar fields survive because they're copied by value. Vector fields are
-pointers that become dangling after stack unwind.
-
-**Blocks:** All OpenGL examples using struct returns with vector fields
-(textured cube, breakout, scene graph). Also `Mat4 { m: vector<float> }` in
-`math::mat4_mul`, `ortho()`, etc.
+**Tests:** `tests/native_loader.rs` — `vec_from_returned_struct`,
+`vec_from_returned_struct_with_gap`, `vec_from_returned_struct_heavy` (all pass).
+`lib/graphics/examples/test_mat4_crash.loft` — prints `data len=16` (correct).
 
 **Related:** Issue #117 (store leaks) and #119 (native registration).
-
-**Fix direction:** The struct constructor must deep-copy vector field data
-into the struct's own store, not just copy the pointer. This should happen at
-the `FinishRecord` or `SetField` level — when a vector-typed field is assigned,
-the vector data should be `copy_claims_seq_vector`'d from the source store
-into the struct's store.
-
-**Mitigations applied (partial):**
-- Tolerate double-free in `free_ref` (skip already-freed stores)
-- Loop pre-init hoists Reference variables to pre-loop scope
-- `is_ret_work_ref` suppresses FreeRef for `__ref_N` in return path
-- `gen_set_first_ref_call_copy` always deep-copies struct returns
 
 ---
 
