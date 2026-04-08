@@ -433,12 +433,27 @@ impl Scopes {
                 self.var_order.push(d);
             }
         }
+        // When reassigning a Reference variable that owns its store (dep empty),
+        // free the old store before the new assignment. This prevents leaks when
+        // a struct-returning function is called in a loop and the result is
+        // assigned to a variable in an outer scope.
+        let needs_pre_free = self.var_scope.contains_key(&v)
+            && matches!(function.tp(v), Type::Reference(_, dep) | Type::Enum(_, true, dep) if dep.is_empty())
+            && !function.is_skip_free(v);
         if !self.var_scope.contains_key(&v) {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);
         }
         if depend.is_empty() {
-            Value::Set(v, Box::new(self.scan(value, function, data)))
+            let set = Value::Set(v, Box::new(self.scan(value, function, data)));
+            if needs_pre_free {
+                Value::Insert(vec![
+                    Value::Call(data.def_nr("OpFreeRef"), vec![Value::Var(v)]),
+                    set,
+                ])
+            } else {
+                set
+            }
         } else {
             let mut ls = Vec::new();
             for d in depend {

@@ -1,0 +1,101 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regression: reassigning struct-returning function results in loops.
+// The old store must be freed before adopting the new callee store.
+
+struct Pt { x: float not null, y: float not null }
+struct Rect { x: float not null, y: float not null, w: float not null, h: float not null }
+struct Named { label: text, value: integer }
+
+fn make_pt(a: float, b: float) -> Pt { Pt { x: a, y: b } }
+fn make_rect(rx: float, ry: float, rw: float, rh: float) -> Rect {
+  Rect { x: rx, y: ry, w: rw, h: rh }
+}
+fn make_named(lb: text, v: integer) -> Named { Named { label: lb, value: v } }
+
+fn shift_pt(p: const Pt, dx: float) -> Pt { make_pt(p.x + dx, p.y) }
+
+// Basic: outer variable reassigned in loop
+fn test_reassign_simple() {
+  p = make_pt(0.0, 0.0);
+  for ra_i in 0..5 {
+    p = make_pt(ra_i as float, 0.0);
+  }
+  assert(p.x == 4.0, "simple: {p.x}");
+}
+
+// Reassign with const ref param (deep copy path)
+fn test_reassign_const_ref() {
+  base = make_pt(1.0, 1.0);
+  p = make_pt(0.0, 0.0);
+  for rb_i in 0..5 {
+    p = shift_pt(base, rb_i as float);
+  }
+  assert(p.x == 5.0, "const ref: {p.x}");
+}
+
+// Multiple variables reassigned in same loop
+fn test_reassign_multiple_vars() {
+  a = make_pt(0.0, 0.0);
+  b = make_pt(0.0, 0.0);
+  for rc_i in 0..3 {
+    a = make_pt(rc_i as float, 1.0);
+    b = make_pt(rc_i as float, 2.0);
+  }
+  assert(a.x == 2.0, "multi a: {a.x}");
+  assert(b.y == 2.0, "multi b: {b.y}");
+}
+
+// Struct with text field reassigned in loop
+fn test_reassign_text_field() {
+  n = make_named("start", 0);
+  for rd_i in 0..5 {
+    n = make_named("item_{rd_i}", rd_i);
+  }
+  assert(n.value == 4, "text field: {n.value}");
+}
+
+// Nested loops (breakout pattern: bricks rendered per frame)
+fn test_reassign_nested_loops() {
+  r = make_rect(0.0, 0.0, 10.0, 10.0);
+  for re_row in 0..3 {
+    for re_col in 0..4 {
+      r = make_rect(re_col as float * 20.0, re_row as float * 15.0, 18.0, 12.0);
+    }
+  }
+  assert(r.x == 60.0, "nested: {r.x}");
+}
+
+// Reassign inside if inside loop
+fn test_reassign_conditional() {
+  p = make_pt(0.0, 0.0);
+  for rf_i in 0..6 {
+    if rf_i % 2 == 0 {
+      p = make_pt(rf_i as float, 0.0);
+    }
+  }
+  assert(p.x == 4.0, "conditional: {p.x}");
+}
+
+// Large iteration count (stress test for store exhaustion)
+fn test_reassign_many_iterations() {
+  p = make_pt(0.0, 0.0);
+  for rg_i in 0..1000 {
+    p = make_pt(rg_i as float, 0.0);
+  }
+  assert(p.x == 999.0, "1000 iters: {p.x}");
+}
+
+// Reassign from different functions per iteration
+fn test_reassign_alternating() {
+  p = make_pt(0.0, 0.0);
+  for rh_i in 0..4 {
+    if rh_i % 2 == 0 {
+      p = make_pt(rh_i as float, 1.0);
+    } else {
+      p = make_pt(rh_i as float, 2.0);
+    }
+  }
+  assert(p.x == 3.0, "alternating: {p.x}");
+  assert(p.y == 2.0, "alternating y: {p.y}");
+}
