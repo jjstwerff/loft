@@ -84,7 +84,7 @@ fn render_native_ml() {
   ml_start = ticks();
   ml_colors = [math::vec3(1.0, 0.3, 0.3), math::vec3(0.3, 1.0, 0.3), math::vec3(0.3, 0.3, 1.0)];
   ml_positions = [math::vec3(-2.0, 0.0, 0.0), math::vec3(0.0, 0.0, 0.0), math::vec3(2.0, 0.0, 0.0)];
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     ml_t = (ticks() - ml_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(15, 15, 20, 255));

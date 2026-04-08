@@ -60,7 +60,7 @@ fn render_native_camera() {
   ca_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
   ca_model = math::mat4_identity();
   ca_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     ca_t = (ticks() - ca_start) as float / 1000000.0;
     // Orbit: camera circles at radius 4, height 2

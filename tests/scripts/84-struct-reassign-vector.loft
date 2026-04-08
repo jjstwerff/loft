@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regression: struct with vector field reassigned in nested loops.
+// Reproduces the breakout game pattern where Mat4 { m: vector<float> }
+// is reassigned per brick while other vectors are read in the same loop.
+
+struct Mat4 { m: vector<float> }
+
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+
+fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
+  model = make_mat4(bx, by);
+  mat4_mul(proj, model)
+}
+
+fn test_reassign_with_vector_read() {
+  bricks = [for _ in 0..12 { 1 }];
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  for rv_row in 0..3 {
+    for rv_col in 0..4 {
+      if bricks[rv_row * 4 + rv_col] == 1 {
+        mvp = rect_mvp(proj, rv_col as float, rv_row as float);
+        assert(mvp.m[0] >= 0.0, "m0");
+      }
+    }
+  }
+  assert(bricks[0] == 1, "bricks intact");
+}
+
+fn test_many_reassigns() {
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  for mr_i in 0..100 {
+    mvp = rect_mvp(proj, mr_i as float, 0.0);
+  }
+  assert(mvp.m[0] == 99.0, "last: {mvp.m[0]}");
+}
+
+fn test_multiple_struct_vars() {
+  proj = make_mat4(1.0, 1.0);
+  a = make_mat4(0.0, 0.0);
+  b = make_mat4(0.0, 0.0);
+  for ms_i in 0..10 {
+    a = rect_mvp(proj, ms_i as float, 1.0);
+    b = rect_mvp(proj, ms_i as float, 2.0);
+  }
+  assert(a.m[0] == 9.0, "a: {a.m[0]}");
+  assert(b.m[5] == 2.0, "b: {b.m[5]}");
+}
+
+fn test_conditional_reassign() {
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  for cr_i in 0..20 {
+    if cr_i % 3 == 0 {
+      mvp = rect_mvp(proj, cr_i as float, 0.0);
+    }
+  }
+  assert(mvp.m[0] == 18.0, "cond: {mvp.m[0]}");
+}

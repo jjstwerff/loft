@@ -78,7 +78,7 @@ fn render_native_materials() {
     math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   mt_light = math::vec3(3.0, 4.0, 2.0);
   mt_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     mt_t = (ticks() - mt_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(20, 20, 25, 255));

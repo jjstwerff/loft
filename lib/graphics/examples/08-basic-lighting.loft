@@ -79,7 +79,7 @@ fn render_native_lighting() {
   bl_view = math::mat4_look_at(bl_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   bl_model = math::mat4_identity();
   bl_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     bl_t = (ticks() - bl_start) as float / 1000000.0;
     // Light orbits around the cube

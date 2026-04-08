@@ -99,7 +99,7 @@ fn render_native_pbr() {
   pb_eye = math::vec3(0.0, 0.0, 8.0);
   pb_view = math::mat4_look_at(pb_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   pb_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     pb_t = (ticks() - pb_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(10, 10, 12, 255));

@@ -270,6 +270,7 @@ fn loft_suite() -> std::io::Result<()> {
     // Scripts with dedicated #[ignore] wrappers are skipped here to keep
     // loft_suite green while the feature is under development.
     let skip: HashSet<&str> = ignored_scripts();
+    let mut count = 0;
     for entry in files {
         let name = entry
             .file_name()
@@ -281,7 +282,9 @@ fn loft_suite() -> std::io::Result<()> {
             continue;
         }
         run_test(entry, false, false)?;
+        count += 1;
     }
+    println!("{count} scripts passed");
     Ok(())
 }
 
@@ -290,76 +293,6 @@ fn loft_suite() -> std::io::Result<()> {
 fn ignored_scripts() -> HashSet<&'static str> {
     HashSet::from([])
 }
-
-macro_rules! script_test {
-    ($name:ident, $path:literal) => {
-        #[test]
-        fn $name() -> std::io::Result<()> {
-            let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            run_test(PathBuf::from($path), false, false)
-        }
-    };
-}
-
-script_test!(integers, "tests/scripts/01-integers.loft");
-script_test!(floats, "tests/scripts/02-floats.loft");
-script_test!(text, "tests/scripts/03-text.loft");
-script_test!(booleans, "tests/scripts/04-booleans.loft");
-script_test!(enums, "tests/scripts/05-enums.loft");
-script_test!(structs, "tests/scripts/06-structs.loft");
-script_test!(control_flow, "tests/scripts/07-control-flow.loft");
-script_test!(functions, "tests/scripts/08-functions.loft");
-script_test!(lambdas, "tests/scripts/09-lambdas.loft");
-script_test!(vectors, "tests/scripts/11-vectors.loft");
-script_test!(collections, "tests/scripts/12-collections.loft");
-script_test!(map_filter_reduce, "tests/scripts/13-map-filter-reduce.loft");
-script_test!(formatting, "tests/scripts/14-formatting.loft");
-script_test!(min_max_clamp, "tests/scripts/17-min-max-clamp.loft");
-script_test!(math_functions, "tests/scripts/18-math-functions.loft");
-script_test!(files, "tests/scripts/19-files.loft");
-#[test]
-fn binary() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(PathBuf::from("tests/scripts/20-binary.loft"), false, false)
-}
-script_test!(binary_ops, "tests/scripts/21-binary-ops.loft");
-script_test!(script_threading, "tests/scripts/22-threading.loft");
-script_test!(stress, "tests/scripts/37-stress.loft");
-script_test!(single_type, "tests/scripts/52-single.loft");
-
-// S16a: field-name overlap between two plain structs in the same file.
-// Both structs share a field name `val` at different byte offsets.
-// Exercises sorted lookup, range query, full iteration, and index range query.
-// Confirmed working — field offsets are type-scoped in determine_keys().
-script_test!(
-    field_overlap_structs,
-    "tests/scripts/23-field-overlap-structs.loft"
-);
-
-// S16a: field-name overlap involving struct-enum variants in the same file.
-// Scenario A: two struct-enum variants share field `score` at different offsets.
-// Scenario B: a plain struct and a struct-enum variant share field `key`.
-script_test!(
-    field_overlap_enum_struct,
-    "tests/scripts/24-field-overlap-enum-struct.loft"
-);
-
-// S16b: range queries on sorted<EnumVariant[field]>
-// Fixed: index_type() now returns Type::Reference(variant_def_nr) instead of
-// Type::Enum(parent, true) so for_type() and field access work correctly.
-script_test!(
-    sorted_enum_variant_range,
-    "tests/scripts/25-sorted-enum-variant-range.loft"
-);
-
-// Logging functions compile and run as no-ops without a log.conf.
-script_test!(logging_script, "tests/scripts/53-logging.loft");
-
-// Implicit type widening in mixed integer/long/float expressions.
-script_test!(auto_convert, "tests/scripts/54-auto-convert.loft");
-
-// stack_trace() introspection returns frames from nested calls.
-script_test!(stack_trace_script, "tests/scripts/55-stack-trace.loft");
 
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser
@@ -442,85 +375,6 @@ fn main(args: vector<text>) {
     state.execute_argv("main", &p.data, &args);
 }
 
-/// T2: Verify `size()` returns Unicode code-point count, not byte length.
-#[test]
-fn size_text() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/41-size-text.loft"),
-        false,
-        true,
-    )
-}
-
-/// A10: Verify field iteration (for f in s#fields).
-#[test]
-fn field_iteration() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/45-field-iter.loft"),
-        false,
-        true,
-    )
-}
-
-/// L2: Verify nested match patterns in field positions.
-#[test]
-fn nested_match() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/44-nested-match.loft"),
-        false,
-        true,
-    )
-}
-
-/// P3: Verify vector aggregates (sum, min_of, max_of, any, all, count_if).
-#[test]
-fn aggregates() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/43-aggregates.loft"),
-        false,
-        true,
-    )
-}
-
-/// L3: Verify FileResult enum for filesystem operations.
-#[test]
-fn file_result() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/42-file-result.loft"),
-        false,
-        true,
-    )
-}
-
-/// P5.2: Verify generic function call-site instantiation.
-#[test]
-fn generics() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(PathBuf::from("tests/scripts/48-generics.loft"), false, true)
-}
-
-/// L7: Verify init(expr) stored field initialiser with $ reference.
-#[test]
-fn init_fields() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(
-        PathBuf::from("tests/scripts/49-init-fields.loft"),
-        false,
-        true,
-    )
-}
-
-/// Regression tests for documented caveats (CAVEATS.md).
-#[test]
-fn caveats() -> std::io::Result<()> {
-    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    run_test(PathBuf::from("tests/scripts/46-caveats.loft"), false, true)
-}
 
 /// Parse, type-check, compile, and execute one `.loft` test file.
 ///

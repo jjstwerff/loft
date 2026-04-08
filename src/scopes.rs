@@ -437,9 +437,16 @@ impl Scopes {
         // free the old store before the new assignment. This prevents leaks when
         // a struct-returning function is called in a loop and the result is
         // assigned to a variable in an outer scope.
-        let needs_pre_free = self.var_scope.contains_key(&v)
-            && matches!(function.tp(v), Type::Reference(_, dep) | Type::Enum(_, true, dep) if dep.is_empty())
-            && !function.is_skip_free(v);
+        // Only free before reassignment when the variable was registered at an
+        // OUTER scope — meaning this Set is a true reassignment inside a loop,
+        // not the first real assignment after a null-init in the same scope.
+        let needs_pre_free = if let Some(&registered_scope) = self.var_scope.get(&v) {
+            registered_scope != self.scope
+                && matches!(function.tp(v), Type::Reference(_, dep) | Type::Enum(_, true, dep) if dep.is_empty())
+                && !function.is_skip_free(v)
+        } else {
+            false
+        };
         if !self.var_scope.contains_key(&v) {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);

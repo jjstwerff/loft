@@ -96,7 +96,7 @@ fn main() {
   pp_view = math::mat4_look_at(
     math::vec3(3.0, 2.5, 4.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   pp_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     pp_t = (ticks() - pp_start) as float / 1000000.0;
     // Pass 1: render scene to FBO

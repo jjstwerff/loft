@@ -54,7 +54,7 @@ fn main() {
   graphics::gl_enable(graphics::GL_CULL_FACE);
   graphics::gl_cull_face(0);
   fc_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     fc_t = (ticks() - fc_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(25, 25, 30, 255));

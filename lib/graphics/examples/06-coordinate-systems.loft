@@ -81,7 +81,7 @@ fn render_native_coords() {
     math::vec3(0.0, 1.0, 0.0));
   cs_positions = cube_positions();
   cs_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     cs_t = (ticks() - cs_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(30, 30, 30, 255));

@@ -43,7 +43,7 @@ fn main() {
   graphics::gl_line_width(1.5);
   graphics::gl_point_size(4.0);
   wf_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     wf_t = (ticks() - wf_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(20, 20, 25, 255));

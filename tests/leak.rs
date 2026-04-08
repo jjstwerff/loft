@@ -87,3 +87,61 @@ fn run_leak_check(path: &str) {
 fn reassign_struct_in_loop() {
     run_leak_check("tests/scripts/83-reassign-struct-loop.loft");
 }
+
+/// Breakout pattern: struct with vector field, reassigned in nested loop
+/// while other vectors are read in the same loop.
+#[test]
+fn breakout_pattern() {
+    run_leak_check_str(
+        r#"
+struct Mat4 { m: vector<float> }
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
+  model = make_mat4(bx, by);
+  mat4_mul(proj, model)
+}
+pub fn test() {
+  bricks = [for _ in 0..10 { 1 }];
+  proj = make_mat4(1.0, 1.0);
+  mvp = make_mat4(0.0, 0.0);
+  for row in 0..3 {
+    for col in 0..4 {
+      if bricks[row * 4 + col] == 1 {
+        mvp = rect_mvp(proj, col as float, row as float);
+        assert(mvp.m[0] >= 0.0, "m0");
+      }
+    }
+  }
+  assert(bricks[0] == 1, "bricks intact");
+}
+"#,
+    );
+}
+
+/// Breakout-style: vector + struct reassignment in nested loops.
+#[test]
+fn reassign_with_vector() {
+    run_leak_check_str(
+        r#"
+struct Pt { x: float not null, y: float not null }
+fn make_pt(a: float, b: float) -> Pt { Pt { x: a, y: b } }
+pub fn test() {
+  bricks = [for _ in 0..10 { 1 }];
+  p = make_pt(0.0, 0.0);
+  for i in 0..3 {
+    for j in 0..4 {
+      if bricks[j] == 1 {
+        p = make_pt(j as float, i as float);
+      }
+    }
+  }
+  assert(p.x == 3.0, "x: {p.x}");
+}
+"#,
+    );
+}

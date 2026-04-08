@@ -71,7 +71,7 @@ fn render_native_cube() {
     math::vec3(0.0, 0.0, 0.0),
     math::vec3(0.0, 1.0, 0.0));
   tc_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     tc_t = (ticks() - tc_start) as float / 1000000.0;
     tc_model = math::mat4_rotate_y(tc_t);

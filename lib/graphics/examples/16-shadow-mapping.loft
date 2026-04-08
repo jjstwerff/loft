@@ -147,7 +147,7 @@ fn main() {
   sm_light_vp = math::mat4_mul(sm_light_proj, sm_light_view);
   sm_start = ticks();
   graphics::gl_enable(graphics::GL_CULL_FACE);
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     sm_t = (ticks() - sm_start) as float / 1000000.0;
     // Pass 1: shadow map

@@ -94,7 +94,7 @@ fn main() {
     math::vec3(2.0, 2.0, 3.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   tc_tex = graphics::gl_upload_canvas(tc_check.data, tc_check.width, tc_check.height);
   tc_start = ticks();
-  for _ in 0..5000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     tc_t = (ticks() - tc_start) as float / 1000000.0;
     tc_model = math::mat4_rotate_y(tc_t * 0.5);

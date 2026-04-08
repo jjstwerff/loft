@@ -78,7 +78,7 @@ fn render_native_complete() {
   fn_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
   graphics::gl_enable(graphics::GL_CULL_FACE);
   fn_start = ticks();
-  for _ in 0..5000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     fn_t = (ticks() - fn_start) as float / 1000000.0;
     // Orbiting camera

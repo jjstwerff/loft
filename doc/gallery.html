@@ -146,7 +146,7 @@ select {
   <div class="toolbar">
     <select id="examples"><option value="">-- Select example --</option></select>
     <button id="run-btn" onclick="runExample()" disabled>&#9654; Run</button>
-    <button id="stop-btn" onclick="loftGL.shouldClose=true">&#9632; Stop</button>
+    <button id="stop-btn">&#9632; Stop</button>
   </div>
 </header>
 
@@ -175,6 +175,9 @@ import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
 // ── WebGL bridge from library ────────────────────────────────────────────────
 const canvas = document.getElementById('gl-canvas');
 let loftGL = null;
+document.getElementById('stop-btn').addEventListener('click', () => {
+  if (loftGL) loftGL.shouldClose = true;
+});
 
 // Asset map: example key → list of { name, type } to pre-load.
 // type: 'image' = decode as HTMLImageElement, 'binary' = store as base64.

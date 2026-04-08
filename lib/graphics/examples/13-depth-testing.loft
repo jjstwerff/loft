@@ -75,7 +75,7 @@ fn main() {
   dt_view = math::mat4_look_at(
     math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
   dt_start = ticks();
-  for _ in 0..3000 {
+  for _ in 0..1000000 {
     if !graphics::gl_poll_events() { break }
     dt_t = (ticks() - dt_start) as float / 1000000.0;
     graphics::gl_clear(graphics::rgba(30, 30, 40, 255));
