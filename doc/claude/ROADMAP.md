@@ -129,6 +129,8 @@ items (W3 frame-aware dispatch, W4 opcode redesign) are tracked in OPTIMISATIONS
 |------|------------------------------------------------------------------|----|--------|------------------|
 | W.G1 | GL overhead: cache uniform locations + direct wasm_bindgen imports | S  |        | OPTIMISATIONS.md |
 | W.G2 | Game object store pooling — plain-data memset pool (S29 already handles general case) | M  |        | OPTIMISATIONS.md |
+| W.G3 | `vector<byte>` type — zero-copy pixel/canvas/text transfer       | M  | ✓      | PERFORMANCE.md   |
+| W.G4 | Zero-copy vertex upload via WASM memory view (`Float32Array`)    | S  | ✓      | PERFORMANCE.md   |
 
 ---
 

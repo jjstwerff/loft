@@ -21,6 +21,8 @@ design for each planned improvement.
 - [Design: N2 — Omit stores parameter from pure native functions](#design-n2--omit-stores-parameter-from-pure-native-functions)
 - [Design: N3 — Remove long null-sentinel from generated code](#design-n3--remove-long-null-sentinel-from-generated-code)
 - [Design: W1 — wasm string representation](#design-w1--wasm-string-representation)
+- [Design: W2 — zero-copy vertex upload via WASM memory view](#design-w2--zero-copy-vertex-upload-via-wasm-memory-view)
+- [Design: W3 — `vector<byte>` type and zero-copy pixel transfer](#design-w3--vectorbyte-type-and-zero-copy-pixel-transfer)
 - [Improvement priority order](#improvement-priority-order)
 - [See also](#see-also)
 
@@ -848,21 +850,256 @@ modes.
 
 ---
 
+## Design: W2 — zero-copy vertex upload via WASM memory view
+
+**Affected path:** `wgl_upload_vertices` (WASM browser only; native has no boundary)
+**Expected gain:** Eliminates O(N) wasm-bindgen transitions for vertex data; ~1–5 ms per upload for large meshes
+**Cost:** Small — one new Rust helper, one JS change; no interpreter or type-system changes
+
+### Background
+
+`extract_f32_vector` in `src/wasm_gl.rs` copies a `vector<single>` into a JS
+`Float32Array` element-by-element:
+
+```rust
+// wasm_gl.rs:101–106 — current
+let arr = js_sys::Float32Array::new_with_length(len);
+for i in 0..len {
+    arr.set_index(i, store.get_single(v_rec, 8 + i * 4));
+}
+```
+
+Each `set_index` call is a wasm-bindgen transition — one per float.  For a mesh
+with 10 000 vertices × 8 floats per vertex = 80 000 transitions per upload.
+Vertex uploads happen at scene load and mesh rebuild, not per frame, but they
+block the first render.
+
+### Why zero-copy is possible
+
+The loft `Store` is contiguous WASM linear memory (`store.ptr: *mut u8`).
+A `vector<single>` stores its elements packed at byte offset `v_rec * 8 + 8`
+within the store buffer — a plain array of f32 with no gaps or indirection.
+JavaScript can create a *view* into WASM linear memory with no copy:
+
+```javascript
+new Float32Array(wasmMemory.buffer, byteOffset, elementCount)
+```
+
+This view is valid for the duration of the call and does not allocate.
+
+### Design
+
+**Rust side** — new helper in `src/wasm_gl.rs`:
+
+```rust
+/// Return the WASM linear-memory byte offset and element count for a
+/// vector<single> field, so JS can create a zero-copy Float32Array view.
+#[cfg(feature = "wasm")]
+fn f32_vector_ptr(stores: &Stores, vref: &DbRef) -> (u32, u32) {
+    let store = &stores.allocations[vref.store_nr as usize];
+    let v_rec = store.get_int(vref.rec, vref.pos) as u32;
+    if v_rec == 0 { return (0, 0); }
+    let len = store.get_int(v_rec, 4) as u32;
+    // Elements start at byte v_rec*8 + 8 within the store buffer.
+    let byte_offset = store.ptr as u32 + v_rec * 8 + 8;
+    (byte_offset, len)
+}
+```
+
+Replace the `extract_f32_vector` call in `wgl_upload_vertices` with two
+integer arguments passed to JS:
+
+```rust
+let (offset, len) = f32_vector_ptr(stores, &data_ref);
+let args = js_sys::Array::of3(&offset.into(), &len.into(), &stride.into());
+let result = gl_call("gl_upload_vertices_ptr", &args);
+```
+
+**JS side** — new method in `lib/graphics/js/loft-gl.js`:
+
+```javascript
+gl_upload_vertices_ptr(byteOffset, len, stride) {
+    const data = new Float32Array(wasmMemory.buffer, byteOffset, len);
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    // ... attrib setup as before ...
+    const idx = vaos.length;
+    vaos.push({ vao, vbo, vertexCount: len / stride });
+    return idx;
+},
+```
+
+`wasmMemory` is the WASM `Memory` object, already available in the host after
+WASM init: `wasmMemory = wasmInstance.exports.memory`.
+
+### Files to change
+
+| File | Change |
+|---|---|
+| `src/wasm_gl.rs` | Add `f32_vector_ptr`; replace `wgl_upload_vertices` body |
+| `lib/graphics/js/loft-gl.js` | Add `gl_upload_vertices_ptr`; expose `wasmMemory` after WASM init |
+| `doc/gallery.html` | Pass `instance.exports.memory` to `initLoftGL` |
+
+The old `extract_f32_vector` helper can be removed once `wgl_upload_vertices`
+is the only caller.
+
+---
+
+## Design: W3 — `vector<byte>` type and zero-copy pixel transfer
+
+**Affected paths:** canvas pixel upload, PNG save, text rasterization, binary I/O
+**Expected gain:** Eliminates two full-image passes (one Rust loop + one JS loop) for every canvas upload; 4× memory reduction for byte-valued data
+**Cost:** Small–Medium — new base type `byte` in type system; graphics API update
+
+### Background
+
+Three separate data-movement paths in `src/wasm_gl.rs` iterate over byte-valued
+data stored in `vector<integer>` (4 bytes per element):
+
+1. **`wgl_upload_canvas`** (lines 573–589): copies `Image.data: vector<integer>` ARGB
+   pixels into a `Uint32Array` element-by-element, then JS unpacks each pixel from
+   ARGB to RGBA bytes in a second O(w×h) nested loop.
+
+2. **`wgl_save_png`** (lines 716–729): same Rust loop; JS does a second O(w×h) loop
+   converting ARGB→RGBA bytes for the PNG encoder.
+
+3. **`wgl_rasterize_text_into`** (lines 900–909): fontdue rasterizes glyphs into a
+   `Vec<u8>`; the result is written to a `vector<integer>` one i32 per alpha byte —
+   a 4× memory waste and O(N) individual `set_int` calls.
+
+The root cause: loft has no 1-byte element type, so byte arrays are forced through
+`vector<integer>`.
+
+### Why `vector<byte>` is straightforward to add
+
+The vector infrastructure already parameterises on element size throughout:
+`elem_size` is passed to `vector_append`, `vector_finish`, `length_vector`, the
+reverse helper, and the copy helpers.  Adding `byte` as a 1-byte base type reuses
+all of this machinery.  The type system already has `character` (1 byte) and
+`boolean` (1 byte) — `byte` follows the same pattern.
+
+### Type system changes
+
+**`src/data.rs`** — add `Byte` to the `Type` enum alongside `Int`, `Long`,
+`Float`, `Single`, `Boolean`, `Character`.  Size: 1 byte.
+
+**`src/typedef.rs`** — register `"byte"` as a built-in type resolving to
+`Type::Byte`.  Add to the size table: `size(Byte) = 1`.
+
+**`src/lexer.rs`** / **`src/parser/`** — accept `byte` as a keyword; parse
+`vector<byte>` like `vector<integer>`.
+
+**`src/fill.rs`** / **`default/01_code.loft`** — add cast ops: `to_byte`,
+`to_integer` (truncate/extend); no arithmetic needed for the immediate use case.
+
+### Zero-copy pixel upload with `vector<byte>`
+
+Change `Image` in `lib/graphics/src/graphics.loft`:
+
+```loft
+struct Image {
+  width:  integer
+  height: integer
+  data:   vector<byte>   // RGBA bytes: [r0, g0, b0, a0, r1, g1, b1, a1, ...]
+}
+```
+
+Pixel write helpers update one byte at a time (already done via `r()`, `g()`,
+`b()`, `a()` channel extraction).  The `rgba()` helper continues to pack for
+arithmetic; pixel assignment unpacks to bytes when writing into the buffer.
+
+**`wgl_upload_canvas` with `vector<byte>` RGBA:**
+
+The loft store holds contiguous RGBA bytes at `v_rec * 8 + 8`.  The entire
+upload collapses to:
+
+```rust
+// Rust — expose pointer + length, no loop
+let byte_offset = store.ptr as u32 + v_rec * 8 + 8;
+let args = js_sys::Array::of3(&byte_offset.into(), &(len as i32).into(),
+                               &width.into());
+gl_call("gl_upload_canvas_ptr", &args);
+```
+
+```javascript
+// JS — zero-copy Uint8Array view, no loop
+gl_upload_canvas_ptr(byteOffset, len, w) {
+    const data = new Uint8Array(wasmMemory.buffer, byteOffset, len);
+    // texImage2D accepts Uint8Array directly in RGBA format
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, len / (w * 4),
+                  0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    // ...
+},
+```
+
+Both the Rust `set_index` loop and the JS ARGB→RGBA nested loop are eliminated.
+The vertical flip (GL texture origin is bottom-left) moves into loft game code
+once at canvas-build time, not repeated on every upload.
+
+**`wgl_rasterize_text_into` with `vector<byte>`:**
+
+The fontdue output `Vec<u8>` can be written to the loft store with one
+`copy_nonoverlapping`:
+
+```rust
+let dst_ptr = unsafe { store.ptr.add(v_rec as usize * 8 + 8) };
+unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), dst_ptr, count) };
+```
+
+One `memcpy` replaces N `set_int` calls.  Memory drops from `4 * N` to `N` bytes.
+
+### Binary I/O benefit
+
+`vector<byte>` also enables efficient binary file reads and HTTP response bodies:
+the Rust bridge can `read_exact` into a `Vec<u8>` and copy it to the loft store
+in one call instead of appending integers element-by-element.
+
+### Vertical flip note
+
+The current `gl_upload_canvas` JS loop performs a vertical flip (WebGL UV origin
+is bottom-left, canvas origin is top-left).  With `vector<byte>`, the flip can be
+done in loft code when drawing to the canvas — a one-time cost at canvas
+construction rather than on every upload.  Alternatively, the GL texture
+parameters can use `gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)` which performs
+the flip inside the WebGL driver with no per-pixel Rust/JS work.
+
+### Files to change
+
+| File | Change |
+|---|---|
+| `src/data.rs` | Add `Type::Byte`; size = 1 |
+| `src/typedef.rs` | Register `"byte"` keyword; add to size table |
+| `src/lexer.rs` | Add `byte` token |
+| `src/parser/definitions.rs` | Accept `byte` type |
+| `src/fill.rs` / `default/01_code.loft` | `to_byte`, `to_integer` cast ops |
+| `src/wasm_gl.rs` | `wgl_upload_canvas` and `wgl_save_png`: use pointer path; `wgl_rasterize_text_into`: `copy_nonoverlapping` |
+| `lib/graphics/src/graphics.loft` | `Image.data: vector<byte>`; update pixel helpers |
+| `lib/graphics/js/loft-gl.js` | `gl_upload_canvas_ptr`, `save_png_ptr`: zero-copy path |
+
+---
+
 ## Improvement priority order
 
-| Priority | Item | Target benchmarks | Expected gain | Cost |
+| Priority | Item | Target | Expected gain | Cost |
 |---|---|---|---|---|
 | 1 | P1 — Superinstructions | 02, 03, 04, all tight loops | 2–4× on integer loops | Medium |
-| 2 | N1 — Direct collection emit | 08, 09, 10 | 5–15× data-struct native | High |
-| 3 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
-| 4 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
-| 5 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
-| 6 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
-| 7 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
+| 2 | N1 — Direct collection emit | 08, 09, 10 native | 5–15× data-struct native | High |
+| 3 | **W3 — `vector<byte>` + zero-copy pixel** | canvas upload, text raster, PNG | Eliminates 2 full-image loops per upload | Small–Medium |
+| 4 | **W2 — zero-copy vertex upload** | mesh load, scene rebuild | Eliminates O(N) wasm-bindgen transitions | Small |
+| 5 | P2 — Stack raw pointer cache | all interpreter | 20–50% across interpreter | High |
+| 6 | N2 — Pure function stores omit | 01, 06 native | 10–30% recursive native | High |
+| 7 | N3 — Long sentinel in codegen | 04 native | ~1.5× Collatz native | Low |
+| 8 | P3 — Verify integer sentinel | 02, 10 | 2–5% (verification) | Low |
+| 9 | W1 — wasm string path | 07 wasm | <1.3× gap | Medium |
 
-Items 1–3 should be scheduled after the 0.8.3 language-syntax milestone. P1 is the
-highest-impact single change because it benefits every tight loop in the interpreter
-without touching the memory model.
+W3 and W2 move up because they are small-effort, high-impact changes specific to
+the game/graphics path and do not touch the interpreter core.  P1 remains the
+highest-priority interpreter change because it benefits every tight loop.
 
 ---
 
