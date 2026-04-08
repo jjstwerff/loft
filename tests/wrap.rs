@@ -794,11 +794,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
         path
     );
     // If `main` exists, run only `main` (it calls helpers internally).
-    // Otherwise run all zero-param functions (fn test_* style).
+    // Otherwise run only `test_*` functions — skip helpers that return
+    // values (calling them standalone leaks the unreceived return store).
     let fns = if all_fns.contains(&"main".to_string()) {
         vec!["main".to_string()]
     } else {
         all_fns
+            .into_iter()
+            .filter(|n| n.starts_with("test_"))
+            .collect()
     };
 
     #[cfg(debug_assertions)]

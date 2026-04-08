@@ -66,7 +66,10 @@ fn run_leak_check(path: &str) {
         if !matches!(def.def_type, DefType::Function) {
             continue;
         }
-        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+        if !def.name.starts_with("n_test_") && def.name != "n_main" {
+            continue;
+        }
+        if def.name.starts_with("n___lambda_") {
             continue;
         }
         if !def.attributes.is_empty() {
