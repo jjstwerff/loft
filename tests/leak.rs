@@ -88,6 +88,24 @@ fn block_copy_opt_no_leak() {
 }
 
 #[test]
+fn field_iter_no_leak() {
+    run_leak_check_str(
+        r#"
+struct Pt { x: float not null }
+
+pub fn test() {
+  p = Pt { x: 1.0 };
+  n = "";
+  for pf in p#fields {
+    n = pf.name;
+  }
+  assert(n == "x", "name: {n}");
+}
+"#,
+    );
+}
+
+#[test]
 fn alias_copy_no_leak() {
     run_leak_check_str(
         r#"
