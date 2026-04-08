@@ -751,8 +751,20 @@ pub fn resume_frame() -> String {
             let Some(session) = slot.as_mut() else {
                 return format!("{{\"running\":false}}");
             };
+            let prev_live = session.state.database.allocations.iter()
+                .skip(1).filter(|s| !s.free).count();
             let still_running = session.state.resume();
             if still_running {
+                let live = session.state.database.allocations.iter()
+                    .skip(1).filter(|s| !s.free).count();
+                if live > prev_live {
+                    let total = session.state.database.allocations.len();
+                    #[cfg(feature = "wasm")]
+                    web_sys::console::warn_1(
+                        &format!("store leak: {prev_live} -> {live} (+{}) / {total} total",
+                                 live - prev_live).into(),
+                    );
+                }
                 format!("{{\"running\":true}}")
             } else {
                 let out = output_take();
