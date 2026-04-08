@@ -391,17 +391,18 @@ impl State {
         if cfg!(debug_assertions) {
             let depth = self.call_depth;
             let db_ref_size = size_of::<DbRef>() as u16; // 12
-            let ret_store_nr: Option<u16> = if value as u16 == db_ref_size || value as usize == 16 {
-                // get_var(12) reads at stack_pos-12; safe since stack_pos = fn_stack+value >= 12
-                let db = *self.get_var::<DbRef>(db_ref_size);
-                if db.store_nr != u16::MAX {
-                    Some(db.store_nr)
+            let ret_store_nr: Option<u16> =
+                if u16::from(value) == db_ref_size || value as usize == 16 {
+                    // get_var(12) reads at stack_pos-12; safe since stack_pos = fn_stack+value >= 12
+                    let db = *self.get_var::<DbRef>(db_ref_size);
+                    if db.store_nr != u16::MAX {
+                        Some(db.store_nr)
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
             let mut leaked: Vec<u16> = Vec::new();
             for (&nr, &d) in &self.ref_positions {
                 if d == depth
@@ -1414,6 +1415,9 @@ impl State {
 
     /// Like `check_store_leaks` but includes `context` (e.g. function name)
     /// in the message for easier diagnosis.
+    ///
+    /// # Panics
+    /// Panics if any stores remain unfreed after execution.
     pub fn check_store_leaks_context(&self, context: &str) {
         let mut leaked = Vec::new();
         for (s_nr, s) in self.database.allocations.iter().enumerate() {

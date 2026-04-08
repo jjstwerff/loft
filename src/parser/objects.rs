@@ -1267,7 +1267,7 @@ impl Parser {
                 && matches!(td, Type::Reference(_, _))
                 && matches!(value, Value::Call(_, _))
             {
-                let w = self.vars.work_refs(&exp_tp, &mut self.lexer);
+                let w = self.vars.work_refs(exp_tp, &mut self.lexer);
                 self.vars.mark_inline_ref(w);
                 list.push(v_set(w, value.clone()));
                 *value = Value::Var(w);
