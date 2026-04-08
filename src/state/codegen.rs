@@ -891,10 +891,7 @@ impl State {
                     && stack.data.def(*fn_nr).code != Value::Null
                     && stack.data.def(*fn_nr).attributes.iter().any(|a| {
                         !a.hidden
-                            && matches!(
-                                a.typedef,
-                                Type::Reference(_, _) | Type::Enum(_, true, _)
-                            )
+                            && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
                     })
                 {
                     let tp_nr = stack.data.def(d_nr).known_type;
@@ -910,11 +907,12 @@ impl State {
                     // callee has no hidden Ref params (the source is a fresh
                     // store from O-B2 adoption).  When hidden Ref params exist,
                     // the source IS __ref_N which is reused across calls.
-                    let has_hidden_ref =
-                        stack.data.def(*fn_nr).attributes.iter().any(|a| {
-                            a.hidden
-                                && matches!(a.typedef, Type::Reference(_, _))
-                        });
+                    let has_hidden_ref = stack
+                        .data
+                        .def(*fn_nr)
+                        .attributes
+                        .iter()
+                        .any(|a| a.hidden && matches!(a.typedef, Type::Reference(_, _)));
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
                     let tp_val = if has_hidden_ref {
                         i32::from(tp_nr)
@@ -923,11 +921,7 @@ impl State {
                     };
                     let copy_val = Value::Call(
                         copy_nr,
-                        vec![
-                            value.clone(),
-                            Value::Var(v),
-                            Value::Int(tp_val),
-                        ],
+                        vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
                     );
                     self.generate(&copy_val, stack, false);
                     return;

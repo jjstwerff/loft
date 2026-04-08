@@ -59,8 +59,11 @@ impl Stores {
         if result.store_nr == 14 {
             // Capture a pseudo-backtrace by logging the allocation context
             web_sys::console::warn_1(
-                &format!("[store14] ALLOC rec={} size={size} name={name} max={}",
-                         result.rec, self.max).into(),
+                &format!(
+                    "[store14] ALLOC rec={} size={size} name={name} max={}",
+                    result.rec, self.max
+                )
+                .into(),
             );
         }
         if std::env::var("LOFT_STORE_LOG").is_ok() {
@@ -109,7 +112,11 @@ impl Stores {
         #[cfg(feature = "wasm")]
         if al == 14 {
             web_sys::console::warn_1(
-                &format!("[store] FREE store=14 rec={} pos={} name={name}", db.rec, db.pos).into(),
+                &format!(
+                    "[store] FREE store=14 rec={} pos={} name={name}",
+                    db.rec, db.pos
+                )
+                .into(),
             );
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");

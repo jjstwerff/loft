@@ -391,9 +391,7 @@ impl State {
         if cfg!(debug_assertions) {
             let depth = self.call_depth;
             let db_ref_size = size_of::<DbRef>() as u16; // 12
-            let ret_store_nr: Option<u16> = if value as u16 == db_ref_size
-                || value as usize == 16
-            {
+            let ret_store_nr: Option<u16> = if value as u16 == db_ref_size || value as usize == 16 {
                 // get_var(12) reads at stack_pos-12; safe since stack_pos = fn_stack+value >= 12
                 let db = *self.get_var::<DbRef>(db_ref_size);
                 if db.store_nr != u16::MAX {

@@ -378,7 +378,6 @@ fn main(args: vector<text>) {
     state.execute_argv("main", &p.data, &args);
 }
 
-
 /// Parse, type-check, compile, and execute one `.loft` test file.
 ///
 /// The default library in `default/` is loaded first, then `entry` is parsed on
