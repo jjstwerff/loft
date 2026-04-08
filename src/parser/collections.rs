@@ -1620,6 +1620,10 @@ use #count instead"
         let field_type = Type::Reference(field_def_nr, Vec::new());
         let loop_var = self.create_var(loop_var_name, &field_type);
         self.vars.defined(loop_var);
+        // The loop var is overwritten by PutRef each iteration — no initial
+        // store allocation needed.  Mark inline_ref so codegen uses
+        // NullRefSentinel instead of ConvRefFromNull.
+        self.vars.mark_inline_ref(loop_var);
 
         let mut body = Value::Null;
         self.parse_block("fields", &mut body, &Type::Void);
@@ -1660,13 +1664,22 @@ use #count instead"
             );
             let sf_insert = Value::Insert(sf_ops);
 
+            // Free the previous iteration's StructField store before
+            // overwriting the loop var with a new one.
+            if !blocks.is_empty() {
+                let free_nr = self.data.def_nr("OpFreeRef");
+                blocks.push(Value::Call(free_nr, vec![Value::Var(loop_var)]));
+            }
             blocks.push(fv_insert);
             blocks.push(sf_insert);
             blocks.push(v_set(loop_var, Value::Var(sf_work)));
+            // The StructField work_ref (sf_work) is consumed by the loop var
+            // assignment — skip its free.  But the FieldValue work_ref
+            // (fv_work) was only copied into StructField via CopyRecord, so
+            // it still owns its store and needs OpFreeRef.
+            self.vars.set_skip_free(sf_work);
             blocks.push(body.clone());
         }
-        // Mark work refs as skip_free — they are consumed by the loop var assignment.
-        self.vars.clean_work_refs(work_checkpoint);
 
         if blocks.is_empty() {
             *code = Value::Null;
