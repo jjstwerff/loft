@@ -96,10 +96,7 @@ fn recurse(n: integer) -> integer {
   recurse(n - 1)
 }
 
-// S6: known native codegen bug — for loop in recursive function produces
-// wrong results in --native mode (deferred to 1.1+).  The interpreter
-// handles this correctly; the native binary may fail.
-// @EXPECT_FAIL recurse
+// S6: fixed by P117 dep_has_var + Type::Never return patch.
 fn test_for_loop_in_recursive_fn() {
   assert(recurse(3) == 3, "recurse");
 }

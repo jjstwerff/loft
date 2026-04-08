@@ -863,6 +863,70 @@ impl State {
                 stack.add_op("OpClearText", self);
                 self.code_add(var_pos);
             }
+            // Free the old store before reassigning an owned Reference.
+            // Only safe when the variable truly owns its store (dep empty).
+            // The dep was cleared on first assignment only when codegen will
+            // deep-copy (gen_set_first_ref_call_copy). O-B2 adopted stores
+            // keep their dep, so this won't fire for them.
+            if matches!(
+                stack.function.tp(v),
+                Type::Reference(_, _) | Type::Enum(_, true, _)
+            ) && stack.function.tp(v).depend().is_empty()
+            {
+                let free_pos = stack.position - stack.function.stack(v);
+                stack.add_op("OpVarRef", self);
+                self.code_add(free_pos);
+                stack.add_op("OpFreeRef", self);
+
+                // P117-reassign: when the value is a call with visible Ref
+                // params, the callee returns via a hidden __ref_N that is
+                // reused across calls.  OpPutRef would alias v with __ref_N;
+                // the next FreeRef would free __ref_N's store → use-after-free.
+                // Deep-copy into a fresh store instead; do NOT free the source
+                // so __ref_N stays valid for the next call.
+                if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
+                    && !stack.function.is_argument(v)
+                    && let Value::Call(fn_nr, _) = value
+                    && stack.data.def(*fn_nr).name.starts_with("n_")
+                    && stack.data.def(*fn_nr).code != Value::Null
+                    && stack.data.def(*fn_nr).attributes.iter().any(|a| {
+                        !a.hidden
+                            && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+                    })
+                {
+                    let tp_nr = stack.data.def(d_nr).known_type;
+                    // Allocate fresh store, put it in v's slot.
+                    stack.add_op("OpConvRefFromNull", self);
+                    stack.add_op("OpDatabase", self);
+                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    self.code_add(tp_nr);
+                    let var_pos = stack.position - stack.function.stack(v);
+                    stack.add_op("OpPutRef", self);
+                    self.code_add(var_pos);
+                    // Call, deep-copy into v.  Free the source only if the
+                    // callee has no hidden Ref params (the source is a fresh
+                    // store from O-B2 adoption).  When hidden Ref params exist,
+                    // the source IS __ref_N which is reused across calls.
+                    let has_hidden_ref = stack
+                        .data
+                        .def(*fn_nr)
+                        .attributes
+                        .iter()
+                        .any(|a| a.hidden && matches!(a.typedef, Type::Reference(_, _)));
+                    let copy_nr = stack.data.def_nr("OpCopyRecord");
+                    let tp_val = if has_hidden_ref {
+                        i32::from(tp_nr)
+                    } else {
+                        i32::from(tp_nr) | 0x8000
+                    };
+                    let copy_val = Value::Call(
+                        copy_nr,
+                        vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
+                    );
+                    self.generate(&copy_val, stack, false);
+                    return;
+                }
+            }
             self.set_var(stack, v, value);
         } else {
             // First allocation — slot pre-assigned by assign_slots.

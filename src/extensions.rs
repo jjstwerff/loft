@@ -1053,15 +1053,15 @@ fn dispatch_call(
         // (I32, Ref, I32) -> I32  (e.g. scalar + vector + scalar)
         (&[ArgT::I32, ArgT::Ref, ArgT::I32], Some(ArgT::I32)) => {
             let ls = make_loft_store(stores, first_ref_store(args));
-            let f: extern "C" fn(i32, LoftStore, LoftRef, i32) -> i32 =
+            let f: extern "C" fn(LoftStore, i32, LoftRef, i32) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0), ls, ref_arg!(1), i32_arg!(2)));
+            stores.put(stack, f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2)));
         }
         // (I32, Ref, I32) -> void
         (&[ArgT::I32, ArgT::Ref, ArgT::I32], None) => {
             let ls = make_loft_store(stores, first_ref_store(args));
-            let f: extern "C" fn(i32, LoftStore, LoftRef, i32) = unsafe { std::mem::transmute(fp) };
-            f(i32_arg!(0), ls, ref_arg!(1), i32_arg!(2));
+            let f: extern "C" fn(LoftStore, i32, LoftRef, i32) = unsafe { std::mem::transmute(fp) };
+            f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2));
         }
         // ── F32 patterns ─────────────────────────────────────────────
         // (F32) -> F32

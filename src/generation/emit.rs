@@ -516,8 +516,9 @@ impl Output<'_> {
         // Fix "hoisted return value" pattern from scopes::free_vars before iterating.
         // This replaces [expr, OpFreeText…, Return(Null)] with [OpFreeText…, Return(expr)]
         // so native code emits `return expr` rather than a dropped `expr` + `return ()`.
+        // P117: also patch Type::Never blocks (unconditional return with cleanup).
         let patched_ops;
-        let operators: &[Value] = if is_void_block {
+        let operators: &[Value] = if is_void_block || matches!(bl.result, Type::Never) {
             patched_ops = self.patch_hoisted_returns(&bl.operators);
             &patched_ops
         } else {
