@@ -391,13 +391,15 @@ impl Scopes {
         if self.var_scope.contains_key(&v) && *value == Value::Null {
             return Value::Insert(Vec::new());
         }
-        // When the assignment is from a function call whose callee has visible
-        // Reference parameters, codegen will deep-copy the result into a fresh
-        // store.  The variable is then independent — clear its dep so
-        // get_free_vars emits OpFreeRef for it.
+        // When codegen will deep-copy the value into a fresh store, the
+        // variable becomes independent — clear its dep so get_free_vars
+        // emits OpFreeRef for it.  Deep copy happens for:
+        // - Var(src) assignment of a Reference (gen_set_first_ref_var_copy)
+        // - Call to a function with visible Reference params (gen_set_first_ref_call_copy)
         if let Type::Reference(d_nr, ref dep) = function.tp(v).clone() {
             if !dep.is_empty() {
-                let is_deep_copied_call = match value {
+                let is_deep_copied = match value {
+                    Value::Var(_) => true,
                     Value::Call(fn_nr, _) => {
                         let def = data.def(*fn_nr);
                         def.name.starts_with("n_")
@@ -412,7 +414,7 @@ impl Scopes {
                     }
                     _ => false,
                 };
-                if is_deep_copied_call {
+                if is_deep_copied {
                     function.set_type(v, Type::Reference(d_nr, vec![]));
                 }
             }
