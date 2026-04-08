@@ -1170,7 +1170,12 @@ impl State {
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         // High bit = free source store after deep copy.
         // Safe with store reference counting: free_named only frees when rc drops to 0.
+        // Disabled under WASM: frame yield/resume creates store aliases that rc
+        // alone cannot track yet; freeing causes "Allocating a used store" panics.
+        #[cfg(not(feature = "wasm"))]
         let tp_with_free = i32::from(tp_nr) | 0x8000;
+        #[cfg(feature = "wasm")]
+        let tp_with_free = i32::from(tp_nr);
         let copy_val = Value::Call(
             copy_nr,
             vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
