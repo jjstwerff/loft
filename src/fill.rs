@@ -1632,22 +1632,6 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i32>();
     let v_r = *s.get_stack::<DbRef>();
-    #[cfg(feature = "wasm")]
-    if v_r.store_nr != u16::MAX
-        && (v_r.store_nr as usize) < s.database.allocations.len()
-        && s.database.allocations[v_r.store_nr as usize].free
-    {
-        // Log which store was freed and when
-        let created = s.database.allocations[v_r.store_nr as usize].created_at;
-        let last_op = s.database.allocations[v_r.store_nr as usize].last_op_at;
-        web_sys::console::error_1(
-            &format!(
-                "get_vector: USE-AFTER-FREE store={} rec={} pos={} index={} bc={} created_at={} last_op_at={}",
-                v_r.store_nr, v_r.rec, v_r.pos, v_index, s.code_pos, created, last_op
-            )
-            .into(),
-        );
-    }
     let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
     s.put_stack(new_value);
 }

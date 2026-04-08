@@ -33,6 +33,48 @@ impl Output<'_> {
         }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
+        // P117-native: when a call returns a Reference and the callee has
+        // visible Reference params, the returned DbRef may alias a parameter.
+        // Deep-copy to prevent aliasing.
+        if let (Type::Reference(d_nr, _), Value::Call(fn_nr, args)) = (variables.tp(var), to)
+            && self.data.def(*fn_nr).name.starts_with("n_")
+            && self.data.def(*fn_nr).code != Value::Null
+            && self.data.def(*fn_nr).attributes.iter().any(|a| {
+                !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+            })
+        {
+            let tp_nr = self.data.def(*d_nr).known_type;
+            if !self.declared.contains(&var) {
+                self.declared.insert(var);
+                let tp_str = rust_type(variables.tp(var), &Context::Variable);
+                writeln!(
+                    w,
+                    "let mut var_{name}: {tp_str} = stores.null_named(\"var_{name}\");"
+                )?;
+                self.indent(w)?;
+            }
+            writeln!(
+                w,
+                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
+            )?;
+            self.indent(w)?;
+            // Emit the call into a temporary, then deep-copy.
+            write!(w, "{{ let _src = {}(stores", self.data.def(*fn_nr).name)?;
+            for arg in args {
+                write!(w, ", ")?;
+                if let Some(vr) = self.create_stack_var(arg) {
+                    let sn = sanitize(variables.name(vr));
+                    write!(w, "&mut var_{sn}")?;
+                } else {
+                    self.output_code_inner(w, arg)?;
+                }
+            }
+            write!(
+                w,
+                "); OpCopyRecord(stores, _src, var_{name}, {tp_nr}_i32); }}"
+            )?;
+            return Ok(());
+        }
         // When assigning a reference to a reference variable, a pointer copy is not
         // sufficient — emit an OpCopyRecord call for a deep copy.
         // For a first declaration, we also need to allocate a fresh store via

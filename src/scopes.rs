@@ -693,8 +693,26 @@ impl Scopes {
                 // declared return type.  When a closure escapes via implicit return,
                 // the block result type may lack the dep that was propagated to the
                 // function's declared return type (vectors.rs:704-711).
-                let in_ret = tp.depend().contains(&v)
-                    || data.def(self.d_nr).returned.depend().contains(&v)
+                // P117-fix: tp.depend() and returned.depend() contain attribute
+                // indices (parameter positions), not variable numbers.  Resolve
+                // each attribute index to its actual variable number before
+                // comparing, to avoid false matches when a local var_nr happens
+                // to equal an unrelated attribute index.
+                let def = data.def(self.d_nr);
+                let dep_has_var = |deps: &Vec<u16>| -> bool {
+                    deps.iter().any(|&a| {
+                        let a_idx = a as usize;
+                        if a_idx < def.attributes.len() {
+                            function.var(&def.attributes[a_idx].name) == v
+                        } else {
+                            a == v // fallback for non-attribute deps
+                        }
+                    })
+                };
+                let tp_deps = tp.depend().clone();
+                let ret_deps = data.def(self.d_nr).returned.depend().clone();
+                let in_ret = dep_has_var(&tp_deps)
+                    || dep_has_var(&ret_deps)
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
                 let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
