@@ -864,9 +864,10 @@ impl State {
                 self.code_add(var_pos);
             }
             // Free the old store before reassigning an owned Reference.
-            // The variable is fully initialized (is_stack_allocated=true)
-            // so it holds a valid DbRef.  Prevents store leaks when
-            // struct-returning functions are called in loops.
+            // Only safe when the variable truly owns its store (dep empty).
+            // The dep was cleared on first assignment only when codegen will
+            // deep-copy (gen_set_first_ref_call_copy). O-B2 adopted stores
+            // keep their dep, so this won't fire for them.
             if matches!(
                 stack.function.tp(v),
                 Type::Reference(_, _) | Type::Enum(_, true, _)

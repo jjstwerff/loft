@@ -130,6 +130,56 @@ pub fn test() {
     );
 }
 
+/// Exact breakout pattern: proj (const Mat4 with vector m) lives across
+/// the entire loop while mvp is reassigned ~50 times per frame.
+/// Tests store recycling: freed mvp stores must not collide with proj.m.
+#[test]
+fn breakout_store_recycling() {
+    run_leak_check_str(
+        r#"
+struct Mat4 { m: vector<float> }
+fn make_mat4(a: float, b: float) -> Mat4 {
+  Mat4 { m: [a, 0.0, 0.0, 0.0, 0.0, b, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  make_mat4(ma.m[0] * mb.m[0], ma.m[5] * mb.m[5])
+}
+fn rect_mvp(proj: const Mat4, bx: float, by: float) -> Mat4 {
+  model = make_mat4(bx, by);
+  mat4_mul(proj, model)
+}
+pub fn test() {
+  bricks = [for _ in 0..50 { 1 }];
+  proj = make_mat4(2.0, 3.0);
+  mvp = make_mat4(0.0, 0.0);
+  // Simulate 100 frames, each drawing all 50 bricks + paddle + ball
+  // gl_set_uniform_mat4 reads mvp.m (a vector) after each reassignment
+  total = 0.0;
+  for frame in 0..100 {
+    for bi in 0..50 {
+      if bricks[bi] == 1 {
+        mvp = rect_mvp(proj, bi as float, frame as float);
+        // simulate gl_set_uniform_mat4 reading mvp.m
+        for mvi in 0..16 { total += mvp.m[mvi]; }
+      }
+    }
+    // paddle
+    mvp = rect_mvp(proj, 4.0, 5.0);
+    for mvi in 0..16 { total += mvp.m[mvi]; }
+    // ball
+    mvp = rect_mvp(proj, 6.0, 7.0);
+    for mvi in 0..16 { total += mvp.m[mvi]; }
+    // Verify proj is intact after all those reassignments
+    assert(proj.m[0] == 2.0, "f{frame} proj.m[0]={proj.m[0]}");
+    assert(proj.m[5] == 3.0, "f{frame} proj.m[5]={proj.m[5]}");
+    assert(len(proj.m) == 16, "f{frame} proj.m len");
+  }
+  assert(total > 0.0, "total");
+}
+"#,
+    );
+}
+
 /// Simulate the breakout frame loop: outer loop with struct reassignment
 /// inside nested loops, reading vectors in the same scope.
 /// This catches use-after-free when freed stores get recycled.

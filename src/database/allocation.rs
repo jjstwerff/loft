@@ -55,6 +55,12 @@ impl Stores {
             rec,
             pos: 8,
         };
+        #[cfg(feature = "wasm")]
+        if result.store_nr == 14 {
+            web_sys::console::warn_1(
+                &format!("[store14] ALLOC rec={} size={size} name={name}", result.rec).into(),
+            );
+        }
         if std::env::var("LOFT_STORE_LOG").is_ok() {
             if name.is_empty() {
                 eprintln!(
@@ -97,6 +103,12 @@ impl Stores {
             } else {
                 eprintln!("[store] free  store={al} \"{name}\" (max={})", self.max);
             }
+        }
+        #[cfg(feature = "wasm")]
+        if al == 14 {
+            web_sys::console::warn_1(
+                &format!("[store] FREE store=14 rec={} pos={} name={name}", db.rec, db.pos).into(),
+            );
         }
         debug_assert!(al < self.allocations.len() as u16, "Incorrect store");
         let store = &mut self.allocations[al as usize];

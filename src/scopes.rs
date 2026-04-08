@@ -396,26 +396,32 @@ impl Scopes {
         // emits OpFreeRef for it.  Deep copy happens for:
         // - Var(src) assignment of a Reference (gen_set_first_ref_var_copy)
         // - Call to a function with visible Reference params (gen_set_first_ref_call_copy)
-        if let Type::Reference(d_nr, ref dep) = function.tp(v).clone() {
-            if !dep.is_empty() {
-                let is_deep_copied = match value {
-                    Value::Var(_) => true,
-                    Value::Call(fn_nr, _) => {
-                        let def = data.def(*fn_nr);
-                        def.name.starts_with("n_")
-                            && def.code != Value::Null
-                            && def.attributes.iter().any(|a| {
-                                !a.hidden
-                                    && matches!(
-                                        a.typedef,
-                                        Type::Reference(_, _) | Type::Enum(_, true, _)
-                                    )
-                            })
+        // On FIRST assignment (variable not yet registered), when codegen will
+        // deep-copy the value into a fresh store, clear the dep so get_free_vars
+        // emits OpFreeRef.  On reassignment, keep the dep — codegen uses OpPutRef
+        // which may adopt a borrowed store without deep copying.
+        if !self.var_scope.contains_key(&v) {
+            if let Type::Reference(d_nr, ref dep) = function.tp(v).clone() {
+                if !dep.is_empty() {
+                    let is_deep_copied = match value {
+                        Value::Var(_) => true,
+                        Value::Call(fn_nr, _) => {
+                            let def = data.def(*fn_nr);
+                            def.name.starts_with("n_")
+                                && def.code != Value::Null
+                                && def.attributes.iter().any(|a| {
+                                    !a.hidden
+                                        && matches!(
+                                            a.typedef,
+                                            Type::Reference(_, _) | Type::Enum(_, true, _)
+                                        )
+                                })
+                        }
+                        _ => false,
+                    };
+                    if is_deep_copied {
+                        function.set_type(v, Type::Reference(d_nr, vec![]));
                     }
-                    _ => false,
-                };
-                if is_deep_copied {
-                    function.set_type(v, Type::Reference(d_nr, vec![]));
                 }
             }
         }
