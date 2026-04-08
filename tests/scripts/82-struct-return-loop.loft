@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Regression: struct returned from function with ref param, called in a loop.
+// The callee's return store must be freed after deep copy (issue #120).
+
+struct Pt { x: float not null, y: float not null }
+
+fn make_pt(a: float, b: float) -> Pt { Pt { x: a, y: b } }
+fn shift_pt(p: const Pt, dx: float) -> Pt { make_pt(p.x + dx, p.y) }
+
+fn test_struct_return_in_loop() {
+  base = make_pt(0.0, 0.0);
+  total = 0.0;
+  for i in 0..10 {
+    p = shift_pt(base, i as float);
+    total += p.x;
+  }
+  assert(total == 45.0, "sum 0..9 = {total}");
+}
+
+fn test_nested_struct_return() {
+  base = make_pt(1.0, 2.0);
+  p = shift_pt(base, 10.0);
+  assert(p.x == 11.0, "shifted x: {p.x}");
+}

@@ -89,6 +89,25 @@ pub fn test() {
     );
 }
 
+/// Struct return in a loop — store must be freed/reused each iteration.
+#[test]
+fn struct_return_in_loop() {
+    run_leak_check_str(
+        r#"
+struct Pt { x: float not null, y: float not null }
+fn make_pt(a: float, b: float) -> Pt { Pt { x: a, y: b } }
+fn shift_pt(p: const Pt, dx: float) -> Pt { make_pt(p.x + dx, p.y) }
+pub fn test() {
+  base = make_pt(0.0, 0.0);
+  for i in 0..3 {
+    p = shift_pt(base, i as float);
+    assert(p.x >= 0.0, "x");
+  }
+}
+"#,
+    );
+}
+
 /// Custom iterator protocol — iter object deep-copied but dep prevented FreeRef.
 #[test]
 fn iterator_protocol() {

@@ -1104,10 +1104,10 @@ impl State {
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
-        // TODO: High bit = free source store after copy.
-        // Currently disabled because freeing the source store causes
-        // corruption when the store is reused in a loop (issue #120).
-        let tp_with_free = i32::from(tp_nr);
+        // Issue #120: set high bit to signal OpCopyRecord to free the
+        // source store after copying. The source is the callee's return
+        // store which would otherwise leak.
+        let tp_with_free = i32::from(tp_nr) | 0x8000;
         let copy_val = Value::Call(
             copy_nr,
             vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],

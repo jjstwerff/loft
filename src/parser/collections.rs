@@ -1631,7 +1631,7 @@ use #count instead"
         let num_attrs = self.data.attributes(struct_def_nr);
         let mut blocks: Vec<Value> = Vec::new();
 
-        let work_checkpoint = self.vars.work_ref();
+        let _work_checkpoint = self.vars.work_ref();
         for a in 0..num_attrs {
             let attr_name = self.data.attr_name(struct_def_nr, a);
             let attr_type = self.data.attr_type(struct_def_nr, a);
