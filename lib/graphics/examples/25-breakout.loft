@@ -261,7 +261,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
   br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
 
   // Font + pre-rendered text textures
-  br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  br_font_path = source_dir() + "DejaVuSans-Bold.ttf";
+  br_font = graphics::gl_load_font(br_font_path);
+  if !br_font { println("WARNING: font not loaded from {br_font_path}"); }
   br_white = graphics::rgba(255, 255, 255, 255);
   br_gray = graphics::rgba(200, 200, 200, 180);
 
@@ -272,6 +274,10 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_tc = graphics::canvas(80, 16, 0);
     br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, br_gray);
     br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 80, 16);
+    if br_pk_tex[br_ti] == 0 { println("WARNING: pickup label {br_ti} texture upload failed"); }
+  }
+  for br_tv in 1..8 {
+    if br_pk_tex[br_tv] == 0 { println("VERIFY: pickup tex[{br_tv}] = 0 (missing)"); }
   }
 
   // Digit textures 0-9 for numeric score display
@@ -281,6 +287,10 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_dcv = graphics::canvas(20, 28, 0);
     br_dcv.draw_text(br_font, br_digits[br_di], 22.0, 2, 2, br_white);
     br_dig_tex[br_di] = graphics::gl_upload_canvas(br_dcv.data, 20, 28);
+    if br_dig_tex[br_di] == 0 { println("WARNING: digit {br_di} texture upload failed"); }
+  }
+  for br_dv in 0..10 {
+    if br_dig_tex[br_dv] == 0 { println("VERIFY: digit tex[{br_dv}] = 0 (missing)"); }
   }
 
   // Intro text
@@ -296,6 +306,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_lcv = graphics::canvas(300, 60, 0);
     br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, br_white);
     br_lvl_tex[br_tl] = graphics::gl_upload_canvas(br_lcv.data, 300, 60);
+    if br_lvl_tex[br_tl] == 0 { println("WARNING: level {br_ln} texture upload failed"); }
   }
 
   // "SCORE" label
