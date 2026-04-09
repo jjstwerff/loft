@@ -190,28 +190,22 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(60, 210, 110, 255));
   at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(160, 240, 190, 100));
 
-  // Row 3: pickups — colored capsule bg + centered icon
+  // Row 3: pickups — large icons only, no background (transparent)
+  // Draw each icon 3 times offset for a bigger, bolder look
   // S_PK_EXTEND (16)
-  at.fill_rect(0 + 2, 96 + 2, 28, 16, graphics::rgba(50, 180, 70, 255));
-  icon_extend(at, 12, 102);
+  icon_extend(at, 8, 100); icon_extend(at, 16, 100); icon_extend(at, 12, 104);
   // S_PK_EXPLODE (17)
-  at.fill_rect(32 + 2, 96 + 2, 28, 16, graphics::rgba(200, 50, 50, 255));
-  icon_explode(at, 44, 101);
+  icon_explode(at, 40, 99); icon_explode(at, 48, 99); icon_explode(at, 44, 103);
   // S_PK_BALLOON (18)
-  at.fill_rect(64 + 2, 96 + 2, 28, 16, graphics::rgba(200, 180, 30, 255));
-  icon_balloon(at, 76, 101);
+  icon_balloon(at, 72, 98); icon_balloon(at, 80, 98); icon_balloon(at, 76, 103);
   // S_PK_NEWROW (19)
-  at.fill_rect(96 + 2, 96 + 2, 28, 16, graphics::rgba(50, 80, 200, 255));
-  icon_newrow(at, 108, 101);
+  icon_newrow(at, 104, 99); icon_newrow(at, 112, 99); icon_newrow(at, 108, 103);
   // S_PK_MULTI (20)
-  at.fill_rect(128 + 2, 96 + 2, 28, 16, graphics::rgba(80, 80, 200, 255));
-  icon_multi(at, 140, 101);
+  icon_multi(at, 136, 99); icon_multi(at, 144, 99); icon_multi(at, 140, 103);
   // S_PK_FIRE (21)
-  at.fill_rect(160 + 2, 96 + 2, 28, 16, graphics::rgba(200, 120, 20, 255));
-  icon_fire(at, 172, 101);
+  icon_fire(at, 168, 99); icon_fire(at, 176, 99); icon_fire(at, 172, 103);
   // S_PK_SHIELD (22)
-  at.fill_rect(128 + 2, 64 + 2, 28, 16, graphics::rgba(50, 100, 200, 255));
-  icon_shield(at, 140, 69);
+  icon_shield(at, 136, 67); icon_shield(at, 144, 67); icon_shield(at, 140, 71);
 
   at
 }
