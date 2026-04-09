@@ -389,8 +389,19 @@ impl Parser {
     }
 
     // <constant>
+    // Accepts either `NAME = expr;` or `NAME: type = expr;`. The optional
+    // type annotation is parsed (so the parser doesn't reject the form)
+    // but the inferred type from the initialiser is the source of truth.
+    // P128 fix.
     pub(crate) fn parse_constant(&mut self) -> bool {
         if let Some(id) = self.lexer.has_identifier() {
+            // Optional `: type` annotation between the identifier and `=`.
+            // Parsed and discarded — the literal's element type is used.
+            // A future enhancement could validate the inferred type matches
+            // the annotation (after dep-list normalisation).
+            if self.lexer.has_token(":") {
+                let _ = self.parse_type_full(u32::MAX, false);
+            }
             self.lexer.token("=");
             if !is_upper(&id) {
                 diagnostic!(

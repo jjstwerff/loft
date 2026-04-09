@@ -48,14 +48,19 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 114 | ~~`h = h + expr` clears h before reading~~ | ~~Medium~~ | **Fixed** — self-append detection + self-reference detection |
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
-| 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
-| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
-| 121 | Tuple literals crash interpreter with heap corruption | **High** | Use struct instead of tuple; native mode works |
+| 117 | Struct-returning functions leak the callee's store after deep copy | Medium | ⚠️ Appears fixed by P116/P118/P122 wave; regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak` passes. Re-verify with the original `file()`-style pattern before closing |
+| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | ⚠️ Appears fixed; `lib/graphics/examples/test_mat4_crash.loft` runs cleanly and `tests/issues.rs::p120_vector_field_in_returned_struct_round_trip` passes. Re-verify with the full GL example suite before closing |
+| 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
 | 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
 | 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
-| 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | Assign array to a variable first, then index |
+| 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | ⚠️ Appears fixed; `tests/issues.rs::p124_function_returning_inline_array_index` passes under interpret. Re-verify under `--native` with `--native-emit` before closing |
 | 125 | `use` import can't find sibling packages when script is inside a package | Medium | ~~**Fixed**~~ — `lib_path` now walks up to `loft.toml` and searches siblings |
 | 126 | Negative integer literal as final expression parsed as void negation | Low | Use `return -1;` instead of bare `-1` as function tail expression |
+| 127 | File-scope `vector<single>` constant passed to `gl_upload_vertices` causes codegen 8B vs 12B stack mismatch | Medium | Move the literal inline into the calling function |
+| 128 | File-scope constants reject type annotations with misleading "Expect token =" error | Low | Drop the annotation; let the literal's element type be inferred |
+| 129 | Native codegen emits duplicate `extern crate loft_graphics_native` when a script outside the package imports a package that uses graphics | Medium | Run the script in `--interpret` mode, or place it inside the loft repo |
+| 130 | Headless GL: panic via `fatal runtime error: Rust cannot catch foreign exceptions` after `gl_create_window` returns false | Medium | Don't run GL examples without a `DISPLAY`; check `gl_create_window` return and `return` immediately — but the panic happens regardless on some paths |
+| 131 | Loft CLI consumes script arguments instead of forwarding them (e.g. `loft script.loft --mode glb` → `unknown option: --mode`) | Low | Use a flag the loft CLI doesn't recognise as its own; or hard-code the mode for now |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -207,6 +212,17 @@ Guard `code != Value::Null` excludes native/stub functions (P118 fix).
 ### 117. Struct-returning functions with text params leak stores
 
 **Severity:** Medium — stores accumulate for functions like `file()`.
+
+**Status (2026-04-09):** ⚠️ **Appears fixed but unverified.** The
+regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak`
+runs 1000 iterations of a `Wrap { name: text, count: integer }`
+construction and assertion loop without any leak warnings or pool
+exhaustion. The `file()` API path that originally exhibited the bug has
+also changed (`file().exists()` no longer exists in the current API), so
+the original repro can't be re-run as-is. Before closing this entry,
+re-verify with: (1) a fresh `file()`-style API call in a tight loop with
+`LOFT_STORES=warn`, (2) the test scripts listed under "Affected tests"
+below.
 
 **Symptom:** `f = file("path")` leaks store because `f`'s type has
 `dep=[__ref_1]` (text-return work variable). Scopes.rs sees non-empty
@@ -891,6 +907,21 @@ crash.
 
 ### 120. Struct constructor doesn't deep-copy vector fields into struct store
 
+**Status (2026-04-09):** ⚠️ **Appears fixed but unverified.** The
+documented reproducer `lib/graphics/examples/test_mat4_crash.loft` now
+runs cleanly:
+```
+inside make_big: data len=16
+after return: data len=16
+data[0]=0 data[15]=15
+```
+The unit-test version `tests/issues.rs::p120_vector_field_in_returned_struct_round_trip`
+also passes, asserting the full round-trip (16 elements survive return).
+Before closing this entry, re-run the full GL example suite — especially
+`19-complete-scene` and `25-breakout`, which the docs cite as blocked by
+this bug. If GL textures still come out black or matrices come out
+zeroed, the fix is incomplete.
+
 **Symptom:** Vector fields in returned structs are empty (length=0) or contain
 garbage. Causes black textures in GL examples and use-after-free crashes when
 the struct is used inside loops.
@@ -957,6 +988,18 @@ into the struct's store.
 ### 121. Tuple literals crash interpreter with heap corruption
 
 **Severity:** High (interpreter only; native codegen works)
+
+**Status (2026-04-09):** ⚠️ **Appears fixed but unverified.** The exact
+documented reproducer (`a = (3.0, 2.0); assert(a.0 > 1.0, ...)`) runs
+cleanly under `--interpret`. The regression-guard tests
+`p121_float_tuple_literal_no_heap_corruption` and
+`p121_float_tuple_function_return` in `tests/issues.rs` pass.
+
+Heap corruption is non-deterministic — passing tests don't *prove* the
+bug is gone; the corruption might require specific allocator state or
+allocation history. Before closing, re-verify with: (1) a debug build
+under valgrind, (2) the `tests/scripts/50-tuples.loft` end-to-end script
+(currently in `SCRIPTS_NATIVE_SKIP`).
 
 **Symptom:** Creating a tuple literal such as `a = (3.0, 2.0)` in interpreter
 mode causes `corrupted size vs. prev_size` (glibc abort) or SIGSEGV.  Tuple
@@ -1046,8 +1089,23 @@ for _ in 0..1000000 {
 
 **Severity:** Low (native mode only)
 
-**Symptom:** `[0.9, 0.2, 0.3][idx]` in loft generates an `as DbRef`
-cast in the Rust output, which fails to compile.
+**Status (2026-04-10):** ⚠️ **Appears fixed but unverified.** The
+function-tail form `[0.9, 0.2, 0.3][idx]` now compiles cleanly under
+`--native`, and the regression guard
+`tests/issues.rs::p124_function_returning_inline_array_index` passes
+under interpret mode. The local-variable workaround
+(`tests/issues.rs::p124_local_array_index_workaround_works`) also keeps
+passing.
+
+Note: in interpret mode, the same expression as a *statement-level*
+assignment (`v = [10, 20, 30][i];`) now produces a parser-level type
+error ("Variable v cannot change type from vector<integer> to integer")
+— a different and stricter behaviour than the original codegen panic.
+Before closing this entry, re-verify with `--native-emit` to confirm no
+`as DbRef` cast appears in the generated Rust source.
+
+**Symptom (historical):** `[0.9, 0.2, 0.3][idx]` in loft generated an
+`as DbRef` cast in the Rust output, which failed to compile.
 
 **Workaround:** Assign the array to a variable first:
 ```loft
@@ -1080,13 +1138,369 @@ layout.
 
 **Severity:** Low
 
-**Symptom:** A function ending with `-1` as the tail expression produces
-`"No matching operator '-' on 'void' and 'integer'"`. The parser treats
-`-1` as unary minus applied to `1`, but the expression context expects
-a value, not an operator.
+**Symptom:** A function whose body contains earlier `if X { return Y; }`
+statements followed by a tail expression `-1` produces a misleading
+parse error:
+
+```
+Error: No matching operator '-' on 'void' and 'integer' at .../file.loft:5:1
+  |
+   5 | }
+     | ^
+```
+
+A function with bare `-1` as its *only* statement parses fine. The bug
+only fires when an earlier statement (typically `if { return; }`) leaves
+the parser in a state where the next `-` is treated as a binary operator
+on the previous statement's `void` result instead of as a unary prefix
+on a new expression.
+
+**Reproducer:**
+```loft
+fn lookup(idx: integer) -> integer {
+  if idx == 0 { return 100; }
+  if idx == 1 { return 200; }
+  -1                          // ← parsed as `void - 1`
+}
+```
+
+**Tests:** `tests/issues.rs::p126_negative_tail_expression` (workaround
+guard, passes) and `p126_negative_tail_expression_after_returns`
+(`#[ignore]`d real bug reproducer).
+
+**Root cause hypothesis:** the statement-vs-expression boundary in
+`parse_block`/`parse_expression` uses pratt parsing and tries to extend
+the previous statement's value with an infix `-` operator before checking
+whether the previous statement actually produced a value.
+
+**Fix path:** in the block parser, force `-` after a void-returning
+statement to start a new unary prefix expression. Equivalent to inserting
+an implicit `;` boundary when the previous statement's result type is
+`Void`. Touch points: `src/parser/expressions.rs` (statement loop) and
+`src/parser/operators.rs` (prefix vs infix `-` resolution).
 
 **Workaround:** Use `return -1;` with explicit return, or assign to a
 variable first: `result = -1; result`.
+
+---
+
+### 127. File-scope vector constant inlined into function call corrupts slots
+
+**Severity:** Medium
+
+**Symptom:** A file-scope constant holding a vector literal, when
+referenced inside a function and passed as an argument, panics in
+codegen with one of two flavours depending on context:
+
+```
+[generate_set] first-assignment of 'n' (var_nr=0) in 'n_test'
+contains a Var(0) self-reference — storage not yet allocated, will
+produce a garbage DbRef at runtime. This is a parser bug.
+value=Call(502, [Block(Block { name: "Vector",
+  operators: [Set(1, Call(312, [Var(0), Int(20), Int(65535)])), ...,
+              Var(0)],
+  result: Vector(Integer(...), []), scope: 2, var_size: 0 })])
+```
+
+Or, in a different reference site:
+
+```
+generate_call [n_F]: mutable arg 0 (data: Reference(265, []))
+expected 12B on stack but generate(Var(0)) pushed 8B —
+Value::Null in a typed slot? Missing convert() call in the parser?
+```
+
+Both errors come from sanity checks in `src/state/codegen.rs` and surface
+the same underlying problem.
+
+**Reproducer:**
+```loft
+QUAD = [1, 2, 3];
+fn count(v: const vector<integer>) -> integer { v.len() }
+fn test() {
+  n = count(QUAD);              // panics in generate_set
+  assert(n == 3, "got {n}");
+}
+```
+
+The bug fires for `vector<integer>` and `vector<single>` constants alike.
+The same literal works when declared as a local variable inside the
+function instead of a file-scope constant.
+
+**Tests:** `tests/issues.rs::p127_file_scope_vector_constant_in_call`
+and `p127_file_scope_single_vector_constant` (both `#[ignore]`d).
+`p127_inline_vector_literal_in_call_works` is the regression guard for
+the working local-variable form.
+
+**Root cause:** `parse_vector` (`src/parser/vectors.rs:1082`) builds a
+vector literal as a `Value::Block` via `v_block()` (`src/data.rs:798`),
+which sets `var_size: 0` and `scope: u16::MAX`. The Block's operator
+list uses `Var(0)` and `Var(1)` for the temporary "current vector slot"
+and "current element slot" used during the construction loop. When the
+literal is parsed as the value of a `DefType::Constant`
+(`src/parser/definitions.rs:407`), the IR is stored as-is. Each later
+reference to the constant inlines the Block into the calling function's
+IR — but the `Var(N)` indices are *not* rewritten and *not* offset, so
+they collide with the calling function's local slots 0 and 1.
+
+When the caller's slot 0 or 1 happens to be the variable being assigned
+(`n = count(QUAD)` puts `n` at slot 0), the codegen sanity check spots
+the self-reference and panics. When the caller's slots happen to be
+unrelated locals, the check might not fire and the code would silently
+write to the wrong slots — making this potentially a *latent* memory
+corruption bug, not just a panic.
+
+**Fix path (preferred order):**
+1. **Re-emit the literal at every reference site.** Cleanest fix —
+   when a constant of vector type is referenced, call back into
+   `parse_vector` to emit a fresh Block with the caller's current
+   `var_size` baseline. Loses constant deduplication but vector
+   literals are large and rarely shared.
+2. **Remap `Var(N)` indices when inlining.** Walk the constant's IR
+   and replace each `Var(i)` with `Var(i + caller.var_size)`, then
+   bump `caller.var_size` by `constant_block.var_size`. Requires
+   tracking the *correct* `var_size` on the constant Block, which
+   currently is 0 — also needs a fix.
+3. **Constant-fold simple literal vectors at parse time.** If a vector
+   literal is fully static (no side-effecting expressions), pre-allocate
+   the storage at constant-init time and reference it as a static IR
+   node that doesn't need temporaries at all. Best for performance but
+   biggest implementation effort.
+
+**Touch points:** `src/data.rs` (`v_block` and `Block::var_size`),
+`src/parser/vectors.rs` (vector literal emission), `src/parser/objects.rs`
+(`replace_record_ref` analogue for inlining), `src/parser/mod.rs` (constant
+resolution path).
+
+**Workaround:** Move the literal inline into the function that uses it.
+
+**Found:** 2026-04-09 while declaring `UNIT_QUAD_2D` in
+`lib/graphics/src/graphics.loft` for the `Painter2D` API.
+
+---
+
+### 128. File-scope constants reject type annotations with misleading error
+
+**Severity:** Low
+
+**Symptom:** Adding a type annotation to a file-scope constant:
+```loft
+QUAD: vector<integer> = [1, 2, 3];
+```
+produces three cascading parse errors at the colon position:
+```
+Error: Expect token = at file.loft:1:6
+Error: Expect token ; at file.loft:1:6
+Error: Syntax error: unexpected ':' at file.loft:1:6
+```
+
+Local variables accept the same annotation (`x: integer = 42;`), so the
+asymmetry is surprising and the error chain is misleading — the colon is
+actually the problem, but the diagnostic blames a missing `=`.
+
+**Test:** `tests/parse_errors.rs::p128_constant_with_type_annotation`
+locks in the current 3-error output.
+
+**Root cause:** `parse_constant` (`src/parser/definitions.rs:392`) does:
+```rust
+if let Some(id) = self.lexer.has_identifier() {
+    self.lexer.token("=");           // ← hard-codes `=` immediately
+    ...
+}
+```
+There is no provision for a `: type` annotation between the identifier
+and the `=`.
+
+**Fix path:** insert a `has_token(":")` branch in `parse_constant`,
+parse the annotation via `parse_type`, and either (a) discard it and
+continue with full inference, or (b) use it to constrain the inferred
+type and error if the literal's element type is incompatible. Option
+(b) gives better diagnostics for typos like `vector<single>` vs `vector<float>`.
+
+```rust
+pub(crate) fn parse_constant(&mut self) -> bool {
+    if let Some(id) = self.lexer.has_identifier() {
+        let mut declared_tp = Type::Null;
+        if self.lexer.has_token(":") {
+            declared_tp = self.parse_type();
+        }
+        self.lexer.token("=");
+        // ... existing logic, optionally check inferred tp matches declared_tp
+    }
+}
+```
+
+**Workaround:** Drop the annotation; the literal's element type
+(e.g. `f` suffix → `single`) is sufficient for inference.
+
+**Found:** 2026-04-09 while declaring `UNIT_QUAD_2D` in graphics.loft.
+
+---
+
+### 129. Native codegen emits duplicate `extern crate` for graphics-using packages
+
+**Severity:** Medium
+
+**Symptom:** Running a script *outside* the loft repo that does
+`use graphics;` (or transitively uses it) fails native compilation with
+Rust E0259:
+
+```
+error[E0259]: the name `loft_graphics_native` is defined multiple times
+  --> /tmp/loft_native.rs:18:1
+   |
+17 | extern crate loft_graphics_native;
+   | ----- previous import of the extern crate `loft_graphics_native` here
+18 | extern crate loft_graphics_native;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `loft_graphics_native` reimported here
+```
+
+The generated `/tmp/loft_native_*.rs` has the same `extern crate`
+declaration emitted twice. The same error happens with `--check` because
+`--check` runs through the native codegen path.
+
+**Reproducer:**
+```bash
+cat > /tmp/test.loft << 'EOF'
+use graphics;
+fn main() { println("hi"); }
+EOF
+cargo run --bin loft -- --lib /home/ubuntu/loft/lib/ /tmp/test.loft
+```
+
+**Test:** Not added — would require a working out-of-repo native
+toolchain in CI. The `--native-emit /tmp/foo.rs` flag is the easiest way
+to inspect the generated source.
+
+**Root cause hypothesis:** the native codegen walks the package
+dependency graph to emit `extern crate` declarations and either visits
+the `graphics` package twice (transitive + direct), or the first emission
+happens during one phase (e.g. dependency scan) and the second during
+another (e.g. native function lookup), with no de-duplication step in
+between.
+
+**Fix path:** maintain a `HashSet<String>` of already-emitted crate
+names in `src/generation/mod.rs` (or wherever `extern crate` lines are
+written), and skip subsequent emissions. Touch points: `src/generation/`
+(emit logic) and `src/generation/dispatch.rs` (per-package walking).
+
+**Workaround:** Run the script with `--interpret` instead (parser still
+runs and types are still resolved), or place the script inside the loft
+repo so it doesn't trigger the cross-package native build path.
+
+**Found:** 2026-04-09 while parse-checking `Painter2D` additions outside
+the repo.
+
+---
+
+### 130. Headless GL aborts via "Rust cannot catch foreign exceptions"
+
+**Severity:** Medium (only affects headless test environments)
+
+**Symptom:** Running any GL example without a display panics during
+window creation, then a *second* panic happens that the runtime can't
+catch and aborts the process:
+
+```
+loft_gl_create_window: EventLoop: os error ... :
+  neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set.
+
+thread '<unnamed>' panicked at .../gl-fe1d8.../bindings.rs:20624:13:
+gl function was not loaded
+fatal runtime error: Rust cannot catch foreign exceptions, aborting
+```
+
+The first panic is winit's event-loop creation failing — that one is
+caught and `gl_create_window` returns `false`. The second panic happens
+during cleanup or during a subsequent GL call: the gl bindings are
+dispatched through function pointers that remain null when context
+creation failed, and calling through a null pointer is C-side undefined
+behaviour that the Rust runtime then refuses to unwind across.
+
+**Test:** Not added — running the test would crash the test harness
+itself. Reproduction requires running any of the 3D examples in
+`lib/graphics/examples/` without `DISPLAY` set.
+
+**Root cause hypothesis:** `loft_gl_create_window` (in
+`lib/graphics/native/src/window.rs` or `src/lib.rs`) catches the winit
+error and returns false, but the global GL context state in
+`lib/graphics/native/src/lib.rs` is partially initialised and a
+subsequent function call (perhaps during the script's `gl_destroy_window`
+or during process exit's `Drop` impls) re-enters the gl bindings.
+
+**Fix path:**
+1. Initialise the global GL context as `None` and gate every native
+   `loft_gl_*` function on `if context.is_none() { return Default::default(); }`.
+2. Wrap winit window creation and the early GL function-pointer load in
+   `std::panic::catch_unwind` so the foreign-exception path can never
+   trigger.
+3. As a smaller fix, audit `Drop` impls on the `Renderer` and any
+   global `OnceCell`/`Lazy` GL state to make sure they no-op when GL was
+   never initialised.
+
+Touch points: `lib/graphics/native/src/lib.rs`, `lib/graphics/native/src/window.rs`.
+
+**Workaround:** Don't run GL examples without a display. The script-side
+`if !gl_create_window { return; }` guard fires correctly but doesn't
+prevent the second panic.
+
+**Found:** 2026-04-09 while parse-checking the rewritten 3D examples in
+the headless sandbox.
+
+---
+
+### 131. Loft CLI consumes script-level arguments
+
+**Severity:** Low
+
+**Symptom:** Many graphics examples parse `arguments()` for `--mode glb`,
+but invoking them as
+
+```bash
+loft 19-complete-scene.loft --mode glb
+```
+
+produces:
+```
+unknown option: --mode
+usage: loft [options] <file>
+```
+
+The loft CLI parses `--mode` as one of its own options, sees nothing,
+and exits before the script runs. As a related quirk, `arguments()`
+called from inside the script returns the *full* loft argv including
+loft's own flags (`--interpret`, `--path`, etc.), not just the
+script-level args — so the example pattern of `for a in arguments() { … }`
+to find `--mode` is broken even when no `--` is involved.
+
+**Test:** `tests/exit_codes.rs::p131_cli_consumes_script_dashdash_arg`
+locks in the current "exits non-zero with 'unknown option'" behaviour
+so the fix can flip it cleanly.
+
+**Root cause:** `src/main.rs` argument parser doesn't distinguish "loft
+options" from "script arguments". Anything matching `--*` is treated
+as a loft option, even after the script path has already been seen.
+And `arguments()` is implemented as a thin wrapper over `std::env::args`
+without filtering out the loft binary name and loft-recognised flags.
+
+**Fix path:**
+1. **Option parser:** in `src/main.rs`, once the positional script-path
+   argument is consumed, treat every subsequent token as a script
+   argument and stop interpreting `--*` as a loft option. Optionally
+   also support an explicit `--` separator before script args, matching
+   common Unix convention.
+2. **`arguments()` builtin:** filter out the loft binary path and any
+   tokens consumed by the loft CLI itself, so the script only sees
+   what was passed *after* the script path.
+
+Touch points: `src/main.rs` (CLI parser), `src/native.rs` or wherever
+`n_arguments` is implemented.
+
+**Workaround:** None at the CLI level. Hard-code the mode in the script,
+or invoke a different entry function from the shebang.
+
+**Found:** 2026-04-09 while trying to parse-check the GLB export path
+of rewritten examples.
 
 ---
 

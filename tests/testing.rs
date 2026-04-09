@@ -215,7 +215,10 @@ impl Drop for Test {
             assert_eq!(u32::from(size), *s, "Size of {}", *d);
         }
         scopes::check(&mut p.data);
-        #[cfg(debug_assertions)]
+        // P132: also generate per-test native code in release builds so the
+        // n2..n10/o7 codegen-inspection tests can read tests/generated/<name>.rs
+        // when the suite is run via `cargo test --release` (the new default
+        // since make ci switched to release for ~1800x speedup).
         self.generate_code(&p, start).unwrap();
         // Validate that we found the correct warnings and errors. Halt when differences are found.
         self.assert_diagnostics(&p);

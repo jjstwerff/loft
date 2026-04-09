@@ -387,7 +387,7 @@ fn put_int(s: &mut State) {
 
 fn put_character(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let v_value = *s.get_stack::<char>();
+    let v_value = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     s.put_var(v_pos, v_value);
 }
 
@@ -1132,7 +1132,7 @@ fn text_character(s: &mut State) {
 }
 
 fn conv_bool_from_character(s: &mut State) {
-    let v_v1 = *s.get_stack::<char>();
+    let v_v1 = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     let new_value = ops::op_conv_bool_from_character(v_v1);
     s.put_stack(new_value);
 }
@@ -1196,7 +1196,7 @@ fn cast_character_from_int(s: &mut State) {
 }
 
 fn conv_int_from_character(s: &mut State) {
-    let v_v1 = *s.get_stack::<char>();
+    let v_v1 = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     let new_value = if v_v1 == char::from(0) {
         i32::MIN
     } else {
@@ -1520,7 +1520,7 @@ fn set_int(s: &mut State) {
 
 fn set_character(s: &mut State) {
     let v_fld = *s.code::<u16>();
-    let v_val = *s.get_stack::<char>();
+    let v_val = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;

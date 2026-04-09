@@ -50,7 +50,10 @@ debug:
 test: clippy
 	-rm -f tests/generated/*
 	-rm -f tests/dumps/*.txt
-	RUST_BACKTRACE=1 cargo test -- --nocapture --test-threads=1 >> result.txt 2>&1
+	# --release: the loft bytecode interpreter is ~1800x slower in debug
+	# mode (debug Rust running an interpreter loop). Release mode keeps
+	# the full test suite under a minute instead of 30+ minutes.
+	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 >> result.txt 2>&1
 
 quick:
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
@@ -110,14 +113,22 @@ test-packages:
 ci:
 	-rm -rf tests/generated
 	-rm -f /tmp/loft_native_*
+	# Some tests (e.g. fill_rs_up_to_date, n2..n10) write into tests/generated
+	# directly via generate_code_to without first calling create_dir_all.
+	# Recreate the directory so these tests don't fail with NotFound when
+	# parallel test scheduling lets them race the helpers that *do* create it.
+	mkdir -p tests/generated
+	# --release on cargo test: see comment on the `test` target — debug mode
+	# pushes the suite from ~1 minute to ~30 minutes because the loft
+	# bytecode interpreter is dominated by debug Rust overhead.
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
 	cargo check --no-default-features >> result.txt 2>&1 && \
-	cargo test >> result.txt 2>&1 && \
+	cargo test --release >> result.txt 2>&1 && \
 	$(MAKE) test-packages >> result.txt 2>&1
 
 run-tests:
-	cargo test > result.txt 2>&1
+	cargo test --release > result.txt 2>&1
 
 clippy:
 	cargo fmt -- --check > result.txt 2>&1
