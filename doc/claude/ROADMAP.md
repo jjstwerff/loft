@@ -25,7 +25,9 @@ Completed work belongs in CHANGELOG.md (user-facing) and git history (implementa
 
 Renderer (R1–R4), WASM + playground (W1, W1.P), WebGL bridge (GL6.1–GL6.5),
 frame yield (FY.1–FY.3), input (GL6.6), asset loading (GL7.1–GL7.4),
-🌐 **live graphics gallery** (GAL.3), language bug fixes (P110–P114).
+🌐 **live graphics gallery** (GAL.3), language bug fixes (P110–P114),
+DX.3 (source-line display + "did you mean?" in errors),
+NT.1 (native codegen reliability — all tests pass).
 
 ---
 
@@ -118,8 +120,6 @@ SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 | SH.2   | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
 | DX.1   | Quick-start `examples/` directory                      | XS | ✓      | DX.md            |
 | DX.2   | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
-| DX.3   | Error messages: source line display + suggestions      | M  | ✓      | DX.md            |
-| NT.1   | Native codegen: reliability (all tests pass)           | XS | ✓      | DX.md            |
 
 ### Remaining package/language items
 

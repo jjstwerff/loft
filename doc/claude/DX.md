@@ -246,7 +246,7 @@ Windows is excluded from native tests because `rustc` invocation paths differ.
 
 ---
 
-## DX.3 — Error Messages: Source Line Display + Suggestions
+## DX.3 — Error Messages: Source Line Display + Suggestions *(completed)*
 
 Errors already include `file:line:col` (e.g. `Error: Unknown variable 'zz'
 at test.loft:1:31`).  This item adds source-line display with a caret and
@@ -340,7 +340,7 @@ The Levenshtein function is ~15 lines of Rust (no external crate needed).
 
 ---
 
-## NT.1 — Native Codegen: Reliability
+## NT.1 — Native Codegen: Reliability *(completed)*
 
 > **Status: all `make test-native` scripts pass (30/30 docs files).**
 > Native mode is already the default (`src/main.rs:1131`).
