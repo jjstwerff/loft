@@ -1519,8 +1519,7 @@ fn native_rs_functions_up_to_date() {
     let mut p = Parser::new();
     p.parse_dir("default", true, false).unwrap();
     scopes::check(&mut p.data);
-    let native_src =
-        std::fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
+    let native_src = std::fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
     let mut missing = Vec::new();
     for d_nr in 0..p.data.definitions() {
         let d = p.data.def(d_nr);

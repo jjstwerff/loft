@@ -418,17 +418,9 @@ impl State {
             };
             let size_bytes = size(&typedef, ctx);
             let abs_pos = frame_base + u32::from(slot);
-            let value = if u64::from(abs_pos) + u64::from(size_bytes) > u64::from(self.stack_pos) {
-                VariableValue::OutOfFrame
-            } else {
-                self.read_variable_value(&typedef, abs_pos, size_bytes, is_arg)
-            };
-            // Liveness rule:
-            //   - Arguments are live for the entire function body.
-            //   - Locals are live from their first reference to their last
-            //     reference (inclusive).
-            //   - If never referenced (bc_first == u32::MAX), the variable is
-            //     dead — only kept for reporting.
+            // Compute liveness before reading the value — non-live slots may
+            // contain uninitialized memory whose garbage pointer fields cause
+            // SIGSEGV when dereferenced (e.g. text variables).
             let i = v_nr as usize;
             let first = bc_first[i];
             let last = bc_last[i];
@@ -438,6 +430,13 @@ impl State {
                 false
             } else {
                 code_pos >= first && code_pos <= last
+            };
+            let value = if !live
+                || u64::from(abs_pos) + u64::from(size_bytes) > u64::from(self.stack_pos)
+            {
+                VariableValue::OutOfFrame
+            } else {
+                self.read_variable_value(&typedef, abs_pos, size_bytes, is_arg)
             };
             out.push(FrameVariable {
                 var_nr: v_nr,
