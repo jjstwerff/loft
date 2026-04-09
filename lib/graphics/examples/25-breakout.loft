@@ -275,12 +275,18 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
   br_pk_tex = [for _ in 0..8 { 0 }];
   for br_ti in 1..8 {
     br_tc = graphics::canvas(80, 16, 0);
+    assert(br_tc.width == 80, "canvas width after create in loop {br_ti}");
+    assert(br_tc.data.len() == 80 * 16, "canvas data len in loop {br_ti}");
     br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, br_gray);
     br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 80, 16);
-    if br_pk_tex[br_ti] == 0 { println("WARNING: pickup label {br_ti} texture upload failed"); }
+    assert(br_pk_tex[br_ti] > 0, "pickup tex upload failed at {br_ti}");
+    // Verify it's stored correctly
+    br_check = br_pk_tex[br_ti];
+    assert(br_check > 0, "pickup tex read-back failed at {br_ti}");
   }
+  // Verify values survive after loop
   for br_tv in 1..8 {
-    println("pickup tex[{br_tv}] = {br_pk_tex[br_tv]}");
+    assert(br_pk_tex[br_tv] > 0, "pickup tex[{br_tv}] lost after loop: {br_pk_tex[br_tv]}");
   }
 
   // Digit textures 0-9 for numeric score display
@@ -290,10 +296,10 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_dcv = graphics::canvas(20, 28, 0);
     br_dcv.draw_text(br_font, br_digits[br_di], 22.0, 2, 2, br_white);
     br_dig_tex[br_di] = graphics::gl_upload_canvas(br_dcv.data, 20, 28);
-    if br_dig_tex[br_di] == 0 { println("WARNING: digit {br_di} texture upload failed"); }
+    assert(br_dig_tex[br_di] > 0, "digit tex upload failed at {br_di}");
   }
   for br_dv in 0..10 {
-    println("digit tex[{br_dv}] = {br_dig_tex[br_dv]}");
+    assert(br_dig_tex[br_dv] > 0, "digit tex[{br_dv}] lost after loop: {br_dig_tex[br_dv]}");
   }
 
   // Intro text
@@ -309,7 +315,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_lcv = graphics::canvas(300, 60, 0);
     br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, br_white);
     br_lvl_tex[br_tl] = graphics::gl_upload_canvas(br_lcv.data, 300, 60);
-    if br_lvl_tex[br_tl] == 0 { println("WARNING: level {br_ln} texture upload failed"); }
+    assert(br_lvl_tex[br_tl] > 0, "level tex upload failed at {br_ln}");
   }
 
   // "SCORE" label
