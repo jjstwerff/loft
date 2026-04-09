@@ -1,39 +1,16 @@
 #!/usr/bin/env -S loft --native
-// Breakout — First Playable Game
+// Breakout — Sprite-based version
 //
-// Break all bricks to win. Some bricks are special and drop pickups:
-//   Green (+)  = extend paddle       — catch it!
-//   Red   (X)  = explosion           — avoid it or lose a life!
-//   Yellow (O) = balloon             — catch it, it explodes bricks after 2s
-//   Blue  (v)  = new row             — avoid! pushes all bricks down one row
+// Special bricks drop pickups. Catch good ones, avoid bad ones:
+//   Green (+)  = extend paddle       Red   (X)  = lose a life
+//   Yellow (O) = balloon explosion   Blue  (v)  = adds a new row of bricks
 //
-// Score = number of bricks destroyed.
-// Controls: arrow keys or A/D to move, Escape to quit.
+// Score = bricks destroyed. Controls: arrows/A/D, Escape to quit.
 use graphics;
 use math;
 use shapes;
 
-// ── Shaders ──────────────────────────────────────────────────────────
-
-VERT_2D = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {{
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}}
-`;
-
-FRAG_2D = `
-#version 330 core
-out vec4 FragColor;
-uniform vec3 uColor;
-void main() {{
-    FragColor = vec4(uColor, 1.0);
-}}
-`;
-
-// ── Game constants ───────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────
 
 SCREEN_W = 800.0;
 SCREEN_H = 600.0;
@@ -57,12 +34,99 @@ BALLOON_DELAY = 2.0;
 EXTEND_EXTRA = 60.0;
 START_ROWS = 6;
 
+// Sprite indices in the atlas (4 cols x 4 rows = 16 slots)
+S_BRICK0 = 0;   // row colors 0-5
+S_BRICK1 = 1;
+S_BRICK2 = 2;
+S_BRICK3 = 3;
+S_BRICK4 = 4;
+S_BRICK5 = 5;
+S_EXTEND = 6;   // green + brick
+S_EXPLODE = 7;  // red X brick
+S_BALLOON = 8;  // yellow O brick
+S_NEWROW = 9;   // blue v brick
+S_BALL = 10;
+S_PADDLE = 11;
+S_PADDLE_EXT = 12;  // extended paddle (green)
+S_PK_EXTEND = 13;
+S_PK_EXPLODE = 14;
+S_PK_BALLOON = 15;
+// SP_PK_NEWROW reuses index in second page — we'll use S_NEWROW for pickup too
+
 // Special brick types
 SP_NONE = 0;
 SP_EXTEND = 1;
 SP_EXPLODE = 2;
 SP_BALLOON = 3;
 SP_NEWROW = 4;
+
+// ── Build sprite atlas ──────────────────────────────────────────────
+
+fn build_atlas() -> graphics::Canvas {
+  // 4x4 grid, 32x32 pixels per cell = 128x128 atlas
+  at = graphics::canvas(128, 128, 0);
+
+  // Row brick colors
+  at_colors = [
+    graphics::rgba(230, 50, 50, 255),
+    graphics::rgba(230, 150, 25, 255),
+    graphics::rgba(50, 200, 50, 255),
+    graphics::rgba(50, 230, 75, 255),
+    graphics::rgba(75, 130, 230, 255),
+    graphics::rgba(150, 75, 180, 255)
+  ];
+  for at_i in 0..6 {
+    at_col = at_i % 4;
+    at_row = at_i / 4;
+    at_x = at_col * 32;
+    at_y = at_row * 32;
+    at.fill_rect(at_x + 1, at_y + 1, 30, 18, at_colors[at_i]);
+    // Slight highlight on top edge
+    at.hline(at_x + 2, at_x + 29, at_y + 2, graphics::rgba(255, 255, 255, 80));
+  }
+
+  // S_EXTEND (6) = col 2, row 1 — green brick with white +
+  at.fill_rect(64 + 1, 32 + 1, 30, 18, graphics::rgba(40, 200, 70, 255));
+  at.fill_rect(64 + 12, 32 + 5, 8, 3, graphics::rgba(255, 255, 255, 220));
+  at.fill_rect(64 + 14, 32 + 3, 4, 14, graphics::rgba(255, 255, 255, 220));
+
+  // S_EXPLODE (7) = col 3, row 1 — red brick with yellow X
+  at.fill_rect(96 + 1, 32 + 1, 30, 18, graphics::rgba(220, 40, 40, 255));
+  at.fill_rect(96 + 12, 32 + 8, 8, 3, graphics::rgba(255, 200, 50, 220));
+  at.fill_rect(96 + 14, 32 + 4, 4, 12, graphics::rgba(255, 200, 50, 220));
+
+  // S_BALLOON (8) = col 0, row 2 — yellow brick with ring
+  at.fill_rect(0 + 1, 64 + 1, 30, 18, graphics::rgba(230, 200, 30, 255));
+  at.fill_circle(16, 64 + 10, 6, graphics::rgba(255, 255, 230, 200));
+  at.fill_circle(16, 64 + 10, 3, graphics::rgba(230, 200, 30, 255));
+
+  // S_NEWROW (9) = col 1, row 2 — blue brick with down arrow
+  at.fill_rect(32 + 1, 64 + 1, 30, 18, graphics::rgba(50, 100, 230, 255));
+  at.fill_rect(32 + 14, 64 + 3, 4, 10, graphics::rgba(200, 220, 255, 220));
+  at.fill_rect(32 + 10, 64 + 11, 12, 3, graphics::rgba(200, 220, 255, 220));
+
+  // S_BALL (10) = col 2, row 2 — white circle
+  at.fill_circle(64 + 16, 64 + 10, 5, graphics::rgba(255, 255, 255, 255));
+
+  // S_PADDLE (11) = col 3, row 2 — gray paddle
+  at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(200, 200, 230, 255));
+  at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(230, 230, 255, 120));
+
+  // S_PADDLE_EXT (12) = col 0, row 3 — green paddle
+  at.fill_rect(0 + 2, 96 + 6, 28, 10, graphics::rgba(70, 230, 120, 255));
+  at.hline(0 + 3, 0 + 29, 96 + 7, graphics::rgba(180, 255, 200, 120));
+
+  // S_PK_EXTEND (13) = col 1, row 3 — small green pickup
+  at.fill_rect(32 + 6, 96 + 6, 20, 10, graphics::rgba(70, 230, 100, 255));
+
+  // S_PK_EXPLODE (14) = col 2, row 3 — small red pickup
+  at.fill_rect(64 + 6, 96 + 6, 20, 10, graphics::rgba(255, 60, 60, 255));
+
+  // S_PK_BALLOON (15) = col 3, row 3 — small yellow pickup
+  at.fill_rect(96 + 6, 96 + 6, 20, 10, graphics::rgba(255, 230, 30, 255));
+
+  at
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -75,23 +139,14 @@ fn ortho() -> math::Mat4 {
   ] }
 }
 
-fn rect_mvp(proj: const math::Mat4, rx: float, ry: float, rw: float, rh: float) -> math::Mat4 {
+fn make_mvp(proj: const math::Mat4, mx: float, my: float, mw: float, mh: float) -> math::Mat4 {
   model = math::Mat4 { m: [
-    rw, 0.0, 0.0, 0.0,
-    0.0, rh, 0.0, 0.0,
+    mw, 0.0, 0.0, 0.0,
+    0.0, mh, 0.0, 0.0,
     0.0, 0.0, 1.0, 0.0,
-    rx, ry, 0.0, 1.0
+    mx, my, 0.0, 1.0
   ] };
   math::mat4_mul(proj, model)
-}
-
-fn draw_quad(shader: integer, vao: integer, proj: const math::Mat4,
-             dqx: float, dqy: float, dqw: float, dqh: float,
-             dqr: float, dqg: float, dqb: float) {
-  dq_mvp = rect_mvp(proj, dqx, dqy, dqw, dqh);
-  graphics::gl_set_uniform_mat4(shader, "uMVP", dq_mvp.m);
-  graphics::gl_set_uniform_vec3(shader, "uColor", dqr, dqg, dqb);
-  graphics::gl_draw(vao, 6);
 }
 
 fn bk_x(col: integer) -> float {
@@ -110,6 +165,21 @@ fn assign_special(seed: integer) -> integer {
   SP_NONE
 }
 
+fn brick_sprite(sp_type: integer, row: integer) -> integer {
+  if sp_type == SP_EXTEND  { return S_EXTEND; }
+  if sp_type == SP_EXPLODE { return S_EXPLODE; }
+  if sp_type == SP_BALLOON { return S_BALLOON; }
+  if sp_type == SP_NEWROW  { return S_NEWROW; }
+  row % 6  // normal bricks use row color sprites S_BRICK0..S_BRICK5
+}
+
+fn pickup_sprite(sp_type: integer) -> integer {
+  if sp_type == SP_EXTEND  { return S_PK_EXTEND; }
+  if sp_type == SP_EXPLODE { return S_PK_EXPLODE; }
+  if sp_type == SP_BALLOON { return S_PK_BALLOON; }
+  S_NEWROW  // reuse blue brick sprite for newrow pickup
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 fn main() {
@@ -118,15 +188,32 @@ fn main() {
     return;
   }
 
-  br_shader = graphics::gl_create_shader(VERT_2D, FRAG_2D);
+  // Build sprite atlas and upload
+  br_atlas = build_atlas();
   br_quad_data = [
     0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,
     0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
   ];
   br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, br_vao);
   br_proj = ortho();
 
-  // ── State ──────────────────────────────────────────────────────
+  // Also keep the flat-color shader for the score bar and outlines
+  br_flat_v = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() {{ gl_Position = uMVP * vec4(aPos, 1.0); }}
+`;
+  br_flat_f = `
+#version 330 core
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() {{ FragColor = vec4(uColor, 1.0); }}
+`;
+  br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
+
+  // ── Game state ─────────────────────────────────────────────────
   br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
   br_pw = PADDLE_W_DEFAULT;
   br_extend_timer = 0.0;
@@ -136,14 +223,12 @@ fn main() {
   br_bdx = BALL_SPEED * 0.7;
   br_bdy = 0.0 - BALL_SPEED;
 
-  // Grid: MAX_ROWS * BRICK_COLS, only br_rows rows are active
   br_max = MAX_ROWS * BRICK_COLS;
   br_bricks = [for _ in 0..br_max { 0 }];
   br_specials = [for _ in 0..br_max { 0 }];
   br_rows = START_ROWS;
   br_alive = 0;
 
-  // Fill initial rows
   for br_ir in 0..START_ROWS {
     for br_ic in 0..BRICK_COLS {
       br_ii = br_ir * BRICK_COLS + br_ic;
@@ -153,24 +238,15 @@ fn main() {
     }
   }
 
-  // Row colors (cycle for rows beyond 6)
-  br_cr = [0.9, 0.9, 0.2, 0.2, 0.3, 0.6];
-  br_cg = [0.2, 0.6, 0.8, 0.9, 0.5, 0.3];
-  br_cb = [0.2, 0.1, 0.2, 0.3, 0.9, 0.7];
-
-  // Falling pickups: up to 8 active at once
   br_pk_x = [for _ in 0..8 { 0.0 }];
   br_pk_y = [for _ in 0..8 { 0.0 }];
   br_pk_type = [for _ in 0..8 { 0 }];
   br_pk_on = [for _ in 0..8 { 0 }];
 
-  // Balloon state
   br_bl_timer = 0.0;
   br_bl_row = 0;
   br_bl_col = 0;
   br_bl_on = false;
-
-  // New-row seed (increments each time a new row is added)
   br_nr_seed = 100;
 
   br_last = ticks();
@@ -180,6 +256,8 @@ fn main() {
   br_lost = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
+  graphics::gl_enable(graphics::GL_BLEND);
+  graphics::gl_blend_func(graphics::BLEND_SRC_ALPHA, graphics::BLEND_ONE_MINUS_SRC_ALPHA);
 
   for _ in 0..10000000 {
     if !graphics::gl_poll_events() { break; }
@@ -200,7 +278,6 @@ fn main() {
       }
       br_px = shapes::clamp(br_px, 0.0, SCREEN_W - br_pw);
 
-      // ── Extend timer ─────────────────────────────────────────
       if br_extend_timer > 0.0 {
         br_extend_timer -= br_dt;
         if br_extend_timer <= 0.0 {
@@ -209,17 +286,16 @@ fn main() {
         }
       }
 
-      // ── Ball movement ────────────────────────────────────────
+      // ── Ball ─────────────────────────────────────────────────
       br_bx += br_bdx * br_dt;
       br_by += br_bdy * br_dt;
-
       if br_bx < 0.0 { br_bx = 0.0; br_bdx = abs(br_bdx); }
       if br_bx > SCREEN_W - BALL_SIZE { br_bx = SCREEN_W - BALL_SIZE; br_bdx = 0.0 - abs(br_bdx); }
       if br_by < 0.0 { br_by = 0.0; br_bdy = abs(br_bdy); }
 
-      // ── Paddle collision ─────────────────────────────────────
       br_ball_r = shapes::Rect { rx: br_bx, ry: br_by, rw: BALL_SIZE, rh: BALL_SIZE };
       br_pad_r = shapes::Rect { rx: br_px, ry: PADDLE_Y, rw: br_pw, rh: PADDLE_H };
+
       if br_bdy > 0.0 && shapes::rects_overlap(br_ball_r, br_pad_r) {
         br_bdy = 0.0 - abs(br_bdy);
         br_hit = (br_bx + BALL_SIZE / 2.0 - br_px) / br_pw;
@@ -227,7 +303,6 @@ fn main() {
         br_by = PADDLE_Y - BALL_SIZE;
       }
 
-      // Ball fell off bottom
       if br_by > SCREEN_H {
         br_lives -= 1;
         if br_lives <= 0 { br_lost = true; }
@@ -251,12 +326,8 @@ fn main() {
               br_bricks[br_idx] = 0;
               br_alive -= 1;
               br_score += 1;
-              if br_dep.ox < br_dep.oy {
-                br_bdx = 0.0 - br_bdx;
-              } else {
-                br_bdy = 0.0 - br_bdy;
-              }
-              // Spawn pickup if special
+              if br_dep.ox < br_dep.oy { br_bdx = 0.0 - br_bdx; }
+              else { br_bdy = 0.0 - br_bdy; }
               if br_specials[br_idx] != SP_NONE {
                 for br_ps in 0..8 {
                   if br_pk_on[br_ps] == 0 {
@@ -273,18 +344,15 @@ fn main() {
         }
       }
 
-      // ── Update pickups ───────────────────────────────────────
+      // ── Pickups ──────────────────────────────────────────────
       for br_pi in 0..8 {
         if br_pk_on[br_pi] == 1 {
           br_pk_y[br_pi] += PICKUP_SPEED * br_dt;
-          if br_pk_y[br_pi] > SCREEN_H {
-            br_pk_on[br_pi] = 0;
-          }
+          if br_pk_y[br_pi] > SCREEN_H { br_pk_on[br_pi] = 0; }
           br_pkr = shapes::Rect { rx: br_pk_x[br_pi], ry: br_pk_y[br_pi], rw: PICKUP_W, rh: PICKUP_H };
           if shapes::rects_overlap(br_pkr, br_pad_r) {
             br_pk_on[br_pi] = 0;
             br_pkt = br_pk_type[br_pi];
-
             if br_pkt == SP_EXTEND {
               br_pw = PADDLE_W_DEFAULT + EXTEND_EXTRA;
               br_extend_timer = EXTEND_DURATION;
@@ -299,38 +367,29 @@ fn main() {
               br_bl_row = ((br_now / 7) as integer) % br_rows;
               br_bl_col = ((br_now / 13) as integer) % BRICK_COLS;
             }
-            if br_pkt == SP_NEWROW {
-              // Shift all bricks down one row
-              if br_rows < MAX_ROWS {
-                // Move rows down: copy from bottom to top to avoid overwrite
-                for br_sr in rev(0..br_rows) {
-                  for br_sc in 0..BRICK_COLS {
-                    br_from = br_sr * BRICK_COLS + br_sc;
-                    br_to = (br_sr + 1) * BRICK_COLS + br_sc;
-                    br_bricks[br_to] = br_bricks[br_from];
-                    br_specials[br_to] = br_specials[br_from];
-                  }
+            if br_pkt == SP_NEWROW && br_rows < MAX_ROWS {
+              for br_sr in rev(0..br_rows) {
+                for br_sc in 0..BRICK_COLS {
+                  br_from = br_sr * BRICK_COLS + br_sc;
+                  br_to = (br_sr + 1) * BRICK_COLS + br_sc;
+                  br_bricks[br_to] = br_bricks[br_from];
+                  br_specials[br_to] = br_specials[br_from];
                 }
-                // Fill new top row
-                for br_nc in 0..BRICK_COLS {
-                  br_bricks[br_nc] = 1;
-                  br_specials[br_nc] = assign_special(br_nr_seed + br_nc);
-                  br_alive += 1;
-                }
-                br_nr_seed += BRICK_COLS;
-                br_rows += 1;
               }
-              // Check if bottom row reached paddle — game over
-              br_bottom_y = bk_y(br_rows - 1) + BRICK_H;
-              if br_bottom_y >= PADDLE_Y {
-                br_lost = true;
+              for br_nc in 0..BRICK_COLS {
+                br_bricks[br_nc] = 1;
+                br_specials[br_nc] = assign_special(br_nr_seed + br_nc);
+                br_alive += 1;
               }
+              br_nr_seed += BRICK_COLS;
+              br_rows += 1;
+              if bk_y(br_rows - 1) + BRICK_H >= PADDLE_Y { br_lost = true; }
             }
           }
         }
       }
 
-      // ── Balloon explosion ────────────────────────────────────
+      // ── Balloon ──────────────────────────────────────────────
       if br_bl_on {
         br_bl_timer -= br_dt;
         if br_bl_timer <= 0.0 {
@@ -355,112 +414,76 @@ fn main() {
 
     // ── Render ───────────────────────────────────────────────────
     graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
-    graphics::gl_use_shader(br_shader);
 
-    // Draw bricks
+    // Draw bricks as sprites
     for br_dr in 0..br_rows {
-      br_ci = br_dr % 6;  // color index cycles
       for br_dc in 0..BRICK_COLS {
         br_di = br_dr * BRICK_COLS + br_dc;
         if br_bricks[br_di] == 1 {
-          br_dx = bk_x(br_dc);
-          br_dy = bk_y(br_dr);
-          br_sp = br_specials[br_di];
-
-          if br_sp == SP_EXTEND {
-            draw_quad(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H, 0.2, 0.8, 0.3);
-            // "+" icon
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 10.0, br_dy + BRICK_H / 2.0 - 1.5, 20.0, 3.0, 1.0, 1.0, 1.0);
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 1.5, br_dy + 4.0, 3.0, 12.0, 1.0, 1.0, 1.0);
-          } else if br_sp == SP_EXPLODE {
-            draw_quad(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H, 0.9, 0.15, 0.15);
-            // "X" icon
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 8.0, br_dy + BRICK_H / 2.0 - 1.5, 16.0, 3.0, 1.0, 0.8, 0.2);
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 1.5, br_dy + 5.0, 3.0, 10.0, 1.0, 0.8, 0.2);
-          } else if br_sp == SP_BALLOON {
-            draw_quad(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H, 0.9, 0.8, 0.1);
-            // "O" icon
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 6.0, br_dy + 3.0, 12.0, 14.0, 1.0, 1.0, 0.9);
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 3.0, br_dy + 6.0, 6.0, 8.0, 0.9, 0.8, 0.1);
-          } else if br_sp == SP_NEWROW {
-            draw_quad(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H, 0.2, 0.4, 0.9);
-            // "v" icon (downward arrow)
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 1.5, br_dy + 3.0, 3.0, 10.0, 0.8, 0.9, 1.0);
-            draw_quad(br_shader, br_vao, br_proj,
-              br_dx + BRICK_W / 2.0 - 6.0, br_dy + 10.0, 12.0, 3.0, 0.8, 0.9, 1.0);
-          } else {
-            draw_quad(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H,
-              br_cr[br_ci], br_cg[br_ci], br_cb[br_ci]);
-          }
+          br_sp = brick_sprite(br_specials[br_di], br_dr);
+          br_mvp = make_mvp(br_proj, bk_x(br_dc), bk_y(br_dr), BRICK_W, BRICK_H);
+          graphics::draw_sprite(br_sheet, br_mvp.m, br_sp);
         }
       }
     }
 
-    // Draw balloon countdown target (flashing outline)
+    // Balloon countdown outline (flat shader)
     if br_bl_on {
       br_flash = ((br_now / 200000) as integer) % 2;
       if br_flash == 0 {
+        graphics::gl_use_shader(br_flat);
         for br_fr in br_bl_row - 1..br_bl_row + 2 {
           for br_fc in br_bl_col - 1..br_bl_col + 2 {
             if br_fr >= 0 && br_fr < br_rows && br_fc >= 0 && br_fc < BRICK_COLS {
               br_fx = bk_x(br_fc);
               br_fy = bk_y(br_fr);
-              draw_quad(br_shader, br_vao, br_proj, br_fx - 2.0, br_fy - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0);
-              draw_quad(br_shader, br_vao, br_proj, br_fx - 2.0, br_fy + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0);
-              draw_quad(br_shader, br_vao, br_proj, br_fx - 2.0, br_fy, 2.0, BRICK_H, 1.0, 1.0, 0.0);
-              draw_quad(br_shader, br_vao, br_proj, br_fx + BRICK_W, br_fy, 2.0, BRICK_H, 1.0, 1.0, 0.0);
+              br_omvp = make_mvp(br_proj, br_fx - 2.0, br_fy - 2.0, BRICK_W + 4.0, 2.0);
+              graphics::gl_set_uniform_mat4(br_flat, "uMVP", br_omvp.m);
+              graphics::gl_set_uniform_vec3(br_flat, "uColor", 1.0, 1.0, 0.0);
+              graphics::gl_draw(br_vao, 6);
+              br_omvp = make_mvp(br_proj, br_fx - 2.0, br_fy + BRICK_H, BRICK_W + 4.0, 2.0);
+              graphics::gl_set_uniform_mat4(br_flat, "uMVP", br_omvp.m);
+              graphics::gl_draw(br_vao, 6);
             }
           }
         }
       }
     }
 
-    // Draw falling pickups
+    // Draw falling pickups as sprites
     for br_pdi in 0..8 {
       if br_pk_on[br_pdi] == 1 {
-        br_pdt = br_pk_type[br_pdi];
-        if br_pdt == SP_EXTEND {
-          draw_quad(br_shader, br_vao, br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H, 0.3, 0.9, 0.4);
-        }
-        if br_pdt == SP_EXPLODE {
-          draw_quad(br_shader, br_vao, br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H, 1.0, 0.2, 0.2);
-        }
-        if br_pdt == SP_BALLOON {
-          draw_quad(br_shader, br_vao, br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H, 1.0, 0.9, 0.1);
-        }
-        if br_pdt == SP_NEWROW {
-          draw_quad(br_shader, br_vao, br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H, 0.3, 0.5, 1.0);
-        }
+        br_psp = pickup_sprite(br_pk_type[br_pdi]);
+        br_pmvp = make_mvp(br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H);
+        graphics::draw_sprite(br_sheet, br_pmvp.m, br_psp);
       }
     }
 
-    // Draw paddle
-    if br_extend_timer > 0.0 {
-      draw_quad(br_shader, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 1.0, 0.5);
-    } else {
-      draw_quad(br_shader, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9);
-    }
+    // Draw paddle as sprite
+    br_pad_sp = if br_extend_timer > 0.0 { S_PADDLE_EXT } else { S_PADDLE };
+    br_pmvp = make_mvp(br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H);
+    graphics::draw_sprite(br_sheet, br_pmvp.m, br_pad_sp);
 
-    // Draw ball
-    draw_quad(br_shader, br_vao, br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0);
+    // Draw ball as sprite
+    br_bmvp = make_mvp(br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE);
+    graphics::draw_sprite(br_sheet, br_bmvp.m, S_BALL);
 
-    // Draw lives (red squares, top-right)
+    // Draw lives (flat shader — small red squares)
+    graphics::gl_use_shader(br_flat);
     for br_li in 0..br_lives {
-      draw_quad(br_shader, br_vao, br_proj,
-        SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3);
+      br_lmvp = make_mvp(br_proj, SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0);
+      graphics::gl_set_uniform_mat4(br_flat, "uMVP", br_lmvp.m);
+      graphics::gl_set_uniform_vec3(br_flat, "uColor", 1.0, 0.3, 0.3);
+      graphics::gl_draw(br_vao, 6);
     }
 
-    // Draw score bar (top-left, 1 pixel per brick destroyed)
+    // Score bar
     br_bar = shapes::clamp((br_score as float) * 3.0, 0.0, 400.0);
     if br_bar > 1.0 {
-      draw_quad(br_shader, br_vao, br_proj, 10.0, 10.0, br_bar, 8.0, 0.3, 0.7, 1.0);
+      br_smvp = make_mvp(br_proj, 10.0, 10.0, br_bar, 8.0);
+      graphics::gl_set_uniform_mat4(br_flat, "uMVP", br_smvp.m);
+      graphics::gl_set_uniform_vec3(br_flat, "uColor", 0.3, 0.7, 1.0);
+      graphics::gl_draw(br_vao, 6);
     }
 
     graphics::gl_swap_buffers();

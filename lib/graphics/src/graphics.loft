@@ -702,3 +702,85 @@ pub fn gl_delete_vao(vao: integer);
 // Delete a framebuffer object.
 pub fn gl_delete_framebuffer(fbo: integer);
 #native "loft_gl_delete_framebuffer"
+
+// ── G1/G2: Sprite Sheet API ─────────────────────────────────────────
+
+// Vertex shader for textured 2D quads. Uses the unit quad positions (0-1)
+// to interpolate UVs between uU0,uV0 and uU1,uV1.
+SPRITE_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+uniform float uU0;
+uniform float uV0;
+uniform float uU1;
+uniform float uV1;
+out vec2 vUV;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = vec2(mix(uU0, uU1, aPos.x), mix(uV0, uV1, aPos.y));
+}}
+`;
+
+// Fragment shader — samples the atlas texture.
+SPRITE_FRAG = `
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main() {{
+    vec4 c = texture(uTex, vUV);
+    if (c.a < 0.01) discard;
+    FragColor = c;
+}}
+`;
+
+/// A sprite sheet backed by a Canvas atlas uploaded as a GL texture.
+/// Sprites are arranged in a grid of `ss_cols` x `ss_rows` cells.
+pub struct SpriteSheet {
+  ss_tex: integer not null,      // GL texture handle
+  ss_shader: integer not null,   // textured quad shader
+  ss_vao: integer not null,      // unit quad VAO (shared)
+  ss_cols: integer not null,
+  ss_rows: integer not null,
+  ss_cell_w: integer not null,
+  ss_cell_h: integer not null,
+}
+
+/// Create a sprite sheet from a Canvas atlas.
+/// The canvas is divided into a grid of `cols` x `rows` cells.
+/// Sprite index 0 is top-left, incrementing left-to-right then top-to-bottom.
+pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, vao: integer) -> SpriteSheet {
+  ss_shader = gl_create_shader(SPRITE_VERT, SPRITE_FRAG);
+  ss_tex = gl_upload_canvas(atlas.data, atlas.width, atlas.height);
+  SpriteSheet {
+    ss_tex: ss_tex,
+    ss_shader: ss_shader,
+    ss_vao: vao,
+    ss_cols: cols,
+    ss_rows: rows,
+    ss_cell_w: atlas.width / cols,
+    ss_cell_h: atlas.height / rows,
+  }
+}
+
+/// Draw sprite at `index` (0-based, row-major).
+/// `mvp` is the pre-multiplied projection * model matrix (16 singles).
+/// The caller builds the MVP for the desired screen position and size.
+pub fn draw_sprite(sheet: const SpriteSheet, mvp: const vector<float>, sp_idx: integer) {
+  sp_col = sp_idx % sheet.ss_cols;
+  sp_row = sp_idx / sheet.ss_cols;
+  sp_u0 = (sp_col as float) / (sheet.ss_cols as float);
+  sp_v0 = (sp_row as float) / (sheet.ss_rows as float);
+  sp_u1 = ((sp_col + 1) as float) / (sheet.ss_cols as float);
+  sp_v1 = ((sp_row + 1) as float) / (sheet.ss_rows as float);
+  gl_use_shader(sheet.ss_shader);
+  gl_bind_texture(sheet.ss_tex, 0);
+  gl_set_uniform_int(sheet.ss_shader, "uTex", 0);
+  gl_set_uniform_float(sheet.ss_shader, "uU0", sp_u0);
+  gl_set_uniform_float(sheet.ss_shader, "uV0", sp_v0);
+  gl_set_uniform_float(sheet.ss_shader, "uU1", sp_u1);
+  gl_set_uniform_float(sheet.ss_shader, "uV1", sp_v1);
+  gl_set_uniform_mat4(sheet.ss_shader, "uMVP", mvp);
+  gl_draw(sheet.ss_vao, 6);
+}
