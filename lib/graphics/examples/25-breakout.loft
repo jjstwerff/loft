@@ -246,16 +246,12 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
   // Font for text rendering
   br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
   // Pre-render pickup name labels as textures (avoids per-frame allocation)
-  br_pk_names = ["", "WIDER", "BOOM!", "BLAST", "ROWS+", "MULTI", "FIRE!", "SHIELD"];
+  br_pk_names = ["", "wider", "boom!", "blast", "rows+", "multi", "fire!", "shield"];
   br_pk_tex = [for _ in 0..8 { 0 }];
-  br_pk_tw = [for _ in 0..8 { 0 }];
-  br_pk_th = [for _ in 0..8 { 0 }];
   for br_ti in 1..8 {
-    br_tc = graphics::canvas(120, 24, 0);
-    br_tc.draw_text(br_font, br_pk_names[br_ti], 18.0, 2, 2, graphics::rgba(255, 255, 255, 255));
-    br_pk_tw[br_ti] = graphics::gl_measure_text(br_font, br_pk_names[br_ti], 18.0) as integer + 4;
-    br_pk_th[br_ti] = 22;
-    br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 120, 24);
+    br_tc = graphics::canvas(80, 16, 0);
+    br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, graphics::rgba(200, 200, 200, 180));
+    br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 80, 16);
   }
   // Pre-render intro text
   br_intro_cv = graphics::canvas(500, 40, 0);
@@ -809,8 +805,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // HUD: pickup labels — show name next to the first falling pickup of each type
+    // HUD: pickup hints — small text in bottom-right, one per active type
     br_shown = [for _ in 0..8 { 0 }];
+    br_hint_y = SCREEN_H - 18.0;
     for br_pl in 0..8 {
       if br_pk_on[br_pl] == 1 {
         br_plt = br_pk_type[br_pl];
@@ -823,10 +820,10 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-          br_tlmv = make_mvp(br_proj,
-            br_pk_x[br_pl] + 30.0, br_pk_y[br_pl] - 4.0, 100.0, 20.0);
+          br_tlmv = make_mvp(br_proj, SCREEN_W - 85.0, br_hint_y, 80.0, 14.0);
           graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
           graphics::gl_draw(br_vao, 6);
+          br_hint_y -= 16.0;
         }
       }
     }
