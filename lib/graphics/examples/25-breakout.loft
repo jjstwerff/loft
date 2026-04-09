@@ -1,4 +1,4 @@
-#!/usr/bin/env -S loft --native
+#!/usr/bin/env -S LOFT_STORES=warn loft --native
 // Breakout — Full-featured sprite-based version
 //
 // Features: multi-hit bricks, ball speed ramp, combo multiplier,
