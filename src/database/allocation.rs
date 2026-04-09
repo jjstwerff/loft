@@ -56,18 +56,24 @@ impl Stores {
             rec,
             pos: 8,
         };
-        if std::env::var("LOFT_STORE_LOG").is_ok() {
-            if name.is_empty() {
+        // LOFT_STORES=log  → full alloc/free trace
+        // LOFT_STORES=warn → only warn when active stores > 30
+        let active = self.allocations.iter().filter(|s| !s.free).count();
+        match std::env::var("LOFT_STORES").as_deref() {
+            Ok("log") => {
+                let label = if name.is_empty() { "" } else { name };
                 eprintln!(
-                    "[store] alloc store={} rec={} size={size}",
-                    result.store_nr, result.rec
-                );
-            } else {
-                eprintln!(
-                    "[store] alloc store={} \"{name}\" rec={} size={size}",
-                    result.store_nr, result.rec
+                    "[store] + alloc #{} {label:>12} | active={active:<4} max={:<4} size={size}",
+                    result.store_nr, self.max
                 );
             }
+            Ok("warn") if active > 30 => {
+                eprintln!(
+                    "[store] WARNING: {active} active stores (max={}) — possible leak at alloc #{}",
+                    self.max, result.store_nr
+                );
+            }
+            _ => {}
         }
         result
     }
@@ -100,24 +106,22 @@ impl Stores {
         // Reference counting: decrement and only free when rc drops to 0.
         if store.ref_count > 1 {
             store.ref_count -= 1;
-            if std::env::var("LOFT_STORE_LOG").is_ok() {
-                if name.is_empty() {
-                    eprintln!("[store] dec_rc store={al} rc={}", store.ref_count);
-                } else {
-                    eprintln!(
-                        "[store] dec_rc store={al} \"{name}\" rc={}",
-                        store.ref_count
-                    );
-                }
+            if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
+                let label = if name.is_empty() { "" } else { name };
+                eprintln!(
+                    "[store]   dec_rc #{al} {label:>12} | rc={}",
+                    store.ref_count
+                );
             }
             return;
         }
-        if std::env::var("LOFT_STORE_LOG").is_ok() {
-            if name.is_empty() {
-                eprintln!("[store] free  store={al} (max={})", self.max);
-            } else {
-                eprintln!("[store] free  store={al} \"{name}\" (max={})", self.max);
-            }
+        if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
+            let active = self.allocations.iter().filter(|s| !s.free).count();
+            let label = if name.is_empty() { "" } else { name };
+            eprintln!(
+                "[store] - free   #{al} {label:>12} | active={:<4} max={}",
+                active, self.max
+            );
         }
         // S36: clear the lock before marking free.
         let store = &mut self.allocations[al as usize];
