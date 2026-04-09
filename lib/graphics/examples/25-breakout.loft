@@ -326,8 +326,6 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
       if br_fire_timer > 0.0 { br_fire_timer -= br_dt; }
 
-      br_pad_r = shapes::Rect { rx: br_px, ry: PADDLE_Y, rw: br_pw, rh: PADDLE_H };
-
       // ── Update all balls ─────────────────────────────────────
       br_any_ball = false;
       for br_bi in 0..MAX_BALLS {
@@ -343,8 +341,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); }
 
         // Paddle
-        br_br = shapes::Rect { rx: br_ball_x[br_bi], ry: br_ball_y[br_bi], rw: BALL_SIZE, rh: BALL_SIZE };
-        if br_ball_dy[br_bi] > 0.0 && shapes::rects_overlap(br_br, br_pad_r) {
+        if br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
+            br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+            br_px, PADDLE_Y, br_pw, PADDLE_H) {
           br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
           br_bh = (br_ball_x[br_bi] + BALL_SIZE / 2.0 - br_px) / br_pw;
           br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
@@ -367,17 +366,20 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         }
 
         // ── Brick collision for this ball ───────────────────────
-        br_br = shapes::Rect { rx: br_ball_x[br_bi], ry: br_ball_y[br_bi], rw: BALL_SIZE, rh: BALL_SIZE };
         for br_cr in 0..br_rows {
           for br_cc in 0..BRICK_COLS {
             br_ci = br_cr * BRICK_COLS + br_cc;
             if br_bricks[br_ci] == 0 { continue; }
-            br_ck = shapes::Rect { rx: bk_x(br_cc), ry: bk_y(br_cr), rw: BRICK_W, rh: BRICK_H };
-            br_cd = shapes::rect_overlap_depth(br_br, br_ck);
-            if br_cd.ox > 0.0 || br_cd.oy > 0.0 {
+            br_cdx = shapes::aabb_depth_x(
+              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
+            br_cdy = shapes::aabb_depth_y(
+              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
+            if br_cdx > 0.0 || br_cdy > 0.0 {
               // Fireball passes through without bouncing
               if br_fire_timer <= 0.0 {
-                if br_cd.ox < br_cd.oy { br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi]; }
+                if br_cdx < br_cdy { br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi]; }
                 else { br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi]; }
               }
               br_hp[br_ci] -= 1;
@@ -457,8 +459,8 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         if br_pk_on[br_pi] == 0 { continue; }
         br_pk_y[br_pi] += PICKUP_SPEED * br_dt;
         if br_pk_y[br_pi] > SCREEN_H { br_pk_on[br_pi] = 0; continue; }
-        br_pkr = shapes::Rect { rx: br_pk_x[br_pi], ry: br_pk_y[br_pi], rw: PICKUP_W, rh: PICKUP_H };
-        if !shapes::rects_overlap(br_pkr, br_pad_r) { continue; }
+        if !shapes::aabb_overlap(br_pk_x[br_pi], br_pk_y[br_pi], PICKUP_W, PICKUP_H,
+            br_px, PADDLE_Y, br_pw, PADDLE_H) { continue; }
         br_pk_on[br_pi] = 0;
         br_pkt = br_pk_type[br_pi];
 

@@ -64,6 +64,27 @@ pub fn rect_overlap_depth(a: const Rect, b: const Rect) -> Overlap {
   Overlap { ox: od_x, oy: od_y }
 }
 
+/// Test AABB overlap using raw coordinates (no struct allocation — safe in loops).
+pub fn aabb_overlap(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> boolean {
+  ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+}
+
+/// Compute AABB overlap depth on each axis using raw coordinates.
+/// Returns ox via the first return, oy via the second.
+/// Both are 0.0 when no overlap. Safe in loops (no struct allocation).
+pub fn aabb_depth_x(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> float {
+  if !(ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) { return 0.0; }
+  min(ax + aw - bx, bx + bw - ax)
+}
+
+pub fn aabb_depth_y(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> float {
+  if !(ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) { return 0.0; }
+  min(ay + ah - by, by + bh - ay)
+}
+
 /// Clamp a value to the range [lo, hi].
 pub fn clamp(val: float, lo: float, hi: float) -> float {
   if val < lo { return lo; }
