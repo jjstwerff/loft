@@ -247,6 +247,11 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
   br_pk_type = [for _ in 0..8 { 0 }];
   br_pk_on = [for _ in 0..8 { 0 }];
 
+  // Row colors for particles
+  br_pcr = [0.9, 0.9, 0.2, 0.2, 0.3, 0.6];
+  br_pcg = [0.2, 0.6, 0.8, 0.9, 0.5, 0.3];
+  br_pcb = [0.2, 0.1, 0.2, 0.3, 0.9, 0.7];
+
   // Particles (destruction effect)
   br_pt_x  = [for _ in 0..MAX_PARTICLES { 0.0 }];
   br_pt_y  = [for _ in 0..MAX_PARTICLES { 0.0 }];
@@ -404,9 +409,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
                       br_pt_vy[br_pf] = br_spd * sin(br_angle);
                       br_pt_t[br_pf] = PARTICLE_LIFE;
                       // Color from row
-                      br_pt_r[br_pf] = [0.9, 0.9, 0.2, 0.2, 0.3, 0.6][br_row_ci];
-                      br_pt_g[br_pf] = [0.2, 0.6, 0.8, 0.9, 0.5, 0.3][br_row_ci];
-                      br_pt_b[br_pf] = [0.2, 0.1, 0.2, 0.3, 0.9, 0.7][br_row_ci];
+                      br_pt_r[br_pf] = br_pcr[br_row_ci];
+                      br_pt_g[br_pf] = br_pcg[br_row_ci];
+                      br_pt_b[br_pf] = br_pcb[br_row_ci];
                       break;
                     }
                   }
