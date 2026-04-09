@@ -806,13 +806,15 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     }
 
     // HUD: pickup hints — small text in bottom-right, one per active type
-    br_shown = [for _ in 0..8 { 0 }];
+    // Use a bitmask instead of vector to avoid per-frame allocation
+    br_shown_mask = 0;
     br_hint_y = SCREEN_H - 18.0;
     for br_pl in 0..8 {
       if br_pk_on[br_pl] == 1 {
         br_plt = br_pk_type[br_pl];
-        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && br_shown[br_plt] == 0 {
-          br_shown[br_plt] = 1;
+        br_plt_bit = 1 << br_plt;
+        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && (br_shown_mask & br_plt_bit) == 0 {
+          br_shown_mask = br_shown_mask | br_plt_bit;
           graphics::gl_use_shader(br_sheet.ss_shader);
           graphics::gl_bind_texture(br_pk_tex[br_plt], 0);
           graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
