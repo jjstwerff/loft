@@ -122,6 +122,9 @@ pub struct LogConfig {
     /// This field is informational; `scopes.rs` reads `LOFT_LOG` directly so it works
     /// even in test runs that don't construct a `LogConfig`.
     pub scope_debug: bool,
+    /// Dump live variables after every traced opcode.  Replaces the
+    /// `LOFT_DUMP_VARS` env-var check, which was unsafe in parallel tests.
+    pub dump_vars: bool,
 }
 
 impl LogConfig {
@@ -142,6 +145,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -160,6 +164,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -178,6 +183,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -197,6 +203,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -215,6 +222,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -233,6 +241,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -251,6 +260,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -272,6 +282,7 @@ impl LogConfig {
             show_variables: true,
             show_all_functions: false,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 
@@ -296,6 +307,7 @@ impl LogConfig {
             show_variables: true,
             show_all_functions: false,
             scope_debug: true,
+            dump_vars: false,
         }
     }
 
@@ -319,6 +331,7 @@ impl LogConfig {
             show_variables: false,
             show_all_functions: true,
             scope_debug: false,
+            dump_vars: false,
         }
     }
 

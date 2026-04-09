@@ -227,13 +227,10 @@ fn execute_log_with_dump_does_not_crash() {
     assert(a + b == 3);
 }",
     );
-    // SAFETY: setting LOFT_DUMP_VARS in tests is racy with parallel test
-    // threads.  Use --test-threads=1 if you enable this in CI.
-    unsafe { std::env::set_var("LOFT_DUMP_VARS", "1") };
-    let config = LogConfig::full();
+    let mut config = LogConfig::full();
+    config.dump_vars = true;
     let mut buf = Vec::<u8>::new();
     state.execute_log(&mut buf, "test", &config, &data).unwrap();
-    unsafe { std::env::remove_var("LOFT_DUMP_VARS") };
     let out = String::from_utf8(buf).unwrap();
     assert!(out.contains("[VARS]"), "no [VARS] lines in trace");
     assert!(out.contains("fn=n_test"), "no n_test frame: {out}");

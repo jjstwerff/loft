@@ -960,7 +960,7 @@ impl State {
             // after each opcode when LOFT_DUMP_VARS is set.  Use this to track
             // when a variable's value changes unexpectedly (e.g. corruption
             // from a misaligned write).
-            if trace_this && std::env::var("LOFT_DUMP_VARS").is_ok() {
+            if trace_this && (config.dump_vars || std::env::var("LOFT_DUMP_VARS").is_ok()) {
                 self.dump_frame_variables(log, data)?;
             }
 

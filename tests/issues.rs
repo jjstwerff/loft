@@ -1510,6 +1510,37 @@ fn regen_fill_rs() {
     println!("src/fill.rs regenerated");
 }
 
+// Assert that every #rust-annotated function from default/*.loft is registered
+// in src/native.rs.  If this fails, a new native function was added to the
+// default library but not wired into the native registry.
+// Fix: add the missing entry to FUNCTIONS in src/native.rs and implement the fn.
+#[test]
+fn native_rs_functions_up_to_date() {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    scopes::check(&mut p.data);
+    let native_src =
+        std::fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
+    let mut missing = Vec::new();
+    for d_nr in 0..p.data.definitions() {
+        let d = p.data.def(d_nr);
+        if d.is_operator() || d.rust.is_empty() {
+            continue;
+        }
+        let entry = format!("\"{}\"", d.name);
+        if !native_src.contains(&entry) {
+            missing.push(d.name.clone());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "src/native.rs is missing {} function(s) from default/*.loft:\n  {}\n\
+         Add them to the FUNCTIONS array and implement the fn bodies.",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
+
 // ── S9 / Issue 90 — character + character codegen panic ───────────────────────
 // `c + d` where both are characters panics with a stack-size mismatch because
 // `parse_append_text` uses the character variable as a text destination.

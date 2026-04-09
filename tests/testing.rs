@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 
 //! Testing framework
-use loft::create;
 #[cfg(debug_assertions)]
 use loft::data::Context;
 use loft::scopes;
@@ -224,10 +223,10 @@ impl Drop for Test {
         if p.diagnostics.level() >= Level::Error {
             return;
         }
-        // generate_code (fill.rs) is now done via `make fill` to avoid
-        // file-write races during parallel test execution.  Per-test native
-        // codegen output still goes to tests/generated/<test>.rs below.
-        create::generate_lib(&p.data).unwrap();
+        // generate_code (fill.rs) and generate_lib (text.rs) are now done
+        // via dedicated staleness-check tests to avoid file-write races
+        // during parallel test execution.  Per-test native codegen output
+        // still goes to tests/generated/<test>.rs below.
         let mut state = State::new(p.database);
         byte_code(&mut state, &mut p.data);
         #[cfg(debug_assertions)]
