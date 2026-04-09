@@ -77,16 +77,10 @@ SP_SHIELD = 7;
 
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
-// Draw a standard brick shape filling the full cell at (bx,by) in the atlas.
+// Draw a standard brick shape at (bx,by) in the atlas with the given color.
 fn draw_brick(at: graphics::Canvas, bx: integer, by: integer, color: integer) {
-  at.fill_rect(bx, by, 32, 20, color);
-  // Top highlight
-  at.hline(bx + 1, bx + 30, by + 1, graphics::rgba(255, 255, 255, 70));
-  // Bottom shadow
-  at.hline(bx + 1, bx + 30, by + 19, graphics::rgba(0, 0, 0, 50));
-  // Left/right edge darkening
-  at.vline(bx, by, by + 19, graphics::rgba(0, 0, 0, 30));
-  at.vline(bx + 31, by, by + 19, graphics::rgba(0, 0, 0, 30));
+  at.fill_rect(bx + 1, by + 1, 30, 18, color);
+  at.hline(bx + 2, bx + 29, by + 2, graphics::rgba(255, 255, 255, 70));
 }
 
 // Draw an icon at the right side of a brick cell.
@@ -190,39 +184,39 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(60, 210, 110, 255));
   at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(160, 240, 190, 100));
 
-  // Row 3: pickups — large bold shapes filling most of the 32x20 cell
-  // S_PK_EXTEND (16) — green double-arrow ↔
-  at.fill_rect(0 + 4, 96 + 7, 24, 6, graphics::rgba(60, 220, 80, 255));
-  at.fill_rect(0 + 2, 96 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
-  at.fill_rect(0 + 26, 96 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
-  // S_PK_EXPLODE (17) — red skull
-  at.fill_circle(32 + 16, 96 + 8, 8, graphics::rgba(230, 50, 50, 255));
-  at.fill_rect(32 + 11, 96 + 5, 3, 3, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 18, 96 + 5, 3, 3, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 13, 96 + 12, 6, 3, graphics::rgba(40, 40, 40, 255));
-  // S_PK_BALLOON (18) — yellow/red balloon with string
-  at.fill_circle(64 + 16, 96 + 7, 7, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(64 + 14, 96 + 5, 3, graphics::rgba(255, 120, 120, 140));
-  at.vline(64 + 16, 96 + 14, 96 + 19, graphics::rgba(180, 180, 180, 255));
-  // S_PK_NEWROW (19) — blue down arrow ⬇
-  at.fill_rect(96 + 13, 96 + 2, 6, 10, graphics::rgba(60, 100, 230, 255));
-  at.fill_rect(96 + 8, 96 + 10, 16, 4, graphics::rgba(60, 100, 230, 255));
-  at.fill_rect(96 + 11, 96 + 14, 10, 3, graphics::rgba(60, 100, 230, 230));
-  at.fill_rect(96 + 14, 96 + 17, 4, 2, graphics::rgba(60, 100, 230, 200));
-  // S_PK_MULTI (20) — three white balls
-  at.fill_circle(128 + 10, 96 + 10, 5, graphics::rgba(255, 255, 255, 255));
-  at.fill_circle(128 + 20, 96 + 6, 4, graphics::rgba(220, 220, 255, 230));
-  at.fill_circle(128 + 22, 96 + 14, 4, graphics::rgba(200, 200, 255, 210));
-  // S_PK_FIRE (21) — orange/yellow flame
-  at.fill_rect(160 + 13, 96 + 4, 6, 14, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect(160 + 10, 96 + 8, 12, 10, graphics::rgba(255, 80, 0, 240));
-  at.fill_rect(160 + 14, 96 + 2, 4, 4, graphics::rgba(255, 200, 0, 230));
-  at.fill_rect(160 + 15, 96 + 0, 2, 3, graphics::rgba(255, 240, 80, 180));
-  // S_PK_SHIELD (22) — blue shield
-  at.fill_rect(128 + 6, 64 + 2, 20, 10, graphics::rgba(60, 140, 255, 255));
-  at.fill_rect(128 + 9, 64 + 12, 14, 4, graphics::rgba(60, 120, 230, 240));
-  at.fill_rect(128 + 12, 64 + 16, 8, 2, graphics::rgba(60, 100, 210, 220));
-  at.hline(128 + 8, 128 + 24, 64 + 3, graphics::rgba(180, 220, 255, 120));
+  // Pickups: index 16=col4row2, 17=col5row2, 18=col0row3..22=col4row3
+  // S_PK_EXTEND (16) at (128, 64) — green double-arrow ↔
+  at.fill_rect(128 + 4, 64 + 7, 24, 6, graphics::rgba(60, 220, 80, 255));
+  at.fill_rect(128 + 2, 64 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
+  at.fill_rect(128 + 26, 64 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
+  // S_PK_EXPLODE (17) at (160, 64) — red skull
+  at.fill_circle(160 + 16, 64 + 10, 8, graphics::rgba(230, 50, 50, 255));
+  at.fill_rect(160 + 11, 64 + 7, 3, 3, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(160 + 18, 64 + 7, 3, 3, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(160 + 13, 64 + 14, 6, 3, graphics::rgba(40, 40, 40, 255));
+  // S_PK_BALLOON (18) at (0, 96) — red balloon with string
+  at.fill_circle(0 + 16, 96 + 8, 8, graphics::rgba(240, 60, 60, 255));
+  at.fill_circle(0 + 13, 96 + 5, 3, graphics::rgba(255, 120, 120, 140));
+  at.vline(0 + 16, 96 + 16, 96 + 20, graphics::rgba(180, 180, 180, 255));
+  // S_PK_NEWROW (19) at (32, 96) — blue down arrow ⬇
+  at.fill_rect(32 + 13, 96 + 2, 6, 10, graphics::rgba(60, 100, 230, 255));
+  at.fill_rect(32 + 8, 96 + 10, 16, 4, graphics::rgba(60, 100, 230, 255));
+  at.fill_rect(32 + 11, 96 + 14, 10, 3, graphics::rgba(60, 100, 230, 230));
+  at.fill_rect(32 + 14, 96 + 17, 4, 2, graphics::rgba(60, 100, 230, 200));
+  // S_PK_MULTI (20) at (64, 96) — three white balls
+  at.fill_circle(64 + 10, 96 + 10, 5, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(64 + 20, 96 + 6, 4, graphics::rgba(220, 220, 255, 230));
+  at.fill_circle(64 + 22, 96 + 14, 4, graphics::rgba(200, 200, 255, 210));
+  // S_PK_FIRE (21) at (96, 96) — orange/yellow flame
+  at.fill_rect(96 + 13, 96 + 4, 6, 14, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect(96 + 10, 96 + 8, 12, 10, graphics::rgba(255, 80, 0, 240));
+  at.fill_rect(96 + 14, 96 + 2, 4, 4, graphics::rgba(255, 200, 0, 230));
+  at.fill_rect(96 + 15, 96 + 0, 2, 3, graphics::rgba(255, 240, 80, 180));
+  // S_PK_SHIELD (22) at (128, 96) — blue shield
+  at.fill_rect(128 + 6, 96 + 2, 20, 10, graphics::rgba(60, 140, 255, 255));
+  at.fill_rect(128 + 9, 96 + 12, 14, 4, graphics::rgba(60, 120, 230, 240));
+  at.fill_rect(128 + 12, 96 + 16, 8, 2, graphics::rgba(60, 100, 210, 220));
+  at.hline(128 + 8, 128 + 24, 96 + 3, graphics::rgba(180, 220, 255, 120));
 
   at
 }
