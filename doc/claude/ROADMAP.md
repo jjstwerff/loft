@@ -110,6 +110,17 @@ SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 | MO.12c | `scene-editor.html` — GLB export button                | S  | ✓      | MO.10, MO.12a |
 | MO.P   | 🌐 **Moros scene editor** on GH Pages                   | S  | ✓      | MO.12b         |
 
+### Developer experience
+
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| SH.1   | TextMate grammar for `.loft` syntax highlighting       | S  | —      | DX.md            |
+| SH.2   | VS Code extension (syntax + snippets + run task)       | S  | —      | DX.md            |
+| DX.1   | Quick-start `examples/` directory                      | XS | —      | DX.md            |
+| DX.2   | CI: add package tests + native tests to workflow       | XS | —      | DX.md            |
+| DX.3   | Error messages: source location + "did you mean?"      | M  | —      | DX.md            |
+| NT.1   | Native codegen: fix remaining test failures            | M  | —      | NATIVE.md        |
+
 ### Remaining package/language items
 
 | ID     | Title                                                  | E  | Design | Source           |
@@ -210,6 +221,7 @@ SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 
 | Area | Document |
 |---|---|
+| Developer experience | [DX.md](DX.md) |
 | Renderer abstraction | [RENDERER.md](RENDERER.md) |
 | Web gallery + unified GL | [WEB_EXAMPLES.md](WEB_EXAMPLES.md) |
 | Graphics implementation | [OPENGL_IMPL.md](OPENGL_IMPL.md) |
