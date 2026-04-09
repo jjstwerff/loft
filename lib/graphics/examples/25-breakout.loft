@@ -812,9 +812,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
           graphics::gl_bind_texture(br_pk_tex[br_plt], 0);
           graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 0.0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 1.0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
           br_tlmv = make_mvp(br_proj, 10.0, br_label_y, 120.0, 24.0);
           graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
           graphics::gl_draw(br_vao, 6);
@@ -831,9 +831,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         graphics::gl_bind_texture(br_lvl_tex[br_tli], 0);
         graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
         graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 0.0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
         graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 1.0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
         br_tlw = 300.0;
         br_tlh = 60.0;
         br_tlmv = make_mvp(br_proj, SCREEN_W / 2.0 - br_tlw / 2.0, SCREEN_H / 2.0 - br_tlh / 2.0, br_tlw, br_tlh);
