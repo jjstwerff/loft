@@ -4,16 +4,18 @@
 // A classic brick-breaker game. Move the paddle with arrow keys or A/D.
 // Break all bricks to win. Don't let the ball fall!
 //
-// Demonstrates: 2D game loop, input handling, collision detection,
+// Demonstrates: 2D game loop, input handling, G4 collision detection,
 // simple rendering with colored rectangles.
 //
 // Loft constructions used:
 //   gl_key_pressed    — real-time keyboard input
 //   gl_draw           — render colored quads
 //   ticks()           — frame-independent movement
+//   shapes::Rect      — G4 AABB collision detection
 //   struct + vector   — game state management
 use graphics;
 use math;
+use shapes;
 
 // ── Shaders ──────────────────────────────────────────────────────────
 
@@ -72,6 +74,17 @@ fn rect_mvp(proj: const math::Mat4, bx: float, by: float, bw: float, bh: float) 
     bx, by, 0.0, 1.0
   ] };
   math::mat4_mul(proj, model)
+}
+
+// ── Drawing helper ───────────────────────────────────────────────────
+
+fn draw_rect(shader: integer, vao: integer, proj: const math::Mat4,
+             drx: float, dry: float, drw: float, drh: float,
+             dr_r: float, dr_g: float, dr_b: float) {
+  dr_mvp = rect_mvp(proj, drx, dry, drw, drh);
+  graphics::gl_set_uniform_mat4(shader, "uMVP", dr_mvp.m);
+  graphics::gl_set_uniform_vec3(shader, "uColor", dr_r, dr_g, dr_b);
+  graphics::gl_draw(vao, 6);
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -138,8 +151,7 @@ fn main() {
       if graphics::gl_key_pressed(graphics::KEY_RIGHT) || graphics::gl_key_pressed(graphics::KEY_D) {
         br_px += PADDLE_SPEED * br_dt;
       }
-      if br_px < 0.0 { br_px = 0.0; }
-      if br_px > SCREEN_W - PADDLE_W { br_px = SCREEN_W - PADDLE_W; }
+      br_px = shapes::clamp(br_px, 0.0, SCREEN_W - PADDLE_W);
 
       // ── Ball movement ──────────────────────────────────────────
       br_bx += br_bdx * br_dt;
@@ -150,13 +162,10 @@ fn main() {
       if br_bx > SCREEN_W - BALL_SIZE { br_bx = SCREEN_W - BALL_SIZE; br_bdx = 0.0 - abs(br_bdx); }
       if br_by < 0.0 { br_by = 0.0; br_bdy = abs(br_bdy); }
 
-      // Paddle collision
-      if br_bdy > 0.0
-        && br_by + BALL_SIZE >= PADDLE_Y
-        && br_by + BALL_SIZE <= PADDLE_Y + PADDLE_H
-        && br_bx + BALL_SIZE >= br_px
-        && br_bx <= br_px + PADDLE_W
-      {
+      // ── Paddle collision (G4) ──────────────────────────────────
+      br_ball = shapes::Rect { rx: br_bx, ry: br_by, rw: BALL_SIZE, rh: BALL_SIZE };
+      br_paddle = shapes::Rect { rx: br_px, ry: PADDLE_Y, rw: PADDLE_W, rh: PADDLE_H };
+      if br_bdy > 0.0 && shapes::rects_overlap(br_ball, br_paddle) {
         br_bdy = 0.0 - abs(br_bdy);
         // Angle based on where ball hits paddle
         br_hit = (br_bx + BALL_SIZE / 2.0 - br_px) / PADDLE_W;
@@ -173,25 +182,24 @@ fn main() {
         br_bdy = 0.0 - BALL_SPEED;
       }
 
-      // ── Brick collision ────────────────────────────────────────
+      // ── Brick collision (G4) ───────────────────────────────────
+      br_ball = shapes::Rect { rx: br_bx, ry: br_by, rw: BALL_SIZE, rh: BALL_SIZE };
       for br_row in 0..BRICK_ROWS {
         for br_col in 0..BRICK_COLS {
           br_idx = br_row * BRICK_COLS + br_col;
           if br_bricks[br_idx] == 1 {
-            br_bkx = (br_col as float) * (BRICK_W + BRICK_PAD) + 12.0;
-            br_bky = (br_row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
-            // AABB overlap test
-            if br_bx + BALL_SIZE > br_bkx
-              && br_bx < br_bkx + BRICK_W
-              && br_by + BALL_SIZE > br_bky
-              && br_by < br_bky + BRICK_H
-            {
+            br_brick = shapes::Rect {
+              rx: (br_col as float) * (BRICK_W + BRICK_PAD) + 12.0,
+              ry: (br_row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP,
+              rw: BRICK_W,
+              rh: BRICK_H,
+            };
+            br_depth = shapes::rect_overlap_depth(br_ball, br_brick);
+            if br_depth.ox > 0.0 || br_depth.oy > 0.0 {
               br_bricks[br_idx] = 0;
               br_alive -= 1;
-              // Bounce: determine which side was hit
-              br_overlap_x = min(br_bx + BALL_SIZE - br_bkx, br_bkx + BRICK_W - br_bx);
-              br_overlap_y = min(br_by + BALL_SIZE - br_bky, br_bky + BRICK_H - br_by);
-              if br_overlap_x < br_overlap_y {
+              // Bounce: smaller overlap axis = side that was hit
+              if br_depth.ox < br_depth.oy {
                 br_bdx = 0.0 - br_bdx;
               } else {
                 br_bdy = 0.0 - br_bdy;
@@ -214,33 +222,22 @@ fn main() {
         if br_bricks[br_dr * BRICK_COLS + br_dc] == 1 {
           br_dx = (br_dc as float) * (BRICK_W + BRICK_PAD) + 12.0;
           br_dy = (br_dr as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
-          br_mvp = rect_mvp(br_proj, br_dx, br_dy, BRICK_W, BRICK_H);
-          graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-          graphics::gl_set_uniform_vec3(br_shader, "uColor",
+          draw_rect(br_shader, br_vao, br_proj, br_dx, br_dy, BRICK_W, BRICK_H,
             br_colors_r[br_dr], br_colors_g[br_dr], br_colors_b[br_dr]);
-          graphics::gl_draw(br_vao, 6);
         }
       }
     }
 
     // Draw paddle
-    br_mvp = rect_mvp(br_proj, br_px, PADDLE_Y, PADDLE_W, PADDLE_H);
-    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-    graphics::gl_set_uniform_vec3(br_shader, "uColor", 0.8, 0.8, 0.9);
-    graphics::gl_draw(br_vao, 6);
+    draw_rect(br_shader, br_vao, br_proj, br_px, PADDLE_Y, PADDLE_W, PADDLE_H, 0.8, 0.8, 0.9);
 
     // Draw ball
-    br_mvp = rect_mvp(br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE);
-    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-    graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 1.0, 1.0);
-    graphics::gl_draw(br_vao, 6);
+    draw_rect(br_shader, br_vao, br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0);
 
     // Draw lives indicator (small squares in top-right)
     for br_li in 0..br_lives {
-      br_mvp = rect_mvp(br_proj, SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0);
-      graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-      graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 0.3, 0.3);
-      graphics::gl_draw(br_vao, 6);
+      draw_rect(br_shader, br_vao, br_proj,
+        SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3);
     }
 
     graphics::gl_swap_buffers();

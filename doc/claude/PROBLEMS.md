@@ -50,6 +50,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
 | 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
+| 121 | Tuple literals crash interpreter with heap corruption | **High** | Use struct instead of tuple; native mode works |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -945,6 +946,43 @@ into the struct's store.
 - Loop pre-init hoists Reference variables to pre-loop scope
 - `is_ret_work_ref` suppresses FreeRef for `__ref_N` in return path
 - `gen_set_first_ref_call_copy` always deep-copies struct returns
+
+---
+
+### 121. Tuple literals crash interpreter with heap corruption
+
+**Severity:** High (interpreter only; native codegen works)
+
+**Symptom:** Creating a tuple literal such as `a = (3.0, 2.0)` in interpreter
+mode causes `corrupted size vs. prev_size` (glibc abort) or SIGSEGV.  Tuple
+element access (`a.0`, `a.1`) also crashes.
+
+**Reproducer:**
+```loft
+fn test() {
+    a = (3.0, 2.0);
+    assert(a.0 > 1.0, "tuple element");
+}
+```
+Run with `loft --interpret test.loft` — aborts with heap corruption.
+
+**Native mode:** `loft --native test.loft` works correctly.  Tuples in
+`tests/docs/28-tuples.loft` pass in native mode.
+
+**Workaround:** Use a struct instead of a tuple:
+```loft
+struct FloatPair { fx: float not null, fy: float not null }
+a = FloatPair { fx: 3.0, fy: 2.0 };
+```
+
+**Root cause:** Likely a stack layout issue in the interpreter's tuple
+codegen — the 16-byte (two floats) tuple allocation corrupts the heap
+allocator metadata, suggesting an off-by-one or alignment error in
+`OpTupleLiteral` or the stack reservation for tuple temporaries.
+
+**Impact:** Tuples cannot be used in library code that must run in both
+interpreter and native modes.  The `rect_overlap_depth` function in
+`lib/shapes` uses a struct (`Overlap`) instead of a tuple for this reason.
 
 ---
 

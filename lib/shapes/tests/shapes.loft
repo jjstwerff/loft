@@ -36,3 +36,50 @@ fn test_diamond() {
   // Center should be empty (outline only)
   assert(cv3.get_pixel(10, 10) == 0, "diamond center empty");
 }
+
+// ── G4: Collision detection tests ───────────────────────────────────
+
+fn test_rects_overlap() {
+  a1 = shapes::Rect { rx: 0.0, ry: 0.0, rw: 10.0, rh: 10.0 };
+  b1 = shapes::Rect { rx: 5.0, ry: 5.0, rw: 10.0, rh: 10.0 };
+  c1 = shapes::Rect { rx: 20.0, ry: 20.0, rw: 5.0, rh: 5.0 };
+  assert(shapes::rects_overlap(a1, b1), "overlapping rects");
+  assert(!shapes::rects_overlap(a1, c1), "non-overlapping rects");
+}
+
+fn test_rects_touching_edge() {
+  // Touching but not overlapping (edge-to-edge)
+  r_left = shapes::Rect { rx: 0.0, ry: 0.0, rw: 10.0, rh: 10.0 };
+  r_right = shapes::Rect { rx: 10.0, ry: 0.0, rw: 10.0, rh: 10.0 };
+  assert(!shapes::rects_overlap(r_left, r_right), "edge-touching rects should not overlap");
+}
+
+fn test_circles_overlap() {
+  ca = shapes::Circle { cx: 0.0, cy: 0.0, cr: 5.0 };
+  cb = shapes::Circle { cx: 8.0, cy: 0.0, cr: 5.0 };
+  cc = shapes::Circle { cx: 20.0, cy: 0.0, cr: 3.0 };
+  assert(shapes::circles_overlap(ca, cb), "overlapping circles");
+  assert(!shapes::circles_overlap(ca, cc), "non-overlapping circles");
+}
+
+fn test_rect_circle_overlap() {
+  rc_r = shapes::Rect { rx: 0.0, ry: 0.0, rw: 10.0, rh: 10.0 };
+  rc_inside = shapes::Circle { cx: 5.0, cy: 5.0, cr: 2.0 };
+  rc_corner = shapes::Circle { cx: 12.0, cy: 12.0, cr: 4.0 };
+  rc_far = shapes::Circle { cx: 20.0, cy: 20.0, cr: 2.0 };
+  assert(shapes::rect_circle_overlap(rc_r, rc_inside), "circle inside rect");
+  assert(shapes::rect_circle_overlap(rc_r, rc_corner), "circle overlaps corner");
+  assert(!shapes::rect_circle_overlap(rc_r, rc_far), "circle far from rect");
+}
+
+fn test_rect_overlap_depth() {
+  od_a = shapes::Rect { rx: 0.0, ry: 0.0, rw: 10.0, rh: 10.0 };
+  od_b = shapes::Rect { rx: 7.0, ry: 8.0, rw: 10.0, rh: 10.0 };
+  od = shapes::rect_overlap_depth(od_a, od_b);
+  assert(od.ox > 2.9 && od.ox < 3.1, "overlap x ~3.0");
+  assert(od.oy > 1.9 && od.oy < 2.1, "overlap y ~2.0");
+  // Non-overlapping returns (0,0)
+  od_c = shapes::Rect { rx: 20.0, ry: 20.0, rw: 5.0, rh: 5.0 };
+  od2 = shapes::rect_overlap_depth(od_a, od_c);
+  assert(od2.ox == 0.0 && od2.oy == 0.0, "no overlap returns zero");
+}
