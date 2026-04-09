@@ -51,6 +51,11 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | N/A — stores accumulate; no user workaround |
 | 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | Reproducer: `lib/graphics/examples/test_mat4_crash.loft`; blocks all advanced GL examples |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | Use struct instead of tuple; native mode works |
+| 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
+| 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
+| 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | Assign array to a variable first, then index |
+| 125 | `use` import can't find sibling packages when script is inside a package | Medium | ~~**Fixed**~~ — `lib_path` now walks up to `loft.toml` and searches siblings |
+| 126 | Negative integer literal as final expression parsed as void negation | Low | Use `return -1;` instead of bare `-1` as function tail expression |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -983,6 +988,105 @@ allocator metadata, suggesting an off-by-one or alignment error in
 **Impact:** Tuples cannot be used in library code that must run in both
 interpreter and native modes.  The `rect_overlap_depth` function in
 `lib/shapes` uses a struct (`Overlap`) instead of a tuple for this reason.
+
+---
+
+### 122. Store leak: struct allocation inside game loop exhausts store pool
+
+**Severity:** High (interpreter and native)
+
+**Symptom:** After running for 30-60 seconds, the game panics with
+`"Allocating a used store"`. Occurs in any tight loop that creates
+struct instances (e.g. collision detection shapes).
+
+**Root cause:** Each `shapes::Rect { ... }` or struct-returning function
+call allocates a store. Inside a 60fps game loop with ~50 bricks checked
+per frame, this exhausts the store pool within seconds. The stores are
+not freed because the struct temporaries are created inside a loop body
+(related to P117 store leak on struct returns).
+
+**Workaround:** Use raw-float functions instead of struct-based APIs
+in game loops. The `shapes` library provides `aabb_overlap(ax,ay,aw,ah,
+bx,by,bw,bh)` and `aabb_depth_x`/`aabb_depth_y` for this purpose.
+
+**Fix direction:** The interpreter should free struct temporaries at the
+end of each loop iteration, not at function exit. This requires tracking
+which stores were allocated within the loop body.
+
+---
+
+### 123. Per-frame vector literal allocation leaks stores
+
+**Severity:** Medium (interpreter)
+
+**Symptom:** Code like `br_shown = [for _ in 0..8 { 0 }]` inside a
+render loop allocates a new vector store every frame. After ~1000 frames
+the store pool is exhausted.
+
+**Workaround:** Use scalar variables, integer bitmasks, or pre-allocated
+arrays initialized once outside the loop.
+
+```loft
+// BAD — allocates every frame
+for _ in 0..1000000 {
+    flags = [for _ in 0..8 { 0 }];  // store leak!
+}
+
+// GOOD — use bitmask
+for _ in 0..1000000 {
+    flags = 0;
+    // set bit: flags = flags | (1 << i)
+    // test bit: (flags & (1 << i)) != 0
+}
+```
+
+---
+
+### 124. Native codegen: inline array indexing generates invalid Rust
+
+**Severity:** Low (native mode only)
+
+**Symptom:** `[0.9, 0.2, 0.3][idx]` in loft generates an `as DbRef`
+cast in the Rust output, which fails to compile.
+
+**Workaround:** Assign the array to a variable first:
+```loft
+// BAD — native codegen error
+color = [0.9, 0.2, 0.3][row];
+
+// GOOD
+colors = [0.9, 0.2, 0.3];
+color = colors[row];
+```
+
+---
+
+### 125. ~~`use` import can't find sibling packages from inside a package~~
+
+**Severity:** Medium — **Fixed**
+
+**Symptom:** Running `./25-breakout.loft` from `lib/graphics/examples/`
+failed with `"Included file shapes not found"` because `use shapes;`
+couldn't locate the sibling `lib/shapes/` package.
+
+**Fix:** `lib_path` in `parser/mod.rs` now walks up from the script's
+directory looking for a `loft.toml`. When found, the package's parent
+directory is searched for sibling packages in `<name>/src/<name>.loft`
+layout.
+
+---
+
+### 126. Negative integer literal as final expression
+
+**Severity:** Low
+
+**Symptom:** A function ending with `-1` as the tail expression produces
+`"No matching operator '-' on 'void' and 'integer'"`. The parser treats
+`-1` as unary minus applied to `1`, but the expression context expects
+a value, not an operator.
+
+**Workaround:** Use `return -1;` with explicit return, or assign to a
+variable first: `result = -1; result`.
 
 ---
 
