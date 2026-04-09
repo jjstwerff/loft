@@ -40,23 +40,30 @@ PARTICLE_LIFE = 0.6;
 FLASH_DURATION = 0.3;
 LEVEL_PAUSE = 1.5;
 
-// Sprite indices (4x4 atlas)
-S_BRICK0 = 0;
+// Sprite indices (6x4 atlas = 24 slots)
+S_BRICK0 = 0;    // row-colored bricks (all look similar)
 S_BRICK1 = 1;
 S_BRICK2 = 2;
 S_BRICK3 = 3;
 S_BRICK4 = 4;
 S_BRICK5 = 5;
-S_EXTEND = 6;
+S_EXTEND = 6;    // special bricks: row-colored + small icon
 S_EXPLODE = 7;
 S_BALLOON = 8;
 S_NEWROW = 9;
-S_BALL = 10;
-S_PADDLE = 11;
-S_PADDLE_EXT = 12;
-S_PK_EXTEND = 13;
-S_PK_EXPLODE = 14;
-S_PK_BALLOON = 15;
+S_MULTI = 10;
+S_FIRE = 11;
+S_SHIELD_BRK = 12;
+S_BALL = 13;
+S_PADDLE = 14;
+S_PADDLE_EXT = 15;
+S_PK_EXTEND = 16;   // pickups: dark bg + emoji icon
+S_PK_EXPLODE = 17;
+S_PK_BALLOON = 18;
+S_PK_NEWROW = 19;
+S_PK_MULTI = 20;
+S_PK_FIRE = 21;
+S_PK_SHIELD = 22;
 
 // Special types
 SP_NONE = 0;
@@ -70,50 +77,140 @@ SP_SHIELD = 7;
 
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
+// Draw a standard brick shape at (bx,by) in the atlas with the given color.
+fn draw_brick(at: graphics::Canvas, bx: integer, by: integer, color: integer) {
+  at.fill_rect(bx + 1, by + 1, 30, 18, color);
+  // Top highlight
+  at.hline(bx + 2, bx + 29, by + 2, graphics::rgba(255, 255, 255, 70));
+  // Bottom shadow
+  at.hline(bx + 2, bx + 29, by + 18, graphics::rgba(0, 0, 0, 40));
+}
+
+// Draw an icon at the right side of a brick cell.
+// Icon area: 8x8 pixels at (bx+20, by+6)
+fn icon_extend(at: graphics::Canvas, ix: integer, iy: integer) {
+  // ↔ arrows: horizontal bar with arrowheads
+  at.fill_rect(ix + 1, iy + 3, 6, 2, graphics::rgba(255, 255, 255, 200));
+  at.set_pixel(ix, iy + 4, graphics::rgba(255, 255, 255, 200));
+  at.set_pixel(ix + 7, iy + 4, graphics::rgba(255, 255, 255, 200));
+}
+
+fn icon_explode(at: graphics::Canvas, ix: integer, iy: integer) {
+  // 💀 skull: circle head + eyes + jaw
+  at.fill_circle(ix + 4, iy + 3, 3, graphics::rgba(255, 220, 180, 220));
+  at.set_pixel(ix + 3, iy + 2, graphics::rgba(40, 40, 40, 255));
+  at.set_pixel(ix + 5, iy + 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(ix + 2, iy + 5, 4, 2, graphics::rgba(255, 220, 180, 180));
+}
+
+fn icon_balloon(at: graphics::Canvas, ix: integer, iy: integer) {
+  // 🎈 balloon: circle + string
+  at.fill_circle(ix + 4, iy + 3, 3, graphics::rgba(255, 80, 80, 230));
+  at.fill_circle(ix + 4, iy + 2, 2, graphics::rgba(255, 140, 140, 150));
+  at.vline(ix + 4, iy + 6, iy + 8, graphics::rgba(180, 180, 180, 200));
+}
+
+fn icon_newrow(at: graphics::Canvas, ix: integer, iy: integer) {
+  // ⬇ down arrow
+  at.fill_rect(ix + 3, iy, 2, 5, graphics::rgba(200, 220, 255, 220));
+  at.hline(ix + 1, ix + 6, iy + 5, graphics::rgba(200, 220, 255, 220));
+  at.hline(ix + 2, ix + 5, iy + 6, graphics::rgba(200, 220, 255, 200));
+  at.hline(ix + 3, ix + 4, iy + 7, graphics::rgba(200, 220, 255, 180));
+}
+
+fn icon_multi(at: graphics::Canvas, ix: integer, iy: integer) {
+  // ⊕ three circles (balls)
+  at.fill_circle(ix + 2, iy + 4, 2, graphics::rgba(255, 255, 255, 200));
+  at.fill_circle(ix + 5, iy + 2, 2, graphics::rgba(220, 220, 255, 180));
+  at.fill_circle(ix + 6, iy + 5, 2, graphics::rgba(200, 200, 255, 160));
+}
+
+fn icon_fire(at: graphics::Canvas, ix: integer, iy: integer) {
+  // 🔥 flame shape
+  at.fill_rect(ix + 3, iy + 2, 2, 5, graphics::rgba(255, 160, 0, 230));
+  at.fill_rect(ix + 2, iy + 4, 4, 3, graphics::rgba(255, 100, 0, 210));
+  at.set_pixel(ix + 4, iy + 1, graphics::rgba(255, 200, 0, 200));
+  at.set_pixel(ix + 3, iy + 0, graphics::rgba(255, 220, 50, 150));
+}
+
+fn icon_shield(at: graphics::Canvas, ix: integer, iy: integer) {
+  // 🛡 shield shape
+  at.fill_rect(ix + 1, iy + 1, 6, 4, graphics::rgba(80, 160, 255, 220));
+  at.fill_rect(ix + 2, iy + 5, 4, 2, graphics::rgba(80, 140, 230, 200));
+  at.hline(ix + 3, ix + 4, iy + 7, graphics::rgba(80, 120, 210, 180));
+  at.hline(ix + 2, ix + 5, iy + 1, graphics::rgba(200, 230, 255, 100));
+}
+
 fn build_atlas() -> graphics::Canvas {
-  at = graphics::canvas(128, 128, 0);
+  // 6 cols x 4 rows, 32x32 per cell = 192x128
+  at = graphics::canvas(192, 128, 0);
   at_colors = [
-    graphics::rgba(230, 50, 50, 255),
-    graphics::rgba(230, 150, 25, 255),
-    graphics::rgba(50, 200, 50, 255),
-    graphics::rgba(50, 230, 75, 255),
-    graphics::rgba(75, 130, 230, 255),
-    graphics::rgba(150, 75, 180, 255)
+    graphics::rgba(200, 60, 60, 255),
+    graphics::rgba(200, 130, 40, 255),
+    graphics::rgba(60, 170, 60, 255),
+    graphics::rgba(60, 190, 90, 255),
+    graphics::rgba(70, 120, 200, 255),
+    graphics::rgba(140, 70, 160, 255)
   ];
+
+  // Row 0: normal bricks S_BRICK0..5 — all similar, just different hues
   for at_i in 0..6 {
-    at_cx = (at_i % 4) * 32;
-    at_cy = (at_i / 4) * 32;
-    at.fill_rect(at_cx + 1, at_cy + 1, 30, 18, at_colors[at_i]);
-    at.hline(at_cx + 2, at_cx + 29, at_cy + 2, graphics::rgba(255, 255, 255, 80));
+    draw_brick(at, at_i * 32, 0, at_colors[at_i]);
   }
-  // S_EXTEND (6)
-  at.fill_rect(65, 33, 30, 18, graphics::rgba(40, 200, 70, 255));
-  at.fill_rect(76, 37, 8, 3, graphics::rgba(255, 255, 255, 220));
-  at.fill_rect(78, 35, 4, 14, graphics::rgba(255, 255, 255, 220));
-  // S_EXPLODE (7)
-  at.fill_rect(97, 33, 30, 18, graphics::rgba(220, 40, 40, 255));
-  at.fill_rect(108, 40, 8, 3, graphics::rgba(255, 200, 50, 220));
-  at.fill_rect(110, 36, 4, 12, graphics::rgba(255, 200, 50, 220));
-  // S_BALLOON (8)
-  at.fill_rect(1, 65, 30, 18, graphics::rgba(230, 200, 30, 255));
-  at.fill_circle(16, 74, 6, graphics::rgba(255, 255, 230, 200));
-  at.fill_circle(16, 74, 3, graphics::rgba(230, 200, 30, 255));
-  // S_NEWROW (9)
-  at.fill_rect(33, 65, 30, 18, graphics::rgba(50, 100, 230, 255));
-  at.fill_rect(46, 67, 4, 10, graphics::rgba(200, 220, 255, 220));
-  at.fill_rect(42, 75, 12, 3, graphics::rgba(200, 220, 255, 220));
-  // S_BALL (10)
-  at.fill_circle(80, 74, 5, graphics::rgba(255, 255, 255, 255));
-  // S_PADDLE (11)
-  at.fill_rect(98, 70, 28, 10, graphics::rgba(200, 200, 230, 255));
-  at.hline(99, 125, 71, graphics::rgba(230, 230, 255, 120));
-  // S_PADDLE_EXT (12)
-  at.fill_rect(2, 102, 28, 10, graphics::rgba(70, 230, 120, 255));
-  at.hline(3, 29, 103, graphics::rgba(180, 255, 200, 120));
-  // Pickups: S_PK_EXTEND (13), S_PK_EXPLODE (14), S_PK_BALLOON (15)
-  at.fill_rect(38, 102, 20, 10, graphics::rgba(70, 230, 100, 255));
-  at.fill_rect(70, 102, 20, 10, graphics::rgba(255, 60, 60, 255));
-  at.fill_rect(102, 102, 20, 10, graphics::rgba(255, 230, 30, 255));
+
+  // Row 1: special bricks S_EXTEND..S_SHIELD_BRK — row-colored with small icon
+  // These use a muted version of a standard color + icon in corner
+  draw_brick(at, 0, 32, graphics::rgba(140, 160, 140, 255));
+  icon_extend(at, 20, 38);
+  draw_brick(at, 32, 32, graphics::rgba(160, 130, 130, 255));
+  icon_explode(at, 52, 38);
+  draw_brick(at, 64, 32, graphics::rgba(160, 155, 120, 255));
+  icon_balloon(at, 84, 38);
+  draw_brick(at, 96, 32, graphics::rgba(130, 140, 160, 255));
+  icon_newrow(at, 116, 38);
+  draw_brick(at, 128, 32, graphics::rgba(140, 140, 160, 255));
+  icon_multi(at, 148, 38);
+  draw_brick(at, 160, 32, graphics::rgba(160, 145, 120, 255));
+  icon_fire(at, 180, 38);
+  // S_SHIELD_BRK (12)
+  draw_brick(at, 0, 64, graphics::rgba(130, 145, 165, 255));
+  icon_shield(at, 20, 70);
+
+  // S_BALL (13)
+  at.fill_circle(32 + 16, 64 + 10, 5, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(32 + 14, 64 + 8, 2, graphics::rgba(255, 255, 255, 60));
+
+  // S_PADDLE (14)
+  at.fill_rect(64 + 2, 64 + 6, 28, 10, graphics::rgba(190, 190, 220, 255));
+  at.hline(64 + 3, 64 + 29, 64 + 7, graphics::rgba(220, 220, 240, 100));
+
+  // S_PADDLE_EXT (15)
+  at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(60, 210, 110, 255));
+  at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(160, 240, 190, 100));
+
+  // Row 3: pickups — dark rounded bg + large emoji icon
+  // S_PK_EXTEND (16)
+  at.fill_rect(0 + 4, 96 + 3, 24, 14, graphics::rgba(30, 50, 30, 200));
+  icon_extend(at, 12, 101);
+  // S_PK_EXPLODE (17)
+  at.fill_rect(32 + 4, 96 + 3, 24, 14, graphics::rgba(50, 25, 25, 200));
+  icon_explode(at, 44, 101);
+  // S_PK_BALLOON (18)
+  at.fill_rect(64 + 4, 96 + 3, 24, 14, graphics::rgba(50, 45, 20, 200));
+  icon_balloon(at, 76, 101);
+  // S_PK_NEWROW (19)
+  at.fill_rect(96 + 4, 96 + 3, 24, 14, graphics::rgba(25, 30, 50, 200));
+  icon_newrow(at, 108, 101);
+  // S_PK_MULTI (20)
+  at.fill_rect(128 + 4, 96 + 3, 24, 14, graphics::rgba(30, 30, 50, 200));
+  icon_multi(at, 140, 101);
+  // S_PK_FIRE (21)
+  at.fill_rect(160 + 4, 96 + 3, 24, 14, graphics::rgba(50, 35, 15, 200));
+  icon_fire(at, 172, 101);
+  // S_PK_SHIELD (22) — reuse slot in row 2
+  at.fill_rect(128 + 4, 64 + 3, 24, 14, graphics::rgba(20, 30, 50, 200));
+  icon_shield(at, 140, 69);
+
   at
 }
 
@@ -156,9 +253,9 @@ fn brick_sprite(sp_type: integer, row: integer) -> integer {
   if sp_type == SP_EXPLODE { return S_EXPLODE; }
   if sp_type == SP_BALLOON { return S_BALLOON; }
   if sp_type == SP_NEWROW  { return S_NEWROW; }
-  if sp_type == SP_MULTI   { return S_BRICK4; }  // cyan tint
-  if sp_type == SP_FIRE    { return S_BRICK0; }  // red tint
-  if sp_type == SP_SHIELD  { return S_BRICK3; }  // green tint
+  if sp_type == SP_MULTI   { return S_MULTI; }
+  if sp_type == SP_FIRE    { return S_FIRE; }
+  if sp_type == SP_SHIELD  { return S_SHIELD_BRK; }
   row % 6
 }
 
@@ -166,7 +263,11 @@ fn pickup_sprite(sp_type: integer) -> integer {
   if sp_type == SP_EXTEND  { return S_PK_EXTEND; }
   if sp_type == SP_EXPLODE { return S_PK_EXPLODE; }
   if sp_type == SP_BALLOON { return S_PK_BALLOON; }
-  S_NEWROW
+  if sp_type == SP_NEWROW  { return S_PK_NEWROW; }
+  if sp_type == SP_MULTI   { return S_PK_MULTI; }
+  if sp_type == SP_FIRE    { return S_PK_FIRE; }
+  if sp_type == SP_SHIELD  { return S_PK_SHIELD; }
+  S_PK_EXTEND
 }
 
 fn draw_flat(shader: integer, vao: integer, proj: const math::Mat4,
@@ -192,7 +293,7 @@ fn main() {
     0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
   ];
   br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
-  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, br_vao);
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 6, 4, br_vao);
   br_proj = ortho();
   br_flat_v = `
 #version 330 core
