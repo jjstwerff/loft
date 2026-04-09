@@ -40,30 +40,23 @@ PARTICLE_LIFE = 0.6;
 FLASH_DURATION = 0.3;
 LEVEL_PAUSE = 1.5;
 
-// Sprite indices (6x4 atlas = 24 slots)
-S_BRICK0 = 0;    // row-colored bricks (all look similar)
-S_BRICK1 = 1;
-S_BRICK2 = 2;
-S_BRICK3 = 3;
-S_BRICK4 = 4;
-S_BRICK5 = 5;
-S_EXTEND = 6;    // special bricks: row-colored + small icon
-S_EXPLODE = 7;
-S_BALLOON = 8;
-S_NEWROW = 9;
-S_MULTI = 10;
-S_FIRE = 11;
-S_SHIELD_BRK = 12;
-S_BALL = 13;
-S_PADDLE = 14;
-S_PADDLE_EXT = 15;
-S_PK_EXTEND = 16;   // pickups: dark bg + emoji icon
-S_PK_EXPLODE = 17;
-S_PK_BALLOON = 18;
-S_PK_NEWROW = 19;
-S_PK_MULTI = 20;
-S_PK_FIRE = 21;
-S_PK_SHIELD = 22;
+// Sprite indices (4x4 atlas = icons only)
+// Small icons overlaid on special bricks
+S_IC_EXTEND = 0;
+S_IC_EXPLODE = 1;
+S_IC_BALLOON = 2;
+S_IC_NEWROW = 3;
+S_IC_MULTI = 4;
+S_IC_FIRE = 5;
+S_IC_SHIELD = 6;
+// Large pickup icons (falling)
+S_PK_EXTEND = 7;
+S_PK_EXPLODE = 8;
+S_PK_BALLOON = 9;
+S_PK_NEWROW = 10;
+S_PK_MULTI = 11;
+S_PK_FIRE = 12;
+S_PK_SHIELD = 13;
 
 // Special types
 SP_NONE = 0;
@@ -77,146 +70,78 @@ SP_SHIELD = 7;
 
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
-// Draw a standard brick shape at (bx,by) in the atlas with the given color.
-fn draw_brick(at: graphics::Canvas, bx: integer, by: integer, color: integer) {
-  at.fill_rect(bx + 1, by + 1, 30, 18, color);
-  at.hline(bx + 2, bx + 29, by + 2, graphics::rgba(255, 255, 255, 70));
-}
-
-// Draw an icon at the right side of a brick cell.
-// Icon area: 8x8 pixels at (bx+20, by+6)
-fn icon_extend(at: graphics::Canvas, ix: integer, iy: integer) {
-  // ↔ arrows: horizontal bar with arrowheads
-  at.fill_rect(ix + 1, iy + 3, 6, 2, graphics::rgba(255, 255, 255, 200));
-  at.set_pixel(ix, iy + 4, graphics::rgba(255, 255, 255, 200));
-  at.set_pixel(ix + 7, iy + 4, graphics::rgba(255, 255, 255, 200));
-}
-
-fn icon_explode(at: graphics::Canvas, ix: integer, iy: integer) {
-  // 💀 skull: circle head + eyes + jaw
-  at.fill_circle(ix + 4, iy + 3, 3, graphics::rgba(255, 220, 180, 220));
-  at.set_pixel(ix + 3, iy + 2, graphics::rgba(40, 40, 40, 255));
-  at.set_pixel(ix + 5, iy + 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(ix + 2, iy + 5, 4, 2, graphics::rgba(255, 220, 180, 180));
-}
-
-fn icon_balloon(at: graphics::Canvas, ix: integer, iy: integer) {
-  // 🎈 balloon: circle + string
-  at.fill_circle(ix + 4, iy + 3, 3, graphics::rgba(255, 80, 80, 230));
-  at.fill_circle(ix + 4, iy + 2, 2, graphics::rgba(255, 140, 140, 150));
-  at.vline(ix + 4, iy + 6, iy + 8, graphics::rgba(180, 180, 180, 200));
-}
-
-fn icon_newrow(at: graphics::Canvas, ix: integer, iy: integer) {
-  // ⬇ down arrow
-  at.fill_rect(ix + 3, iy, 2, 5, graphics::rgba(200, 220, 255, 220));
-  at.hline(ix + 1, ix + 6, iy + 5, graphics::rgba(200, 220, 255, 220));
-  at.hline(ix + 2, ix + 5, iy + 6, graphics::rgba(200, 220, 255, 200));
-  at.hline(ix + 3, ix + 4, iy + 7, graphics::rgba(200, 220, 255, 180));
-}
-
-fn icon_multi(at: graphics::Canvas, ix: integer, iy: integer) {
-  // ⊕ three circles (balls)
-  at.fill_circle(ix + 2, iy + 4, 2, graphics::rgba(255, 255, 255, 200));
-  at.fill_circle(ix + 5, iy + 2, 2, graphics::rgba(220, 220, 255, 180));
-  at.fill_circle(ix + 6, iy + 5, 2, graphics::rgba(200, 200, 255, 160));
-}
-
-fn icon_fire(at: graphics::Canvas, ix: integer, iy: integer) {
-  // 🔥 flame shape
-  at.fill_rect(ix + 3, iy + 2, 2, 5, graphics::rgba(255, 160, 0, 230));
-  at.fill_rect(ix + 2, iy + 4, 4, 3, graphics::rgba(255, 100, 0, 210));
-  at.set_pixel(ix + 4, iy + 1, graphics::rgba(255, 200, 0, 200));
-  at.set_pixel(ix + 3, iy + 0, graphics::rgba(255, 220, 50, 150));
-}
-
-fn icon_shield(at: graphics::Canvas, ix: integer, iy: integer) {
-  // 🛡 shield shape
-  at.fill_rect(ix + 1, iy + 1, 6, 4, graphics::rgba(80, 160, 255, 220));
-  at.fill_rect(ix + 2, iy + 5, 4, 2, graphics::rgba(80, 140, 230, 200));
-  at.hline(ix + 3, ix + 4, iy + 7, graphics::rgba(80, 120, 210, 180));
-  at.hline(ix + 2, ix + 5, iy + 1, graphics::rgba(200, 230, 255, 100));
-}
-
 fn build_atlas() -> graphics::Canvas {
-  // 6 cols x 4 rows, 32x32 per cell = 192x128
-  at = graphics::canvas(192, 128, 0);
-  at_colors = [
-    graphics::rgba(230, 60, 60, 255),
-    graphics::rgba(230, 150, 30, 255),
-    graphics::rgba(50, 200, 60, 255),
-    graphics::rgba(50, 230, 90, 255),
-    graphics::rgba(75, 130, 230, 255),
-    graphics::rgba(150, 75, 180, 255)
-  ];
+  // 4x4 grid, 32x32 per cell = 128x128
+  // Row 0: small icons for brick overlay (drawn in corner of brick)
+  // Row 1: (continued)
+  // Row 2-3: large pickup icons (fill most of cell)
+  at = graphics::canvas(128, 128, 0);
 
-  // Row 0: normal bricks — bright row colors
-  for at_i in 0..6 {
-    draw_brick(at, at_i * 32, 0, at_colors[at_i]);
-  }
+  // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
+  // S_IC_EXTEND (0) — white ↔
+  at.fill_rect(12, 14, 8, 3, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(10, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(19, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  // S_IC_EXPLODE (1) — white skull
+  at.fill_circle(32 + 16, 14, 5, graphics::rgba(255, 230, 200, 240));
+  at.fill_rect(32 + 13, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 17, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 14, 18, 4, 2, graphics::rgba(40, 40, 40, 255));
+  // S_IC_BALLOON (2) — red balloon
+  at.fill_circle(64 + 16, 12, 5, graphics::rgba(255, 70, 70, 240));
+  at.fill_circle(64 + 14, 10, 2, graphics::rgba(255, 150, 150, 130));
+  at.vline(64 + 16, 17, 20, graphics::rgba(200, 200, 200, 200));
+  // S_IC_NEWROW (3) — blue ⬇
+  at.fill_rect(96 + 14, 8, 4, 8, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 10, 14, 12, 3, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 13, 17, 6, 2, graphics::rgba(130, 180, 255, 200));
+  // S_IC_MULTI (4) — white circles
+  at.fill_circle(8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
+  at.fill_circle(18, 32 + 10, 3, graphics::rgba(230, 230, 255, 200));
+  at.fill_circle(20, 32 + 17, 3, graphics::rgba(210, 210, 255, 180));
+  // S_IC_FIRE (5) — orange flame
+  at.fill_rect(32 + 14, 32 + 6, 4, 12, graphics::rgba(255, 150, 0, 240));
+  at.fill_rect(32 + 12, 32 + 10, 8, 8, graphics::rgba(255, 90, 0, 220));
+  at.fill_rect(32 + 15, 32 + 4, 2, 4, graphics::rgba(255, 220, 50, 200));
+  // S_IC_SHIELD (6) — blue shield
+  at.fill_rect(64 + 9, 32 + 8, 14, 6, graphics::rgba(80, 160, 255, 240));
+  at.fill_rect(64 + 11, 32 + 14, 10, 3, graphics::rgba(80, 140, 230, 220));
+  at.fill_rect(64 + 13, 32 + 17, 6, 2, graphics::rgba(80, 120, 210, 200));
+  at.hline(64 + 10, 64 + 22, 32 + 9, graphics::rgba(200, 230, 255, 120));
 
-  // Row 1: special bricks — SAME bright row colors + small icon in corner
-  // Use a cycling color so specials blend in with normal bricks
-  draw_brick(at, 0, 32, at_colors[2]);    // extend = green row
-  icon_extend(at, 20, 38);
-  draw_brick(at, 32, 32, at_colors[0]);   // explode = red row
-  icon_explode(at, 52, 38);
-  draw_brick(at, 64, 32, at_colors[1]);   // balloon = orange row
-  icon_balloon(at, 84, 38);
-  draw_brick(at, 96, 32, at_colors[4]);   // newrow = blue row
-  icon_newrow(at, 116, 38);
-  draw_brick(at, 128, 32, at_colors[4]);  // multi = blue row
-  icon_multi(at, 148, 38);
-  draw_brick(at, 160, 32, at_colors[1]);  // fire = orange row
-  icon_fire(at, 180, 38);
-  draw_brick(at, 0, 64, at_colors[4]);    // shield = blue row
-  icon_shield(at, 20, 70);
-
-  // S_BALL (13) — white circle with shine
-  at.fill_circle(32 + 16, 64 + 10, 5, graphics::rgba(255, 255, 255, 255));
-  at.fill_circle(32 + 14, 64 + 8, 2, graphics::rgba(255, 255, 255, 60));
-
-  // S_PADDLE (14)
-  at.fill_rect(64 + 2, 64 + 6, 28, 10, graphics::rgba(190, 190, 220, 255));
-  at.hline(64 + 3, 64 + 29, 64 + 7, graphics::rgba(220, 220, 240, 100));
-
-  // S_PADDLE_EXT (15) — green
-  at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(60, 210, 110, 255));
-  at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(160, 240, 190, 100));
-
-  // Pickups: index 16=col4row2, 17=col5row2, 18=col0row3..22=col4row3
-  // S_PK_EXTEND (16) at (128, 64) — green double-arrow ↔
-  at.fill_rect(128 + 4, 64 + 7, 24, 6, graphics::rgba(60, 220, 80, 255));
-  at.fill_rect(128 + 2, 64 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
-  at.fill_rect(128 + 26, 64 + 5, 4, 10, graphics::rgba(60, 220, 80, 255));
-  // S_PK_EXPLODE (17) at (160, 64) — red skull
-  at.fill_circle(160 + 16, 64 + 10, 8, graphics::rgba(230, 50, 50, 255));
-  at.fill_rect(160 + 11, 64 + 7, 3, 3, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(160 + 18, 64 + 7, 3, 3, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(160 + 13, 64 + 14, 6, 3, graphics::rgba(40, 40, 40, 255));
-  // S_PK_BALLOON (18) at (0, 96) — red balloon with string
-  at.fill_circle(0 + 16, 96 + 8, 8, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(0 + 13, 96 + 5, 3, graphics::rgba(255, 120, 120, 140));
-  at.vline(0 + 16, 96 + 16, 96 + 20, graphics::rgba(180, 180, 180, 255));
-  // S_PK_NEWROW (19) at (32, 96) — blue down arrow ⬇
-  at.fill_rect(32 + 13, 96 + 2, 6, 10, graphics::rgba(60, 100, 230, 255));
-  at.fill_rect(32 + 8, 96 + 10, 16, 4, graphics::rgba(60, 100, 230, 255));
-  at.fill_rect(32 + 11, 96 + 14, 10, 3, graphics::rgba(60, 100, 230, 230));
-  at.fill_rect(32 + 14, 96 + 17, 4, 2, graphics::rgba(60, 100, 230, 200));
-  // S_PK_MULTI (20) at (64, 96) — three white balls
-  at.fill_circle(64 + 10, 96 + 10, 5, graphics::rgba(255, 255, 255, 255));
-  at.fill_circle(64 + 20, 96 + 6, 4, graphics::rgba(220, 220, 255, 230));
-  at.fill_circle(64 + 22, 96 + 14, 4, graphics::rgba(200, 200, 255, 210));
-  // S_PK_FIRE (21) at (96, 96) — orange/yellow flame
-  at.fill_rect(96 + 13, 96 + 4, 6, 14, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect(96 + 10, 96 + 8, 12, 10, graphics::rgba(255, 80, 0, 240));
-  at.fill_rect(96 + 14, 96 + 2, 4, 4, graphics::rgba(255, 200, 0, 230));
-  at.fill_rect(96 + 15, 96 + 0, 2, 3, graphics::rgba(255, 240, 80, 180));
-  // S_PK_SHIELD (22) at (128, 96) — blue shield
-  at.fill_rect(128 + 6, 96 + 2, 20, 10, graphics::rgba(60, 140, 255, 255));
-  at.fill_rect(128 + 9, 96 + 12, 14, 4, graphics::rgba(60, 120, 230, 240));
-  at.fill_rect(128 + 12, 96 + 16, 8, 2, graphics::rgba(60, 100, 210, 220));
-  at.hline(128 + 8, 128 + 24, 96 + 3, graphics::rgba(180, 220, 255, 120));
+  // Large pickup icons — fill most of 32x32 cell
+  // S_PK_EXTEND (7) at (96, 32) — large green ↔
+  at.fill_rect(96 + 4, 32 + 12, 24, 8, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 2, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 24, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  // S_PK_EXPLODE (8) at (0, 64) — large red skull
+  at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
+  at.fill_rect(10, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(18, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(11, 64 + 20, 10, 4, graphics::rgba(40, 40, 40, 255));
+  // S_PK_BALLOON (9) at (32, 64) — large red balloon
+  at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
+  at.fill_circle(32 + 12, 64 + 8, 4, graphics::rgba(255, 130, 130, 130));
+  at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
+  // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
+  at.fill_rect(64 + 12, 64 + 2, 8, 16, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 6, 64 + 14, 20, 6, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 10, 64 + 20, 12, 5, graphics::rgba(60, 110, 240, 230));
+  at.fill_rect(64 + 13, 64 + 25, 6, 4, graphics::rgba(60, 110, 240, 200));
+  // S_PK_MULTI (11) at (96, 64) — large white balls
+  at.fill_circle(96 + 10, 64 + 16, 7, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
+  at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
+  // S_PK_FIRE (12) at (0, 96) — large flame
+  at.fill_rect(12, 96 + 6, 8, 22, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect(8, 96 + 12, 16, 16, graphics::rgba(255, 80, 0, 240));
+  at.fill_rect(13, 96 + 2, 6, 8, graphics::rgba(255, 210, 20, 230));
+  at.fill_rect(14, 96 + 0, 4, 4, graphics::rgba(255, 240, 80, 180));
+  // S_PK_SHIELD (13) at (32, 96) — large blue shield
+  at.fill_rect(32 + 6, 96 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
+  at.fill_rect(32 + 9, 96 + 16, 14, 6, graphics::rgba(60, 130, 240, 240));
+  at.fill_rect(32 + 12, 96 + 22, 8, 4, graphics::rgba(60, 110, 220, 220));
+  at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
 
   at
 }
@@ -255,15 +180,16 @@ fn assign_special(seed: integer) -> integer {
   SP_NONE
 }
 
-fn brick_sprite(sp_type: integer, row: integer) -> integer {
-  if sp_type == SP_EXTEND  { return S_EXTEND; }
-  if sp_type == SP_EXPLODE { return S_EXPLODE; }
-  if sp_type == SP_BALLOON { return S_BALLOON; }
-  if sp_type == SP_NEWROW  { return S_NEWROW; }
-  if sp_type == SP_MULTI   { return S_MULTI; }
-  if sp_type == SP_FIRE    { return S_FIRE; }
-  if sp_type == SP_SHIELD  { return S_SHIELD_BRK; }
-  row % 6
+// Returns the small icon sprite index for a special brick type, or 99 for normal.
+fn brick_icon(sp_type: integer) -> integer {
+  if sp_type == SP_EXTEND  { return S_IC_EXTEND; }
+  if sp_type == SP_EXPLODE { return S_IC_EXPLODE; }
+  if sp_type == SP_BALLOON { return S_IC_BALLOON; }
+  if sp_type == SP_NEWROW  { return S_IC_NEWROW; }
+  if sp_type == SP_MULTI   { return S_IC_MULTI; }
+  if sp_type == SP_FIRE    { return S_IC_FIRE; }
+  if sp_type == SP_SHIELD  { return S_IC_SHIELD; }
+  99
 }
 
 fn pickup_sprite(sp_type: integer) -> integer {
@@ -300,7 +226,7 @@ fn main() {
     0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
   ];
   br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
-  br_sheet = graphics::create_sprite_sheet(br_atlas, 6, 4, br_vao);
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, br_vao);
   br_proj = ortho();
   br_flat_v = `
 #version 330 core
@@ -712,18 +638,34 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     // ── Render ───────────────────────────────────────────────────
     graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
 
-    // Bricks
+    // Bricks — flat color + sprite icon overlay for specials
+    graphics::gl_use_shader(br_flat);
+    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_dr in 0..br_rows {
+      br_ci = br_dr % 6;
       for br_dc in 0..BRICK_COLS {
         br_di = br_dr * BRICK_COLS + br_dc;
         if br_bricks[br_di] == 1 {
-          br_sp = brick_sprite(br_specials[br_di], br_dr);
-          br_mv = make_mvp(br_proj, bk_x(br_dc), bk_y(br_dr), BRICK_W, BRICK_H);
-          graphics::draw_sprite(br_sheet, br_mv.m, br_sp);
-          // Multi-hit indicator: draw small dots for HP > 1
-          if br_hp[br_di] >= 2 {
+          draw_flat(br_flat, br_vao, br_proj,
+            bk_x(br_dc), bk_y(br_dr), BRICK_W, BRICK_H,
+            br_pcr[br_ci], br_pcg[br_ci], br_pcb[br_ci]);
+          // Highlight
+          draw_flat(br_flat, br_vao, br_proj,
+            bk_x(br_dc) + 1.0, bk_y(br_dr) + 1.0, BRICK_W - 2.0, 2.0,
+            1.0, 1.0, 1.0);
+          graphics::gl_set_uniform_float(br_flat, "uAlpha", 0.15);
+          graphics::gl_draw(br_vao, 6);
+          graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
+          // Icon overlay for specials
+          br_ic = brick_icon(br_specials[br_di]);
+          if br_ic < 99 {
+            br_mv = make_mvp(br_proj, bk_x(br_dc) + BRICK_W - 22.0, bk_y(br_dr), 20.0, 20.0);
+            graphics::draw_sprite(br_sheet, br_mv.m, br_ic);
             graphics::gl_use_shader(br_flat);
             graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
+          }
+          // Multi-hit dots
+          if br_hp[br_di] >= 2 {
             draw_flat(br_flat, br_vao, br_proj,
               bk_x(br_dc) + 3.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0);
           }
@@ -754,11 +696,13 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // Pickups
+    // Pickups — large sprite icons, no block background
     for br_pdi in 0..8 {
       if br_pk_on[br_pdi] == 1 {
         br_psp = pickup_sprite(br_pk_type[br_pdi]);
-        br_pmv = make_mvp(br_proj, br_pk_x[br_pdi], br_pk_y[br_pdi], PICKUP_W, PICKUP_H);
+        // Render at 28x28 so the icon is clearly visible
+        br_pmv = make_mvp(br_proj,
+          br_pk_x[br_pdi] - 4.0, br_pk_y[br_pdi] - 8.0, 28.0, 28.0);
         graphics::draw_sprite(br_sheet, br_pmv.m, br_psp);
       }
     }
@@ -770,23 +714,24 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       draw_flat(br_flat, br_vao, br_proj, 0.0, SCREEN_H - 3.0, SCREEN_W, 3.0, 0.3, 0.6, 1.0);
     }
 
-    // Paddle
-    br_pad_sp = if br_extend_timer > 0.0 { S_PADDLE_EXT } else { S_PADDLE };
-    br_pmv = make_mvp(br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H);
-    graphics::draw_sprite(br_sheet, br_pmv.m, br_pad_sp);
+    // Paddle — flat color
+    graphics::gl_use_shader(br_flat);
+    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
+    if br_extend_timer > 0.0 {
+      draw_flat(br_flat, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5);
+    } else {
+      draw_flat(br_flat, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9);
+    }
 
-    // Balls (orange if fireball active)
+    // Balls — flat color
     for br_bd in 0..MAX_BALLS {
       if br_ball_on[br_bd] == 1 {
         if br_fire_timer > 0.0 {
-          // Fireball: draw as flat orange
-          graphics::gl_use_shader(br_flat);
-          graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
           draw_flat(br_flat, br_vao, br_proj,
             br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0);
         } else {
-          br_bmv = make_mvp(br_proj, br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE);
-          graphics::draw_sprite(br_sheet, br_bmv.m, S_BALL);
+          draw_flat(br_flat, br_vao, br_proj,
+            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0);
         }
       }
     }
