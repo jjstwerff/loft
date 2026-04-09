@@ -803,7 +803,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     }
 
     // HUD: pickup labels — show name of each active falling pickup in bottom-left
-    br_label_y = PADDLE_Y + 25.0;
+    br_label_y = PADDLE_Y - 28.0;
     for br_pl in 0..8 {
       if br_pk_on[br_pl] == 1 {
         br_plt = br_pk_type[br_pl];
@@ -818,7 +818,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
           br_tlmv = make_mvp(br_proj, 10.0, br_label_y, 120.0, 24.0);
           graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
           graphics::gl_draw(br_vao, 6);
-          br_label_y += 26.0;
+          br_label_y -= 26.0;
         }
       }
     }
