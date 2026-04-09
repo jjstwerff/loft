@@ -1,186 +1,84 @@
 #!/usr/bin/env -S loft --native
 // Complete Scene: Combining All Techniques
 //
-// Demonstrates: a full scene using most of the graphics library features.
-// Combines: mesh primitives, scene graph, PBR materials, transforms,
-// orbiting camera, lighting. Both native and GLB export.
+// A "showcase" scene — floor, pedestal, gold sphere, orbiting red cubes,
+// corner green spheres — all rendered through the high-level renderer
+// with one render_frame() call per frame. No shader code, no MVP math,
+// no uniform setup in user code.
 //
-// This is the "showcase" example that tests the full rendering pipeline.
+// Both modes (native and GLB export) reuse the same Scene object.
 //
 // Loft constructions used:
-//   All mesh primitives (cube, sphere, plane)
-//   Scene graph with multiple materials
-//   Matrix composition (translate * rotate * scale)
-//   Camera orbit with ticks() timing
-//   Phong lighting with multiple uniform types
-use graphics;
+//   mesh::{cube, sphere, plane}      — primitive meshes
+//   scene::{Scene, Camera, Material, node_at, directional_light}
+//   render::{create_renderer, render_frame, destroy}
+//   math::{mat4_translate, mat4_trs, mat4_identity, vec3, normalize3}
 use mesh;
 use math;
-use glb;
 use scene;
+use render;
+use glb;
 
-VERT_FINAL = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProj;
-out vec3 vWorldPos;
-out vec3 vNormal;
-void main() {{
-    vWorldPos = vec3(uModel * vec4(aPos, 1.0));
-    vNormal = mat3(transpose(inverse(uModel))) * aNormal;
-    gl_Position = uProj * uView * vec4(vWorldPos, 1.0);
-}}
-`;
-
-FRAG_FINAL = `
-#version 330 core
-in vec3 vWorldPos;
-in vec3 vNormal;
-out vec4 FragColor;
-uniform vec3 uCamPos;
-uniform vec3 uLightPos;
-uniform vec3 uColor;
-uniform float uMetallic;
-uniform float uRoughness;
-void main() {{
-    vec3 N = normalize(vNormal);
-    vec3 V = normalize(uCamPos - vWorldPos);
-    vec3 L = normalize(uLightPos - vWorldPos);
-    vec3 H = normalize(V + L);
-    float diff = max(dot(N, L), 0.0);
-    float spec = pow(max(dot(N, H), 0.0), mix(8.0, 128.0, 1.0 - uRoughness));
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
-    vec3 ambient = uColor * mix(0.15, 0.08, uMetallic);
-    vec3 diffuse = uColor * diff * (1.0 - uMetallic * 0.7);
-    vec3 specular = mix(vec3(0.04), uColor, uMetallic) * spec * (1.0 + fresnel);
-    FragColor = vec4(ambient + diffuse + specular, 1.0);
-}}
-`;
-
-fn render_native_complete() {
-  if !graphics::gl_create_window(800, 600, "19 - Complete Scene") {
-    println("Failed to create window"); return;
+fn build_scene() -> scene::Scene {
+  sc = scene::Scene { name: "complete_scene" };
+  bs_ci = sc.add_mesh(mesh::cube());
+  bs_si = sc.add_mesh(mesh::sphere("ball", 0.5, 24, 16));
+  bs_fi = sc.add_mesh(mesh::plane("floor", 12.0, 12.0));
+  bs_floor_m = sc.add_material(scene::material_color("floor", 0.3, 0.3, 0.35));
+  bs_ped_m   = sc.add_material(scene::material_metal("pedestal", 0.15, 0.3, 0.6, 0.2));
+  bs_gold_m  = sc.add_material(scene::material_metal("gold", 1.0, 0.84, 0.0, 0.1));
+  bs_red_m   = sc.add_material(scene::material_color("red", 0.9, 0.2, 0.15));
+  bs_green_m = sc.add_material(scene::material_metal("green", 0.2, 0.8, 0.4, 0.4));
+  sc.add_node(scene::node_at("floor", bs_fi, bs_floor_m, math::mat4_identity()));
+  sc.add_node(scene::node_at("pedestal", bs_ci, bs_ped_m,
+    math::mat4_trs(0.0, 1.0, 0.0, 0.0, 0.5, 2.0, 0.5)));
+  sc.add_node(scene::node_at("gold_ball", bs_si, bs_gold_m,
+    math::mat4_translate(0.0, 2.5, 0.0)));
+  for bs_ri in 0..4 {
+    bs_ra = bs_ri as float * 1.5708;
+    sc.add_node(scene::node_at("red_{bs_ri}", bs_ci, bs_red_m,
+      math::mat4_translate(sin(bs_ra) * 3.0, 0.5, cos(bs_ra) * 3.0)));
   }
-  // Build meshes
-  fn_cube = mesh::cube();
-  fn_sphere = mesh::sphere("ball", 0.5, 24, 16);
-  fn_floor = mesh::plane("floor", 12.0, 12.0);
-  fn_shader = graphics::gl_create_shader(VERT_FINAL, FRAG_FINAL);
-  fn_cvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(fn_cube), 6);
-  fn_svao = graphics::gl_upload_vertices(mesh::mesh_to_floats(fn_sphere), 6);
-  fn_fvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(fn_floor), 6);
-  fn_cnv = fn_cube.triangles.len() * 3;
-  fn_snv = fn_sphere.triangles.len() * 3;
-  fn_fnv = fn_floor.triangles.len() * 3;
-  fn_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
-  graphics::gl_enable(graphics::GL_CULL_FACE);
-  fn_start = ticks();
-  for _ in 0..5000 {
-    if !graphics::gl_poll_events() { break }
-    fn_t = (ticks() - fn_start) as float / 1000000.0;
-    // Orbiting camera
-    fn_eye = math::vec3(sin(fn_t * 0.2) * 8.0, 4.0, cos(fn_t * 0.2) * 8.0);
-    fn_view = math::mat4_look_at(fn_eye, math::vec3(0.0, 0.5, 0.0), math::vec3(0.0, 1.0, 0.0));
-    fn_light = math::vec3(sin(fn_t * 0.5) * 4.0, 5.0, cos(fn_t * 0.5) * 4.0);
-    graphics::gl_clear(graphics::rgba(15, 15, 20, 255));
-    graphics::gl_use_shader(fn_shader);
-    graphics::gl_set_uniform_mat4(fn_shader, "uView", fn_view.m);
-    graphics::gl_set_uniform_mat4(fn_shader, "uProj", fn_proj.m);
-    graphics::gl_set_uniform_vec3(fn_shader, "uCamPos", fn_eye.x, fn_eye.y, fn_eye.z);
-    graphics::gl_set_uniform_vec3(fn_shader, "uLightPos", fn_light.x, fn_light.y, fn_light.z);
-    // Floor
-    graphics::gl_set_uniform_mat4(fn_shader, "uModel", math::mat4_identity().m);
-    graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.3, 0.3, 0.35);
-    graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.0);
-    graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.9);
-    graphics::gl_draw(fn_fvao, fn_fnv);
-    // Center pedestal (tall blue cube)
-    fn_pm = math::mat4_trs(0.0, 1.0, 0.0, 0.0, 0.5, 2.0, 0.5);
-    graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_pm.m);
-    graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.15, 0.3, 0.6);
-    graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.7);
-    graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.2);
-    graphics::gl_draw(fn_cvao, fn_cnv);
-    // Gold sphere on top
-    fn_gsm = math::mat4_translate(0.0, 2.5, 0.0);
-    graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_gsm.m);
-    graphics::gl_set_uniform_vec3(fn_shader, "uColor", 1.0, 0.84, 0.0);
-    graphics::gl_set_uniform_float(fn_shader, "uMetallic", 1.0);
-    graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.1);
-    graphics::gl_draw(fn_svao, fn_snv);
-    // Orbiting red cubes
-    for fn_ci in 0..4 {
-      fn_ca = fn_t * 0.4 + fn_ci as float * 1.5708;
-      fn_cx = sin(fn_ca) * 3.0;
-      fn_cz = cos(fn_ca) * 3.0;
-      fn_cm = math::mat4_trs(fn_cx, 0.5, fn_cz, fn_t + fn_ci as float, 1.0, 1.0, 1.0);
-      graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_cm.m);
-      graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.9, 0.2, 0.15);
-      graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.0);
-      graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.6);
-      graphics::gl_draw(fn_cvao, fn_cnv);
-    }
-    // Corner spheres
-    for fn_si in 0..4 {
-      fn_sx = if fn_si % 2 == 0 { -4.0 } else { 4.0 };
-      fn_sz = if fn_si < 2 { -4.0 } else { 4.0 };
-      fn_ssm = math::mat4_translate(fn_sx, 0.5, fn_sz);
-      graphics::gl_set_uniform_mat4(fn_shader, "uModel", fn_ssm.m);
-      graphics::gl_set_uniform_vec3(fn_shader, "uColor", 0.2, 0.8, 0.4);
-      graphics::gl_set_uniform_float(fn_shader, "uMetallic", 0.3);
-      graphics::gl_set_uniform_float(fn_shader, "uRoughness", 0.4);
-      graphics::gl_draw(fn_svao, fn_snv);
-    }
-    graphics::gl_swap_buffers();
+  for bs_gi in 0..4 {
+    bs_gx = if bs_gi % 2 == 0 { -4.0 } else { 4.0 };
+    bs_gz = if bs_gi < 2 { -4.0 } else { 4.0 };
+    sc.add_node(scene::node_at("corner_{bs_gi}", bs_si, bs_green_m,
+      math::mat4_translate(bs_gx, 0.5, bs_gz)));
   }
-  graphics::gl_destroy_window();
+  sc.add_light(scene::directional_light("sun", 1.0, 0.95, 0.9, 3.0,
+    math::normalize3(math::vec3(-1.0, -2.0, -1.0))));
+  sc
 }
 
-fn export_glb_complete() {
-  fn_s = scene::Scene { name: "complete_scene" };
-  fn_ci = fn_s.add_mesh(mesh::cube());
-  fn_si = fn_s.add_mesh(mesh::sphere("ball", 0.5, 24, 16));
-  fn_fi = fn_s.add_mesh(mesh::plane("floor", 12.0, 12.0));
-  // Materials
-  fn_floor_m = fn_s.add_material(scene::Material { name: "floor",
-    base_color_r: 0.3, base_color_g: 0.3, base_color_b: 0.35, base_color_a: 1.0,
-    metallic: 0.0, roughness: 0.9 });
-  fn_ped_m = fn_s.add_material(scene::material_metal("pedestal", 0.15, 0.3, 0.6, 0.2));
-  fn_gold_m = fn_s.add_material(scene::material_metal("gold", 1.0, 0.84, 0.0, 0.1));
-  fn_red_m = fn_s.add_material(scene::Material { name: "red",
-    base_color_r: 0.9, base_color_g: 0.2, base_color_b: 0.15, base_color_a: 1.0,
-    metallic: 0.0, roughness: 0.6 });
-  fn_green_m = fn_s.add_material(scene::Material { name: "green",
-    base_color_r: 0.2, base_color_g: 0.8, base_color_b: 0.4, base_color_a: 1.0,
-    metallic: 0.3, roughness: 0.4 });
-  // Nodes
-  fn_s.add_node(scene::node_at("floor", fn_fi, fn_floor_m, math::mat4_identity()));
-  fn_s.add_node(scene::node_at("pedestal", fn_ci, fn_ped_m, math::mat4_trs(0.0, 1.0, 0.0, 0.0, 0.5, 2.0, 0.5)));
-  fn_s.add_node(scene::node_at("gold_ball", fn_si, fn_gold_m, math::mat4_translate(0.0, 2.5, 0.0)));
-  for fn_ei in 0..4 {
-    fn_ea = fn_ei as float * 1.5708;
-    fn_s.add_node(scene::node_at("red_{fn_ei}", fn_ci, fn_red_m, math::mat4_translate(sin(fn_ea) * 3.0, 0.5, cos(fn_ea) * 3.0)));
+fn render_native() {
+  sc = build_scene();
+  cam = scene::Camera {
+    name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(8.0, 4.0, 0.0),
+    target: math::vec3(0.0, 0.5, 0.0) };
+  r = render::create_renderer(800, 600, "19 - Complete Scene");
+  rn_start = ticks();
+  for _ in 0..5000 {
+    rn_t = (ticks() - rn_start) as float / 1000000.0;
+    cam.position = math::vec3(sin(rn_t * 0.2) * 8.0, 4.0, cos(rn_t * 0.2) * 8.0);
+    if !r.render_frame(sc, cam) { break; }
   }
-  for fn_gi in 0..4 {
-    fn_gx = if fn_gi % 2 == 0 { -4.0 } else { 4.0 };
-    fn_gz = if fn_gi < 2 { -4.0 } else { 4.0 };
-    fn_s.add_node(scene::node_at("corner_{fn_gi}", fn_si, fn_green_m, math::mat4_translate(fn_gx, 0.5, fn_gz)));
-  }
-  fn_s.add_camera(scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
+  r.destroy();
+}
+
+fn export_glb() {
+  sc = build_scene();
+  sc.add_camera(scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(8.0, 4.0, 0.0), target: math::vec3(0.0, 0.5, 0.0) });
-  glb::save_scene_glb(fn_s, "19-complete-scene.glb");
+  glb::save_scene_glb(sc, "19-complete-scene.glb");
   println("Exported 19-complete-scene.glb");
 }
 
 fn main() {
-  fn_mode = "native";
-  for fn_a in arguments() {
-    if fn_a == "--mode" { fn_mode = "" }
-    else if fn_mode == "" { fn_mode = fn_a }
+  mode19 = "native";
+  for arg19 in arguments() {
+    if arg19 == "--mode" { mode19 = "" }
+    else if mode19 == "" { mode19 = arg19 }
   }
-  if fn_mode == "glb" { export_glb_complete() }
-  else { render_native_complete() }
+  if mode19 == "glb" { export_glb() } else { render_native() }
 }

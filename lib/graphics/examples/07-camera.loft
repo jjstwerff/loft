@@ -1,109 +1,58 @@
 #!/usr/bin/env -S loft --native
-// LearnOpenGL Chapter 7: Camera
-// https://learnopengl.com/Getting-started/Camera
-// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
-// Original tutorials licensed under CC BY-NC 4.0
-// https://creativecommons.org/licenses/by-nc/4.0/
-// This loft implementation is an independent adaptation for the loft graphics library.
+// Camera — orbiting eye around a cube via the high-level renderer.
 //
-// Demonstrates: orbiting camera using mat4_look_at with animated eye position.
-// The camera circles around a cube, showing how the view matrix changes.
-//
-// Run:
-//   loft examples/07-camera.loft              -- native
-//   loft examples/07-camera.loft --mode glb   -- export GLB with camera
+// Per-frame: update cam.position on a circular path, renderer rebuilds the
+// view matrix internally.
 //
 // Loft constructions used:
-//   sin/cos              — compute circular orbit path
-//   mat4_look_at         — rebuild view matrix each frame from moving eye
-//   ticks()              — frame-independent animation timing
-use graphics;
+//   mesh::cube             — target mesh
+//   scene::{Scene, Camera, node_at, directional_light, material_color}
+//   render::{create_renderer, render_frame, destroy}
 use mesh;
 use math;
-use glb;
 use scene;
+use render;
+use glb;
 
-VERT_MVP = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-uniform mat4 uMVP;
-out vec3 vNormal;
-void main() {{
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vNormal = aNormal;
-}}
-`;
-
-FRAG_LIT = `
-#version 330 core
-in vec3 vNormal;
-out vec4 FragColor;
-void main() {{
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.8));
-    float diff = max(dot(normalize(vNormal), lightDir), 0.0);
-    vec3 color = vec3(0.2, 0.8, 0.4) * (0.3 + 0.7 * diff);
-    FragColor = vec4(color, 1.0);
-}}
-`;
-
-fn render_native_camera() {
-  if !graphics::gl_create_window(800, 600, "07 - Camera (orbiting)") {
-    println("Failed to create window");
-    return;
-  }
-  ca_m = mesh::cube();
-  ca_shader = graphics::gl_create_shader(VERT_MVP, FRAG_LIT);
-  ca_data = mesh::mesh_to_floats(ca_m);
-  ca_vao = graphics::gl_upload_vertices(ca_data, 6);
-  ca_n_verts = ca_m.triangles.len() * 3;
-  ca_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
-  ca_model = math::mat4_identity();
-  ca_start = ticks();
-  for _ in 0..3000 {
-    if !graphics::gl_poll_events() { break }
-    ca_t = (ticks() - ca_start) as float / 1000000.0;
-    // Orbit: camera circles at radius 4, height 2
-    ca_radius = 4.0;
-    ca_eye = math::vec3(
-      sin(ca_t * 0.5) * ca_radius,
-      2.0,
-      cos(ca_t * 0.5) * ca_radius);
-    ca_view = math::mat4_look_at(ca_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
-    ca_mvp = math::mat4_mul(ca_proj, math::mat4_mul(ca_view, ca_model));
-    graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
-    graphics::gl_use_shader(ca_shader);
-    graphics::gl_set_uniform_mat4(ca_shader, "uMVP", ca_mvp.m);
-    graphics::gl_draw(ca_vao, ca_n_verts);
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
+fn build_camera_scene() -> scene::Scene {
+  sc07 = scene::Scene { name: "camera_orbit" };
+  mi07 = sc07.add_mesh(mesh::cube());
+  mat07 = sc07.add_material(scene::material_color("green", 0.2, 0.8, 0.4));
+  sc07.add_node(scene::node_at("cube", mi07, mat07, math::mat4_identity()));
+  sc07.add_light(scene::directional_light("key", 1.0, 0.95, 0.9, 2.5,
+    math::normalize3(math::vec3(-0.5, -1.0, -0.8))));
+  sc07
 }
 
-fn export_glb_camera() {
-  ca_s = scene::Scene { name: "camera_orbit" };
-  ca_mi = ca_s.add_mesh(mesh::cube());
-  ca_mat = scene::Material {
-    name: "green", base_color_r: 0.2, base_color_g: 0.8, base_color_b: 0.4,
-    base_color_a: 1.0, metallic: 0.0, roughness: 0.6
-  };
-  ca_mati = ca_s.add_material(ca_mat);
-  ca_s.add_node(scene::node_at("cube", ca_mi, ca_mati, math::mat4_identity()));
-  ca_s.add_camera(scene::Camera {
-    name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
+fn render_native() {
+  sc07 = build_camera_scene();
+  cam07 = scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
     position: math::vec3(4.0, 2.0, 0.0),
-    target: math::vec3(0.0, 0.0, 0.0)
-  });
-  glb::save_scene_glb(ca_s, "07-camera.glb");
+    target: math::vec3(0.0, 0.0, 0.0) };
+  r07 = render::create_renderer(800, 600, "07 - Camera (orbiting)");
+  start07 = ticks();
+  for _ in 0..3000 {
+    t07 = (ticks() - start07) as float / 1000000.0;
+    cam07.position = math::vec3(sin(t07 * 0.5) * 4.0, 2.0, cos(t07 * 0.5) * 4.0);
+    if !r07.render_frame(sc07, cam07) { break; }
+  }
+  r07.destroy();
+}
+
+fn export_glb() {
+  sc07 = build_camera_scene();
+  sc07.add_camera(scene::Camera { name: "orbit", fov: 45.0, near: 0.1, far: 100.0,
+    position: math::vec3(4.0, 2.0, 0.0),
+    target: math::vec3(0.0, 0.0, 0.0) });
+  glb::save_scene_glb(sc07, "07-camera.glb");
   println("Exported 07-camera.glb");
 }
 
 fn main() {
-  ca_mode = "native";
-  for ca_a in arguments() {
-    if ca_a == "--mode" { ca_mode = "" }
-    else if ca_mode == "" { ca_mode = ca_a }
+  mode07 = "native";
+  for arg07 in arguments() {
+    if arg07 == "--mode" { mode07 = "" }
+    else if mode07 == "" { mode07 = arg07 }
   }
-  if ca_mode == "glb" { export_glb_camera() }
-  else { render_native_camera() }
+  if mode07 == "glb" { export_glb() } else { render_native() }
 }

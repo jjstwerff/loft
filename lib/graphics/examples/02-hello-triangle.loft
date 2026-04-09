@@ -1,93 +1,61 @@
 #!/usr/bin/env -S loft --native
-// LearnOpenGL Chapter 2: Hello Triangle
-// https://learnopengl.com/Getting-started/Hello-Triangle
-// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
-// Original tutorials licensed under CC BY-NC 4.0
-// https://creativecommons.org/licenses/by-nc/4.0/
-// This loft implementation is an independent adaptation for the loft graphics library.
-//
-// Demonstrates: vertex data, shaders, VAO/VBO, drawing triangles.
-// Two modes:
-//   native — renders an orange triangle in an OpenGL window
-//   glb    — exports the triangle as a .glb file
-//
-// Run:
-//   loft examples/02-hello-triangle.loft                -- native
-//   loft examples/02-hello-triangle.loft --mode glb     -- export GLB
+// Hello Triangle — single orange triangle rendered through the scene graph
+// and high-level renderer. Demonstrates the minimum scene: one mesh, one
+// material, one camera, one light.
 //
 // Loft constructions used:
-//   Mesh, Vertex, Triangle    — 3D geometry types
-//   mesh_to_floats            — flatten mesh to vector<single> for GL
-//   gl_upload_vertices        — upload float buffer to GPU as VAO
-//   gl_create_shader          — compile GLSL vertex + fragment shaders
-//   save_glb                  — export mesh as GLB 2.0 binary
-use graphics;
+//   mesh::{mesh, vertex, add_vertex, add_triangle}
+//   scene::{Scene, Camera, material_color, node_at, directional_light}
+//   render::{create_renderer, render_loop, destroy}
 use mesh;
 use math;
+use scene;
+use render;
 use glb;
 
-VERT_SRC = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-void main() {{
-    gl_Position = vec4(aPos, 1.0);
-}}
-`;
-
-FRAG_SRC = `
-#version 330 core
-out vec4 FragColor;
-void main() {{
-    FragColor = vec4(1.0, 0.5, 0.2, 1.0);
-}}
-`;
-
 fn build_triangle() -> mesh::Mesh {
-  ht_m = mesh::mesh("triangle");
-  ht_m.add_vertex(mesh::vertex(
+  m02 = mesh::mesh("triangle");
+  m02.add_vertex(mesh::vertex(
     math::vec3(-0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
+  m02.add_vertex(mesh::vertex(
     math::vec3( 0.5, -0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(1.0, 0.0)));
-  ht_m.add_vertex(mesh::vertex(
+  m02.add_vertex(mesh::vertex(
     math::vec3( 0.0,  0.5, 0.0), math::vec3(0.0, 0.0, 1.0), math::vec2(0.5, 1.0)));
-  ht_m.add_triangle(0, 1, 2);
-  ht_m
+  m02.add_triangle(0, 1, 2);
+  m02
 }
 
-fn render_native(nt_m: const mesh::Mesh) {
-  if !graphics::gl_create_window(800, 600, "02 - Hello Triangle") {
-    println("Failed to create window");
-    return;
-  }
-  nt_shader = graphics::gl_create_shader(VERT_SRC, FRAG_SRC);
-  nt_data = mesh::mesh_to_floats(nt_m);
-  nt_vao = graphics::gl_upload_vertices(nt_data, 6);
-  for _ in 0..300 {
-    if !graphics::gl_poll_events() { break }
-    graphics::gl_clear(graphics::rgba(51, 76, 76, 255));
-    graphics::gl_use_shader(nt_shader);
-    graphics::gl_draw(nt_vao, 3);
-    graphics::gl_swap_buffers();
-  }
-  graphics::gl_destroy_window();
+fn build_scene(tri02: const mesh::Mesh) -> scene::Scene {
+  sc02 = scene::Scene { name: "hello_triangle" };
+  mi02 = sc02.add_mesh(tri02);
+  mat02 = sc02.add_material(scene::material_color("orange", 1.0, 0.5, 0.2));
+  sc02.add_node(scene::node_at("tri", mi02, mat02, math::mat4_identity()));
+  sc02.add_light(scene::directional_light("front", 1.0, 1.0, 1.0, 2.0,
+    math::normalize3(math::vec3(0.0, 0.0, -1.0))));
+  sc02
 }
 
-fn export_glb(eg_m: const mesh::Mesh) {
-  glb::save_glb(eg_m, "02-hello-triangle.glb");
+fn render_native() {
+  tri02 = build_triangle();
+  sc02 = build_scene(tri02);
+  cam02 = scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 10.0,
+    position: math::vec3(0.0, 0.0, 2.0),
+    target: math::vec3(0.0, 0.0, 0.0) };
+  r02 = render::create_renderer(800, 600, "02 - Hello Triangle");
+  r02.render_loop(sc02, cam02);
+  r02.destroy();
+}
+
+fn export_glb() {
+  glb::save_glb(build_triangle(), "02-hello-triangle.glb");
   println("Exported 02-hello-triangle.glb");
 }
 
 fn main() {
-  m_tri = build_triangle();
-  mode = "native";
-  for m_arg in arguments() {
-    if m_arg == "--mode" { mode = "" }
-    else if mode == "" { mode = m_arg }
+  mode02 = "native";
+  for arg02 in arguments() {
+    if arg02 == "--mode" { mode02 = "" }
+    else if mode02 == "" { mode02 = arg02 }
   }
-  if mode == "glb" {
-    export_glb(m_tri);
-  } else {
-    render_native(m_tri);
-  }
+  if mode02 == "glb" { export_glb() } else { render_native() }
 }

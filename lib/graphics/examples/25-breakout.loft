@@ -7,7 +7,6 @@
 //
 // Controls: arrows/A/D to move, Escape to quit.
 use graphics;
-use math;
 use shapes;
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -148,23 +147,6 @@ fn build_atlas() -> graphics::Canvas {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-fn ortho() -> math::Mat4 {
-  math::Mat4 { m: [
-    2.0 / SCREEN_W, 0.0, 0.0, 0.0,
-    0.0, -2.0 / SCREEN_H, 0.0, 0.0,
-    0.0, 0.0, -1.0, 0.0,
-    -1.0, 1.0, 0.0, 1.0
-  ] }
-}
-
-fn make_mvp(proj: const math::Mat4, mx: float, my: float, mw: float, mh: float) -> math::Mat4 {
-  model = math::Mat4 { m: [
-    mw, 0.0, 0.0, 0.0,  0.0, mh, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,  mx, my, 0.0, 1.0
-  ] };
-  math::mat4_mul(proj, model)
-}
-
 fn bk_x(col: integer) -> float { (col as float) * (BRICK_W + BRICK_PAD) + 12.0 }
 fn bk_y(row: integer) -> float { (row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP }
 
@@ -203,32 +185,6 @@ fn pickup_sprite(sp_type: integer) -> integer {
   S_PK_EXTEND
 }
 
-// Draw a pre-rendered text texture (canvas uploaded to GL) at screen position.
-// UV is flipped vertically because canvas Y=0 is top, GL Y=0 is bottom.
-fn draw_tex(sheet: const graphics::SpriteSheet, vao: integer,
-            proj: const math::Mat4, tex: integer,
-            dtx: float, dty: float, dtw: float, dth: float) {
-  graphics::gl_use_shader(sheet.ss_shader);
-  graphics::gl_bind_texture(tex, 0);
-  graphics::gl_set_uniform_int(sheet.ss_shader, "uTex", 0);
-  graphics::gl_set_uniform_float(sheet.ss_shader, "uU0", 0.0);
-  graphics::gl_set_uniform_float(sheet.ss_shader, "uV0", 1.0);
-  graphics::gl_set_uniform_float(sheet.ss_shader, "uU1", 1.0);
-  graphics::gl_set_uniform_float(sheet.ss_shader, "uV1", 0.0);
-  dt_mvp = make_mvp(proj, dtx, dty, dtw, dth);
-  graphics::gl_set_uniform_mat4(sheet.ss_shader, "uMVP", dt_mvp.m);
-  graphics::gl_draw(vao, 6);
-}
-
-fn draw_flat(shader: integer, vao: integer, proj: const math::Mat4,
-             dfx: float, dfy: float, dfw: float, dfh: float,
-             dfr: float, dfg: float, dfb: float) {
-  df_mvp = make_mvp(proj, dfx, dfy, dfw, dfh);
-  graphics::gl_set_uniform_mat4(shader, "uMVP", df_mvp.m);
-  graphics::gl_set_uniform_vec3(shader, "uColor", dfr, dfg, dfb);
-  graphics::gl_draw(vao, 6);
-}
-
 // ── Main ─────────────────────────────────────────────────────────────
 
 fn main() {
@@ -238,27 +194,8 @@ fn main() {
   }
 
   br_atlas = build_atlas();
-  br_quad_data = [
-    0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
-  ];
-  br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
-  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, br_vao);
-  br_proj = ortho();
-  br_flat_v = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {{ gl_Position = uMVP * vec4(aPos, 1.0); }}
-`;
-  br_flat_f = `
-#version 330 core
-out vec4 FragColor;
-uniform vec3 uColor;
-uniform float uAlpha;
-void main() {{ FragColor = vec4(uColor, uAlpha); }}
-`;
-  br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
+  br_painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, graphics::painter_vao(br_painter));
 
   // Font — try local first, then absolute path
   br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
@@ -270,58 +207,32 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
   br_white = graphics::rgba(255, 255, 255, 255);
   br_gray = graphics::rgba(200, 200, 200, 180);
 
-  // Pickup labels — loop creates canvas per iteration (likely store leak trigger)
+  // Pickup labels — one auto-sized text texture per pickup type.
   br_pk_names = ["", "wider", "boom!", "blast", "rows+", "multi", "fire!", "shield"];
   br_pk_tex = [for _ in 0..8 { 0 }];
   for br_ti in 1..8 {
-    br_tc = graphics::canvas(80, 16, 0);
-    assert(br_tc.width == 80, "canvas width after create in loop {br_ti}");
-    assert(br_tc.data.len() == 80 * 16, "canvas data len in loop {br_ti}");
-    br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, br_gray);
-    br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 80, 16);
-    assert(br_pk_tex[br_ti] > 0, "pickup tex upload failed at {br_ti}");
-    // Verify it's stored correctly
-    br_check = br_pk_tex[br_ti];
-    assert(br_check > 0, "pickup tex read-back failed at {br_ti}");
-  }
-  // Verify values survive after loop
-  for br_tv in 1..8 {
-    assert(br_pk_tex[br_tv] > 0, "pickup tex[{br_tv}] lost after loop: {br_pk_tex[br_tv]}");
+    br_pk_tex[br_ti] = graphics::create_text_texture(br_font, br_pk_names[br_ti], 12.0, br_gray);
   }
 
   // Digit textures 0-9 for numeric score display
   br_digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
   br_dig_tex = [for _ in 0..10 { 0 }];
   for br_di in 0..10 {
-    br_dcv = graphics::canvas(20, 28, 0);
-    br_dcv.draw_text(br_font, br_digits[br_di], 22.0, 2, 2, br_white);
-    br_dig_tex[br_di] = graphics::gl_upload_canvas(br_dcv.data, 20, 28);
-    assert(br_dig_tex[br_di] > 0, "digit tex upload failed at {br_di}");
-  }
-  for br_dv in 0..10 {
-    assert(br_dig_tex[br_dv] > 0, "digit tex[{br_dv}] lost after loop: {br_dig_tex[br_dv]}");
+    br_dig_tex[br_di] = graphics::create_text_texture(br_font, br_digits[br_di], 22.0, br_white);
   }
 
   // Intro text
-  br_intro_cv = graphics::canvas(500, 40, 0);
-  br_intro_cv.draw_text(br_font, "A / D  or  Arrow Keys to move", 28.0, 4, 4, br_white);
-  br_intro_tex = graphics::gl_upload_canvas(br_intro_cv.data, 500, 40);
+  br_intro_tex = graphics::create_text_texture(br_font, "A / D  or  Arrow Keys to move", 28.0, br_white);
 
-  // "LEVEL N" textures (loop — may trigger store warning)
+  // "LEVEL N" textures — one per level.
   br_lvl_tex = [for _ in 0..20 { 0 }];
   for br_tl in 0..20 {
     br_ln = br_tl + 1;
-    br_lt = "LEVEL {br_ln}";
-    br_lcv = graphics::canvas(300, 60, 0);
-    br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, br_white);
-    br_lvl_tex[br_tl] = graphics::gl_upload_canvas(br_lcv.data, 300, 60);
-    assert(br_lvl_tex[br_tl] > 0, "level tex upload failed at {br_ln}");
+    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_ln}", 48.0, br_white);
   }
 
   // "SCORE" label
-  br_score_cv = graphics::canvas(80, 20, 0);
-  br_score_cv.draw_text(br_font, "SCORE", 14.0, 2, 2, br_gray);
-  br_score_label_tex = graphics::gl_upload_canvas(br_score_cv.data, 80, 20);
+  br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
 
   // ── Game state ─────────────────────────────────────────────────
   br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
@@ -721,39 +632,35 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
 
     // Bricks — flat color + sprite icon overlay for specials
-    graphics::gl_use_shader(br_flat);
-    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_dr in 0..br_rows {
       br_ci = br_dr % 6;
       for br_dc in 0..BRICK_COLS {
         br_di = br_dr * BRICK_COLS + br_dc;
         if br_bricks[br_di] == 1 {
-          draw_flat(br_flat, br_vao, br_proj,
+          graphics::draw_rect_at(br_painter,
             bk_x(br_dc), bk_y(br_dr), BRICK_W, BRICK_H,
-            br_pcr[br_ci], br_pcg[br_ci], br_pcb[br_ci]);
-          // Highlight
-          draw_flat(br_flat, br_vao, br_proj,
+            br_pcr[br_ci], br_pcg[br_ci], br_pcb[br_ci], 1.0);
+          // Highlight + ghost pass (alpha 1.0 then 0.15 over the same pixels)
+          graphics::draw_rect_at(br_painter,
             bk_x(br_dc) + 1.0, bk_y(br_dr) + 1.0, BRICK_W - 2.0, 2.0,
-            1.0, 1.0, 1.0);
-          graphics::gl_set_uniform_float(br_flat, "uAlpha", 0.15);
-          graphics::gl_draw(br_vao, 6);
-          graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
+            1.0, 1.0, 1.0, 1.0);
+          graphics::draw_rect_at(br_painter,
+            bk_x(br_dc) + 1.0, bk_y(br_dr) + 1.0, BRICK_W - 2.0, 2.0,
+            1.0, 1.0, 1.0, 0.15);
           // Icon overlay for specials
           br_ic = brick_icon(br_specials[br_di]);
           if br_ic < 99 {
-            br_mv = make_mvp(br_proj, bk_x(br_dc) + BRICK_W - 22.0, bk_y(br_dr), 20.0, 20.0);
-            graphics::draw_sprite(br_sheet, br_mv.m, br_ic);
-            graphics::gl_use_shader(br_flat);
-            graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
+            graphics::draw_sprite_at(br_sheet, br_painter,
+              bk_x(br_dc) + BRICK_W - 22.0, bk_y(br_dr), 20.0, 20.0, br_ic);
           }
           // Multi-hit dots
           if br_hp[br_di] >= 2 {
-            draw_flat(br_flat, br_vao, br_proj,
-              bk_x(br_dc) + 3.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0);
+            graphics::draw_rect_at(br_painter,
+              bk_x(br_dc) + 3.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0);
           }
           if br_hp[br_di] >= 3 {
-            draw_flat(br_flat, br_vao, br_proj,
-              bk_x(br_dc) + 9.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0);
+            graphics::draw_rect_at(br_painter,
+              bk_x(br_dc) + 9.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0);
           }
         }
       }
@@ -763,15 +670,13 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     if br_bl_on {
       br_bfl = ((br_now / 200000) as integer) % 2;
       if br_bfl == 0 {
-        graphics::gl_use_shader(br_flat);
-        graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
         for br_fr in br_bl_row - 1..br_bl_row + 2 {
           for br_fc in br_bl_col - 1..br_bl_col + 2 {
             if br_fr >= 0 && br_fr < br_rows && br_fc >= 0 && br_fc < BRICK_COLS {
-              draw_flat(br_flat, br_vao, br_proj,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0);
-              draw_flat(br_flat, br_vao, br_proj,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0);
+              graphics::draw_rect_at(br_painter,
+                bk_x(br_fc) - 2.0, bk_y(br_fr) - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
+              graphics::draw_rect_at(br_painter,
+                bk_x(br_fc) - 2.0, bk_y(br_fr) + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
             }
           }
         }
@@ -783,66 +688,59 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       if br_pk_on[br_pdi] == 1 {
         br_psp = pickup_sprite(br_pk_type[br_pdi]);
         // Render at 56x56 centered on the pickup hitbox
-        br_pmv = make_mvp(br_proj,
-          br_pk_x[br_pdi] - 18.0, br_pk_y[br_pdi] - 22.0, 56.0, 56.0);
-        graphics::draw_sprite(br_sheet, br_pmv.m, br_psp);
+        graphics::draw_sprite_at(br_sheet, br_painter,
+          br_pk_x[br_pdi] - 18.0, br_pk_y[br_pdi] - 22.0, 56.0, 56.0, br_psp);
       }
     }
 
     // Shield bar at bottom
     if br_shield_on {
-      graphics::gl_use_shader(br_flat);
-      graphics::gl_set_uniform_float(br_flat, "uAlpha", 0.6);
-      draw_flat(br_flat, br_vao, br_proj, 0.0, SCREEN_H - 3.0, SCREEN_W, 3.0, 0.3, 0.6, 1.0);
+      graphics::draw_rect_at(br_painter,
+        0.0, SCREEN_H - 3.0, SCREEN_W, 3.0, 0.3, 0.6, 1.0, 0.6);
     }
 
     // Paddle — flat color
-    graphics::gl_use_shader(br_flat);
-    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     if br_extend_timer > 0.0 {
-      draw_flat(br_flat, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5);
+      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5, 1.0);
     } else {
-      draw_flat(br_flat, br_vao, br_proj, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9);
+      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
     }
 
     // Balls — flat color
     for br_bd in 0..MAX_BALLS {
       if br_ball_on[br_bd] == 1 {
         if br_fire_timer > 0.0 {
-          draw_flat(br_flat, br_vao, br_proj,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0);
+          graphics::draw_rect_at(br_painter,
+            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0, 1.0);
         } else {
-          draw_flat(br_flat, br_vao, br_proj,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0);
+          graphics::draw_rect_at(br_painter,
+            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0, 1.0);
         }
       }
     }
 
-    // Particles
-    graphics::gl_use_shader(br_flat);
+    // Particles — alpha fades with remaining life
     for br_pd in 0..MAX_PARTICLES {
       if br_pt_t[br_pd] > 0.0 {
         br_pa = br_pt_t[br_pd] / PARTICLE_LIFE;
-        graphics::gl_set_uniform_float(br_flat, "uAlpha", br_pa);
-        draw_flat(br_flat, br_vao, br_proj,
+        graphics::draw_rect_at(br_painter,
           br_pt_x[br_pd], br_pt_y[br_pd], 4.0, 4.0,
-          br_pt_r[br_pd], br_pt_g[br_pd], br_pt_b[br_pd]);
+          br_pt_r[br_pd], br_pt_g[br_pd], br_pt_b[br_pd], br_pa);
       }
     }
 
     // HUD: lives (red squares, top-right)
-    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_lh in 0..br_lives {
-      draw_flat(br_flat, br_vao, br_proj,
-        SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3);
+      graphics::draw_rect_at(br_painter,
+        SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3, 1.0);
     }
 
     // HUD: numeric score (top-left, digit textures)
-    draw_tex(br_sheet, br_vao, br_proj, br_score_label_tex, 10.0, 4.0, 60.0, 14.0);
+    graphics::draw_texture_at(br_painter, br_score_label_tex, 10.0, 4.0, 60.0, 14.0);
     br_sc = br_score;
     br_sx = 72.0;
     if br_sc == 0 {
-      draw_tex(br_sheet, br_vao, br_proj, br_dig_tex[0], br_sx, 2.0, 14.0, 20.0);
+      graphics::draw_texture_at(br_painter, br_dig_tex[0], br_sx, 2.0, 14.0, 20.0);
     }
     // Extract digits right-to-left, draw left-to-right
     br_sc_digits = 0;
@@ -855,7 +753,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       br_sc_tmp = br_sc;
       for _br_sd2 in 0..br_sc_digits {
         br_sd_d = br_sc_tmp % 10;
-        draw_tex(br_sheet, br_vao, br_proj, br_dig_tex[br_sd_d], br_sx, 2.0, 14.0, 20.0);
+        graphics::draw_texture_at(br_painter, br_dig_tex[br_sd_d], br_sx, 2.0, 14.0, 20.0);
         br_sx -= 14.0;
         br_sc_tmp = br_sc_tmp / 10;
       }
@@ -863,20 +761,16 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
 
     // HUD: combo bar (under score)
     if br_combo > 1 {
-      graphics::gl_use_shader(br_flat);
-      graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
       br_cbar = shapes::clamp((br_combo as float) * 15.0, 0.0, 200.0);
       br_cg_val = shapes::clamp(1.0 - (br_combo as float) * 0.08, 0.0, 1.0);
-      draw_flat(br_flat, br_vao, br_proj, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0);
+      graphics::draw_rect_at(br_painter, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0, 1.0);
     }
 
     // HUD: level dots (top-center)
-    graphics::gl_use_shader(br_flat);
-    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_lv in 0..br_level {
       if br_lv < 10 {
-        draw_flat(br_flat, br_vao, br_proj,
-          370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5);
+        graphics::draw_rect_at(br_painter,
+          370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5, 1.0);
       }
     }
 
@@ -889,7 +783,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         br_plt_bit = 1 << br_plt;
         if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && (br_shown_mask & br_plt_bit) == 0 {
           br_shown_mask = br_shown_mask | br_plt_bit;
-          draw_tex(br_sheet, br_vao, br_proj, br_pk_tex[br_plt],
+          graphics::draw_texture_at(br_painter, br_pk_tex[br_plt],
             SCREEN_W - 85.0, br_hint_y, 80.0, 14.0);
           br_hint_y -= 16.0;
         }
@@ -900,24 +794,22 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     if br_level_timer > 0.0 {
       br_tli = br_level - 1;
       if br_tli >= 0 && br_tli < 20 && br_lvl_tex[br_tli] != 0 {
-        draw_tex(br_sheet, br_vao, br_proj, br_lvl_tex[br_tli],
+        graphics::draw_texture_at(br_painter, br_lvl_tex[br_tli],
           SCREEN_W / 2.0 - 150.0, SCREEN_H / 2.0 - 30.0, 300.0, 60.0);
       }
     }
 
     // Intro text
     if br_intro_timer > 0.0 {
-      draw_tex(br_sheet, br_vao, br_proj, br_intro_tex,
+      graphics::draw_texture_at(br_painter, br_intro_tex,
         SCREEN_W / 2.0 - 250.0, SCREEN_H / 2.0 + 40.0, 500.0, 40.0);
     }
 
     // Screen flash overlay
     if br_flash_timer > 0.0 {
       br_fa = br_flash_timer / FLASH_DURATION * 0.4;
-      graphics::gl_use_shader(br_flat);
-      graphics::gl_set_uniform_float(br_flat, "uAlpha", br_fa);
-      draw_flat(br_flat, br_vao, br_proj, 0.0, 0.0, SCREEN_W, SCREEN_H,
-        br_flash_r, br_flash_g, br_flash_b);
+      graphics::draw_rect_at(br_painter,
+        0.0, 0.0, SCREEN_W, SCREEN_H, br_flash_r, br_flash_g, br_flash_b, br_fa);
     }
 
     graphics::gl_swap_buffers();

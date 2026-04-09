@@ -1,107 +1,42 @@
 #!/usr/bin/env -S loft --native
-// LearnOpenGL: Depth Testing
-// https://learnopengl.com/Advanced-OpenGL/Depth-testing
-// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
-// Original tutorials licensed under CC BY-NC 4.0
-// https://creativecommons.org/licenses/by-nc/4.0/
-// This loft implementation is an independent adaptation for the loft graphics library.
-//
-// Demonstrates: depth buffer visualization.
-// Renders overlapping cubes and a floor with simple diffuse shading.
-// The fragment shader also visualizes linear depth: nearby surfaces are
-// brighter, distant surfaces are darker — making depth ordering visible.
+// Depth Testing — overlapping rotating cubes on a grey floor. The renderer
+// enables depth testing by default; this example just describes the scene
+// and lets the pipeline do its job.
 //
 // Loft constructions used:
-//   gl_create_window, gl_create_shader, gl_upload_vertices
-//   gl_set_uniform_mat4, gl_set_uniform_vec3
-//   gl_draw, gl_poll_events, gl_swap_buffers
-use graphics;
+//   scene::{Scene, Camera, material_color, node_at, directional_light}
+//   render::{create_renderer, render_frame, destroy}
 use mesh;
 use math;
+use scene;
+use render;
 
-VERT_SRC = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-uniform mat4 uMVP;
-uniform mat4 uModel;
-out vec3 vNormal;
-out vec3 vFragPos;
-void main() {{
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vFragPos = vec3(uModel * vec4(aPos, 1.0));
-    vNormal = mat3(uModel) * aNormal;
-}}
-`;
-
-FRAG_SRC = `
-#version 330 core
-in vec3 vNormal;
-in vec3 vFragPos;
-uniform vec3 uColor;
-out vec4 FragColor;
-void main() {{
-    // Simple directional light
-    vec3 lightDir = normalize(vec3(-1.0, -2.0, -1.0));
-    vec3 norm = normalize(vNormal);
-    float diff = max(dot(norm, -lightDir), 0.0);
-    vec3 color = uColor * (0.25 + 0.75 * diff);
-
-    // Blend in linear depth: near surfaces stay bright, far = dark tint
-    float near = 0.1; float far = 15.0;
-    float ndc = gl_FragCoord.z * 2.0 - 1.0;
-    float linear = (2.0 * near * far) / (far + near - ndc * (far - near));
-    float depth_fog = clamp(linear / far, 0.0, 1.0);
-    color = mix(color, color * 0.2, depth_fog);
-
-    FragColor = vec4(color, 1.0);
-}}
-`;
-
-fn main() {
-  if !graphics::gl_create_window(800, 600, "13 - Depth Testing") {
-    println("Failed to create window"); return;
-  }
-  dt_cube = mesh::cube();
-  dt_plane = mesh::plane("floor", 8.0, 8.0);
-  dt_shader = graphics::gl_create_shader(VERT_SRC, FRAG_SRC);
-  dt_cd = mesh::mesh_to_floats(dt_cube);
-  dt_pd = mesh::mesh_to_floats(dt_plane);
-  dt_cvao = graphics::gl_upload_vertices(dt_cd, 6);
-  dt_pvao = graphics::gl_upload_vertices(dt_pd, 6);
-  dt_cnv = dt_cube.triangles.len() * 3;
-  dt_pnv = dt_plane.triangles.len() * 3;
-  dt_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 15.0);
-  dt_view = math::mat4_look_at(
-    math::vec3(3.0, 3.0, 5.0), math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
-  dt_start = ticks();
+fn render_native() {
+  sc13 = scene::Scene { name: "depth_testing" };
+  ci13 = sc13.add_mesh(mesh::cube());
+  fi13 = sc13.add_mesh(mesh::plane("floor", 8.0, 8.0));
+  floor_m13 = sc13.add_material(scene::material_color("floor", 0.45, 0.45, 0.5));
+  red13 = sc13.add_material(scene::material_color("red", 0.9, 0.2, 0.15));
+  blue13 = sc13.add_material(scene::material_color("blue", 0.15, 0.3, 0.9));
+  sc13.add_node(scene::node_at("floor", fi13, floor_m13, math::mat4_identity()));
+  sc13.add_node(scene::node_at("near_cube", ci13, red13,
+    math::mat4_translate(-1.0, 0.5, 1.0)));
+  sc13.add_node(scene::node_at("far_cube", ci13, blue13,
+    math::mat4_translate(1.5, 0.5, -2.0)));
+  sc13.add_light(scene::directional_light("sun", 1.0, 0.95, 0.9, 3.0,
+    math::normalize3(math::vec3(-1.0, -2.0, -1.0))));
+  cam13 = scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 15.0,
+    position: math::vec3(3.0, 3.0, 5.0),
+    target: math::vec3(0.0, 0.0, 0.0) };
+  r13 = render::create_renderer(800, 600, "13 - Depth Testing");
+  start13 = ticks();
   for _ in 0..3000 {
-    if !graphics::gl_poll_events() { break }
-    dt_t = (ticks() - dt_start) as float / 1000000.0;
-    graphics::gl_clear(graphics::rgba(30, 30, 40, 255));
-    graphics::gl_use_shader(dt_shader);
-    // Floor — gray
-    dt_fm = math::mat4_identity();
-    dt_fmvp = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_fm));
-    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_fmvp.m);
-    graphics::gl_set_uniform_mat4(dt_shader, "uModel", dt_fm.m);
-    graphics::gl_set_uniform_vec3(dt_shader, "uColor", 0.45, 0.45, 0.5);
-    graphics::gl_draw(dt_pvao, dt_pnv);
-    // Cube 1 — near, red
-    dt_m1 = math::mat4_trs(-1.0, 0.5, 1.0, dt_t * 0.5, 1.0, 1.0, 1.0);
-    dt_mvp1 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m1));
-    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp1.m);
-    graphics::gl_set_uniform_mat4(dt_shader, "uModel", dt_m1.m);
-    graphics::gl_set_uniform_vec3(dt_shader, "uColor", 0.9, 0.2, 0.15);
-    graphics::gl_draw(dt_cvao, dt_cnv);
-    // Cube 2 — far, blue
-    dt_m2 = math::mat4_trs(1.5, 0.5, -2.0, dt_t * 0.3, 1.0, 1.0, 1.0);
-    dt_mvp2 = math::mat4_mul(dt_proj, math::mat4_mul(dt_view, dt_m2));
-    graphics::gl_set_uniform_mat4(dt_shader, "uMVP", dt_mvp2.m);
-    graphics::gl_set_uniform_mat4(dt_shader, "uModel", dt_m2.m);
-    graphics::gl_set_uniform_vec3(dt_shader, "uColor", 0.15, 0.3, 0.9);
-    graphics::gl_draw(dt_cvao, dt_cnv);
-    graphics::gl_swap_buffers();
+    t13 = (ticks() - start13) as float / 1000000.0;
+    sc13.nodes[1].transform = math::mat4_trs(-1.0, 0.5, 1.0, t13 * 0.5, 1.0, 1.0, 1.0);
+    sc13.nodes[2].transform = math::mat4_trs(1.5, 0.5, -2.0, t13 * 0.3, 1.0, 1.0, 1.0);
+    if !r13.render_frame(sc13, cam13) { break; }
   }
-  graphics::gl_destroy_window();
+  r13.destroy();
 }
+
+fn main() { render_native(); }

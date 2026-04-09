@@ -1,133 +1,83 @@
 #!/usr/bin/env -S loft --native
-// Interactive Camera with WASD + Mouse
-//
-// Demonstrates: keyboard input for first-person camera movement.
-// WASD to move, Q/E to go up/down. Escape to close.
+// Interactive Camera — WASD to move, Q/E for vertical, arrows or left-drag
+// to look around. Scene rendered via the high-level renderer; this example
+// focuses on the input handling, not the GL plumbing.
 //
 // Loft constructions used:
-//   gl_key_pressed(graphics::KEY_W) — real-time keyboard state polling
-//   gl_mouse_x/y           — cursor position tracking
-//   gl_mouse_button        — mouse button state
-//   ticks()                — frame-independent movement speed
+//   graphics::{gl_key_pressed, gl_mouse_x, gl_mouse_y, gl_mouse_button, KEY_*}
+//   scene::{Scene, Camera, material_color, node_at, directional_light}
+//   render::{create_renderer, render_frame, destroy}
 use graphics;
 use mesh;
 use math;
+use scene;
+use render;
 
-VERT_CAM = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-uniform mat4 uMVP;
-out vec3 vNormal;
-void main() {{
-    gl_Position = uMVP * vec4(aPos, 1.0);
-    vNormal = aNormal;
-}}
-`;
-
-FRAG_CAM = `
-#version 330 core
-in vec3 vNormal;
-out vec4 FragColor;
-uniform vec3 uColor;
-void main() {{
-    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
-    float d = max(dot(normalize(vNormal), ld), 0.0);
-    FragColor = vec4(uColor * (0.2 + 0.8 * d), 1.0);
-}}
-`;
+fn build_world() -> scene::Scene {
+  sc21 = scene::Scene { name: "keyboard_cam" };
+  ci21 = sc21.add_mesh(mesh::cube());
+  fi21 = sc21.add_mesh(mesh::plane("floor", 20.0, 20.0));
+  floor_m21 = sc21.add_material(scene::material_color("grass", 0.3, 0.4, 0.3));
+  sc21.add_node(scene::node_at("floor", fi21, floor_m21, math::mat4_identity()));
+  for ci21n in 0..12 {
+    hue21 = ci21n as float * 0.26;
+    mat21 = sc21.add_material(scene::material_color("cube_{ci21n}",
+      0.5 + 0.5 * sin(hue21),
+      0.5 + 0.5 * sin(hue21 + 2.1),
+      0.5 + 0.5 * sin(hue21 + 4.2)));
+    angle21 = ci21n as float * 0.524;
+    sc21.add_node(scene::node_at("cube_{ci21n}", ci21, mat21,
+      math::mat4_translate(sin(angle21) * 6.0, 0.5, cos(angle21) * 6.0)));
+  }
+  sc21.add_light(scene::directional_light("sun", 1.0, 0.95, 0.9, 3.0,
+    math::normalize3(math::vec3(-0.5, -1.0, -0.8))));
+  sc21
+}
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "21 - Keyboard Camera (WASD + Q/E)") {
-    println("Failed to create window"); return;
-  }
-  // Scene: floor + scattered cubes
-  kc_cube = mesh::cube();
-  kc_floor = mesh::plane("floor", 20.0, 20.0);
-  kc_shader = graphics::gl_create_shader(VERT_CAM, FRAG_CAM);
-  kc_cvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(kc_cube), 6);
-  kc_fvao = graphics::gl_upload_vertices(mesh::mesh_to_floats(kc_floor), 6);
-  kc_cnv = kc_cube.triangles.len() * 3;
-  kc_fnv = kc_floor.triangles.len() * 3;
-  kc_proj = math::mat4_perspective(0.785, 800.0 / 600.0, 0.1, 100.0);
+  sc21 = build_world();
+  r21 = render::create_renderer(800, 600, "21 - Keyboard Camera (WASD + Q/E)");
   // Camera state
-  kc_cam_x = 0.0;
-  kc_cam_y = 2.0;
-  kc_cam_z = 8.0;
-  kc_cam_yaw = 0.0;
-  kc_cam_pitch = 0.0;
-  kc_last_mx = graphics::gl_mouse_x();
-  kc_last_my = graphics::gl_mouse_y();
-  kc_last_tick = ticks();
-  graphics::gl_enable(graphics::GL_CULL_FACE);
+  cx21 = 0.0; cy21 = 2.0; cz21 = 8.0;
+  yaw21 = 0.0; pitch21 = 0.0;
+  last_mx21 = graphics::gl_mouse_x();
+  last_my21 = graphics::gl_mouse_y();
+  last_tick21 = ticks();
+  cam21 = scene::Camera { name: "fps", fov: 60.0, near: 0.1, far: 100.0,
+    position: math::vec3(cx21, cy21, cz21),
+    target: math::vec3(cx21, cy21, cz21 - 1.0) };
   for _ in 0..100000 {
-    if !graphics::gl_poll_events() { break }
-    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break }
-    // Delta time
-    kc_now = ticks();
-    kc_dt = (kc_now - kc_last_tick) as float / 1000000.0;
-    kc_last_tick = kc_now;
-    kc_speed = 4.0 * kc_dt;
-    // Camera movement
-    kc_fwd_x = sin(kc_cam_yaw);
-    kc_fwd_z = -cos(kc_cam_yaw);
-    if graphics::gl_key_pressed(graphics::KEY_W) {
-      kc_cam_x += kc_fwd_x * kc_speed;
-      kc_cam_z += kc_fwd_z * kc_speed;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_S) {
-      kc_cam_x -= kc_fwd_x * kc_speed;
-      kc_cam_z -= kc_fwd_z * kc_speed;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_A) {
-      kc_cam_x -= kc_fwd_z * kc_speed;
-      kc_cam_z += kc_fwd_x * kc_speed;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_D) {
-      kc_cam_x += kc_fwd_z * kc_speed;
-      kc_cam_z -= kc_fwd_x * kc_speed;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_Q) { kc_cam_y -= kc_speed }
-    if graphics::gl_key_pressed(graphics::KEY_E) { kc_cam_y += kc_speed }
-    if graphics::gl_key_pressed(graphics::KEY_LEFT) { kc_cam_yaw -= 2.0 * kc_dt }
-    if graphics::gl_key_pressed(graphics::KEY_RIGHT) { kc_cam_yaw += 2.0 * kc_dt }
-    // Mouse drag: left button rotates yaw/pitch
-    kc_mx = graphics::gl_mouse_x();
-    kc_my = graphics::gl_mouse_y();
+    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
+    now21 = ticks();
+    dt21 = (now21 - last_tick21) as float / 1000000.0;
+    last_tick21 = now21;
+    speed21 = 4.0 * dt21;
+    fwd_x21 = sin(yaw21);
+    fwd_z21 = -cos(yaw21);
+    if graphics::gl_key_pressed(graphics::KEY_W) { cx21 += fwd_x21 * speed21; cz21 += fwd_z21 * speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_S) { cx21 -= fwd_x21 * speed21; cz21 -= fwd_z21 * speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_A) { cx21 -= fwd_z21 * speed21; cz21 += fwd_x21 * speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_D) { cx21 += fwd_z21 * speed21; cz21 -= fwd_x21 * speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_Q) { cy21 -= speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_E) { cy21 += speed21; }
+    if graphics::gl_key_pressed(graphics::KEY_LEFT) { yaw21 -= 2.0 * dt21; }
+    if graphics::gl_key_pressed(graphics::KEY_RIGHT) { yaw21 += 2.0 * dt21; }
+    mx21 = graphics::gl_mouse_x();
+    my21 = graphics::gl_mouse_y();
     if graphics::gl_mouse_button() & 1 != 0 {
-      kc_cam_yaw += (kc_mx - kc_last_mx) * 0.0025;
-      kc_cam_pitch -= (kc_my - kc_last_my) * 0.0025;
-      if kc_cam_pitch > 1.4 { kc_cam_pitch = 1.4; }
-      if kc_cam_pitch < -1.4 { kc_cam_pitch = -1.4; }
+      yaw21 += (mx21 - last_mx21) * 0.0025;
+      pitch21 -= (my21 - last_my21) * 0.0025;
+      if pitch21 > 1.4 { pitch21 = 1.4; }
+      if pitch21 < -1.4 { pitch21 = -1.4; }
     }
-    kc_last_mx = kc_mx;
-    kc_last_my = kc_my;
-    kc_eye = math::vec3(kc_cam_x, kc_cam_y, kc_cam_z);
-    kc_target = math::vec3(kc_cam_x + kc_fwd_x * cos(kc_cam_pitch), kc_cam_y + sin(kc_cam_pitch), kc_cam_z + kc_fwd_z * cos(kc_cam_pitch));
-    kc_view = math::mat4_look_at(kc_eye, kc_target, math::vec3(0.0, 1.0, 0.0));
-    graphics::gl_clear(graphics::rgba(40, 50, 60, 255));
-    graphics::gl_use_shader(kc_shader);
-    // Floor
-    kc_fmvp = math::mat4_mul(kc_proj, kc_view);
-    graphics::gl_set_uniform_mat4(kc_shader, "uMVP", kc_fmvp.m);
-    graphics::gl_set_uniform_vec3(kc_shader, "uColor", 0.3, 0.4, 0.3);
-    graphics::gl_draw(kc_fvao, kc_fnv);
-    // Scattered cubes
-    for kc_ci in 0..12 {
-      kc_angle = kc_ci as float * 0.524;
-      kc_cx = sin(kc_angle) * 6.0;
-      kc_cz = cos(kc_angle) * 6.0;
-      kc_cm = math::mat4_translate(kc_cx, 0.5, kc_cz);
-      kc_cmvp = math::mat4_mul(kc_proj, math::mat4_mul(kc_view, kc_cm));
-      graphics::gl_set_uniform_mat4(kc_shader, "uMVP", kc_cmvp.m);
-      kc_hue = (kc_ci as float * 0.26);
-      graphics::gl_set_uniform_vec3(kc_shader, "uColor",
-        0.5 + 0.5 * sin(kc_hue),
-        0.5 + 0.5 * sin(kc_hue + 2.1),
-        0.5 + 0.5 * sin(kc_hue + 4.2));
-      graphics::gl_draw(kc_cvao, kc_cnv);
-    }
-    graphics::gl_swap_buffers();
+    last_mx21 = mx21;
+    last_my21 = my21;
+    cam21.position = math::vec3(cx21, cy21, cz21);
+    cam21.target = math::vec3(
+      cx21 + fwd_x21 * cos(pitch21),
+      cy21 + sin(pitch21),
+      cz21 + fwd_z21 * cos(pitch21));
+    if !r21.render_frame(sc21, cam21) { break; }
   }
-  graphics::gl_destroy_window();
+  r21.destroy();
 }
