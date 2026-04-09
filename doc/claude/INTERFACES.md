@@ -4,6 +4,8 @@
 
 # Interfaces — Design and Implementation Plan
 
+> **Status: designed, not scheduled (post-1.0).**
+
 Structural interfaces for loft: implicit satisfaction, static dispatch only.
 Primarily motivated by enabling bounded generic functions (`<T: Ordered>`).
 

@@ -1,7 +1,18 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Calculate the positions of fields inside a record
+//! Type resolution and field layout.
+//!
+//! After the parser's first pass declares all types, this module resolves
+//! forward references, computes field sizes and offsets, and initialises
+//! database store schemas.  Called between parser pass 1 and pass 2.
+//!
+//! Key entry points:
+//! - [`actual_types`] — resolve forward type references, detect cycles,
+//!   compute field positions via [`crate::calc::calculate_positions`].
+//! - [`fill_all`] — allocate database stores for each struct/enum and
+//!   write the type schema into `Stores`.
+//! - [`complete_definition`] — finalise a single definition's field layout.
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 
@@ -90,9 +101,9 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
             DefType::Unknown => {
                 let name = &data.def(d).name;
                 let msg = if name == "string" {
-                    "Error: Undefined type 'string' — did you mean 'text'?".to_string()
+                    "Undefined type 'string' — did you mean 'text'?".to_string()
                 } else {
-                    format!("Error: Undefined type {name}")
+                    format!("Undefined type {name}")
                 };
                 lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
             }
@@ -133,7 +144,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     Level::Error,
                     &data.def(d_nr).position,
                     &format!(
-                        "Error: Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
+                        "Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
                         data.def(d_nr).name,
                         data.def(d_nr).name,
                     ),
@@ -155,7 +166,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     Level::Error,
                     &data.def(c_nr).position,
                     &format!(
-                        "Error: Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
+                        "Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
                         data.def(c_nr).name,
                     ),
                 );

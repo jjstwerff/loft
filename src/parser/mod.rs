@@ -2095,6 +2095,32 @@ impl Parser {
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
             f = format!("{base_dir}/lib/{id}.loft");
         }
+        // - walk up from the script directory looking for a loft.toml; if found,
+        //   the package's parent directory contains sibling packages.
+        if !std::path::Path::new(&f).exists() && !cur_dir.is_empty() {
+            let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+            loop {
+                if search_dir.join("loft.toml").exists() {
+                    if let Some(parent) = search_dir.parent() {
+                        let candidate = parent.join(id).join("src").join(format!("{id}.loft"));
+                        if candidate.exists() {
+                            f = candidate.to_string_lossy().to_string();
+                        } else {
+                            let flat = parent.join(format!("{id}.loft"));
+                            if flat.exists() {
+                                f = flat.to_string_lossy().to_string();
+                            }
+                        }
+                    }
+                    break;
+                }
+                if let Some(p) = search_dir.parent() {
+                    search_dir = p.to_path_buf();
+                } else {
+                    break;
+                }
+            }
+        }
         // - a directory with the same name of the current script (strip the .loft suffix)
         if !std::path::Path::new(&f).exists() && cur_script.len() >= 5 {
             f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);

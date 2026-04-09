@@ -2,7 +2,6 @@
 # Stack Slot Assignment — Design and Implementation
 
 This document is the working reference for the `assign_slots` redesign.
-History of earlier attempts is in ASSIGNMENT.md and SLOT_FAILURES.md.
 
 ---
 
@@ -140,71 +139,10 @@ next bug.  The correct approach reads the IR tree directly.
 
 ---
 
-## New Design — Two-Zone Block Pre-Claim
+## Two-Zone Design
 
-### Core idea
-
-At block entry in codegen, claim all space for **small variables** (≤ 8 B primitives)
-upfront via a single `OpReserveFrame` opcode.  Large variables (Text 24 B, Reference
-12 B, Vector 12 B) remain placed at TOS in initialization order — but their TOS is now
-**exactly known** because the small-variable frame is already accounted for and nested
-block TOS movements are modelled directly from the IR tree.
-
-The result: every large variable's pre-assigned `stack_pos` equals `stack.position`
-at the exact moment `generate_set` is called for its first assignment.  The two override
-cases in `generate_set` become unreachable.
-
-### Why separate small from large
-
-Small primitives (int, bool, long, float, fn-ref; ≤ 8 B) can be written to any stack
-position via `OpPutX`.  They can be pre-claimed in bulk and written later.
-
-Large types (Text 24 B, Reference 12 B, Vector 12 B) **must** be initialized at the
-current TOS: `OpText`, `OpConvRefFromNull`, `OpCreateStack` all write at
-`stack.position`.  Pre-claiming their space before initialization would leave TOS above
-the slot, and the init opcode would write to the wrong address.
-
-### Variable frame layout within a block
-
-For scope S with frame base `B`:
-
-```
-B + 0                            B + zone1_size      B + zone1_size + zone2_size
-│← zone 1: small primitives →│← zone 2: large types, in first_def order →│
-│  pre-claimed at block entry  │  placed sequentially as they are initialized │
-```
-
-- **Zone 1** (`var_size` bytes): all variables with `size ≤ 8`.  Greedy interval
-  colouring within `[B, B + zone1_size)`.  Positions are final at `assign_slots` time.
-- **Zone 2**: all variables with `size > 8`.  Placed sequentially starting at
-  `B + zone1_size`, in the order their `Value::Set` appears as a direct top-level
-  operator of the scope's Block node.
-
-`Block.var_size` stores `zone1_size` — the number of bytes claimed by `OpReserveFrame`.
-
-### Why large-type positions are now exact
-
-When `assign_slots` processes scope S using the IR tree:
-
-1. Frame base `B` is known (computed from ancestors).
-2. `zone1_size` is computed by colouring S's small variables.
-3. The tree walk iterates through S's Block operators in order:
-   - `Value::Set(v, ...)` where `v ∈ S` and `v` is large: place `v` at current `tos`
-     and advance `tos += size(v)`.
-   - `Value::Block(child)` / `Value::Loop(child)`: recurse into child with its own
-     frame base = current `tos`.  After the child returns, `tos` is **unchanged**
-     (child block cleans up with its own `OpFreeStack`).
-   - `Value::If(cond, then, else)`: process `then` and `else` sub-blocks each from the
-     current `tos`; after both arms, `tos` is unchanged (gen_if resets stack.position
-     between arms).
-   - All other operators: no large variable initialization, `tos` unchanged.
-
-Step 3 uses the same pass ordering that codegen will use, so `tos` exactly tracks
-`stack.position` at every `Value::Set` for a large variable.
-
-Because every large variable `v` in scope S has its first `Value::Set` as a direct
-top-level operator of S's block (scope assignment in scopes.rs guarantees this), the
-walk never misses a placement.
+See `src/variables/slots.rs` module docs for the frame layout diagram and
+zone 1 / zone 2 semantics.
 
 ---
 
@@ -388,6 +326,4 @@ with nested expressions are handled in `build_scope_parents`, `scan_inner`, and
 
 ## See Also
 
-- [ASSIGNMENT.md](ASSIGNMENT.md) — History of A6, P1, P2 proposals
-- [SLOT_FAILURES.md](SLOT_FAILURES.md) — Detailed analysis of earlier bugs
 - [PROBLEMS.md](PROBLEMS.md) — General known issues tracker

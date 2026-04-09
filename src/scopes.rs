@@ -1,6 +1,31 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Scope analysis and dependency-based freeing.
+//!
+//! After parsing, every function is walked by [`check`] which:
+//! 1. Assigns each variable to a scope (block nesting level).
+//! 2. Inserts `OpFreeText` / `OpFreeRef` at scope exits to free owned values.
+//! 3. Handles variable shadowing across sibling scopes via `var_mapping`.
+//! 4. Calls [`assign_slots`] and [`compute_intervals`] for stack layout.
+//!
+//! ## Dependency-based freeing
+//!
+//! Whether a heap value is freed at scope exit depends on the `dep` field
+//! on its [`Type`]:
+//!
+//! - **`dep` empty** → the variable *owns* the value → emit `OpFreeRef`.
+//! - **`dep` non-empty** → the variable *borrows* from a parameter → skip free
+//!   (the caller owns the store; freeing here would corrupt it).
+//!
+//! **Text exception:** `OpFreeText` is always emitted for `Type::Text` regardless
+//! of deps, because text lives as a `String` on the stack frame — it must be
+//! dropped when the frame exits, even if borrowed.  The `Str` slice that was
+//! passed as an argument is a view, not an allocation.
+//!
+//! **Return-value exemption:** the variable holding the function's return value
+//! (`ret_var`) is never freed — its value is consumed by the caller.
+
 use crate::data::{Block, Context, Data, DefType, Type, Value, v_set};
 use crate::variables::{Function, assign_slots, compute_intervals, size};
 use std::collections::{BTreeMap, HashMap, HashSet};

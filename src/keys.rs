@@ -1,6 +1,16 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Runtime value types for store pointers, string views, and collection keys.
+//!
+//! - [`DbRef`] — universal pointer into a [`Store`](crate::store::Store):
+//!   `(store_nr, rec, pos)`.  12 bytes on the stack.
+//! - [`Str`] — 16-byte borrowed string view `(ptr, len)`.  Used for text
+//!   arguments on the stack; the backing data lives in a `String` or in
+//!   the static `text_code` buffer.
+//! - [`Key`] / [`Content`] — typed keys and values for hash/sorted/index
+//!   collections, used by the collection lookup operators.
+
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_possible_truncation)]

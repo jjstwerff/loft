@@ -1,8 +1,26 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Stack slot assignment: two-zone approach with greedy interval colouring
-//! for small variables and sequential placement for large variables.
+//! Stack slot assignment: two-zone block pre-claim design.
+//!
+//! ## Frame layout
+//!
+//! ```text
+//! ┌──────────────────┐  ← frame base (args_base)
+//! │  arguments       │  parameters in declaration order
+//! │  return address   │  4 bytes
+//! ├──────────────────┤  ← local_start
+//! │  zone 1: small   │  ≤16-byte types (int, float, bool, char, DbRef)
+//! │                  │  pre-claimed per block; greedy interval colouring
+//! ├──────────────────┤
+//! │  zone 2: large   │  >16-byte types (text=24B String, tuples, etc.)
+//! │                  │  sequential allocation order
+//! └──────────────────┘  ← stack_pos (TOS)
+//! ```
+//!
+//! Zone 1 variables are packed densely — dead variables' slots are reused
+//! within the same scope.  Zone 2 variables are never reused because their
+//! large size makes overlap-checking expensive and the savings minimal.
 
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]

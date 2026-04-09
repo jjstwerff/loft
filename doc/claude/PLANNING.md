@@ -31,7 +31,7 @@ release gate criteria, project structure changes, and release artifact checklist
 Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
 creates noise and makes the document harder to scan for remaining work.
 
-Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [ASSIGNMENT.md](ASSIGNMENT.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
+Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [PACKAGES.md](PACKAGES.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
 
 ---
 
@@ -57,7 +57,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
   - [A12 — Lazy work-variable initialization](#a12--lazy-work-variable-initialization) *(deferred to 1.1+)*
   - [A13 — Complete two-zone slot assignment](#a13--complete-two-zone-slot-assignment-steps-8-and-10) *(completed 0.8.3)*
   - [A14 — `par_light`: lightweight parallel loop with pre-allocated stores](#a14--par_light-lightweight-parallel-loop-with-pre-allocated-stores)
-  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(0.9.0)*
+  - [TR1 — Stack trace introspection](#tr1--stack-trace-introspection) *(completed 0.8.3)*
 - [E — Library Ergonomics](#e--library-ergonomics)
   - [C57 — Route decorator syntax (`@get`, `@post`, `@ws`)](#c57--route-decorator-syntax) *(1.1+)*
 - [N — Native Codegen](#n--native-codegen)
@@ -123,7 +123,7 @@ fn-ref that composes naturally with `map` and `filter`.  All items gated behind 
   line), resolve the best version (highest semver for "latest", exact match for pinned),
   download the `.zip`, extract to a temp dir, locate the package root inside the archive.
   Gated behind a new `registry` Cargo feature (on by default); deps: `ureq = "2"`,
-  `zip = "2"`.  Full design: [REGISTRY.md](REGISTRY.md).
+  `zip = "2"`.  Full design: [PACKAGES.md](PACKAGES.md).
 - **REG.2** — Extend `loft install` in `main.rs`: arguments without `/` or `.` are
   treated as registry names with optional `@version` suffix.  Local-path installs
   (`install .`, `install /path`) are unchanged.  Registry file location: `LOFT_REGISTRY`
@@ -503,7 +503,7 @@ left at the last successful checkpoint.
   **Effort:** Medium
   **Target:** 0.8.3
 
-- **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLE_MATCH.md](TUPLE_MATCH.md).
+- **T1.9** *(completed 0.8.3)* — Tuple destructuring in `match`.  See [TUPLES.md](TUPLES.md).
 
   `Type::Tuple` dispatch added to `parse_match`; new `parse_tuple_match` handles wildcard
   (`_`), binding, and literal patterns. AND conditions use `v_if(a,b,false)` (no OpAnd).
@@ -1686,7 +1686,7 @@ use.
 - **TR1.4** — Call-site line numbers *(completed 0.8.3)*: CallFrame stores source line directly; resolved in fn_call. Tests blocked by Problem #85.
 
 **Effort:** Medium
-**Target:** 0.9.0
+**Completed:** 0.8.3 (phases 1–4; phases 5–6 deferred to 1.1+)
 
 ---
 
@@ -3569,8 +3569,8 @@ See [ROADMAP.md](ROADMAP.md) — items in implementation order, grouped by miles
 - [../../CHANGELOG.md](../../CHANGELOG.md) — Completed work history (all fixed bugs and shipped features)
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs and workarounds
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design asymmetries and surprises
-- [ASSIGNMENT.md](ASSIGNMENT.md) — Stack slot assignment status (A6 detail)
-- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — External library packaging design (A7 Phase 2)
+- [SLOTS.md](SLOTS.md) — Stack slot assignment (A6 detail)
+- [PACKAGES.md](PACKAGES.md) — External library packaging design (A7 Phase 2)
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Feature proposal process, quality gates, scope rules, and backwards compatibility
 - [THREADING.md](THREADING.md) — Parallel for-loop design (A1 detail)
 - [LOGGER.md](LOGGER.md) — Logger design (A2 detail)

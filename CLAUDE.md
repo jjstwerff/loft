@@ -188,11 +188,9 @@ The rule: **always commit before any operation that changes the working tree.**
 | [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) | Value/Type enums in detail; 233 bytecode operators; State layout |
 | [DATABASE.md](doc/claude/DATABASE.md) | Store allocator, Stores schema, DbRef, vector/tree/hash/radix implementations |
 | [INTERNALS.md](doc/claude/INTERNALS.md) | calc.rs, stack.rs, create.rs, native.rs, ops.rs, png_store.rs, parallel.rs, main.rs, logger.rs |
-| [THREADING.md](doc/claude/THREADING.md) | Parallel for-loop (`par(...)`), `fn <name>` references, runtime parallel execution |
-| [SAFE.md](doc/claude/SAFE.md) | Thread safety analysis — parallel worker store isolation, risks, and mitigation designs |
+| [THREADING.md](doc/claude/THREADING.md) | Parallel execution — `par(...)`, `par_light(...)`, thread safety analysis, store isolation |
 | [INTERFACES.md](doc/claude/INTERFACES.md) | Interface/trait system — bounded generics, operator overloading, phase design |
-| [WASM.md](doc/claude/WASM.md) | WASM architecture — wasm32-wasip2 target, VirtFS, host bridges, feature gates |
-| [LIGHT_PAR.md](doc/claude/LIGHT_PAR.md) | `par_light(...)` design — shallow-borrow stores + pre-allocated pool for non-recursive workers |
+| [WASM.md](doc/claude/WASM.md) | WASM architecture — wasm32-wasip2 target, VirtFS, host bridges, feature gates, FS bridge steps |
 | [LOGGER.md](doc/claude/LOGGER.md) | Runtime logging framework (log_info/warn/error/fatal, config, rate limiting, production mode) |
 | [TESTING.md](doc/claude/TESTING.md) | Test framework, `LogConfig` debug-logging presets, `LOFT_LOG` env var, suite files |
 | [DOC.md](doc/claude/DOC.md) | HTML documentation generation (gendoc.rs + documentation.rs) |
@@ -203,34 +201,21 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
-| [OPTIMISATIONS.md](doc/claude/OPTIMISATIONS.md) | Planned and implemented runtime/compiler optimisations |
-| [CONST_DATA.md](doc/claude/CONST_DATA.md) | Bulk constant data initialisation — O8.1–O8.4 design |
-| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmark results, root-cause analysis vs Python and Rust, improvement plan |
+| [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, optimisation plans, string alloc, const data, block copy analysis |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
-| [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, stack layout |
-| [TUPLE_MATCH.md](doc/claude/TUPLE_MATCH.md) | T1.9: tuple destructuring in match — element patterns, exhaustiveness, IR lowering |
+| [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
-| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`) design and fix plans |
-| [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) | External library loading and `loft.toml` package manifest |
-| [PACKAGES.md](doc/claude/PACKAGES.md) | Unified package format — native Rust + WASM + loft; OpenGL case study |
-| [REGISTRY.md](doc/claude/REGISTRY.md) | Package registry — text-file format, URL-per-version, `loft install <name>` design |
-| [REGISTRY_GOVERNANCE.md](doc/claude/REGISTRY_GOVERNANCE.md) | Registry governance — submission, review, yank/deprecation, problem response procedures |
+| [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`), `--native` default plan, fix plans |
+| [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
-| [WASM_FS_STEPS.md](doc/claude/WASM_FS_STEPS.md) | WASM filesystem bridge — six separately testable implementation steps (FS-A … FS-F) |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [QUICK_START.md](doc/claude/QUICK_START.md) | Session-start orientation — commands, file map, naming conventions, key patterns |
-| [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) | Slot assignment design notes — P1/P2 proposals, resolved bugs, two-zone layout |
-| [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
-| [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) | Slot assignment failure analysis — root-cause matrix, A/B/C bug categories (A6) |
-| [FAILURES.md](doc/claude/FAILURES.md) | Historical test failure analysis — slot conflicts, vector append bug, fix evidence |
-| [GAPS.md](doc/claude/GAPS.md) | Test coverage gaps — zero-coverage files, missing edge-case areas, priorities |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
 | [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) | Web services design evaluation — HTTP/JSON approach comparison, issues #54/#55 |
@@ -254,21 +239,21 @@ The rule: **always commit before any operation that changes the working tree.**
 | Add a feature to the compiler | [COMPILER.md](doc/claude/COMPILER.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Debug a runtime crash | [PROBLEMS.md](doc/claude/PROBLEMS.md) (check open issues) → [TESTING.md](doc/claude/TESTING.md) § LogConfig → [INTERNALS.md](doc/claude/INTERNALS.md) |
 | Add a native (Rust) standard library function | [INTERNALS.md](doc/claude/INTERNALS.md) § Native Function Registry, then `default/01_code.loft` |
-| Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [OPTIMISATIONS.md](doc/claude/OPTIMISATIONS.md) |
-| Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmark data, root-cause analysis, O1–O7 designs → [OPTIMISATIONS.md](doc/claude/OPTIMISATIONS.md) |
+| Plan or review enhancements | [PLANNING.md](doc/claude/PLANNING.md), then [PERFORMANCE.md](doc/claude/PERFORMANCE.md) |
+| Improve interpreter or native performance | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) — benchmarks, root-cause analysis, optimisation designs |
 | Implement a PLANNING.md item | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) — branching, commit order, CI |
 | Understand the parallel execution model | [THREADING.md](doc/claude/THREADING.md), then [INTERNALS.md](doc/claude/INTERNALS.md) § Parallel Execution |
 | Set up logging in a loft program | [STDLIB.md](doc/claude/STDLIB.md) § Logging, then [LOGGER.md](doc/claude/LOGGER.md) |
 | Understand the heap / memory model | [DATABASE.md](doc/claude/DATABASE.md), then [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) § DbRef |
 | Improve the test suite | [TESTING.md](doc/claude/TESTING.md), then `tests/scripts/` and `tests/docs/` |
-| Find test coverage gaps | [GAPS.md](doc/claude/GAPS.md) → [TESTING.md](doc/claude/TESTING.md) |
-| Fix a known bug | [PROBLEMS.md](doc/claude/PROBLEMS.md) (fix path) → [FAILURES.md](doc/claude/FAILURES.md) (test evidence) → [TESTING.md](doc/claude/TESTING.md) |
+| Find test coverage gaps | [TESTING.md](doc/claude/TESTING.md) § Test Coverage Gaps |
+| Fix a known bug | [PROBLEMS.md](doc/claude/PROBLEMS.md) (fix path) → [TESTING.md](doc/claude/TESTING.md) |
 | Retest caveats before release | [CAVEATS.md](doc/claude/CAVEATS.md) — each entry has a reproducer and test reference |
 | Add or fix native code generation | [NATIVE.md](doc/claude/NATIVE.md) → [INTERMEDIATE.md](doc/claude/INTERMEDIATE.md) → [INTERNALS.md](doc/claude/INTERNALS.md) § Native |
-| Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) → [ASSIGNMENT.md](doc/claude/ASSIGNMENT.md) → [SLOT_FAILURES.md](doc/claude/SLOT_FAILURES.md) |
+| Understand slot assignment / stack layout | [SLOTS.md](doc/claude/SLOTS.md) |
 | Implement a planned language feature (Tuples/Coroutines/etc.) | [ROADMAP.md](doc/claude/ROADMAP.md) → [PLANNING.md](doc/claude/PLANNING.md) → feature design doc (TUPLES.md / COROUTINE.md / STACKTRACE.md) |
 | Add HTTP or JSON support | [PLANNING.md](doc/claude/PLANNING.md) § H-tier → [WEB_SERVICES.md](doc/claude/WEB_SERVICES.md) → [STDLIB.md](doc/claude/STDLIB.md) |
-| Implement `loft install <name>` registry | [REGISTRY.md](doc/claude/REGISTRY.md) → [EXTERNAL_LIBS.md](doc/claude/EXTERNAL_LIBS.md) |
+| Implement `loft install <name>` registry | [PACKAGES.md](doc/claude/PACKAGES.md) |
 | Build or understand the `server` library | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) |
 | Build or understand the `game_client` library | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) |
 | Write or review `.loft` files | `.claude/skills/loft-write/SKILL.md` |

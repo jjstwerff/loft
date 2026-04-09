@@ -1957,3 +1957,152 @@ fn file_content_nonexistent_trace() {
     )
     .result(Value::Null);
 }
+
+// ── P122: Struct return inside loop should not exhaust store pool ────────────
+// When a function returns a struct, the callee allocates a store. Inside a loop
+// these stores must be freed each iteration. If they accumulate, the store pool
+// is exhausted and panics with "Allocating a used store".
+
+#[test]
+fn p122_struct_return_in_loop() {
+    code!(
+        "struct Pair { px: float not null, py: float not null }
+fn make_pair(mx: float, my: float) -> Pair {
+    Pair { px: mx, py: my }
+}
+fn test() {
+    total = 0.0;
+    for p122_i in 0..500 {
+        p = make_pair(p122_i as float, p122_i as float * 2.0);
+        total += p.px + p.py;
+    }
+    assert(total > 0.0, \"struct loop failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122b: nested loop struct creation (collision detection pattern)
+#[test]
+fn p122_struct_nested_loop() {
+    code!(
+        "struct Box { bx: float not null, by: float not null, bw: float not null, bh: float not null }
+fn overlap(a: const Box, b: const Box) -> boolean {
+    a.bx < b.bx + b.bw && a.bx + a.bw > b.bx && a.by < b.by + b.bh && a.by + a.bh > b.by
+}
+fn test() {
+    hits = 0;
+    for p122_frame in 0..60 {
+        ball = Box { bx: p122_frame as float, by: 50.0, bw: 10.0, bh: 10.0 };
+        for p122_row in 0..5 {
+            for p122_col in 0..10 {
+                brick = Box { bx: (p122_col as float) * 12.0, by: (p122_row as float) * 12.0, bw: 10.0, bh: 10.0 };
+                if overlap(ball, brick) { hits += 1; }
+            }
+        }
+    }
+    assert(hits > 0, \"nested struct loop failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P123: Vector allocation inside loop ─────────────────────────────────────
+// Creating a vector literal inside a loop should not leak stores.
+
+#[test]
+fn p123_vector_in_loop() {
+    code!(
+        "fn test() {
+    total = 0;
+    for p123_i in 0..200 {
+        v = [for p123_j in 0..8 { p123_j + p123_i * 0 }];
+        total += v[0] + v[7];
+    }
+    assert(total == 1400, \"vector loop failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P126: Negative integer as tail expression ───────────────────────────────
+
+#[test]
+fn p126_negative_tail_expression() {
+    code!(
+        "fn negate(n: integer) -> integer {
+    if n > 0 { return 0 - n; }
+    n
+}
+fn test() {
+    assert(negate(5) == -5, \"negate positive\");
+    assert(negate(-3) == -3, \"negate negative\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122c: struct-returning function used inside conditional inside loop
+// This is the exact pattern from the breakout collision detection.
+#[test]
+fn p122_struct_return_conditional_loop() {
+    code!(
+        "struct Overlap { ox: float not null, oy: float not null }
+fn compute_overlap(ax: float, bx: float) -> Overlap {
+    Overlap { ox: ax, oy: bx }
+}
+fn test() {
+    score = 0;
+    for p122c_frame in 0..100 {
+        for p122c_i in 0..50 {
+            d = compute_overlap(p122c_frame as float, p122c_i as float);
+            if d.ox > 10.0 {
+                score += 1;
+            }
+        }
+    }
+    assert(score > 0, \"conditional struct failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122d: struct created inside loop body (not from function return)
+#[test]
+fn p122_struct_literal_in_loop() {
+    code!(
+        "struct Rect { rx: float not null, ry: float not null, rw: float not null, rh: float not null }
+fn test() {
+    count = 0;
+    for p122d_i in 0..500 {
+        r = Rect { rx: p122d_i as float, ry: 0.0, rw: 10.0, rh: 10.0 };
+        if r.rx > 100.0 { count += 1; }
+    }
+    assert(count == 399, \"struct literal loop failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122e: very long loop (simulating game frames) — tests store pool exhaustion
+#[test]
+fn p122_long_running_struct_loop() {
+    code!(
+        "struct Overlap { ox: float not null, oy: float not null }
+fn depth(ax: float, ay: float, bx: float, by: float) -> Overlap {
+    Overlap { ox: ax - bx, oy: ay - by }
+}
+fn test() {
+    score = 0;
+    // 10000 frames * 10 bricks = 100,000 struct allocations
+    for p122e_f in 0..10000 {
+        for p122e_b in 0..10 {
+            d = depth(p122e_f as float, 50.0, p122e_b as float * 8.0, 20.0);
+            if d.ox > 0.0 && d.oy > 0.0 { score += 1; }
+        }
+    }
+    assert(score > 0, \"long struct loop failed\");
+}"
+    )
+    .result(Value::Null);
+}

@@ -480,7 +480,7 @@ pub extern "C" fn my_func(a: i32, text: *const u8, text_len: usize) -> i32 {
 
 ## FFI.4 — Zero-boilerplate native function guide
 
-A documentation page in `doc/claude/EXTERNAL_LIBS.md` with:
+A documentation page in `doc/claude/PACKAGES.md` with:
 
 1. How to write a Rust function
 2. How to declare it in loft with `#native`

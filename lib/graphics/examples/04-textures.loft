@@ -1,78 +1,44 @@
 #!/usr/bin/env -S loft --native
-// LearnOpenGL Chapter 4: Textures
-// https://learnopengl.com/Getting-started/Textures
-// Based on LearnOpenGL by Joey de Vries (https://learnopengl.com)
-// Original tutorials licensed under CC BY-NC 4.0
-// https://creativecommons.org/licenses/by-nc/4.0/
-// This loft implementation is an independent adaptation for the loft graphics library.
-//
-// Demonstrates: texture mapping with UV coordinates.
-// A brick wall texture (wall.jpg) is mapped onto a rectangle.
-//
-// Run:
-//   loft examples/04-textures.loft
+// Textures — load an image file and draw it through Painter2D. No custom
+// shaders, no UV math, no manual texture binding — one `draw_texture_at`
+// call per quad.
 //
 // Loft constructions used:
-//   gl_load_texture       — load image file (JPG/PNG) as GL texture
-//   gl_bind_texture       — bind texture to a sampler unit
-//   gl_set_uniform_int    — bind sampler2D to texture unit
-//   GLSL sampler2D        — sample texture in fragment shader
+//   graphics::{gl_load_texture, create_painter_2d, draw_texture_at,
+//              gl_clear, gl_poll_events, gl_swap_buffers,
+//              gl_create_window, gl_destroy_window, gl_delete_texture}
 use graphics;
 
-VERT_TEX = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aUV;
-out vec2 vUV;
-void main() {{
-    gl_Position = vec4(aPos, 1.0);
-    vUV = aUV;
-}}
-`;
-
-FRAG_TEX = `
-#version 330 core
-in vec2 vUV;
-out vec4 FragColor;
-uniform sampler2D uTexture;
-void main() {{
-    FragColor = texture(uTexture, vUV);
-}}
-`;
+SCREEN_W = 800.0;
+SCREEN_H = 600.0;
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "04 - Textures (wall.jpg)") {
+  if !graphics::gl_create_window(SCREEN_W as integer, SCREEN_H as integer, "04 - Textures") {
     println("Failed to create window"); return;
   }
-  // Load the brick wall texture from the LearnOpenGL tutorial
-  tx_tex = graphics::gl_load_texture("examples/wall.jpg");
-  if tx_tex == 0 {
-    // Try from current directory if running from examples/
-    tx_tex = graphics::gl_load_texture("wall.jpg");
+  // Load the brick wall texture from either possible working directory.
+  wall04 = graphics::gl_load_texture("examples/wall.jpg");
+  if wall04 == 0 { wall04 = graphics::gl_load_texture("wall.jpg"); }
+  if wall04 == 0 {
+    println("Failed to load wall.jpg");
+    graphics::gl_destroy_window();
+    return;
   }
-  if tx_tex == 0 {
-    println("Failed to load wall.jpg"); return;
-  }
-  tx_shader = graphics::gl_create_shader(VERT_TEX, FRAG_TEX);
-  // Textured triangle: pos(3) + normal(3) + uv(2) = stride 8
-  tx_data = [
-    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f,
-     0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  1.0f, 0.0f,
-     0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f,  0.5f, 1.0f
-  ];
-  tx_vao = graphics::gl_upload_vertices(tx_data, 8);
+  painter04 = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
   for _ in 0..300 {
-    if !graphics::gl_poll_events() { break }
+    if !graphics::gl_poll_events() { break; }
     graphics::gl_clear(graphics::rgba(40, 40, 45, 255));
-    graphics::gl_use_shader(tx_shader);
-    graphics::gl_bind_texture(tx_tex, 0);
-    graphics::gl_set_uniform_int(tx_shader, "uTexture", 0);
-    graphics::gl_draw(tx_vao, 3);
+    // A 3x2 grid of the same texture, just to show how cheap repeating is.
+    for row04 in 0..2 {
+      for col04 in 0..3 {
+        graphics::draw_texture_at(painter04, wall04,
+          40.0 + col04 as float * 250.0,
+          40.0 + row04 as float * 260.0,
+          220.0, 220.0);
+      }
+    }
     graphics::gl_swap_buffers();
   }
-  graphics::gl_delete_texture(tx_tex);
-  graphics::gl_delete_vao(tx_vao);
-  graphics::gl_delete_shader(tx_shader);
+  graphics::gl_delete_texture(wall04);
   graphics::gl_destroy_window();
 }

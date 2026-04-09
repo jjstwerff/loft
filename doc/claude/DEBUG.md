@@ -301,4 +301,4 @@ runner will pick it up automatically.
 - [../DEVELOPERS.md](../DEVELOPERS.md) — Developer guide: pipeline overview, quality requirements, feature proposals
 - [TESTING.md](TESTING.md) — Test framework, `code!` / `expr!` macros, LogConfig debug presets
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
-- [ASSIGNMENT.md](ASSIGNMENT.md) — Variable scoping and slot assignment details
+- [SLOTS.md](SLOTS.md) — Variable scoping and slot assignment details

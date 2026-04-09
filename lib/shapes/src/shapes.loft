@@ -1,8 +1,96 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// High-level shape drawing library built on the graphics package.
-// Demonstrates PKG.3 transitive dependency resolution.
+// Shape drawing and 2D collision detection library.
 use graphics;
+
+// ── G4: 2D Collision Detection ──────────────────────────────────────
+
+/// Axis-aligned bounding box for 2D collision.
+pub struct Rect {
+  rx: float not null,
+  ry: float not null,
+  rw: float not null,
+  rh: float not null,
+}
+
+/// Circle shape for 2D collision.
+pub struct Circle {
+  cx: float not null,
+  cy: float not null,
+  cr: float not null,
+}
+
+/// Test whether two axis-aligned rectangles overlap.
+pub fn rects_overlap(a: const Rect, b: const Rect) -> boolean {
+  a.rx < b.rx + b.rw && a.rx + a.rw > b.rx && a.ry < b.ry + b.rh && a.ry + a.rh > b.ry
+}
+
+/// Test whether two circles overlap.
+pub fn circles_overlap(a: const Circle, b: const Circle) -> boolean {
+  co_dx = a.cx - b.cx;
+  co_dy = a.cy - b.cy;
+  co_dist_sq = co_dx * co_dx + co_dy * co_dy;
+  co_r_sum = a.cr + b.cr;
+  co_dist_sq < co_r_sum * co_r_sum
+}
+
+/// Test whether a rectangle and a circle overlap.
+pub fn rect_circle_overlap(r: const Rect, c: const Circle) -> boolean {
+  // Find the closest point on the rectangle to the circle center
+  rc_closest_x = c.cx;
+  if rc_closest_x < r.rx { rc_closest_x = r.rx; }
+  if rc_closest_x > r.rx + r.rw { rc_closest_x = r.rx + r.rw; }
+  rc_closest_y = c.cy;
+  if rc_closest_y < r.ry { rc_closest_y = r.ry; }
+  if rc_closest_y > r.ry + r.rh { rc_closest_y = r.ry + r.rh; }
+  rc_dx = c.cx - rc_closest_x;
+  rc_dy = c.cy - rc_closest_y;
+  rc_dx * rc_dx + rc_dy * rc_dy < c.cr * c.cr
+}
+
+/// Overlap depth between two rectangles on each axis.
+pub struct Overlap {
+  ox: float not null,
+  oy: float not null,
+}
+
+/// Compute the overlap depth between two rectangles on each axis.
+/// Returns (0.0, 0.0) when they don't overlap.
+/// Useful for bounce direction: if ox < oy → horizontal bounce.
+pub fn rect_overlap_depth(a: const Rect, b: const Rect) -> Overlap {
+  if !rects_overlap(a, b) { return Overlap { ox: 0.0, oy: 0.0 }; }
+  od_x = min(a.rx + a.rw - b.rx, b.rx + b.rw - a.rx);
+  od_y = min(a.ry + a.rh - b.ry, b.ry + b.rh - a.ry);
+  Overlap { ox: od_x, oy: od_y }
+}
+
+/// Test AABB overlap using raw coordinates (no struct allocation — safe in loops).
+pub fn aabb_overlap(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> boolean {
+  ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+}
+
+/// Compute AABB overlap depth on each axis using raw coordinates.
+/// Returns ox via the first return, oy via the second.
+/// Both are 0.0 when no overlap. Safe in loops (no struct allocation).
+pub fn aabb_depth_x(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> float {
+  if !(ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) { return 0.0; }
+  min(ax + aw - bx, bx + bw - ax)
+}
+
+pub fn aabb_depth_y(ax: float, ay: float, aw: float, ah: float,
+                    bx: float, by: float, bw: float, bh: float) -> float {
+  if !(ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) { return 0.0; }
+  min(ay + ah - by, by + bh - ay)
+}
+
+/// Clamp a value to the range [lo, hi].
+pub fn clamp(val: float, lo: float, hi: float) -> float {
+  if val < lo { return lo; }
+  if val > hi { return hi; }
+  val
+}
 
 // Draw a filled rectangle with a 1px border outline.
 pub fn bordered_rect(cv: graphics::Canvas, brx: integer, bry: integer, brw: integer, brh: integer, fill: integer, border: integer) {

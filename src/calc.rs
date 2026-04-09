@@ -1,6 +1,13 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Field layout calculator — computes byte offsets for struct/enum fields.
+//!
+//! [`calculate_positions`] takes a list of `(name, size, alignment)` fields
+//! and assigns each a byte offset within a record, minimising gaps via a
+//! `BTreeMap`-based gap tracker.  Fields are sorted largest-first to reduce
+//! padding.  Called by `typedef.rs` during type resolution.
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 

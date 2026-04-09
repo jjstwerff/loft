@@ -38,70 +38,9 @@ The runtime data layer is split across multiple source files that together imple
 
 ## Store — Raw Heap Allocator (`src/store.rs`)
 
-### Memory Layout
-
-A `Store` is a single contiguous heap allocation addressed in **8-byte words** (not bytes). The raw pointer is `*mut u8` but all offsets are expressed as word indices (`u32`).
-
-```
-word 0: size header  (i32, positive = claimed, negative = free, magnitude = record size in words)
-word 1..n: record data
-```
-
-Records are variable-length. The size word at offset 0 of each record encodes both the length and the claimed/free state:
-
-- **Positive**: record is live; size = word count of record body (not counting the header word itself).
-- **Negative**: record is free; `-size` = word count of the free block body.
-
-Free blocks form an implicit free list. `claim(size)` walks the store from the start, finds the first free block large enough, and either takes it exactly (if the remainder is too small to split) or splits it and leaves a smaller free block.
-
-### Store struct
-
-```rust
-pub struct Store {
-    data: *mut u8,    // raw backing allocation
-    size: u32,        // current capacity in words
-}
-```
-
-The store grows by doubling when a claim cannot be satisfied from free space.
-
-### Key Functions
-
-| Function | Description |
-|---|---|
-| `claim(size: u32) -> u32` | Allocate `size` words; returns `rec` (word offset of the header) |
-| `delete(rec: u32)` | Free a record; marks header negative; may merge adjacent free blocks |
-| `resize(rec: u32, size: u32) -> u32` | Grow or shrink a record in place if possible; otherwise relocates |
-| `validate()` | Debug check: walks all records verifying headers are consistent |
-| `get_int(rec, pos) -> i32` | Read a 4-byte integer at word `rec`, byte offset `pos*4` |
-| `set_int(rec, pos, val)` | Write a 4-byte integer |
-| `get_long(rec, pos) -> i64` | Read an 8-byte integer (two consecutive words) |
-| `set_long(rec, pos, val)` | Write an 8-byte integer |
-| `get_str(rec, pos) -> &str` | Read a string reference (pointer + length stored inline) |
-| `set_str(rec, pos, val)` | Write a string reference |
-| `lock()` | Mark the store as read-only |
-| `unlock()` | Remove the read-only mark |
-| `is_locked() -> bool` | Return whether the store is currently locked |
-
-Typed accessors (`get_int`, `get_long`, `get_str`, etc.) apply a byte-level offset within the record. String storage encodes the pointer and length as two 4-byte words.
-
-### Store Locking
-
-A `Store` carries a `locked: bool` flag that marks the store as read-only at runtime.
-
-```rust
-pub struct Store {
-    // ...
-    pub locked: bool,
-}
-```
-
-When `locked` is `true`, any attempt to write to the store is treated as an error:
-
-- **Debug builds** (`#[cfg(debug_assertions)]`): `addr_mut` panics immediately with `"Write to locked store at rec={rec} fld={fld}"`. `claim()` and `delete()` also `debug_assert!` against a locked store.
-- **Release builds**: writes are silently discarded. `addr_mut` returns a pointer to a thread-local 256-byte dummy buffer so the caller never dereferences a null pointer. `claim()` returns 0; `delete()` is a no-op.
-
-This design gives a hard fail-fast contract in development while keeping production overhead to a single branch.
+See `src/store.rs` module docs for memory layout, signed size headers, and
+free-block allocation.  See `src/keys.rs` module docs for `DbRef`, `Str`,
+`Key`, and `Content` types.
 
 ---
 

@@ -439,30 +439,28 @@ impl Lexer {
     }
 
     pub fn diagnostic(&mut self, level: Level, message: &str) {
-        self.diagnostics.add(
+        self.diagnostics.add_at(
             level,
-            &format!(
-                "{message} at {}:{}:{}",
-                self.position.file, self.position.line, self.position.pos
-            ),
+            message,
+            &self.position.file,
+            self.position.line,
+            self.position.pos,
         );
     }
 
     pub fn specific(&mut self, result: &LexResult, level: Level, message: &str) {
-        self.diagnostics.add(
+        self.diagnostics.add_at(
             level,
-            &format!(
-                "{message} at {}:{}:{}",
-                self.position.file, result.position.line, result.position.pos
-            ),
+            message,
+            &self.position.file,
+            result.position.line,
+            result.position.pos,
         );
     }
 
     pub fn pos_diagnostic(&mut self, level: Level, pos: &Position, message: &str) {
-        self.diagnostics.add(
-            level,
-            &format!("{message} at {}:{}:{}", pos.file, pos.line, pos.pos),
-        );
+        self.diagnostics
+            .add_at(level, message, &pos.file, pos.line, pos.pos);
     }
 
     pub fn diagnostics(&self) -> &Diagnostics {

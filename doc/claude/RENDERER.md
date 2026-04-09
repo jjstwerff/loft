@@ -1,6 +1,8 @@
 
 # High-Level Renderer Design
 
+> **Status: designed, not scheduled.  Low-level `gl_*` API covers current use cases.**
+
 Design for a renderer layer on top of the low-level GL bindings in `lib/graphics/`.
 The existing `gl_*` functions remain as the low-level API for tutorials and custom
 rendering; this layer provides the abstraction that production code should use.

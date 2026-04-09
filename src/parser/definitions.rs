@@ -45,7 +45,7 @@ impl Parser {
             self.lexer.pos_diagnostic(
                 Level::Warning,
                 pos,
-                &format!("Warning: no implementation of '{name}' for variant '{variant_name}'"),
+                &format!("no implementation of '{name}' for variant '{variant_name}'"),
             );
         }
     }

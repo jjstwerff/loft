@@ -7,7 +7,7 @@
 HTTP client and JSON support for loft, built on existing parsing infrastructure.
 
 **Updated:** 2026-03-24
-**Status:** JSON serialization and deserialization already work; HTTP client not yet implemented.
+**Status:** JSON serialization and deserialization work.  HTTP client is deferred to 1.1+ (H4 in PLANNING.md).
 
 ---
 

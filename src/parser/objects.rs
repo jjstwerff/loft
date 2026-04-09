@@ -488,12 +488,25 @@ impl Parser {
                 return;
             }
             if !self.first_pass && (self.vars.tp(*nr).is_unknown() || !self.vars.is_defined(*nr)) {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Unknown variable '{}'",
-                    self.vars.name(*nr)
-                );
+                let name = self.vars.name(*nr).to_string();
+                let candidates: Vec<&str> = (0..self.vars.count())
+                    .filter(|&v| {
+                        v != *nr && self.vars.is_defined(v) && !self.vars.tp(v).is_unknown()
+                    })
+                    .map(|v| self.vars.name(v))
+                    .collect();
+                let suggestion = crate::diagnostics::suggest_similar(&name, &candidates);
+                if let Some(s) = suggestion {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown variable '{}' — did you mean '{}'?",
+                        name,
+                        s
+                    );
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+                }
             }
         }
     }

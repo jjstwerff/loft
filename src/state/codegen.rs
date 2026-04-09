@@ -1,6 +1,17 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Bytecode generation: lowers the `Value` IR tree into flat bytecode.
+//!
+//! Each function's IR (produced by the parser) is walked by
+//! [`State::def_code`] which emits operator words into `State.bytecode`.
+//! The emitted bytecode is a flat `Vec<u32>` indexed by code position;
+//! each operator is one or more words (opcode + operands).
+//!
+//! Key helpers: `gen_set` (assignment), `gen_call` (function call),
+//! `gen_format` (format strings), `gen_block` / `gen_if` / `gen_for`
+//! (control flow).
+
 use super::State;
 use crate::data::{Block, Context, Data, I32, Type, Value};
 use crate::stack::Stack;

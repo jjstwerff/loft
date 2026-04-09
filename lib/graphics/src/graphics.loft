@@ -702,3 +702,248 @@ pub fn gl_delete_vao(vao: integer);
 // Delete a framebuffer object.
 pub fn gl_delete_framebuffer(fbo: integer);
 #native "loft_gl_delete_framebuffer"
+
+// ── G1/G2: Sprite Sheet API ─────────────────────────────────────────
+
+// Vertex shader for textured 2D quads. Uses the unit quad positions (0-1)
+// to interpolate UVs between uU0,uV0 and uU1,uV1.
+SPRITE_VERT = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+uniform float uU0;
+uniform float uV0;
+uniform float uU1;
+uniform float uV1;
+out vec2 vUV;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = vec2(mix(uU0, uU1, aPos.x), mix(uV0, uV1, aPos.y));
+}}
+`;
+
+// Fragment shader — samples the atlas texture.
+SPRITE_FRAG = `
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main() {{
+    vec4 c = texture(uTex, vUV);
+    if (c.a < 0.01) discard;
+    FragColor = c;
+}}
+`;
+
+/// A sprite sheet backed by a Canvas atlas uploaded as a GL texture.
+/// Sprites are arranged in a grid of `ss_cols` x `ss_rows` cells.
+pub struct SpriteSheet {
+  ss_tex: integer not null,      // GL texture handle
+  ss_shader: integer not null,   // textured quad shader
+  ss_vao: integer not null,      // unit quad VAO (shared)
+  ss_cols: integer not null,
+  ss_rows: integer not null,
+  ss_cell_w: integer not null,
+  ss_cell_h: integer not null,
+}
+
+/// Create a sprite sheet from a Canvas atlas.
+/// The canvas is divided into a grid of `cols` x `rows` cells.
+/// Sprite index 0 is top-left, incrementing left-to-right then top-to-bottom.
+pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, vao: integer) -> SpriteSheet {
+  ss_shader = gl_create_shader(SPRITE_VERT, SPRITE_FRAG);
+  ss_tex = gl_upload_canvas(atlas.data, atlas.width, atlas.height);
+  SpriteSheet {
+    ss_tex: ss_tex,
+    ss_shader: ss_shader,
+    ss_vao: vao,
+    ss_cols: cols,
+    ss_rows: rows,
+    ss_cell_w: atlas.width / cols,
+    ss_cell_h: atlas.height / rows,
+  }
+}
+
+/// Draw sprite at `index` (0-based, row-major).
+/// `mvp` is the pre-multiplied projection * model matrix (16 singles).
+/// The caller builds the MVP for the desired screen position and size.
+pub fn draw_sprite(sheet: const SpriteSheet, mvp: const vector<float>, sp_idx: integer) {
+  sp_col = sp_idx % sheet.ss_cols;
+  sp_row = sp_idx / sheet.ss_cols;
+  sp_u0 = (sp_col as float) / (sheet.ss_cols as float);
+  sp_v0 = (sp_row as float) / (sheet.ss_rows as float);
+  sp_u1 = ((sp_col + 1) as float) / (sheet.ss_cols as float);
+  sp_v1 = ((sp_row + 1) as float) / (sheet.ss_rows as float);
+  gl_use_shader(sheet.ss_shader);
+  gl_bind_texture(sheet.ss_tex, 0);
+  gl_set_uniform_int(sheet.ss_shader, "uTex", 0);
+  gl_set_uniform_float(sheet.ss_shader, "uU0", sp_u0);
+  gl_set_uniform_float(sheet.ss_shader, "uV0", sp_v0);
+  gl_set_uniform_float(sheet.ss_shader, "uU1", sp_u1);
+  gl_set_uniform_float(sheet.ss_shader, "uV1", sp_v1);
+  gl_set_uniform_mat4(sheet.ss_shader, "uMVP", mvp);
+  gl_draw(sheet.ss_vao, 6);
+}
+
+// ── G3: Painter2D — ergonomic 2D draw helpers ───────────────────────
+//
+// Painter2D bundles a flat-color shader, a textured-quad shader, a shared
+// unit-quad VAO, and an orthographic projection sized for the window. It
+// lets 2D games draw rectangles, sprites, and textures with (x, y, w, h)
+// screen coordinates without hand-building MVP matrices.
+//
+// Screen-space origin: top-left. Y increases downward (pixel-style).
+// All draw helpers assume the unit quad is at Z=0.
+
+// Flat-color vertex shader — transforms the unit quad by uMVP.
+FLAT_VERT_2D = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() {{ gl_Position = uMVP * vec4(aPos, 1.0); }}
+`;
+
+// Flat-color fragment shader — uColor (vec3) + uAlpha (float).
+FLAT_FRAG_2D = `
+#version 330 core
+uniform vec3 uColor;
+uniform float uAlpha;
+out vec4 FragColor;
+void main() {{ FragColor = vec4(uColor, uAlpha); }}
+`;
+
+// Textured quad vertex shader — samples the full texture with V flipped,
+// matching canvas origin (top-left) to GL sampler origin (bottom-left).
+TEX_VERT_2D = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+out vec2 vUV;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = vec2(aPos.x, 1.0 - aPos.y);
+}}
+`;
+
+// Textured quad fragment shader — alpha-discards fully transparent pixels.
+TEX_FRAG_2D = `
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main() {{
+    vec4 c = texture(uTex, vUV);
+    if (c.a < 0.01) discard;
+    FragColor = c;
+}}
+`;
+
+/// A 2D painter bundling shaders, a unit-quad VAO, and an orthographic
+/// projection. Create once per window with `create_painter_2d`, then use
+/// `draw_rect_at`, `draw_sprite_at`, and `draw_texture_at` to render.
+pub struct Painter2D {
+  p2_flat: integer not null,        // flat color shader
+  p2_tex: integer not null,         // textured quad shader (V-flipped)
+  p2_vao: integer not null,         // shared unit-quad VAO
+  p2_proj: vector<float>,           // orthographic projection (16 floats)
+}
+
+/// Create a Painter2D for a window of size `screen_w` x `screen_h`.
+/// Compiles the flat and textured shaders, uploads the unit-quad VAO, and
+/// builds an orthographic projection with the origin at the top-left.
+/// Call once after `gl_create_window`.
+pub fn create_painter_2d(screen_w: float, screen_h: float) -> Painter2D {
+  cpn_flat = gl_create_shader(FLAT_VERT_2D, FLAT_FRAG_2D);
+  cpn_tex = gl_create_shader(TEX_VERT_2D, TEX_FRAG_2D);
+  // Unit quad — two triangles from (0,0) to (1,1), z=0, in f32.
+  cpn_quad = [
+    0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f
+  ];
+  cpn_vao = gl_upload_vertices(cpn_quad, 3);
+  cpn_proj = [
+    2.0 / screen_w, 0.0, 0.0, 0.0,
+    0.0, -2.0 / screen_h, 0.0, 0.0,
+    0.0, 0.0, -1.0, 0.0,
+    -1.0, 1.0, 0.0, 1.0
+  ];
+  Painter2D {
+    p2_flat: cpn_flat,
+    p2_tex: cpn_tex,
+    p2_vao: cpn_vao,
+    p2_proj: cpn_proj,
+  }
+}
+
+/// Return the unit-quad VAO owned by the painter, so it can be shared with
+/// `create_sprite_sheet` instead of uploading a second copy.
+pub fn painter_vao(self: const Painter2D) -> integer { self.p2_vao }
+
+// Build an MVP = proj * translate(x, y, 0) * scale(w, h, 1) without going
+// through the generic math::mat4_mul path. The model matrix is sparse, so
+// this collapses to 4 column updates on the 16-float projection.
+fn build_mvp_2d(proj: const vector<float>, x: float, y: float, w: float, h: float) -> vector<float> {
+  bmn_mvp = [
+    // column 0 = proj.col0 * w
+    proj[0] * w,  proj[1] * w,  proj[2] * w,  proj[3] * w,
+    // column 1 = proj.col1 * h
+    proj[4] * h,  proj[5] * h,  proj[6] * h,  proj[7] * h,
+    // column 2 = proj.col2 (z untouched)
+    proj[8],      proj[9],      proj[10],     proj[11],
+    // column 3 = proj.col0 * x + proj.col1 * y + proj.col3
+    proj[0] * x + proj[4] * y + proj[12],
+    proj[1] * x + proj[5] * y + proj[13],
+    proj[2] * x + proj[6] * y + proj[14],
+    proj[3] * x + proj[7] * y + proj[15]
+  ];
+  bmn_mvp
+}
+
+/// Draw a filled rectangle at screen position (x, y) with size (w, h).
+/// Colour channels are in 0.0..1.0. Uses the painter's flat-color shader.
+pub fn draw_rect_at(painter: const Painter2D, x: float, y: float, w: float, h: float,
+                    r: float, g: float, b: float, a: float) {
+  drn_mvp = build_mvp_2d(painter.p2_proj, x, y, w, h);
+  gl_use_shader(painter.p2_flat);
+  gl_set_uniform_mat4(painter.p2_flat, "uMVP", drn_mvp);
+  gl_set_uniform_vec3(painter.p2_flat, "uColor", r, g, b);
+  gl_set_uniform_float(painter.p2_flat, "uAlpha", a);
+  gl_draw(painter.p2_vao, 6);
+}
+
+/// Draw a sprite from `sheet` at screen position (x, y) with size (w, h).
+/// `sp_idx` is the 0-based sprite index (row-major) in the sheet.
+/// This is a one-liner replacement for `make_mvp` + `draw_sprite`.
+pub fn draw_sprite_at(sheet: const SpriteSheet, painter: const Painter2D,
+                      x: float, y: float, w: float, h: float, sp_idx: integer) {
+  dsn_mvp = build_mvp_2d(painter.p2_proj, x, y, w, h);
+  draw_sprite(sheet, dsn_mvp, sp_idx);
+}
+
+/// Draw an arbitrary GL texture as a screen-space quad at (x, y, w, h).
+/// Uses the painter's textured shader, which flips V to match canvas origin.
+/// Suitable for textures created with `create_text_texture` or `gl_upload_canvas`.
+pub fn draw_texture_at(painter: const Painter2D, tex: integer,
+                       x: float, y: float, w: float, h: float) {
+  dxn_mvp = build_mvp_2d(painter.p2_proj, x, y, w, h);
+  gl_use_shader(painter.p2_tex);
+  gl_bind_texture(tex, 0);
+  gl_set_uniform_int(painter.p2_tex, "uTex", 0);
+  gl_set_uniform_mat4(painter.p2_tex, "uMVP", dxn_mvp);
+  gl_draw(painter.p2_vao, 6);
+}
+
+/// Rasterize `content` with `font` at `size` pixels, upload the glyph bitmap
+/// as a GL texture, and return the texture ID. The texture is sized to fit
+/// the measured text plus a small padding; pair with `draw_texture_at` to
+/// render. Caller owns the texture — call `gl_delete_texture` when done.
+/// Returns 0 if the text cannot be measured.
+pub fn create_text_texture(font: integer, content: text, size: float, color: integer) -> integer {
+  ctn_pad = 2;
+  ctn_tw = gl_measure_text(font, content, size) as integer + ctn_pad * 2 + 1;
+  ctn_th = gl_text_height(font, size) + ctn_pad * 2;
+  if ctn_tw <= 0 or ctn_th <= 0 { return 0; }
+  ctn_cv = canvas(ctn_tw, ctn_th, 0);
+  ctn_cv.draw_text(font, content, size, ctn_pad, ctn_pad, color);
+  gl_upload_canvas(ctn_cv.data, ctn_tw, ctn_th)
+}

@@ -142,7 +142,7 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 
 **Complexity.** O(N + V) per function: one IR traversal pass, one free-variable scan per scope exit. Total across all functions: O(N_total + V_total). ~486 lines.
 
-**Reducibility.** Moderate. The pre-init logic for if/else (Option A sub-3) adds non-trivial complexity in `scan_if`. When slot assignment (Steps 3+4 of [ASSIGNMENT.md](ASSIGNMENT.md)) is complete, some of this pre-init complexity can be simplified. The `var_mapping` table (for `copy_variable`) is hard to reason about; a clearer ownership model would help.
+**Reducibility.** Moderate. The pre-init logic for if/else (Option A sub-3) adds non-trivial complexity in `scan_if`. When slot assignment (Steps 3+4 of [SLOTS.md](SLOTS.md)) is complete, some of this pre-init complexity can be simplified. The `var_mapping` table (for `copy_variable`) is hard to reason about; a clearer ownership model would help.
 
 **Code quality.** Fair. The algorithm is correct for owned types but borrowed-ref pre-init is still incomplete (known runtime crash). The interplay of `var_scope`, `var_mapping`, and scope stack makes invariants hard to state. Adding explicit pre/post-condition comments would improve this significantly.
 
@@ -151,7 +151,7 @@ Complexity estimates use O-notation over the number of IR nodes (N), variables (
 **Enhancement opportunities.**
 - Model liveness explicitly (as computed by `compute_intervals`) during scope analysis, eliminating the separate liveness pass.
 - Replace `var_mapping` with a proper SSA-like renaming pass, which would also simplify slot assignment.
-- Finish borrowed-ref pre-init (Steps 3+4 of [ASSIGNMENT.md](ASSIGNMENT.md)).
+- Finish borrowed-ref pre-init (Steps 3+4 of [SLOTS.md](SLOTS.md)).
 
 ---
 

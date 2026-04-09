@@ -1,246 +1,815 @@
-#!/usr/bin/env -S loft --native
-// Breakout — First Playable Game
+#!/usr/bin/env -S LOFT_STORES=warn loft --native
+// Breakout — Full-featured sprite-based version
 //
-// A classic brick-breaker game. Move the paddle with arrow keys or A/D.
-// Break all bricks to win. Don't let the ball fall!
+// Features: multi-hit bricks, ball speed ramp, combo multiplier,
+// screen flash effects, multi-ball, brick destruction particles,
+// level progression, and special brick pickups.
 //
-// Demonstrates: 2D game loop, input handling, collision detection,
-// simple rendering with colored rectangles.
-//
-// Loft constructions used:
-//   gl_key_pressed    — real-time keyboard input
-//   gl_draw           — render colored quads
-//   ticks()           — frame-independent movement
-//   struct + vector   — game state management
+// Controls: arrows/A/D to move, Escape to quit.
 use graphics;
-use math;
+use shapes;
 
-// ── Shaders ──────────────────────────────────────────────────────────
-
-VERT_2D = `
-#version 330 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 uMVP;
-void main() {{
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}}
-`;
-
-FRAG_2D = `
-#version 330 core
-out vec4 FragColor;
-uniform vec3 uColor;
-void main() {{
-    FragColor = vec4(uColor, 1.0);
-}}
-`;
-
-// ── Game constants ───────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────
 
 SCREEN_W = 800.0;
 SCREEN_H = 600.0;
-PADDLE_W = 100.0;
+PADDLE_W_DEFAULT = 100.0;
 PADDLE_H = 15.0;
 PADDLE_Y = 560.0;
 PADDLE_SPEED = 500.0;
 BALL_SIZE = 10.0;
-BALL_SPEED = 350.0;
-BRICK_ROWS = 5;
+BALL_SPEED_BASE = 300.0;
+SPEED_RAMP = 0.04;
+MAX_ROWS = 20;
 BRICK_COLS = 10;
 BRICK_W = 72.0;
 BRICK_H = 20.0;
 BRICK_PAD = 4.0;
 BRICK_TOP = 50.0;
+PICKUP_W = 20.0;
+PICKUP_H = 12.0;
+PICKUP_SPEED = 180.0;
+EXTEND_DURATION = 8.0;
+BALLOON_DELAY = 2.0;
+EXTEND_EXTRA = 60.0;
+START_ROWS = 5;
+MAX_BALLS = 3;
+MAX_PARTICLES = 48;
+PARTICLE_LIFE = 0.6;
+FLASH_DURATION = 0.3;
+LEVEL_PAUSE = 1.5;
 
-// ── Helper: orthographic projection ──────────────────────────────────
+// Sprite indices (4x4 atlas = icons only)
+// Small icons overlaid on special bricks
+S_IC_EXTEND = 0;
+S_IC_EXPLODE = 1;
+S_IC_BALLOON = 2;
+S_IC_NEWROW = 3;
+S_IC_MULTI = 4;
+S_IC_FIRE = 5;
+S_IC_SHIELD = 6;
+// Large pickup icons (falling)
+S_PK_EXTEND = 7;
+S_PK_EXPLODE = 8;
+S_PK_BALLOON = 9;
+S_PK_NEWROW = 10;
+S_PK_MULTI = 11;
+S_PK_FIRE = 12;
+S_PK_SHIELD = 13;
 
-fn ortho() -> math::Mat4 {
-  // Maps (0,0)-(800,600) to clip space (-1,-1)-(1,1), Y down
-  math::Mat4 { m: [
-    2.0 / SCREEN_W, 0.0, 0.0, 0.0,
-    0.0, -2.0 / SCREEN_H, 0.0, 0.0,
-    0.0, 0.0, -1.0, 0.0,
-    -1.0, 1.0, 0.0, 1.0
-  ] }
+// Special types
+SP_NONE = 0;
+SP_EXTEND = 1;
+SP_EXPLODE = 2;
+SP_BALLOON = 3;
+SP_NEWROW = 4;
+SP_MULTI = 5;
+SP_FIRE = 6;
+SP_SHIELD = 7;
+
+// ── Sprite atlas ─────────────────────────────────────────────────────
+
+fn build_atlas() -> graphics::Canvas {
+  // 4x4 grid, 32x32 per cell = 128x128
+  // Row 0: small icons for brick overlay
+  // Row 1: (continued)
+  // Row 2-3: large pickup icons with text labels
+  at = graphics::canvas(128, 128, 0);
+
+  // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
+  // S_IC_EXTEND (0) — white ↔
+  at.fill_rect(12, 14, 8, 3, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(10, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(19, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  // S_IC_EXPLODE (1) — white skull
+  at.fill_circle(32 + 16, 14, 5, graphics::rgba(255, 230, 200, 240));
+  at.fill_rect(32 + 13, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 17, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 14, 18, 4, 2, graphics::rgba(40, 40, 40, 255));
+  // S_IC_BALLOON (2) — red balloon
+  at.fill_circle(64 + 16, 12, 5, graphics::rgba(255, 70, 70, 240));
+  at.fill_circle(64 + 14, 10, 2, graphics::rgba(255, 150, 150, 130));
+  at.vline(64 + 16, 17, 20, graphics::rgba(200, 200, 200, 200));
+  // S_IC_NEWROW (3) — blue ⬇
+  at.fill_rect(96 + 14, 8, 4, 8, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 10, 14, 12, 3, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 13, 17, 6, 2, graphics::rgba(130, 180, 255, 200));
+  // S_IC_MULTI (4) — white circles
+  at.fill_circle(8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
+  at.fill_circle(18, 32 + 10, 3, graphics::rgba(230, 230, 255, 200));
+  at.fill_circle(20, 32 + 17, 3, graphics::rgba(210, 210, 255, 180));
+  // S_IC_FIRE (5) — orange flame
+  at.fill_rect(32 + 14, 32 + 6, 4, 12, graphics::rgba(255, 150, 0, 240));
+  at.fill_rect(32 + 12, 32 + 10, 8, 8, graphics::rgba(255, 90, 0, 220));
+  at.fill_rect(32 + 15, 32 + 4, 2, 4, graphics::rgba(255, 220, 50, 200));
+  // S_IC_SHIELD (6) — blue shield
+  at.fill_rect(64 + 9, 32 + 8, 14, 6, graphics::rgba(80, 160, 255, 240));
+  at.fill_rect(64 + 11, 32 + 14, 10, 3, graphics::rgba(80, 140, 230, 220));
+  at.fill_rect(64 + 13, 32 + 17, 6, 2, graphics::rgba(80, 120, 210, 200));
+  at.hline(64 + 10, 64 + 22, 32 + 9, graphics::rgba(200, 230, 255, 120));
+
+  // Large pickup icons — fill most of 32x32 cell
+  // S_PK_EXTEND (7) at (96, 32) — large green ↔
+  at.fill_rect(96 + 4, 32 + 12, 24, 8, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 2, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 24, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  // S_PK_EXPLODE (8) at (0, 64) — large red skull
+  at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
+  at.fill_rect(10, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(18, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(11, 64 + 20, 10, 4, graphics::rgba(40, 40, 40, 255));
+  // S_PK_BALLOON (9) at (32, 64) — large red balloon
+  at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
+  at.fill_circle(32 + 12, 64 + 8, 4, graphics::rgba(255, 130, 130, 130));
+  at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
+  // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
+  at.fill_rect(64 + 12, 64 + 2, 8, 16, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 6, 64 + 14, 20, 6, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 10, 64 + 20, 12, 5, graphics::rgba(60, 110, 240, 230));
+  at.fill_rect(64 + 13, 64 + 25, 6, 4, graphics::rgba(60, 110, 240, 200));
+  // S_PK_MULTI (11) at (96, 64) — large white balls
+  at.fill_circle(96 + 10, 64 + 16, 7, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
+  at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
+  // S_PK_FIRE (12) at (0, 96) — large flame
+  at.fill_rect(12, 96 + 6, 8, 22, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect(8, 96 + 12, 16, 16, graphics::rgba(255, 80, 0, 240));
+  at.fill_rect(13, 96 + 2, 6, 8, graphics::rgba(255, 210, 20, 230));
+  at.fill_rect(14, 96 + 0, 4, 4, graphics::rgba(255, 240, 80, 180));
+  // S_PK_SHIELD (13) at (32, 96) — large blue shield
+  at.fill_rect(32 + 6, 96 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
+  at.fill_rect(32 + 9, 96 + 16, 14, 6, graphics::rgba(60, 130, 240, 240));
+  at.fill_rect(32 + 12, 96 + 22, 8, 4, graphics::rgba(60, 110, 220, 220));
+  at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
+
+  at
 }
 
-fn rect_mvp(proj: const math::Mat4, bx: float, by: float, bw: float, bh: float) -> math::Mat4 {
-  model = math::Mat4 { m: [
-    bw, 0.0, 0.0, 0.0,
-    0.0, bh, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    bx, by, 0.0, 1.0
-  ] };
-  math::mat4_mul(proj, model)
+// ── Helpers ──────────────────────────────────────────────────────────
+
+fn bk_x(col: integer) -> float { (col as float) * (BRICK_W + BRICK_PAD) + 12.0 }
+fn bk_y(row: integer) -> float { (row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP }
+
+fn assign_special(seed: integer) -> integer {
+  as_v = (seed * 7 + 13) % 50;
+  if as_v < 2 { return SP_EXTEND; }
+  if as_v < 3 { return SP_EXPLODE; }
+  if as_v < 4 { return SP_BALLOON; }
+  if as_v < 5 { return SP_NEWROW; }
+  if as_v < 6 { return SP_MULTI; }
+  if as_v < 7 { return SP_FIRE; }
+  if as_v < 8 { return SP_SHIELD; }
+  SP_NONE
+}
+
+// Returns the small icon sprite index for a special brick type, or 99 for normal.
+fn brick_icon(sp_type: integer) -> integer {
+  if sp_type == SP_EXTEND  { return S_IC_EXTEND; }
+  if sp_type == SP_EXPLODE { return S_IC_EXPLODE; }
+  if sp_type == SP_BALLOON { return S_IC_BALLOON; }
+  if sp_type == SP_NEWROW  { return S_IC_NEWROW; }
+  if sp_type == SP_MULTI   { return S_IC_MULTI; }
+  if sp_type == SP_FIRE    { return S_IC_FIRE; }
+  if sp_type == SP_SHIELD  { return S_IC_SHIELD; }
+  99
+}
+
+fn pickup_sprite(sp_type: integer) -> integer {
+  if sp_type == SP_EXTEND  { return S_PK_EXTEND; }
+  if sp_type == SP_EXPLODE { return S_PK_EXPLODE; }
+  if sp_type == SP_BALLOON { return S_PK_BALLOON; }
+  if sp_type == SP_NEWROW  { return S_PK_NEWROW; }
+  if sp_type == SP_MULTI   { return S_PK_MULTI; }
+  if sp_type == SP_FIRE    { return S_PK_FIRE; }
+  if sp_type == SP_SHIELD  { return S_PK_SHIELD; }
+  S_PK_EXTEND
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "25 - Breakout") {
+  if !graphics::gl_create_window(800, 600, "Breakout") {
     println("Failed to create window");
     return;
   }
 
-  br_shader = graphics::gl_create_shader(VERT_2D, FRAG_2D);
+  br_atlas = build_atlas();
+  br_painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, graphics::painter_vao(br_painter));
 
-  // Unit quad: two triangles covering (0,0)-(1,1)
-  br_quad_data = [
-    0.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 0.0f,
-    1.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f,
-    1.0f, 1.0f, 0.0f,
-    0.0f, 1.0f, 0.0f
-  ];
-  br_vao = graphics::gl_upload_vertices(br_quad_data, 3);
-  br_proj = ortho();
+  // Font — try local first, then absolute path
+  br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  if !br_font {
+    // Native mode runs from a temp dir; try the script's directory
+    br_font = graphics::gl_load_font("lib/graphics/examples/DejaVuSans-Bold.ttf");
+  }
+  if !br_font { println("WARNING: font not loaded — text will be invisible"); }
+  br_white = graphics::rgba(255, 255, 255, 255);
+  br_gray = graphics::rgba(200, 200, 200, 180);
 
-  // Paddle state
-  br_px = (SCREEN_W - PADDLE_W) / 2.0;
+  // Pickup labels — one auto-sized text texture per pickup type.
+  br_pk_names = ["", "wider", "boom!", "blast", "rows+", "multi", "fire!", "shield"];
+  br_pk_tex = [for _ in 0..8 { 0 }];
+  for br_ti in 1..8 {
+    br_pk_tex[br_ti] = graphics::create_text_texture(br_font, br_pk_names[br_ti], 12.0, br_gray);
+  }
 
-  // Ball state
-  br_bx = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
-  br_by = PADDLE_Y - 30.0;
-  br_bdx = BALL_SPEED * 0.7;
-  br_bdy = 0.0 - BALL_SPEED;
+  // Digit textures 0-9 for numeric score display
+  br_digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  br_dig_tex = [for _ in 0..10 { 0 }];
+  for br_di in 0..10 {
+    br_dig_tex[br_di] = graphics::create_text_texture(br_font, br_digits[br_di], 22.0, br_white);
+  }
 
-  // Bricks: 1 = alive, 0 = destroyed
-  br_bricks = [for _ in 0..BRICK_ROWS * BRICK_COLS { 1 }];
-  br_alive = BRICK_ROWS * BRICK_COLS;
+  // Intro text
+  br_intro_tex = graphics::create_text_texture(br_font, "A / D  or  Arrow Keys to move", 28.0, br_white);
 
-  // Brick colors per row
-  br_colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
-  br_colors_g = [0.2, 0.6, 0.8, 0.9, 0.5];
-  br_colors_b = [0.2, 0.1, 0.2, 0.3, 0.9];
+  // "LEVEL N" textures — one per level.
+  br_lvl_tex = [for _ in 0..20 { 0 }];
+  for br_tl in 0..20 {
+    br_ln = br_tl + 1;
+    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_ln}", 48.0, br_white);
+  }
+
+  // "SCORE" label
+  br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
+
+  // ── Game state ─────────────────────────────────────────────────
+  br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
+  br_pw = PADDLE_W_DEFAULT;
+  br_extend_timer = 0.0;
+  br_fire_timer = 0.0;
+  br_shield_on = false;
+
+  // Multi-ball: up to 3 balls
+  br_ball_x  = [SCREEN_W / 2.0 - BALL_SIZE / 2.0, 0.0, 0.0];
+  br_ball_y  = [PADDLE_Y - 30.0, 0.0, 0.0];
+  br_ball_dx = [BALL_SPEED_BASE * 0.7, 0.0, 0.0];
+  br_ball_dy = [0.0 - BALL_SPEED_BASE, 0.0, 0.0];
+  br_ball_on = [1, 0, 0];
+
+  br_max = MAX_ROWS * BRICK_COLS;
+  br_bricks = [for _ in 0..br_max { 0 }];
+  br_specials = [for _ in 0..br_max { 0 }];
+  br_hp = [for _ in 0..br_max { 0 }];  // hit points per brick
+  br_rows = START_ROWS;
+  br_alive = 0;
+  br_level = 1;
+
+  for br_ir in 0..START_ROWS {
+    for br_ic in 0..BRICK_COLS {
+      br_ii = br_ir * BRICK_COLS + br_ic;
+      br_bricks[br_ii] = 1;
+      br_specials[br_ii] = assign_special(br_ii);
+      br_hp[br_ii] = 1;
+      br_alive += 1;
+    }
+  }
+
+  // Pickups
+  br_pk_x = [for _ in 0..8 { 0.0 }];
+  br_pk_y = [for _ in 0..8 { 0.0 }];
+  br_pk_type = [for _ in 0..8 { 0 }];
+  br_pk_on = [for _ in 0..8 { 0 }];
+
+  // Row colors for particles
+  br_pcr = [0.9, 0.9, 0.2, 0.2, 0.3, 0.6];
+  br_pcg = [0.2, 0.6, 0.8, 0.9, 0.5, 0.3];
+  br_pcb = [0.2, 0.1, 0.2, 0.3, 0.9, 0.7];
+
+  // Particles (destruction effect)
+  br_pt_x  = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_y  = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_vx = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_vy = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_t  = [for _ in 0..MAX_PARTICLES { 0.0 }];  // remaining life
+  br_pt_r  = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_g  = [for _ in 0..MAX_PARTICLES { 0.0 }];
+  br_pt_b  = [for _ in 0..MAX_PARTICLES { 0.0 }];
+
+  // Balloon
+  br_bl_timer = 0.0;
+  br_bl_row = 0;
+  br_bl_col = 0;
+  br_bl_on = false;
+  br_nr_seed = 100;
+
+  // Screen flash
+  br_flash_timer = 0.0;
+  br_flash_r = 0.0;
+  br_flash_g = 0.0;
+  br_flash_b = 0.0;
+
+  // Level transition
+  br_level_timer = 0.0;
+  br_intro_timer = 2.0;
+
+  // Combo
+  br_combo = 0;
+  br_combo_best = 0;
+
+  // Ball speed (increases with score)
+  br_ball_speed = BALL_SPEED_BASE;
 
   br_last = ticks();
   br_lives = 3;
+  br_score = 0;
   br_won = false;
+  br_lost = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
+  graphics::gl_enable(graphics::GL_BLEND);
+  graphics::gl_blend_func(graphics::BLEND_SRC_ALPHA, graphics::BLEND_ONE_MINUS_SRC_ALPHA);
 
-  for _ in 0..1000000 {
+  for _ in 0..10000000 {
     if !graphics::gl_poll_events() { break; }
     if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
 
-    // Delta time
     br_now = ticks();
     br_dt = (br_now - br_last) as float / 1000000.0;
     br_last = br_now;
-    if br_dt > 0.05 { br_dt = 0.05; }  // cap to prevent tunneling
+    if br_dt > 0.05 { br_dt = 0.05; }
+    if br_intro_timer > 0.0 { br_intro_timer -= br_dt; }
 
-    if !br_won && br_lives > 0 {
-      // ── Input ──────────────────────────────────────────────────
+    // Level transition pause
+    if br_level_timer > 0.0 {
+      br_level_timer -= br_dt;
+    }
+
+    if !br_won && !br_lost && br_level_timer <= 0.0 {
+      // ── Input ────────────────────────────────────────────────
       if graphics::gl_key_pressed(graphics::KEY_LEFT) || graphics::gl_key_pressed(graphics::KEY_A) {
         br_px -= PADDLE_SPEED * br_dt;
       }
       if graphics::gl_key_pressed(graphics::KEY_RIGHT) || graphics::gl_key_pressed(graphics::KEY_D) {
         br_px += PADDLE_SPEED * br_dt;
       }
-      if br_px < 0.0 { br_px = 0.0; }
-      if br_px > SCREEN_W - PADDLE_W { br_px = SCREEN_W - PADDLE_W; }
+      br_px = shapes::clamp(br_px, 0.0, SCREEN_W - br_pw);
 
-      // ── Ball movement ──────────────────────────────────────────
-      br_bx += br_bdx * br_dt;
-      br_by += br_bdy * br_dt;
-
-      // Wall bounces
-      if br_bx < 0.0 { br_bx = 0.0; br_bdx = abs(br_bdx); }
-      if br_bx > SCREEN_W - BALL_SIZE { br_bx = SCREEN_W - BALL_SIZE; br_bdx = 0.0 - abs(br_bdx); }
-      if br_by < 0.0 { br_by = 0.0; br_bdy = abs(br_bdy); }
-
-      // Paddle collision
-      if br_bdy > 0.0
-        && br_by + BALL_SIZE >= PADDLE_Y
-        && br_by + BALL_SIZE <= PADDLE_Y + PADDLE_H
-        && br_bx + BALL_SIZE >= br_px
-        && br_bx <= br_px + PADDLE_W
-      {
-        br_bdy = 0.0 - abs(br_bdy);
-        // Angle based on where ball hits paddle
-        br_hit = (br_bx + BALL_SIZE / 2.0 - br_px) / PADDLE_W;
-        br_bdx = BALL_SPEED * (br_hit - 0.5) * 1.8;
-        br_by = PADDLE_Y - BALL_SIZE;
+      // Timers
+      if br_extend_timer > 0.0 {
+        br_extend_timer -= br_dt;
+        if br_extend_timer <= 0.0 { br_pw = PADDLE_W_DEFAULT; }
       }
+      if br_fire_timer > 0.0 { br_fire_timer -= br_dt; }
 
-      // Ball fell off bottom
-      if br_by > SCREEN_H {
-        br_lives -= 1;
-        br_bx = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
-        br_by = PADDLE_Y - 30.0;
-        br_bdx = BALL_SPEED * 0.7;
-        br_bdy = 0.0 - BALL_SPEED;
-      }
+      // ── Update all balls ─────────────────────────────────────
+      br_any_ball = false;
+      for br_bi in 0..MAX_BALLS {
+        if br_ball_on[br_bi] == 0 { continue; }
+        br_any_ball = true;
 
-      // ── Brick collision ────────────────────────────────────────
-      for br_row in 0..BRICK_ROWS {
-        for br_col in 0..BRICK_COLS {
-          br_idx = br_row * BRICK_COLS + br_col;
-          if br_bricks[br_idx] == 1 {
-            br_bkx = (br_col as float) * (BRICK_W + BRICK_PAD) + 12.0;
-            br_bky = (br_row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
-            // AABB overlap test
-            if br_bx + BALL_SIZE > br_bkx
-              && br_bx < br_bkx + BRICK_W
-              && br_by + BALL_SIZE > br_bky
-              && br_by < br_bky + BRICK_H
-            {
-              br_bricks[br_idx] = 0;
-              br_alive -= 1;
-              // Bounce: determine which side was hit
-              br_overlap_x = min(br_bx + BALL_SIZE - br_bkx, br_bkx + BRICK_W - br_bx);
-              br_overlap_y = min(br_by + BALL_SIZE - br_bky, br_bky + BRICK_H - br_by);
-              if br_overlap_x < br_overlap_y {
-                br_bdx = 0.0 - br_bdx;
-              } else {
-                br_bdy = 0.0 - br_bdy;
+        br_ball_x[br_bi] += br_ball_dx[br_bi] * br_dt;
+        br_ball_y[br_bi] += br_ball_dy[br_bi] * br_dt;
+
+        // Walls
+        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); }
+        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); }
+        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); }
+
+        // Paddle
+        if br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
+            br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+            br_px, PADDLE_Y, br_pw, PADDLE_H) {
+          br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
+          br_bh = (br_ball_x[br_bi] + BALL_SIZE / 2.0 - br_px) / br_pw;
+          br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
+          br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
+          br_combo = 0;  // reset combo on paddle hit
+        }
+
+        // Shield
+        if br_ball_y[br_bi] > SCREEN_H - 4.0 && br_shield_on {
+          br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
+          br_ball_y[br_bi] = SCREEN_H - 4.0;
+          br_shield_on = false;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 0.3; br_flash_g = 0.6; br_flash_b = 1.0;
+        }
+
+        // Ball lost
+        if br_ball_y[br_bi] > SCREEN_H {
+          br_ball_on[br_bi] = 0;
+        }
+
+        // ── Brick collision for this ball ───────────────────────
+        for br_cr in 0..br_rows {
+          for br_cc in 0..BRICK_COLS {
+            br_ci = br_cr * BRICK_COLS + br_cc;
+            if br_bricks[br_ci] == 0 { continue; }
+            br_cdx = shapes::aabb_depth_x(
+              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
+            br_cdy = shapes::aabb_depth_y(
+              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
+              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
+            if br_cdx > 0.0 || br_cdy > 0.0 {
+              // Fireball passes through without bouncing
+              if br_fire_timer <= 0.0 {
+                if br_cdx < br_cdy { br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi]; }
+                else { br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi]; }
+              }
+              br_hp[br_ci] -= 1;
+              if br_hp[br_ci] <= 0 {
+                br_bricks[br_ci] = 0;
+                br_alive -= 1;
+                br_combo += 1;
+                if br_combo > br_combo_best { br_combo_best = br_combo; }
+                br_pts = br_combo;
+                if br_pts > 10 { br_pts = 10; }
+                br_score += br_pts;
+
+                // Speed ramp: +4% per 10 bricks
+                br_ball_speed = BALL_SPEED_BASE * (1.0 + (br_score as float) * SPEED_RAMP / 10.0);
+                if br_ball_speed > 700.0 { br_ball_speed = 700.0; }
+
+                // Spawn particles
+                br_prx = bk_x(br_cc) + BRICK_W / 2.0;
+                br_pry = bk_y(br_cr) + BRICK_H / 2.0;
+                br_row_ci = br_cr % 6;
+                for br_pp in 0..6 {
+                  for br_pf in 0..MAX_PARTICLES {
+                    if br_pt_t[br_pf] <= 0.0 {
+                      br_pt_x[br_pf] = br_prx;
+                      br_pt_y[br_pf] = br_pry;
+                      br_angle = (br_pp as float) * 1.047 + 0.3;
+                      br_spd = 120.0 + (br_pp as float) * 30.0;
+                      br_pt_vx[br_pf] = br_spd * cos(br_angle);
+                      br_pt_vy[br_pf] = br_spd * sin(br_angle);
+                      br_pt_t[br_pf] = PARTICLE_LIFE;
+                      // Color from row
+                      br_pt_r[br_pf] = br_pcr[br_row_ci];
+                      br_pt_g[br_pf] = br_pcg[br_row_ci];
+                      br_pt_b[br_pf] = br_pcb[br_row_ci];
+                      break;
+                    }
+                  }
+                }
+
+                // Spawn pickup
+                if br_specials[br_ci] != SP_NONE {
+                  for br_ps in 0..8 {
+                    if br_pk_on[br_ps] == 0 {
+                      br_pk_x[br_ps] = bk_x(br_cc) + BRICK_W / 2.0 - PICKUP_W / 2.0;
+                      br_pk_y[br_ps] = bk_y(br_cr);
+                      br_pk_type[br_ps] = br_specials[br_ci];
+                      br_pk_on[br_ps] = 1;
+                      break;
+                    }
+                  }
+                }
               }
             }
           }
         }
       }
 
-      if br_alive == 0 { br_won = true; }
+      // All balls lost?
+      if !br_any_ball {
+        br_lives -= 1;
+        br_combo = 0;
+        if br_lives <= 0 {
+          br_lost = true;
+        } else {
+          br_ball_x[0] = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
+          br_ball_y[0] = PADDLE_Y - 30.0;
+          br_ball_dx[0] = br_ball_speed * 0.7;
+          br_ball_dy[0] = 0.0 - br_ball_speed;
+          br_ball_on[0] = 1;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 0.1; br_flash_b = 0.1;
+        }
+      }
+
+      // ── Pickups ──────────────────────────────────────────────
+      for br_pi in 0..8 {
+        if br_pk_on[br_pi] == 0 { continue; }
+        br_pk_y[br_pi] += PICKUP_SPEED * br_dt;
+        if br_pk_y[br_pi] > SCREEN_H { br_pk_on[br_pi] = 0; continue; }
+        if !shapes::aabb_overlap(br_pk_x[br_pi], br_pk_y[br_pi], PICKUP_W, PICKUP_H,
+            br_px, PADDLE_Y, br_pw, PADDLE_H) { continue; }
+        br_pk_on[br_pi] = 0;
+        br_pkt = br_pk_type[br_pi];
+
+        if br_pkt == SP_EXTEND {
+          br_pw = PADDLE_W_DEFAULT + EXTEND_EXTRA;
+          br_extend_timer = EXTEND_DURATION;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 0.1; br_flash_g = 0.8; br_flash_b = 0.2;
+        }
+        if br_pkt == SP_EXPLODE {
+          br_lives -= 1;
+          if br_lives <= 0 { br_lost = true; }
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 0.0; br_flash_b = 0.0;
+        }
+        if br_pkt == SP_BALLOON {
+          br_bl_on = true;
+          br_bl_timer = BALLOON_DELAY;
+          br_bl_row = ((br_now / 7) as integer) % br_rows;
+          br_bl_col = ((br_now / 13) as integer) % BRICK_COLS;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 0.9; br_flash_b = 0.1;
+        }
+        if br_pkt == SP_NEWROW && br_rows < MAX_ROWS {
+          for br_sr in rev(0..br_rows) {
+            for br_sc in 0..BRICK_COLS {
+              br_from = br_sr * BRICK_COLS + br_sc;
+              br_to = (br_sr + 1) * BRICK_COLS + br_sc;
+              br_bricks[br_to] = br_bricks[br_from];
+              br_specials[br_to] = br_specials[br_from];
+              br_hp[br_to] = br_hp[br_from];
+            }
+          }
+          for br_nc in 0..BRICK_COLS {
+            br_bricks[br_nc] = 1;
+            br_specials[br_nc] = assign_special(br_nr_seed + br_nc);
+            br_hp[br_nc] = 1;
+            br_alive += 1;
+          }
+          br_nr_seed += BRICK_COLS;
+          br_rows += 1;
+          if bk_y(br_rows - 1) + BRICK_H >= PADDLE_Y { br_lost = true; }
+        }
+        if br_pkt == SP_MULTI {
+          // Spawn extra balls
+          for br_mb in 1..MAX_BALLS {
+            if br_ball_on[br_mb] == 0 {
+              br_ball_x[br_mb] = br_ball_x[0];
+              br_ball_y[br_mb] = br_ball_y[0];
+              br_ball_dx[br_mb] = br_ball_speed * (if br_mb == 1 { 0.5 } else { -0.5 });
+              br_ball_dy[br_mb] = 0.0 - br_ball_speed * 0.8;
+              br_ball_on[br_mb] = 1;
+            }
+          }
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 0.5; br_flash_g = 0.5; br_flash_b = 1.0;
+        }
+        if br_pkt == SP_FIRE {
+          br_fire_timer = 5.0;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 0.5; br_flash_b = 0.0;
+        }
+        if br_pkt == SP_SHIELD {
+          br_shield_on = true;
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 0.3; br_flash_g = 0.6; br_flash_b = 1.0;
+        }
+      }
+
+      // ── Balloon explosion ────────────────────────────────────
+      if br_bl_on {
+        br_bl_timer -= br_dt;
+        if br_bl_timer <= 0.0 {
+          br_bl_on = false;
+          for br_er in br_bl_row - 1..br_bl_row + 2 {
+            for br_ec in br_bl_col - 1..br_bl_col + 2 {
+              if br_er >= 0 && br_er < br_rows && br_ec >= 0 && br_ec < BRICK_COLS {
+                br_ei = br_er * BRICK_COLS + br_ec;
+                if br_bricks[br_ei] == 1 {
+                  br_bricks[br_ei] = 0;
+                  br_alive -= 1;
+                  br_score += 1;
+                }
+              }
+            }
+          }
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 1.0; br_flash_b = 0.3;
+        }
+      }
+
+      // ── Level progression ────────────────────────────────────
+      if br_alive <= 0 && !br_won {
+        br_level += 1;
+        br_rows = START_ROWS + br_level - 1;
+        if br_rows > MAX_ROWS { br_rows = MAX_ROWS; }
+        br_alive = 0;
+        for br_lr in 0..br_rows {
+          for br_lc in 0..BRICK_COLS {
+            br_li = br_lr * BRICK_COLS + br_lc;
+            br_bricks[br_li] = 1;
+            br_specials[br_li] = assign_special(br_li + br_level * 100);
+            // Boss row: top row gets extra HP every 3 levels
+            if br_lr == 0 && br_level % 3 == 0 {
+              br_hp[br_li] = 3;
+            } else if br_lr < 2 && br_level > 3 {
+              br_hp[br_li] = 2;
+            } else {
+              br_hp[br_li] = 1;
+            }
+            br_alive += 1;
+          }
+        }
+        // Reset ball
+        br_ball_x[0] = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
+        br_ball_y[0] = PADDLE_Y - 30.0;
+        br_ball_dx[0] = br_ball_speed * 0.7;
+        br_ball_dy[0] = 0.0 - br_ball_speed;
+        br_ball_on[0] = 1;
+        br_ball_on[1] = 0;
+        br_ball_on[2] = 0;
+        br_level_timer = LEVEL_PAUSE;
+        br_flash_timer = FLASH_DURATION;
+        br_flash_r = 0.2; br_flash_g = 1.0; br_flash_b = 0.5;
+      }
     }
 
-    // ── Render ─────────────────────────────────────────────────────
-    graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
-    graphics::gl_use_shader(br_shader);
+    // ── Update particles ───────────────────────────────────────
+    for br_pu in 0..MAX_PARTICLES {
+      if br_pt_t[br_pu] > 0.0 {
+        br_pt_t[br_pu] -= br_dt;
+        br_pt_x[br_pu] += br_pt_vx[br_pu] * br_dt;
+        br_pt_y[br_pu] += br_pt_vy[br_pu] * br_dt;
+        br_pt_vy[br_pu] += 200.0 * br_dt;  // gravity
+      }
+    }
 
-    // Draw bricks
-    for br_dr in 0..BRICK_ROWS {
+    // ── Flash timer ────────────────────────────────────────────
+    if br_flash_timer > 0.0 { br_flash_timer -= br_dt; }
+
+    // ── Render ───────────────────────────────────────────────────
+    graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
+
+    // Bricks — flat color + sprite icon overlay for specials
+    for br_dr in 0..br_rows {
+      br_ci = br_dr % 6;
       for br_dc in 0..BRICK_COLS {
-        if br_bricks[br_dr * BRICK_COLS + br_dc] == 1 {
-          br_dx = (br_dc as float) * (BRICK_W + BRICK_PAD) + 12.0;
-          br_dy = (br_dr as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP;
-          br_mvp = rect_mvp(br_proj, br_dx, br_dy, BRICK_W, BRICK_H);
-          graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-          graphics::gl_set_uniform_vec3(br_shader, "uColor",
-            br_colors_r[br_dr], br_colors_g[br_dr], br_colors_b[br_dr]);
-          graphics::gl_draw(br_vao, 6);
+        br_di = br_dr * BRICK_COLS + br_dc;
+        if br_bricks[br_di] == 1 {
+          graphics::draw_rect_at(br_painter,
+            bk_x(br_dc), bk_y(br_dr), BRICK_W, BRICK_H,
+            br_pcr[br_ci], br_pcg[br_ci], br_pcb[br_ci], 1.0);
+          // Highlight + ghost pass (alpha 1.0 then 0.15 over the same pixels)
+          graphics::draw_rect_at(br_painter,
+            bk_x(br_dc) + 1.0, bk_y(br_dr) + 1.0, BRICK_W - 2.0, 2.0,
+            1.0, 1.0, 1.0, 1.0);
+          graphics::draw_rect_at(br_painter,
+            bk_x(br_dc) + 1.0, bk_y(br_dr) + 1.0, BRICK_W - 2.0, 2.0,
+            1.0, 1.0, 1.0, 0.15);
+          // Icon overlay for specials
+          br_ic = brick_icon(br_specials[br_di]);
+          if br_ic < 99 {
+            graphics::draw_sprite_at(br_sheet, br_painter,
+              bk_x(br_dc) + BRICK_W - 22.0, bk_y(br_dr), 20.0, 20.0, br_ic);
+          }
+          // Multi-hit dots
+          if br_hp[br_di] >= 2 {
+            graphics::draw_rect_at(br_painter,
+              bk_x(br_dc) + 3.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0);
+          }
+          if br_hp[br_di] >= 3 {
+            graphics::draw_rect_at(br_painter,
+              bk_x(br_dc) + 9.0, bk_y(br_dr) + 3.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0);
+          }
         }
       }
     }
 
-    // Draw paddle
-    br_mvp = rect_mvp(br_proj, br_px, PADDLE_Y, PADDLE_W, PADDLE_H);
-    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-    graphics::gl_set_uniform_vec3(br_shader, "uColor", 0.8, 0.8, 0.9);
-    graphics::gl_draw(br_vao, 6);
+    // Balloon countdown outline
+    if br_bl_on {
+      br_bfl = ((br_now / 200000) as integer) % 2;
+      if br_bfl == 0 {
+        for br_fr in br_bl_row - 1..br_bl_row + 2 {
+          for br_fc in br_bl_col - 1..br_bl_col + 2 {
+            if br_fr >= 0 && br_fr < br_rows && br_fc >= 0 && br_fc < BRICK_COLS {
+              graphics::draw_rect_at(br_painter,
+                bk_x(br_fc) - 2.0, bk_y(br_fr) - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
+              graphics::draw_rect_at(br_painter,
+                bk_x(br_fc) - 2.0, bk_y(br_fr) + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
+            }
+          }
+        }
+      }
+    }
 
-    // Draw ball
-    br_mvp = rect_mvp(br_proj, br_bx, br_by, BALL_SIZE, BALL_SIZE);
-    graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-    graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 1.0, 1.0);
-    graphics::gl_draw(br_vao, 6);
+    // Pickups — large sprite icons, no block background
+    for br_pdi in 0..8 {
+      if br_pk_on[br_pdi] == 1 {
+        br_psp = pickup_sprite(br_pk_type[br_pdi]);
+        // Render at 56x56 centered on the pickup hitbox
+        graphics::draw_sprite_at(br_sheet, br_painter,
+          br_pk_x[br_pdi] - 18.0, br_pk_y[br_pdi] - 22.0, 56.0, 56.0, br_psp);
+      }
+    }
 
-    // Draw lives indicator (small squares in top-right)
-    for br_li in 0..br_lives {
-      br_mvp = rect_mvp(br_proj, SCREEN_W - 20.0 - (br_li as float) * 18.0, 10.0, 12.0, 12.0);
-      graphics::gl_set_uniform_mat4(br_shader, "uMVP", br_mvp.m);
-      graphics::gl_set_uniform_vec3(br_shader, "uColor", 1.0, 0.3, 0.3);
-      graphics::gl_draw(br_vao, 6);
+    // Shield bar at bottom
+    if br_shield_on {
+      graphics::draw_rect_at(br_painter,
+        0.0, SCREEN_H - 3.0, SCREEN_W, 3.0, 0.3, 0.6, 1.0, 0.6);
+    }
+
+    // Paddle — flat color
+    if br_extend_timer > 0.0 {
+      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5, 1.0);
+    } else {
+      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
+    }
+
+    // Balls — flat color
+    for br_bd in 0..MAX_BALLS {
+      if br_ball_on[br_bd] == 1 {
+        if br_fire_timer > 0.0 {
+          graphics::draw_rect_at(br_painter,
+            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0, 1.0);
+        } else {
+          graphics::draw_rect_at(br_painter,
+            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0, 1.0);
+        }
+      }
+    }
+
+    // Particles — alpha fades with remaining life
+    for br_pd in 0..MAX_PARTICLES {
+      if br_pt_t[br_pd] > 0.0 {
+        br_pa = br_pt_t[br_pd] / PARTICLE_LIFE;
+        graphics::draw_rect_at(br_painter,
+          br_pt_x[br_pd], br_pt_y[br_pd], 4.0, 4.0,
+          br_pt_r[br_pd], br_pt_g[br_pd], br_pt_b[br_pd], br_pa);
+      }
+    }
+
+    // HUD: lives (red squares, top-right)
+    for br_lh in 0..br_lives {
+      graphics::draw_rect_at(br_painter,
+        SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3, 1.0);
+    }
+
+    // HUD: numeric score (top-left, digit textures)
+    graphics::draw_texture_at(br_painter, br_score_label_tex, 10.0, 4.0, 60.0, 14.0);
+    br_sc = br_score;
+    br_sx = 72.0;
+    if br_sc == 0 {
+      graphics::draw_texture_at(br_painter, br_dig_tex[0], br_sx, 2.0, 14.0, 20.0);
+    }
+    // Extract digits right-to-left, draw left-to-right
+    br_sc_digits = 0;
+    br_sc_tmp = br_sc;
+    for _br_sd in 0..6 {
+      if br_sc_tmp > 0 { br_sc_digits += 1; br_sc_tmp = br_sc_tmp / 10; }
+    }
+    if br_sc_digits > 0 {
+      br_sx = 72.0 + (br_sc_digits - 1) as float * 14.0;
+      br_sc_tmp = br_sc;
+      for _br_sd2 in 0..br_sc_digits {
+        br_sd_d = br_sc_tmp % 10;
+        graphics::draw_texture_at(br_painter, br_dig_tex[br_sd_d], br_sx, 2.0, 14.0, 20.0);
+        br_sx -= 14.0;
+        br_sc_tmp = br_sc_tmp / 10;
+      }
+    }
+
+    // HUD: combo bar (under score)
+    if br_combo > 1 {
+      br_cbar = shapes::clamp((br_combo as float) * 15.0, 0.0, 200.0);
+      br_cg_val = shapes::clamp(1.0 - (br_combo as float) * 0.08, 0.0, 1.0);
+      graphics::draw_rect_at(br_painter, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0, 1.0);
+    }
+
+    // HUD: level dots (top-center)
+    for br_lv in 0..br_level {
+      if br_lv < 10 {
+        graphics::draw_rect_at(br_painter,
+          370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5, 1.0);
+      }
+    }
+
+    // HUD: pickup hints (bottom-right, one per active type)
+    br_shown_mask = 0;
+    br_hint_y = SCREEN_H - 18.0;
+    for br_pl in 0..8 {
+      if br_pk_on[br_pl] == 1 {
+        br_plt = br_pk_type[br_pl];
+        br_plt_bit = 1 << br_plt;
+        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && (br_shown_mask & br_plt_bit) == 0 {
+          br_shown_mask = br_shown_mask | br_plt_bit;
+          graphics::draw_texture_at(br_painter, br_pk_tex[br_plt],
+            SCREEN_W - 85.0, br_hint_y, 80.0, 14.0);
+          br_hint_y -= 16.0;
+        }
+      }
+    }
+
+    // Level transition text — big "LEVEL N" centered
+    if br_level_timer > 0.0 {
+      br_tli = br_level - 1;
+      if br_tli >= 0 && br_tli < 20 && br_lvl_tex[br_tli] != 0 {
+        graphics::draw_texture_at(br_painter, br_lvl_tex[br_tli],
+          SCREEN_W / 2.0 - 150.0, SCREEN_H / 2.0 - 30.0, 300.0, 60.0);
+      }
+    }
+
+    // Intro text
+    if br_intro_timer > 0.0 {
+      graphics::draw_texture_at(br_painter, br_intro_tex,
+        SCREEN_W / 2.0 - 250.0, SCREEN_H / 2.0 + 40.0, 500.0, 40.0);
+    }
+
+    // Screen flash overlay
+    if br_flash_timer > 0.0 {
+      br_fa = br_flash_timer / FLASH_DURATION * 0.4;
+      graphics::draw_rect_at(br_painter,
+        0.0, 0.0, SCREEN_W, SCREEN_H, br_flash_r, br_flash_g, br_flash_b, br_fa);
     }
 
     graphics::gl_swap_buffers();

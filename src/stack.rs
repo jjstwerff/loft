@@ -1,6 +1,13 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Bytecode generation stack — tracks the compile-time stack position.
+//!
+//! During codegen, [`Stack`] mirrors the runtime stack position so that
+//! each operator knows where its operands will be.  `operator()` adjusts
+//! the position by the operator's net stack effect.  [`Loop`] records the
+//! stack depth at loop entry so `break`/`continue` can restore it.
+
 #![allow(clippy::cast_possible_truncation)]
 
 use crate::data::{Context, Data, Value};

@@ -66,7 +66,7 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 | A3 optional Cargo features | Lean binary; clean dependency management |
 | Tier N (N2–N9, N1) native codegen fixes | Efficiency: turn existing but broken generator into working `--native` path |
 | ~~A1 parallel workers full~~ | ~~Feature completeness for existing parallel construct~~ *(done — all return types supported incl. struct/ref, both interpreter and native)* |
-| TR1 stack trace introspection | `stack_trace()` stdlib; prerequisite for coroutines |
+| ~~TR1 stack trace introspection~~ | ~~`stack_trace()` stdlib; prerequisite for coroutines~~ *(done 0.8.3 — phases 1–4)* |
 | A7 native extension libraries | `#native` annotation + `cdylib` loading for external packages |
 
 ### 1.0.0 gate items (on top of 0.9.0)

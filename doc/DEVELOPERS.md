@@ -485,7 +485,7 @@ lifetimes.
 **Caveats.**
 - This is the most fragile subsystem. The `var_mapping` table (which maps a variable
   slot to a "copy" slot when a name is reused across sibling scopes) is hard to
-  reason about. Read `ASSIGNMENT.md` before touching it.
+  reason about. Read `SLOTS.md` before touching it.
 - Pre-init for reference types first assigned inside a branch is handled by
   `find_first_ref_vars` (with `deps_ready` guard for borrowed types).  This was
   fixed in 2026-03-13 (PROBLEMS #2).  When adding a new owned type, write a test
@@ -725,10 +725,10 @@ and using the test framework for quick iteration.
 - [claude/DEBUG.md](claude/DEBUG.md) — Debugging guide: LOFT_LOG presets, diagnosing crashes, scope bugs, slot panics
 - [PROMPTS.md](PROMPTS.md) — Working effectively with Claude and when to use each prompt in `prompts.txt`
 - [claude/PLANNING.md](claude/PLANNING.md) — Priority-ordered enhancement backlog and version milestones
-- [claude/EXTERNAL_LIBS.md](claude/EXTERNAL_LIBS.md) — Design for separately-packaged libraries and native (Rust) extensions
+- [claude/PACKAGES.md](claude/PACKAGES.md) — Package format, registry, external libraries, native extensions
 - [claude/PROBLEMS.md](claude/PROBLEMS.md) — Known bugs with severity, workarounds, and fix paths
 - [claude/COMPILER.md](claude/COMPILER.md) — Deep dive into the lexer, parser, IR, and bytecode pipeline
 - [claude/DESIGN.md](claude/DESIGN.md) — Algorithm analysis for every major subsystem
 - [claude/TESTING.md](claude/TESTING.md) — Test framework, running tests, debugging `.loft` script failures
-- [claude/ASSIGNMENT.md](claude/ASSIGNMENT.md) — Variable scoping and slot assignment details
+- [claude/SLOTS.md](claude/SLOTS.md) — Variable scoping and slot assignment details
 - [claude/INCONSISTENCIES.md](claude/INCONSISTENCIES.md) — Language quirks and known semantic asymmetries

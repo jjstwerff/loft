@@ -1,6 +1,33 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+//! Per-function variable table and stack slot assignment.
+//!
+//! Each function being compiled gets a [`Function`] that tracks every
+//! variable (name, type, scope, liveness interval, stack slot) and every
+//! iterator/loop in the function body.
+//!
+//! ## Dependency tracking
+//!
+//! The `dep` field on [`Type`](crate::data::Type) controls ownership:
+//! - **empty** → the variable *owns* its heap value (freed at scope exit).
+//! - **non-empty** → the variable *borrows* from a parameter listed by
+//!   attribute index (not freed — the caller owns the store).
+//!
+//! [`Function::depend`] adds a dependency when the parser discovers that a
+//! local variable borrows from a parameter (e.g. field access on a reference
+//! argument).
+//!
+//! ## Slot assignment
+//!
+//! After scope analysis, [`assign_slots`] assigns each variable a byte
+//! offset on the stack using a two-zone layout:
+//! - **Zone 1** (pre-claimed): small types (≤ 16 bytes) packed per-block.
+//! - **Zone 2** (sequential): large types (text, references) allocated in
+//!   the order they first appear.
+//!
+//! See `slots.rs` for the algorithm.
+
 #![allow(clippy::cast_possible_truncation)]
 
 mod intervals;
