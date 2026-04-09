@@ -700,9 +700,9 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     for br_pdi in 0..8 {
       if br_pk_on[br_pdi] == 1 {
         br_psp = pickup_sprite(br_pk_type[br_pdi]);
-        // Render at 28x28 so the icon is clearly visible
+        // Render at 56x56 centered on the pickup hitbox
         br_pmv = make_mvp(br_proj,
-          br_pk_x[br_pdi] - 4.0, br_pk_y[br_pdi] - 8.0, 28.0, 28.0);
+          br_pk_x[br_pdi] - 18.0, br_pk_y[br_pdi] - 22.0, 56.0, 56.0);
         graphics::draw_sprite(br_sheet, br_pmv.m, br_psp);
       }
     }
