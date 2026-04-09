@@ -260,10 +260,13 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
 `;
   br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
 
-  // Font + pre-rendered text textures
-  br_font_path = source_dir() + "DejaVuSans-Bold.ttf";
-  br_font = graphics::gl_load_font(br_font_path);
-  if !br_font { println("WARNING: font not loaded from {br_font_path}"); }
+  // Font — try local first, then absolute path
+  br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  if !br_font {
+    // Native mode runs from a temp dir; try the script's directory
+    br_font = graphics::gl_load_font("lib/graphics/examples/DejaVuSans-Bold.ttf");
+  }
+  if !br_font { println("WARNING: font not loaded — text will be invisible"); }
   br_white = graphics::rgba(255, 255, 255, 255);
   br_gray = graphics::rgba(200, 200, 200, 180);
 
