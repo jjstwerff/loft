@@ -280,7 +280,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     if br_pk_tex[br_ti] == 0 { println("WARNING: pickup label {br_ti} texture upload failed"); }
   }
   for br_tv in 1..8 {
-    if br_pk_tex[br_tv] == 0 { println("VERIFY: pickup tex[{br_tv}] = 0 (missing)"); }
+    println("pickup tex[{br_tv}] = {br_pk_tex[br_tv]}");
   }
 
   // Digit textures 0-9 for numeric score display
@@ -293,7 +293,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     if br_dig_tex[br_di] == 0 { println("WARNING: digit {br_di} texture upload failed"); }
   }
   for br_dv in 0..10 {
-    if br_dig_tex[br_dv] == 0 { println("VERIFY: digit tex[{br_dv}] = 0 (missing)"); }
+    println("digit tex[{br_dv}] = {br_dig_tex[br_dv]}");
   }
 
   // Intro text
