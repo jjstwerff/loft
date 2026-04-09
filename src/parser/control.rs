@@ -709,7 +709,7 @@ impl Parser {
                 .collect();
             if !missing.is_empty() {
                 let msg = format!(
-                    "Error: match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
+                    "match on {} is not exhaustive — missing: {}; add the missing variants or a '_ =>' wildcard",
                     self.data.def(e_nr).name,
                     missing.join(", ")
                 );

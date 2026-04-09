@@ -29,7 +29,7 @@ fn unknown_var() {
 #[test]
 fn typo_var_name() {
     code!("fn test() { count = 0; cound + 1; }")
-        .error("Unknown variable 'cound' at typo_var_name:1:33")
+        .error("Unknown variable 'cound' — did you mean 'count'? at typo_var_name:1:33")
         .warning("Variable count is never read at typo_var_name:1:20");
 }
 
@@ -154,7 +154,7 @@ fn undefined_as() {
 #[test]
 fn undefined_enum() {
     code!("enum E1 { V1 }\nfn test(v: E1) -> boolean { v > V2 }")
-        .error("Unknown variable 'V2' at undefined_enum:2:37");
+        .error("Unknown variable 'V2' — did you mean 'v'? at undefined_enum:2:37");
 }
 
 #[test]
@@ -827,6 +827,6 @@ fn circular_init_error() {
 #[test]
 fn unknown_variable_error() {
     code!("fn test() -> integer { reuslt = 42; result }")
-        .error("Unknown variable 'result' at unknown_variable_error:1:45")
+        .error("Unknown variable 'result' — did you mean 'reuslt'? at unknown_variable_error:1:45")
         .warning("Variable reuslt is never read at unknown_variable_error:1:32");
 }

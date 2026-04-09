@@ -1539,9 +1539,27 @@ fn main() {
     let start_def = p.data.definitions();
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
-        for l in p.diagnostics.lines() {
-            if !l.starts_with("Debug: ") {
-                println!("{l}");
+        // Cache source files for source-line display.
+        let mut source_cache: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for entry in p.diagnostics.entries() {
+            if entry.level == Level::Debug {
+                continue;
+            }
+            println!("{}", entry.to_string_compact());
+            // Show the offending source line with a caret.
+            if entry.line > 0 && !entry.file.is_empty() {
+                let src = source_cache
+                    .entry(entry.file.clone())
+                    .or_insert_with(|| {
+                        std::fs::read_to_string(&entry.file).unwrap_or_default()
+                    });
+                if let Some(line_text) = src.lines().nth(entry.line as usize - 1) {
+                    let col = entry.col.saturating_sub(1) as usize;
+                    println!("  |");
+                    println!("{:>4} | {}", entry.line, line_text);
+                    println!("     | {:>width$}^", "", width = col);
+                }
             }
         }
         if p.diagnostics.level() >= Level::Error {

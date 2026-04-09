@@ -398,7 +398,7 @@ impl Test {
             expected.insert(format!("Fatal: {w}"));
         }
         let mut found = "".to_string();
-        for l in p.diagnostics.lines() {
+        for l in &p.diagnostics.lines() {
             if l.starts_with("Debug: ") {
                 continue; // Debug-level diagnostics are not surfaced in tests
             }

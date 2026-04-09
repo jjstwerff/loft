@@ -78,7 +78,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     }
     if !p.diagnostics.is_empty() {
         check_diagnostics(
-            p.diagnostics.lines(),
+            &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,
@@ -747,7 +747,7 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             .any(|l| !l.starts_with("Warning:") && !l.starts_with("Debug:"));
     if !p.diagnostics.is_empty() {
         check_diagnostics(
-            p.diagnostics.lines(),
+            &p.diagnostics.lines(),
             &expected,
             &exp_errors,
             &exp_ann_warns,

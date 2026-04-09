@@ -101,9 +101,9 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
             DefType::Unknown => {
                 let name = &data.def(d).name;
                 let msg = if name == "string" {
-                    "Error: Undefined type 'string' — did you mean 'text'?".to_string()
+                    "Undefined type 'string' — did you mean 'text'?".to_string()
                 } else {
-                    format!("Error: Undefined type {name}")
+                    format!("Undefined type {name}")
                 };
                 lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
             }
@@ -144,7 +144,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     Level::Error,
                     &data.def(d_nr).position,
                     &format!(
-                        "Error: Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
+                        "Struct '{}' contains itself (directly or indirectly) — use reference<{}> to break the cycle",
                         data.def(d_nr).name,
                         data.def(d_nr).name,
                     ),
@@ -166,7 +166,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                     Level::Error,
                     &data.def(c_nr).position,
                     &format!(
-                        "Error: Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
+                        "Struct '{}' has a field named 'key' which is reserved for hash iteration — rename the field",
                         data.def(c_nr).name,
                     ),
                 );
