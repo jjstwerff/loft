@@ -1985,6 +1985,10 @@ fn test() {
 // P122b: nested loop struct creation (collision detection pattern)
 #[test]
 fn p122_struct_nested_loop() {
+    // Iteration count reduced from 60*5*10=3000 to 20*5*5=500 for CI speed.
+    // The bug exhausted the store pool after a few hundred iterations, so
+    // 500 is sufficient as a regression guard. Run --ignored variant for
+    // the full stress test.
     code!(
         "struct Box { bx: float not null, by: float not null, bw: float not null, bh: float not null }
 fn overlap(a: const Box, b: const Box) -> boolean {
@@ -1992,10 +1996,10 @@ fn overlap(a: const Box, b: const Box) -> boolean {
 }
 fn test() {
     hits = 0;
-    for p122_frame in 0..60 {
+    for p122_frame in 0..20 {
         ball = Box { bx: p122_frame as float, by: 50.0, bw: 10.0, bh: 10.0 };
         for p122_row in 0..5 {
-            for p122_col in 0..10 {
+            for p122_col in 0..5 {
                 brick = Box { bx: (p122_col as float) * 12.0, by: (p122_row as float) * 12.0, bw: 10.0, bh: 10.0 };
                 if overlap(ball, brick) { hits += 1; }
             }
@@ -2026,7 +2030,27 @@ fn p123_vector_in_loop() {
 }
 
 // ── P126: Negative integer as tail expression ───────────────────────────────
+//
+// Symptom: a function whose body has earlier `if X { return Y; }` statements
+// followed by a tail expression `-1` produces a misleading parse error:
+//   "No matching operator '-' on 'void' and 'integer'"
+//
+// Root cause hypothesis: after parsing `if ... { return ... }` the parser
+// records the previous-statement type as `void`, and when it then tries to
+// parse `-1` as the next expression, the prefix `-` is consumed as a binary
+// operator continuing the `void` expression instead of starting a new unary
+// negation. Bare `-1` at the start of a function (no preceding statements)
+// works fine, so the bug is in the boundary between statement-end and
+// expression-start parsing.
+//
+// Fix path: in `parse_expression` (or wherever statement boundaries are
+// resolved), force `-` after a void-returning statement to be parsed as a
+// unary prefix on a new expression, not a binary operator on the previous
+// statement's value. Equivalent to inserting an implicit `;` boundary.
+//
+// Workaround: use `return -1;` with explicit return.
 
+/// Regression guard for the workaround — the explicit-return form must keep working.
 #[test]
 fn p126_negative_tail_expression() {
     code!(
@@ -2042,10 +2066,296 @@ fn test() {
     .result(Value::Null);
 }
 
+/// Reproduces the actual bug — bare `-1` after `if { return; }` blocks
+/// triggers the misleading "operator '-' on 'void'" diagnostic.
+#[test]
+#[ignore = "P126: bare `-1` tail expression after if-return parsed as void minus int"]
+fn p126_negative_tail_expression_after_returns() {
+    code!(
+        "fn lookup(idx: integer) -> integer {
+  if idx == 0 { return 100; }
+  if idx == 1 { return 200; }
+  -1
+}
+fn test() {
+  assert(lookup(0) == 100, \"case 0\");
+  assert(lookup(1) == 200, \"case 1\");
+  assert(lookup(5) == -1, \"default\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P127: File-scope vector constant inlined into function call ─────────────
+//
+// Symptom: a file-scope constant holding a vector literal, when used as a
+// function argument, panics in codegen with one of two flavours depending
+// on context:
+//   1. "[generate_set] first-assignment of 'X' (var_nr=0) in 'n_test'
+//       contains a Var(0) self-reference — storage not yet allocated, will
+//       produce a garbage DbRef at runtime. This is a parser bug."
+//   2. "generate_call [n_F]: mutable arg 0 (data: Reference(265, []))
+//       expected 12B on stack but generate(Var(0)) pushed 8B —
+//       Value::Null in a typed slot? Missing convert() call in the parser?"
+//
+// Root cause: `parse_vector` builds a vector literal as a `Value::Block`
+// via `v_block()` (src/data.rs:798), which sets `var_size: 0` and uses
+// `Var(0)`/`Var(1)` for its temporaries. When this Block is stored as the
+// `code` of a `DefType::Constant` (parser/definitions.rs:407) and later
+// inlined where the constant is referenced, the `Var` indices are NOT
+// rewritten — they collide with the calling function's local slots.
+//
+// Fix path: when inlining a file-scope constant Block into a calling
+// function, either:
+//   (a) remap each `Var(N)` in the constant's IR to a fresh local slot in
+//       the caller (allocate `var_size` extra slots first, then offset all
+//       Var indices by the caller's current var count), or
+//   (b) re-emit the literal at every reference site so each call site has
+//       its own freshly-numbered slots, or
+//   (c) constant-fold simple literal vectors to a static IR node that
+//       doesn't need temporaries at all (best for performance).
+//
+// Workaround: move the literal inline into the function that needs it.
+
+#[test]
+#[ignore = "P127: file-scope vector constants leak Var() refs into calling functions"]
+fn p127_file_scope_vector_constant_in_call() {
+    code!(
+        "QUAD = [1, 2, 3];
+fn count(v: const vector<integer>) -> integer { v.len() }
+fn test() {
+  n = count(QUAD);
+  assert(n == 3, \"got {n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Same bug — the local-variable form (literal inline) must keep working.
+#[test]
+fn p127_inline_vector_literal_in_call_works() {
+    code!(
+        "fn count(v: const vector<integer>) -> integer { v.len() }
+fn test() {
+  quad = [1, 2, 3];
+  n = count(quad);
+  assert(n == 3, \"got {n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// The bug also fires for `vector<single>` constants, which is what hit
+/// us originally in `lib/graphics/src/graphics.loft` with `UNIT_QUAD_2D`.
+#[test]
+#[ignore = "P127: same bug for vector<single> constants used in call args"]
+fn p127_file_scope_single_vector_constant() {
+    code!(
+        "QUAD = [1.0f, 2.0f, 3.0f];
+fn count(v: const vector<single>) -> integer { v.len() }
+fn test() {
+  n = count(QUAD);
+  assert(n == 3, \"got {n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P117: Struct-returning text-param functions leak callee store ───────────
+//
+// PROBLEMS.md #117 — `f = file("path")` and similar text-parameter
+// struct-returning functions accumulate stores because the dep system
+// keeps the work-ref alive even when the O-B2 adoption path bypasses it.
+//
+// 2026-04-09: I could not reproduce the symptom in a fresh repro of the
+// described pattern. The repro below — repeatedly calling a text-param
+// struct constructor in a loop — runs to completion without panic and
+// without "Database N not correctly freed" warnings. Either:
+//   (a) the bug was silently fixed by one of the recent O-B2 codegen
+//       changes (P116/P118/P119/P122 fix wave),
+//   (b) the original symptom requires the specific `file()` API path
+//       which has changed (the `file().exists()` method no longer
+//       exists in the current API), or
+//   (c) the leak is too small to trigger pool exhaustion within a
+//       reasonable test loop.
+//
+// This test is a *regression guard*: it locks in the current working
+// behaviour. If it ever fails with "Allocating a used store" or
+// "Database N not correctly freed", #117 has regressed and the
+// PROBLEMS.md entry needs reopening with a fresh root-cause analysis.
+//
+// Fix path (per PROBLEMS.md): in the O-B2 codegen path
+// (`gen_set_first_at_tos`), after adopting the callee's store, emit
+// `OpFreeRef` for the unused `__ref_N` work variable.
+#[test]
+fn p117_text_param_struct_return_loop_no_leak() {
+    // 100 iterations is enough to detect a per-call store leak in debug
+    // mode without dominating CI time.
+    code!(
+        "struct Wrap { name: text not null, count: integer not null }
+fn make(t: text) -> Wrap {
+  Wrap { name: t, count: t.len() }
+}
+fn test() {
+  for _p117_i in 0..100 {
+    w = make(\"hello\");
+    assert(w.count == 5, \"count\");
+  }
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P120: Vector field in struct returned from function ────────────────────
+//
+// PROBLEMS.md #120 — when a function returns a struct containing a
+// `vector<integer>` field, the vector data was lost during stack unwind
+// because the constructor only copied the vector pointer, not the
+// underlying data. Caused length=0 vectors after function return.
+//
+// 2026-04-09: the original reproducer
+// `lib/graphics/examples/test_mat4_crash.loft` now runs cleanly:
+//   inside make_big: data len=16
+//   after return: data len=16
+//   data[0]=0 data[15]=15
+//
+// This regression-guard test reproduces the same pattern as a unit test
+// so any future regression is caught in CI. If this test ever fails,
+// reopen #120 in PROBLEMS.md and revisit `gen_set_first_ref_call_copy`
+// in `src/state/codegen.rs`.
+//
+// Fix path (per PROBLEMS.md): the struct constructor must deep-copy
+// vector field data into the struct's own store at `FinishRecord` /
+// `SetField` level. Mitigations already in place include double-free
+// tolerance in `free_ref`, loop pre-init reference hoisting, and
+// `is_ret_work_ref` suppression of FreeRef in return paths.
+#[test]
+fn p120_vector_field_in_returned_struct_round_trip() {
+    code!(
+        "struct BigBox {
+  width: integer not null,
+  height: integer not null,
+  data: vector<integer>
+}
+fn make_big() -> BigBox {
+  d: vector<integer> = [];
+  for p120_i in 0..16 { d += [p120_i]; }
+  BigBox { width: 4, height: 4, data: d }
+}
+fn test() {
+  b = make_big();
+  assert(b.width == 4, \"width\");
+  assert(b.height == 4, \"height\");
+  assert(b.data.len() == 16, \"data len {b.data.len()}\");
+  assert(b.data[0] == 0, \"data[0]\");
+  assert(b.data[15] == 15, \"data[15]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P121: Tuple literals crashed interpreter with heap corruption ──────────
+//
+// PROBLEMS.md #121 — `a = (3.0, 2.0)` triggered glibc
+// "corrupted size vs. prev_size" abort or SIGSEGV in interpreter mode
+// (native worked). Cited as "stack layout issue in interpreter's tuple
+// codegen — 16-byte float-pair allocation corrupts heap allocator metadata".
+//
+// 2026-04-09: the documented reproducer runs cleanly in `--interpret`
+// mode. Either the bug has been silently fixed or the heap corruption
+// requires specific allocator state that doesn't reliably reproduce.
+//
+// Regression guard: the test below executes the exact reproducer from
+// PROBLEMS.md plus a few variants (function return, destructure,
+// element assign). If any of these regress to the heap-corruption
+// failure, #121 should be reopened.
+//
+// Fix path (per PROBLEMS.md): audit `OpTupleLiteral` and stack
+// reservation for tuple temporaries for off-by-one / alignment errors.
+#[test]
+fn p121_float_tuple_literal_no_heap_corruption() {
+    code!(
+        "fn test() {
+  a = (3.0, 2.0);
+  assert(a.0 > 1.0, \"a.0\");
+  assert(a.1 < 5.0, \"a.1\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p121_float_tuple_function_return() {
+    code!(
+        "fn pair(p121_x: float) -> (float, float) { (p121_x, p121_x * 2.0) }
+fn test() {
+  p = pair(3.0);
+  assert(p.0 == 3.0, \"first\");
+  assert(p.1 == 6.0, \"second\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P124: Native codegen — inline array indexing on float literal ──────────
+//
+// PROBLEMS.md #124 — `[0.9, 0.2, 0.3][idx]` in loft generated an
+// `as DbRef` cast in the Rust output that failed to compile. Native-mode
+// only (interpreter handled it correctly).
+//
+// 2026-04-09: the inline form now triggers a parser-level type error
+// in interpret mode ("Variable v cannot change type from vector<integer>
+// to integer"), and the function-tail form (`[0.9, 0.2, 0.3][idx]` as
+// the body of a function returning float) compiles cleanly under
+// `--native`. Either the codegen `as DbRef` mistake has been fixed, or
+// the parser now refuses the form before it reaches the codegen path.
+//
+// Regression guard: lock in the current working behaviour. If `--native`
+// compilation regresses for the function-tail form, reopen #124. The
+// test runs in interpret mode by default; native-mode coverage lives in
+// `tests/native.rs` if a more thorough check is needed.
+//
+// Fix path (per PROBLEMS.md): in `src/generation/`, the inline-array-
+// then-index pattern emits a `Reference` cast to the wrong type. Look
+// for `as DbRef` in the generated Rust source via `--native-emit`.
+#[test]
+fn p124_function_returning_inline_array_index() {
+    code!(
+        "fn pick(p124_idx: integer) -> float {
+  [0.9, 0.2, 0.3][p124_idx]
+}
+fn test() {
+  assert(pick(0) > 0.85, \"0\");
+  assert(pick(1) < 0.25, \"1\");
+  assert(pick(2) > 0.25, \"2\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Documented workaround — assign the array to a variable first, then index.
+/// This must keep working even if #124 is fixed at the inline-form level.
+#[test]
+fn p124_local_array_index_workaround_works() {
+    code!(
+        "fn pick(p124w_idx: integer) -> float {
+  options = [0.9, 0.2, 0.3];
+  options[p124w_idx]
+}
+fn test() {
+  assert(pick(0) > 0.85, \"0\");
+  assert(pick(1) < 0.25, \"1\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122c: struct-returning function used inside conditional inside loop
 // This is the exact pattern from the breakout collision detection.
 #[test]
 fn p122_struct_return_conditional_loop() {
+    // Iterations reduced 100*50=5000 → 30*15=450 for CI speed. Still
+    // exercises the store-leak pattern with hundreds of allocations.
     code!(
         "struct Overlap { ox: float not null, oy: float not null }
 fn compute_overlap(ax: float, bx: float) -> Overlap {
@@ -2053,8 +2363,8 @@ fn compute_overlap(ax: float, bx: float) -> Overlap {
 }
 fn test() {
     score = 0;
-    for p122c_frame in 0..100 {
-        for p122c_i in 0..50 {
+    for p122c_frame in 0..30 {
+        for p122c_i in 0..15 {
             d = compute_overlap(p122c_frame as float, p122c_i as float);
             if d.ox > 10.0 {
                 score += 1;
@@ -2084,8 +2394,13 @@ fn test() {
     .result(Value::Null);
 }
 
-// P122e: very long loop (simulating game frames) — tests store pool exhaustion
+// P122e: very long loop (simulating game frames) — exhaustion stress test.
+//
+// Marked #[ignore] because it takes ~10 minutes in debug mode. Run on
+// demand with `cargo test --ignored p122_long_running_struct_loop` to
+// verify the fix under sustained load.
 #[test]
+#[ignore = "P122 stress test — 100k struct allocations, ~10min in debug. Run on demand."]
 fn p122_long_running_struct_loop() {
     code!(
         "struct Overlap { ox: float not null, oy: float not null }

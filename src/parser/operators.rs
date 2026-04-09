@@ -254,6 +254,14 @@ impl Parser {
         };
         let mut current_type = self.parse_operators(var_tp, code, parent_tp, precedence + 1);
         loop {
+            // P126: a void left operand cannot have any binary operator
+            // applied to it. Returning early prevents the pratt loop from
+            // consuming a token that's actually the start of the *next*
+            // statement — e.g. `if cond { return 0; }\n -1` where `-1` is
+            // the function's tail expression, not `void - 1`.
+            if matches!(current_type, Type::Void) {
+                return current_type;
+            }
             let mut operator = "";
             for op in OPERATORS[precedence] {
                 if self.lexer.has_token(op) {

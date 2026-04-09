@@ -830,3 +830,18 @@ fn unknown_variable_error() {
         .error("Unknown variable 'result' — did you mean 'reuslt'? at unknown_variable_error:1:45")
         .warning("Variable reuslt is never read at unknown_variable_error:1:32");
 }
+
+// ── P128: File-scope constants accept type annotations (FIXED) ─────────────
+//
+// `parse_constant` (src/parser/definitions.rs:392) now consumes an optional
+// `: type` annotation between the identifier and `=`. The annotation is
+// parsed (so the parser accepts the form) but the literal's inferred type
+// is the source of truth — a future enhancement could validate the two
+// match after dep-list normalisation.
+//
+// Regression guard: the form must keep parsing without errors.
+#[test]
+fn p128_constant_with_type_annotation_parses() {
+    code!("QUAD: vector<integer> = [1, 2, 3];\nfn test() {}");
+    // No .error() calls — parses cleanly.
+}

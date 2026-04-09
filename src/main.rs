@@ -1357,10 +1357,22 @@ fn main() {
             }
             return;
         } else if a.starts_with('-') {
-            println!("unknown option: {a}");
-            println!("usage: loft [options] <file>");
-            println!("Try `loft --help` for more information.");
-            std::process::exit(1);
+            // P131: once the script path has been seen, treat every later
+            // token (including `--*` ones) as a script argument and forward
+            // it to the script's `arguments()`. The loft CLI cannot ambiguate
+            // its own options from script options after the script path is
+            // known. Use of `--` as an explicit forwarding boundary is also
+            // supported (an explicit `--` is consumed and skipped).
+            if !file_name.is_empty() {
+                if a != "--" {
+                    user_args.push(a.to_string());
+                }
+            } else {
+                println!("unknown option: {a}");
+                println!("usage: loft [options] <file>");
+                println!("Try `loft --help` for more information.");
+                std::process::exit(1);
+            }
         } else if file_name.is_empty() {
             file_name = a.to_string();
         } else {

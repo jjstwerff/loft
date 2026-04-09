@@ -517,10 +517,16 @@ pub fn op_conv_bool_from_int(v: i32) -> bool {
 #[inline]
 #[must_use]
 pub fn op_conv_bool_from_character(v: char) -> bool {
-    // The null sentinel for 4-byte values is i32::MIN (0x80000000), which is
-    // NOT char::from(0).  Coroutine exhaustion and null-character checks must
-    // recognise both the zero char ('\0') and the integer null sentinel.
-    v != char::from(0) && (v as u32) != i32::MIN as u32
+    // P132: callers must read raw bytes via `char::from_u32(...).unwrap_or('\0')`
+    // (handled in `create.rs::generate_code_to`), so an invalid bit pattern
+    // — including the `i32::MIN` (0x80000000) coroutine-exhaustion sentinel
+    // pushed by `push_null_value` for `iterator<character>` — is mapped to
+    // `'\0'` *before* this function is called. The check below therefore only
+    // needs to recognise the explicit null character. Reading raw stack bytes
+    // directly as `char` would be undefined behaviour: Rust assumes every
+    // `char` is a valid Unicode scalar value, and the release-mode optimiser
+    // would constant-fold the sentinel check away.
+    v != '\0'
 }
 
 #[inline]

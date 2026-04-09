@@ -197,6 +197,23 @@ pub const OPERATORS: &[fn(&mut State); {count}] = &["
             if a.mutable {
                 if matches!(a.typedef, Type::Text(_)) {
                     writeln!(into, "    let v_{} = s.string();", a.name)?;
+                } else if matches!(a.typedef, Type::Character) {
+                    // P132: character values on the stack may be the
+                    // `i32::MIN` (0x80000000) coroutine-exhaustion sentinel
+                    // pushed by `push_null_value`. That bit pattern is not a
+                    // valid Unicode scalar value, so reading the bytes as
+                    // `*s.get_stack::<char>()` is undefined behaviour: the
+                    // release-mode optimiser then assumes the resulting
+                    // `char` is a valid scalar and elides any sentinel
+                    // check, causing `for c in iterator<character>()` loops
+                    // to hang forever. Read the raw `u32` and map invalid
+                    // bytes to the null character `'\0'` so the op
+                    // functions always see a valid `char`.
+                    writeln!(
+                        into,
+                        "    let v_{} = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\\0');",
+                        a.name
+                    )?;
                 } else {
                     writeln!(into, "    let v_{} = *s.get_stack::<{tp}>();", a.name)?;
                 }
