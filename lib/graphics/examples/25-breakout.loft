@@ -369,11 +369,11 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_dt = (br_now - br_last) as float / 1000000.0;
     br_last = br_now;
     if br_dt > 0.05 { br_dt = 0.05; }
+    if br_intro_timer > 0.0 { br_intro_timer -= br_dt; }
 
     // Level transition pause
     if br_level_timer > 0.0 {
       br_level_timer -= br_dt;
-      if br_intro_timer > 0.0 { br_intro_timer -= br_dt; }
     }
 
     if !br_won && !br_lost && br_level_timer <= 0.0 {
@@ -809,8 +809,8 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // HUD: pickup labels — show name of each active falling pickup in bottom-left
-    br_label_y = PADDLE_Y - 28.0;
+    // HUD: pickup labels — show name of each active falling pickup
+    // Rendered next to the pickup sprite itself for clarity
     for br_pl in 0..8 {
       if br_pk_on[br_pl] == 1 {
         br_plt = br_pk_type[br_pl];
@@ -822,10 +822,11 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-          br_tlmv = make_mvp(br_proj, 10.0, br_label_y, 120.0, 24.0);
+          // Draw label next to the falling pickup
+          br_tlmv = make_mvp(br_proj,
+            br_pk_x[br_pl] + 30.0, br_pk_y[br_pl] - 4.0, 100.0, 20.0);
           graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
           graphics::gl_draw(br_vao, 6);
-          br_label_y -= 26.0;
         }
       }
     }
