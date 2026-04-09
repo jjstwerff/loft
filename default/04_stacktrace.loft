@@ -46,6 +46,19 @@ pub struct StackFrame {
 }
 
 /// Return the current call stack as a vector of frames, outermost first.
-/// Arguments are not yet populated (empty vectors); line numbers use the
-/// call-site position from the shadow call-frame vector.
+/// TR1.4: Each frame's `variables` field is populated with the live local
+/// variables at that frame's call site (typed via `ArgValue`).  Use this to
+/// inspect not only the current function's variables but also the variables
+/// of any function further up the call stack:
+///
+/// ```loft
+/// fn debug_dump() {
+///   for frame in stack_trace() {
+///     println("{frame.function}:{frame.line}");
+///     for v in frame.variables {
+///       println("  {v.name} = {v.value}");
+///     }
+///   }
+/// }
+/// ```
 pub fn stack_trace() -> vector<StackFrame>;

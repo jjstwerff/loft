@@ -1191,15 +1191,9 @@ impl Store {
             return crate::state::STRING_NULL;
         }
         let len = self.get_int(rec, 4);
-        #[cfg(debug_assertions)]
-        assert!(
-            len >= 0 && len <= self.addr::<i32>(rec, 0) * 8,
-            "Inconsistent text store"
-        );
-        assert!(
-            (len / 8) as u32 + rec <= self.size,
-            "Inconsistent text store"
-        );
+        if len < 0 || (len / 8) as u32 + rec > self.size {
+            return crate::state::STRING_NULL;
+        }
         unsafe {
             std::str::from_utf8_unchecked(std::slice::from_raw_parts(
                 self.ptr.offset(rec as isize * 8 + 8),

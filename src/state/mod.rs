@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 mod codegen;
-mod debug;
+pub mod debug;
 mod io;
 mod text;
 
@@ -335,6 +335,96 @@ impl State {
                     }
                 })
                 .collect();
+            // TR1.4: snapshot variables for each frame.  Each frame's bytecode
+            // position is its `call_pos` (where the next call was made), or
+            // for the topmost frame, the current `code_pos`.
+            if let Some(data) = data_opt {
+                let frames: Vec<(u32, u32, u32)> = self
+                    .call_stack
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, f)| {
+                        let cp = if idx + 1 == self.call_stack.len() {
+                            // Topmost frame: use current code_pos
+                            self.code_pos
+                        } else {
+                            // Non-top frame: use the call instruction position
+                            // of the next frame's call
+                            self.call_stack[idx + 1].call_pos
+                        };
+                        (f.d_nr, f.args_base, cp)
+                    })
+                    .collect();
+                self.database.variables_snapshot = frames
+                    .into_iter()
+                    .map(|(d_nr, args_base, cp)| {
+                        let frame_vars = self.iter_frame_variables_at(data, d_nr, args_base, cp);
+                        frame_vars
+                            .into_iter()
+                            .filter(|fv| fv.live)
+                            .map(|fv| {
+                                let type_name = fv.typedef.name(data);
+                                let value = match fv.value {
+                                    crate::state::debug::VariableValue::Integer(n) => {
+                                        crate::database::VarValueSnapshot::Int(n)
+                                    }
+                                    crate::state::debug::VariableValue::Long(n) => {
+                                        crate::database::VarValueSnapshot::Long(n)
+                                    }
+                                    crate::state::debug::VariableValue::Single(n) => {
+                                        crate::database::VarValueSnapshot::Single(n)
+                                    }
+                                    crate::state::debug::VariableValue::Float(n) => {
+                                        crate::database::VarValueSnapshot::Float(n)
+                                    }
+                                    crate::state::debug::VariableValue::Boolean(b) => {
+                                        crate::database::VarValueSnapshot::Bool(b)
+                                    }
+                                    crate::state::debug::VariableValue::Character(c) => {
+                                        crate::database::VarValueSnapshot::Char(c)
+                                    }
+                                    crate::state::debug::VariableValue::Text {
+                                        content, ..
+                                    }
+                                    | crate::state::debug::VariableValue::StrView {
+                                        content, ..
+                                    } => crate::database::VarValueSnapshot::Text(
+                                        content.unwrap_or_default(),
+                                    ),
+                                    crate::state::debug::VariableValue::Reference(r)
+                                    | crate::state::debug::VariableValue::Vector(r) => {
+                                        crate::database::VarValueSnapshot::Ref {
+                                            store: i32::from(r.store_nr),
+                                            rec: r.rec as i32,
+                                            pos: r.pos as i32,
+                                        }
+                                    }
+                                    crate::state::debug::VariableValue::OutOfFrame => {
+                                        crate::database::VarValueSnapshot::Other(
+                                            "<out-of-frame>".to_string(),
+                                        )
+                                    }
+                                    crate::state::debug::VariableValue::Unreadable(why) => {
+                                        crate::database::VarValueSnapshot::Other(format!(
+                                            "<unreadable: {why}>"
+                                        ))
+                                    }
+                                    crate::state::debug::VariableValue::Unsupported => {
+                                        crate::database::VarValueSnapshot::Other(
+                                            "<unsupported>".to_string(),
+                                        )
+                                    }
+                                };
+                                crate::database::VarSnapshot {
+                                    name: fv.name,
+                                    type_name,
+                                    value,
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+            }
         }
         let mut stack = self.stack_cur;
         stack.pos = 8 + self.stack_pos;

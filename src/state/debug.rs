@@ -32,6 +32,78 @@ pub enum StackDiagLevel {
     Full,
 }
 
+/// Return the current call frame's `args_base`, or 4 (entry function) when
+/// the call stack is empty.  Used by [`State::dump_frame_variables`].
+fn frame_base_or(state: &State) -> u32 {
+    state.call_stack.last().map_or(4, |cf| cf.args_base)
+}
+
+// ------------------------------------------------------------------ FrameVariable
+
+/// One slot-assigned variable in the current call frame, with a snapshot of its
+/// runtime value.  Produced by [`State::iter_frame_variables`].
+#[derive(Debug, Clone)]
+pub struct FrameVariable {
+    pub var_nr: u16,
+    pub name: String,
+    pub typedef: Type,
+    /// Slot offset from the frame base (compile-time, never `u16::MAX` here).
+    pub slot: u16,
+    /// Absolute byte offset within the stack store (slot + frame_base).
+    pub abs_pos: u32,
+    /// Width of the slot in bytes (`Context::Variable`).
+    pub size: u16,
+    pub is_argument: bool,
+    pub scope: u16,
+    pub value: VariableValue,
+    /// True when the variable is live at the current `code_pos` — derived from
+    /// the bytecode reference range in `State.vars`.  Stale variables (slot
+    /// coalesced with another live variable) are reported but marked.
+    pub live: bool,
+    /// First bytecode position referencing this variable in the current
+    /// function, or `u32::MAX` if never referenced.
+    pub bc_first: u32,
+    /// Last bytecode position referencing this variable, or `u32::MAX`.
+    pub bc_last: u32,
+}
+
+/// A safely-read snapshot of a variable's value.  Never dereferences raw
+/// pointers without bounds-checking — corrupted slots produce `Unreadable` or
+/// `OutOfFrame` rather than crashing.
+#[derive(Debug, Clone)]
+pub enum VariableValue {
+    Integer(i32),
+    Long(i64),
+    Single(f32),
+    Float(f64),
+    Boolean(bool),
+    Character(char),
+    /// Text variable (String storage).  `cap`/`ptr`/`len` are the raw 24-byte
+    /// String layout fields; `content` is `Some(s)` only when the pointer
+    /// passes `Str::str()`'s safety guard.
+    Text {
+        cap: u64,
+        ptr: u64,
+        len: u64,
+        content: Option<String>,
+    },
+    /// `Str` view (16 bytes — used for text on the eval stack).
+    StrView {
+        ptr: u64,
+        len: u32,
+        content: Option<String>,
+    },
+    Reference(DbRef),
+    Vector(DbRef),
+    /// Slot lies above the current `stack_pos` (not yet allocated this frame).
+    OutOfFrame,
+    /// Slot is below `stack_pos` but the read failed (bounds, alignment, or
+    /// store-not-mapped).  The string explains why.
+    Unreadable(&'static str),
+    /// Type variant not yet handled by the introspection framework.
+    Unsupported,
+}
+
 impl State {
     /**
     Print the byte-code
@@ -259,6 +331,343 @@ impl State {
         let mut buf = Vec::<u8>::new();
         let _ = self.validate_stack(&mut buf, code_pos, data, StackDiagLevel::Full, extras);
         eprint!("{}", String::from_utf8_lossy(&buf));
+    }
+
+    /// Bounds-checked read at an absolute frame offset (not relative to TOS).
+    /// Returns `None` if the read would extend beyond the current stack store
+    /// buffer.  Does NOT modify `stack_pos` or any state.
+    fn peek_at<T: Copy>(&self, abs_pos: u32) -> Option<T> {
+        let store = self.database.store(&self.stack_cur);
+        let total =
+            u64::from(self.stack_cur.pos) + u64::from(abs_pos) + std::mem::size_of::<T>() as u64;
+        if total > store.byte_capacity() {
+            return None;
+        }
+        Some(*store.addr::<T>(self.stack_cur.rec, self.stack_cur.pos + abs_pos))
+    }
+
+    /// Enumerate every slot-assigned variable in the current call frame with a
+    /// safe snapshot of its value.  Returns an empty `Vec` when no function
+    /// matches `self.code_pos` or when the call stack is empty.
+    ///
+    /// This is a read-only introspection helper — it never mutates `stack_pos`,
+    /// `code_pos`, or any store data.  Variables whose slot lies above the
+    /// current `stack_pos` (not yet allocated) appear with
+    /// [`VariableValue::OutOfFrame`].  Variables that fail bounds checks appear
+    /// with [`VariableValue::Unreadable`].
+    pub fn iter_frame_variables(&self, data: &Data) -> Vec<FrameVariable> {
+        let fn_d_nr = State::fn_d_nr_for_pos(self.code_pos, data);
+        if fn_d_nr == u32::MAX {
+            return Vec::new();
+        }
+        let frame_base = self.call_stack.last().map_or(4u32, |cf| cf.args_base);
+        self.iter_frame_variables_at(data, fn_d_nr, frame_base, self.code_pos)
+    }
+
+    /// Like [`iter_frame_variables`] but for a specific frame, identified by
+    /// its `d_nr`, `args_base`, and the bytecode position to evaluate liveness
+    /// against.  Used by stack-trace introspection to walk every frame in the
+    /// active call chain — see `n_stack_trace`'s variables snapshot.
+    pub fn iter_frame_variables_at(
+        &self,
+        data: &Data,
+        fn_d_nr: u32,
+        frame_base: u32,
+        code_pos: u32,
+    ) -> Vec<FrameVariable> {
+        let mut out = Vec::new();
+        if fn_d_nr == u32::MAX || (fn_d_nr as usize) >= data.definitions() as usize {
+            return out;
+        }
+        let def = data.def(fn_d_nr);
+        let vars = &def.variables;
+        // Pre-compute bytecode reference ranges per var_nr by scanning
+        // self.vars for entries within this function's bytecode range.
+        let fn_bc_start = def.code_position;
+        let fn_bc_end = def.code_position + def.code_length;
+        let mut bc_first = vec![u32::MAX; vars.count() as usize];
+        let mut bc_last = vec![u32::MAX; vars.count() as usize];
+        for (&bc, &v) in &self.vars {
+            if bc < fn_bc_start || bc >= fn_bc_end {
+                continue;
+            }
+            let i = v as usize;
+            if i >= bc_first.len() {
+                continue;
+            }
+            if bc_first[i] == u32::MAX || bc < bc_first[i] {
+                bc_first[i] = bc;
+            }
+            if bc_last[i] == u32::MAX || bc > bc_last[i] {
+                bc_last[i] = bc;
+            }
+        }
+        for v_nr in 0..vars.count() {
+            let slot = vars.stack(v_nr);
+            if slot == u16::MAX {
+                continue;
+            }
+            let typedef = vars.tp(v_nr).clone();
+            // Argument text variables are 16-byte Str on the stack; local text
+            // variables are 24-byte String.  Match the runtime layout.
+            let is_arg = vars.is_argument(v_nr);
+            let ctx = if is_arg {
+                &Context::Argument
+            } else {
+                &Context::Variable
+            };
+            let size_bytes = size(&typedef, ctx);
+            let abs_pos = frame_base + u32::from(slot);
+            // Compute liveness before reading the value — non-live slots may
+            // contain uninitialized memory whose garbage pointer fields cause
+            // SIGSEGV when dereferenced (e.g. text variables).
+            let i = v_nr as usize;
+            let first = bc_first[i];
+            let last = bc_last[i];
+            let live = if is_arg {
+                true
+            } else if first == u32::MAX {
+                false
+            } else {
+                code_pos >= first && code_pos <= last
+            };
+            let value = if !live
+                || u64::from(abs_pos) + u64::from(size_bytes) > u64::from(self.stack_pos)
+            {
+                VariableValue::OutOfFrame
+            } else {
+                self.read_variable_value(&typedef, abs_pos, size_bytes, is_arg)
+            };
+            out.push(FrameVariable {
+                var_nr: v_nr,
+                name: vars.name(v_nr).to_string(),
+                typedef,
+                slot,
+                abs_pos,
+                size: size_bytes,
+                is_argument: is_arg,
+                scope: vars.scope(v_nr),
+                value,
+                live,
+                bc_first: first,
+                bc_last: last,
+            });
+        }
+        out
+    }
+
+    /// Read a variable's value safely at an absolute frame position.
+    /// Mirrors `dump_stack`'s per-type matching but reads at `abs_pos` instead
+    /// of popping from TOS.  When `is_arg` is true, text variables are read as
+    /// `Str` (16 bytes); otherwise as `String` (24 bytes).
+    fn read_variable_value(
+        &self,
+        tp: &Type,
+        abs_pos: u32,
+        _size: u16,
+        is_arg: bool,
+    ) -> VariableValue {
+        match tp {
+            Type::Integer(_, _, _) => self
+                .peek_at::<i32>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Integer),
+            Type::Long => self
+                .peek_at::<i64>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
+            Type::Single => self
+                .peek_at::<f32>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Single),
+            Type::Float => self
+                .peek_at::<f64>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Float),
+            Type::Boolean => self
+                .peek_at::<u8>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), |b| {
+                    VariableValue::Boolean(b != 0)
+                }),
+            Type::Character => self
+                .peek_at::<u32>(abs_pos)
+                .map(|w| char::from_u32(w).unwrap_or('\0'))
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Character),
+            Type::Text(_) if is_arg => {
+                // Str layout (16 bytes): ptr@0 (8 bytes), len@8 (4 bytes), pad@12 (4 bytes)
+                let ptr = match self.peek_at::<u64>(abs_pos) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let len = match self.peek_at::<u32>(abs_pos + 8) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let content = if ptr == 0 || ptr < (1 << 16) {
+                    if len == 0 { Some(String::new()) } else { None }
+                } else if len > 10_000_000 {
+                    None
+                } else {
+                    let slice =
+                        unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+                    std::str::from_utf8(slice).ok().map(str::to_string)
+                };
+                VariableValue::StrView { ptr, len, content }
+            }
+            Type::Text(_) => {
+                // String layout (24 bytes): cap@0, ptr@8, len@16
+                let cap = match self.peek_at::<u64>(abs_pos) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let ptr = match self.peek_at::<u64>(abs_pos + 8) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let len = match self.peek_at::<u64>(abs_pos + 16) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let content = if ptr == 0 || ptr < (1 << 16) {
+                    if len == 0 { Some(String::new()) } else { None }
+                } else if len > 10_000_000 {
+                    None
+                } else {
+                    let slice =
+                        unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+                    std::str::from_utf8(slice).ok().map(str::to_string)
+                };
+                VariableValue::Text {
+                    cap,
+                    ptr,
+                    len,
+                    content,
+                }
+            }
+            Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                // DbRef layout: rec@0, pos@4, store_nr@8 (Rust reorders)
+                let rec = match self.peek_at::<u32>(abs_pos) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let pos = match self.peek_at::<u32>(abs_pos + 4) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let store_nr = match self.peek_at::<u16>(abs_pos + 8) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                VariableValue::Reference(DbRef { store_nr, rec, pos })
+            }
+            Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _) => {
+                let rec = match self.peek_at::<u32>(abs_pos) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let pos = match self.peek_at::<u32>(abs_pos + 4) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                let store_nr = match self.peek_at::<u16>(abs_pos + 8) {
+                    Some(v) => v,
+                    None => return VariableValue::Unreadable("oob"),
+                };
+                VariableValue::Vector(DbRef { store_nr, rec, pos })
+            }
+            _ => VariableValue::Unsupported,
+        }
+    }
+
+    /// Format the result of [`iter_frame_variables`] as a multi-line table.
+    /// One line per variable, sorted by slot offset.  Used by trace output and
+    /// the `Full` level of `validate_stack`.
+    ///
+    /// # Errors
+    /// Propagates I/O errors from the writer.
+    pub fn dump_frame_variables(&self, f: &mut dyn Write, data: &Data) -> Result<(), Error> {
+        let fn_d_nr = State::fn_d_nr_for_pos(self.code_pos, data);
+        if fn_d_nr == u32::MAX {
+            writeln!(f, "[VARS] no function for code_pos={}", self.code_pos)?;
+            return Ok(());
+        }
+        let mut vars = self.iter_frame_variables(data);
+        // Sort by slot, then by liveness so live variables come first within
+        // each slot (slot coalescing groups multiple vars at the same offset).
+        vars.sort_by_key(|v| (v.slot, !v.live));
+        let total_vars = data.def(fn_d_nr).variables.count();
+        let live_count = vars.iter().filter(|v| v.live).count();
+        // When LOFT_DUMP_VARS_LIVE is set, hide stale (slot-coalesced inactive)
+        // variables — only show what is actually live at this code position.
+        let live_only = std::env::var("LOFT_DUMP_VARS_LIVE").is_ok();
+        if live_only {
+            vars.retain(|v| v.live);
+        }
+        writeln!(
+            f,
+            "[VARS] fn={} code_pos={} stack_pos={} ({} live, {} slot-assigned, {} total)",
+            data.def(fn_d_nr).name,
+            self.code_pos,
+            self.stack_pos,
+            live_count,
+            vars.len(),
+            total_vars
+        )?;
+        for v in &vars {
+            let arg = if v.is_argument { "arg " } else { "    " };
+            let live_marker = if v.live { " " } else { "X" };
+            write!(
+                f,
+                "  {live_marker}v{:<3} [{:4}+{:3}={:4}..{:4}) {arg}{:<24} ",
+                v.var_nr,
+                frame_base_or(self),
+                v.slot,
+                v.abs_pos,
+                v.abs_pos + u32::from(v.size),
+                v.name
+            )?;
+            match &v.value {
+                VariableValue::Integer(n) => writeln!(f, "i32  = {n}")?,
+                VariableValue::Long(n) => writeln!(f, "i64  = {n}")?,
+                VariableValue::Single(n) => writeln!(f, "f32  = {n}")?,
+                VariableValue::Float(n) => writeln!(f, "f64  = {n}")?,
+                VariableValue::Boolean(b) => writeln!(f, "bool = {b}")?,
+                VariableValue::Character(c) => writeln!(f, "char = {c:?}")?,
+                VariableValue::Text {
+                    cap,
+                    ptr,
+                    len,
+                    content,
+                } => {
+                    write!(f, "text = String{{cap={cap:#x}, ptr={ptr:#x}, len={len}}}")?;
+                    if let Some(s) = content {
+                        if s.len() > 32 {
+                            writeln!(f, " {:?}...", &s[..32])?;
+                        } else {
+                            writeln!(f, " {s:?}")?;
+                        }
+                    } else {
+                        writeln!(f, " <unreadable>")?;
+                    }
+                }
+                VariableValue::StrView { ptr, len, content } => {
+                    write!(f, "str  = Str{{ptr={ptr:#x}, len={len}}}")?;
+                    match content {
+                        Some(s) => writeln!(f, " {s:?}")?,
+                        None => writeln!(f, " <unreadable>")?,
+                    }
+                }
+                VariableValue::Reference(r) => {
+                    writeln!(f, "ref  = ({},{},{})", r.store_nr, r.rec, r.pos)?
+                }
+                VariableValue::Vector(r) => {
+                    writeln!(f, "vec  = ({},{},{})", r.store_nr, r.rec, r.pos)?
+                }
+                VariableValue::OutOfFrame => writeln!(f, "<out-of-frame>")?,
+                VariableValue::Unreadable(why) => writeln!(f, "<unreadable: {why}>")?,
+                VariableValue::Unsupported => writeln!(f, "<unsupported type>")?,
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn dump_fn_signature(
@@ -544,6 +953,14 @@ impl State {
             OPERATORS[op as usize](self);
             if trace_this {
                 self.log_result(log, op, code, data)?;
+            }
+
+            // Variable introspection: dump live variables in the current frame
+            // after each opcode when LOFT_DUMP_VARS is set.  Use this to track
+            // when a variable's value changes unexpectedly (e.g. corruption
+            // from a misaligned write).
+            if trace_this && (config.dump_vars || std::env::var("LOFT_DUMP_VARS").is_ok()) {
+                self.dump_frame_variables(log, data)?;
             }
 
             // Optional stack snapshot after the opcode.
@@ -835,7 +1252,14 @@ impl State {
             }
             return Ok(());
         }
-        let v = self.dump_stack(&def.returned, code, data);
+        let saved = self.stack_pos;
+        let v = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.dump_stack(&def.returned, code, data)
+        }))
+        .unwrap_or_else(|_| {
+            self.stack_pos = saved;
+            "<display-error>".to_string()
+        });
         if def.name == "OpConvRefFromNull" {
             writeln!(log, " -> {v}[{}]", self.stack_pos)?;
             self.stack_pos = stack;
@@ -865,15 +1289,12 @@ impl State {
                 4 => format!("{}", *self.get_stack::<u8>() == 1), // boolean
                 5 => {
                     let s = self.string();
-                    // Guard: ptr < 64 KiB means a DbRef-derived garbage pointer (A5.6).
-                    if (s.ptr as usize) < (1 << 16) {
-                        return format!(" -> <raw:{:#x}>[{}]", s.ptr as usize, self.stack_pos);
-                    }
-                    let s = s.str();
-                    if s == STRING_NULL {
-                        "null".to_string()
-                    } else {
-                        format!("\"{}\"", s.replace('"', "\\\""))
+                    match s.try_str() {
+                        None => {
+                            return format!(" -> <raw:{:#x}>[{}]", s.ptr as usize, self.stack_pos);
+                        }
+                        Some(s) if s == STRING_NULL => "null".to_string(),
+                        Some(s) => format!("\"{}\"", s.replace('"', "\\\"")),
                     }
                 } // text
                 6 => format!("{}", *self.get_stack::<char>()), // character
@@ -945,17 +1366,19 @@ impl State {
             Type::Single => format!("{}", *self.get_stack::<f32>()),
             Type::Float => format!("{}", *self.get_stack::<f64>()),
             Type::Text(_) => {
-                let s = self.string();
-                // Guard: ptr < 64 KiB means a null-page address or a DbRef-derived value
-                // (e.g. OpVarFnRef's 16-byte fn_ref slot misread as Str). A5.6.
-                if (s.ptr as usize) < (1 << 16) {
-                    return format!("<raw:{:#x}>", s.ptr as usize);
+                // Guard: check stack has room for a Str read.
+                let needed = self.stack_cur.pos + self.stack_pos;
+                let str_size = super::size_ptr();
+                let cap = self.database.store(&self.stack_cur).byte_capacity();
+                if u64::from(needed) < u64::from(str_size) || needed - str_size > cap as u32 {
+                    self.stack_pos -= str_size;
+                    return format!("<stack-oob:{needed}>");
                 }
-                let s = s.str();
-                if s == STRING_NULL {
-                    "null".to_string()
-                } else {
-                    format!("\"{}\"", s.replace('"', "\\\""))
+                let s = self.string();
+                match s.try_str() {
+                    None => format!("<raw:{:#x}>", s.ptr as usize),
+                    Some(s) if s == STRING_NULL => "null".to_string(),
+                    Some(s) => format!("\"{}\"", s.replace('"', "\\\"")),
                 }
             }
             Type::Boolean => format!("{}", *self.get_stack::<u8>() == 1),
@@ -969,12 +1392,18 @@ impl State {
                 if known == u16::MAX || val.store_nr as usize >= self.database.allocations.len() {
                     return format!("ref({},{},{})", val.store_nr, val.rec, val.pos);
                 }
+                let store = &self.database.allocations[val.store_nr as usize];
+                if store.free {
+                    return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
+                }
+                // Guard: record must be within the store buffer.
+                if u64::from(val.rec) * 8 + u64::from(val.pos) + 8 > store.byte_capacity() {
+                    return format!("ref({},{},{})=<oob>", val.store_nr, val.rec, val.pos);
+                }
                 // Guard: the record must be live (positive fld-0 header) before we
-                // dereference.  A stale `DbRef` can point to a store that was re-initialised
-                // (init() sets fld 0 negative) but not yet re-claimed — show coords only.
+                // dereference.
                 if val.rec != 0 {
-                    let hdr =
-                        *self.database.allocations[val.store_nr as usize].addr::<i32>(val.rec, 0);
+                    let hdr = *store.addr::<i32>(val.rec, 0);
                     if hdr <= 0 {
                         return format!("ref({},{},{})=<freed>", val.store_nr, val.rec, val.pos);
                     }

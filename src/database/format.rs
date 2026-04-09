@@ -449,10 +449,14 @@ impl ShowDb<'_> {
             });
         } else if self.known_type == 5 {
             let text_nr = self.store().get_int(self.rec, self.pos) as u32;
-            let text_val = self.store().get_str(text_nr);
-            s.push('\"');
-            s.push_str(text_val);
-            s.push('\"');
+            if text_nr == 0 || text_nr >= self.store().capacity_words() {
+                write!(s, "<bad-text:{text_nr}>").unwrap();
+            } else {
+                let text_val = self.store().get_str(text_nr);
+                s.push('\"');
+                s.push_str(text_val);
+                s.push('\"');
+            }
         } else if self.known_type == 6 {
             let i = self.store().get_int(self.rec, self.pos);
             if i != i32::MAX
@@ -801,6 +805,12 @@ impl DumpDb<'_> {
             s.push_str("null");
             return;
         }
+        // Guard: ensure the record is within the store's buffer before reading.
+        let store = self.store();
+        if u64::from(self.rec) * 8 + u64::from(self.pos) + 8 > store.byte_capacity() {
+            write!(s, "<oob:rec={},pos={}>", self.rec, self.pos).unwrap();
+            return;
+        }
         match self.known_type {
             0 => write!(s, "{}", self.store().get_int(self.rec, self.pos)).unwrap(), // integer
             1 => write!(s, "{}l", self.store().get_long(self.rec, self.pos)).unwrap(), // long
@@ -814,8 +824,12 @@ impl DumpDb<'_> {
             5 => {
                 // text
                 let text_nr = self.store().get_int(self.rec, self.pos) as u32;
-                let text_val = self.store().get_str(text_nr);
-                write!(s, "\"{}\"", text_val.replace('"', "\\\"")).unwrap();
+                if text_nr == 0 || text_nr >= self.store().capacity_words() {
+                    write!(s, "<bad-text:{text_nr}>").unwrap();
+                } else {
+                    let text_val = self.store().get_str(text_nr);
+                    write!(s, "\"{}\"", text_val.replace('"', "\\\"")).unwrap();
+                }
             }
             6 => {
                 // character

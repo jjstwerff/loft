@@ -386,6 +386,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
+            variables_snapshot: Vec::new(),
             closure_map: std::collections::HashMap::new(),
         })
     }
@@ -451,6 +452,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
+            variables_snapshot: Vec::new(),
             closure_map: std::collections::HashMap::new(),
         })
     }

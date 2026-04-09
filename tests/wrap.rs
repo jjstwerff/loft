@@ -406,7 +406,9 @@ fn file_debug() -> std::io::Result<()> {
 
 /// Debug the run of `16-parser.loft` with a full execution trace written to
 /// `tests/dumps/16-parser.loft.txt`.  Use this when diagnosing parser regressions.
-/// Ignored by default — the execution trace takes ~100 s.
+/// Ignored: the execute_log trace dereferences a &text DbRef whose debug dump
+/// reads uninitialised stack memory (the runtime itself works — only the trace
+/// formatter segfaults).  See the `<raw:0x1>` in the dump at GetFileText.
 /// Run explicitly: cargo test -- parser_debug --ignored
 #[test]
 #[ignore]
