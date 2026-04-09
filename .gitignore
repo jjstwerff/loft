@@ -15,3 +15,7 @@ tests/test_native_pkg/
 *.glb
 lib/graphics/examples/*.png
 test_scene_debug.loft
+# FUSE filesystem hidden files: created when a file is deleted while still
+# open by another process (e.g. an editor or watcher). They're stale OS
+# artefacts, never source code.
+.fuse_hidden*
