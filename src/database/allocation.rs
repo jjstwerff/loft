@@ -260,10 +260,25 @@ impl Stores {
 
     #[must_use]
     pub fn store(&self, r: &DbRef) -> &Store {
-        &self.allocations[r.store_nr as usize]
+        let s = &self.allocations[r.store_nr as usize];
+        #[cfg(debug_assertions)]
+        if s.free {
+            eprintln!(
+                "[store] ACCESS FREED store #{} rec={} pos={} — data will be garbage",
+                r.store_nr, r.rec, r.pos
+            );
+        }
+        s
     }
 
     pub fn store_mut(&mut self, r: &DbRef) -> &mut Store {
+        #[cfg(debug_assertions)]
+        if self.allocations[r.store_nr as usize].free {
+            eprintln!(
+                "[store] WRITE TO FREED store #{} rec={} pos={} — corruption",
+                r.store_nr, r.rec, r.pos
+            );
+        }
         &mut self.allocations[r.store_nr as usize]
     }
 
