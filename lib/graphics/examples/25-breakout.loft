@@ -809,12 +809,13 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // HUD: pickup labels — show name of each active falling pickup
-    // Rendered next to the pickup sprite itself for clarity
+    // HUD: pickup labels — show name next to the first falling pickup of each type
+    br_shown = [for _ in 0..8 { 0 }];
     for br_pl in 0..8 {
       if br_pk_on[br_pl] == 1 {
         br_plt = br_pk_type[br_pl];
-        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 {
+        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && br_shown[br_plt] == 0 {
+          br_shown[br_plt] = 1;
           graphics::gl_use_shader(br_sheet.ss_shader);
           graphics::gl_bind_texture(br_pk_tex[br_plt], 0);
           graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
@@ -822,7 +823,6 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
           graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-          // Draw label next to the falling pickup
           br_tlmv = make_mvp(br_proj,
             br_pk_x[br_pl] + 30.0, br_pk_y[br_pl] - 4.0, 100.0, 20.0);
           graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
