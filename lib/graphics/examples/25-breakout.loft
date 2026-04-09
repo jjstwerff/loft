@@ -72,9 +72,9 @@ SP_SHIELD = 7;
 
 fn build_atlas() -> graphics::Canvas {
   // 4x4 grid, 32x32 per cell = 128x128
-  // Row 0: small icons for brick overlay (drawn in corner of brick)
+  // Row 0: small icons for brick overlay
   // Row 1: (continued)
-  // Row 2-3: large pickup icons (fill most of cell)
+  // Row 2-3: large pickup icons with text labels
   at = graphics::canvas(128, 128, 0);
 
   // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
@@ -242,6 +242,32 @@ uniform float uAlpha;
 void main() {{ FragColor = vec4(uColor, uAlpha); }}
 `;
   br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
+
+  // Font for text rendering
+  br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  // Pre-render pickup name labels as textures (avoids per-frame allocation)
+  br_pk_names = ["", "WIDER", "BOOM!", "BLAST", "ROWS+", "MULTI", "FIRE!", "SHIELD"];
+  br_pk_tex = [for _ in 0..8 { 0 }];
+  br_pk_tw = [for _ in 0..8 { 0 }];
+  br_pk_th = [for _ in 0..8 { 0 }];
+  for br_ti in 1..8 {
+    br_tc = graphics::canvas(120, 24, 0);
+    br_tc.draw_text(br_font, br_pk_names[br_ti], 18.0, 2, 2, graphics::rgba(255, 255, 255, 255));
+    br_pk_tw[br_ti] = graphics::gl_measure_text(br_font, br_pk_names[br_ti], 18.0) as integer + 4;
+    br_pk_th[br_ti] = 22;
+    br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 120, 24);
+  }
+  // Pre-render "LEVEL N" textures for levels 1-20
+  br_lvl_tex = [for _ in 0..20 { 0 }];
+  br_lvl_tw = [for _ in 0..20 { 0 }];
+  for br_tl in 0..20 {
+    br_ln = br_tl + 1;
+    br_lt = "LEVEL {br_ln}";
+    br_lcv = graphics::canvas(300, 60, 0);
+    br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, graphics::rgba(255, 255, 255, 255));
+    br_lvl_tw[br_tl] = graphics::gl_measure_text(br_font, br_lt, 48.0) as integer + 8;
+    br_lvl_tex[br_tl] = graphics::gl_upload_canvas(br_lcv.data, 300, 60);
+  }
 
   // ── Game state ─────────────────────────────────────────────────
   br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
@@ -776,9 +802,50 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
+    // HUD: pickup labels — show name of each active falling pickup in bottom-left
+    br_label_y = PADDLE_Y + 25.0;
+    for br_pl in 0..8 {
+      if br_pk_on[br_pl] == 1 {
+        br_plt = br_pk_type[br_pl];
+        if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 {
+          graphics::gl_use_shader(br_sheet.ss_shader);
+          graphics::gl_bind_texture(br_pk_tex[br_plt], 0);
+          graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 0.0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
+          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 1.0);
+          br_tlmv = make_mvp(br_proj, 10.0, br_label_y, 120.0, 24.0);
+          graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
+          graphics::gl_draw(br_vao, 6);
+          br_label_y += 26.0;
+        }
+      }
+    }
+
+    // Level transition text — big "LEVEL N" centered
+    if br_level_timer > 0.0 {
+      br_tli = br_level - 1;
+      if br_tli >= 0 && br_tli < 20 && br_lvl_tex[br_tli] != 0 {
+        graphics::gl_use_shader(br_sheet.ss_shader);
+        graphics::gl_bind_texture(br_lvl_tex[br_tli], 0);
+        graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 0.0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
+        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 1.0);
+        br_tlw = 300.0;
+        br_tlh = 60.0;
+        br_tlmv = make_mvp(br_proj, SCREEN_W / 2.0 - br_tlw / 2.0, SCREEN_H / 2.0 - br_tlh / 2.0, br_tlw, br_tlh);
+        graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
+        graphics::gl_draw(br_vao, 6);
+      }
+    }
+
     // Screen flash overlay
     if br_flash_timer > 0.0 {
       br_fa = br_flash_timer / FLASH_DURATION * 0.4;
+      graphics::gl_use_shader(br_flat);
       graphics::gl_set_uniform_float(br_flat, "uAlpha", br_fa);
       draw_flat(br_flat, br_vao, br_proj, 0.0, 0.0, SCREEN_W, SCREEN_H,
         br_flash_r, br_flash_g, br_flash_b);
