@@ -717,4 +717,4 @@ build produces a valid `.wasm` file.
 - [ROADMAP.md](ROADMAP.md) — W1–W6 milestone table with effort estimates and dependencies
 - [RELEASE.md](RELEASE.md) — 1.0.0 gate criteria the IDE must satisfy
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Branch naming and commit workflow for implementing W items
-- [EXTERNAL_LIBS.md](EXTERNAL_LIBS.md) — R1 workspace split is a prerequisite for the `cdylib` WASM target
+- [PACKAGES.md](PACKAGES.md) — R1 workspace split is a prerequisite for the `cdylib` WASM target

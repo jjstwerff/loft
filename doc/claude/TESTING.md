@@ -340,6 +340,10 @@ pub struct LogConfig {
     /// dump.  Enabled by `LOFT_LOG=all_fns`; essential for diagnosing crashes
     /// whose opcode address falls inside a built-in.
     pub show_all_functions: bool,
+
+    /// Dump live variables after every traced opcode.  Replaces the
+    /// `LOFT_DUMP_VARS` env-var check (which was unsafe in parallel tests).
+    pub dump_vars: bool,
 }
 ```
 
@@ -991,6 +995,47 @@ point of first access, before corruption propagates:
 | `stack.pos ≥ size_of::<T>()` | `src/database/mod.rs` `get<T>()` | Stack underflow from popping more bytes than were pushed (e.g. wrong native-function arg order) |
 
 All three are zero-cost in release builds.
+
+---
+
+## Test Coverage Gaps
+
+Last updated 2026-04-02.  Overall: **71.3% line / 74.9% function**.
+
+### Files with 0% or critically low coverage
+
+| File | Line % | Key gaps |
+|---|---|---|
+| `src/documentation.rs` | 0% | HTML doc gen — covered by `gendoc` binary only |
+| `src/radix_tree.rs` | 0% | Planned feature, unused |
+| `src/native_utils.rs` | 12.3% | WASM/installed-layout paths |
+| `src/database/allocation.rs` | 38.6% | Store growth, boundary conditions |
+| `src/logger.rs` | 39.3% | Production mode, rotation, rate limiting |
+| `src/extensions.rs` | 45.5% | Plugin dedup, library load failures |
+| `src/variables/validate.rs` | 45.6% | Scope cycle detection, sibling conflicts |
+| `src/database/search.rs` | 46.5% | Multi-key range queries |
+
+### Priority gap areas
+
+1. **Vector reverse/sort** — `.loft` script test; closes `reverse_vector()` 0% gap
+2. **Database store boundaries** — `limits.rs`; important for correctness
+3. **Database range queries** — `.loft` scripts with multi-key sorted collections
+4. **Parser stress / error recovery** — new `parser_stress.rs`; high robustness value
+5. **Logger production mode + rotation** — extend `logger_severity.rs`
+6. **DbRef edge cases** — add to `data_structures.rs`
+7. **Slot validation paths** — synthetic IR tests in `tests/slots.rs`
+
+### Features tested only in `tests/*.rs` (not scriptable)
+
+| Feature | Rust test file |
+|---|---|
+| Parallel worker API | `threading.rs` |
+| Data structures API (Stores/tree/hash) | `data_structures.rs` |
+| Logger severity routing | `logger_severity.rs` |
+| Code generation correctness | `issues.rs` |
+| Code formatter roundtrips | `format.rs` |
+| Native compilation pipeline | `native.rs` |
+| WASM compilation | `wasm_entry.rs` |
 
 ---
 

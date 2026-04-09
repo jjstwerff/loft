@@ -38,7 +38,6 @@ fn build(script: &str) -> (State, Data) {
 // ── Test 1: Single integer variable ─────────────────────────────────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn integer_variable_layout() {
     // After compile, the framework can list slot-assigned variables for
     // n_test.  We don't need execute output to verify the slot table.
@@ -75,7 +74,6 @@ fn integer_variable_layout() {
 // ── Test 2: Iterator yields variables for entry function ────────────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn iter_yields_function_variables() {
     let (mut state, data) = build(
         "fn test() {
@@ -105,7 +103,6 @@ fn iter_yields_function_variables() {
 // ── Test 3: Liveness — slot-coalesced variables are marked correctly ───────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn liveness_marks_dead_variables() {
     // This script reuses slots: `x` is dead after `z = x + y`, so its slot
     // is coalesced with another variable.
@@ -137,7 +134,6 @@ fn liveness_marks_dead_variables() {
 // ── Test 4: Bytecode-position liveness range is populated ───────────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn liveness_range_populated() {
     let (mut state, data) = build(
         "fn test() {
@@ -177,7 +173,6 @@ fn liveness_range_populated() {
 // ── Test 5: Iterator is read-only — does not mutate stack_pos ──────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn iter_does_not_mutate_state() {
     let (mut state, data) = build(
         "fn test() {
@@ -198,7 +193,6 @@ fn iter_does_not_mutate_state() {
 // ── Test 6: dump_frame_variables produces expected format ──────────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn dump_format_smoke_test() {
     let (mut state, data) = build(
         "fn test() {
@@ -225,7 +219,6 @@ fn dump_format_smoke_test() {
 // ── Test 7: Run a real script through execute_log to ensure no crashes ────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn execute_log_with_dump_does_not_crash() {
     let (mut state, data) = build(
         "fn test() {
@@ -248,7 +241,6 @@ fn execute_log_with_dump_does_not_crash() {
 // ── Test 8a: Verify the framework agrees with the codegen vars map ─────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn iter_var_nr_matches_codegen() {
     // The codegen records (bytecode_pos, var_nr) entries in State.vars when
     // it emits a variable-accessing opcode.  The framework's iter_frame_variables
@@ -306,7 +298,6 @@ fn iter_var_nr_matches_codegen() {
 // ── Test 8b: same validation on the file_content reproducer ────────────────
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn iter_var_nr_matches_codegen_file_content() {
     let (mut state, data) = build(
         "fn test() {
@@ -348,7 +339,6 @@ fn iter_var_nr_matches_codegen_file_content() {
 // ── Test 9: Argument size — text args use Str (16B), locals use String (24B)
 
 #[test]
-#[ignore = "SIGSEGV on ubuntu CI — investigating uninitialized stack reads"]
 fn arg_text_uses_str_layout() {
     let (mut state, data) = build(
         "fn helper(s: text) -> integer {

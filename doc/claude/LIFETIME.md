@@ -6,81 +6,12 @@ heap-owning types interacts with scope exit to decide what gets freed.
 
 ---
 
-## The dep field
+## Dep field and scope exit freeing
 
-Every heap-owning type carries a `Vec<u16>` dependency list:
+The `dep` field on `Type` controls ownership and freeing.  See `src/data.rs`
+(Type enum doc) and `src/scopes.rs` (module doc) for the core semantics.
 
-```rust
-Type::Text(Vec<u16>)                          // text buffer on the stack frame
-Type::Reference(u32, Vec<u16>)                // store-allocated record
-Type::Vector(Box<Type>, Vec<u16>)             // dynamic vector
-Type::Enum(u32, bool, Vec<u16>)               // struct-enum variant (is_ref=true)
-Type::Function(Vec<Type>, Box<Type>, Vec<u16>) // fn-ref with closure record
-Type::Sorted(u32, .., Vec<u16>)               // sorted collection
-Type::Index(u32, .., Vec<u16>)                // unique index
-Type::Hash(u32, .., Vec<u16>)                 // hash table
-Type::Spacial(u32, .., Vec<u16>)              // spatial index
-```
-
-Each `u16` in the list is a **variable number** (`v_nr`).  The meaning:
-
-| dep list | Meaning | Free behaviour |
-|----------|---------|----------------|
-| `[]` (empty) | **Owned** — this variable allocated the value | Freed at scope exit |
-| `[v]` | **Borrowed** — derived from variable `v` | NOT freed (owner frees it) |
-| `[v, w, …]` | Borrowed from multiple ancestors | NOT freed |
-
-The dep list answers: "who is responsible for freeing this value?"  An empty list
-means "I am"; a non-empty list means "someone else is".
-
----
-
-## How deps are created
-
-### `Type::depending(on: u16)` — `src/data.rs:209`
-
-Adds variable `on` to the front of the dep list, producing a borrowed variant of the
-same type.  Called whenever a value is **derived from** another variable:
-
-```rust
-// Reading a variable produces a value that depends on that variable.
-// src/parser/objects.rs:138
-t = self.vars.tp(v_nr).depending(v_nr);
-
-// Accessing a field inherits the parent's deps plus the parent variable.
-// src/parser/fields.rs:55-62
-for on in dep { t = t.depending(on); }
-t = t.depending(*nr);  // nr = the struct variable
-
-// Iterating a vector: element depends on the vector variable.
-// src/parser/collections.rs:832
-in_type = in_type.depending(vec_var);
-```
-
-### Text exception — `src/parser/objects.rs:115-119`
-
-When reading a `Text` variable, the type is cloned **without** adding the self-dep:
-
-```rust
-if matches!(self.vars.tp(v_nr), Type::Text(_)) {
-    t = self.vars.tp(v_nr).clone();     // keeps existing deps, no self-dep added
-} else {
-    t = self.vars.tp(v_nr).depending(v_nr);  // adds self-dep
-}
-```
-
-This is because text lives on the stack frame (as a `Str` pointer+length), not in the
-store.  A text value IS the variable — there is no separate heap allocation that the
-variable "points to" and could outlive.
-
-### `Function::depend(var_nr, on)` — `src/variables/mod.rs:502`
-
-Mutates a variable's type in-place to add a dep.  Used when the parser discovers
-that `var_nr` borrows from `on` (e.g. a vector element assigned to a local).
-
----
-
-## Scope exit — `get_free_vars` — `src/scopes.rs:564-665`
+## Scope exit — `get_free_vars`
 
 When a scope ends (block exit, function return, loop iteration boundary), the scope
 analysis emits free operations for variables registered in that scope.

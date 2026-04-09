@@ -147,7 +147,7 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 | `doc/claude/PLANNING.md` | Items were completed (remove) or new items discovered (add) |
 | `doc/claude/PROBLEMS.md` | Bugs were fixed (mark resolved) or **any new bug found during the sprint** (add with reproducer) |
 | `doc/claude/CAVEATS.md` | Edge cases were fixed or **any new workaround discovered** (add with test reference) |
-| `doc/claude/GAPS.md` | Test coverage improved or new gaps identified |
+| `doc/claude/TESTING.md` § Coverage Gaps | Test coverage improved or new gaps identified |
 | `README.md` | New user-facing features, CLI commands, or examples added |
 | Feature design doc (e.g. `PACKAGES.md`, `OPENGL.md`) | Implementation diverged from design, or phases completed |
 | `doc/claude/STDLIB.md` | New stdlib functions or types added |
@@ -537,7 +537,7 @@ behaviour and update them as needed.  Common files to check:
 | `RELEASE.md` | Gate criteria or release checklist changed |
 | `PROBLEMS.md` | A known bug was fixed or a new one was discovered |
 | `STDLIB.md` | A standard-library function was added or changed |
-| `EXTERNAL_LIBS.md` | Library resolution or manifest handling changed |
+| `PACKAGES.md` | Library resolution or manifest handling changed |
 | `INCONSISTENCIES.md` | A documented language inconsistency was resolved |
 | Any other `doc/claude/*.md` | File explicitly describes the feature area |
 

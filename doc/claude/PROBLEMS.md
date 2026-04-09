@@ -777,7 +777,7 @@ by `OpVectorRef` at the call site.
 
 **Tests:** `tests/scripts/76-ignored-struct-vector-return.loft` —
 `test_p105_inline_struct_in_vector`, `test_p105_nested_struct_in_vector`.
-See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+Fixed in Sprint 8.
 
 ---
 
@@ -795,7 +795,7 @@ causing reads from wrong memory locations and silently returning empty vectors.
 `OpGetField` for all `Type::Reference` accesses in `get_val()`.
 
 **Test:** `tests/scripts/76-ignored-struct-vector-return.loft::test_p106_nested_vector_in_vector_element`.
-See [P104_P105_P106_C54.md](P104_P105_P106_C54.md).
+Fixed in Sprint 8.
 
 ---
 

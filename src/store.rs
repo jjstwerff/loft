@@ -1,11 +1,24 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! An in memory store that can be allocated in small steps.
-//! A store has a structure of unclaimed data.
-//! There can be a mapped file behind each storage instead of only memory.
+//! Word-addressed heap store with bump allocation and free-block reuse.
 //!
-//! There is always a specific record as the main record of a store describing vectors and indexes with sub-records.
+//! Each [`Store`] is a contiguous buffer of 8-byte words.  Records are
+//! allocated via [`claim`](Store::claim) and freed via
+//! [`delete`](Store::delete).
+//!
+//! ## Memory layout
+//!
+//! Every record starts with a **signed size header** (one `i32` word):
+//! - **Positive** → claimed record; magnitude = size in words (incl. header).
+//! - **Negative** → free block; magnitude = size in words.
+//!
+//! Free blocks are tracked in a `BTreeMap` for gap-based allocation.
+//! Adjacent free blocks are merged on `delete` to reduce fragmentation.
+//!
+//! Record 0 is the store header; record 1 (`PRIMARY`) is the main record
+//! describing vectors and indexes with sub-records.  A store may optionally
+//! be backed by a memory-mapped file (`mmap` feature).
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
@@ -118,7 +131,7 @@ impl Store {
 
     pub fn new(size: u32) -> Store {
         let l = Layout::from_size_align(size as usize * 8, 8).expect("Problem");
-        let ptr = unsafe { A.alloc(l) };
+        let ptr = unsafe { A.alloc_zeroed(l) };
         let mut store = Store {
             ptr,
             size,
@@ -423,9 +436,13 @@ impl Store {
             self.size = size;
             return;
         }
+        let old_bytes = self.size as usize * 8;
         let bytes = size as usize * 8;
-        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+        let l = Layout::from_size_align(old_bytes, 8).expect("Problem");
         self.ptr = unsafe { A.realloc(self.ptr, l, bytes) };
+        if bytes > old_bytes {
+            unsafe { self.ptr.add(old_bytes).write_bytes(0, bytes - old_bytes) };
+        }
         self.size = size;
     }
 

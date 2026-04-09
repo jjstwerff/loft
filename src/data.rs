@@ -143,6 +143,15 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
+/// Static type of a parsed expression or variable.
+///
+/// Several variants carry a `Vec<u16>` **dependency list** (`dep`):
+/// - **Empty** → the value is *owned* — freed by `OpFreeRef` at scope exit.
+/// - **Non-empty** → the value *borrows* from the parameters listed by
+///   attribute index — NOT freed (the caller owns the store).
+///
+/// This governs the freeing logic in [`crate::scopes`].  See also
+/// [`Function::depend`](crate::variables::Function) which adds entries.
 pub enum Type {
     /// The type of this parse result is unknown, possibly linked to a yet unknown type (if != 0).
     Unknown(u32),

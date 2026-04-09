@@ -121,18 +121,11 @@ Nullable integers with range exactly 256 or 65536 also use 1 or 2 bytes respecti
 
 ### Dependency Lists (`Vec<u16>`)
 
-Types that hold heap-allocated data (`Text`, `Reference`, `Vector`, `Enum(ref)`, collections)
-carry a `Vec<u16>` of **variable indices** that this value borrows storage from.
-
-The dep list is a *borrow tracker*:
-- **Empty dep** → the variable owns its allocation; `OpFreeRef` will be emitted when it goes out of scope.
-- **Non-empty dep** → the variable borrows from another; `OpFreeRef` is suppressed; code generation emits `OpCreateStack(dep[0])` instead of `OpConvRefFromNull`/`OpDatabase`.
-- If the **return type** of a block/function depends on variable `v` (`tp.depend().contains(&v)`), `OpFreeRef(v)` is also suppressed even when dep is empty.
-
-`Type::depend()` extracts the full dep list, recursing through `RefVar`.
-`Type::depending(on)` returns a copy of the type with `on` prepended.
-
-`Type::RefVar(Box<Type>)` means "stack reference": a DbRef pointing into another variable's stack slot rather than an independently-owned record. Used for `&text` (alias) parameters; `depend()` delegates to the inner type.
+Types carrying `Vec<u16>` track ownership for scope-based freeing.
+See `src/data.rs` (Type enum doc) and `src/scopes.rs` (module doc) for
+the full semantics.  `Type::RefVar(Box<Type>)` means "stack reference"
+— a DbRef into another variable's stack slot; `depend()` delegates to
+the inner type.
 
 ---
 

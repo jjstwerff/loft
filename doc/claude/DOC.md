@@ -210,7 +210,7 @@ If a new section is added, a new `doc/stdlib-<id>.html` file is created automati
 ---
 
 ## See also
-- [QUICK_START.md](QUICK_START.md) — `cargo run --bin gendoc` command and typical developer workflow
+- [DEVELOPMENT.md](DEVELOPMENT.md) — Development workflow and common commands
 - [CODE.md](CODE.md) — Doc-comment style rules for `pub` declarations in `default/*.loft`
 - [INTERNALS.md](INTERNALS.md) — `gendoc.rs` and `documentation.rs` module descriptions
 - [RELEASE.md](RELEASE.md) — Doc review as a 1.0.0 gate item

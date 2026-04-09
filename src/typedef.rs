@@ -1,7 +1,18 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Calculate the positions of fields inside a record
+//! Type resolution and field layout.
+//!
+//! After the parser's first pass declares all types, this module resolves
+//! forward references, computes field sizes and offsets, and initialises
+//! database store schemas.  Called between parser pass 1 and pass 2.
+//!
+//! Key entry points:
+//! - [`actual_types`] — resolve forward type references, detect cycles,
+//!   compute field positions via [`crate::calc::calculate_positions`].
+//! - [`fill_all`] — allocate database stores for each struct/enum and
+//!   write the type schema into `Stores`.
+//! - [`complete_definition`] — finalise a single definition's field layout.
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_possible_wrap)]
 

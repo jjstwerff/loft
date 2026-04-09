@@ -1,3 +1,13 @@
+//! Rust code generator for native function bodies and operator dispatch.
+//!
+//! - [`generate_lib`] — writes `tests/generated/text.rs` with the native
+//!   function table from `#rust` annotations in `default/*.loft`.
+//! - [`generate_code_to`] — writes `src/fill.rs` (233-operator dispatch
+//!   table) from operator definitions in `default/*.loft`.
+//!
+//! Both are maintenance tools; see `make fill` and the `native_rs_functions_up_to_date`
+//! / `fill_rs_up_to_date` tests for staleness checks.
+
 use crate::data::{Context, Data, Type};
 use std::fs::File;
 use std::io::Write;
