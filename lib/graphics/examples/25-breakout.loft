@@ -257,6 +257,11 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     br_pk_th[br_ti] = 22;
     br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 120, 24);
   }
+  // Pre-render intro text
+  br_intro_cv = graphics::canvas(500, 40, 0);
+  br_intro_cv.draw_text(br_font, "A / D  or  Arrow Keys to move", 28.0, 4, 4, graphics::rgba(255, 255, 255, 255));
+  br_intro_tex = graphics::gl_upload_canvas(br_intro_cv.data, 500, 40);
+
   // Pre-render "LEVEL N" textures for levels 1-20
   br_lvl_tex = [for _ in 0..20 { 0 }];
   br_lvl_tw = [for _ in 0..20 { 0 }];
@@ -337,6 +342,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
 
   // Level transition
   br_level_timer = 0.0;
+  br_intro_timer = 2.0;
 
   // Combo
   br_combo = 0;
@@ -367,6 +373,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     // Level transition pause
     if br_level_timer > 0.0 {
       br_level_timer -= br_dt;
+      if br_intro_timer > 0.0 { br_intro_timer -= br_dt; }
     }
 
     if !br_won && !br_lost && br_level_timer <= 0.0 {
@@ -840,6 +847,20 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
         graphics::gl_draw(br_vao, 6);
       }
+    }
+
+    // Intro text
+    if br_intro_timer > 0.0 {
+      graphics::gl_use_shader(br_sheet.ss_shader);
+      graphics::gl_bind_texture(br_intro_tex, 0);
+      graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
+      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
+      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
+      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
+      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
+      br_tlmv = make_mvp(br_proj, SCREEN_W / 2.0 - 250.0, SCREEN_H / 2.0 + 40.0, 500.0, 40.0);
+      graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
+      graphics::gl_draw(br_vao, 6);
     }
 
     // Screen flash overlay
