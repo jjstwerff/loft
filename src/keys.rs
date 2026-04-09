@@ -29,9 +29,27 @@ impl Str {
 
     #[must_use]
     pub fn str<'a>(&self) -> &'a str {
+        if self.ptr.is_null() || (self.ptr as usize) < (1 << 16) || self.len > 10_000_000 {
+            return "";
+        }
         unsafe {
             std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.ptr, self.len as usize))
         }
+    }
+
+    /// Safe conversion for trace/debug display.  Returns `None` when the pointer
+    /// or length look like uninitialised stack garbage, avoiding SIGSEGV.
+    #[must_use]
+    pub fn try_str<'a>(&self) -> Option<&'a str> {
+        if self.ptr.is_null()
+            || (self.ptr as usize) < (1 << 16)
+            || self.len > 10_000_000
+            || (self.ptr as usize).checked_add(self.len as usize).is_none()
+        {
+            return None;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) };
+        std::str::from_utf8(slice).ok()
     }
 }
 

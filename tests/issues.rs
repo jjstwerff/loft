@@ -1907,3 +1907,23 @@ fn o7_format_string_with_capacity() {
         "single-segment format string should fall through to bare .to_string()"
     );
 }
+
+// ── File.content() trace crash ──────────────────────────────────────────────
+// File.content() on a non-existent file returns garbage text when execute_log
+// traces the result.  The &text parameter's CreateStack points into the stack
+// store; after GetFileText fails to open the file, the output String is never
+// written, so VarText reads uninitialised memory as a Str with ptr=0x1.
+// The runtime (execute) works fine — only execute_log triggers the crash.
+
+#[test]
+#[ignore = "SIGSEGV in execute_log: File.content() on non-existent file corrupts caller's String"]
+fn file_content_nonexistent_trace() {
+    code!(
+        "fn test() {
+    f = file(\"/nonexistent_file_trace_test.txt\");
+    t = f.content();
+    assert(t == \"\", \"expected empty, got '{t}'\");
+}"
+    )
+    .result(Value::Null);
+}

@@ -930,9 +930,11 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
 /// The snapshot is populated by `State::static_call` before this runs.
 fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
     let snapshot = std::mem::take(&mut stores.call_stack_snapshot);
+    let vars_snapshot = std::mem::take(&mut stores.variables_snapshot);
     let sf_elm = stores.name("StackFrame");
     let sf_size = u32::from(stores.size(sf_elm));
-    // Fix #89: validate that hard-coded field offsets match the actual type layout.
+    let var_elm = stores.name("VarInfo");
+    let var_size = u32::from(stores.size(var_elm));
     // Fix #89: validate that hard-coded field offsets match the actual type layout.
     debug_assert_eq!(
         stores.position(sf_elm, "function"),
@@ -949,10 +951,12 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         8,
         "StackFrame.line offset mismatch"
     );
+    // Field offset for `variables: vector<VarInfo>` on StackFrame.
+    let vars_field_pos = stores.position(sf_elm, "variables");
     let vec = stores.database(sf_size);
     stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
 
-    for (fn_name, file, line) in &snapshot {
+    for (frame_idx, (fn_name, file, line)) in snapshot.iter().enumerate() {
         let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
         let fn_str = stores.store_mut(&vec).set_str(fn_name.as_str());
         stores
@@ -969,9 +973,148 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         // blocks don't leave garbage data that looks like a valid first_block_rec.
         stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
         stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
+
+        // TR1.4: build vector<VarInfo> for this frame from the snapshot.
+        if let Some(frame_vars) = vars_snapshot.get(frame_idx) {
+            populate_frame_variables(
+                stores,
+                &vec,
+                elm.rec,
+                elm.pos + u32::from(vars_field_pos),
+                var_size,
+                frame_vars,
+            );
+        }
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     stores.put(stack, vec);
+}
+
+/// TR1.4: append a `vector<VarInfo>` to the StackFrame at the given offset.
+/// Each VarInfo gets `name`, `type_name` (text fields) and `value` (ArgValue
+/// struct-enum) populated from the runtime snapshot captured by static_call.
+///
+/// ArgValue is a loft struct-enum.  The discriminant is a 1-indexed byte at
+/// offset 0 (0 = null, 1 = first variant, ...).  Variant data lives at
+/// offsets resolved via `stores.position(<variant_type>, <field>)`.
+#[allow(clippy::similar_names)]
+fn populate_frame_variables(
+    stores: &mut Stores,
+    sf_vec: &DbRef,
+    parent_rec: u32,
+    vars_field_abs: u32,
+    var_elm_size: u32,
+    frame_vars: &[crate::database::VarSnapshot],
+) {
+    if frame_vars.is_empty() {
+        return;
+    }
+    let var_elm = stores.name("VarInfo");
+    // Allocate the inner vector record for this frame's variables.
+    let vec_words = ((frame_vars.len() as u32) * var_elm_size + 15) / 8 + 1;
+    let inner_rec = stores.store_mut(sf_vec).claim(vec_words.max(1));
+    // Header: count
+    stores
+        .store_mut(sf_vec)
+        .set_int(inner_rec, 4, frame_vars.len() as i32);
+    // Link from the StackFrame.variables field to this inner record.
+    stores
+        .store_mut(sf_vec)
+        .set_int(parent_rec, vars_field_abs, inner_rec as i32);
+
+    let name_pos = stores.position(var_elm, "name");
+    let type_pos = stores.position(var_elm, "type_name");
+    let val_pos = stores.position(var_elm, "value");
+
+    // ArgValue variant types (resolve once).
+    let bool_tp = stores.name("BoolVal");
+    let int_tp = stores.name("IntVal");
+    let long_tp = stores.name("LongVal");
+    let float_tp = stores.name("FloatVal");
+    let single_tp = stores.name("SingleVal");
+    let char_tp = stores.name("CharVal");
+    let text_tp = stores.name("TextVal");
+    let ref_tp = stores.name("RefVal");
+    let other_tp = stores.name("OtherVal");
+
+    let bool_b_pos = stores.position(bool_tp, "b");
+    let int_n_pos = stores.position(int_tp, "n");
+    let long_n_pos = stores.position(long_tp, "n");
+    let float_f_pos = stores.position(float_tp, "f");
+    let single_f_pos = stores.position(single_tp, "f");
+    let char_c_pos = stores.position(char_tp, "c");
+    let text_t_pos = stores.position(text_tp, "t");
+    let ref_store_pos = stores.position(ref_tp, "store");
+    let ref_rec_pos = stores.position(ref_tp, "rec");
+    let ref_pos_pos = stores.position(ref_tp, "pos");
+    let other_desc_pos = stores.position(other_tp, "description");
+
+    for (i, vs) in frame_vars.iter().enumerate() {
+        let inline_pos = 8 + (i as u32) * var_elm_size;
+        // Write name
+        let name_str = stores.store_mut(sf_vec).set_str(&vs.name);
+        stores.store_mut(sf_vec).set_int(
+            inner_rec,
+            inline_pos + u32::from(name_pos),
+            name_str as i32,
+        );
+        // Write type_name
+        let type_str = stores.store_mut(sf_vec).set_str(&vs.type_name);
+        stores.store_mut(sf_vec).set_int(
+            inner_rec,
+            inline_pos + u32::from(type_pos),
+            type_str as i32,
+        );
+        // Write ArgValue: discriminant byte at av_abs (1-indexed),
+        // variant data at av_abs + position(variant_tp, field_name).
+        let av_abs = inline_pos + u32::from(val_pos);
+        let store_mut = stores.store_mut(sf_vec);
+        match &vs.value {
+            crate::database::VarValueSnapshot::Null => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 1);
+            }
+            crate::database::VarValueSnapshot::Bool(b) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 2);
+                store_mut.set_byte(inner_rec, av_abs + u32::from(bool_b_pos), 0, i32::from(*b));
+            }
+            crate::database::VarValueSnapshot::Int(n) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 3);
+                store_mut.set_int(inner_rec, av_abs + u32::from(int_n_pos), *n);
+            }
+            crate::database::VarValueSnapshot::Long(n) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 4);
+                store_mut.set_long(inner_rec, av_abs + u32::from(long_n_pos), *n);
+            }
+            crate::database::VarValueSnapshot::Float(f) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 5);
+                store_mut.set_float(inner_rec, av_abs + u32::from(float_f_pos), *f);
+            }
+            crate::database::VarValueSnapshot::Single(f) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 6);
+                store_mut.set_single(inner_rec, av_abs + u32::from(single_f_pos), *f);
+            }
+            crate::database::VarValueSnapshot::Char(c) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 7);
+                store_mut.set_int(inner_rec, av_abs + u32::from(char_c_pos), *c as i32);
+            }
+            crate::database::VarValueSnapshot::Text(s) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 8);
+                let txt = store_mut.set_str(s);
+                store_mut.set_int(inner_rec, av_abs + u32::from(text_t_pos), txt as i32);
+            }
+            crate::database::VarValueSnapshot::Ref { store, rec, pos } => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 9);
+                store_mut.set_int(inner_rec, av_abs + u32::from(ref_store_pos), *store);
+                store_mut.set_int(inner_rec, av_abs + u32::from(ref_rec_pos), *rec);
+                store_mut.set_int(inner_rec, av_abs + u32::from(ref_pos_pos), *pos);
+            }
+            crate::database::VarValueSnapshot::Other(desc) => {
+                store_mut.set_byte(inner_rec, av_abs, 0, 11);
+                let txt = store_mut.set_str(desc);
+                store_mut.set_int(inner_rec, av_abs + u32::from(other_desc_pos), txt as i32);
+            }
+        }
+    }
 }
 
 /// Return the platform path separator as a loft `character`.

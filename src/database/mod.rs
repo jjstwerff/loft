@@ -49,6 +49,33 @@ pub struct ParallelCtx {
 unsafe impl Send for ParallelCtx {}
 unsafe impl Sync for ParallelCtx {}
 
+/// TR1.4: snapshot of one local variable's runtime value, captured by
+/// `State::static_call` for inclusion in a `StackFrame.variables` vector.
+/// All fields are owned values — no raw pointers — so the snapshot is safe
+/// to retain across native function boundaries.
+#[derive(Debug, Clone)]
+pub struct VarSnapshot {
+    pub name: String,
+    pub type_name: String,
+    pub value: VarValueSnapshot,
+}
+
+/// Owned snapshot of a variable's typed runtime value.  Mirrors the loft
+/// `ArgValue` enum so the native can populate `VarInfo.value` directly.
+#[derive(Debug, Clone)]
+pub enum VarValueSnapshot {
+    Null,
+    Bool(bool),
+    Int(i32),
+    Long(i64),
+    Float(f64),
+    Single(f32),
+    Char(char),
+    Text(String),
+    Ref { store: i32, rec: i32, pos: i32 },
+    Other(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: String,
@@ -156,6 +183,11 @@ pub struct Stores {
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
     /// Populated by `State::static_call` when `n_stack_trace` is invoked.
     pub call_stack_snapshot: Vec<(String, String, u32)>,
+    /// TR1.4: per-frame variable snapshot.  Outer Vec is parallel to
+    /// `call_stack_snapshot` (one entry per frame); inner Vec is the live
+    /// variables in that frame as `(name, type_name, ArgValueSnapshot)`.
+    /// Populated alongside `call_stack_snapshot` in `State::static_call`.
+    pub variables_snapshot: Vec<Vec<VarSnapshot>>,
     /// A5.6g: native-code closure store. Maps lambda d_nr → closure DbRef.
     /// Set by `OpStoreClosure` (native) immediately before calling the lambda;
     /// read by `OpGetClosure` in the match-dispatch arm.
@@ -194,6 +226,7 @@ impl Clone for Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
+            variables_snapshot: Vec::new(),
             closure_map: HashMap::new(),
         }
     }
@@ -451,6 +484,7 @@ impl Stores {
             #[cfg(feature = "wasm")]
             start_time_ms: crate::wasm::host_time_now(),
             call_stack_snapshot: Vec::new(),
+            variables_snapshot: Vec::new(),
             closure_map: HashMap::new(),
         };
         result.base_type("integer", 4); // 0
