@@ -203,6 +203,23 @@ fn pickup_sprite(sp_type: integer) -> integer {
   S_PK_EXTEND
 }
 
+// Draw a pre-rendered text texture (canvas uploaded to GL) at screen position.
+// UV is flipped vertically because canvas Y=0 is top, GL Y=0 is bottom.
+fn draw_tex(sheet: const graphics::SpriteSheet, vao: integer,
+            proj: const math::Mat4, tex: integer,
+            dtx: float, dty: float, dtw: float, dth: float) {
+  graphics::gl_use_shader(sheet.ss_shader);
+  graphics::gl_bind_texture(tex, 0);
+  graphics::gl_set_uniform_int(sheet.ss_shader, "uTex", 0);
+  graphics::gl_set_uniform_float(sheet.ss_shader, "uU0", 0.0);
+  graphics::gl_set_uniform_float(sheet.ss_shader, "uV0", 1.0);
+  graphics::gl_set_uniform_float(sheet.ss_shader, "uU1", 1.0);
+  graphics::gl_set_uniform_float(sheet.ss_shader, "uV1", 0.0);
+  dt_mvp = make_mvp(proj, dtx, dty, dtw, dth);
+  graphics::gl_set_uniform_mat4(sheet.ss_shader, "uMVP", dt_mvp.m);
+  graphics::gl_draw(vao, 6);
+}
+
 fn draw_flat(shader: integer, vao: integer, proj: const math::Mat4,
              dfx: float, dfy: float, dfw: float, dfh: float,
              dfr: float, dfg: float, dfb: float) {
@@ -243,32 +260,48 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
 `;
   br_flat = graphics::gl_create_shader(br_flat_v, br_flat_f);
 
-  // Font for text rendering
+  // Font + pre-rendered text textures
   br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
-  // Pre-render pickup name labels as textures (avoids per-frame allocation)
+  br_white = graphics::rgba(255, 255, 255, 255);
+  br_gray = graphics::rgba(200, 200, 200, 180);
+
+  // Pickup labels — loop creates canvas per iteration (likely store leak trigger)
   br_pk_names = ["", "wider", "boom!", "blast", "rows+", "multi", "fire!", "shield"];
   br_pk_tex = [for _ in 0..8 { 0 }];
   for br_ti in 1..8 {
     br_tc = graphics::canvas(80, 16, 0);
-    br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, graphics::rgba(200, 200, 200, 180));
+    br_tc.draw_text(br_font, br_pk_names[br_ti], 12.0, 1, 1, br_gray);
     br_pk_tex[br_ti] = graphics::gl_upload_canvas(br_tc.data, 80, 16);
   }
-  // Pre-render intro text
+
+  // Digit textures 0-9 for numeric score display
+  br_digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  br_dig_tex = [for _ in 0..10 { 0 }];
+  for br_di in 0..10 {
+    br_dcv = graphics::canvas(20, 28, 0);
+    br_dcv.draw_text(br_font, br_digits[br_di], 22.0, 2, 2, br_white);
+    br_dig_tex[br_di] = graphics::gl_upload_canvas(br_dcv.data, 20, 28);
+  }
+
+  // Intro text
   br_intro_cv = graphics::canvas(500, 40, 0);
-  br_intro_cv.draw_text(br_font, "A / D  or  Arrow Keys to move", 28.0, 4, 4, graphics::rgba(255, 255, 255, 255));
+  br_intro_cv.draw_text(br_font, "A / D  or  Arrow Keys to move", 28.0, 4, 4, br_white);
   br_intro_tex = graphics::gl_upload_canvas(br_intro_cv.data, 500, 40);
 
-  // Pre-render "LEVEL N" textures for levels 1-20
+  // "LEVEL N" textures (loop — may trigger store warning)
   br_lvl_tex = [for _ in 0..20 { 0 }];
-  br_lvl_tw = [for _ in 0..20 { 0 }];
   for br_tl in 0..20 {
     br_ln = br_tl + 1;
     br_lt = "LEVEL {br_ln}";
     br_lcv = graphics::canvas(300, 60, 0);
-    br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, graphics::rgba(255, 255, 255, 255));
-    br_lvl_tw[br_tl] = graphics::gl_measure_text(br_font, br_lt, 48.0) as integer + 8;
+    br_lcv.draw_text(br_font, br_lt, 48.0, 4, 4, br_white);
     br_lvl_tex[br_tl] = graphics::gl_upload_canvas(br_lcv.data, 300, 60);
   }
+
+  // "SCORE" label
+  br_score_cv = graphics::canvas(80, 20, 0);
+  br_score_cv.draw_text(br_font, "SCORE", 14.0, 2, 2, br_gray);
+  br_score_label_tex = graphics::gl_upload_canvas(br_score_cv.data, 80, 20);
 
   // ── Game state ─────────────────────────────────────────────────
   br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
@@ -777,27 +810,49 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // HUD: lives
+    // HUD: lives (red squares, top-right)
     graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_lh in 0..br_lives {
       draw_flat(br_flat, br_vao, br_proj,
         SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3);
     }
 
-    // HUD: score bar
-    br_bar = shapes::clamp((br_score as float) * 2.0, 0.0, 400.0);
-    if br_bar > 1.0 {
-      draw_flat(br_flat, br_vao, br_proj, 10.0, 10.0, br_bar, 8.0, 0.3, 0.7, 1.0);
+    // HUD: numeric score (top-left, digit textures)
+    draw_tex(br_sheet, br_vao, br_proj, br_score_label_tex, 10.0, 4.0, 60.0, 14.0);
+    br_sc = br_score;
+    br_sx = 72.0;
+    if br_sc == 0 {
+      draw_tex(br_sheet, br_vao, br_proj, br_dig_tex[0], br_sx, 2.0, 14.0, 20.0);
+    }
+    // Extract digits right-to-left, draw left-to-right
+    br_sc_digits = 0;
+    br_sc_tmp = br_sc;
+    for _br_sd in 0..6 {
+      if br_sc_tmp > 0 { br_sc_digits += 1; br_sc_tmp = br_sc_tmp / 10; }
+    }
+    if br_sc_digits > 0 {
+      br_sx = 72.0 + (br_sc_digits - 1) as float * 14.0;
+      br_sc_tmp = br_sc;
+      for _br_sd2 in 0..br_sc_digits {
+        br_sd_d = br_sc_tmp % 10;
+        draw_tex(br_sheet, br_vao, br_proj, br_dig_tex[br_sd_d], br_sx, 2.0, 14.0, 20.0);
+        br_sx -= 14.0;
+        br_sc_tmp = br_sc_tmp / 10;
+      }
     }
 
-    // HUD: combo indicator (small bar under score, colored by multiplier)
+    // HUD: combo bar (under score)
     if br_combo > 1 {
+      graphics::gl_use_shader(br_flat);
+      graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
       br_cbar = shapes::clamp((br_combo as float) * 15.0, 0.0, 200.0);
       br_cg_val = shapes::clamp(1.0 - (br_combo as float) * 0.08, 0.0, 1.0);
-      draw_flat(br_flat, br_vao, br_proj, 10.0, 20.0, br_cbar, 4.0, 1.0, br_cg_val, 0.0);
+      draw_flat(br_flat, br_vao, br_proj, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0);
     }
 
-    // HUD: level indicator (small squares, top-center)
+    // HUD: level dots (top-center)
+    graphics::gl_use_shader(br_flat);
+    graphics::gl_set_uniform_float(br_flat, "uAlpha", 1.0);
     for br_lv in 0..br_level {
       if br_lv < 10 {
         draw_flat(br_flat, br_vao, br_proj,
@@ -805,8 +860,7 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
       }
     }
 
-    // HUD: pickup hints — small text in bottom-right, one per active type
-    // Use a bitmask instead of vector to avoid per-frame allocation
+    // HUD: pickup hints (bottom-right, one per active type)
     br_shown_mask = 0;
     br_hint_y = SCREEN_H - 18.0;
     for br_pl in 0..8 {
@@ -815,16 +869,8 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
         br_plt_bit = 1 << br_plt;
         if br_plt >= 1 && br_plt <= 7 && br_pk_tex[br_plt] != 0 && (br_shown_mask & br_plt_bit) == 0 {
           br_shown_mask = br_shown_mask | br_plt_bit;
-          graphics::gl_use_shader(br_sheet.ss_shader);
-          graphics::gl_bind_texture(br_pk_tex[br_plt], 0);
-          graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
-          graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-          br_tlmv = make_mvp(br_proj, SCREEN_W - 85.0, br_hint_y, 80.0, 14.0);
-          graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
-          graphics::gl_draw(br_vao, 6);
+          draw_tex(br_sheet, br_vao, br_proj, br_pk_tex[br_plt],
+            SCREEN_W - 85.0, br_hint_y, 80.0, 14.0);
           br_hint_y -= 16.0;
         }
       }
@@ -834,33 +880,15 @@ void main() {{ FragColor = vec4(uColor, uAlpha); }}
     if br_level_timer > 0.0 {
       br_tli = br_level - 1;
       if br_tli >= 0 && br_tli < 20 && br_lvl_tex[br_tli] != 0 {
-        graphics::gl_use_shader(br_sheet.ss_shader);
-        graphics::gl_bind_texture(br_lvl_tex[br_tli], 0);
-        graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
-        graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-        br_tlw = 300.0;
-        br_tlh = 60.0;
-        br_tlmv = make_mvp(br_proj, SCREEN_W / 2.0 - br_tlw / 2.0, SCREEN_H / 2.0 - br_tlh / 2.0, br_tlw, br_tlh);
-        graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
-        graphics::gl_draw(br_vao, 6);
+        draw_tex(br_sheet, br_vao, br_proj, br_lvl_tex[br_tli],
+          SCREEN_W / 2.0 - 150.0, SCREEN_H / 2.0 - 30.0, 300.0, 60.0);
       }
     }
 
     // Intro text
     if br_intro_timer > 0.0 {
-      graphics::gl_use_shader(br_sheet.ss_shader);
-      graphics::gl_bind_texture(br_intro_tex, 0);
-      graphics::gl_set_uniform_int(br_sheet.ss_shader, "uTex", 0);
-      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU0", 0.0);
-      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV0", 1.0);
-      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uU1", 1.0);
-      graphics::gl_set_uniform_float(br_sheet.ss_shader, "uV1", 0.0);
-      br_tlmv = make_mvp(br_proj, SCREEN_W / 2.0 - 250.0, SCREEN_H / 2.0 + 40.0, 500.0, 40.0);
-      graphics::gl_set_uniform_mat4(br_sheet.ss_shader, "uMVP", br_tlmv.m);
-      graphics::gl_draw(br_vao, 6);
+      draw_tex(br_sheet, br_vao, br_proj, br_intro_tex,
+        SCREEN_W / 2.0 - 250.0, SCREEN_H / 2.0 + 40.0, 500.0, 40.0);
     }
 
     // Screen flash overlay
