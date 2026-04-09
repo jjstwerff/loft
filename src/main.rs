@@ -1551,9 +1551,7 @@ fn main() {
             if entry.line > 0 && !entry.file.is_empty() {
                 let src = source_cache
                     .entry(entry.file.clone())
-                    .or_insert_with(|| {
-                        std::fs::read_to_string(&entry.file).unwrap_or_default()
-                    });
+                    .or_insert_with(|| std::fs::read_to_string(&entry.file).unwrap_or_default());
                 if let Some(line_text) = src.lines().nth(entry.line as usize - 1) {
                     let col = entry.col.saturating_sub(1) as usize;
                     println!("  |");

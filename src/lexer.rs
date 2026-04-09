@@ -459,7 +459,8 @@ impl Lexer {
     }
 
     pub fn pos_diagnostic(&mut self, level: Level, pos: &Position, message: &str) {
-        self.diagnostics.add_at(level, message, &pos.file, pos.line, pos.pos);
+        self.diagnostics
+            .add_at(level, message, &pos.file, pos.line, pos.pos);
     }
 
     pub fn diagnostics(&self) -> &Diagnostics {
