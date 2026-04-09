@@ -77,13 +77,16 @@ SP_SHIELD = 7;
 
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
-// Draw a standard brick shape at (bx,by) in the atlas with the given color.
+// Draw a standard brick shape filling the full cell at (bx,by) in the atlas.
 fn draw_brick(at: graphics::Canvas, bx: integer, by: integer, color: integer) {
-  at.fill_rect(bx + 1, by + 1, 30, 18, color);
+  at.fill_rect(bx, by, 32, 20, color);
   // Top highlight
-  at.hline(bx + 2, bx + 29, by + 2, graphics::rgba(255, 255, 255, 70));
+  at.hline(bx + 1, bx + 30, by + 1, graphics::rgba(255, 255, 255, 70));
   // Bottom shadow
-  at.hline(bx + 2, bx + 29, by + 18, graphics::rgba(0, 0, 0, 40));
+  at.hline(bx + 1, bx + 30, by + 19, graphics::rgba(0, 0, 0, 50));
+  // Left/right edge darkening
+  at.vline(bx, by, by + 19, graphics::rgba(0, 0, 0, 30));
+  at.vline(bx + 31, by, by + 19, graphics::rgba(0, 0, 0, 30));
 }
 
 // Draw an icon at the right side of a brick cell.
@@ -187,16 +190,28 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_rect(96 + 2, 64 + 6, 28, 10, graphics::rgba(60, 210, 110, 255));
   at.hline(96 + 3, 96 + 29, 64 + 7, graphics::rgba(160, 240, 190, 100));
 
-  // Row 3: pickups — just the icon, no background block (transparent bg)
-  // Draw icons larger (centered in 32x20 area) so they're visible while falling
-  icon_extend(at, 12, 100);
-  icon_extend(at, 4, 100);   // double-draw for visibility
-  icon_explode(at, 44, 99);
-  icon_balloon(at, 76, 99);
-  icon_newrow(at, 108, 99);
-  icon_multi(at, 140, 99);
-  icon_fire(at, 172, 99);
-  icon_shield(at, 140, 67);
+  // Row 3: pickups — colored capsule bg + centered icon
+  // S_PK_EXTEND (16)
+  at.fill_rect(0 + 2, 96 + 2, 28, 16, graphics::rgba(50, 180, 70, 255));
+  icon_extend(at, 12, 102);
+  // S_PK_EXPLODE (17)
+  at.fill_rect(32 + 2, 96 + 2, 28, 16, graphics::rgba(200, 50, 50, 255));
+  icon_explode(at, 44, 101);
+  // S_PK_BALLOON (18)
+  at.fill_rect(64 + 2, 96 + 2, 28, 16, graphics::rgba(200, 180, 30, 255));
+  icon_balloon(at, 76, 101);
+  // S_PK_NEWROW (19)
+  at.fill_rect(96 + 2, 96 + 2, 28, 16, graphics::rgba(50, 80, 200, 255));
+  icon_newrow(at, 108, 101);
+  // S_PK_MULTI (20)
+  at.fill_rect(128 + 2, 96 + 2, 28, 16, graphics::rgba(80, 80, 200, 255));
+  icon_multi(at, 140, 101);
+  // S_PK_FIRE (21)
+  at.fill_rect(160 + 2, 96 + 2, 28, 16, graphics::rgba(200, 120, 20, 255));
+  icon_fire(at, 172, 101);
+  // S_PK_SHIELD (22)
+  at.fill_rect(128 + 2, 64 + 2, 28, 16, graphics::rgba(50, 100, 200, 255));
+  icon_shield(at, 140, 69);
 
   at
 }
