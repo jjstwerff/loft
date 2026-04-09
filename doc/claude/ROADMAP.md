@@ -29,7 +29,6 @@ Completed work belongs in CHANGELOG.md and git history.
 | G1     | Sprite sheet loading (atlas texture + UV rect lookup)  | S  | ✓      | GAME_INFRA.md    |
 | G2     | Sprite drawing (billboarded quads in 3D or 2D overlay) | S  | ✓      | GAME_INFRA.md    |
 | G3     | Tilemap rendering (grid-based 2D, batched draw)        | M  | ✓      | GAME_INFRA.md    |
-| G4     | 2D collision detection (AABB + circle)                 | S  | ✓      | GAME_INFRA.md    |
 | G5     | Audio: sound effect playback (Web Audio + native)      | S  | ✓      | GAME_INFRA.md    |
 | G6     | Audio: background music with crossfade                 | S  | ✓      | GAME_INFRA.md    |
 | G7     | First playable demo game (Breakout clone)              | M  | ✓      | GAME_INFRA.md    |
