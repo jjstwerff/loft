@@ -114,12 +114,12 @@ SCENE_MAP, SCENE_MAP_RENDER, OPEN_ISSUES.
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
-| SH.1   | TextMate grammar for `.loft` syntax highlighting       | S  | —      | DX.md            |
-| SH.2   | VS Code extension (syntax + snippets + run task)       | S  | —      | DX.md            |
-| DX.1   | Quick-start `examples/` directory                      | XS | —      | DX.md            |
-| DX.2   | CI: add package tests + native tests to workflow       | XS | —      | DX.md            |
-| DX.3   | Error messages: source location + "did you mean?"      | M  | —      | DX.md            |
-| NT.1   | Native codegen: fix remaining test failures            | M  | —      | NATIVE.md        |
+| SH.1   | TextMate grammar for `.loft` syntax highlighting       | S  | ✓      | DX.md            |
+| SH.2   | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
+| DX.1   | Quick-start `examples/` directory                      | XS | ✓      | DX.md            |
+| DX.2   | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
+| DX.3   | Error messages: source line display + suggestions      | M  | ✓      | DX.md            |
+| NT.1   | Native codegen: reliability (all tests pass)           | XS | ✓      | DX.md            |
 
 ### Remaining package/language items
 

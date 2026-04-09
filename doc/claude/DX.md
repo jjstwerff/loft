@@ -246,110 +246,108 @@ Windows is excluded from native tests because `rustc` invocation paths differ.
 
 ---
 
-## DX.3 — Error Messages: Source Location + Suggestions
+## DX.3 — Error Messages: Source Line Display + Suggestions
 
-Improve error messages to show the source file, line, column, and the
-offending source line with a caret pointing to the error position.
+Errors already include `file:line:col` (e.g. `Error: Unknown variable 'zz'
+at test.loft:1:31`).  This item adds source-line display with a caret and
+"did you mean?" suggestions for unknown identifiers.
 
-### Current format
-
-```
-Error: Unknown variable 'z'
-```
-
-### Target format
+### Current output
 
 ```
-error[E001]: unknown variable 'z'
-  --> examples/hello.loft:5:12
-   |
- 5 |     result = z + 1;
-   |              ^ not found in this scope
-   |
-   = help: did you mean 'x'?
+Error: Unknown variable 'zz' at test.loft:1:31
+```
+
+### Target output
+
+```
+Error: Unknown variable 'zz' at test.loft:1:31
+  |
+1 |     y = x + zz;
+  |             ^^ did you mean 'x'?
 ```
 
 ### Implementation
 
-#### Phase 1: Source location in diagnostics
+#### Phase 1: Structured diagnostic entries
 
-The `Diagnostics` struct currently stores only `Vec<String>` messages.
-Extend to store structured entries:
+The `Diagnostics` struct stores `Vec<String>`.  Change to structured entries
+so the display layer can extract location info:
 
 ```rust
-struct DiagEntry {
-    level: Level,
-    message: String,
-    file: Option<String>,
-    line: Option<u32>,
-    column: Option<u32>,
+pub struct DiagEntry {
+    pub level: Level,
+    pub message: String,     // "Unknown variable 'zz'"
+    pub file: String,        // "test.loft"
+    pub line: u32,           // 1
+    pub col: u32,            // 31
 }
 ```
 
-The parser already tracks position via `Lexer.position()` — thread it through
-to `diagnostic!` calls.
+The `diagnostic!` macro already calls `self.lexer.diagnostic(level, msg)` which
+formats the string with `position.file`, `position.line`, `position.pos`.
+Change `Lexer::diagnostic` to push a `DiagEntry` instead of formatting a string.
 
-#### Phase 2: Source line display
+#### Phase 2: Source line display in main.rs
 
-When printing a diagnostic, read the source file (already loaded in the parser)
-and display the offending line with a caret:
+`Parser` already holds the source text (loaded in `parse_file`).  Store a
+`HashMap<String, String>` mapping file path → source content.  When printing
+diagnostics in `main.rs`, look up the source, extract the line, and print
+with a caret:
 
 ```rust
-fn format_diagnostic(entry: &DiagEntry, source: &str) -> String {
-    // Extract line from source, print with line number and caret
+fn print_diagnostic(entry: &DiagEntry, sources: &HashMap<String, String>) {
+    println!("{}: {} at {}:{}:{}", entry.level, entry.message,
+             entry.file, entry.line, entry.col);
+    if let Some(src) = sources.get(&entry.file) {
+        if let Some(line_text) = src.lines().nth(entry.line as usize - 1) {
+            let col = entry.col.saturating_sub(1) as usize;
+            println!("  |");
+            println!("{:>3} | {}", entry.line, line_text);
+            println!("  | {:>width$}^", "", width = col + 1);
+        }
+    }
 }
 ```
 
-#### Phase 3: "Did you mean?" suggestions
+#### Phase 3: "Did you mean?" for unknown variables
 
-Already partially implemented — `objects.rs` has `known_var_or_type` that
-detects unknown variables.  Extend with Levenshtein distance to suggest the
-closest matching name:
+When `known_var_or_type` in `objects.rs` reports an unknown variable, compute
+Levenshtein distance against all in-scope variable names and suggest the
+closest match (distance ≤ 2):
 
 ```rust
-fn suggest_similar(name: &str, candidates: &[&str]) -> Option<&str> {
+fn suggest_similar<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
     candidates.iter()
+        .copied()
         .filter(|c| levenshtein(name, c) <= 2)
         .min_by_key(|c| levenshtein(name, c))
 }
 ```
 
+Append ` — did you mean '{suggestion}'?` to the diagnostic message.
+The Levenshtein function is ~15 lines of Rust (no external crate needed).
+
 ### Files to modify
 
 | File | Change |
 |---|---|
-| `src/diagnostics.rs` | Structured `DiagEntry`, display formatting |
-| `src/parser/*.rs` | Thread file/line/column into `diagnostic!` calls |
-| `src/main.rs` | Format diagnostics with source context on exit |
+| `src/diagnostics.rs` | `DiagEntry` struct, `Diagnostics` stores `Vec<DiagEntry>` |
+| `src/lexer.rs` | `Lexer::diagnostic` pushes `DiagEntry` instead of formatted string |
+| `src/main.rs` | Source-line display when printing diagnostics |
+| `src/parser/objects.rs` | Levenshtein suggestion on unknown variable |
+| `src/parser/definitions.rs` | Levenshtein suggestion on unknown type |
 
 ---
 
-## NT.1 — Native Codegen: Fix Remaining Test Failures
+## NT.1 — Native Codegen: Reliability
 
-Make `--native` reliable for all test scripts so it can confidently remain
-the default execution mode.
+> **Status: all `make test-native` scripts pass (30/30 docs files).**
+> Native mode is already the default (`src/main.rs:1131`).
 
-### Current state
-
-- `native_mode = true` is already the default in `src/main.rs:1131`
-- `make test-native` runs all `tests/docs/*.loft` files through `--native`
-- Some scripts still fail due to unhandled IR patterns in `src/generation/`
-
-### Approach
-
-See [NATIVE.md](NATIVE.md) for the full dependency graph of remaining failures.
-The key blockers (from NATIVE.md analysis):
-
-1. **Type inference gaps** — generated Rust code has missing type annotations
-2. **Null guard patterns** — null sentinel checks not emitted for all types
-3. **Iterator codegen** — `for` loops over sorted/hash/index not fully wired
-4. **Text lifetime** — generated code uses `&str` where `String` is needed
-5. **Struct-enum dispatch** — polymorphic method calls in generated code
-
-### Validation
-
-After fixes, `make test-native` must pass all scripts that `cargo test` passes.
-Add `make test-native` to CI (DX.2) to prevent regressions.
+The remaining work is regression prevention: add `make test-native` to CI
+(DX.2) so native failures are caught before merge.  See [NATIVE.md](NATIVE.md)
+for the full codegen design and any future N-series items.
 
 ---
 
