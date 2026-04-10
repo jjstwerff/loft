@@ -465,23 +465,43 @@ impl Scopes {
                 }
             }
         }
-        if depend.is_empty() {
-            Value::Set(v, Box::new(self.scan(value, function, data)))
-        } else {
-            let mut ls = Vec::new();
-            for d in depend {
-                if d == v {
-                    continue;
-                }
-                if matches!(function.tp(d), Type::Text(_)) {
-                    ls.push(v_set(d, Value::Text(String::new())));
-                } else {
-                    ls.push(v_set(d, Value::Null));
-                }
-                self.var_scope.insert(d, self.scope);
+        let scanned = self.scan(value, function, data);
+        // Flatten: if the scanned value is Insert([preamble..., final_call]),
+        // hoist the preamble out so the IR becomes
+        // Insert([preamble..., Set(v, final_call)]) instead of
+        // Set(v, Insert([preamble..., final_call])).
+        // This keeps Set(v, Call(...)) as a bare Call, which codegen's
+        // gen_set_first_at_tos can handle correctly.
+        let (mut ls, set_value) = if let Value::Insert(mut ops) = scanned {
+            if ops.len() >= 2 {
+                let final_val = ops.pop().unwrap();
+                (ops, final_val)
+            } else {
+                (Vec::new(), Value::Insert(ops))
             }
-            ls.push(Value::Set(v, Box::new(self.scan(value, function, data))));
-            Value::Insert(ls)
+        } else {
+            (Vec::new(), scanned)
+        };
+        // Prepend dependency initializations.
+        let mut prefix = Vec::new();
+        for d in depend {
+            if d == v {
+                continue;
+            }
+            if matches!(function.tp(d), Type::Text(_)) {
+                prefix.push(v_set(d, Value::Text(String::new())));
+            } else {
+                prefix.push(v_set(d, Value::Null));
+            }
+            self.var_scope.insert(d, self.scope);
+        }
+        if prefix.is_empty() && ls.is_empty() {
+            Value::Set(v, Box::new(set_value))
+        } else {
+            let mut all = prefix;
+            all.append(&mut ls);
+            all.push(Value::Set(v, Box::new(set_value)));
+            Value::Insert(all)
         }
     }
 
