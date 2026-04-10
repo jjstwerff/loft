@@ -52,7 +52,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 120 | ~~Use-after-free: struct return inside `if` block in loop frees borrowed store~~ | ~~**High**~~ | **Fixed** — `const` parameter store lock now released at function exit via `n_set_store_lock(var, false)` in `scopes.rs::get_free_vars`. All 27 GL examples pass headless. |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
 | 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | Medium | **Partially fixed** — `copy_ref` in `operators.rs` now sets the free bit on `OpCopyRecord` for struct-returning function calls and struct literals assigned to fields. Local-variable and field-assignment patterns no longer leak. Remaining leaks in the renderer pipeline (deep internal allocations) still need investigation. |
-| 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
+| 123 | ~~Per-frame vector literal allocation leaks stores~~ | ~~Medium~~ | **Fixed** — vector literal reassignment in loops no longer leaks stores |
 | 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | ⚠️ Appears fixed; `tests/issues.rs::p124_function_returning_inline_array_index` passes under interpret. Re-verify under `--native` with `--native-emit` before closing |
 | 125 | `use` import can't find sibling packages when script is inside a package | Medium | ~~**Fixed**~~ — `lib_path` now walks up to `loft.toml` and searches siblings |
 | 126 | Negative integer literal as final expression parsed as void negation | Low | Use `return -1;` instead of bare `-1` as function tail expression |
@@ -63,6 +63,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 131 | Loft CLI consumes script arguments instead of forwarding them (e.g. `loft script.loft --mode glb` → `unknown option: --mode`) | Low | Use a flag the loft CLI doesn't recognise as its own; or hard-code the mode for now |
 | 134 | ~~`gl_load_font` returns `-1` on failure but loft `if !font` only catches `i32::MIN` — invalid font handle propagates through `gl_measure_text` → 0-width canvas → invisible text~~ | ~~**High** (silent visual failure: every text texture in breakout, smoke test, examples)~~ | **Fixed** — `loft_gl_load_font` now returns `i32::MIN` on file-not-found so the loft fallback path triggers correctly. Same root-cause pattern as P132 (native ↔ loft sentinel mismatch at FFI boundary). |
 | 133 | RGB↔BGR channel swap in `gl_clear` / GL pixel output | Low (cosmetic) | `gl_clear(rgba(40, 80, 120, 255))` produces pixel `(120, 80, 40)` on screen — every clear/material colour comes out with R and B swapped. Workaround: pre-swap the channels at call sites until the underlying packing is fixed in `lib/graphics/native/src/lib.rs`. |
+| 135 | Inline struct argument to function call leaks store | **High** | `f(make_struct(...))` leaks the intermediate store every call; `v = make_struct(...); f(v)` does not. Dominant leak source in GL renderer (~3 stores per frame from `mat4_look_at(vec3(), vec3(), vec3())`). |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -1075,13 +1076,13 @@ bx,by,bw,bh)` and `aabb_depth_x`/`aabb_depth_y` for this purpose.
 
 ---
 
-### 123. Per-frame vector literal allocation leaks stores
+### 123. ~~Per-frame vector literal allocation leaks stores~~
 
-**Severity:** Medium (interpreter)
+**FIXED** — vector literal reassignment in loops no longer leaks.
+Verified: `flags = [for _ in 0..8 { 0 }]` in a 1000-iteration loop
+produces no store warnings under `LOFT_STORES=warn`.
 
-**Symptom:** Code like `br_shown = [for _ in 0..8 { 0 }]` inside a
-render loop allocates a new vector store every frame. After ~1000 frames
-the store pool is exhausted.
+**Historical severity:** Medium (interpreter)
 
 **Workaround:** Use scalar variables, integer bitmasks, or pre-allocated
 arrays initialized once outside the loop.
@@ -1099,6 +1100,67 @@ for _ in 0..1000000 {
     // test bit: (flags & (1 << i)) != 0
 }
 ```
+
+---
+
+### 135. Inline struct argument to function call leaks store
+
+**Severity:** High (interpreter — dominant GL renderer leak)
+
+**Symptom:** `LOFT_STORES=warn` shows monotonically growing active stores
+in any loop that passes a struct-returning function call directly as an
+argument: `f(make_struct(...))`.
+
+**Minimal reproducer:**
+```loft
+struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn my_length(v: Vec3) -> float { v.x + v.y + v.z }
+fn main() {
+  total = 0.0;
+  for i in 0..10000 {
+    total += my_length(vec3(i as float, 0.0, 0.0));  // leaks 1 store per call
+  }
+}
+```
+
+**Non-leaking equivalent:**
+```loft
+fn main() {
+  total = 0.0;
+  for i in 0..10000 {
+    v = vec3(i as float, 0.0, 0.0);  // assign to local first
+    total += my_length(v);            // no leak
+  }
+}
+```
+
+**Impact:** In the GL renderer, `mat4_look_at(vec3(...), vec3(...), vec3(...))`
+leaks 3 stores per frame. At 60fps, 05-transformations reaches ~16k active
+stores in 5 seconds.
+
+**Root cause:** When a struct-returning call is nested as an argument, the
+parser's `add_defaults` creates a `__ref_N` work variable to hold the
+intermediate result. The codegen generates the inner call into this work
+variable's store, then passes it to the outer call. But the work variable's
+store is never freed — `is_ret_work_ref` suppresses `OpFreeRef`, and
+there is no `free_source` mechanism for call arguments (only for
+`copy_ref` field assignments).
+
+**Fix direction:** After the outer call completes, emit `OpFreeRef` for
+each work-ref argument whose store was consumed by the call. This could
+be done in `generate_call` in `codegen.rs` or in `scopes.rs` by tracking
+which work-ref variables are inline-argument temporaries (not return
+buffers).
+
+**Workaround:** Assign struct-returning calls to local variables before
+passing them as arguments. `v = make_struct(...); f(v)` does not leak.
+
+**Tests:** `tests/issues.rs::p135_inline_struct_arg_leaks_store`,
+`p135b_two_inline_struct_args_leak`,
+`p135c_nested_inline_struct_args_renderer_pattern`.
 
 ---
 

@@ -2494,3 +2494,78 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// ── P135: Inline struct argument to function call leaks store ─────────
+//
+// When a struct-returning function call is passed directly as an argument
+// to another function (e.g. `my_sum(vec3(i, 0, 0))`), the intermediate
+// store allocated by the inner call is never freed.  Assigning to a
+// local first (`v = vec3(i, 0, 0); my_sum(v)`) does NOT leak.
+//
+// This is the dominant leak source in the GL renderer where
+// `mat4_look_at(vec3(...), vec3(...), vec3(...))` leaks 3 stores per
+// frame.
+
+#[test]
+fn p135_inline_struct_arg_leaks_store() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn my_length(v: Vec3) -> float { v.x + v.y + v.z }
+fn test() {
+  total = 0.0;
+  for p135_i in 0..10000 {
+    total += my_length(vec3(p135_i as float, 0.0, 0.0));
+  }
+  assert(total > 0.0, \"inline struct arg loop\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P135b: two inline struct args — both leak
+#[test]
+fn p135b_two_inline_struct_args_leak() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn add_x(a: Vec3, b: Vec3) -> float { a.x + b.x }
+fn test() {
+  total = 0.0;
+  for p135b_i in 0..5000 {
+    total += add_x(vec3(p135b_i as float, 0.0, 0.0), vec3(0.0, p135b_i as float, 0.0));
+  }
+  assert(total > 0.0, \"two inline struct args\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P135c: nested inline struct args (renderer pattern)
+// mat4_look_at(vec3(...), vec3(...), vec3(...)) — 3 stores leaked per call
+#[test]
+fn p135c_nested_inline_struct_args_renderer_pattern() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Mat4 { m: vector<float> }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn mat4_look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
+  Mat4 { m: [eye.x, target.y, up.z, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn test() {
+  total = 0.0;
+  for _p135c_i in 0..3000 {
+    view = mat4_look_at(vec3(0.0, 1.5, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    total += view.m[0];
+  }
+  assert(total == 0.0, \"nested inline struct args\");
+}"
+    )
+    .result(Value::Null);
+}
