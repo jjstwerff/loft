@@ -997,17 +997,6 @@ impl Scopes {
                 && def.code != Value::Null
                 && let Type::Reference(d_nr, _) = &def.returned
             {
-                // Only lift when the outer call is a built-in operator (OpXxx).
-                // Operators consume arguments by value and never store
-                // references to the argument's data.  User-function calls
-                // may store the argument internally (e.g. add_mesh stores
-                // the Mesh in a Scene vector) — freeing the lifted temp
-                // after the call would invalidate those internal references.
-                if outer_call == u32::MAX
-                    || !data.def(outer_call).name.starts_with("Op")
-                {
-                    return None;
-                }
                 return Some(*d_nr);
             }
         }

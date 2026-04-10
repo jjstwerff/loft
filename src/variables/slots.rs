@@ -217,7 +217,7 @@ fn place_large_and_recurse(
                     // Process inner first so child scopes see the correct tos.
                     // Text excluded: OpText emitted before inner evaluation.
                     if !matches!(function.variables[v].type_def, Type::Text(_))
-                        && inner_has_child_scope(inner)
+                        && inner_has_pre_assignments(inner)
                     {
                         place_large_and_recurse(function, inner, scope, tos, depth + 1);
                         place_zone2(function, v, scope, tos);
@@ -302,15 +302,17 @@ fn place_zone2(function: &mut Function, v: usize, scope: u16, tos: &mut u16) -> 
     v_slot
 }
 
-/// Check whether a Value tree contains any Block or Loop nodes (child scopes).
-fn inner_has_child_scope(val: &Value) -> bool {
+/// Check whether a Value tree contains nodes that codegen will evaluate
+/// before the enclosing Set's target variable — child scopes (Block/Loop)
+/// or Set nodes for other variables (e.g. __lift_N in Insert preambles).
+fn inner_has_pre_assignments(val: &Value) -> bool {
     match val {
         Value::Block(_) | Value::Loop(_) => true,
-        Value::Call(_, args) | Value::CallRef(_, args) => args.iter().any(inner_has_child_scope),
-        Value::Set(_, inner) => inner_has_child_scope(inner),
-        Value::If(c, t, e) => inner_has_child_scope(c) || inner_has_child_scope(t) || inner_has_child_scope(e),
-        Value::Insert(ops) => ops.iter().any(inner_has_child_scope),
-        Value::Drop(inner) | Value::Return(inner) => inner_has_child_scope(inner),
+        Value::Set(_, _) => true, // inner Set is evaluated before the outer Set's target
+        Value::Call(_, args) | Value::CallRef(_, args) => args.iter().any(inner_has_pre_assignments),
+        Value::If(c, t, e) => inner_has_pre_assignments(c) || inner_has_pre_assignments(t) || inner_has_pre_assignments(e),
+        Value::Insert(ops) => ops.iter().any(inner_has_pre_assignments),
+        Value::Drop(inner) | Value::Return(inner) => inner_has_pre_assignments(inner),
         _ => false,
     }
 }
@@ -1444,5 +1446,70 @@ mod tests {
             find_conflict(&f.variables, &HashMap::new()).is_none(),
             "slot conflict: parent var Set inside child scope"
         );
+    }
+
+    // ── P122/P135: Set(v, Insert([Set(__lift_1, ...), ..., Call(...)]))
+    //
+    // The P135 lift produces Insert nodes containing preamble Sets for
+    // __lift_N temporaries followed by the actual Call.  Codegen evaluates
+    // the Insert sequentially — the __lift Sets advance TOS before the
+    // Call result is assigned to v.  assign_slots must place __lift vars
+    // BEFORE v.
+
+    #[test]
+    fn insert_preamble_sets_placed_before_target() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+        declare_loop(&mut f, 2, 5, 60);
+
+        add_scoped_var(&mut f, "total", &Type::Float, 1, 1, 60);
+        // scope 3: loop body block
+        // view = mat4_look_at(__lift_1, __lift_2, __lift_3)
+        let view = add_scoped_var(&mut f, "view", &ref_tp, 3, 20, 50);
+        let lift1 = add_scoped_var(&mut f, "__lift_1", &ref_tp, 3, 15, 50);
+        let lift2 = add_scoped_var(&mut f, "__lift_2", &ref_tp, 3, 16, 50);
+        let lift3 = add_scoped_var(&mut f, "__lift_3", &ref_tp, 3, 17, 50);
+
+        // IR: Loop(scope=2, [Block(scope=3, [Set(view, Insert([Set(lift1, ...), ..., Call(...)]))])])
+        let insert = Value::Insert(vec![
+            Value::Set(lift1, Box::new(Value::Null)),
+            Value::Set(lift2, Box::new(Value::Null)),
+            Value::Set(lift3, Box::new(Value::Null)),
+            Value::Call(999, vec![Value::Var(lift1), Value::Var(lift2), Value::Var(lift3)]),
+        ]);
+        let view_set = Value::Set(view, Box::new(insert));
+        let block3 = Value::Block(Box::new(Block {
+            name: "", scope: 3, var_size: 0, result: Type::Void,
+            operators: vec![view_set],
+        }));
+        let loop2 = Value::Loop(Box::new(Block {
+            name: "", scope: 2, var_size: 0, result: Type::Void,
+            operators: vec![block3],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![loop2],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        // All lifts must be placed before view
+        assert_ne!(f.stack(lift1), u16::MAX, "lift1 must be placed");
+        assert_ne!(f.stack(view), u16::MAX, "view must be placed");
+        assert!(
+            f.stack(lift1) < f.stack(view),
+            "lift1 at {} must be below view at {} — Insert preamble evaluated first",
+            f.stack(lift1), f.stack(view)
+        );
+        assert!(
+            f.stack(lift2) < f.stack(view),
+            "lift2 at {} must be below view at {}",
+            f.stack(lift2), f.stack(view)
+        );
+        assert!(
+            f.stack(lift3) < f.stack(view),
+            "lift3 at {} must be below view at {}",
+            f.stack(lift3), f.stack(view)
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 }
