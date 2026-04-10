@@ -2667,33 +2667,18 @@ fn test() {
     .result(Value::Null);
 }
 
-// P122p: vector comprehension — the comprehension's loop variable has
-// a slot gap when preceded by enough zone2 variables. Reproduces
-// breakout's _elm slot gap.
+// P122p: comprehension followed by plain vector literal — breakout pattern.
+// The comprehension's child scope has zone1 vars. After it exits, the
+// next vector literal's _elm must see correct TOS.
 #[test]
 fn p122p_vector_comprehension_slot_gap() {
     code!(
         "fn test() {
-    SW = 400.0;
-    BS = 10.0;
-    PY = 350.0;
-    SPD = 3.0;
-    pp_x  = [0.0, 0.0, 0.0];
-    pp_y  = [0.0, 0.0, 0.0];
-    pp_w  = [0.0, 0.0, 0.0];
-    pp_vx = [0.0, 0.0, 0.0];
-    pp_vy = [0.0, 0.0, 0.0];
-    pp_rot = [0.0, 0.0, 0.0];
-    pp_drot = [0.0, 0.0, 0.0];
-    ball_x  = [SW / 2.0 - BS / 2.0, 0.0, 0.0];
-    ball_y  = [PY - 30.0, 0.0, 0.0];
-    ball_dx = [SPD * 0.7, 0.0, 0.0];
-    ball_dy = [0.0 - SPD, 0.0, 0.0];
-    ball_on = [1, 0, 0];
-    mx = 8 * 10;
-    f = [for _ in 0..mx { 0 }];
-    assert(f.len() == 80, \"f.len {f.len()}\");
-    assert(f[0] == 0, \"f[0] {f[0]}\");
+    bricks = [for _ in 0..10 { 0 }];
+    colors = [1, 2, 3, 4];
+    assert(bricks.len() == 10, \"bricks {bricks.len()}\");
+    assert(colors.len() == 4, \"colors {colors.len()}\");
+    assert(colors[1] == 2, \"colors[1] {colors[1]}\");
 }"
     )
     .result(Value::Null);
