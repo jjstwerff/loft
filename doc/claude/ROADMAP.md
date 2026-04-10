@@ -96,17 +96,32 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | BK.7  | High-score persistence (file or localStorage in WASM)  | S  |
 | BK.8  | Polish pass on sprite atlas (better art, consistent style) | S |
 
-### Language fix that unblocks idiomatic game code
+### Open issues that block 0.8.4
 
-| ID    | Title                                                  | E  | Severity | Source       |
-|-------|--------------------------------------------------------|----|----------|--------------|
-| P122  | Store leak: free struct/vector temporaries at end of loop iteration | MH | High | PROBLEMS.md  |
+These must be resolved before the game polish items above can proceed
+without workarounds. Ordered by impact.
 
-P122 is the headline pain point in today's breakout: the game has to use
-bitmasks instead of vectors and raw-float collision APIs instead of structs
-to avoid exhausting the store pool. Fixing it lets breakout (and any future
-game) use idiomatic loft. Without this fix, BK.* polish work continues to
-accumulate workarounds.
+| ID   | Title                                                  | E  | Status |
+|------|--------------------------------------------------------|----|--------|
+| P122 | Store leak: struct-returning functions inside render loops leak ~6 stores/frame | M | Partially fixed — field/local/inline-arg patterns done; remaining: local Mat4 vars inside const-param functions not freed at function exit |
+| P135 | Inline struct arg to function call leaks store          | M  | Partially fixed — operators + const-param user functions now lifted; remaining: non-const-param patterns |
+| P127 | File-scope vector constant corrupts caller slots        | M  | Open — `#[ignore]`d reproducer in tests/issues.rs |
+
+### Already done (remove from ROADMAP when merged to main)
+
+| ID    | Title                                                  | Status |
+|-------|--------------------------------------------------------|--------|
+| P120  | Delete on locked store in copy_record                  | ✅ Fixed — const-param store lock released at function exit |
+| P123  | Per-frame vector literal allocation leaks              | ✅ Fixed |
+| P134  | `gl_load_font` returns -1 instead of null sentinel     | ✅ Fixed — breakout score counter now visible |
+| P132  | Release-mode coroutine hang (char UB)                  | ✅ Fixed (on main via PR #142) |
+| P126  | `-1` tail expression after if-return                   | ✅ Fixed (on main via PR #142) |
+| P128  | Constant type annotations rejected                     | ✅ Fixed (on main via PR #142) |
+| P131  | CLI consumes script arguments                          | ✅ Fixed (on main via PR #142) |
+| BK.9  | Paddle breakage animation (3-piece explosion)          | ✅ Done (on main via PR #145) |
+| CI    | Headless GL smoke test + golden image comparison       | ✅ Done (on main via PR #145) |
+| CI    | `make ci` runs in --release (~1m30s vs 31min)          | ✅ Done (on main via PR #142) |
+| CI    | `make test-gl-headless` full GL suite under Xvfb       | ✅ Done (on main via PR #145) |
 
 ---
 
