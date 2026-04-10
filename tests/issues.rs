@@ -2569,3 +2569,56 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// P122g: inline struct arg passed to user function that stores it in a vector.
+// This is the exact pattern from add_light(directional_light(...)) in the GL
+// renderer.  The inner call creates a temp store; the outer call deep-copies
+// it into the scene's vector.  After the call, the temp store should be freed.
+#[test]
+fn p122g_inline_struct_arg_stored_in_vector() {
+    code!(
+        "struct Light { name: text, intensity: float not null }
+struct Scene { lights: vector<Light> }
+fn make_light(n: text, i: float) -> Light { Light { name: n, intensity: i } }
+fn add_light(self: Scene, l: Light) -> integer {
+    si = self.lights.len();
+    self.lights += [l];
+    si
+}
+fn test() {
+    sc = Scene { lights: [] };
+    for p122g_i in 0..100 {
+        sc.add_light(make_light(\"l\", p122g_i as float));
+    }
+    assert(sc.lights.len() == 100, \"expected 100 lights got {sc.lights.len()}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122h: same pattern but with nested inline struct args (normalize3(vec3(...)))
+// passed through a user function chain.
+#[test]
+fn p122h_nested_inline_struct_through_user_fn() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Scene { directions: vector<Vec3> }
+fn vec3(x: float, y: float, z: float) -> Vec3 { Vec3 { x: x, y: y, z: z } }
+fn normalize3(v: Vec3) -> Vec3 {
+    len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if len == 0.0 { return v; }
+    Vec3 { x: v.x / len, y: v.y / len, z: v.z / len }
+}
+fn add_dir(self: Scene, d: Vec3) {
+    self.directions += [d];
+}
+fn test() {
+    sc = Scene { directions: [] };
+    for p122h_i in 0..1000 {
+        sc.add_dir(normalize3(vec3(p122h_i as float, 1.0, 0.0)));
+    }
+    assert(sc.directions.len() == 1000, \"expected 1000 dirs\");
+}"
+    )
+    .result(Value::Null);
+}
