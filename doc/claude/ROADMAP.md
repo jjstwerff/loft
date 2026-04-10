@@ -27,6 +27,32 @@ comes after the single-player browser experience works.
 **Maintenance rule:** When an item is completed, remove it from this file.
 Completed work belongs in CHANGELOG.md and git history.
 
+## Zero-regressions rule
+
+**No release may ship with regressions versus any previous state of
+`main`.** Something that worked must keep working. "Perceived regressions"
+count — if a feature was merged onto `main` and worked at any point, it
+must work at release time or be explicitly reverted with documentation.
+
+There is no urgency to release if doing so means shipping a drawback for
+users or developers. We do things right.
+
+**Enforcement:** before tagging any release, run:
+```bash
+make ci                       # unit tests + package tests + GL smoke + golden diff
+make test-gl-headless         # full GL suite under Xvfb — GL_HEADLESS_SKIP must be EMPTY
+```
+If `GL_HEADLESS_SKIP` in the Makefile is non-empty, those examples are
+known-broken and **block the release** — fix the underlying bug first.
+
+**Current blocker (2026-04-10):** P120 — 11 GL examples panic with
+`Delete on locked store` in `copy_record`. These use the high-level
+`render::create_renderer` path with per-frame transform updates. The fix
+must land before any release that includes those examples. See
+PROBLEMS.md #120 for the backtrace, the failing example list, and the
+fix path (`copy_record` must detect a locked destination store and either
+defer the delete or copy via a scratch store).
+
 ---
 
 ## 0.8.4 — Awesome Breakout
