@@ -139,13 +139,45 @@ impl Parser {
         }
     }
 
+    /// Check whether `val` is a call to a user-defined function that returns a struct
+    /// via a temporary store.  Used by `copy_ref` to decide whether to free the source
+    /// store after the deep copy (P122 fix).
+    fn is_struct_returning_call(&self, val: &Value) -> bool {
+        if self.first_pass {
+            return false;
+        }
+        match val {
+            Value::Call(fn_nr, _) => {
+                let def = &self.data.def(*fn_nr);
+                // User function with code (not a built-in op)
+                def.name.starts_with("n_") && def.code != Value::Null
+            }
+            // Struct constructor blocks allocate a store too — when assigned
+            // to a field, the source store is a temporary that should be freed.
+            Value::Block(bl) => bl.name == "Object",
+            _ => false,
+        }
+    }
+
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type;
-        // println!("here! f_type:{f_type} pass:{} to:{to:?} at {}", self.first_pass, self.lexer.pos());
+        // P122-fix: when the source is a struct-returning function call,
+        // set the high bit (0x8000) on the type parameter to signal
+        // copy_record to free the callee's temporary store after the
+        // deep copy.  Without this, the __ref_N work-ref store allocated
+        // by add_defaults leaks on every call in a loop.
+        #[cfg(not(feature = "wasm"))]
+        let tp_val = if self.is_struct_returning_call(code) {
+            i32::from(tp) | 0x8000
+        } else {
+            i32::from(tp)
+        };
+        #[cfg(feature = "wasm")]
+        let tp_val = i32::from(tp);
         self.cl(
             "OpCopyRecord",
-            &[code.clone(), to.clone(), Value::Int(i32::from(tp))],
+            &[code.clone(), to.clone(), Value::Int(tp_val)],
         )
     }
 

@@ -51,7 +51,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | ⚠️ Appears fixed by P116/P118/P122 wave; regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak` passes. Re-verify with the original `file()`-style pattern before closing |
 | 120 | ~~Use-after-free: struct return inside `if` block in loop frees borrowed store~~ | ~~**High**~~ | **Fixed** — `const` parameter store lock now released at function exit via `n_set_store_lock(var, false)` in `scopes.rs::get_free_vars`. All 27 GL examples pass headless. |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
-| 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
+| 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | Medium | **Partially fixed** — `copy_ref` in `operators.rs` now sets the free bit on `OpCopyRecord` for struct-returning function calls and struct literals assigned to fields. Local-variable and field-assignment patterns no longer leak. Remaining leaks in the renderer pipeline (deep internal allocations) still need investigation. |
 | 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
 | 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | ⚠️ Appears fixed; `tests/issues.rs::p124_function_returning_inline_array_index` passes under interpret. Re-verify under `--native` with `--native-emit` before closing |
 | 125 | `use` import can't find sibling packages when script is inside a package | Medium | ~~**Fixed**~~ — `lib_path` now walks up to `loft.toml` and searches siblings |
@@ -1047,25 +1047,31 @@ interpreter and native modes.  The `rect_overlap_depth` function in
 
 ### 122. Store leak: struct allocation inside game loop exhausts store pool
 
-**Severity:** High (interpreter and native)
+**Severity:** Medium (downgraded from High — partial fix landed)
+
+**Partially fixed** in `src/parser/operators.rs`.
 
 **Symptom:** After running for 30-60 seconds, the game panics with
 `"Allocating a used store"`. Occurs in any tight loop that creates
 struct instances (e.g. collision detection shapes).
 
-**Root cause:** Each `shapes::Rect { ... }` or struct-returning function
-call allocates a store. Inside a 60fps game loop with ~50 bricks checked
-per frame, this exhausts the store pool within seconds. The stores are
-not freed because the struct temporaries are created inside a loop body
-(related to P117 store leak on struct returns).
+**What was fixed:** `copy_ref` (field assignment path for `x.field = expr`
+where expr is a struct) now sets the `0x8000` free bit on `OpCopyRecord`
+when the source is a struct-returning function call or a struct literal.
+This signals `copy_record` to free the callee's temporary store after the
+deep copy. Test `p122_struct_return_to_field_in_loop` (10,000 iterations)
+confirms stable store count (max=4). The local-variable patterns
+(`p122_struct_return_in_loop`, etc.) were already non-leaking.
+
+**What remains:** The GL renderer pipeline (`render.loft`, `scene.loft`)
+still leaks stores — 05-transformations reaches ~16k active stores in 2
+seconds under `LOFT_STORES=warn`. These are deeper internal allocations
+within the library functions, not the user-facing field-assignment pattern.
+Requires per-function investigation of the renderer's struct temporaries.
 
 **Workaround:** Use raw-float functions instead of struct-based APIs
 in game loops. The `shapes` library provides `aabb_overlap(ax,ay,aw,ah,
 bx,by,bw,bh)` and `aabb_depth_x`/`aabb_depth_y` for this purpose.
-
-**Fix direction:** The interpreter should free struct temporaries at the
-end of each loop iteration, not at function exit. This requires tracking
-which stores were allocated within the loop body.
 
 ---
 

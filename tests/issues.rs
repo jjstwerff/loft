@@ -2470,3 +2470,27 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// P122f: struct-returning function result assigned to a struct field in a loop.
+// This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
+// struct that is assigned to sc.nodes[0].transform each frame.
+#[test]
+fn p122_struct_return_to_field_in_loop() {
+    code!(
+        "struct Transform { a: float not null, b: float not null, c: float not null, d: float not null }
+struct Node { name: text, transform: Transform }
+struct Scene { nodes: vector<Node> }
+fn make_transform(angle: float) -> Transform {
+  Transform { a: angle, b: angle * 2.0, c: angle * 3.0, d: angle * 4.0 }
+}
+fn test() {
+  sc = Scene { nodes: [] };
+  sc.nodes += [Node { name: \"cube\", transform: Transform { a: 1.0, b: 0.0, c: 0.0, d: 1.0 } }];
+  for p122f_i in 0..10000 {
+    sc.nodes[0].transform = make_transform(p122f_i as float * 0.01);
+  }
+  assert(sc.nodes[0].transform.a > 0.0, \"field assign loop\");
+}"
+    )
+    .result(Value::Null);
+}
