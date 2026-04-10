@@ -241,6 +241,22 @@ fn main() {
   br_fire_timer = 0.0;
   br_shield_on = false;
 
+  // Paddle break-and-respawn state.
+  // br_paddle_state: 0=normal (paddle visible & active), 1=exploding
+  // (paddle invisible, 3 pieces fly outward), 2=respawn pause (waiting
+  // for next paddle+ball to appear).
+  br_paddle_state = 0;
+  br_explode_timer = 0.0;
+  // Per-piece state — 3 pieces, each with position, velocity, rotation.
+  br_pp_x  = [0.0, 0.0, 0.0];
+  br_pp_y  = [0.0, 0.0, 0.0];
+  br_pp_w  = [0.0, 0.0, 0.0];
+  br_pp_vx = [0.0, 0.0, 0.0];
+  br_pp_vy = [0.0, 0.0, 0.0];
+  br_pp_rot = [0.0, 0.0, 0.0];     // visual jitter / "rotation"
+  br_pp_drot = [0.0, 0.0, 0.0];    // angular velocity
+  EXPLODE_DURATION = 1.4;          // seconds before next paddle+ball
+
   // Multi-ball: up to 3 balls
   br_ball_x  = [SCREEN_W / 2.0 - BALL_SIZE / 2.0, 0.0, 0.0];
   br_ball_y  = [PADDLE_Y - 30.0, 0.0, 0.0];
@@ -338,13 +354,17 @@ fn main() {
 
     if !br_won && !br_lost && br_level_timer <= 0.0 {
       // ── Input ────────────────────────────────────────────────
-      if graphics::gl_key_pressed(graphics::KEY_LEFT) || graphics::gl_key_pressed(graphics::KEY_A) {
-        br_px -= PADDLE_SPEED * br_dt;
+      // Paddle movement is disabled during the explosion respawn pause
+      // so the player can't slide a non-existent paddle around the screen.
+      if br_paddle_state == 0 {
+        if graphics::gl_key_pressed(graphics::KEY_LEFT) || graphics::gl_key_pressed(graphics::KEY_A) {
+          br_px -= PADDLE_SPEED * br_dt;
+        }
+        if graphics::gl_key_pressed(graphics::KEY_RIGHT) || graphics::gl_key_pressed(graphics::KEY_D) {
+          br_px += PADDLE_SPEED * br_dt;
+        }
+        br_px = shapes::clamp(br_px, 0.0, SCREEN_W - br_pw);
       }
-      if graphics::gl_key_pressed(graphics::KEY_RIGHT) || graphics::gl_key_pressed(graphics::KEY_D) {
-        br_px += PADDLE_SPEED * br_dt;
-      }
-      br_px = shapes::clamp(br_px, 0.0, SCREEN_W - br_pw);
 
       // Timers
       if br_extend_timer > 0.0 {
@@ -367,8 +387,8 @@ fn main() {
         if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); }
         if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); }
 
-        // Paddle
-        if br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
+        // Paddle (skipped during the explosion respawn pause)
+        if br_paddle_state == 0 && br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
             br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
             br_px, PADDLE_Y, br_pw, PADDLE_H) {
           br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
@@ -464,20 +484,88 @@ fn main() {
         }
       }
 
-      // All balls lost?
-      if !br_any_ball {
+      // All balls lost? Enter the paddle-explosion phase: break the
+      // paddle into 3 pieces with slightly varied widths (so the cuts
+      // look ragged), give each piece an outward velocity + rotation,
+      // and emit splinter particles at the break points. The next
+      // paddle + ball appears after EXPLODE_DURATION via the respawn
+      // pause state.
+      if !br_any_ball && br_paddle_state == 0 {
         br_lives -= 1;
         br_combo = 0;
         if br_lives <= 0 {
           br_lost = true;
         } else {
+          br_paddle_state = 1;
+          br_explode_timer = EXPLODE_DURATION;
+          // Slightly asymmetric piece widths for a "ragged" cut feel.
+          br_pp_total = br_pw;
+          br_pp_w[0] = br_pp_total * 0.32;
+          br_pp_w[1] = br_pp_total * 0.34;
+          br_pp_w[2] = br_pp_total * 0.30;
+          br_pp_x[0] = br_px;
+          br_pp_x[1] = br_px + br_pp_w[0] + 2.0;
+          br_pp_x[2] = br_px + br_pp_w[0] + br_pp_w[1] + 4.0;
+          br_pp_y[0] = PADDLE_Y;
+          br_pp_y[1] = PADDLE_Y;
+          br_pp_y[2] = PADDLE_Y;
+          // Outer pieces fly outward + slightly up; middle piece falls
+          // mostly down with a small horizontal kick.
+          br_pp_vx[0] = -260.0;
+          br_pp_vx[1] = (br_lives as float * 7.0) - 15.0;  // tiny pseudo-random jitter
+          br_pp_vx[2] = 260.0;
+          br_pp_vy[0] = -180.0;
+          br_pp_vy[1] = -60.0;
+          br_pp_vy[2] = -180.0;
+          br_pp_rot[0] = 0.0;
+          br_pp_rot[1] = 0.0;
+          br_pp_rot[2] = 0.0;
+          br_pp_drot[0] = -3.5;
+          br_pp_drot[1] = 1.2;
+          br_pp_drot[2] = 4.0;
+          // Splinter particles at the two break points.
+          for br_sp_b in 0..2 {
+            br_sp_bx = br_px + br_pp_w[0] + br_sp_b as float * br_pp_w[1];
+            for br_sp_i in 0..6 {
+              for br_sp_j in 0..MAX_PARTICLES {
+                if br_pt_t[br_sp_j] <= 0.0 {
+                  br_pt_x[br_sp_j] = br_sp_bx + (br_sp_i as float - 3.0) * 1.5;
+                  br_pt_y[br_sp_j] = PADDLE_Y + br_sp_i as float;
+                  br_pt_vx[br_sp_j] = (br_sp_i as float - 2.5) * 80.0;
+                  br_pt_vy[br_sp_j] = -150.0 - br_sp_i as float * 12.0;
+                  br_pt_t[br_sp_j] = PARTICLE_LIFE;
+                  br_pt_r[br_sp_j] = 0.85;
+                  br_pt_g[br_sp_j] = 0.85;
+                  br_pt_b[br_sp_j] = 0.95;
+                  break;
+                }
+              }
+            }
+          }
+          br_flash_timer = FLASH_DURATION;
+          br_flash_r = 1.0; br_flash_g = 0.1; br_flash_b = 0.1;
+        }
+      }
+
+      // ── Update paddle explosion phase ─────────────────────────
+      if br_paddle_state == 1 {
+        br_explode_timer -= br_dt;
+        for br_pp_i in 0..3 {
+          br_pp_x[br_pp_i] += br_pp_vx[br_pp_i] * br_dt;
+          br_pp_y[br_pp_i] += br_pp_vy[br_pp_i] * br_dt;
+          br_pp_vy[br_pp_i] += 600.0 * br_dt;  // gravity
+          br_pp_rot[br_pp_i] += br_pp_drot[br_pp_i] * br_dt;
+        }
+        if br_explode_timer <= 0.0 {
+          // Respawn paddle and ball at the centre.
+          br_paddle_state = 0;
+          br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
+          br_pw = PADDLE_W_DEFAULT;
           br_ball_x[0] = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
           br_ball_y[0] = PADDLE_Y - 30.0;
           br_ball_dx[0] = br_ball_speed * 0.7;
           br_ball_dy[0] = 0.0 - br_ball_speed;
           br_ball_on[0] = 1;
-          br_flash_timer = FLASH_DURATION;
-          br_flash_r = 1.0; br_flash_g = 0.1; br_flash_b = 0.1;
         }
       }
 
@@ -699,11 +787,40 @@ fn main() {
         0.0, SCREEN_H - 3.0, SCREEN_W, 3.0, 0.3, 0.6, 1.0, 0.6);
     }
 
-    // Paddle — flat color
-    if br_extend_timer > 0.0 {
-      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5, 1.0);
+    // Paddle — flat color (suppressed during the explosion phase)
+    if br_paddle_state == 0 {
+      if br_extend_timer > 0.0 {
+        graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.3, 0.9, 0.5, 1.0);
+      } else {
+        graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
+      }
     } else {
-      graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
+      // Exploding — draw the 3 pieces with their current positions and a
+      // small "rotation jitter" simulated by horizontal/vertical wobble
+      // (Painter2D draws axis-aligned rects, so we fake the rotation by
+      // offsetting the y position slightly based on rot). Each piece has
+      // a slightly different shade so the break is visually obvious.
+      for br_pp_d in 0..3 {
+        br_pp_jx = sin(br_pp_rot[br_pp_d]) * 1.5;
+        br_pp_jy = cos(br_pp_rot[br_pp_d]) * 1.5;
+        br_pp_shade = 0.85 - br_pp_d as float * 0.08;
+        graphics::draw_rect_at(br_painter,
+          br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
+          br_pp_w[br_pp_d], PADDLE_H,
+          br_pp_shade, br_pp_shade, br_pp_shade + 0.05, 1.0);
+        // Splinter highlight on the break edges
+        if br_pp_d > 0 {
+          graphics::draw_rect_at(br_painter,
+            br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
+            2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
+        }
+        if br_pp_d < 2 {
+          graphics::draw_rect_at(br_painter,
+            br_pp_x[br_pp_d] + br_pp_jx + br_pp_w[br_pp_d] - 2.0,
+            br_pp_y[br_pp_d] + br_pp_jy,
+            2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
+        }
+      }
     }
 
     // Balls — flat color

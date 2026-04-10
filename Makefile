@@ -1,7 +1,7 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages serve wasm
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm
 
 all:
 	rustfmt src/*.rs --edition 2024
@@ -110,6 +110,177 @@ test-packages:
 	echo "$$total package tests, $$failed failed"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
 
+# Headless GL example tests — tiered:
+#
+#   test-gl-smoke    : 3 representative examples, ~20s. Wired into `make ci`.
+#                      Catches catastrophic regressions (window creation,
+#                      Painter2D draw path, scene-graph render path).
+#   test-gl-headless : full set (14 today, 26 once P120 lands), ~90-180s.
+#                      Run on demand: `make test-gl-headless`. Catches
+#                      finer-grained regressions.
+#
+# Both run lib/graphics/examples/*.loft under Xvfb with the Mesa software
+# rasterizer for ~5 seconds each, looking for panics. They catch the
+# "appears fixed but isn't" failure mode where a unit-level regression
+# test passes but the real GL example panics in actual usage (see
+# PROBLEMS.md #120).
+#
+# An example "passes" if it exits with code 0 (clean exit), 124 (our
+# 5-second timeout fired — expected for examples with `for _ in 0..1000000`
+# game loops), or 143 (SIGTERM). Anything else is a failure, and any
+# `panicked` line in stderr is also a failure regardless of exit code.
+
+# Smoke set — one custom example designed for fast, broad coverage of
+# the most-likely-to-regress paths in a single ~5s run. Adding more
+# coverage to the smoke set should be done by editing 00-smoke.loft,
+# not by adding more files here.
+GL_SMOKE := 00-smoke
+
+# Examples currently broken by P120 (Delete on locked store in copy_record).
+# All use the high-level renderer's per-frame transform-update path.
+# Tracked: doc/claude/PROBLEMS.md #120 — remove from the skip list as P120
+# is fixed and re-verify with `make test-gl-headless`.
+GL_HEADLESS_SKIP := \
+	05-transformations \
+	06-coordinate-systems \
+	09-materials \
+	12-multiple-lights \
+	13-depth-testing \
+	15-face-culling \
+	16-shadow-mapping \
+	17-post-processing \
+	20-textured-cube \
+	22-wireframe \
+	23-cleanup \
+	test_mat4_crash
+
+# Internal helper: run one loft example under Xvfb. Used by both targets.
+# $1 = path to .loft file. Returns 0 on success, sets failed counter via stderr.
+define gl_headless_run_one
+	name=$$(basename "$(1)" .loft); \
+	printf "  %-30s " "$$name"; \
+	out=$$(timeout 5 xvfb-run -a -s "-screen 0 800x600x24" \
+		./target/release/loft --interpret \
+			--path $$(pwd)/ --lib $$(pwd)/lib/ \
+			"$(1)" 2>&1); \
+	code=$$?; \
+	if echo "$$out" | grep -q "panicked"; then \
+		echo "FAILED (panic)"; \
+		echo "$$out" | grep -A2 "panicked" | head -5; \
+		failed=$$((failed + 1)); \
+	elif [ $$code -eq 0 ] || [ $$code -eq 124 ] || [ $$code -eq 143 ]; then \
+		echo "ok"; \
+	else \
+		echo "FAILED (exit $$code)"; \
+		echo "$$out" | tail -3; \
+		failed=$$((failed + 1)); \
+	fi
+endef
+
+test-gl-smoke:
+	@cargo build --release -q
+	@if ! command -v xvfb-run >/dev/null 2>&1; then \
+		echo "  test-gl-smoke: SKIPPED (xvfb-run not installed; apt-get install xvfb)"; \
+		exit 0; \
+	fi
+	@failed=0; total=0; \
+	for name in $(GL_SMOKE); do \
+		f="lib/graphics/examples/$$name.loft"; \
+		[ -f "$$f" ] || { echo "MISSING: $$f"; failed=$$((failed + 1)); continue; }; \
+		total=$$((total + 1)); \
+		$(call gl_headless_run_one,$$f); \
+	done; \
+	echo "$$total smoke-tested, $$failed failed"; \
+	if [ $$failed -gt 0 ]; then exit 1; fi
+
+# test-gl-golden: render the smoke test under Xvfb and compare the
+# resulting screenshot pixel-for-pixel against tests/golden/00-smoke.png.
+# Mesa swrast is deterministic, so any non-zero difference indicates a
+# real rendering regression — colour swap, missing texture, layout drift,
+# font path failure, etc. The bug found today (gl_load_font sentinel
+# mismatch hiding all text textures) would have been caught here on the
+# first run after the bug was introduced.
+#
+# Tolerance: 1% per-pixel fuzz, 0 absolute differences allowed. Adjust
+# the AE threshold if anti-aliasing on different platforms produces a
+# small but bounded difference.
+#
+# To accept a deliberate visual change, run `make update-gl-golden`.
+test-gl-golden:
+	@cargo build --release -q
+	@if ! command -v xvfb-run >/dev/null 2>&1; then \
+		echo "  test-gl-golden: SKIPPED (xvfb-run not installed)"; \
+		exit 0; \
+	fi
+	@if ! command -v compare >/dev/null 2>&1; then \
+		echo "  test-gl-golden: SKIPPED (ImageMagick compare not installed)"; \
+		exit 0; \
+	fi
+	@if [ ! -f tests/golden/00-smoke.png ]; then \
+		echo "  test-gl-golden: FAIL — tests/golden/00-smoke.png missing."; \
+		echo "  Run 'make update-gl-golden' to create it."; \
+		exit 1; \
+	fi
+	@mkdir -p /tmp/loft_test_render
+	@printf "  %-30s " "00-smoke.png vs golden"
+	@xvfb-run -a -s "-screen 0 400x300x24" \
+		tests/scripts/snap_smoke.sh /tmp/loft_test_render/00-smoke.png \
+		>/tmp/loft_golden.log 2>&1; \
+	rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
+		echo "FAIL (snapshot)"; \
+		cat /tmp/loft_golden.log; \
+		exit 1; \
+	fi; \
+	diff_count=$$(compare -metric AE -fuzz 1% \
+		tests/golden/00-smoke.png \
+		/tmp/loft_test_render/00-smoke.png \
+		/tmp/loft_test_render/00-smoke-diff.png 2>&1); \
+	if [ "$$diff_count" = "0" ]; then \
+		echo "ok (0 px differ)"; \
+	else \
+		echo "FAIL ($$diff_count px differ)"; \
+		echo "  Diff written to /tmp/loft_test_render/00-smoke-diff.png"; \
+		echo "  If the change is intentional, run: make update-gl-golden"; \
+		exit 1; \
+	fi
+
+# Regenerate tests/golden/00-smoke.png from the current build. Use after
+# an intentional visual change to the smoke test or to a renderer code
+# path that affects it.
+update-gl-golden:
+	@cargo build --release -q
+	@if ! command -v xvfb-run >/dev/null 2>&1; then \
+		echo "  update-gl-golden: requires xvfb-run"; exit 1; \
+	fi
+	@mkdir -p tests/golden
+	@xvfb-run -a -s "-screen 0 400x300x24" \
+		tests/scripts/snap_smoke.sh tests/golden/00-smoke.png
+	@echo "  Updated tests/golden/00-smoke.png"
+	@echo "  Inspect with: xdg-open tests/golden/00-smoke.png"
+
+test-gl-headless:
+	@cargo build --release -q
+	@if ! command -v xvfb-run >/dev/null 2>&1; then \
+		echo "  test-gl-headless: SKIPPED (xvfb-run not installed; apt-get install xvfb)"; \
+		exit 0; \
+	fi
+	@failed=0; total=0; skipped=0; \
+	skip_pattern="$$(echo "$(GL_HEADLESS_SKIP)" | tr ' ' '|')"; \
+	for f in lib/graphics/examples/*.loft; do \
+		[ -f "$$f" ] || continue; \
+		name=$$(basename "$$f" .loft); \
+		if echo "$$name" | grep -qE "^($$skip_pattern)$$"; then \
+			printf "  %-30s SKIP (PROBLEMS.md P120)\n" "$$name"; \
+			skipped=$$((skipped + 1)); \
+			continue; \
+		fi; \
+		total=$$((total + 1)); \
+		$(call gl_headless_run_one,$$f); \
+	done; \
+	echo "$$total tested, $$skipped skipped, $$failed failed"; \
+	if [ $$failed -gt 0 ]; then exit 1; fi
+
 ci:
 	-rm -rf tests/generated
 	-rm -f /tmp/loft_native_*
@@ -125,7 +296,9 @@ ci:
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
 	cargo check --no-default-features >> result.txt 2>&1 && \
 	cargo test --release >> result.txt 2>&1 && \
-	$(MAKE) test-packages >> result.txt 2>&1
+	$(MAKE) test-packages >> result.txt 2>&1 && \
+	$(MAKE) test-gl-smoke >> result.txt 2>&1 && \
+	$(MAKE) test-gl-golden >> result.txt 2>&1
 
 run-tests:
 	cargo test --release > result.txt 2>&1

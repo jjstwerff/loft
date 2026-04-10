@@ -1,0 +1,126 @@
+#!/usr/bin/env -S loft --native
+// Headless smoke test for the loft graphics stack.
+//
+// Designed to exercise the most-likely-to-regress paths in a single short
+// run so `make test-gl-smoke` (and `make ci`) can catch breakage early
+// without running the full lib/graphics/examples suite. Used by:
+//
+//   make test-gl-smoke      ← wired into `make ci`
+//   make test-gl-headless   ← also runs the full suite
+//
+// What this exercises:
+//   - gl_create_window / gl_destroy_window — native window lifecycle
+//   - create_painter_2d                    — Painter2D initialisation
+//   - canvas + fill_rect + blend_pixel     — software rasterizer primitives
+//   - create_sprite_sheet                  — atlas upload from a Canvas
+//   - draw_rect_at  (multiple alphas)      — flat-color quad path
+//   - draw_sprite_at                       — sprite atlas → quad
+//   - draw_texture_at                      — generic textured quad (V-flip)
+//   - gl_upload_canvas                     — Canvas → GL texture
+//   - create_text_texture                  — text rasterization (text→PNG→GL)
+//   - gl_clear / gl_poll_events / gl_swap_buffers — frame loop plumbing
+//   - Multiple frames of mixed 2D draws    — exercises the per-frame path
+//
+// Success criterion: exits cleanly with no panic. The test runs a fixed
+// 200-frame loop so it terminates well within the 5-second `timeout`
+// used by `make test-gl-smoke`. Each phase prints a status line so
+// failures are easy to bisect from logs.
+use graphics;
+
+SCREEN_W = 400.0;
+SCREEN_H = 300.0;
+
+fn build_atlas() -> graphics::Canvas {
+  // 2x2 atlas, 32x32 per cell. Sprite 0 = red, 1 = green, 2 = blue, 3 = white.
+  // Each cell has a one-pixel border via blend_pixel to exercise that path.
+  c = graphics::canvas(64, 64, 0);
+  c.fill_rect(0,  0,  32, 32, graphics::rgba(220,  60,  60, 255));
+  c.fill_rect(32, 0,  32, 32, graphics::rgba( 60, 220,  60, 255));
+  c.fill_rect(0,  32, 32, 32, graphics::rgba( 60,  60, 220, 255));
+  c.fill_rect(32, 32, 32, 32, graphics::rgba(230, 230, 230, 255));
+  for sm_y in 0..64 {
+    c.blend_pixel(0,      sm_y, graphics::rgba(0, 0, 0, 200));
+    c.blend_pixel(63,     sm_y, graphics::rgba(0, 0, 0, 200));
+    c.blend_pixel(sm_y,   0,    graphics::rgba(0, 0, 0, 200));
+    c.blend_pixel(sm_y,   63,   graphics::rgba(0, 0, 0, 200));
+  }
+  c
+}
+
+fn main() {
+  println("smoke: start");
+
+  if !graphics::gl_create_window(SCREEN_W as integer, SCREEN_H as integer, "loft GL smoke") {
+    println("smoke: FAIL gl_create_window");
+    return;
+  }
+  println("smoke: window ok");
+
+  painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
+  println("smoke: painter ok");
+
+  atlas = build_atlas();
+  sheet = graphics::create_sprite_sheet(atlas, 2, 2, graphics::painter_vao(painter));
+  println("smoke: sprite sheet ok");
+
+  // Optional: an arbitrary texture uploaded straight from a Canvas, for
+  // draw_texture_at coverage. This is the same path text textures use.
+  banner = graphics::canvas(120, 20, graphics::rgba(40, 40, 60, 255));
+  banner.fill_rect(2, 2, 116, 16, graphics::rgba(200, 200, 220, 255));
+  banner_tex = graphics::gl_upload_canvas(banner.data, banner.width, banner.height);
+  println("smoke: gl_upload_canvas ok");
+
+  // Optional: text texture path. Falls back gracefully if no font is found
+  // — the test stays a smoke check, not a font-availability gate.
+  font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  if !font {
+    font = graphics::gl_load_font("lib/graphics/examples/DejaVuSans-Bold.ttf");
+  }
+  text_tex = 0;
+  if font {
+    text_tex = graphics::create_text_texture(font, "loft", 18.0, graphics::rgba(255, 255, 255, 255));
+    println("smoke: text texture ok");
+  } else {
+    println("smoke: text texture skipped (no font)");
+  }
+
+  // Frame loop — finite so it exits cleanly.
+  for _sm_frame in 0..200 {
+    if !graphics::gl_poll_events() { break; }
+    graphics::gl_clear(graphics::rgba(20, 25, 35, 255));
+
+    // Painter2D rectangles in a row, varying alpha — exercises the flat
+    // shader's uColor + uAlpha uniforms and the unit-quad VAO path.
+    for sm_i in 0..6 {
+      sm_x = 10.0 + sm_i as float * 60.0;
+      sm_a = 0.4 + sm_i as float * 0.1;
+      graphics::draw_rect_at(painter, sm_x, 20.0, 50.0, 30.0,
+        sm_i as float * 0.15, 0.5, 1.0 - sm_i as float * 0.15, sm_a);
+    }
+
+    // Sprites from the atlas — exercises draw_sprite_at + the textured shader.
+    for sm_si in 0..4 {
+      sm_sx = 10.0 + sm_si as float * 60.0;
+      graphics::draw_sprite_at(sheet, painter, sm_sx, 70.0, 32.0, 32.0, sm_si);
+    }
+
+    // Generic textured quad — draw_texture_at with the painter's tex shader.
+    graphics::draw_texture_at(painter, banner_tex, 10.0, 120.0, 120.0, 20.0);
+
+    // Text texture overlay (only if font loaded).
+    if text_tex {
+      graphics::draw_texture_at(painter, text_tex, 200.0, 120.0, 80.0, 20.0);
+    }
+
+    // Solid bottom strip to verify gl_clear isn't covering everything.
+    graphics::draw_rect_at(painter, 0.0, SCREEN_H - 4.0, SCREEN_W, 4.0,
+      0.3, 0.6, 1.0, 1.0);
+
+    graphics::gl_swap_buffers();
+  }
+
+  if text_tex { graphics::gl_delete_texture(text_tex); }
+  graphics::gl_delete_texture(banner_tex);
+  graphics::gl_destroy_window();
+  println("smoke: clean shutdown ok");
+}
