@@ -51,6 +51,8 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     }
     // Walk the IR tree, assigning slots scope-by-scope.
     process_scope(function, code, local_start, 0);
+    // Place any variables that the IR walk missed (scope has no Block/Loop in IR).
+    place_orphaned_vars(function);
     #[cfg(debug_assertions)]
     {
         function.logging = false;
@@ -199,50 +201,30 @@ fn place_large_and_recurse(
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
                 if v_size > 8 {
-                    // C43.2/C46: try reusing any dead same-type zone-2 slot.
-                    // The full conflict scan in find_reusable_zone2_slot guards
-                    // against spatial+temporal overlaps with all assigned variables.
-                    // Text-only restriction (inside the finder) prevents the
-                    // Reference/Vector IR-walk-order issues (C45).
-                    let reuse_slot = find_reusable_zone2_slot(function, v, scope);
-                    let (v_slot, reused) = if let Some(slot) = reuse_slot {
-                        (slot, true)
-                    } else {
-                        let s = *tos;
-                        *tos += v_size;
-                        (s, false)
-                    };
-                    if function.logging {
-                        let tag = if reused { "zone2-reuse" } else { "zone2" };
-                        eprintln!(
-                            "[assign_slots]   {tag}  '{}' scope={scope} size={v_size}B → slot={v_slot}  \
-                             inner={}",
-                            function.variables[v].name,
-                            match inner.as_ref() {
-                                Value::Block(bl) => format!("Block(scope={})", bl.scope),
-                                Value::Loop(bl) => format!("Loop(scope={})", bl.scope),
-                                other => format!("{:?}", std::mem::discriminant(other)),
-                            }
-                        );
-                    }
-                    function.variables[v].stack_pos = v_slot;
-                    function.variables[v].pre_assigned_pos = v_slot;
                     // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
                     // For non-Text types, generate_block is called with `to = v.stack_pos`,
                     // so at runtime the block's frame starts at v's slot (v is not yet live).
-                    // Zone-1 vars of the child scope share v's slot area safely.
-                    // Using frame_base = v_slot (not *tos after advancing) prevents the
-                    // pos > TOS override in generate_set for Zone-2 vars of the child scope.
-                    //
-                    // Text is excluded: gen_set_first_text emits OpText BEFORE the block runs,
-                    // advancing stack.position by v_size, so the block's frame_base at codegen
-                    // time is v_slot + v_size — matching the old *tos value.
+                    // Text is excluded: gen_set_first_text emits OpText BEFORE the block runs.
                     if matches!(inner.as_ref(), Value::Block(_))
                         && !matches!(function.variables[v].type_def, Type::Text(_))
                     {
+                        let v_slot = place_zone2(function, v, scope, tos);
                         process_scope(function, inner, v_slot, depth + 1);
                         return;
                     }
+                    // Non-Block inner with child scopes (e.g. Call(fn, [Block(...)])):
+                    // codegen evaluates inner (including Block args) BEFORE placing v.
+                    // Process inner first so child scopes see the correct tos.
+                    // Text excluded: OpText emitted before inner evaluation.
+                    if !matches!(function.variables[v].type_def, Type::Text(_))
+                        && inner_has_child_scope(inner)
+                    {
+                        place_large_and_recurse(function, inner, scope, tos, depth + 1);
+                        place_zone2(function, v, scope, tos);
+                        return;
+                    }
+                    // Simple inner: place v first, then recurse.
+                    place_zone2(function, v, scope, tos);
                 }
             } else if function.logging && function.variables[v].scope != scope {
                 eprintln!(
@@ -298,6 +280,80 @@ fn place_large_and_recurse(
 /// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
 /// Guards: same size, same type discriminant, dead (`last_use` < `first_def`),
 /// no spatial+temporal overlap with any other assigned variable.
+/// Place a zone-2 variable at tos, trying dead-slot reuse first.
+fn place_zone2(function: &mut Function, v: usize, scope: u16, tos: &mut u16) -> u16 {
+    let v_size = size(&function.variables[v].type_def, &Context::Variable);
+    let reuse_slot = find_reusable_zone2_slot(function, v, scope);
+    let v_slot = if let Some(slot) = reuse_slot {
+        slot
+    } else {
+        let s = *tos;
+        *tos += v_size;
+        s
+    };
+    if function.logging {
+        eprintln!(
+            "[assign_slots]   zone2  '{}' scope={scope} size={v_size}B → slot={v_slot}",
+            function.variables[v].name,
+        );
+    }
+    function.variables[v].stack_pos = v_slot;
+    function.variables[v].pre_assigned_pos = v_slot;
+    v_slot
+}
+
+/// Check whether a Value tree contains any Block or Loop nodes (child scopes).
+fn inner_has_child_scope(val: &Value) -> bool {
+    match val {
+        Value::Block(_) | Value::Loop(_) => true,
+        Value::Call(_, args) | Value::CallRef(_, args) => args.iter().any(inner_has_child_scope),
+        Value::Set(_, inner) => inner_has_child_scope(inner),
+        Value::If(c, t, e) => inner_has_child_scope(c) || inner_has_child_scope(t) || inner_has_child_scope(e),
+        Value::Insert(ops) => ops.iter().any(inner_has_child_scope),
+        Value::Drop(inner) | Value::Return(inner) => inner_has_child_scope(inner),
+        _ => false,
+    }
+}
+
+/// Place variables that the IR walk missed (scope has no Block/Loop in IR).
+fn place_orphaned_vars(function: &mut Function) {
+    let orphans: Vec<usize> = function
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| {
+            !v.argument && v.first_def != u32::MAX && v.stack_pos == u16::MAX
+                && size(&v.type_def, &Context::Variable) > 0
+        })
+        .map(|(i, _)| i)
+        .collect();
+    for &i in &orphans {
+        let v_size = size(&function.variables[i].type_def, &Context::Variable);
+        let v_first = function.variables[i].first_def;
+        let v_last = function.variables[i].last_use;
+        let mut candidate = 0u16;
+        loop {
+            let end = candidate + v_size;
+            let conflict = function.variables.iter().enumerate().any(|(j, jv)| {
+                if j == i || jv.stack_pos == u16::MAX { return false; }
+                let js = jv.stack_pos;
+                let je = js + size(&jv.type_def, &Context::Variable);
+                candidate < je && end > js && v_first <= jv.last_use && v_last >= jv.first_def
+            });
+            if !conflict { break; }
+            candidate += 1;
+        }
+        if function.logging {
+            eprintln!(
+                "[assign_slots]   orphan '{}' scope={} size={v_size}B → slot={candidate}",
+                function.variables[i].name, function.variables[i].scope,
+            );
+        }
+        function.variables[i].stack_pos = candidate;
+        function.variables[i].pre_assigned_pos = candidate;
+    }
+}
+
 fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
     // C43: only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
     // have complex interactions with IR-walk-order placement that cause partial
