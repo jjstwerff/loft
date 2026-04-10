@@ -1141,19 +1141,30 @@ fn main() {
 leaks 3 stores per frame. At 60fps, 05-transformations reaches ~16k active
 stores in 5 seconds.
 
-**Root cause:** When a struct-returning call is nested as an argument, the
-parser's `add_defaults` creates a `__ref_N` work variable to hold the
-intermediate result. The codegen generates the inner call into this work
-variable's store, then passes it to the outer call. But the work variable's
-store is never freed — `is_ret_work_ref` suppresses `OpFreeRef`, and
-there is no `free_source` mechanism for call arguments (only for
-`copy_ref` field assignments).
+**Root cause:** The inner call (e.g. `vec3(...)`) allocates a store for
+its return struct. This store is placed directly on the runtime stack as
+a DbRef argument to the outer call. After the outer call returns, nobody
+frees the store. Note: `add_defaults` does NOT create a `__ref_N` for
+the inner call in the caller's scope — `vec3` has only 3 attributes (x,y,z)
+with no hidden return parameter.  The struct is allocated inside `vec3`
+and the DbRef is returned on the stack.
 
-**Fix direction:** After the outer call completes, emit `OpFreeRef` for
-each work-ref argument whose store was consumed by the call. This could
-be done in `generate_call` in `codegen.rs` or in `scopes.rs` by tracking
-which work-ref variables are inline-argument temporaries (not return
-buffers).
+**Attempted fixes:**
+- Codegen-level `OpVarRef`+`OpFreeRef` after the call: fails because
+  the runtime stack layout after `fn_return` doesn't match compile-time
+  tracking (4-byte saved return address shifts positions).
+- Parser-level temporary variable creation in `call_nr`: fails because
+  variables created during expression parsing are too late for the
+  slot assignment pipeline.
+
+**Fix direction:** The correct approach is to lift inline struct
+arguments at parse time, early enough for scope/slot assignment. Options:
+1. In `parse_call` (control.rs), before resolving the call, detect
+   struct-returning inner calls among the argument expressions and
+   rewrite them as `{ let tmp = inner(); outer(tmp) }` blocks.
+2. In `process_call_args` (mod.rs), when an argument is a Value::Call
+   to a struct-returning function, create a work_ref via the existing
+   mechanism and wrap the argument in a Set+Var pair.
 
 **Workaround:** Assign struct-returning calls to local variables before
 passing them as arguments. `v = make_struct(...); f(v)` does not leak.
