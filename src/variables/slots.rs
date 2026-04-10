@@ -67,24 +67,31 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         depth <= 1000,
         "assign_slots scope nesting limit exceeded at depth {depth}"
     );
+    let is_loop = matches!(block_val, Value::Loop(_));
     let bl_scope = match block_val {
         Value::Block(bl) | Value::Loop(bl) => bl.scope,
         _ => return,
     };
 
     // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
-    let mut small_vars: Vec<usize> = function
-        .variables
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| {
-            !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
-                let s = size(&v.type_def, &Context::Variable);
-                s > 0 && s <= 8
-            }
-        })
-        .map(|(i, _)| i)
-        .collect();
+    // Loops skip zone1: they have no OpReserveFrame, so small vars are
+    // placed at TOS by codegen on first use (same as zone2 vars).
+    let mut small_vars: Vec<usize> = if is_loop {
+        Vec::new()
+    } else {
+        function
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
+                    let s = size(&v.type_def, &Context::Variable);
+                    s > 0 && s <= 8
+                }
+            })
+            .map(|(i, _)| i)
+            .collect()
+    };
     small_vars.sort_by_key(|&i| function.variables[i].first_def);
 
     if function.logging {
@@ -161,13 +168,18 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     }
     let zone1_size = zone1_hwm - frame_base;
 
-    // Store var_size (zone1 bytes) in the Block node so generate_block can emit OpReserveFrame.
+    // Store var_size (zone1 bytes) in the Block node so generate_block can
+    // emit OpReserveFrame.  Loops do NOT get OpReserveFrame — their zone1
+    // vars are placed at the loop's frame_base and allocated on first use
+    // by gen_set_first_at_tos during the first iteration.
     if let Value::Block(bl) | Value::Loop(bl) = block_val {
-        bl.var_size = zone1_size;
+        bl.var_size = if is_loop { 0 } else { zone1_size };
     }
 
     // ── Zone 2: place large variables and recurse into child scopes ────────────
     // tos tracks the physical TOS after zone1 is pre-claimed.
+    // tos starts after zone1 regardless of loop/block — zone1 vars occupy
+    // [frame_base, frame_base+zone1_size) and zone2 must not overlap them.
     let mut tos = frame_base + zone1_size;
     if function.logging {
         eprintln!("[assign_slots]   zone1_size={zone1_size}  zone2_tos_start={tos}");

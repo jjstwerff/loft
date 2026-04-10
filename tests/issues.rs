@@ -2684,6 +2684,27 @@ fn p122p_vector_comprehension_slot_gap() {
     .result(Value::Null);
 }
 
+// P122q: sorted range comprehension — loop zone1 var + zone2 var ordering.
+// The comprehension loop has a zone1 temp (_comp) and a zone2 var (e).
+// Without OpReserveFrame in gen_loop, zone1 vars must be placed so
+// codegen encounters them at TOS before zone2 vars.
+#[test]
+fn p122q_comprehension_zone1_zone2_ordering() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+struct Db { map: sorted<Elm[key]> }
+fn vals(db: Db, lo: integer, hi: integer) -> vector<integer> {
+    [for e in db.map[lo..hi] { e.val }]
+}
+fn test() {
+    r = vals(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 1, 3);
+    assert(r.len() == 2, \"len {r.len()}\");
+    assert(r[0] == 10, \"r[0] {r[0]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
