@@ -2667,6 +2667,38 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122p: vector comprehension — the comprehension's loop variable has
+// a slot gap when preceded by enough zone2 variables. Reproduces
+// breakout's _elm slot gap.
+#[test]
+fn p122p_vector_comprehension_slot_gap() {
+    code!(
+        "fn test() {
+    SW = 400.0;
+    BS = 10.0;
+    PY = 350.0;
+    SPD = 3.0;
+    pp_x  = [0.0, 0.0, 0.0];
+    pp_y  = [0.0, 0.0, 0.0];
+    pp_w  = [0.0, 0.0, 0.0];
+    pp_vx = [0.0, 0.0, 0.0];
+    pp_vy = [0.0, 0.0, 0.0];
+    pp_rot = [0.0, 0.0, 0.0];
+    pp_drot = [0.0, 0.0, 0.0];
+    ball_x  = [SW / 2.0 - BS / 2.0, 0.0, 0.0];
+    ball_y  = [PY - 30.0, 0.0, 0.0];
+    ball_dx = [SPD * 0.7, 0.0, 0.0];
+    ball_dy = [0.0 - SPD, 0.0, 0.0];
+    ball_on = [1, 0, 0];
+    mx = 8 * 10;
+    f = [for _ in 0..mx { 0 }];
+    assert(f.len() == 80, \"f.len {f.len()}\");
+    assert(f[0] == 0, \"f[0] {f[0]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
