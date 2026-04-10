@@ -67,15 +67,15 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         depth <= 1000,
         "assign_slots scope nesting limit exceeded at depth {depth}"
     );
-    let is_loop = matches!(block_val, Value::Loop(_));
     let bl_scope = match block_val {
         Value::Block(bl) | Value::Loop(bl) => bl.scope,
         _ => return,
     };
 
     // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
-    // Loops skip zone1: they have no OpReserveFrame, so small vars are
-    // placed at TOS by codegen on first use (same as zone2 vars).
+    let is_loop = matches!(block_val, Value::Loop(_));
+    // Loops skip zone1: no OpReserveFrame.  All loop vars are placed at
+    // TOS by codegen on first use via the zone2 IR-walk path.
     let mut small_vars: Vec<usize> = if is_loop {
         Vec::new()
     } else {
@@ -168,18 +168,15 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     }
     let zone1_size = zone1_hwm - frame_base;
 
-    // Store var_size (zone1 bytes) in the Block node so generate_block can
-    // emit OpReserveFrame.  Loops do NOT get OpReserveFrame — their zone1
-    // vars are placed at the loop's frame_base and allocated on first use
-    // by gen_set_first_at_tos during the first iteration.
+    // Store var_size in the Block/Loop node.
+    // Loops: var_size=0 (no OpReserveFrame, zone1 is empty).
+    // Blocks: var_size=zone1_size (OpReserveFrame pre-claims zone1).
     if let Value::Block(bl) | Value::Loop(bl) = block_val {
         bl.var_size = if is_loop { 0 } else { zone1_size };
     }
 
     // ── Zone 2: place large variables and recurse into child scopes ────────────
-    // tos tracks the physical TOS after zone1 is pre-claimed.
-    // tos starts after zone1 regardless of loop/block — zone1 vars occupy
-    // [frame_base, frame_base+zone1_size) and zone2 must not overlap them.
+    // zone1_size is 0 for loops (small_vars empty), so tos = frame_base.
     let mut tos = frame_base + zone1_size;
     if function.logging {
         eprintln!("[assign_slots]   zone1_size={zone1_size}  zone2_tos_start={tos}");
@@ -212,7 +209,7 @@ fn place_large_and_recurse(
             let v = *v_nr as usize;
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
-                if v_size > 8 {
+                if v_size > 8 || (v_size > 0 && function.variables[v].stack_pos == u16::MAX && function.is_loop_scope(function.variables[v].scope)) {
                     // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
                     // For non-Text types, generate_block is called with `to = v.stack_pos`,
                     // so at runtime the block's frame starts at v's slot (v is not yet live).
@@ -331,7 +328,7 @@ fn inner_has_pre_assignments(val: &Value) -> bool {
 
 /// Place variables that the IR walk missed (scope has no Block/Loop in IR).
 fn place_orphaned_vars(function: &mut Function) {
-    let orphans: Vec<usize> = function
+    let mut orphans: Vec<usize> = function
         .variables
         .iter()
         .enumerate()
@@ -341,6 +338,9 @@ fn place_orphaned_vars(function: &mut Function) {
         })
         .map(|(i, _)| i)
         .collect();
+    // Sort by first_def so earlier-defined vars get lower slots,
+    // matching codegen's evaluation order.
+    orphans.sort_by_key(|&i| function.variables[i].first_def);
     for &i in &orphans {
         let v_size = size(&function.variables[i].type_def, &Context::Variable);
         let v_first = function.variables[i].first_def;

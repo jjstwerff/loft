@@ -423,6 +423,10 @@ impl State {
     }
 
     pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
+        // Loops do NOT emit OpReserveFrame for zone1 vars.  All loop vars
+        // (both small and large) are placed at TOS by codegen on first use.
+        // assign_slots sets var_size=0 for loops and places all vars in
+        // IR-walk order via zone2.
         stack.add_loop(self.code_pos);
         let pos = self.code_pos;
         for v in &lp.operators {
