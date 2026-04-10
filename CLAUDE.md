@@ -212,6 +212,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
+| [DEBUG_PLAN.md](doc/claude/DEBUG_PLAN.md) | Systematic plan for all open safety/leak/data-loss issues (P120–P135) |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
