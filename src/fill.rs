@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 253] = &[
+pub const OPERATORS: &[fn(&mut State); 252] = &[
     goto,
     goto_word,
     goto_false,
@@ -175,7 +175,6 @@ pub const OPERATORS: &[fn(&mut State); 253] = &[
     conv_ref_from_null,
     null_ref_sentinel,
     free_ref,
-    inc_rc,
     sizeof_ref,
     var_ref,
     put_ref,
@@ -1942,13 +1941,4 @@ fn put_fn_ref(s: &mut State) {
         let v = *s.get_stack::<[i32; 4]>();
         s.put_var(v_pos, v);
     }
-}
-
-fn inc_rc(s: &mut State) {
-    let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = {
-        s.database.inc_rc(v_v1.store_nr);
-        v_v1
-    };
-    s.put_stack(new_value);
 }

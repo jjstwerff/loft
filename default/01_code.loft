@@ -733,8 +733,6 @@ fn OpConvRefFromNull() -> reference;
 fn OpNullRefSentinel() -> reference;
 #rust"DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
 fn OpFreeRef(v1: reference);
-fn OpIncRc(v1: reference) -> reference;
-#rust"{{ stores.inc_rc(@v1.store_nr); @v1 }}"
 fn OpSizeofRef(val: reference) -> integer;
 fn OpVarRef(pos: const u16) -> reference;
 #rust"{{let r = *s.get_var::<DbRef>(@pos); stores.valid(&r); r}}"
