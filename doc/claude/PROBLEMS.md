@@ -49,7 +49,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | ⚠️ Appears fixed by P116/P118/P122 wave; regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak` passes. Re-verify with the original `file()`-style pattern before closing |
-| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | ⚠️ Appears fixed; `lib/graphics/examples/test_mat4_crash.loft` runs cleanly and `tests/issues.rs::p120_vector_field_in_returned_struct_round_trip` passes. Re-verify with the full GL example suite before closing |
+| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | **Reopened 2026-04-10** — 11 of 26 GL examples panic with `Delete on locked store` from `Store::delete → remove_claims → copy_record` when run under Xvfb. Regression test `p120_vector_field_in_returned_struct_round_trip` passes but only exercises the simplified pattern. Real fix needed in `copy_record`. |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
 | 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
 | 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
@@ -61,6 +61,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 129 | Native codegen emits duplicate `extern crate loft_graphics_native` when a script outside the package imports a package that uses graphics | Medium | Run the script in `--interpret` mode, or place it inside the loft repo |
 | 130 | Headless GL: panic via `fatal runtime error: Rust cannot catch foreign exceptions` after `gl_create_window` returns false | Medium | Don't run GL examples without a `DISPLAY`; check `gl_create_window` return and `return` immediately — but the panic happens regardless on some paths |
 | 131 | Loft CLI consumes script arguments instead of forwarding them (e.g. `loft script.loft --mode glb` → `unknown option: --mode`) | Low | Use a flag the loft CLI doesn't recognise as its own; or hard-code the mode for now |
+| 133 | RGB↔BGR channel swap in `gl_clear` / GL pixel output | Low (cosmetic) | `gl_clear(rgba(40, 80, 120, 255))` produces pixel `(120, 80, 40)` on screen — every clear/material colour comes out with R and B swapped. Workaround: pre-swap the channels at call sites until the underlying packing is fixed in `lib/graphics/native/src/lib.rs`. |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -907,20 +908,51 @@ crash.
 
 ### 120. Struct constructor doesn't deep-copy vector fields into struct store
 
-**Status (2026-04-09):** ⚠️ **Appears fixed but unverified.** The
-documented reproducer `lib/graphics/examples/test_mat4_crash.loft` now
-runs cleanly:
+**Status (2026-04-10):** ❌ **Reopened.** The simple reproducer in
+`test_mat4_crash.loft` and the unit test
+`tests/issues.rs::p120_vector_field_in_returned_struct_round_trip` both
+pass — but **11 of 26 GL examples** still panic with this bug when run
+end-to-end under Xvfb (`xvfb-run -a target/release/loft … 25-breakout.loft`):
+
+```
+thread 'main' panicked at src/store.rs:357:9:
+Delete on locked store (rec=360)
+stack backtrace:
+   2: loft::store::Store::delete
+   3: loft::database::allocation::<impl loft::database::Stores>::remove_claims
+   4: loft::database::allocation::<impl loft::database::Stores>::remove_claims
+   5: loft::state::io::<impl loft::state::State>::copy_record
+```
+
+**Failing examples (2026-04-10):** `05-transformations`,
+`06-coordinate-systems`, `09-materials`, `12-multiple-lights`,
+`13-depth-testing`, `15-face-culling`, `16-shadow-mapping`,
+`17-post-processing`, `20-textured-cube`, `22-wireframe`, `23-cleanup`.
+All of these were the 0.8.4 examples ported to use `render::create_renderer`
+and `scene::Scene` — the bug fires when the renderer tries to deep-copy
+struct fields that contain a vector during the per-frame node-transform
+update path.
+
+The simplified regression test passes because it copies a struct *once*
+at the top level. The real failure path is `copy_record` being called
+on a record whose containing store has been locked by an outer
+operation — that scenario is only reachable through the renderer's
+batched-draw flow.
+
+**Fix needed:** `copy_record` (in `src/state/io.rs`) should detect when
+the destination store is locked and either defer the delete or copy
+into an unlocked scratch store. Touch points: `src/state/io.rs::copy_record`,
+`src/database/allocation.rs::remove_claims`, `src/store.rs::Store::delete`.
+
+**Historical reproducer (`lib/graphics/examples/test_mat4_crash.loft`)
+still passes:**
 ```
 inside make_big: data len=16
 after return: data len=16
 data[0]=0 data[15]=15
 ```
-The unit-test version `tests/issues.rs::p120_vector_field_in_returned_struct_round_trip`
-also passes, asserting the full round-trip (16 elements survive return).
-Before closing this entry, re-run the full GL example suite — especially
-`19-complete-scene` and `25-breakout`, which the docs cite as blocked by
-this bug. If GL textures still come out black or matrices come out
-zeroed, the fix is incomplete.
+This simpler case is unaffected — proving the simplified test alone
+isn't sufficient to validate the fix.
 
 **Symptom:** Vector fields in returned structs are empty (length=0) or contain
 garbage. Causes black textures in GL examples and use-after-free crashes when
