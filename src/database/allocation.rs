@@ -296,9 +296,14 @@ impl Stores {
     }
 
     /// Unlock the store that contains the record pointed to by `r`.
+    /// Borrowed stores (worker copies) are never unlocked — they must stay
+    /// locked for the entire parallel scope to prevent writes.
     pub fn unlock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
-            self.allocations[r.store_nr as usize].unlock();
+            let store = &mut self.allocations[r.store_nr as usize];
+            if !store.is_borrowed() {
+                store.unlock();
+            }
         }
     }
 
