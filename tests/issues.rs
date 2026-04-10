@@ -2705,6 +2705,30 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122r: par loop calling function with internal for-loop.
+// Tests whether OpFreeStack in gen_loop works correctly when the
+// function's bytecode is executed by parallel workers.
+#[test]
+fn p122r_par_loop_with_inner_for() {
+    code!(
+        "struct Item { val: integer }
+struct List { items: vector<Item> }
+fn sum_digits(n: const Item) -> integer {
+    s = 0;
+    for d in 0..n.val { s += d - d + 1; }
+    s
+}
+fn test() {
+    lst = List { items: [] };
+    lst.items += [Item{val:3}, Item{val:5}, Item{val:2}, Item{val:4}];
+    total = 0;
+    for a in lst.items par(b = sum_digits(a), 2) { total += b; }
+    assert(total == 14, \"total {total}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
