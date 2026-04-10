@@ -1112,4 +1112,156 @@ mod tests {
         );
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
+
+    // ── P122: parent-scope zone2 variables must not overlap child-scope zone1 ──
+
+    /// When a parent scope has many zone2 reference variables (like __lift_N temps
+    /// from P135 inline struct arg lifting), a late-placed reference variable in
+    /// the parent (like `r`) occupies slots right before the child scope's frame_base.
+    /// The child scope's zone1 variables must not overlap the parent's zone2 range.
+    ///
+    /// Reproduces the GL crash: 13 refs in scope 1 (slots 68–224), a for-loop in
+    /// scope 2 with a zone1 integer `idx`.  idx must start at 224 or higher, never
+    /// inside `r`'s [212, 224) range.
+    #[test]
+    fn assign_slots_parent_zone2_does_not_overlap_child_zone1() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("n_render_native", "test");
+        // scope 2: for-loop body
+        declare_loop(&mut f, 2, 50, 90);
+
+        // Parent scope (1): 13 reference variables, all live across the loop
+        for i in 0..13u32 {
+            add_scoped_var(
+                &mut f,
+                &format!("lift{}", i + 1),
+                &ref_tp,
+                1,
+                i * 10,
+                100,
+            );
+        }
+        // r: the last parent zone2 ref, live across the loop
+        let r_var = add_scoped_var(&mut f, "r", &ref_tp, 1, 45, 95);
+
+        // Child scope (2): zone1 integer variable (loop index)
+        let idx_var = add_scoped_var(&mut f, "idx", &INT, 2, 50, 90);
+
+        run_assign_slots_scoped(
+            &mut f,
+            4, // local_start: 4-byte return address
+            1,
+            &[(2, 1, true)],
+        );
+
+        let r_slot = f.stack(r_var);
+        let r_end = r_slot + size(&ref_tp, &Context::Variable);
+        let idx_slot = f.stack(idx_var);
+        let idx_end = idx_slot + size(&INT, &Context::Variable);
+
+        // idx must not overlap r
+        assert!(
+            idx_slot >= r_end || idx_end <= r_slot,
+            "child zone1 variable 'idx' at [{idx_slot}, {idx_end}) overlaps parent zone2 \
+             variable 'r' at [{r_slot}, {r_end}). \
+             assign_slots must place child zone1 after all live parent zone2 variables."
+        );
+        assert!(
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
+            "slot conflict detected in parent-zone2 / child-zone1 test"
+        );
+    }
+
+    // ── P122: simulate the codegen override that causes the slot collision ──
+
+    /// This test simulates what adjust_first_assignment_slot does:
+    /// it tries to move `idx` from its pre-assigned slot (above TOS) down to
+    /// stack.position (which is lower due to evaluation-stack differences).
+    /// The move must be BLOCKED because `r` occupies that space.
+    ///
+    /// This directly reproduces the GL crash from 13-depth-testing.loft.
+    #[test]
+    fn adjust_must_not_move_child_into_parent_zone2() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("n_render_native", "test");
+        declare_loop(&mut f, 2, 50, 90);
+
+        // Parent scope (1): 13 refs + `r`, all live across the loop
+        for i in 0..13u32 {
+            add_scoped_var(&mut f, &format!("lift{}", i + 1), &ref_tp, 1, i * 10, 100);
+        }
+        let r_var = add_scoped_var(&mut f, "r", &ref_tp, 1, 45, 95);
+
+        // Child scope (2): integer `idx`
+        let idx_var = add_scoped_var(&mut f, "idx", &INT, 2, 50, 90);
+
+        run_assign_slots_scoped(&mut f, 4, 1, &[(2, 1, true)]);
+
+        let r_slot = f.stack(r_var);
+        let r_end = r_slot + size(&ref_tp, &Context::Variable);
+        let idx_pre = f.stack(idx_var); // what assign_slots chose
+
+        // Simulate codegen: stack.position is inside r's range (e.g. r_end - 4)
+        // This is the scenario where codegen's adjust_first_assignment_slot
+        // would try to move idx from idx_pre down to simulated_tos.
+        let simulated_tos = r_end - 4; // inside r's [r_slot, r_end)
+
+        // The check: if we moved idx to simulated_tos, would it overlap r?
+        let idx_size = size(&INT, &Context::Variable);
+        let would_overlap = simulated_tos < r_end && (simulated_tos + idx_size) > r_slot
+            && f.variables[idx_var as usize].first_def <= f.variables[r_var as usize].last_use
+            && f.variables[idx_var as usize].last_use >= f.variables[r_var as usize].first_def;
+
+        assert!(
+            would_overlap,
+            "Moving idx from {idx_pre} to {simulated_tos} would overlap r at [{r_slot}, {r_end}). \
+             adjust_first_assignment_slot MUST detect this and refuse the move."
+        );
+
+        // The fix: the overlap check must scan ALL variables, not just same-scope siblings.
+        // With the current same-scope-only check, r (scope 1) is invisible to idx (scope 2).
+        let same_scope_only_sees_overlap = f
+            .variables
+            .iter()
+            .enumerate()
+            .any(|(j, jv)| {
+                if j == idx_var as usize || jv.stack_pos == u16::MAX {
+                    return false;
+                }
+                if jv.scope != f.variables[idx_var as usize].scope {
+                    return false; // THIS IS THE BUG: skips parent-scope variables
+                }
+                let js = jv.stack_pos;
+                let je = js + size(&jv.type_def, &Context::Variable);
+                simulated_tos < je && (simulated_tos + idx_size) > js
+            });
+
+        assert!(
+            !same_scope_only_sees_overlap,
+            "Same-scope-only check fails to detect the overlap — this is the bug"
+        );
+
+        // The fix: check ALL variables regardless of scope
+        let all_scopes_sees_overlap = f
+            .variables
+            .iter()
+            .enumerate()
+            .any(|(j, jv)| {
+                if j == idx_var as usize || jv.stack_pos == u16::MAX {
+                    return false;
+                }
+                // NO scope filter — check all variables
+                let js = jv.stack_pos;
+                let je = js + size(&jv.type_def, &Context::Variable);
+                simulated_tos < je
+                    && (simulated_tos + idx_size) > js
+                    && f.variables[idx_var as usize].first_def <= jv.last_use
+                    && f.variables[idx_var as usize].last_use >= jv.first_def
+            });
+
+        assert!(
+            all_scopes_sees_overlap,
+            "All-scopes check must detect the overlap between idx and r"
+        );
+    }
 }

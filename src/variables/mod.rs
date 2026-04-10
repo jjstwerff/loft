@@ -1100,6 +1100,19 @@ impl Function {
     /// Set the pre-assigned stack position for `var`.  Called once per argument during
     /// argument layout in `def_code`; the caller advances `stack.position` separately.
     pub fn set_stack_pos(&mut self, var: u16, pos: u16) {
+        let v = &self.variables[var as usize];
+        // After assign_slots has run (pre_assigned_pos != u16::MAX),
+        // codegen must never move a variable to a different slot.
+        // If this fires, fix assign_slots to produce the correct position.
+        debug_assert!(
+            v.pre_assigned_pos == u16::MAX || v.pre_assigned_pos == pos || v.argument,
+            "[set_stack_pos] '{}' scope={}: assign_slots placed at {} but codegen \
+             is moving to {} — fix assign_slots, not codegen",
+            v.name,
+            v.scope,
+            v.pre_assigned_pos,
+            pos,
+        );
         self.variables[var as usize].stack_pos = pos;
     }
 

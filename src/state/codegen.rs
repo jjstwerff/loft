@@ -792,67 +792,6 @@ impl State {
     /// Adjust the slot position for a first-assignment variable.
     /// Case 1: pre-assigned above TOS → move down. Case 2: large type below TOS →
     /// override only if no child-scope overlap (A13 guard).
-    fn adjust_first_assignment_slot(stack: &mut Stack, v: u16, pos: u16) {
-        if pos > stack.position {
-            // S32: Before moving a variable down to TOS, check that no same-scope
-            // sibling with an overlapping live interval already occupies
-            // [stack.position, stack.position + v_size).  Without this guard,
-            // two same-size same-scope variables (e.g. rv and _read_34) can both
-            // land at the same slot — see CAVEATS.md C28.
-            let v_size = size(stack.function.tp(v), &Context::Variable);
-            let new_end = stack.position + v_size;
-            let v_scope = stack.function.scope(v);
-            let v_first = stack.function.first_def(v);
-            let v_last = stack.function.last_use(v);
-            let has_sibling_overlap = (0..stack.function.count()).any(|j| {
-                if j == v || stack.function.stack(j) == u16::MAX {
-                    return false;
-                }
-                if stack.function.scope(j) != v_scope {
-                    return false; // child-scope overlap is handled in the else-if branch
-                }
-                let js = stack.function.stack(j);
-                let je = js + size(stack.function.tp(j), &Context::Variable);
-                stack.position < je
-                    && new_end > js
-                    && v_first <= stack.function.last_use(j)
-                    && v_last >= stack.function.first_def(j)
-            });
-            if !has_sibling_overlap {
-                stack.function.set_stack_pos(v, stack.position);
-            }
-        } else if pos < stack.position
-            && matches!(
-                stack.function.tp(v),
-                Type::Vector(_, _) | Type::Reference(_, _) | Type::Enum(_, true, _)
-            )
-        {
-            let v_size = size(stack.function.tp(v), &Context::Variable);
-            let new_end = stack.position + v_size;
-            let v_scope = stack.function.scope(v);
-            let v_first = stack.function.first_def(v);
-            let v_last = stack.function.last_use(v);
-            let has_child_overlap = (0..stack.function.count()).any(|j| {
-                if j == v || stack.function.stack(j) == u16::MAX {
-                    return false;
-                }
-                let j_scope = stack.function.scope(j);
-                if j_scope == v_scope {
-                    return false;
-                }
-                let js = stack.function.stack(j);
-                let je = js + size(stack.function.tp(j), &Context::Variable);
-                stack.position < je
-                    && new_end > js
-                    && v_first <= stack.function.last_use(j)
-                    && v_last >= stack.function.first_def(j)
-            });
-            if !has_child_overlap {
-                stack.function.set_stack_pos(v, stack.position);
-            }
-        }
-    }
-
     #[allow(clippy::too_many_lines)]
     pub(super) fn generate_set(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         self.vars.insert(self.code_pos, v);
@@ -951,25 +890,18 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            // Variables created inside expressions (closures, yield-from, tuple desugaring)
-            // may have slot positions above the current TOS.
-            // adjust_first_assignment_slot handles this by moving the slot down to TOS.
-            Self::adjust_first_assignment_slot(stack, v, pos);
-            let pos = stack.function.stack(v);
-            // S34 Option A: adjust_first_assignment_slot may leave pos > stack.position
-            // when has_sibling_overlap blocks the downward move.  The sibling causing the
-            // block has not yet been allocated (it occupies the same pre-assigned slot in
-            // the slot allocator's plan), so placing this variable at current TOS is safe.
-            // Reset pos to TOS; the sibling will advance TOS when it is allocated in turn.
-            // mark skip_free so the outer variable (already at TOS) emits OpFreeRef and
-            // this variable — aliased to the same slot — does not produce a double-free.
-            let pos = if pos > stack.position {
-                stack.function.set_stack_pos(v, stack.position);
-                stack.function.set_skip_free(v);
-                stack.position
-            } else {
-                pos
-            };
+            // assign_slots is the single authority for slot positions.
+            // If a variable's pre-assigned slot is above codegen's TOS,
+            // assign_slots over-estimated the stack depth.  Fix assign_slots.
+            assert!(
+                pos <= stack.position,
+                "[slot-diverge] '{}' scope={} pre_assigned={pos} > codegen_tos={} in '{}' — \
+                 assign_slots must not place variables above where codegen's TOS will be",
+                stack.function.name(v),
+                stack.function.scope(v),
+                stack.position,
+                stack.data.def(stack.def_nr).name,
+            );
             if pos == stack.position {
                 self.gen_set_first_at_tos(stack, v, value);
             } else {
