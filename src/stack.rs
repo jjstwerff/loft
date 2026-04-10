@@ -64,6 +64,13 @@ impl<'a> Stack<'a> {
             Value::If(_, true_val, _) => self.size_code(true_val),
             Value::Text(_) => size_of::<&str>() as u16,
             Value::Var(v) => variables::size(self.function.tp(*v), &Context::Argument),
+            Value::Insert(ops) => {
+                if ops.is_empty() {
+                    0
+                } else {
+                    self.size_code(ops.last().unwrap())
+                }
+            }
             _ => 0,
         }
     }

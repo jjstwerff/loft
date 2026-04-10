@@ -2636,6 +2636,37 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122o: add_node(node_at("name", int, int, mat4_identity())) pattern.
+// node_at returns a struct, mat4_identity returns a struct — both get lifted.
+// This is the pattern from GL renderer-demo: multiple add_node calls with
+// struct-returning args.
+#[test]
+fn p122o_add_node_with_lifted_mat4() {
+    code!(
+        "struct Mat4 { m: vector<float> }
+struct Node { name: text, mesh_id: integer, mat_id: integer, transform: Mat4 }
+struct Scene { name: text, nodes: vector<Node> }
+fn mat4_identity() -> Mat4 { Mat4 { m: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] } }
+fn node_at(n: text, mi: integer, ma: integer, t: Mat4) -> Node {
+    Node { name: n, mesh_id: mi, mat_id: ma, transform: t }
+}
+fn add_node(self: Scene, nd: Node) -> integer {
+    i = self.nodes.len();
+    self.nodes += [nd];
+    i
+}
+fn test() {
+    s = Scene { name: \"demo\", nodes: [] };
+    s.add_node(node_at(\"floor\", 0, 0, mat4_identity()));
+    s.add_node(node_at(\"cube\", 1, 1, mat4_identity()));
+    s.add_node(node_at(\"ball\", 2, 2, mat4_identity()));
+    assert(s.nodes.len() == 3, \"expected 3 nodes got {s.nodes.len()}\");
+    assert(s.nodes[0].transform.m[0] == 1.0, \"m[0] should be 1.0\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
