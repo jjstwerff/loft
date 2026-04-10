@@ -2560,6 +2560,35 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122m: nested lift — vertex(vec3(...), vec3(...), vec2(...)) where the
+// vertex result is itself passed as an inline arg to add_vertex.
+// This is the build_triangle pattern from 02-hello-triangle.
+#[test]
+fn p122m_nested_lift_vertex_pattern() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+struct V2 { u: float not null, v: float not null }
+struct Vtx { pos: V3, norm: V3, uv: V2 }
+struct Mesh { name: text, count: integer }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn v2(u: float, v: float) -> V2 { V2 { u: u, v: v } }
+fn vertex(p: V3, n: V3, t: V2) -> Vtx { Vtx { pos: p, norm: n, uv: t } }
+fn add_vertex(self: Mesh, vt: Vtx) { self.count += 1; if vt.pos.x > 999.0 { self.count -= 1; } }
+fn build() -> Mesh {
+    m = Mesh { name: \"tri\", count: 0 };
+    m.add_vertex(vertex(v3(-0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.0, 0.0)));
+    m.add_vertex(vertex(v3( 0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(1.0, 0.0)));
+    m.add_vertex(vertex(v3( 0.0,  0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.5, 1.0)));
+    m
+}
+fn test() {
+    m = build();
+    assert(m.count == 3, \"expected 3 vertices got {m.count}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
