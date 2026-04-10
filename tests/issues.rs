@@ -2495,6 +2495,71 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122j: direct struct-returning call (no lift needed) — the baseline case.
+// f = sub3(target, eye) produces Set(f, Call(sub3, ...)) with no Insert.
+#[test]
+fn p122j_direct_struct_return_no_lift() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn look(eye: V3, target: V3) -> float {
+    f = sub3(target, eye);
+    s = sub3(eye, target);
+    f.x + s.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == 0.0, \"expected 0.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122k: one direct call, one lifted call — mixed pattern.
+// f = sub3(target, eye)            → direct, no lift
+// g = scale3(sub3(eye, target), 3.0) → lifted: __lift_1 + scale3
+#[test]
+fn p122k_mixed_direct_and_lifted() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn look(eye: V3, target: V3) -> float {
+    f = sub3(target, eye);
+    g = scale3(sub3(eye, target), 3.0);
+    f.x + g.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == -6.0, \"expected -6.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122l: single lifted call — simplest lift pattern.
+// f = scale3(sub3(target, eye), 2.0) → one __lift + one call
+#[test]
+fn p122l_single_lifted_call() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn test() {
+    a = v3(1.0, 2.0, 3.0);
+    b = v3(4.0, 5.0, 6.0);
+    r = scale3(sub3(b, a), 2.0);
+    assert(r.x == 6.0, \"expected 6.0 got {r.x}\");
+    assert(r.y == 6.0, \"expected 6.0 got {r.y}\");
+    assert(r.z == 6.0, \"expected 6.0 got {r.z}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
