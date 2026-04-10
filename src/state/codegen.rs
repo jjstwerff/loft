@@ -923,6 +923,15 @@ impl State {
 
     /// First assignment at current TOS — dispatch by variable type.
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
+        let pos = stack.function.stack(v);
+        assert!(
+            pos == stack.position,
+            "[gen_set_first_at_tos] '{}' in '{}': slot={pos} but TOS={} — \
+             caller must ensure TOS matches the variable's slot before calling",
+            stack.function.name(v),
+            stack.data.def(stack.def_nr).name,
+            stack.position,
+        );
         // Slot is at current TOS — use direct placement (same as old claim() path).
         // Large types (text, refs, vectors) always land here; non-reusing primitives too.
         if matches!(*stack.function.tp(v), Type::Text(_)) {
