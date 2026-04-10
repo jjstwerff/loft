@@ -1172,96 +1172,221 @@ mod tests {
         );
     }
 
-    // ── P122: simulate the codegen override that causes the slot collision ──
+    // ── P122: coroutine Set(gen, Call(fn, [Block])) ──
+    //
+    // Codegen evaluates Call arguments before placing the result.
+    // Set(gen, Call(fn, [Block(scope=5, [Set(vec, ...)])])):
+    //   - Block(scope=5) evaluated first → vec placed at tos
+    //   - gen placed after → must be above vec
 
-    /// This test simulates what adjust_first_assignment_slot does:
-    /// it tries to move `idx` from its pre-assigned slot (above TOS) down to
-    /// stack.position (which is lower due to evaluation-stack differences).
-    /// The move must be BLOCKED because `r` occupies that space.
-    ///
-    /// This directly reproduces the GL crash from 13-depth-testing.loft.
     #[test]
-    fn adjust_must_not_move_child_into_parent_zone2() {
+    fn call_with_block_arg_places_block_vars_first() {
         let ref_tp = Type::Reference(0, vec![]);
-        let mut f = Function::new("n_render_native", "test");
-        declare_loop(&mut f, 2, 50, 90);
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f", "test");
+        declare_loop(&mut f, 3, 5, 70);
 
-        // Parent scope (1): 13 refs + `r`, all live across the loop
-        for i in 0..13u32 {
-            add_scoped_var(&mut f, &format!("lift{}", i + 1), &ref_tp, 1, i * 10, 100);
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 80);
+        add_scoped_var(&mut f, "total", &INT, 3, 6, 66);
+        let gen_var = add_scoped_var(&mut f, "gen", &ref_tp, 4, 20, 65);
+        let vec_var = add_scoped_var(&mut f, "vec", &ref_tp, 5, 22, 30);
+        let elm_var = add_scoped_var(&mut f, "elm", &ref_tp, 5, 23, 29);
+
+        let scope5 = Value::Block(Box::new(Block {
+            name: "", scope: 5, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(vec_var, Box::new(Value::Null)),
+                Value::Set(elm_var, Box::new(Value::Null)),
+            ],
+        }));
+        let gen_set = Value::Set(gen_var, Box::new(Value::Call(999, vec![scope5])));
+        let loop3 = Value::Loop(Box::new(Block {
+            name: "", scope: 3, var_size: 0, result: Type::Void,
+            operators: vec![gen_set],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![Value::Set(work, Box::new(Value::Null)), loop3],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        assert_ne!(f.stack(gen_var), u16::MAX, "gen must be placed");
+        assert_ne!(f.stack(vec_var), u16::MAX, "vec must be placed");
+        assert!(
+            f.stack(vec_var) < f.stack(gen_var),
+            "vec at {} must be below gen at {} — Call args evaluated first",
+            f.stack(vec_var), f.stack(gen_var)
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── if_typing pattern: Set(tv, Block(scope=2, [Set(a, ...), If(...)]))
+    //
+    // tv is Text (scope=1). Inner is Block(scope=2) containing child scopes 3,4.
+    // Text is excluded from block-return frame sharing because codegen emits
+    // OpText before the Block. So tv must be at tos BEFORE the Block, and a
+    // (scope=2, also Text) must be placed inside scope=2's frame.
+    // tv and a must not overlap.
+
+    #[test]
+    fn text_block_return_no_overlap_with_child_text() {
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f", "test");
+
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 5, 45);
+        let a = add_scoped_var(&mut f, "a", &text_tp, 2, 10, 30);
+
+        // IR: Set(work, Null), Set(tv, Block(scope=2, [Set(a, "12"), ...]))
+        let scope2 = Value::Block(Box::new(Block {
+            name: "", scope: 2, var_size: 0, result: Type::Void,
+            operators: vec![Value::Set(a, Box::new(Value::Null))],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(work, Box::new(Value::Null)),
+                Value::Set(tv, Box::new(scope2)),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let tv_slot = f.stack(tv);
+        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
+        let a_slot = f.stack(a);
+        let a_end = a_slot + size(&text_tp, &Context::Variable);
+
+        // tv and a must not overlap (both live at seq 10-30)
+        assert!(
+            a_slot >= tv_end || a_end <= tv_slot,
+            "tv [{tv_slot},{tv_end}) and a [{a_slot},{a_end}) must not overlap"
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── closure_capture pattern: parent var placed after child scope exits
+    //
+    // scope=1: work(24B), clos(12B), greeting(24B)
+    // scope=2: f(16B) via Set(f, Block(scope=3))  — block-return
+    // then back in scope=1's IR: Set(tv, Call(...)) where Call args contain
+    // Block(scope=4) with child scopes.
+    // tv must not overlap f even though f's child scope exits before tv.
+
+    #[test]
+    fn parent_var_after_child_block_return_no_overlap() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f_test", "test");
+
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let greeting = add_scoped_var(&mut f, "greeting", &text_tp, 1, 3, 48);
+        // f is block-return: Set(f, Block(scope=2, [...]))
+        let f_var = add_scoped_var(&mut f, "fv", &ref_tp, 2, 10, 20);
+        // tv comes after f dies; Set(tv, Call(fn, [Block(scope=4)]))
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 25, 45);
+
+        // IR: Set(work, Null), Set(greeting, Null),
+        //     Block(scope=2, [Set(f, Block(scope=3))]),
+        //     Set(tv, Call(fn, [Block(scope=4)]))
+        let scope3 = Value::Block(Box::new(Block {
+            name: "", scope: 3, var_size: 0, result: Type::Void,
+            operators: vec![],
+        }));
+        let scope2 = Value::Block(Box::new(Block {
+            name: "", scope: 2, var_size: 0, result: Type::Void,
+            operators: vec![Value::Set(f_var, Box::new(scope3))],
+        }));
+        let scope4 = Value::Block(Box::new(Block {
+            name: "", scope: 4, var_size: 0, result: Type::Void,
+            operators: vec![],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(work, Box::new(Value::Null)),
+                Value::Set(greeting, Box::new(Value::Null)),
+                scope2,
+                Value::Set(tv, Box::new(Value::Call(999, vec![scope4]))),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let f_slot = f.stack(f_var);
+        let f_end = f_slot + size(&ref_tp, &Context::Variable);
+        let tv_slot = f.stack(tv);
+        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
+
+        // f dies at 20, tv born at 25 → no temporal overlap, spatial reuse is OK
+        // But if they DO overlap temporally, spatial must not overlap.
+        if tv.min(f_var) <= tv.max(f_var) {
+            // Check find_conflict which handles all cases
         }
-        let r_var = add_scoped_var(&mut f, "r", &ref_tp, 1, 45, 95);
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
 
-        // Child scope (2): integer `idx`
-        let idx_var = add_scoped_var(&mut f, "idx", &INT, 2, 50, 90);
+    // ── Parent-scope var Set node inside child scope's operator list ──
+    //
+    // After scope analysis, Set(tv, Insert([...])) can end up inside
+    // scope=4's operators even though tv is scope=1.  place_large_and_recurse
+    // skips it (scope mismatch), but still recurses into the Insert's inner.
+    // The inner may contain child Blocks. tv must still get a valid slot
+    // that doesn't overlap any child scope variable.
 
-        run_assign_slots_scoped(&mut f, 4, 1, &[(2, 1, true)]);
+    #[test]
+    fn parent_var_set_inside_child_scope_operators() {
+        let text_tp = Type::Text(vec![]);
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
 
-        let r_slot = f.stack(r_var);
-        let r_end = r_slot + size(&ref_tp, &Context::Variable);
-        let idx_pre = f.stack(idx_var); // what assign_slots chose
+        // scope 1 vars
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 15, 45);
+        // scope 2: block with Set(f, Block(scope=3))
+        let fv = add_scoped_var(&mut f, "fv", &ref_tp, 2, 10, 20);
 
-        // Simulate codegen: stack.position is inside r's range (e.g. r_end - 4)
-        // This is the scenario where codegen's adjust_first_assignment_slot
-        // would try to move idx from idx_pre down to simulated_tos.
-        let simulated_tos = r_end - 4; // inside r's [r_slot, r_end)
+        // IR: scope 1 root contains:
+        //   Set(work, Null)
+        //   Block(scope=2, [
+        //     Set(fv, Block(scope=3, []))
+        //     Set(tv, Null)           ← scope=1 var inside scope=2's operators!
+        //   ])
+        let scope3 = Value::Block(Box::new(Block {
+            name: "", scope: 3, var_size: 0, result: Type::Void,
+            operators: vec![],
+        }));
+        let scope2 = Value::Block(Box::new(Block {
+            name: "", scope: 2, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(fv, Box::new(scope3)),
+                Value::Set(tv, Box::new(Value::Null)),  // parent var in child scope!
+            ],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(work, Box::new(Value::Null)),
+                scope2,
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
 
-        // The check: if we moved idx to simulated_tos, would it overlap r?
-        let idx_size = size(&INT, &Context::Variable);
-        let would_overlap = simulated_tos < r_end && (simulated_tos + idx_size) > r_slot
-            && f.variables[idx_var as usize].first_def <= f.variables[r_var as usize].last_use
-            && f.variables[idx_var as usize].last_use >= f.variables[r_var as usize].first_def;
+        let fv_slot = f.stack(fv);
+        let fv_end = fv_slot + size(&ref_tp, &Context::Variable);
+        let tv_slot = f.stack(tv);
+        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
 
+        // tv must not overlap fv if their lives overlap
+        if f.variables[tv as usize].first_def <= f.variables[fv as usize].last_use
+            && f.variables[tv as usize].last_use >= f.variables[fv as usize].first_def
+        {
+            assert!(
+                tv_slot >= fv_end || tv_end <= fv_slot,
+                "tv [{tv_slot},{tv_end}) overlaps fv [{fv_slot},{fv_end}) — both live"
+            );
+        }
         assert!(
-            would_overlap,
-            "Moving idx from {idx_pre} to {simulated_tos} would overlap r at [{r_slot}, {r_end}). \
-             adjust_first_assignment_slot MUST detect this and refuse the move."
-        );
-
-        // The fix: the overlap check must scan ALL variables, not just same-scope siblings.
-        // With the current same-scope-only check, r (scope 1) is invisible to idx (scope 2).
-        let same_scope_only_sees_overlap = f
-            .variables
-            .iter()
-            .enumerate()
-            .any(|(j, jv)| {
-                if j == idx_var as usize || jv.stack_pos == u16::MAX {
-                    return false;
-                }
-                if jv.scope != f.variables[idx_var as usize].scope {
-                    return false; // THIS IS THE BUG: skips parent-scope variables
-                }
-                let js = jv.stack_pos;
-                let je = js + size(&jv.type_def, &Context::Variable);
-                simulated_tos < je && (simulated_tos + idx_size) > js
-            });
-
-        assert!(
-            !same_scope_only_sees_overlap,
-            "Same-scope-only check fails to detect the overlap — this is the bug"
-        );
-
-        // The fix: check ALL variables regardless of scope
-        let all_scopes_sees_overlap = f
-            .variables
-            .iter()
-            .enumerate()
-            .any(|(j, jv)| {
-                if j == idx_var as usize || jv.stack_pos == u16::MAX {
-                    return false;
-                }
-                // NO scope filter — check all variables
-                let js = jv.stack_pos;
-                let je = js + size(&jv.type_def, &Context::Variable);
-                simulated_tos < je
-                    && (simulated_tos + idx_size) > js
-                    && f.variables[idx_var as usize].first_def <= jv.last_use
-                    && f.variables[idx_var as usize].last_use >= jv.first_def
-            });
-
-        assert!(
-            all_scopes_sees_overlap,
-            "All-scopes check must detect the overlap between idx and r"
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
+            "slot conflict: parent var Set inside child scope"
         );
     }
 }
