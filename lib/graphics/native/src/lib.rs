@@ -970,13 +970,21 @@ loft_ffi::loft_register! {
 
 // ── Text / Font C-ABI exports (GL3) ─────────────────────────────────────
 
-/// Load a font from a file path. Returns font index (>= 0) or -1 on error.
+/// Load a font from a file path. Returns font index (>= 0) on success, or
+/// `i32::MIN` on error — that's loft's null sentinel for `integer`, so the
+/// loft-side `if !font { … }` check works correctly. (Returning -1 would
+/// look like a valid handle to loft, since -1 is not the null sentinel.
+/// The bug that caused breakout's score counter and every text texture in
+/// 00-smoke.loft to be silently invisible was: -1 returned here, the loft
+/// fallback path skipped, font_idx=-1 cast to usize=MAX in measure_text,
+/// `fonts.get()` returns None, width returned as 0, canvas allocated as
+/// 5×25, no glyphs fit.)
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_load_font(path_ptr: *const u8, path_len: usize) -> i32 {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     match std::fs::read(path) {
         Ok(data) => text::load_font_bytes(&data),
-        Err(_) => -1,
+        Err(_) => i32::MIN,
     }
 }
 
