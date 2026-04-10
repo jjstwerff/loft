@@ -691,6 +691,42 @@ impl Function {
         self.new_var(name, type_def, lexer)
     }
 
+    /// Create a temporary variable during scope analysis (no Lexer needed).
+    /// Reuses an existing variable if the name already exists (two-pass stability).
+    /// Used by P135 fix to lift inline struct-returning call arguments.
+    pub fn add_temp_var(&mut self, name: &str, type_def: &Type) -> u16 {
+        if let Some(nr) = self.names.get(name) {
+            let nr = *nr;
+            if self.variables[nr as usize].type_def.is_unknown() {
+                self.variables[nr as usize].type_def = type_def.clone();
+            }
+            return nr;
+        }
+        let v = self.variables.len() as u16;
+        self.names.insert(name.to_string(), v);
+        self.variables.push(Variable {
+            name: name.to_string(),
+            type_def: type_def.clone(),
+            source: (0, 0),
+            scope: u16::MAX,
+            stack_pos: u16::MAX,
+            uses: 1,
+            uses_at_write: 0,
+            write_source: (0, 0),
+            argument: false,
+            defined: false,
+            const_param: false,
+            stack_allocated: false,
+            skip_free: false,
+            captured: false,
+            first_def: u32::MAX,
+            last_use: 0,
+            pre_assigned_pos: u16::MAX,
+            promoted_from: u16::MAX,
+        });
+        v
+    }
+
     /// Create an exact copy of a variable, used to duplicate them when reused in later scopes.
     pub fn copy_variable(&mut self, var: u16) -> u16 {
         let v = self.variables.len() as u16;
