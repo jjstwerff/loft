@@ -1039,6 +1039,147 @@ Last updated 2026-04-02.  Overall: **71.3% line / 74.9% function**.
 
 ---
 
+## Headless OpenGL testing (Xvfb)
+
+Loft GL examples create a real winit/GLX window, so they normally need an X
+display. For CI / sandbox environments without `$DISPLAY`, we run them under
+**Xvfb** (the X Virtual Framebuffer). Xvfb is a software X server that
+keeps everything in memory — no GPU, no monitor, no compositor required.
+
+### Required tools
+
+```bash
+sudo apt-get install -y xvfb x11-utils x11-apps xdotool imagemagick
+```
+
+- `xvfb-run` — wrapper that starts Xvfb on a free display, runs the inner
+  command with `$DISPLAY` set, and tears Xvfb down on exit.
+- `xdotool` — searches for a window by name and returns its X11 ID.
+- `import` (from ImageMagick) — captures a window or the root drawable
+  to a PNG file.
+
+### Running a single GL example headlessly
+
+```bash
+xvfb-run -a -s "-screen 0 800x600x24" \
+    target/release/loft --interpret \
+        --path /home/ubuntu/loft/ \
+        --lib /home/ubuntu/loft/lib/ \
+        lib/graphics/examples/25-breakout.loft
+```
+
+`-a` picks an unused display number. `-s` passes args to Xvfb itself.
+Mesa's software rasterizer (`swrast`/`llvmpipe`) handles the actual GL
+draw calls — the binary doesn't know it's running headless.
+
+### Capturing a screenshot
+
+You can't take a screenshot *after* `xvfb-run` returns because that's when
+Xvfb dies. The capture has to happen *while* loft is running. The pattern:
+
+1. Background loft inside a wrapper script.
+2. Poll for loft's window via `xdotool search --name "."`.
+3. Wait for some animation/render time.
+4. `import -window <id> out.png`.
+5. Kill loft, exit. `xvfb-run` then tears down Xvfb.
+
+A working wrapper script lives at `/tmp/snap_inner.sh` during dev sessions:
+
+```bash
+#!/bin/bash
+SCRIPT="$1"
+OUTPUT="$2"
+POST_WAIT="${3:-4}"
+
+target/release/loft --interpret \
+    --path /home/ubuntu/loft/ --lib /home/ubuntu/loft/lib/ \
+    "$SCRIPT" >/tmp/loft.log 2>&1 &
+LOFT_PID=$!
+
+# Poll up to 10s for loft's window to appear
+WIN_ID=""
+for i in $(seq 1 20); do
+    sleep 0.5
+    WIN_ID=$(xdotool search --name "." 2>/dev/null | tail -1)
+    [ -n "$WIN_ID" ] && break
+    ps -p $LOFT_PID >/dev/null 2>&1 || break
+done
+
+sleep "$POST_WAIT"   # let the render loop produce interesting frames
+
+if ! ps -p $LOFT_PID >/dev/null 2>&1; then
+    echo "FAIL: loft exited before capture (script too short)"
+    exit 1
+fi
+
+import -window "$WIN_ID" "$OUTPUT"
+kill $LOFT_PID 2>/dev/null; wait $LOFT_PID 2>/dev/null
+```
+
+Then run it inside `xvfb-run`:
+
+```bash
+xvfb-run -a -s "-screen 0 800x600x24" \
+    /tmp/snap_inner.sh \
+    lib/graphics/examples/25-breakout.loft \
+    /tmp/breakout.png 6
+```
+
+`POST_WAIT` matters: short scripts (`for _ in 0..300`) finish before the
+capture; long-running ones (e.g. `for _ in 0..1000000` like breakout) stay
+alive indefinitely. For animated examples, increase `POST_WAIT` to capture
+a different frame in the animation cycle.
+
+### Gotchas
+
+- **The loft window is a child of the X root, not the root itself.**
+  `import -window root` captures an empty Xvfb root if no window manager
+  is parenting/compositing children. Always grab loft's window by ID.
+- **`LIBGL_ALWAYS_SOFTWARE=1` makes things WORSE under Xvfb.** Without it,
+  Mesa picks `swrast_dri.so` automatically; with it, the GL context fails
+  to initialise and `gl_create_window` returns false.
+- **Some loft examples panic under Xvfb** (15 of 26 ran clean as of
+  2026-04-10; 11 panic with `Delete on locked store` — that's the **P120
+  use-after-free** still alive in real GL paths, despite the regression
+  guard tests passing).
+- **There's an RGB↔BGR channel swap somewhere in loft's GL clear path.**
+  `gl_clear(rgba(40, 80, 120, 255))` produces the pixel `(120, 80, 40)`
+  on screen. Affects every example's appearance but not whether it runs.
+  Tracked separately.
+- **Polling for `xdotool search --name "."`** matches *any* named window.
+  If the test environment has other X clients running, narrow it down by
+  passing the window title used in `gl_create_window`.
+
+### Using Xvfb to run the cargo test suite
+
+```bash
+# Run all GL-touching tests under Xvfb in one shot
+xvfb-run -a cargo test --release
+```
+
+The test process inherits `$DISPLAY` from `xvfb-run`. Tests that don't
+touch GL ignore it; tests that *do* touch GL get a working framebuffer.
+
+### Headless valgrind on a GL example
+
+For leak/UB checking on a GL example, combine Xvfb with valgrind:
+
+```bash
+xvfb-run -a -s "-screen 0 800x600x24" \
+    valgrind --tool=memcheck --leak-check=full \
+             --show-leak-kinds=all --log-file=/tmp/v.log \
+        target/debug/loft --interpret \
+            --path /home/ubuntu/loft/ --lib /home/ubuntu/loft/lib/ \
+            lib/graphics/examples/25-breakout.loft
+
+grep -E "definitely lost|indirectly lost|possibly lost|ERROR SUMMARY" /tmp/v.log
+```
+
+Debug-build loft + valgrind + Mesa swrast is **very slow** — expect
+10-100x slowdown. Use a short loop count for ad-hoc checks.
+
+---
+
 ## See also
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
 - [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index
