@@ -423,6 +423,13 @@ impl State {
     }
 
     pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
+        // Reserve zone1 frame for small variables in the loop scope,
+        // matching what assign_slots allocated.
+        if lp.var_size > 0 {
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(lp.var_size);
+            stack.position += lp.var_size;
+        }
         stack.add_loop(self.code_pos);
         let pos = self.code_pos;
         for v in &lp.operators {
