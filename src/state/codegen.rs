@@ -898,15 +898,9 @@ impl State {
             );
             stack.function.set_stack_allocated(v);
             if pos >= stack.position {
-                // Slot is at or above TOS.  Pad the runtime stack to reach
-                // pos, then use direct placement which advances TOS past
-                // the variable.
-                if pos > stack.position {
-                    let gap = pos - stack.position;
-                    stack.add_op("OpReserveFrame", self);
-                    self.code_add(gap);
-                    stack.position += gap;
-                }
+                // Slot is at or above TOS.  gen_set_first_at_tos evaluates the
+                // value expression first (which may advance TOS via inner Sets),
+                // then places the result.
                 self.gen_set_first_at_tos(stack, v, value);
             } else {
                 // Slot is below TOS: zone1 variable reusing a dead slot.

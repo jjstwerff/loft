@@ -1512,4 +1512,68 @@ mod tests {
         );
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
+
+    // ── P122: sequential Set(v, Insert([Set(__lift, ...), Call(fn, __lift)])) ──
+    //
+    // From mat4_look_at: two sequential assignments where each has a lifted
+    // inline arg. The key constraint: codegen encounters Set(f, Insert(...))
+    // and must evaluate the Insert before placing f. The Insert's Set(__lift_1)
+    // is at a LOWER slot than f. Codegen's TOS must match __lift_1's slot
+    // when it's first assigned.
+    //
+    // Constraint: f.slot == __lift_1.slot + __lift_1.size
+    // (f is placed right after __lift_1, and codegen's TOS will be there
+    // after __lift_1's gen_set_first_at_tos)
+
+    #[test]
+    fn sequential_lifted_calls_slots_match_codegen_tos() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+
+        // Two sequential Set(v, Insert([Set(__lift, ...), Call(...)])) in scope 1
+        let lift1 = add_scoped_var(&mut f, "lift1", &ref_tp, 1, 10, 50);
+        let fv = add_scoped_var(&mut f, "fv", &ref_tp, 1, 12, 50);
+        let lift2 = add_scoped_var(&mut f, "lift2", &ref_tp, 1, 20, 50);
+        let sv = add_scoped_var(&mut f, "sv", &ref_tp, 1, 22, 50);
+
+        // IR: scope 1 block with two Set(v, Insert([Set(lift, Null), Call(...)]))
+        let insert1 = Value::Insert(vec![
+            Value::Set(lift1, Box::new(Value::Null)),
+            Value::Call(999, vec![Value::Var(lift1)]),
+        ]);
+        let insert2 = Value::Insert(vec![
+            Value::Set(lift2, Box::new(Value::Null)),
+            Value::Call(999, vec![Value::Var(lift2)]),
+        ]);
+        let mut code = Value::Block(Box::new(Block {
+            name: "", scope: 1, var_size: 0, result: Type::Void,
+            operators: vec![
+                Value::Set(fv, Box::new(insert1)),
+                Value::Set(sv, Box::new(insert2)),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let ref_size = size(&ref_tp, &Context::Variable);
+
+        // lift1 must be at TOS start (4), fv right after
+        assert_ne!(f.stack(lift1), u16::MAX, "lift1 must be placed");
+        assert_ne!(f.stack(fv), u16::MAX, "fv must be placed");
+        assert_eq!(
+            f.stack(fv), f.stack(lift1) + ref_size,
+            "fv must be right after lift1: lift1={} + {}B = {}, fv={}",
+            f.stack(lift1), ref_size, f.stack(lift1) + ref_size, f.stack(fv)
+        );
+
+        // lift2 must follow fv, sv right after lift2
+        assert_ne!(f.stack(lift2), u16::MAX, "lift2 must be placed");
+        assert_ne!(f.stack(sv), u16::MAX, "sv must be placed");
+        assert_eq!(
+            f.stack(sv), f.stack(lift2) + ref_size,
+            "sv must be right after lift2: lift2={} + {}B = {}, sv={}",
+            f.stack(lift2), ref_size, f.stack(lift2) + ref_size, f.stack(sv)
+        );
+
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
 }
