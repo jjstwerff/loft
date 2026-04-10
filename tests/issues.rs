@@ -2254,6 +2254,55 @@ fn test() {
     .result(Value::Null);
 }
 
+// ── P120b: const parameter store lock never released ──────────────────────
+//
+// PROBLEMS.md #120 (reopened) — `const` reference/vector parameters get
+// their backing store locked at function entry via `n_set_store_lock`, but
+// the lock is never released at function exit. After the function returns,
+// any mutation on the struct (e.g. field reassignment) triggers
+// `remove_claims → store.delete` on the still-locked store → panic
+// "Delete on locked store".
+#[test]
+fn p120b_const_param_store_lock_released_on_return() {
+    code!(
+        "struct V { x: integer not null, y: integer not null }
+fn read_only(c: const V) -> integer { c.x + c.y }
+fn test() {
+  v = V { x: 1, y: 2 };
+  assert(read_only(v) == 3, \"first call\");
+  v.x = 10;
+  assert(read_only(v) == 12, \"after mutation\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P120c: const param unlock in a loop — the GL failure pattern.
+// render_frame(sc: const Scene, cam) locks sc's store; after return the
+// next iteration assigns to sc.nodes[0].transform which triggers
+// remove_claims → store.delete on the (formerly) locked store.
+#[test]
+fn p120c_const_param_unlock_in_loop() {
+    code!(
+        "struct Transform { m: float not null }
+struct Node { name: text, transform: Transform }
+struct Scene { nodes: vector<Node> }
+fn render_frame(sc: const Scene) -> integer {
+  sc.nodes[0].transform.m as integer
+}
+fn test() {
+  sc = Scene { nodes: [] };
+  sc.nodes += [Node { name: \"n\", transform: Transform { m: 1.0 } }];
+  for i in 0..5 {
+    _r = render_frame(sc);
+    sc.nodes[0].transform = Transform { m: (i + 2) as float };
+  }
+  assert(sc.nodes[0].transform.m > 4.0, \"final value\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // ── P121: Tuple literals crashed interpreter with heap corruption ──────────
 //
 // PROBLEMS.md #121 — `a = (3.0, 2.0)` triggered glibc

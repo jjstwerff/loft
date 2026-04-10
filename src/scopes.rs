@@ -776,6 +776,31 @@ impl Scopes {
                 }
             }
         }
+        // P120-fix: unlock const reference/vector parameters at function exit.
+        // The lock was set in parse_code (expressions.rs:163-178) at function entry.
+        // Arguments live at scope 0 which `variables()` intentionally skips, so
+        // we handle them here as a separate pass.  Only emit when exiting to
+        // the function's top scope (to_scope <= 1).
+        if to_scope <= 1 {
+            let lock_fn = data.def_nr("n_set_store_lock");
+            if lock_fn != u32::MAX {
+                let n_vars = function.next_var();
+                for v_nr in 0..n_vars {
+                    if function.is_argument(v_nr)
+                        && function.is_const_param(v_nr)
+                        && matches!(
+                            function.tp(v_nr),
+                            Type::Reference(_, _) | Type::Vector(_, _)
+                        )
+                    {
+                        ls.push(Value::Call(
+                            lock_fn,
+                            vec![Value::Var(v_nr), Value::Boolean(false)],
+                        ));
+                    }
+                }
+            }
+        }
         // scope_debug: also report Reference vars in var_order whose scope is NOT in
         // the current chain — these are "orphaned" vars that should never happen after
         // the A5.6 block-pre-registration fix.

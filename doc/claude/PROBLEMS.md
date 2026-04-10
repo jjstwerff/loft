@@ -49,7 +49,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | ⚠️ Appears fixed by P116/P118/P122 wave; regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak` passes. Re-verify with the original `file()`-style pattern before closing |
-| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | **Reopened 2026-04-10** — 11 of 26 GL examples panic with `Delete on locked store` from `Store::delete → remove_claims → copy_record` when run under Xvfb. Regression test `p120_vector_field_in_returned_struct_round_trip` passes but only exercises the simplified pattern. Real fix needed in `copy_record`. |
+| 120 | ~~Use-after-free: struct return inside `if` block in loop frees borrowed store~~ | ~~**High**~~ | **Fixed** — `const` parameter store lock now released at function exit via `n_set_store_lock(var, false)` in `scopes.rs::get_free_vars`. All 27 GL examples pass headless. |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
 | 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
 | 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
@@ -907,59 +907,37 @@ prefix-fallback in the symbol lookup.
 **Test:** `02-hello-triangle.loft` with `--interpret` — renders 300 frames without
 crash.
 
-### 120. Struct constructor doesn't deep-copy vector fields into struct store
+### 120. ~~Const-parameter store lock never released at function exit~~
 
-**Status (2026-04-10):** ❌ **Reopened.** The simple reproducer in
-`test_mat4_crash.loft` and the unit test
-`tests/issues.rs::p120_vector_field_in_returned_struct_round_trip` both
-pass — but **11 of 26 GL examples** still panic with this bug when run
-end-to-end under Xvfb (`xvfb-run -a target/release/loft … 25-breakout.loft`):
+**FIXED** in `src/scopes.rs`.
 
-```
-thread 'main' panicked at src/store.rs:357:9:
-Delete on locked store (rec=360)
-stack backtrace:
-   2: loft::store::Store::delete
-   3: loft::database::allocation::<impl loft::database::Stores>::remove_claims
-   4: loft::database::allocation::<impl loft::database::Stores>::remove_claims
-   5: loft::state::io::<impl loft::state::State>::copy_record
-```
+**Root cause:** `const` reference/vector parameters had their backing
+store locked at function entry via `n_set_store_lock(var, true)` (emitted
+in `src/parser/expressions.rs:163-178`), but there was **no corresponding
+unlock at function exit**. After a function like `render_frame(sc: const Scene)`
+returned, `sc`'s store stayed locked. The next loop iteration's field
+assignment (e.g. `sc.nodes[0].transform = ...`) triggered
+`remove_claims → store.delete` on the still-locked store → panic
+"Delete on locked store" / "Write to locked store".
 
-**Failing examples (2026-04-10):** `05-transformations`,
-`06-coordinate-systems`, `09-materials`, `12-multiple-lights`,
-`13-depth-testing`, `15-face-culling`, `16-shadow-mapping`,
-`17-post-processing`, `20-textured-cube`, `22-wireframe`, `23-cleanup`.
-All of these were the 0.8.4 examples ported to use `render::create_renderer`
-and `scene::Scene` — the bug fires when the renderer tries to deep-copy
-struct fields that contain a vector during the per-frame node-transform
-update path.
+**Fix:** Emit `n_set_store_lock(var, false)` for each const
+reference/vector argument at every function exit point. Added to
+`scopes.rs::get_free_vars` — when `to_scope <= 1` (function-level exit),
+iterate all arguments and unlock those that are `const_param` with
+`Reference` or `Vector` type.
 
-The simplified regression test passes because it copies a struct *once*
-at the top level. The real failure path is `copy_record` being called
-on a record whose containing store has been locked by an outer
-operation — that scenario is only reachable through the renderer's
-batched-draw flow.
+**Regression tests:** `p120b_const_param_store_lock_released_on_return`
+(simple struct), `p120c_const_param_unlock_in_loop` (loop with
+per-iteration mutation after const call). All 27 GL examples pass
+headless.
 
-**Fix needed:** `copy_record` (in `src/state/io.rs`) should detect when
-the destination store is locked and either defer the delete or copy
-into an unlocked scratch store. Touch points: `src/state/io.rs::copy_record`,
-`src/database/allocation.rs::remove_claims`, `src/store.rs::Store::delete`.
+**Historical note:** the original P120 was a deep-copy issue (vector
+fields in returned structs losing data). That was fixed separately.
+The "reopened" P120 was a different manifestation: const-param store
+locks persisting after function exit, causing panics on subsequent
+mutation. Both are now fixed.
 
-**Historical reproducer (`lib/graphics/examples/test_mat4_crash.loft`)
-still passes:**
-```
-inside make_big: data len=16
-after return: data len=16
-data[0]=0 data[15]=15
-```
-This simpler case is unaffected — proving the simplified test alone
-isn't sufficient to validate the fix.
-
-**Symptom:** Vector fields in returned structs are empty (length=0) or contain
-garbage. Causes black textures in GL examples and use-after-free crashes when
-the struct is used inside loops.
-
-**Minimal reproducer:** `lib/graphics/examples/test_mat4_crash.loft`:
+**Original deep-copy reproducer (`lib/graphics/examples/test_mat4_crash.loft`):**
 ```loft
 struct BigBox {
     width: integer,
