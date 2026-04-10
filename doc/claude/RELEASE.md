@@ -1,35 +1,70 @@
 
 # Release Planning
 
-## What "0.9.0" and "1.0.0" mean
+## What each milestone means
 
-**0.9.0 — Production-ready standalone executable.**
-The interpreter is complete, stable, and efficient enough to rely on for real programs.
-All planned language features (lambdas, aggregates, nested patterns, full parallel support)
-are present.  No known crashes or silent wrong results.  Pre-built binaries ship for all
-four platforms.
+**0.8.4 — Awesome Breakout.**
+The single-player Breakout demo (`lib/graphics/examples/25-breakout.loft`)
+becomes a game someone would actually want to share with a friend: audio,
+multiple hand-designed levels, polished art, screen shake, pause menu, high
+scores, and a single-file HTML export hosted on itch.io. The headline
+language fix is **P122** (free struct/vector temporaries at end-of-loop)
+which removes the bitmasks-and-raw-floats workaround pattern from the game
+code. Audience: anyone who can click a link.
 
-**1.0.0 — Stable language + fully working IDE.**
-1.0.0 is the **stability contract**: any program valid on 1.0.0 compiles and runs
-identically on any 1.0.x or 1.x.0 release.  The contract covers:
+**0.8.5 — Working Moros editor.**
+The Moros hex RPG scene editor runs end-to-end in the browser: load a map,
+paint hexes, place walls and items, see a live 3D preview, export to GLB.
+Web only — multiplayer comes later. Audience: tabletop RPG hobbyists who
+want to design dungeons and ship them as static files.
+
+**0.9.0 — Fully working loft language.**
+The language is feature-complete, well-documented, and tooling-friendly.
+PROBLEMS.md has zero "appears fixed but unverified" entries. There's a
+REPL, a VS Code extension, decent error recovery, and `loft.lock` for
+reproducible builds. The four issues today's release-mode switch flagged
+as "appears fixed" (P117, P120, P121, P124, P127) are definitively closed.
+Audience: developers who want to write loft as a real language, not just
+a game scripting tool.
+
+**1.0.0 — Totally sure everything works.**
+1.0.0 is the **stability contract**: any program valid on 1.0.0 compiles
+and runs identically on any 1.0.x or 1.x.0 release. The contract covers:
 - The core language surface (syntax, type system, documented stdlib API, CLI flags).
 - The public IDE API (WASM `compileAndRun` / `getSymbols` JS interface).
 - The interpreter does not panic or silently produce wrong results.
 - A user can write, run, and share a real program — from the terminal or the browser.
 
-The Web IDE (W1–W6) is part of 1.0.0, not post-1.0.  See [PLANNING.md § Milestone
-Reevaluation](PLANNING.md#milestone-reevaluation) for the full reasoning.
+The Web IDE (W1–W6), the multiplayer stack (SRV.*, GC.*), and the scene
+scripting layer (SC.*) all ship in 1.0.0. Plus the **stability gate** in
+ROADMAP.md: valgrind clean, four-platform binaries, no `**High**` open
+issues, no shortcuts. See [ROADMAP.md § 1.0.0](ROADMAP.md) for the full
+checklist.
 
 ---
 
 ## Gate Items — MUST for 1.0
 
-These block a 1.0 release because they cause panics on valid programs, ship incorrect public identity, or leave public keywords in a permanently-broken state.
+These block a 1.0 release because they cause panics on valid programs, ship
+incorrect public identity, or leave public keywords in a permanently-broken
+state.
 
-Completed gate items (T0-1 through T0-7, T1-5, PROBLEMS #10, #37–#40, A4 pre-gate,
-Cargo.toml, README, CHANGELOG, CI pipeline, R1) are recorded in CHANGELOG.md.
+Completed historical gate items (T0-1 through T0-7, T1-5, PROBLEMS #10,
+#37–#40, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, R1) are
+recorded in CHANGELOG.md.
 
-No open gate items remain.  All known crashes on valid programs have been fixed.
+**Open as of 2026-04-10:**
+
+- **P122** — store leak in tight game loops. Currently worked around in
+  `25-breakout.loft` with bitmasks and raw-float collision APIs. Slated
+  for 0.8.4.
+- **P117 / P120 / P121 / P124** — flagged `⚠️ Appears fixed but unverified`
+  in PROBLEMS.md. Regression-guard tests pass; the original symptoms have
+  not been re-validated under their original conditions. Slated for 0.9.0.
+- **P127** — file-scope vector constants leak Var() refs into calling
+  functions. Has a `#[ignore]`d reproducer test. Slated for 0.9.0.
+- **Stability gate** — see ROADMAP.md § 1.0.0 for the full hands-on
+  checklist (valgrind, 4-platform binaries, INCONSISTENCIES.md sweep).
 
 ---
 
@@ -52,43 +87,72 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 
 ## Items by milestone
 
+### 0.8.4 gate items
+
+| Item | Notes |
+|---|---|
+| **P122** store leak in game loops | Free struct/vector temps at end of loop iteration. Today's breakout has to use bitmasks + raw-float collision APIs to dodge this. **Headline language fix for 0.8.4.** |
+| G3 tilemap rendering | Lets BK.3 levels be data instead of code |
+| G5 audio sound effects | Brick hit, paddle bounce, pickup chimes |
+| G6 background music | With volume mix during play |
+| W1.1 single-file HTML export | `loft --html game.loft` → one file |
+| BK.1–BK.8 game polish | Audio, levels, screen shake, pause menu, title/game-over screens, high scores, art pass |
+| G7.P playable Breakout on itch.io | The actual ship target |
+
+### 0.8.5 gate items
+
+| Item | Notes |
+|---|---|
+| MO.1a–MO.6 moros backend | Data model, palette types, JSON I/O, paint/wall/item ops, undo/redo, slope tool, stencil stamping |
+| MO.C1–MO.E5 moros JS frontend | Hex canvas, tools, palettes, undo, localStorage |
+| MO.7a–MO.10 moros 3D renderer | Hex geometry, wall slabs, stairs, camera, hex picking, GLB export |
+| MO.W1, MO.W2 WASM builds | Editor and renderer compiled for the browser |
+| MO.12a–MO.12c WASM↔JS wiring | Live 3D preview panel + GLB export button |
+| MO.P moros editor on GH Pages | The actual ship target |
+
 ### 0.9.0 gate items
 
 | Item | Notes |
 |---|---|
 | L1 error recovery | Cascading errors after one bad token; high UX impact |
-| P1 lambda expressions | Core language completeness; unblocks P3 and A5 |
-| P3 vector aggregates | Stdlib completeness; depends on P1 |
-| L2 nested match patterns | Language completeness |
-| A9 vector slice CoW | Correctness: mutating a slice must not corrupt parent |
-| A6 stack slot pre-pass | Architectural: eliminates slot-conflict category of bugs |
-| A8 destination-passing for strings | Efficiency: eliminates double-copy in format expressions |
-| A3 optional Cargo features | Lean binary; clean dependency management |
-| Tier N (N2–N9, N1) native codegen fixes | Efficiency: turn existing but broken generator into working `--native` path |
-| ~~A1 parallel workers full~~ | ~~Feature completeness for existing parallel construct~~ *(done — all return types supported incl. struct/ref, both interpreter and native)* |
-| ~~TR1 stack trace introspection~~ | ~~`stack_trace()` stdlib; prerequisite for coroutines~~ *(done 0.8.3 — phases 1–4)* |
-| A7 native extension libraries | `#native` annotation + `cdylib` loading for external packages |
+| P2 REPL / interactive mode | No browser IDE yet (that's 1.0.0); a terminal REPL is the answer for now |
+| W-warn developer warnings | Clippy-inspired diagnostics |
+| AOT auto-compile libraries | Native shared libs without manual `cargo build` |
+| C52 stdlib name clash + `std::` prefix | Naming hygiene |
+| C53 match arms with library enums + bare names | Match ergonomics |
+| **P127** file-scope vector constants | Already has a reproducer test (`#[ignore]`d); needs Var-index remapping fix |
+| **Verify P117** | Re-test the original `file()` pattern with `LOFT_STORES=warn` |
+| **Verify P120** | Re-run the full GL example suite end-to-end on a display |
+| **Verify P121** | Debug-build valgrind pass over `tests/scripts/50-tuples.loft` |
+| **Verify P124** | `--native-emit` inspection of generated Rust |
+| SH.1, SH.2 syntax highlighting | TextMate grammar + VS Code extension |
+| DX.1, DX.2 quick-start examples + CI | `examples/` directory + CI workflow polish |
+| PKG.7 lock file | Reproducible builds |
+| FFI.1–FFI.4 native extension docs | Generic marshaller, cdylib loader, docs |
 
 ### 1.0.0 gate items (on top of 0.9.0)
 
 | Item | Notes |
 |---|---|
-| R1 workspace split | Prerequisite for WASM target |
-| W1 WASM foundation | Enables all other IDE work |
 | W2 editor shell | Visible IDE |
 | W3 symbol navigation | Go-to-definition, find-usages |
 | W4 multi-file projects | IndexedDB persistence |
 | W5 docs/examples browser | Integrated documentation |
 | W6 export/import + PWA | Offline support; closes the loop |
+| SC.1–SC.6 scene scripting | Hex enter/exit/interact hooks; in-browser hot-reload |
+| SRV.1–SRV.G server library | HTTP routing, WebSockets, auth, ACME, game loop |
+| GC.1–GC.6 game client library | WebSocket protocol, lobby, prediction, WASM script loading |
+| **Stability gate** | See ROADMAP.md § 1.0.0 — valgrind clean, 4-platform binaries, zero open `**High**` issues, hands-on testing |
 
 ### Explicitly 1.1+
 
 | Item | Notes |
 |---|---|
-| P2 REPL | Browser IDE covers the interactive use case; revisit if needed |
 | A2 logger production mode | Low user impact until logger is widely used |
 | A4 spacial<T> full implementation | After pre-gate added in 0.8.0 |
 | A5 closure capture | Very high effort; depends on P1 |
+| C57 route decorator syntax | `@get` / `@post` / `@ws` annotations |
+| W1.14 WASM Tier 2 | Web Worker pool + `par()` parallelism |
 
 ---
 

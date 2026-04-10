@@ -72,6 +72,28 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
+### Current plan (2026-04-10)
+
+**The narrative sub-sections below are historical** — they document what was
+*planned* at each version, not necessarily what shipped. The authoritative
+current milestone definitions live in [ROADMAP.md](ROADMAP.md) and
+[RELEASE.md](RELEASE.md). The high-level shape is:
+
+| Version | Goal                                       | Status        |
+|---------|--------------------------------------------|---------------|
+| 0.8.0–0.8.3 | Stability, native codegen, slot correctness, lambdas, parallel, stack trace, sprite sheet API | **Shipped** |
+| 0.8.4   | **Awesome Breakout** — a game worth sharing on itch.io | In progress |
+| 0.8.5   | **Working Moros editor** — paint hex scenes in the browser | Planned   |
+| 0.9.0   | **Fully working loft language** — feature-complete + verified | Planned |
+| 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract | Planned |
+
+When updating priorities, edit ROADMAP.md / RELEASE.md first; this section
+catches up later. Items still listed under "Version 0.9.0" or "Version
+0.8.4" below may have been moved to a different milestone or shipped
+already — cross-check against ROADMAP.md before relying on them.
+
+---
+
 ### Version 0.8.2 — Stability, native codegen, and slot correctness (in progress)
 
 Goal: harden the interpreter, complete native code generation, fix slot assignment, and
