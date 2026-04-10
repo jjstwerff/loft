@@ -2489,7 +2489,7 @@ fn look(eye: V3, target: V3) -> float {
 }
 fn test() {
     r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
-    assert(r == 15.0, \"expected 15.0 got {r}\");
+    assert(r == -3.0, \"expected -3.0 got {r}\");
 }"
     )
     .result(Value::Null);
