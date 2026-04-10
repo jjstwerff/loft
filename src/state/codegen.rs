@@ -423,11 +423,6 @@ impl State {
     }
 
     pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
-        if lp.var_size > 0 {
-            stack.add_op("OpReserveFrame", self);
-            self.code_add(lp.var_size);
-            stack.position += lp.var_size;
-        }
         stack.add_loop(self.code_pos);
         let pos = self.code_pos;
         for v in &lp.operators {
@@ -437,12 +432,6 @@ impl State {
         stack.add_op("OpGotoWord", self);
         self.code_add((i64::from(pos) - i64::from(self.code_pos) - 2) as i16);
         stack.end_loop(self);
-        if lp.var_size > 0 {
-            stack.add_op("OpFreeStack", self);
-            self.code_add(0u8);
-            self.code_add(lp.var_size);
-            stack.position -= lp.var_size;
-        }
         Type::Void
     }
 
