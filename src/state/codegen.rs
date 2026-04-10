@@ -423,6 +423,7 @@ impl State {
     }
 
     pub(super) fn gen_loop(&mut self, lp: &crate::data::Block, stack: &mut Stack) -> Type {
+        let before_loop = stack.position;
         // Reserve zone1 frame for small variables in the loop scope,
         // matching what assign_slots allocated.
         if lp.var_size > 0 {
@@ -439,6 +440,18 @@ impl State {
         stack.add_op("OpGotoWord", self);
         self.code_add((i64::from(pos) - i64::from(self.code_pos) - 2) as i16);
         stack.end_loop(self);
+        // Free the zone1 reservation after the loop exits.
+        if lp.var_size > 0 {
+            stack.add_op("OpFreeStack", self);
+            self.code_add(0u8);
+            self.code_add(lp.var_size);
+            stack.position -= lp.var_size;
+        }
+        debug_assert_eq!(
+            stack.position, before_loop,
+            "gen_loop: TOS after loop ({}) != TOS before loop ({before_loop})",
+            stack.position
+        );
         Type::Void
     }
 
