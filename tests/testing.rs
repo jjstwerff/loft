@@ -11,11 +11,9 @@ extern crate loft;
 #[path = "common/mod.rs"]
 mod common;
 use loft::compile::byte_code;
-#[cfg(debug_assertions)]
 use loft::compile::show_code;
 use loft::data::Data;
 use loft::generation::Output;
-#[cfg(debug_assertions)]
 use loft::log_config::LogConfig;
 use std::fs::File;
 use std::io::Write;
@@ -163,7 +161,6 @@ impl Test {
         )
     }
 
-    #[cfg(debug_assertions)]
     fn output_code(
         &mut self,
         data: &mut Data,
@@ -231,7 +228,10 @@ impl Drop for Test {
         // during parallel test execution.  Per-test native codegen output
         // still goes to tests/generated/<test>.rs below.
         let mut state = State::new(p.database);
-        byte_code(&mut state, &mut p.data);
+        let codegen_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            byte_code(&mut state, &mut p.data);
+        }))
+        .err();
         #[cfg(debug_assertions)]
         if let Some(spec) = &self.expected_slots {
             let test_nr = p.data.def_nr("n_test");
@@ -339,14 +339,22 @@ impl Drop for Test {
                 );
             }
         }
+        let config = LogConfig::from_env();
+        let log_active = std::env::var("LOFT_LOG").is_ok();
         #[cfg(debug_assertions)]
-        {
-            let config = LogConfig::from_env();
+        let log_active = true;
+        if log_active {
             let mut w = self.output_code(&mut p.data, types, &mut code, &mut state, &config);
+            if let Some(panic_payload) = codegen_panic {
+                // Dump was written — now re-panic with the original message.
+                std::panic::resume_unwind(panic_payload);
+            }
             state.execute_log(&mut w, "test", &config, &p.data).unwrap();
+        } else if let Some(panic_payload) = codegen_panic {
+            std::panic::resume_unwind(panic_payload);
+        } else {
+            state.execute("test", &p.data);
         }
-        #[cfg(not(debug_assertions))]
-        state.execute("test", &p.data);
     }
 }
 
