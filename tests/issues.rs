@@ -2589,6 +2589,53 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122n: mat4_look_at from the math library — the exact function that fails
+// in GL examples. Uses normalize3(sub3(...)), normalize3(cross(...)), cross(...)
+// which each produce a lifted inline struct arg.
+#[test]
+fn p122n_mat4_look_at_library_pattern() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Mat4 { m: vector<float> }
+fn vec3(vx: float, vy: float, vz: float) -> Vec3 { Vec3 { x: vx, y: vy, z: vz } }
+fn sub3(va: const Vec3, vb: const Vec3) -> Vec3 {
+    Vec3 { x: va.x - vb.x, y: va.y - vb.y, z: va.z - vb.z }
+}
+fn dot3(da: const Vec3, db: const Vec3) -> float {
+    da.x * db.x + da.y * db.y + da.z * db.z
+}
+fn cross(ca: const Vec3, cb: const Vec3) -> Vec3 {
+    Vec3 { x: ca.y * cb.z - ca.z * cb.y,
+           y: ca.z * cb.x - ca.x * cb.z,
+           z: ca.x * cb.y - ca.y * cb.x }
+}
+fn length3(lv: const Vec3) -> float { sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z) }
+fn normalize3(nv: const Vec3) -> Vec3 {
+    nl = length3(nv);
+    if nl == 0.0 { return nv; }
+    Vec3 { x: nv.x / nl, y: nv.y / nl, z: nv.z / nl }
+}
+fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4 {
+    la_f = normalize3(sub3(target, eye));
+    la_s = normalize3(cross(la_f, up));
+    la_u = cross(la_s, la_f);
+    Mat4 { m: [
+        la_s.x,  la_u.x,  -la_f.x, 0.0,
+        la_s.y,  la_u.y,  -la_f.y, 0.0,
+        la_s.z,  la_u.z,  -la_f.z, 0.0,
+        -dot3(la_s, eye), -dot3(la_u, eye), dot3(la_f, eye), 1.0
+    ] }
+}
+fn test() {
+    v = mat4_look_at(vec3(0.0, 0.0, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    assert(v.m.len() == 16, \"expected 16 elements got {v.m.len()}\");
+    assert(v.m[0] == 1.0, \"m[0] should be 1.0, got {v.m[0]}\");
+    assert(v.m[14] == -3.0, \"m[14] should be -3.0, got {v.m[14]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
