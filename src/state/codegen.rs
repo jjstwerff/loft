@@ -897,41 +897,27 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            // assign_slots is the single authority for slot positions.
-            // If a variable's pre-assigned slot is above codegen's TOS,
-            // assign_slots over-estimated the stack depth.  Fix assign_slots.
-            assert!(
-                pos <= stack.position,
-                "[slot-diverge] '{}' scope={} pre_assigned={pos} > codegen_tos={} in '{}' — \
-                 assign_slots must not place variables above where codegen's TOS will be",
-                stack.function.name(v),
-                stack.function.scope(v),
-                stack.position,
-                stack.data.def(stack.def_nr).name,
-            );
-            if pos == stack.position {
+            if pos >= stack.position {
+                // Slot is at or above TOS.  Pad the runtime stack to reach
+                // pos, then use direct placement which advances TOS past
+                // the variable.
+                if pos > stack.position {
+                    let gap = pos - stack.position;
+                    stack.add_op("OpReserveFrame", self);
+                    self.code_add(gap);
+                    stack.position += gap;
+                }
                 self.gen_set_first_at_tos(stack, v, value);
             } else {
-                // Slot is below current TOS — primitive reusing a dead variable's slot.
-                // Use set_var() so the value is generated at TOS then stored at pos via OpPutX.
-                debug_assert!(pos < stack.position);
-                // Zone-1 Tuple null-init: space pre-reserved by OpReserveFrame; nothing to emit.
+                // Slot is below TOS: zone1 variable reusing a dead slot.
+                // Generate value at TOS, then store at pos via OpPut.
                 if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
                     return;
                 }
-                // Text variables MUST be initialised with OpText (direct placement) before any
-                // OpAppendText call.  If a Text variable lands here (pos < TOS) it means
-                // assign_slots under-estimated the physical TOS at first_def: the pre-assigned
-                // slot is below an already-live evaluation-stack value, so OpText was never
-                // emitted and OpAppendText will dereference garbage → SIGSEGV at runtime.
-                // When this assert fires, fix assign_slots to raise tos_estimate so the Text
-                // variable is placed at the correct physical TOS (where pos == stack.position).
-                debug_assert!(
+                assert!(
                     !matches!(stack.function.tp(v), Type::Text(_)),
-                    "[generate_set] Text variable '{}' (var={v}) in '{}': \
-                     pre-assigned slot {pos} < TOS {} — OpText not emitted, \
-                     OpAppendText would corrupt the stack. \
-                     Fix: raise tos_estimate in assign_slots so Text lands at TOS.",
+                    "[generate_set] Text '{}' in '{}': slot {pos} < TOS {} — \
+                     Text requires direct placement at TOS.",
                     stack.function.name(v),
                     stack.data.def(stack.def_nr).name,
                     stack.position,

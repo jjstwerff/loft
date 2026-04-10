@@ -2471,6 +2471,30 @@ fn test() {
     .result(Value::Null);
 }
 
+// P122i: multiple sequential Set(v, Insert([Set(__lift, call), Call(fn, __lift)]))
+// This is the exact pattern from mat4_look_at after P122 lift:
+//   f = normalize3(sub3(target, eye))  →  Set(f, Insert([Set(__lift_1, sub3(...)), normalize3(__lift_1)]))
+//   s = normalize3(cross(f, up))       →  Set(s, Insert([Set(__lift_2, cross(...)), normalize3(__lift_2)]))
+#[test]
+fn p122i_sequential_lifted_calls() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn look(eye: V3, target: V3) -> float {
+    f = scale3(sub3(target, eye), 2.0);
+    s = scale3(sub3(eye, target), 3.0);
+    f.x + s.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == 15.0, \"expected 15.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // P122f: struct-returning function result assigned to a struct field in a loop.
 // This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
 // struct that is assigned to sc.nodes[0].transform each frame.
