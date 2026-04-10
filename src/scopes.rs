@@ -998,10 +998,14 @@ impl Scopes {
                 && let Type::Reference(d_nr, _) = &def.returned
             {
                 // Only lift when the outer call is a built-in operator (OpXxx).
-                // Operators consume arguments by value and never borrow stores.
-                // User-function calls (n_xxx) may have complex lifetime
-                // relationships that make early freeing unsafe.
-                if outer_call == u32::MAX || !data.def(outer_call).name.starts_with("Op") {
+                // Operators consume arguments by value and never store
+                // references to the argument's data.  User-function calls
+                // may store the argument internally (e.g. add_mesh stores
+                // the Mesh in a Scene vector) — freeing the lifted temp
+                // after the call would invalidate those internal references.
+                if outer_call == u32::MAX
+                    || !data.def(outer_call).name.starts_with("Op")
+                {
                     return None;
                 }
                 return Some(*d_nr);
