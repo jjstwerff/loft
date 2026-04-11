@@ -1052,6 +1052,17 @@ impl Parser {
                     let call = Value::Call(new_d, fixed);
                     return Self::wrap_vector_get_val(call, concrete, data);
                 }
+                // I9-text fixup: when a T-stub had an extra __work_1 parameter
+                // (for text-returning interface methods) but the concrete method
+                // doesn't, drop the trailing argument to match the concrete signature.
+                if new_d != d && new_d != u32::MAX && (new_d as usize) < data.definitions.len() {
+                    let concrete_params = data.def(new_d).attributes.len();
+                    if new_args.len() > concrete_params {
+                        let mut trimmed = new_args;
+                        trimmed.truncate(concrete_params);
+                        return Value::Call(new_d, trimmed);
+                    }
+                }
                 Value::Call(new_d, new_args)
             }
             Value::Block(bl) => Value::Block(Box::new(crate::data::Block {
