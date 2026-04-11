@@ -4,13 +4,12 @@
 ## What each milestone means
 
 **0.8.4 — Awesome Breakout.**
-The single-player Breakout demo (`lib/graphics/examples/25-breakout.loft`)
-becomes a game someone would actually want to share with a friend: audio,
-multiple hand-designed levels, polished art, screen shake, pause menu, high
-scores, and a single-file HTML export hosted on itch.io. The headline
-language fix is **P122** (free struct/vector temporaries at end-of-loop)
-which removes the bitmasks-and-raw-floats workaround pattern from the game
-code. Audience: anyone who can click a link.
+The Breakout demo has audio (chiptune synthesis), title/pause/game-over
+screens with restart, and ships as a single-file HTML export via
+`loft --html`. All language blockers (P117–P131, L4–L6, S5) are fixed.
+Remaining polish (hand-designed levels, background music, art) can go
+into 0.8.5 without blocking this release. Audience: anyone who can
+click a link.
 
 **0.8.5 — Working Moros editor.**
 The Moros hex RPG scene editor runs end-to-end in the browser: load a map,

@@ -41,34 +41,34 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 
 | Area      | Today                          | After 0.8.4                                  |
 |-----------|--------------------------------|----------------------------------------------|
-| Audio     | Silent                         | Brick hits, paddle bounce, pickup chimes, music |
+| Audio     | ~~Silent~~ | **Done** — chiptune synthesis (sfx_beep/chirp/noise/descend/bounce) |
 | Levels    | Procedurally generated rows    | Several hand-designed levels with themes     |
 | Visuals   | Procedural sprite atlas        | Polished art + screen shake + better particles |
-| Sharing   | Run from `cargo run …`         | Single-file HTML export, hosted on itch.io   |
+| Sharing   | ~~Run from `cargo run …`~~ | **Done** — `loft --html` single-file export (native WASM) |
 | Smoothness| ~~Per-frame store leak workarounds~~ | **Done** — P122 fixed; idiomatic struct APIs work |
 
 ### Game infrastructure
 
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | ✓      | GAME_INFRA.md    |
-| G5    | Audio: sound effect playback (Web Audio + native)      | S  | ✓      | GAME_INFRA.md    |
-| G6    | Audio: background music with crossfade                 | S  | ✓      | GAME_INFRA.md    |
-| W1.1  | Single-file HTML export (`loft --html game.loft`)      | M  | ✓      | GAME_INFRA.md    |
-| G7.P  | 🌐 **Playable Breakout** — share link on itch.io        | S  | ✓      |                  |
+| ID    | Title                                                  | E  | Status |
+|-------|--------------------------------------------------------|----|--------|
+| G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | Planned |
+| ~~G5~~| ~~Audio: sound effect playback~~                       | S  | **Done** — rodio + audio_play_raw + chiptune synthesis |
+| G6    | Audio: background music with crossfade                 | S  | Planned (layer on G5) |
+| ~~W1.1~~| ~~Single-file HTML export~~                          | M  | **Done** — native WASM + asyncify + GL bridge |
+| G7.P  | 🌐 **Playable Breakout** — share link on itch.io        | S  | Ready (--html works) |
 
 ### Game polish (`lib/graphics/examples/25-breakout.loft`)
 
-| ID    | Title                                                  | E  |
-|-------|--------------------------------------------------------|----|
-| BK.1  | Audio integration: brick hit, paddle, pickups, life lost | S  |
-| BK.2  | Background music + low-volume mix during play          | S  |
-| BK.3  | Multiple hand-designed levels (5+) loaded from tilemaps | M |
-| BK.4  | Screen shake on brick break + life lost                | XS |
-| BK.5  | Pause menu + restart                                   | S  |
-| BK.6  | Title screen + game-over screen                        | S  |
-| BK.7  | High-score persistence (file or localStorage in WASM)  | S  |
-| BK.8  | Polish pass on sprite atlas (better art, consistent style) | S |
+| ID    | Title                                                  | E  | Status |
+|-------|--------------------------------------------------------|----|--------|
+| ~~BK.1~~ | ~~Audio integration~~                              | S  | **Done** — brick/paddle/wall/pickup/life sounds |
+| BK.2  | Background music + low-volume mix during play          | S  | Planned |
+| BK.3  | Multiple hand-designed levels (5+) loaded from tilemaps | M | Planned |
+| BK.4  | Screen shake on brick break + life lost                | XS | Planned |
+| ~~BK.5~~ | ~~Pause menu + restart~~                           | S  | **Done** — P to pause, SPACE to resume |
+| ~~BK.6~~ | ~~Title screen + game-over screen~~                | S  | **Done** — state machine with restart |
+| BK.7  | High-score persistence (file or localStorage in WASM)  | S  | Planned |
+| BK.8  | Polish pass on sprite atlas (better art, consistent style) | S | Planned |
 
 ### Language fixes (all completed)
 

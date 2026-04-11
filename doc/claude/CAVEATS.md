@@ -71,9 +71,21 @@ Only same-file enum variants work in match patterns.
 
 ---
 
+## C54 — Integer overflow panics in debug builds
+
+Arithmetic that produces `i32::MIN` (the null sentinel) triggers a
+`debug_assert` panic in `src/ops.rs` via the `checked_int!` macro.
+In release builds the result is silently null.  By design — the debug
+check catches accidental sentinel collisions.
+
+**Workaround:** stay within `i32::MIN + 1 .. i32::MAX` or use `long`.
+**Test:** stress_test.loft `test_int_overflow`.
+
+---
+
 ## Verification log
 
-Last retested: **2026-04-11** against commit `61ca012` (consilidate branch).
+Last retested: **2026-04-11** against commit `8761101` (consilidate branch).
 
 | Caveat | Status | How verified |
 |--------|--------|-------------|
@@ -84,6 +96,7 @@ Last retested: **2026-04-11** against commit `61ca012` (consilidate branch).
 | C45 | Still applies | Slot allocator still text-only for zone-2 reuse |
 | ~~C51~~ | **Removed** | Native extensions now load via `extensions::load_all`; 15 native_loader tests pass |
 | C53 | Still applies | No library-enum match test exists; workaround documented |
+| C54 | **New** | Integer overflow debug panic — by design, documented |
 
 ---
 
