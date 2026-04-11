@@ -467,9 +467,11 @@ fn main() {
         br_ball_y[br_bi] += br_ball_dy[br_bi] * br_dt;
 
         // Walls
-        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); }
-        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); }
-        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); }
+        br_wall_hit = false;
+        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); br_wall_hit = true; }
+        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); br_wall_hit = true; }
+        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); br_wall_hit = true; }
+        if br_wall_hit { graphics::sfx_beep(600.0f, 0.03f, 0.1f); }
 
         // Paddle (skipped during the explosion respawn pause)
         if br_paddle_state == 0 && br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
@@ -480,6 +482,7 @@ fn main() {
           br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
           br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
           br_combo = 0;  // reset combo on paddle hit
+          graphics::sfx_bounce(180.0f, 0.3f);
         }
 
         // Shield
@@ -518,6 +521,8 @@ fn main() {
                 br_bricks[br_ci] = 0;
                 br_alive -= 1;
                 br_combo += 1;
+                // BK.1: brick break sound — pitch rises with combo
+                graphics::sfx_beep(400.0f + br_combo as single * 40.0f, 0.06f, 0.25f);
                 if br_combo > br_combo_best { br_combo_best = br_combo; }
                 br_pts = br_combo;
                 if br_pts > 10 { br_pts = 10; }
@@ -577,6 +582,7 @@ fn main() {
       if !br_any_ball && br_paddle_state == 0 {
         br_lives -= 1;
         br_combo = 0;
+        graphics::sfx_descend(500.0f, 150.0f, 0.4f, 0.4f);
         if br_lives <= 0 {
           br_lost = true;
         } else {
@@ -662,6 +668,7 @@ fn main() {
             br_px, PADDLE_Y, br_pw, PADDLE_H) { continue; }
         br_pk_on[br_pi] = 0;
         br_pkt = br_pk_type[br_pi];
+        graphics::sfx_chirp(400.0f, 900.0f, 0.12f, 0.3f);
 
         if br_pkt == SP_EXTEND {
           br_pw = PADDLE_W_DEFAULT + EXTEND_EXTRA;
