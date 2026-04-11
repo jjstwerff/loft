@@ -49,10 +49,10 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 115 | ~~Text parameter reassignment/append segfaults~~ | ~~Medium~~ | **Fixed** — auto-promotes text argument to local String on mutation |
 | 116 | ~~`x = func(s)` where func returns a struct param aliases the store~~ | ~~**High**~~ | **Fixed** — codegen deep copies when func has Reference params; adopts when safe |
 | 117 | Struct-returning functions leak the callee's store after deep copy | Medium | ⚠️ Appears fixed by P116/P118/P122 wave; regression guard `tests/issues.rs::p117_text_param_struct_return_loop_no_leak` passes. Re-verify with the original `file()`-style pattern before closing |
-| 120 | Use-after-free: struct return inside `if` block in loop frees borrowed store | **High** | **Reopened 2026-04-10** — 11 of 26 GL examples panic with `Delete on locked store` from `Store::delete → remove_claims → copy_record` when run under Xvfb. Regression test `p120_vector_field_in_returned_struct_round_trip` passes but only exercises the simplified pattern. Real fix needed in `copy_record`. |
+| 120 | ~~Use-after-free: struct return inside `if` block in loop frees borrowed store~~ | ~~**High**~~ | **Fixed** — `const` parameter store lock now released at function exit via `n_set_store_lock(var, false)` in `scopes.rs::get_free_vars`. All 27 GL examples pass headless. |
 | 121 | Tuple literals crash interpreter with heap corruption | **High** | ⚠️ Appears fixed; reproducer from PROBLEMS.md runs cleanly and `tests/issues.rs::p121_float_tuple_*` regression guards pass. Re-verify in a debug build with valgrind before closing |
-| 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | **High** | Use raw-float functions instead of struct-based APIs in loops |
-| 123 | Per-frame vector literal allocation leaks stores | Medium | Use scalar variables or bitmasks instead of `[for _ in 0..N { 0 }]` in render loop |
+| 122 | Store leak: struct/vector allocation inside game loop exhausts store pool | Medium | **Partially fixed** — `copy_ref` in `operators.rs` now sets the free bit on `OpCopyRecord` for struct-returning function calls and struct literals assigned to fields. Local-variable and field-assignment patterns no longer leak. Remaining leaks in the renderer pipeline (deep internal allocations) still need investigation. |
+| 123 | ~~Per-frame vector literal allocation leaks stores~~ | ~~Medium~~ | **Fixed** — vector literal reassignment in loops no longer leaks stores |
 | 124 | Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast | Low | ⚠️ Appears fixed; `tests/issues.rs::p124_function_returning_inline_array_index` passes under interpret. Re-verify under `--native` with `--native-emit` before closing |
 | 125 | `use` import can't find sibling packages when script is inside a package | Medium | ~~**Fixed**~~ — `lib_path` now walks up to `loft.toml` and searches siblings |
 | 126 | Negative integer literal as final expression parsed as void negation | Low | Use `return -1;` instead of bare `-1` as function tail expression |
@@ -63,6 +63,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 131 | Loft CLI consumes script arguments instead of forwarding them (e.g. `loft script.loft --mode glb` → `unknown option: --mode`) | Low | Use a flag the loft CLI doesn't recognise as its own; or hard-code the mode for now |
 | 134 | ~~`gl_load_font` returns `-1` on failure but loft `if !font` only catches `i32::MIN` — invalid font handle propagates through `gl_measure_text` → 0-width canvas → invisible text~~ | ~~**High** (silent visual failure: every text texture in breakout, smoke test, examples)~~ | **Fixed** — `loft_gl_load_font` now returns `i32::MIN` on file-not-found so the loft fallback path triggers correctly. Same root-cause pattern as P132 (native ↔ loft sentinel mismatch at FFI boundary). |
 | 133 | RGB↔BGR channel swap in `gl_clear` / GL pixel output | Low (cosmetic) | `gl_clear(rgba(40, 80, 120, 255))` produces pixel `(120, 80, 40)` on screen — every clear/material colour comes out with R and B swapped. Workaround: pre-swap the channels at call sites until the underlying packing is fixed in `lib/graphics/native/src/lib.rs`. |
+| 135 | Inline struct argument to function call leaks store | Medium | **Partially fixed** — `scan_args` in `scopes.rs` lifts inline struct-returning call arguments to temporary `__lift_N` variables when the outer call is a built-in operator. Reduced GL renderer leak from ~16k to ~6k stores in 5s. Remaining leaks: user-function calls (`normalize3(vec3(...))`, `add_mesh(cube())`) where the callee may store the argument internally — freeing early would invalidate those references. |
 | 118 | ~~`22-threading.loft` regression~~ | ~~Medium~~ | **Fixed** — O-B2 branch now excludes native/stub functions (`code != Null`) |
 | 119 | ~~Native OpenGL programs segfault (heap corruption)~~ | ~~**High**~~ | **Fixed** — `n_` functions registered under `loft_` names so auto-marshaller resolves them |
 
@@ -907,59 +908,37 @@ prefix-fallback in the symbol lookup.
 **Test:** `02-hello-triangle.loft` with `--interpret` — renders 300 frames without
 crash.
 
-### 120. Struct constructor doesn't deep-copy vector fields into struct store
+### 120. ~~Const-parameter store lock never released at function exit~~
 
-**Status (2026-04-10):** ❌ **Reopened.** The simple reproducer in
-`test_mat4_crash.loft` and the unit test
-`tests/issues.rs::p120_vector_field_in_returned_struct_round_trip` both
-pass — but **11 of 26 GL examples** still panic with this bug when run
-end-to-end under Xvfb (`xvfb-run -a target/release/loft … 25-breakout.loft`):
+**FIXED** in `src/scopes.rs`.
 
-```
-thread 'main' panicked at src/store.rs:357:9:
-Delete on locked store (rec=360)
-stack backtrace:
-   2: loft::store::Store::delete
-   3: loft::database::allocation::<impl loft::database::Stores>::remove_claims
-   4: loft::database::allocation::<impl loft::database::Stores>::remove_claims
-   5: loft::state::io::<impl loft::state::State>::copy_record
-```
+**Root cause:** `const` reference/vector parameters had their backing
+store locked at function entry via `n_set_store_lock(var, true)` (emitted
+in `src/parser/expressions.rs:163-178`), but there was **no corresponding
+unlock at function exit**. After a function like `render_frame(sc: const Scene)`
+returned, `sc`'s store stayed locked. The next loop iteration's field
+assignment (e.g. `sc.nodes[0].transform = ...`) triggered
+`remove_claims → store.delete` on the still-locked store → panic
+"Delete on locked store" / "Write to locked store".
 
-**Failing examples (2026-04-10):** `05-transformations`,
-`06-coordinate-systems`, `09-materials`, `12-multiple-lights`,
-`13-depth-testing`, `15-face-culling`, `16-shadow-mapping`,
-`17-post-processing`, `20-textured-cube`, `22-wireframe`, `23-cleanup`.
-All of these were the 0.8.4 examples ported to use `render::create_renderer`
-and `scene::Scene` — the bug fires when the renderer tries to deep-copy
-struct fields that contain a vector during the per-frame node-transform
-update path.
+**Fix:** Emit `n_set_store_lock(var, false)` for each const
+reference/vector argument at every function exit point. Added to
+`scopes.rs::get_free_vars` — when `to_scope <= 1` (function-level exit),
+iterate all arguments and unlock those that are `const_param` with
+`Reference` or `Vector` type.
 
-The simplified regression test passes because it copies a struct *once*
-at the top level. The real failure path is `copy_record` being called
-on a record whose containing store has been locked by an outer
-operation — that scenario is only reachable through the renderer's
-batched-draw flow.
+**Regression tests:** `p120b_const_param_store_lock_released_on_return`
+(simple struct), `p120c_const_param_unlock_in_loop` (loop with
+per-iteration mutation after const call). All 27 GL examples pass
+headless.
 
-**Fix needed:** `copy_record` (in `src/state/io.rs`) should detect when
-the destination store is locked and either defer the delete or copy
-into an unlocked scratch store. Touch points: `src/state/io.rs::copy_record`,
-`src/database/allocation.rs::remove_claims`, `src/store.rs::Store::delete`.
+**Historical note:** the original P120 was a deep-copy issue (vector
+fields in returned structs losing data). That was fixed separately.
+The "reopened" P120 was a different manifestation: const-param store
+locks persisting after function exit, causing panics on subsequent
+mutation. Both are now fixed.
 
-**Historical reproducer (`lib/graphics/examples/test_mat4_crash.loft`)
-still passes:**
-```
-inside make_big: data len=16
-after return: data len=16
-data[0]=0 data[15]=15
-```
-This simpler case is unaffected — proving the simplified test alone
-isn't sufficient to validate the fix.
-
-**Symptom:** Vector fields in returned structs are empty (length=0) or contain
-garbage. Causes black textures in GL examples and use-after-free crashes when
-the struct is used inside loops.
-
-**Minimal reproducer:** `lib/graphics/examples/test_mat4_crash.loft`:
+**Original deep-copy reproducer (`lib/graphics/examples/test_mat4_crash.loft`):**
 ```loft
 struct BigBox {
     width: integer,
@@ -1069,35 +1048,41 @@ interpreter and native modes.  The `rect_overlap_depth` function in
 
 ### 122. Store leak: struct allocation inside game loop exhausts store pool
 
-**Severity:** High (interpreter and native)
+**Severity:** Medium (downgraded from High — partial fix landed)
+
+**Partially fixed** in `src/parser/operators.rs`.
 
 **Symptom:** After running for 30-60 seconds, the game panics with
 `"Allocating a used store"`. Occurs in any tight loop that creates
 struct instances (e.g. collision detection shapes).
 
-**Root cause:** Each `shapes::Rect { ... }` or struct-returning function
-call allocates a store. Inside a 60fps game loop with ~50 bricks checked
-per frame, this exhausts the store pool within seconds. The stores are
-not freed because the struct temporaries are created inside a loop body
-(related to P117 store leak on struct returns).
+**What was fixed:** `copy_ref` (field assignment path for `x.field = expr`
+where expr is a struct) now sets the `0x8000` free bit on `OpCopyRecord`
+when the source is a struct-returning function call or a struct literal.
+This signals `copy_record` to free the callee's temporary store after the
+deep copy. Test `p122_struct_return_to_field_in_loop` (10,000 iterations)
+confirms stable store count (max=4). The local-variable patterns
+(`p122_struct_return_in_loop`, etc.) were already non-leaking.
+
+**What remains:** The GL renderer pipeline (`render.loft`, `scene.loft`)
+still leaks stores — 05-transformations reaches ~16k active stores in 2
+seconds under `LOFT_STORES=warn`. These are deeper internal allocations
+within the library functions, not the user-facing field-assignment pattern.
+Requires per-function investigation of the renderer's struct temporaries.
 
 **Workaround:** Use raw-float functions instead of struct-based APIs
 in game loops. The `shapes` library provides `aabb_overlap(ax,ay,aw,ah,
 bx,by,bw,bh)` and `aabb_depth_x`/`aabb_depth_y` for this purpose.
 
-**Fix direction:** The interpreter should free struct temporaries at the
-end of each loop iteration, not at function exit. This requires tracking
-which stores were allocated within the loop body.
-
 ---
 
-### 123. Per-frame vector literal allocation leaks stores
+### 123. ~~Per-frame vector literal allocation leaks stores~~
 
-**Severity:** Medium (interpreter)
+**FIXED** — vector literal reassignment in loops no longer leaks.
+Verified: `flags = [for _ in 0..8 { 0 }]` in a 1000-iteration loop
+produces no store warnings under `LOFT_STORES=warn`.
 
-**Symptom:** Code like `br_shown = [for _ in 0..8 { 0 }]` inside a
-render loop allocates a new vector store every frame. After ~1000 frames
-the store pool is exhausted.
+**Historical severity:** Medium (interpreter)
 
 **Workaround:** Use scalar variables, integer bitmasks, or pre-allocated
 arrays initialized once outside the loop.
@@ -1115,6 +1100,78 @@ for _ in 0..1000000 {
     // test bit: (flags & (1 << i)) != 0
 }
 ```
+
+---
+
+### 135. Inline struct argument to function call leaks store
+
+**Severity:** High (interpreter — dominant GL renderer leak)
+
+**Symptom:** `LOFT_STORES=warn` shows monotonically growing active stores
+in any loop that passes a struct-returning function call directly as an
+argument: `f(make_struct(...))`.
+
+**Minimal reproducer:**
+```loft
+struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn my_length(v: Vec3) -> float { v.x + v.y + v.z }
+fn main() {
+  total = 0.0;
+  for i in 0..10000 {
+    total += my_length(vec3(i as float, 0.0, 0.0));  // leaks 1 store per call
+  }
+}
+```
+
+**Non-leaking equivalent:**
+```loft
+fn main() {
+  total = 0.0;
+  for i in 0..10000 {
+    v = vec3(i as float, 0.0, 0.0);  // assign to local first
+    total += my_length(v);            // no leak
+  }
+}
+```
+
+**Impact:** In the GL renderer, `mat4_look_at(vec3(...), vec3(...), vec3(...))`
+leaks 3 stores per frame. At 60fps, 05-transformations reaches ~16k active
+stores in 5 seconds.
+
+**Root cause:** The inner call (e.g. `vec3(...)`) allocates a store for
+its return struct. This store is placed directly on the runtime stack as
+a DbRef argument to the outer call. After the outer call returns, nobody
+frees the store. Note: `add_defaults` does NOT create a `__ref_N` for
+the inner call in the caller's scope — `vec3` has only 3 attributes (x,y,z)
+with no hidden return parameter.  The struct is allocated inside `vec3`
+and the DbRef is returned on the stack.
+
+**Attempted fixes:**
+- Codegen-level `OpVarRef`+`OpFreeRef` after the call: fails because
+  the runtime stack layout after `fn_return` doesn't match compile-time
+  tracking (4-byte saved return address shifts positions).
+- Parser-level temporary variable creation in `call_nr`: fails because
+  variables created during expression parsing are too late for the
+  slot assignment pipeline.
+
+**Fix direction:** The correct approach is to lift inline struct
+arguments at parse time, early enough for scope/slot assignment. Options:
+1. In `parse_call` (control.rs), before resolving the call, detect
+   struct-returning inner calls among the argument expressions and
+   rewrite them as `{ let tmp = inner(); outer(tmp) }` blocks.
+2. In `process_call_args` (mod.rs), when an argument is a Value::Call
+   to a struct-returning function, create a work_ref via the existing
+   mechanism and wrap the argument in a Set+Var pair.
+
+**Workaround:** Assign struct-returning calls to local variables before
+passing them as arguments. `v = make_struct(...); f(v)` does not leak.
+
+**Tests:** `tests/issues.rs::p135_inline_struct_arg_leaks_store`,
+`p135b_two_inline_struct_args_leak`,
+`p135c_nested_inline_struct_args_renderer_pattern`.
 
 ---
 

@@ -137,22 +137,9 @@ test-packages:
 GL_SMOKE := 00-smoke
 
 # Examples currently broken by P120 (Delete on locked store in copy_record).
-# All use the high-level renderer's per-frame transform-update path.
-# Tracked: doc/claude/PROBLEMS.md #120 — remove from the skip list as P120
-# is fixed and re-verify with `make test-gl-headless`.
-GL_HEADLESS_SKIP := \
-	05-transformations \
-	06-coordinate-systems \
-	09-materials \
-	12-multiple-lights \
-	13-depth-testing \
-	15-face-culling \
-	16-shadow-mapping \
-	17-post-processing \
-	20-textured-cube \
-	22-wireframe \
-	23-cleanup \
-	test_mat4_crash
+# P120 fixed — const-param store lock now released at function exit.
+# All 27 GL examples pass headless.  Keep variable for future skip needs.
+GL_HEADLESS_SKIP :=
 
 # Internal helper: run one loft example under Xvfb. Used by both targets.
 # $1 = path to .loft file. Returns 0 on success, sets failed counter via stderr.

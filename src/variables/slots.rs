@@ -51,6 +51,8 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     }
     // Walk the IR tree, assigning slots scope-by-scope.
     process_scope(function, code, local_start, 0);
+    // Place any variables that the IR walk missed (scope has no Block/Loop in IR).
+    place_orphaned_vars(function);
     #[cfg(debug_assertions)]
     {
         function.logging = false;
@@ -65,24 +67,31 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         depth <= 1000,
         "assign_slots scope nesting limit exceeded at depth {depth}"
     );
+    let is_loop = matches!(block_val, Value::Loop(_));
     let bl_scope = match block_val {
         Value::Block(bl) | Value::Loop(bl) => bl.scope,
         _ => return,
     };
 
     // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
-    let mut small_vars: Vec<usize> = function
-        .variables
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| {
-            !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
-                let s = size(&v.type_def, &Context::Variable);
-                s > 0 && s <= 8
-            }
-        })
-        .map(|(i, _)| i)
-        .collect();
+    // Loops skip zone1: no OpReserveFrame (loop vars persist across iterations).
+    // All loop vars are placed sequentially via the zone2 IR-walk.
+    let mut small_vars: Vec<usize> = if is_loop {
+        Vec::new()
+    } else {
+        function
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
+                    let s = size(&v.type_def, &Context::Variable);
+                    s > 0 && s <= 8
+                }
+            })
+            .map(|(i, _)| i)
+            .collect()
+    };
     small_vars.sort_by_key(|&i| function.variables[i].first_def);
 
     if function.logging {
@@ -159,13 +168,14 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     }
     let zone1_size = zone1_hwm - frame_base;
 
-    // Store var_size (zone1 bytes) in the Block node so generate_block can emit OpReserveFrame.
+    // Store var_size in the Block/Loop node.
+    // Loops: var_size=0 (no OpReserveFrame, zone1 is empty).
     if let Value::Block(bl) | Value::Loop(bl) = block_val {
-        bl.var_size = zone1_size;
+        bl.var_size = if is_loop { 0 } else { zone1_size };
     }
 
     // ── Zone 2: place large variables and recurse into child scopes ────────────
-    // tos tracks the physical TOS after zone1 is pre-claimed.
+    // zone1_size is 0 for loops (small_vars empty), so tos = frame_base.
     let mut tos = frame_base + zone1_size;
     if function.logging {
         eprintln!("[assign_slots]   zone1_size={zone1_size}  zone2_tos_start={tos}");
@@ -198,51 +208,47 @@ fn place_large_and_recurse(
             let v = *v_nr as usize;
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
-                if v_size > 8 {
-                    // C43.2/C46: try reusing any dead same-type zone-2 slot.
-                    // The full conflict scan in find_reusable_zone2_slot guards
-                    // against spatial+temporal overlaps with all assigned variables.
-                    // Text-only restriction (inside the finder) prevents the
-                    // Reference/Vector IR-walk-order issues (C45).
-                    let reuse_slot = find_reusable_zone2_slot(function, v, scope);
-                    let (v_slot, reused) = if let Some(slot) = reuse_slot {
-                        (slot, true)
-                    } else {
-                        let s = *tos;
-                        *tos += v_size;
-                        (s, false)
-                    };
+                // Loop small vars: place sequentially at *tos.
+                // No zone1 coloring, no block-return, no inner_has_pre_assignments.
+                if v_size > 0 && v_size <= 8 && function.is_loop_scope(scope) {
                     if function.logging {
-                        let tag = if reused { "zone2-reuse" } else { "zone2" };
                         eprintln!(
-                            "[assign_slots]   {tag}  '{}' scope={scope} size={v_size}B → slot={v_slot}  \
-                             inner={}",
+                            "[assign_slots]   loop-seq  '{}' scope={scope} size={v_size}B → slot={tos}",
                             function.variables[v].name,
-                            match inner.as_ref() {
-                                Value::Block(bl) => format!("Block(scope={})", bl.scope),
-                                Value::Loop(bl) => format!("Loop(scope={})", bl.scope),
-                                other => format!("{:?}", std::mem::discriminant(other)),
-                            }
+                            tos = *tos,
                         );
                     }
-                    function.variables[v].stack_pos = v_slot;
-                    function.variables[v].pre_assigned_pos = v_slot;
+                    function.variables[v].stack_pos = *tos;
+                    function.variables[v].pre_assigned_pos = *tos;
+                    *tos += v_size;
+                    place_large_and_recurse(function, inner, scope, tos, depth + 1);
+                    return;
+                }
+                if v_size > 8 {
                     // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
                     // For non-Text types, generate_block is called with `to = v.stack_pos`,
                     // so at runtime the block's frame starts at v's slot (v is not yet live).
-                    // Zone-1 vars of the child scope share v's slot area safely.
-                    // Using frame_base = v_slot (not *tos after advancing) prevents the
-                    // pos > TOS override in generate_set for Zone-2 vars of the child scope.
-                    //
-                    // Text is excluded: gen_set_first_text emits OpText BEFORE the block runs,
-                    // advancing stack.position by v_size, so the block's frame_base at codegen
-                    // time is v_slot + v_size — matching the old *tos value.
+                    // Text is excluded: gen_set_first_text emits OpText BEFORE the block runs.
                     if matches!(inner.as_ref(), Value::Block(_))
                         && !matches!(function.variables[v].type_def, Type::Text(_))
                     {
+                        let v_slot = place_zone2(function, v, scope, tos);
                         process_scope(function, inner, v_slot, depth + 1);
                         return;
                     }
+                    // Non-Block inner with child scopes (e.g. Call(fn, [Block(...)])):
+                    // codegen evaluates inner (including Block args) BEFORE placing v.
+                    // Process inner first so child scopes see the correct tos.
+                    // Text excluded: OpText emitted before inner evaluation.
+                    if !matches!(function.variables[v].type_def, Type::Text(_))
+                        && inner_has_pre_assignments(inner)
+                    {
+                        place_large_and_recurse(function, inner, scope, tos, depth + 1);
+                        place_zone2(function, v, scope, tos);
+                        return;
+                    }
+                    // Simple inner: place v first, then recurse.
+                    place_zone2(function, v, scope, tos);
                 }
             } else if function.logging && function.variables[v].scope != scope {
                 eprintln!(
@@ -298,6 +304,97 @@ fn place_large_and_recurse(
 /// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
 /// Guards: same size, same type discriminant, dead (`last_use` < `first_def`),
 /// no spatial+temporal overlap with any other assigned variable.
+/// Place a zone-2 variable at tos, trying dead-slot reuse first.
+fn place_zone2(function: &mut Function, v: usize, scope: u16, tos: &mut u16) -> u16 {
+    let v_size = size(&function.variables[v].type_def, &Context::Variable);
+    let reuse_slot = find_reusable_zone2_slot(function, v, scope);
+    let v_slot = if let Some(slot) = reuse_slot {
+        slot
+    } else {
+        let s = *tos;
+        *tos += v_size;
+        s
+    };
+    if function.logging {
+        eprintln!(
+            "[assign_slots]   zone2  '{}' scope={scope} size={v_size}B → slot={v_slot}",
+            function.variables[v].name,
+        );
+    }
+    function.variables[v].stack_pos = v_slot;
+    function.variables[v].pre_assigned_pos = v_slot;
+    v_slot
+}
+
+/// Check whether a Value tree contains nodes that codegen will evaluate
+/// before the enclosing Set's target variable — child scopes (Block/Loop)
+/// or Set nodes for other variables (e.g. __lift_N in Insert preambles).
+fn inner_has_pre_assignments(val: &Value) -> bool {
+    match val {
+        Value::Block(_) | Value::Loop(_) => true,
+        Value::Set(_, _) => true, // inner Set is evaluated before the outer Set's target
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            args.iter().any(inner_has_pre_assignments)
+        }
+        Value::If(c, t, e) => {
+            inner_has_pre_assignments(c)
+                || inner_has_pre_assignments(t)
+                || inner_has_pre_assignments(e)
+        }
+        Value::Insert(ops) => ops.iter().any(inner_has_pre_assignments),
+        Value::Drop(inner) | Value::Return(inner) => inner_has_pre_assignments(inner),
+        _ => false,
+    }
+}
+
+/// Place variables that the IR walk missed (scope has no Block/Loop in IR).
+fn place_orphaned_vars(function: &mut Function) {
+    let mut orphans: Vec<usize> = function
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| {
+            !v.argument
+                && v.first_def != u32::MAX
+                && v.stack_pos == u16::MAX
+                && size(&v.type_def, &Context::Variable) > 0
+        })
+        .map(|(i, _)| i)
+        .collect();
+    // Sort by first_def so earlier-defined vars get lower slots,
+    // matching codegen's evaluation order.
+    orphans.sort_by_key(|&i| function.variables[i].first_def);
+    for &i in &orphans {
+        let v_size = size(&function.variables[i].type_def, &Context::Variable);
+        let v_first = function.variables[i].first_def;
+        let v_last = function.variables[i].last_use;
+        let mut candidate = 0u16;
+        loop {
+            let end = candidate + v_size;
+            let conflict = function.variables.iter().enumerate().any(|(j, jv)| {
+                if j == i || jv.stack_pos == u16::MAX {
+                    return false;
+                }
+                let js = jv.stack_pos;
+                let je = js + size(&jv.type_def, &Context::Variable);
+                candidate < je && end > js && v_first <= jv.last_use && v_last >= jv.first_def
+            });
+            if !conflict {
+                break;
+            }
+            candidate += 1;
+        }
+        if function.logging {
+            eprintln!(
+                "[assign_slots]   orphan '{}' scope={} size={v_size}B → slot={candidate}",
+                function.variables[i].name, function.variables[i].scope,
+            );
+        }
+        function.variables[i].stack_pos = candidate;
+        function.variables[i].pre_assigned_pos = candidate;
+    }
+}
+
 fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
     // C43: only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
     // have complex interactions with IR-walk-order placement that cause partial
@@ -1110,6 +1207,462 @@ mod tests {
             f.variables[t1 as usize].stack_pos, f.variables[t2 as usize].stack_pos,
             "t2 should reuse t1's slot despite r being placed in between"
         );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── P122: parent-scope zone2 variables must not overlap child-scope zone1 ──
+
+    /// When a parent scope has many zone2 reference variables (like __lift_N temps
+    /// from P135 inline struct arg lifting), a late-placed reference variable in
+    /// the parent (like `r`) occupies slots right before the child scope's frame_base.
+    /// The child scope's zone1 variables must not overlap the parent's zone2 range.
+    ///
+    /// Reproduces the GL crash: 13 refs in scope 1 (slots 68–224), a for-loop in
+    /// scope 2 with a zone1 integer `idx`.  idx must start at 224 or higher, never
+    /// inside `r`'s [212, 224) range.
+    #[test]
+    fn assign_slots_parent_zone2_does_not_overlap_child_zone1() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("n_render_native", "test");
+        // scope 2: for-loop body
+        declare_loop(&mut f, 2, 50, 90);
+
+        // Parent scope (1): 13 reference variables, all live across the loop
+        for i in 0..13u32 {
+            add_scoped_var(&mut f, &format!("lift{}", i + 1), &ref_tp, 1, i * 10, 100);
+        }
+        // r: the last parent zone2 ref, live across the loop
+        let r_var = add_scoped_var(&mut f, "r", &ref_tp, 1, 45, 95);
+
+        // Child scope (2): zone1 integer variable (loop index)
+        let idx_var = add_scoped_var(&mut f, "idx", &INT, 2, 50, 90);
+
+        run_assign_slots_scoped(
+            &mut f,
+            4, // local_start: 4-byte return address
+            1,
+            &[(2, 1, true)],
+        );
+
+        let r_slot = f.stack(r_var);
+        let r_end = r_slot + size(&ref_tp, &Context::Variable);
+        let idx_slot = f.stack(idx_var);
+        let idx_end = idx_slot + size(&INT, &Context::Variable);
+
+        // idx must not overlap r
+        assert!(
+            idx_slot >= r_end || idx_end <= r_slot,
+            "child zone1 variable 'idx' at [{idx_slot}, {idx_end}) overlaps parent zone2 \
+             variable 'r' at [{r_slot}, {r_end}). \
+             assign_slots must place child zone1 after all live parent zone2 variables."
+        );
+        assert!(
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
+            "slot conflict detected in parent-zone2 / child-zone1 test"
+        );
+    }
+
+    // ── P122: coroutine Set(gen, Call(fn, [Block])) ──
+    //
+    // Codegen evaluates Call arguments before placing the result.
+    // Set(gen, Call(fn, [Block(scope=5, [Set(vec, ...)])])):
+    //   - Block(scope=5) evaluated first → vec placed at tos
+    //   - gen placed after → must be above vec
+
+    #[test]
+    fn call_with_block_arg_places_block_vars_first() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f", "test");
+        declare_loop(&mut f, 3, 5, 70);
+
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 80);
+        add_scoped_var(&mut f, "total", &INT, 3, 6, 66);
+        let gen_var = add_scoped_var(&mut f, "gen", &ref_tp, 4, 20, 65);
+        let vec_var = add_scoped_var(&mut f, "vec", &ref_tp, 5, 22, 30);
+        let elm_var = add_scoped_var(&mut f, "elm", &ref_tp, 5, 23, 29);
+
+        let scope5 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 5,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![
+                Value::Set(vec_var, Box::new(Value::Null)),
+                Value::Set(elm_var, Box::new(Value::Null)),
+            ],
+        }));
+        let gen_set = Value::Set(gen_var, Box::new(Value::Call(999, vec![scope5])));
+        let loop3 = Value::Loop(Box::new(Block {
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![gen_set],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![Value::Set(work, Box::new(Value::Null)), loop3],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        assert_ne!(f.stack(gen_var), u16::MAX, "gen must be placed");
+        assert_ne!(f.stack(vec_var), u16::MAX, "vec must be placed");
+        assert!(
+            f.stack(vec_var) < f.stack(gen_var),
+            "vec at {} must be below gen at {} — Call args evaluated first",
+            f.stack(vec_var),
+            f.stack(gen_var)
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── if_typing pattern: Set(tv, Block(scope=2, [Set(a, ...), If(...)]))
+    //
+    // tv is Text (scope=1). Inner is Block(scope=2) containing child scopes 3,4.
+    // Text is excluded from block-return frame sharing because codegen emits
+    // OpText before the Block. So tv must be at tos BEFORE the Block, and a
+    // (scope=2, also Text) must be placed inside scope=2's frame.
+    // tv and a must not overlap.
+
+    #[test]
+    fn text_block_return_no_overlap_with_child_text() {
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f", "test");
+
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 5, 45);
+        let a = add_scoped_var(&mut f, "a", &text_tp, 2, 10, 30);
+
+        // IR: Set(work, Null), Set(tv, Block(scope=2, [Set(a, "12"), ...]))
+        let scope2 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![Value::Set(a, Box::new(Value::Null))],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![
+                Value::Set(work, Box::new(Value::Null)),
+                Value::Set(tv, Box::new(scope2)),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let tv_slot = f.stack(tv);
+        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
+        let a_slot = f.stack(a);
+        let a_end = a_slot + size(&text_tp, &Context::Variable);
+
+        // tv and a must not overlap (both live at seq 10-30)
+        assert!(
+            a_slot >= tv_end || a_end <= tv_slot,
+            "tv [{tv_slot},{tv_end}) and a [{a_slot},{a_end}) must not overlap"
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── closure_capture pattern: parent var placed after child scope exits
+    //
+    // scope=1: work(24B), clos(12B), greeting(24B)
+    // scope=2: f(16B) via Set(f, Block(scope=3))  — block-return
+    // then back in scope=1's IR: Set(tv, Call(...)) where Call args contain
+    // Block(scope=4) with child scopes.
+    // tv must not overlap f even though f's child scope exits before tv.
+
+    #[test]
+    fn parent_var_after_child_block_return_no_overlap() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let text_tp = Type::Text(vec![]);
+        let mut f = Function::new("f_test", "test");
+
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let greeting = add_scoped_var(&mut f, "greeting", &text_tp, 1, 3, 48);
+        // f is block-return: Set(f, Block(scope=2, [...]))
+        let f_var = add_scoped_var(&mut f, "fv", &ref_tp, 2, 10, 20);
+        // tv comes after f dies; Set(tv, Call(fn, [Block(scope=4)]))
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 25, 45);
+
+        // IR: Set(work, Null), Set(greeting, Null),
+        //     Block(scope=2, [Set(f, Block(scope=3))]),
+        //     Set(tv, Call(fn, [Block(scope=4)]))
+        let scope3 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![],
+        }));
+        let scope2 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![Value::Set(f_var, Box::new(scope3))],
+        }));
+        let scope4 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 4,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![
+                Value::Set(work, Box::new(Value::Null)),
+                Value::Set(greeting, Box::new(Value::Null)),
+                scope2,
+                Value::Set(tv, Box::new(Value::Call(999, vec![scope4]))),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let _f_slot = f.stack(f_var);
+        let _tv_slot = f.stack(tv);
+
+        // f dies at 20, tv born at 25 → no temporal overlap, spatial reuse is OK
+        if tv.min(f_var) <= tv.max(f_var) {
+            // Check find_conflict which handles all cases
+        }
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── Parent-scope var Set node inside child scope's operator list ──
+    //
+    // After scope analysis, Set(tv, Insert([...])) can end up inside
+    // scope=4's operators even though tv is scope=1.  place_large_and_recurse
+    // skips it (scope mismatch), but still recurses into the Insert's inner.
+    // The inner may contain child Blocks. tv must still get a valid slot
+    // that doesn't overlap any child scope variable.
+
+    #[test]
+    fn parent_var_set_inside_child_scope_operators() {
+        let text_tp = Type::Text(vec![]);
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+
+        // scope 1 vars
+        let work = add_scoped_var(&mut f, "work", &text_tp, 1, 1, 50);
+        let tv = add_scoped_var(&mut f, "tv", &text_tp, 1, 15, 45);
+        // scope 2: block with Set(f, Block(scope=3))
+        let fv = add_scoped_var(&mut f, "fv", &ref_tp, 2, 10, 20);
+
+        // IR: scope 1 root contains:
+        //   Set(work, Null)
+        //   Block(scope=2, [
+        //     Set(fv, Block(scope=3, []))
+        //     Set(tv, Null)           ← scope=1 var inside scope=2's operators!
+        //   ])
+        let scope3 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![],
+        }));
+        let scope2 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![
+                Value::Set(fv, Box::new(scope3)),
+                Value::Set(tv, Box::new(Value::Null)), // parent var in child scope!
+            ],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![Value::Set(work, Box::new(Value::Null)), scope2],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let fv_slot = f.stack(fv);
+        let fv_end = fv_slot + size(&ref_tp, &Context::Variable);
+        let tv_slot = f.stack(tv);
+        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
+
+        // tv must not overlap fv if their lives overlap
+        if f.variables[tv as usize].first_def <= f.variables[fv as usize].last_use
+            && f.variables[tv as usize].last_use >= f.variables[fv as usize].first_def
+        {
+            assert!(
+                tv_slot >= fv_end || tv_end <= fv_slot,
+                "tv [{tv_slot},{tv_end}) overlaps fv [{fv_slot},{fv_end}) — both live"
+            );
+        }
+        assert!(
+            find_conflict(&f.variables, &HashMap::new()).is_none(),
+            "slot conflict: parent var Set inside child scope"
+        );
+    }
+
+    // ── P122/P135: Set(v, Insert([Set(__lift_1, ...), ..., Call(...)]))
+    //
+    // The P135 lift produces Insert nodes containing preamble Sets for
+    // __lift_N temporaries followed by the actual Call.  Codegen evaluates
+    // the Insert sequentially — the __lift Sets advance TOS before the
+    // Call result is assigned to v.  assign_slots must place __lift vars
+    // BEFORE v.
+
+    #[test]
+    fn insert_preamble_sets_placed_before_target() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+        declare_loop(&mut f, 2, 5, 60);
+
+        add_scoped_var(&mut f, "total", &Type::Float, 1, 1, 60);
+        // scope 3: loop body block
+        // view = mat4_look_at(__lift_1, __lift_2, __lift_3)
+        let view = add_scoped_var(&mut f, "view", &ref_tp, 3, 20, 50);
+        let lift1 = add_scoped_var(&mut f, "__lift_1", &ref_tp, 3, 15, 50);
+        let lift2 = add_scoped_var(&mut f, "__lift_2", &ref_tp, 3, 16, 50);
+        let lift3 = add_scoped_var(&mut f, "__lift_3", &ref_tp, 3, 17, 50);
+
+        // IR: Loop(scope=2, [Block(scope=3, [Set(view, Insert([Set(lift1, ...), ..., Call(...)]))])])
+        let insert = Value::Insert(vec![
+            Value::Set(lift1, Box::new(Value::Null)),
+            Value::Set(lift2, Box::new(Value::Null)),
+            Value::Set(lift3, Box::new(Value::Null)),
+            Value::Call(
+                999,
+                vec![Value::Var(lift1), Value::Var(lift2), Value::Var(lift3)],
+            ),
+        ]);
+        let view_set = Value::Set(view, Box::new(insert));
+        let block3 = Value::Block(Box::new(Block {
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![view_set],
+        }));
+        let loop2 = Value::Loop(Box::new(Block {
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![block3],
+        }));
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![loop2],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        // All lifts must be placed before view
+        assert_ne!(f.stack(lift1), u16::MAX, "lift1 must be placed");
+        assert_ne!(f.stack(view), u16::MAX, "view must be placed");
+        assert!(
+            f.stack(lift1) < f.stack(view),
+            "lift1 at {} must be below view at {} — Insert preamble evaluated first",
+            f.stack(lift1),
+            f.stack(view)
+        );
+        assert!(
+            f.stack(lift2) < f.stack(view),
+            "lift2 at {} must be below view at {}",
+            f.stack(lift2),
+            f.stack(view)
+        );
+        assert!(
+            f.stack(lift3) < f.stack(view),
+            "lift3 at {} must be below view at {}",
+            f.stack(lift3),
+            f.stack(view)
+        );
+        assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
+    }
+
+    // ── P122: sequential Set(v, Insert([Set(__lift, ...), Call(fn, __lift)])) ──
+    //
+    // From mat4_look_at: two sequential assignments where each has a lifted
+    // inline arg. The key constraint: codegen encounters Set(f, Insert(...))
+    // and must evaluate the Insert before placing f. The Insert's Set(__lift_1)
+    // is at a LOWER slot than f. Codegen's TOS must match __lift_1's slot
+    // when it's first assigned.
+    //
+    // Constraint: f.slot == __lift_1.slot + __lift_1.size
+    // (f is placed right after __lift_1, and codegen's TOS will be there
+    // after __lift_1's gen_set_first_at_tos)
+
+    #[test]
+    fn sequential_lifted_calls_slots_match_codegen_tos() {
+        let ref_tp = Type::Reference(0, vec![]);
+        let mut f = Function::new("f", "test");
+
+        // Two sequential Set(v, Insert([Set(__lift, ...), Call(...)])) in scope 1
+        let lift1 = add_scoped_var(&mut f, "lift1", &ref_tp, 1, 10, 50);
+        let fv = add_scoped_var(&mut f, "fv", &ref_tp, 1, 12, 50);
+        let lift2 = add_scoped_var(&mut f, "lift2", &ref_tp, 1, 20, 50);
+        let sv = add_scoped_var(&mut f, "sv", &ref_tp, 1, 22, 50);
+
+        // IR: scope 1 block with two Set(v, Insert([Set(lift, Null), Call(...)]))
+        let insert1 = Value::Insert(vec![
+            Value::Set(lift1, Box::new(Value::Null)),
+            Value::Call(999, vec![Value::Var(lift1)]),
+        ]);
+        let insert2 = Value::Insert(vec![
+            Value::Set(lift2, Box::new(Value::Null)),
+            Value::Call(999, vec![Value::Var(lift2)]),
+        ]);
+        let mut code = Value::Block(Box::new(Block {
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![
+                Value::Set(fv, Box::new(insert1)),
+                Value::Set(sv, Box::new(insert2)),
+            ],
+        }));
+        assign_slots(&mut f, &mut code, 4);
+
+        let ref_size = size(&ref_tp, &Context::Variable);
+
+        // lift1 must be at TOS start (4), fv right after
+        assert_ne!(f.stack(lift1), u16::MAX, "lift1 must be placed");
+        assert_ne!(f.stack(fv), u16::MAX, "fv must be placed");
+        assert_eq!(
+            f.stack(fv),
+            f.stack(lift1) + ref_size,
+            "fv must be right after lift1: lift1={} + {}B = {}, fv={}",
+            f.stack(lift1),
+            ref_size,
+            f.stack(lift1) + ref_size,
+            f.stack(fv)
+        );
+
+        // lift2 must follow fv, sv right after lift2
+        assert_ne!(f.stack(lift2), u16::MAX, "lift2 must be placed");
+        assert_ne!(f.stack(sv), u16::MAX, "sv must be placed");
+        assert_eq!(
+            f.stack(sv),
+            f.stack(lift2) + ref_size,
+            "sv must be right after lift2: lift2={} + {}B = {}, sv={}",
+            f.stack(lift2),
+            ref_size,
+            f.stack(lift2) + ref_size,
+            f.stack(sv)
+        );
+
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 }

@@ -2254,6 +2254,55 @@ fn test() {
     .result(Value::Null);
 }
 
+// ── P120b: const parameter store lock never released ──────────────────────
+//
+// PROBLEMS.md #120 (reopened) — `const` reference/vector parameters get
+// their backing store locked at function entry via `n_set_store_lock`, but
+// the lock is never released at function exit. After the function returns,
+// any mutation on the struct (e.g. field reassignment) triggers
+// `remove_claims → store.delete` on the still-locked store → panic
+// "Delete on locked store".
+#[test]
+fn p120b_const_param_store_lock_released_on_return() {
+    code!(
+        "struct V { x: integer not null, y: integer not null }
+fn read_only(c: const V) -> integer { c.x + c.y }
+fn test() {
+  v = V { x: 1, y: 2 };
+  assert(read_only(v) == 3, \"first call\");
+  v.x = 10;
+  assert(read_only(v) == 12, \"after mutation\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P120c: const param unlock in a loop — the GL failure pattern.
+// render_frame(sc: const Scene, cam) locks sc's store; after return the
+// next iteration assigns to sc.nodes[0].transform which triggers
+// remove_claims → store.delete on the (formerly) locked store.
+#[test]
+fn p120c_const_param_unlock_in_loop() {
+    code!(
+        "struct Transform { m: float not null }
+struct Node { name: text, transform: Transform }
+struct Scene { nodes: vector<Node> }
+fn render_frame(sc: const Scene) -> integer {
+  sc.nodes[0].transform.m as integer
+}
+fn test() {
+  sc = Scene { nodes: [] };
+  sc.nodes += [Node { name: \"n\", transform: Transform { m: 1.0 } }];
+  for i in 0..5 {
+    _r = render_frame(sc);
+    sc.nodes[0].transform = Transform { m: (i + 2) as float };
+  }
+  assert(sc.nodes[0].transform.m > 4.0, \"final value\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // ── P121: Tuple literals crashed interpreter with heap corruption ──────────
 //
 // PROBLEMS.md #121 — `a = (3.0, 2.0)` triggered glibc
@@ -2417,6 +2466,416 @@ fn test() {
         }
     }
     assert(score > 0, \"long struct loop failed\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122i: multiple sequential Set(v, Insert([Set(__lift, call), Call(fn, __lift)]))
+// This is the exact pattern from mat4_look_at after P122 lift:
+//   f = normalize3(sub3(target, eye))  →  Set(f, Insert([Set(__lift_1, sub3(...)), normalize3(__lift_1)]))
+//   s = normalize3(cross(f, up))       →  Set(s, Insert([Set(__lift_2, cross(...)), normalize3(__lift_2)]))
+#[test]
+fn p122i_sequential_lifted_calls() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn look(eye: V3, target: V3) -> float {
+    f = scale3(sub3(target, eye), 2.0);
+    s = scale3(sub3(eye, target), 3.0);
+    f.x + s.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == -3.0, \"expected -3.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122j: direct struct-returning call (no lift needed) — the baseline case.
+// f = sub3(target, eye) produces Set(f, Call(sub3, ...)) with no Insert.
+#[test]
+fn p122j_direct_struct_return_no_lift() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn look(eye: V3, target: V3) -> float {
+    f = sub3(target, eye);
+    s = sub3(eye, target);
+    f.x + s.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == 0.0, \"expected 0.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122k: one direct call, one lifted call — mixed pattern.
+// f = sub3(target, eye)            → direct, no lift
+// g = scale3(sub3(eye, target), 3.0) → lifted: __lift_1 + scale3
+#[test]
+fn p122k_mixed_direct_and_lifted() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn look(eye: V3, target: V3) -> float {
+    f = sub3(target, eye);
+    g = scale3(sub3(eye, target), 3.0);
+    f.x + g.x
+}
+fn test() {
+    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
+    assert(r == -6.0, \"expected -6.0 got {r}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122l: single lifted call — simplest lift pattern.
+// f = scale3(sub3(target, eye), 2.0) → one __lift + one call
+#[test]
+fn p122l_single_lifted_call() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
+fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+fn test() {
+    a = v3(1.0, 2.0, 3.0);
+    b = v3(4.0, 5.0, 6.0);
+    r = scale3(sub3(b, a), 2.0);
+    assert(r.x == 6.0, \"expected 6.0 got {r.x}\");
+    assert(r.y == 6.0, \"expected 6.0 got {r.y}\");
+    assert(r.z == 6.0, \"expected 6.0 got {r.z}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122m: nested lift — vertex(vec3(...), vec3(...), vec2(...)) where the
+// vertex result is itself passed as an inline arg to add_vertex.
+// This is the build_triangle pattern from 02-hello-triangle.
+#[test]
+fn p122m_nested_lift_vertex_pattern() {
+    code!(
+        "struct V3 { x: float not null, y: float not null, z: float not null }
+struct V2 { u: float not null, v: float not null }
+struct Vtx { pos: V3, norm: V3, uv: V2 }
+struct Mesh { name: text, count: integer }
+fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
+fn v2(u: float, v: float) -> V2 { V2 { u: u, v: v } }
+fn vertex(p: V3, n: V3, t: V2) -> Vtx { Vtx { pos: p, norm: n, uv: t } }
+fn add_vertex(self: Mesh, vt: Vtx) { self.count += 1; if vt.pos.x > 999.0 { self.count -= 1; } }
+fn build() -> Mesh {
+    m = Mesh { name: \"tri\", count: 0 };
+    m.add_vertex(vertex(v3(-0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.0, 0.0)));
+    m.add_vertex(vertex(v3( 0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(1.0, 0.0)));
+    m.add_vertex(vertex(v3( 0.0,  0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.5, 1.0)));
+    m
+}
+fn test() {
+    m = build();
+    assert(m.count == 3, \"expected 3 vertices got {m.count}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122n: mat4_look_at from the math library — the exact function that fails
+// in GL examples. Uses normalize3(sub3(...)), normalize3(cross(...)), cross(...)
+// which each produce a lifted inline struct arg.
+#[test]
+fn p122n_mat4_look_at_library_pattern() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Mat4 { m: vector<float> }
+fn vec3(vx: float, vy: float, vz: float) -> Vec3 { Vec3 { x: vx, y: vy, z: vz } }
+fn sub3(va: const Vec3, vb: const Vec3) -> Vec3 {
+    Vec3 { x: va.x - vb.x, y: va.y - vb.y, z: va.z - vb.z }
+}
+fn dot3(da: const Vec3, db: const Vec3) -> float {
+    da.x * db.x + da.y * db.y + da.z * db.z
+}
+fn cross(ca: const Vec3, cb: const Vec3) -> Vec3 {
+    Vec3 { x: ca.y * cb.z - ca.z * cb.y,
+           y: ca.z * cb.x - ca.x * cb.z,
+           z: ca.x * cb.y - ca.y * cb.x }
+}
+fn length3(lv: const Vec3) -> float { sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z) }
+fn normalize3(nv: const Vec3) -> Vec3 {
+    nl = length3(nv);
+    if nl == 0.0 { return nv; }
+    Vec3 { x: nv.x / nl, y: nv.y / nl, z: nv.z / nl }
+}
+fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4 {
+    la_f = normalize3(sub3(target, eye));
+    la_s = normalize3(cross(la_f, up));
+    la_u = cross(la_s, la_f);
+    Mat4 { m: [
+        la_s.x,  la_u.x,  -la_f.x, 0.0,
+        la_s.y,  la_u.y,  -la_f.y, 0.0,
+        la_s.z,  la_u.z,  -la_f.z, 0.0,
+        -dot3(la_s, eye), -dot3(la_u, eye), dot3(la_f, eye), 1.0
+    ] }
+}
+fn test() {
+    v = mat4_look_at(vec3(0.0, 0.0, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    assert(v.m.len() == 16, \"expected 16 elements got {v.m.len()}\");
+    assert(v.m[0] == 1.0, \"m[0] should be 1.0, got {v.m[0]}\");
+    assert(v.m[14] == -3.0, \"m[14] should be -3.0, got {v.m[14]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122o: add_node(node_at("name", int, int, mat4_identity())) pattern.
+// node_at returns a struct, mat4_identity returns a struct — both get lifted.
+// This is the pattern from GL renderer-demo: multiple add_node calls with
+// struct-returning args.
+#[test]
+fn p122o_add_node_with_lifted_mat4() {
+    code!(
+        "struct Mat4 { m: vector<float> }
+struct Node { name: text, mesh_id: integer, mat_id: integer, transform: Mat4 }
+struct Scene { name: text, nodes: vector<Node> }
+fn mat4_identity() -> Mat4 { Mat4 { m: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] } }
+fn node_at(n: text, mi: integer, ma: integer, t: Mat4) -> Node {
+    Node { name: n, mesh_id: mi, mat_id: ma, transform: t }
+}
+fn add_node(self: Scene, nd: Node) -> integer {
+    i = self.nodes.len();
+    self.nodes += [nd];
+    i
+}
+fn test() {
+    s = Scene { name: \"demo\", nodes: [] };
+    s.add_node(node_at(\"floor\", 0, 0, mat4_identity()));
+    s.add_node(node_at(\"cube\", 1, 1, mat4_identity()));
+    s.add_node(node_at(\"ball\", 2, 2, mat4_identity()));
+    assert(s.nodes.len() == 3, \"expected 3 nodes got {s.nodes.len()}\");
+    assert(s.nodes[0].transform.m[0] == 1.0, \"m[0] should be 1.0\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122p: comprehension followed by plain vector literal — breakout pattern.
+// The comprehension's child scope has zone1 vars. After it exits, the
+// next vector literal's _elm must see correct TOS.
+#[test]
+fn p122p_vector_comprehension_slot_gap() {
+    code!(
+        "fn test() {
+    bricks = [for _ in 0..10 { 0 }];
+    colors = [1, 2, 3, 4];
+    assert(bricks.len() == 10, \"bricks {bricks.len()}\");
+    assert(colors.len() == 4, \"colors {colors.len()}\");
+    assert(colors[1] == 2, \"colors[1] {colors[1]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122q: sorted range comprehension — loop zone1 var + zone2 var ordering.
+// The comprehension loop has a zone1 temp (_comp) and a zone2 var (e).
+// Without OpReserveFrame in gen_loop, zone1 vars must be placed so
+// codegen encounters them at TOS before zone2 vars.
+#[test]
+fn p122q_comprehension_zone1_zone2_ordering() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+struct Db { map: sorted<Elm[key]> }
+fn vals(db: Db, lo: integer, hi: integer) -> vector<integer> {
+    [for e in db.map[lo..hi] { e.val }]
+}
+fn test() {
+    r = vals(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 1, 3);
+    assert(r.len() == 2, \"len {r.len()}\");
+    assert(r[0] == 10, \"r[0] {r[0]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122r: par loop calling function with internal for-loop.
+// Tests whether OpFreeStack in gen_loop works correctly when the
+// function's bytecode is executed by parallel workers.
+#[test]
+fn p122r_par_loop_with_inner_for() {
+    code!(
+        "struct Item { val: integer }
+struct List { items: vector<Item> }
+fn sum_digits(n: const Item) -> integer {
+    s = 0;
+    for d in 0..n.val { s += d - d + 1; }
+    s
+}
+fn test() {
+    lst = List { items: [] };
+    lst.items += [Item{val:3}, Item{val:5}, Item{val:2}, Item{val:4}];
+    total = 0;
+    for a in lst.items par(b = sum_digits(a), 2) { total += b; }
+    assert(total == 14, \"total {total}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122f: struct-returning function result assigned to a struct field in a loop.
+// This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
+// struct that is assigned to sc.nodes[0].transform each frame.
+#[test]
+fn p122_struct_return_to_field_in_loop() {
+    code!(
+        "struct Transform { a: float not null, b: float not null, c: float not null, d: float not null }
+struct Node { name: text, transform: Transform }
+struct Scene { nodes: vector<Node> }
+fn make_transform(angle: float) -> Transform {
+  Transform { a: angle, b: angle * 2.0, c: angle * 3.0, d: angle * 4.0 }
+}
+fn test() {
+  sc = Scene { nodes: [] };
+  sc.nodes += [Node { name: \"cube\", transform: Transform { a: 1.0, b: 0.0, c: 0.0, d: 1.0 } }];
+  for p122f_i in 0..10000 {
+    sc.nodes[0].transform = make_transform(p122f_i as float * 0.01);
+  }
+  assert(sc.nodes[0].transform.a > 0.0, \"field assign loop\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P135: Inline struct argument to function call leaks store ─────────
+//
+// When a struct-returning function call is passed directly as an argument
+// to another function (e.g. `my_sum(vec3(i, 0, 0))`), the intermediate
+// store allocated by the inner call is never freed.  Assigning to a
+// local first (`v = vec3(i, 0, 0); my_sum(v)`) does NOT leak.
+//
+// This is the dominant leak source in the GL renderer where
+// `mat4_look_at(vec3(...), vec3(...), vec3(...))` leaks 3 stores per
+// frame.
+
+#[test]
+fn p135_inline_struct_arg_leaks_store() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn my_length(v: Vec3) -> float { v.x + v.y + v.z }
+fn test() {
+  total = 0.0;
+  for p135_i in 0..10000 {
+    total += my_length(vec3(p135_i as float, 0.0, 0.0));
+  }
+  assert(total > 0.0, \"inline struct arg loop\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P135b: two inline struct args — both leak
+#[test]
+fn p135b_two_inline_struct_args_leak() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn add_x(a: Vec3, b: Vec3) -> float { a.x + b.x }
+fn test() {
+  total = 0.0;
+  for p135b_i in 0..5000 {
+    total += add_x(vec3(p135b_i as float, 0.0, 0.0), vec3(0.0, p135b_i as float, 0.0));
+  }
+  assert(total > 0.0, \"two inline struct args\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P135c: nested inline struct args (renderer pattern)
+// mat4_look_at(vec3(...), vec3(...), vec3(...)) — 3 stores leaked per call
+#[test]
+fn p135c_nested_inline_struct_args_renderer_pattern() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Mat4 { m: vector<float> }
+fn vec3(x: float, y: float, z: float) -> Vec3 {
+  Vec3 { x: x, y: y, z: z }
+}
+fn mat4_look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
+  Mat4 { m: [eye.x, target.y, up.z, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
+}
+fn test() {
+  total = 0.0;
+  for _p135c_i in 0..3000 {
+    view = mat4_look_at(vec3(0.0, 1.5, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    total += view.m[0];
+  }
+  assert(total == 0.0, \"nested inline struct args\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122g: inline struct arg passed to user function that stores it in a vector.
+// This is the exact pattern from add_light(directional_light(...)) in the GL
+// renderer.  The inner call creates a temp store; the outer call deep-copies
+// it into the scene's vector.  After the call, the temp store should be freed.
+#[test]
+fn p122g_inline_struct_arg_stored_in_vector() {
+    code!(
+        "struct Light { name: text, intensity: float not null }
+struct Scene { lights: vector<Light> }
+fn make_light(n: text, i: float) -> Light { Light { name: n, intensity: i } }
+fn add_light(self: Scene, l: Light) -> integer {
+    si = self.lights.len();
+    self.lights += [l];
+    si
+}
+fn test() {
+    sc = Scene { lights: [] };
+    for p122g_i in 0..100 {
+        sc.add_light(make_light(\"l\", p122g_i as float));
+    }
+    assert(sc.lights.len() == 100, \"expected 100 lights got {sc.lights.len()}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P122h: same pattern but with nested inline struct args (normalize3(vec3(...)))
+// passed through a user function chain.
+#[test]
+fn p122h_nested_inline_struct_through_user_fn() {
+    code!(
+        "struct Vec3 { x: float not null, y: float not null, z: float not null }
+struct Scene { directions: vector<Vec3> }
+fn vec3(x: float, y: float, z: float) -> Vec3 { Vec3 { x: x, y: y, z: z } }
+fn normalize3(v: Vec3) -> Vec3 {
+    len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if len == 0.0 { return v; }
+    Vec3 { x: v.x / len, y: v.y / len, z: v.z / len }
+}
+fn add_dir(self: Scene, d: Vec3) {
+    self.directions += [d];
+}
+fn test() {
+    sc = Scene { directions: [] };
+    for p122h_i in 0..1000 {
+        sc.add_dir(normalize3(vec3(p122h_i as float, 1.0, 0.0)));
+    }
+    assert(sc.directions.len() == 1000, \"expected 1000 dirs\");
 }"
     )
     .result(Value::Null);

@@ -51,6 +51,9 @@ struct Scopes {
     loops: Vec<u16>,
     /// Recursion depth counter for `scan`; reset to 0 when scope analysis starts.
     scan_depth: usize,
+    /// Counter for `__lift_N` temporary variables created to own inline struct
+    /// arguments (P135 fix).
+    lift_counter: u16,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -69,6 +72,7 @@ pub fn check(data: &mut Data) {
             var_mapping: HashMap::new(),
             loops: vec![],
             scan_depth: 0,
+            lift_counter: 0,
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -332,7 +336,7 @@ impl Scopes {
                 }
             }
             Value::Call(d_nr, args) => {
-                let (preamble, ls) = self.scan_args(args, function, data);
+                let (preamble, ls) = self.scan_args(args, function, data, *d_nr);
                 let call = Value::Call(*d_nr, ls);
                 if preamble.is_empty() {
                     call
@@ -343,7 +347,7 @@ impl Scopes {
                 }
             }
             Value::CallRef(v_nr, args) => {
-                let (preamble, ls) = self.scan_args(args, function, data);
+                let (preamble, ls) = self.scan_args(args, function, data, u32::MAX);
                 let call = Value::CallRef(*v_nr, ls);
                 if preamble.is_empty() {
                     call
@@ -461,23 +465,43 @@ impl Scopes {
                 }
             }
         }
-        if depend.is_empty() {
-            Value::Set(v, Box::new(self.scan(value, function, data)))
-        } else {
-            let mut ls = Vec::new();
-            for d in depend {
-                if d == v {
-                    continue;
-                }
-                if matches!(function.tp(d), Type::Text(_)) {
-                    ls.push(v_set(d, Value::Text(String::new())));
-                } else {
-                    ls.push(v_set(d, Value::Null));
-                }
-                self.var_scope.insert(d, self.scope);
+        let scanned = self.scan(value, function, data);
+        // Flatten: if the scanned value is Insert([preamble..., final_call]),
+        // hoist the preamble out so the IR becomes
+        // Insert([preamble..., Set(v, final_call)]) instead of
+        // Set(v, Insert([preamble..., final_call])).
+        // This keeps Set(v, Call(...)) as a bare Call, which codegen's
+        // gen_set_first_at_tos can handle correctly.
+        let (mut ls, set_value) = if let Value::Insert(mut ops) = scanned {
+            if ops.len() >= 2 {
+                let final_val = ops.pop().unwrap();
+                (ops, final_val)
+            } else {
+                (Vec::new(), Value::Insert(ops))
             }
-            ls.push(Value::Set(v, Box::new(self.scan(value, function, data))));
-            Value::Insert(ls)
+        } else {
+            (Vec::new(), scanned)
+        };
+        // Prepend dependency initializations.
+        let mut prefix = Vec::new();
+        for d in depend {
+            if d == v {
+                continue;
+            }
+            if matches!(function.tp(d), Type::Text(_)) {
+                prefix.push(v_set(d, Value::Text(String::new())));
+            } else {
+                prefix.push(v_set(d, Value::Null));
+            }
+            self.var_scope.insert(d, self.scope);
+        }
+        if prefix.is_empty() && ls.is_empty() {
+            Value::Set(v, Box::new(set_value))
+        } else {
+            let mut all = prefix;
+            all.append(&mut ls);
+            all.push(Value::Set(v, Box::new(set_value)));
+            Value::Insert(all)
         }
     }
 
@@ -776,6 +800,31 @@ impl Scopes {
                 }
             }
         }
+        // P120-fix: unlock const reference/vector parameters at function exit.
+        // The lock was set in parse_code (expressions.rs:163-178) at function entry.
+        // Arguments live at scope 0 which `variables()` intentionally skips, so
+        // we handle them here as a separate pass.  Only emit when exiting to
+        // the function's top scope (to_scope <= 1).
+        if to_scope <= 1 {
+            let lock_fn = data.def_nr("n_set_store_lock");
+            if lock_fn != u32::MAX {
+                let n_vars = function.next_var();
+                for v_nr in 0..n_vars {
+                    if function.is_argument(v_nr)
+                        && function.is_const_param(v_nr)
+                        && matches!(
+                            function.tp(v_nr),
+                            Type::Reference(_, _) | Type::Vector(_, _)
+                        )
+                    {
+                        ls.push(Value::Call(
+                            lock_fn,
+                            vec![Value::Var(v_nr), Value::Boolean(false)],
+                        ));
+                    }
+                }
+            }
+        }
         // scope_debug: also report Reference vars in var_order whose scope is NOT in
         // the current chain — these are "orphaned" vars that should never happen after
         // the A5.6 block-pre-registration fix.
@@ -892,31 +941,99 @@ impl Scopes {
         args: &[Value],
         function: &mut Function,
         data: &Data,
+        outer_call: u32,
     ) -> (Vec<Value>, Vec<Value>) {
         let mut preamble: Vec<Value> = Vec::new();
         let mut ls: Vec<Value> = Vec::new();
         for a in args {
             let scanned = self.scan(a, function, data);
             if let Value::Insert(ops) = scanned {
-                let is_hoisted = ops.len() == 2
+                // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
+                let is_a56_hoisted = ops.len() == 2
                     && if let Value::Set(v, val) = &ops[0] {
                         matches!(val.as_ref(), Value::Null)
                             && matches!(function.tp(*v), Type::Reference(_, dep) if dep.is_empty())
                     } else {
                         false
                     };
-                if is_hoisted {
+                // P135: hoist Set(__lift_N, ...) preamble from nested scan_args.
+                // These are produced when an inner call's arguments contained
+                // inline struct-returning calls that were already lifted.
+                let n = ops.len();
+                let is_p135_hoisted = n >= 2
+                    && ops[..n - 1].iter().all(|v| {
+                        matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__lift_"))
+                    });
+                if is_a56_hoisted || is_p135_hoisted {
                     let mut it = ops.into_iter();
-                    preamble.push(it.next().unwrap()); // Set(w, Null)
-                    ls.push(it.next().unwrap()); // body (block without alloc)
+                    for _ in 0..n - 1 {
+                        preamble.push(it.next().unwrap());
+                    }
+                    let final_val = it.next().unwrap();
+                    // P135: the remaining Call may also be struct-returning
+                    // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
+                    if let Some(struct_d_nr) =
+                        Self::inline_struct_return(&final_val, data, outer_call)
+                    {
+                        self.lift_counter += 1;
+                        let name = format!("__lift_{}", self.lift_counter);
+                        let tp = Type::Reference(struct_d_nr, vec![]);
+                        let tmp = function.add_temp_var(&name, &tp);
+                        self.var_scope.insert(tmp, self.scope);
+                        self.var_order.push(tmp);
+                        preamble.push(v_set(tmp, final_val));
+                        ls.push(Value::Var(tmp));
+                    } else {
+                        ls.push(final_val);
+                    }
                 } else {
                     ls.push(Value::Insert(ops));
                 }
+            } else if let Some(struct_d_nr) = Self::inline_struct_return(&scanned, data, outer_call)
+            {
+                // P135-fix: inline struct-returning call as argument — lift to
+                // a temporary variable so get_free_vars emits OpFreeRef at scope
+                // exit.  Without this, the callee's store leaks every call.
+                //
+                // The argument becomes Set(tmp, call(...)) which the codegen
+                // handles via gen_set_first_at_tos on first encounter and
+                // generate_set (reassignment) on subsequent loop iterations.
+                // get_free_vars emits OpFreeRef(tmp) at scope exit because
+                // the dep is empty (owned).
+                self.lift_counter += 1;
+                let name = format!("__lift_{}", self.lift_counter);
+                let tp = Type::Reference(struct_d_nr, vec![]); // owned
+                let tmp = function.add_temp_var(&name, &tp);
+                self.var_scope.insert(tmp, self.scope);
+                self.var_order.push(tmp);
+                preamble.push(v_set(tmp, scanned));
+                ls.push(Value::Var(tmp));
             } else {
                 ls.push(scanned);
             }
         }
         (preamble, ls)
+    }
+
+    /// Check whether a scanned argument at position `arg_idx` is an inline
+    /// struct-returning call that needs lifting to a temporary variable (P135
+    /// fix).  Returns the struct definition number if lifting is needed, None
+    /// otherwise.
+    ///
+    /// Skips lifting when the outer call's return type depends on this argument
+    /// (i.e. the result borrows from the argument's store).  Freeing the lifted
+    /// temp at scope exit would be use-after-free in that case.
+    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<u32> {
+        if let Value::Call(fn_nr, _) = val {
+            let def = data.def(*fn_nr);
+            if def.name.starts_with("n_")
+                && def.code != Value::Null
+                && let Type::Reference(d_nr, _) = &def.returned
+            {
+                return Some(*d_nr);
+            }
+        }
+        None
     }
 }
 
