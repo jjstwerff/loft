@@ -1824,6 +1824,7 @@ fn main() {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Loft Program".to_string());
+        let gl_js = include_str!("../doc/loft-gl-wasm.js");
         let html = format!(
             r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{title}</title>
@@ -1832,19 +1833,13 @@ fn main() {
 <canvas id="c" tabindex="0" style="display:none"></canvas>
 <pre id="out"></pre>
 <script>
+{gl_js}
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
-const output=document.getElementById('out');
 const canvas=document.getElementById('c');
-const decoder=new TextDecoder();
+const output=document.getElementById('out');
 let mem;
-function readStr(ptr,len){{return decoder.decode(new Uint8Array(mem.buffer,ptr,len));}}
-const imports={{
-  loft_io:{{
-    loft_host_print(ptr,len){{output.textContent+=readStr(ptr,len);}}
-  }},
-  env:{{}}
-}};
+const imports=buildLoftImports(canvas,output,()=>mem);
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;
   r.instance.exports.loft_start();

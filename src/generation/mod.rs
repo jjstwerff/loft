@@ -410,8 +410,54 @@ extern crate loft;"
                 "    safe fn loft_host_print(ptr: *const u8, len: usize);"
             )?;
             writeln!(w, "}}")?;
-            // Skip extern crate for native packages — GL functions will be
-            // imported from the host via #[link(wasm_import_module)] in step 6.
+            // W1.1 step 6: emit WASM import declarations for all #native functions.
+            // Each native symbol gets declared as an imported extern "C" function so
+            // the generated code can call it directly (unqualified).
+            writeln!(w, "#[link(wasm_import_module = \"loft_gl\")]")?;
+            writeln!(w, "unsafe extern \"C\" {{")?;
+            let mut declared_natives = std::collections::HashSet::new();
+            for d_nr in 0..data.definitions() {
+                let def = data.def(d_nr);
+                if def.native.is_empty() || declared_natives.contains(&def.native) {
+                    continue;
+                }
+                declared_natives.insert(def.native.clone());
+                // Build the C-ABI signature from loft parameter types.
+                use std::fmt::Write as _;
+                let mut params = String::new();
+                for attr in &def.attributes {
+                    if attr.name.starts_with("__") {
+                        continue;
+                    }
+                    if !params.is_empty() {
+                        params.push_str(", ");
+                    }
+                    let name = sanitize(&attr.name);
+                    match &attr.typedef {
+                        Type::Text(_) => params.push_str("ptr: *const u8, len: usize"),
+                        Type::Vector(elem_tp, _) => {
+                            let elem = Self::vector_elem_rust_type(elem_tp);
+                            let _ = write!(params, "ptr: *const {elem}, count: u32");
+                        }
+                        Type::Long => { let _ = write!(params, "{name}: i64"); }
+                        Type::Float => { let _ = write!(params, "{name}: f64"); }
+                        Type::Single => { let _ = write!(params, "{name}: f32"); }
+                        Type::Boolean => { let _ = write!(params, "{name}: bool"); }
+                        _ => { let _ = write!(params, "{name}: i32"); }
+                    }
+                }
+                let ret = match &def.returned {
+                    Type::Void => String::new(),
+                    Type::Integer(_, _, _) | Type::Character => " -> i32".to_string(),
+                    Type::Long => " -> i64".to_string(),
+                    Type::Float => " -> f64".to_string(),
+                    Type::Single => " -> f32".to_string(),
+                    Type::Boolean => " -> bool".to_string(),
+                    _ => " -> i32".to_string(),
+                };
+                writeln!(w, "    safe fn {}({params}){ret};", def.native)?;
+            }
+            writeln!(w, "}}")?;
         } else {
             // Emit extern crate declarations for native packages.
             for (crate_name, _) in &data.native_packages {
@@ -956,9 +1002,13 @@ extern crate loft;"
                 // Emit a call to the native Rust function with type marshalling.
                 self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else if !def.native.is_empty() {
-                // #native "symbol" with a known crate — emit direct call with
-                // type marshalling derived from the loft function signature.
-                if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
+                // #native "symbol" — emit direct call with type marshalling.
+                if self.wasm_browser {
+                    // W1.1: call the imported function directly (unqualified).
+                    // The function is declared in the preamble via
+                    // #[link(wasm_import_module = "loft_gl")].
+                    self.output_native_direct_call(w, def_nr, &def.native)?;
+                } else if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
                     let qualified = format!("{}::{}", krate, def.native);
                     self.output_native_direct_call(w, def_nr, &qualified)?;
                 } else {
