@@ -1839,7 +1839,12 @@ const canvas=document.getElementById('c');
 const decoder=new TextDecoder();
 let mem;
 function readStr(ptr,len){{return decoder.decode(new Uint8Array(mem.buffer,ptr,len));}}
-const imports={{env:{{}}}};
+const imports={{
+  loft_io:{{
+    loft_host_print(ptr,len){{output.textContent+=readStr(ptr,len);}}
+  }},
+  env:{{}}
+}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;
   r.instance.exports.loft_start();

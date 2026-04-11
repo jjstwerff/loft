@@ -380,7 +380,7 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
-    fn emit_file_header(w: &mut dyn Write, data: &Data) -> std::io::Result<()> {
+    fn emit_file_header(w: &mut dyn Write, data: &Data, wasm_browser: bool) -> std::io::Result<()> {
         writeln!(
             w,
             "\
@@ -401,10 +401,23 @@ impl Output<'_> {
 
 extern crate loft;"
         )?;
-        // Emit extern crate declarations for native packages.
-        for (crate_name, _) in &data.native_packages {
-            let ident = crate_name.replace('-', "_");
-            writeln!(w, "extern crate {ident};")?;
+        if wasm_browser {
+            // W1.1: declare host-imported functions for browser WASM.
+            writeln!(w, "#[link(wasm_import_module = \"loft_io\")]")?;
+            writeln!(w, "unsafe extern \"C\" {{")?;
+            writeln!(
+                w,
+                "    safe fn loft_host_print(ptr: *const u8, len: usize);"
+            )?;
+            writeln!(w, "}}")?;
+            // Skip extern crate for native packages — GL functions will be
+            // imported from the host via #[link(wasm_import_module)] in step 6.
+        } else {
+            // Emit extern crate declarations for native packages.
+            for (crate_name, _) in &data.native_packages {
+                let ident = crate_name.replace('-', "_");
+                writeln!(w, "extern crate {ident};")?;
+            }
         }
         writeln!(w, "use loft::database::Stores;")?;
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
@@ -433,7 +446,7 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
-        Self::emit_file_header(w, self.data)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
@@ -457,7 +470,7 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w, self.data)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
