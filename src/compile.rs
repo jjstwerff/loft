@@ -110,6 +110,8 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             state.database.record_finish(&vec_ref, &rec, vec_tp, 0);
         }
         state.database.allocations[db.store_nr as usize].lock();
+        // High ref_count ensures free/dec_rc never actually frees this store.
+        state.database.allocations[db.store_nr as usize].ref_count = u32::MAX / 2;
         data.definitions[d_nr as usize].const_ref = Some(vec_ref);
         state.const_refs[d_nr as usize] = vec_ref;
     }

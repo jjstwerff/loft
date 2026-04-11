@@ -969,6 +969,7 @@ impl State {
             && data.store_nr != to.store_nr
             && data.store_nr != 0
             && !self.database.allocations[data.store_nr as usize].free
+            && !self.database.allocations[data.store_nr as usize].locked
         {
             self.database.free(&data);
         }
