@@ -1136,6 +1136,7 @@ fn main() {
     // Some(path) = explicit output path
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
+    let mut html_out: Option<String> = None;
     let mut tests_dir: Option<String> = None;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
@@ -1204,6 +1205,15 @@ fn main() {
                 p
             } else {
                 String::new() // sentinel: compute default from file_name later
+            });
+        } else if a == "--html" {
+            // W1.1: single-file HTML export with compiled browser WASM.
+            html_out = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                p
+            } else {
+                String::new()
             });
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
@@ -1648,6 +1658,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 call_stack_prefix: None,
+                wasm_browser: false,
             };
             let main_nr = p.data.def_nr("n_main");
             let entry_defs: Vec<u32> = if main_nr < end_def {
@@ -1708,6 +1719,143 @@ fn main() {
         return;
     }
 
+    // W1.1: --html — compile to browser WASM and assemble self-contained HTML.
+    if let Some(ref html_path) = html_out {
+        let html_path = if html_path.is_empty() {
+            default_artifact_path(&abs_file, "html")
+                .to_str()
+                .unwrap_or("out.html")
+                .to_string()
+        } else {
+            html_path.clone()
+        };
+        let end_def = p.data.definitions();
+        let rs_path = std::env::temp_dir().join("loft_html.rs");
+        {
+            let mut f = match std::fs::File::create(&rs_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("loft: cannot write source to '{}': {e}", rs_path.display());
+                    std::process::exit(1);
+                }
+            };
+            let mut out = generation::Output {
+                data: &p.data,
+                stores: &state.database,
+                counter: 0,
+                indent: 0,
+                def_nr: 0,
+                declared: HashSet::new(),
+                reachable: HashSet::new(),
+                loop_stack: Vec::new(),
+                next_format_count: 0,
+                yield_collect: false,
+                fn_ref_context: false,
+                call_stack_prefix: None,
+                wasm_browser: true,
+            };
+            let main_nr = p.data.def_nr("n_main");
+            let entry_defs: Vec<u32> = if main_nr < end_def {
+                vec![main_nr]
+            } else {
+                (start_def..end_def).collect()
+            };
+            if let Err(e) = out.output_native_reachable(&mut f, start_def, end_def, &entry_defs) {
+                eprintln!("loft: html code generation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Compile to wasm32-unknown-unknown cdylib
+        let wasm_path = std::env::temp_dir().join("loft_html.wasm");
+        let mut cmd = std::process::Command::new("rustc");
+        cmd.arg("--edition=2024")
+            .arg("--target")
+            .arg("wasm32-unknown-unknown")
+            .arg("--crate-type")
+            .arg("cdylib")
+            .arg("-O")
+            .arg("-o")
+            .arg(&wasm_path)
+            .arg(&rs_path);
+        if let Some(lib_dir) = loft_lib_dir_for(Some("wasm32-unknown-unknown")) {
+            cmd.arg("--extern")
+                .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
+            let deps = lib_dir.join("deps");
+            cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+        }
+        let status = cmd.status();
+        let _ = std::fs::remove_file(&rs_path);
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => {
+                eprintln!("loft: browser WASM compilation failed");
+                std::process::exit(1);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("loft: rustc not found; install the Rust toolchain to use --html");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("loft: failed to launch rustc: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Optional: wasm-opt
+        let opt_path = std::env::temp_dir().join("loft_html_opt.wasm");
+        let final_wasm = if std::process::Command::new("wasm-opt")
+            .args(["-Oz", "--strip-debug", "--strip-producers"])
+            .arg("-o")
+            .arg(&opt_path)
+            .arg(&wasm_path)
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            let _ = std::fs::remove_file(&wasm_path);
+            opt_path
+        } else {
+            eprintln!("note: install wasm-opt (binaryen) for smaller output");
+            wasm_path
+        };
+        // Assemble HTML
+        let wasm_bytes = std::fs::read(&final_wasm).unwrap_or_default();
+        let _ = std::fs::remove_file(&final_wasm);
+        let wasm_b64 = crate::base64::encode(&wasm_bytes);
+        let title = std::path::Path::new(&file_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Loft Program".to_string());
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{title}</title>
+<style>body{{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh}}canvas{{display:block}}pre{{color:#0f0;font-size:14px}}</style>
+</head><body>
+<canvas id="c" tabindex="0" style="display:none"></canvas>
+<pre id="out"></pre>
+<script>
+const wasmB64="{wasm_b64}";
+const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
+const output=document.getElementById('out');
+const canvas=document.getElementById('c');
+const decoder=new TextDecoder();
+let mem;
+function readStr(ptr,len){{return decoder.decode(new Uint8Array(mem.buffer,ptr,len));}}
+const imports={{env:{{}}}};
+WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
+  mem=r.instance.exports.memory;
+  r.instance.exports.loft_start();
+}});
+</script></body></html>"#
+        );
+        if let Err(e) = std::fs::write(&html_path, &html) {
+            eprintln!("loft: cannot write HTML to '{html_path}': {e}");
+            std::process::exit(1);
+        }
+        let wasm_kb = wasm_bytes.len() / 1024;
+        let html_kb = html.len() / 1024;
+        println!("wrote {html_path} ({html_kb} KB, WASM {wasm_kb} KB)");
+        return;
+    }
+
     // Check rustc availability; fall back to interpreter if not found.
     if native_mode && native_emit.is_none() {
         if let Err(e) = std::process::Command::new("rustc")
@@ -1757,6 +1905,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 call_stack_prefix: None,
+                wasm_browser: false,
             };
             let result = if native_release {
                 let main_nr = p.data.def_nr("n_main");

@@ -375,6 +375,7 @@ impl Test {
             yield_collect: false,
             fn_ref_context: false,
             call_stack_prefix: None,
+            wasm_browser: false,
         };
         o.output_native(w, 0, start)?;
         // Write code output when the result is tested, not only for errors or warnings.

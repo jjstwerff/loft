@@ -216,6 +216,9 @@ pub struct Output<'a> {
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
+    /// W1.1: when true, emit `#[no_mangle] pub extern "C" fn loft_start()`
+    /// instead of `fn main()` and use WASM imports for native package functions.
+    pub wasm_browser: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -461,12 +464,20 @@ extern crate loft;"
         writeln!(w, "    db.finish();\n}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
-        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
+        // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name == "n_main") {
-            writeln!(
-                w,
-                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
-            )?;
+            if self.wasm_browser {
+                // W1.1: exported cdylib entry point for browser WASM.
+                writeln!(
+                    w,
+                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                )?;
+            }
         }
         Ok(())
     }
