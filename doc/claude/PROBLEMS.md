@@ -22,20 +22,90 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 
 | # | Issue | Severity | Workaround? |
 |---|-------|----------|-------------|
-| 22 | Spatial index (`spacial<T>`) operations not implemented | Low | Compile-time error; use `sorted<T>` or `index<T>` |
-| 54 | `json_items` returns opaque `vector<text>` | Low | Accepted limitation; `JsonValue` enum deferred |
-| 55 | Thread-local `http_status()` not parallel-safe | Medium | Design constraint — use `HttpResponse` struct |
-| 85 | Struct-enum local variable leaks stack space | Low | Pass as parameter instead of local |
-| 86 | Lambda capture: misleading self-reference error | Low | Mitigated — clear error message |
-| 89 | Hard-coded StackFrame field offsets | Low | Do not reorder `04_stacktrace.loft` fields |
-| 90 | `fn_call` HashMap lookup per call | Low | Negligible overhead |
-| 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
-| 92 | `stack_trace()` empty in parallel workers | Low | Call from main thread only |
-| 128 | File-scope constant type annotations rejected | Low | Drop the annotation |
-| 129 | Native codegen: duplicate `extern crate` | Medium | Use `--interpret` mode |
-| 130 | Headless GL: foreign exception panic | Medium | Check `gl_create_window` return |
-| 131 | CLI consumes script arguments | Low | Hard-code the mode for now |
-| 133 | RGB/BGR channel swap in GL output | Low | Pre-swap channels at call sites |
+| 22 | Spatial index (`spacial<T>`) operations not implemented | Low | N/A |
+| 54 | `json_items` returns opaque `vector<text>` — no compile-time element type | Low | Accepted limitation; `JsonValue` enum deferred |
+| 55 | Thread-local `http_status()` pattern is not parallel-safe | Medium | Use `HttpResponse` struct instead; do not add `http_status()` |
+| 85 | Struct-enum local variable leaks stack space (debug assertion) | Low | Pass as parameter instead of local |
+| 86 | Lambda capture produced misleading codegen self-reference error | Low | *(mitigated by A5.1)* — clear error now |
+| 89 | Hard-coded StackFrame field offsets in `n_stack_trace` | Low | N/A — offsets must match `04_stacktrace.loft` |
+| 90 | `fn_call` HashMap lookup for line number on every call | Low | N/A — small overhead relative to dispatch |
+| 91 | L7 `init(expr)` parameter form not implemented | Low | Pass default explicitly at call site |
+| 92 | `stack_trace()` in parallel workers returns empty | Low | Call from main thread only |
+| 124 | ~~Native codegen: inline array indexing `[a,b,c][i]` generates invalid Rust cast~~ | ~~Low~~ | **Fixed (2026-04-11)** — verified with `--native-emit`: no `as DbRef` cast in generated Rust. Runs clean in both `--native` and interpret modes |
+| 127 | File-scope `vector<single>` constant passed to `gl_upload_vertices` causes codegen 8B vs 12B stack mismatch | Medium | Move the literal inline into the calling function |
+| 128 | File-scope constants reject type annotations with misleading "Expect token =" error | Low | Drop the annotation; let the literal's element type be inferred |
+| 129 | Native codegen emits duplicate `extern crate loft_graphics_native` when a script outside the package imports a package that uses graphics | Medium | Run the script in `--interpret` mode, or place it inside the loft repo |
+| 130 | Headless GL: panic via `fatal runtime error: Rust cannot catch foreign exceptions` after `gl_create_window` returns false | Medium | Don't run GL examples without a `DISPLAY`; check `gl_create_window` return and `return` immediately — but the panic happens regardless on some paths |
+| 131 | Loft CLI consumes script arguments instead of forwarding them (e.g. `loft script.loft --mode glb` → `unknown option: --mode`) | Low | Use a flag the loft CLI doesn't recognise as its own; or hard-code the mode for now |
+| 133 | RGB↔BGR channel swap in `gl_clear` / GL pixel output | Low (cosmetic) | Pre-swap the channels at call sites until the underlying packing is fixed in `lib/graphics/native/src/lib.rs` |
+
+---
+
+---
+
+### 117. Struct-returning functions with text params leak stores
+
+**Severity:** Medium — stores accumulate for functions like `file()`.
+
+**Status (2026-04-11):** **Fixed.** Verified with GL-pattern stress tests:
+- `p117_gl_text_param_struct_return_sustained`: 2000 iterations of
+  `load_asset(text) -> Asset` in a loop — passes in both release and debug
+- `p117_gl_multi_text_struct_per_frame`: 3 text-param struct returns per
+  iteration for 1000 iterations — passes in both release and debug
+- Original regression guard `p117_text_param_struct_return_loop_no_leak`
+  also passes (1000 iterations)
+
+**Symptom:** `f = file("path")` leaks store because `f`'s type has
+`dep=[__ref_1]` (text-return work variable). Scopes.rs sees non-empty
+deps and skips OpFreeRef, treating `f` as a borrowed reference.
+
+**Root cause:** `call_dependencies` / `resolve_deps` propagates deps
+from text-return work variables (`__ref_N`) into the struct return type.
+The File struct COPIES the text into its store (OpSetText deep copy),
+so the dep is spurious — but the dep system doesn't distinguish copies
+from shared references.
+
+**Affected tests:** `file_write_error`, `file_exists_true/false`,
+`file_debug` — all fail with "Database N not correctly freed".
+
+**Attempted fix:** Filtering `__ref_N` deps in `get_free_vars` fixed
+the file tests but caused "Double free" in `issue_84_merge_sort` —
+the filter was too broad, removing genuine deps for recursive structs.
+
+**Attempted fixes and why they fail:**
+
+1. **Filtering __ref_N deps in get_free_vars (scopes.rs):** Fixed file
+   tests but caused double-free in merge_sort (recursive vector returns)
+   and double-free in native codegen (which reads the same IR).
+
+2. **Empty deps in add_defaults line 1797:** Fixed file tests but caused
+   use-after-free in null-coalescing tests. The `vec![vr]` dep keeps the
+   work ref alive while the returned struct is constructed. Removing it
+   breaks patterns where the work ref IS the returned store.
+
+3. **Filtering text deps in ref_return:** Doesn't help because the
+   spurious dep comes from `add_defaults` (caller side), not `ref_return`
+   (callee side). The variables in `ref_return`'s `ls` are struct-typed.
+
+**Root cause:** The dep at `add_defaults:1797` (`vec![vr]`) is
+load-bearing — removing it causes use-after-free (stack store freed
+during execution) and breaks null-coalescing. The dep keeps the
+return-store work ref alive, which is correct when the function
+returns THROUGH the work ref. But for O-B2 adoption (no-ref-param
+functions), the work ref is unused — the callee's store is adopted
+directly. The dep is only spurious in the O-B2 case.
+
+**Correct fix:** In the O-B2 codegen path (`gen_set_first_at_tos`),
+after adopting the callee's store, emit `OpFreeRef` for the unused
+`__ref_N` work variable. This frees the work ref that was allocated
+by `add_defaults` but never used (O-B2 bypasses it). The dep stays
+in the type system (keeping the broader lifetime model intact), but
+the unused work ref store is explicitly cleaned up.
+
+**Detection:** Runtime warning at program exit (`execute_argv`) and
+compile-time `check_ref_leaks` P117 warning are in place.
+
+**Files:** `src/state/codegen.rs` (O-B2 adoption path)
 
 ---
 
