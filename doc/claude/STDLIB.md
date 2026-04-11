@@ -147,6 +147,7 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 | `trim_start(self: text) -> text` | Removes leading whitespace only. |
 | `trim_end(self: text) -> text` | Removes trailing whitespace only. |
 | `split(self: text, separator: character) -> vector<text>` | Splits `self` on every occurrence of `separator` and returns the parts as a vector. |
+| `join(self: vector<text>, separator: text) -> text` | Concatenates all elements of `self` with `separator` between each pair. Inverse of `split`. |
 
 ### Iterating over text
 

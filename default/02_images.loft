@@ -136,6 +136,17 @@ pub fn split(self: text, separator: character) -> vector < text > {
   }
   result
 }
+// Joins a vector of text values with a separator between each pair.
+// Inverse of split: "a,b,c".split(',').join(",") == "a,b,c".
+
+pub fn join(self: vector<text>, jn_sep: text) -> text {
+  jn_result = "";
+  for jn_part in self {
+    if !jn_part#first { jn_result += jn_sep; }
+    jn_result += jn_part;
+  }
+  return jn_result;
+}
 // --- File System ---
 // Returns the platform path separator character: '\' on Windows, '/' elsewhere.
 // Detected once at startup from the runtime filesystem.

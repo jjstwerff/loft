@@ -1195,11 +1195,12 @@ access, or method calls.  Multiple type variables (`<T, U>`) are not supported.
 A structural interface system is designed ([INTERFACES.md](INTERFACES.md))
 but deferred to post-1.0.
 
-### Text: most operations exist
+### Text: comprehensive operations
 
 The stdlib provides `starts_with`, `ends_with`, `find`, `contains`, `replace`,
-`trim`, `split(char)`, `to_uppercase`, `to_lowercase`, `len`, and slicing.
-**Missing:** `join` (concatenate vector of strings with separator).
+`trim`, `split(char)`, `join(separator)`, `to_uppercase`, `to_lowercase`,
+`len`, and slicing.  `split` and `join` are inverses:
+`"a,b,c".split(',').join(",") == "a,b,c"`.
 
 ## See also
 - [STDLIB.md](STDLIB.md) — Standard library API (math, text, collections, file I/O, logging, parallel)
