@@ -969,7 +969,23 @@ impl Scopes {
                     for _ in 0..n - 1 {
                         preamble.push(it.next().unwrap());
                     }
-                    ls.push(it.next().unwrap()); // the actual call / value
+                    let final_val = it.next().unwrap();
+                    // P135: the remaining Call may also be struct-returning
+                    // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
+                    if let Some(struct_d_nr) =
+                        Self::inline_struct_return(&final_val, data, outer_call)
+                    {
+                        self.lift_counter += 1;
+                        let name = format!("__lift_{}", self.lift_counter);
+                        let tp = Type::Reference(struct_d_nr, vec![]);
+                        let tmp = function.add_temp_var(&name, &tp);
+                        self.var_scope.insert(tmp, self.scope);
+                        self.var_order.push(tmp);
+                        preamble.push(v_set(tmp, final_val));
+                        ls.push(Value::Var(tmp));
+                    } else {
+                        ls.push(final_val);
+                    }
                 } else {
                     ls.push(Value::Insert(ops));
                 }
