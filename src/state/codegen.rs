@@ -891,31 +891,43 @@ impl State {
             );
             stack.function.set_stack_allocated(v);
             if pos >= stack.position {
-                // Slot is at or above TOS.  gen_set_first_at_tos evaluates the
-                // value expression first (which may advance TOS via inner Sets),
-                // then places the result.
                 self.gen_set_first_at_tos(stack, v, value);
             } else {
                 // Slot is below TOS: zone1 variable reusing a dead slot.
-                // Generate value at TOS, then store at pos via OpPut.
                 if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
                     return;
                 }
-                assert!(
-                    !matches!(stack.function.tp(v), Type::Text(_)),
-                    "[generate_set] Text '{}' in '{}': slot {pos} < TOS {} — \
-                     Text requires direct placement at TOS.",
-                    stack.function.name(v),
-                    stack.data.def(stack.def_nr).name,
-                    stack.position,
-                );
-                self.set_var(stack, v, value);
+                // Large types below TOS need initialization at TOS first,
+                // then OpPut to store at the slot. set_var handles this for
+                // reassignment but not for first assignment — use
+                // gen_set_first_at_tos which handles init properly.
+                // It will assert pos == TOS, so we must accept that for
+                // large types below TOS this assertion may fire.
+                // The old adjust_first_assignment_slot moved these to TOS;
+                // we now route them through the same path.
+                if matches!(
+                    stack.function.tp(v),
+                    Type::Text(_)
+                        | Type::Reference(_, _)
+                        | Type::Vector(_, _)
+                        | Type::Enum(_, true, _)
+                ) {
+                    self.gen_set_first_at_tos(stack, v, value);
+                } else {
+                    self.set_var(stack, v, value);
+                }
             }
         }
     }
 
     /// First assignment at current TOS — dispatch by variable type.
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
+        let pos = stack.function.stack(v);
+        // When pos < TOS (large type reusing dead slot below TOS), move
+        // the variable's slot to TOS so the init opcode writes correctly.
+        if pos < stack.position {
+            stack.function.set_stack_pos(v, stack.position);
+        }
         let pos = stack.function.stack(v);
         assert!(
             pos == stack.position,
