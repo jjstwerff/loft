@@ -34,11 +34,14 @@ runtime.  A compile-time error is emitted for basic usage.
 
 ---
 
-## C12 — No exception handling
+## C12 — No exception handling (by design)
 
-Runtime errors from `assert` and `panic` abort the program.  No `try`/`catch`.
+Loft uses null returns + `??` coalescing instead of exceptions.  Fallible
+operations return null; callers handle with `??`, `!`, or `if`.  `assert`
+and `panic` are for bugs, not expected failures.  Production mode logs
+asserts instead of aborting.
 
-**Workaround:** validate inputs; use `FileResult` for file I/O errors.
+**Pattern:** `value = fallible_call() ?? default;`
 
 ---
 

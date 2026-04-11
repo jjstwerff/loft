@@ -1108,24 +1108,88 @@ fn describe(self: Circle) -> text { }   // stub: returns null, no warning
 
 ---
 
-## Known Limitations
+## Design decisions and constraints
 
-A complete list with workarounds is in [PROBLEMS.md](PROBLEMS.md) at the repository root.
-The most commonly encountered limitations are summarised here.
+A complete list of open issues is in [PROBLEMS.md](PROBLEMS.md).
 
-### Exit codes
+### Error handling: null as the error channel
 
-`loft` exits with code 0 even when a parse error occurs. To detect failures in
-shell scripts, capture output and check for `Error:` or `panicked`:
+Loft uses null returns instead of exceptions.  Every fallible operation returns
+null on failure, and the caller handles it with `??` (null coalescing), `!` (null
+check), or explicit `if`:
 
-```sh
-out=$(loft myfile.loft 2>&1)
-if [ $? -ne 0 ] || echo "$out" | grep -q "^Error:\|panicked"; then
-    echo "FAILED: $out"
-fi
+```loft
+// Fallback with ??
+name = config.get("user") ?? "anonymous";
+
+// Guard with !
+f = file("data.txt");
+if !f { println("file not found"); return; }
+
+// Graceful degradation
+clip = audio_load("hit.wav");
+if clip { audio_play(clip, 0.5); }  // skip if audio unavailable
 ```
 
----
+This replaces `try`/`catch` with simpler, more predictable control flow.  There are
+no hidden exception paths — every function's failure mode is visible at the call site.
+
+`assert` and `panic` are for programmer errors (bugs), not expected failures.
+In production mode (`--production`), failed asserts are logged instead of aborting.
+
+### Generics: single type variable, no bounds
+
+Generics support one type variable `<T>` inferred from the first argument.  Only
+assign, return, and store operations are allowed on `T` — no arithmetic, field
+access, or method calls.  Multiple type variables (`<T, U>`) are not supported.
+
+```loft
+fn first<T>(items: vector<T>) -> T { items[0] }  // ok
+// fn map<T, U>(v: vector<T>, f: fn(T)->U) -> vector<U>  // not supported
+```
+
+A structural interface system (`interface` keyword with `<T: Bound>` syntax) is
+designed ([INTERFACES.md](INTERFACES.md)) but deferred to post-1.0.
+
+### Closure capture: copy-at-definition, mutable within copy
+
+Captured variables are copied into the closure at definition time (value semantics,
+like Rust `move`).  Mutations after capture are not visible inside the lambda, and
+mutations inside the lambda are not visible outside.  However, the closure's own
+copy persists across invocations:
+
+```loft
+counter = 0;
+inc = fn() -> integer { counter += 1; counter };
+inc();   // 1
+inc();   // 2
+inc();   // 3
+counter; // still 0 — outer variable unchanged
+```
+
+### Variable scoping: shared name table per file
+
+All functions in a `.loft` file share one variable name table.  In practice this
+works transparently — the compiler tracks which function each variable belongs to.
+Collisions only occur in specific codegen edge cases:
+
+- A function with `const vector<T>` parameters that calls itself recursively AND
+  contains a `for` loop may panic with "Too few parameters" (PROBLEMS.md #84).
+- Workaround: use function-prefixed loop variable names in library code
+  (e.g. `wu_x` for Wu line algorithm, `bz_t` for Bezier).
+
+Regular parameter and local variable reuse across functions works correctly.
+
+### Hash collections: must be struct fields
+
+Hash collections cannot be standalone local variables.  Wrap in a struct:
+
+```loft
+struct Table { data: hash<Entry[name]> }
+t = Table { data: [] };
+```
+
+Hash collections cannot be iterated directly (`for kv in hash` is not supported).
 
 ## See also
 - [STDLIB.md](STDLIB.md) — Standard library API (math, text, collections, file I/O, logging, parallel)
