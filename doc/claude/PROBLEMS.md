@@ -33,6 +33,7 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 92 | `stack_trace()` empty in parallel workers | Low | Call from main thread only |
 | 128 | File-scope constant type annotations rejected | Low | Drop the annotation |
 | 133 | RGB/BGR channel swap in GL output | Low | Pre-swap channels at call sites |
+| 136 | Bounded generic + for loop + interface method → use-after-free | Medium | Use unbounded generic with manual dispatch |
 
 ---
 
