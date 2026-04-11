@@ -29,7 +29,7 @@ Web Worker pool (W1.18, targeted 1.1+).
 The spatial index collection type is declared but all operations panic at
 runtime.  A compile-time error is emitted for basic usage.
 
-**Test:** `tests/scripts/36-parse-errors.loft::test_spacial_type_error`.
+**Test:** `tests/scripts/36-parse-errors.loft::test_spacial_not_implemented`.
 **Planned fix:** A4 (1.1+).
 
 ---
@@ -60,13 +60,6 @@ works.  No correctness impact — just wastes some stack space.
 
 ---
 
-## C51 — Libraries: no native extension loading
-
-Libraries are pure `.loft` files.  The `loft.toml` `native = "..."` field
-is parsed but native shared libraries are not loaded at runtime.
-
----
-
 ## C53 — Match arms cannot use library enum variants
 
 Match arms do not support `testlib::Ok` or bare `Ok` for library enums.
@@ -77,6 +70,20 @@ Only same-file enum variants work in match patterns.
 **Docs:** [PLANNING.md](PLANNING.md) § C53.
 
 ---
+
+## Verification log
+
+Last retested: **2026-04-11** against commit `61ca012` (consilidate branch).
+
+| Caveat | Status | How verified |
+|--------|--------|-------------|
+| C3 | Still applies | Design constraint — WASM has no thread pool |
+| C7 | Still applies | `--tests 36-parse-errors.loft::test_spacial_not_implemented` → expected error |
+| C12 | Still applies | Design constraint — no `try`/`catch` syntax |
+| C38 | Still applies | `--tests 56-closures.loft::test_capture_timing` → passes |
+| C45 | Still applies | Slot allocator still text-only for zone-2 reuse |
+| ~~C51~~ | **Removed** | Native extensions now load via `extensions::load_all`; 15 native_loader tests pass |
+| C53 | Still applies | No library-enum match test exists; workaround documented |
 
 ---
 

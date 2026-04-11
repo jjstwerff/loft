@@ -412,6 +412,7 @@ impl Stores {
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
+            user_args: Vec::new(),
             #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
             #[cfg(feature = "wasm")]
@@ -478,6 +479,7 @@ impl Stores {
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
+            user_args: Vec::new(),
             #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
             #[cfg(feature = "wasm")]

@@ -32,7 +32,6 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
 | 92 | `stack_trace()` empty in parallel workers | Low | Call from main thread only |
 | 128 | File-scope constant type annotations rejected | Low | Drop the annotation |
-| 131 | CLI consumes script arguments | Low | Hard-code the mode for now |
 | 133 | RGB/BGR channel swap in GL output | Low | Pre-swap channels at call sites |
 
 ---
@@ -293,7 +292,7 @@ sees `data_ptr.is_null()` and skips the snapshot.
 - **119** Native OpenGL `n_` functions registered under `loft_` names for auto-marshaller.
 - **134** `gl_load_font` sentinel mismatch — now returns `i32::MIN` on failure.
 
-### 117, 120–130. Fixed
+### 117, 120–131. Fixed
 
 - **117** Struct-text-param store leak — verified with 2000-iteration GL-pattern tests in debug.
 - **120** Struct field overwrite leak — high-bit on CopyRecord type in `copy_ref()`.
@@ -311,6 +310,10 @@ sees `data_ptr.is_null()` and skips the snapshot.
 - **130** Headless GL foreign exception panic — `GL_READY` thread-local guard
   on all `gl::*` calls. Test: `p130_gl_functions_noop_without_context` in
   `lib/graphics/native/tests/headless_safety.rs`.
+- **131** CLI consumes script arguments — `user_args` stored in `Stores`,
+  `os_arguments()` returns them instead of raw `std::env::args`.
+  Tests: `p131_cli_forwards_script_dashdash_arg`, `p131_cli_explicit_dashdash_separator`,
+  `p131_arguments_returns_only_script_args`.
 
 
 ### 128. File-scope constants reject type annotations with misleading error
@@ -734,61 +737,6 @@ pub(crate) fn parse_constant(&mut self) -> bool {
 (e.g. `f` suffix → `single`) is sufficient for inference.
 
 **Found:** 2026-04-09 while declaring `UNIT_QUAD_2D` in graphics.loft.
-
----
-
-### 131. Loft CLI consumes script-level arguments
-
-**Severity:** Low
-
-**Symptom:** Many graphics examples parse `arguments()` for `--mode glb`,
-but invoking them as
-
-```bash
-loft 19-complete-scene.loft --mode glb
-```
-
-produces:
-```
-unknown option: --mode
-usage: loft [options] <file>
-```
-
-The loft CLI parses `--mode` as one of its own options, sees nothing,
-and exits before the script runs. As a related quirk, `arguments()`
-called from inside the script returns the *full* loft argv including
-loft's own flags (`--interpret`, `--path`, etc.), not just the
-script-level args — so the example pattern of `for a in arguments() { … }`
-to find `--mode` is broken even when no `--` is involved.
-
-**Test:** `tests/exit_codes.rs::p131_cli_consumes_script_dashdash_arg`
-locks in the current "exits non-zero with 'unknown option'" behaviour
-so the fix can flip it cleanly.
-
-**Root cause:** `src/main.rs` argument parser doesn't distinguish "loft
-options" from "script arguments". Anything matching `--*` is treated
-as a loft option, even after the script path has already been seen.
-And `arguments()` is implemented as a thin wrapper over `std::env::args`
-without filtering out the loft binary name and loft-recognised flags.
-
-**Fix path:**
-1. **Option parser:** in `src/main.rs`, once the positional script-path
-   argument is consumed, treat every subsequent token as a script
-   argument and stop interpreting `--*` as a loft option. Optionally
-   also support an explicit `--` separator before script args, matching
-   common Unix convention.
-2. **`arguments()` builtin:** filter out the loft binary path and any
-   tokens consumed by the loft CLI itself, so the script only sees
-   what was passed *after* the script path.
-
-Touch points: `src/main.rs` (CLI parser), `src/native.rs` or wherever
-`n_arguments` is implemented.
-
-**Workaround:** None at the CLI level. Hard-code the mode in the script,
-or invoke a different entry function from the shebang.
-
-**Found:** 2026-04-09 while trying to parse-check the GLB export path
-of rewritten examples.
 
 ---
 

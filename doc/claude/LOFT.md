@@ -284,9 +284,9 @@ first = a ?? b ?? c    // chains: first non-null of a, b, c
 The operator is left-associative and chains: `a ?? b ?? c` is `(a ?? b) ?? c`.
 If `lhs` has a statically-known `null` type (the bare `null` literal), `??` returns `rhs` directly.
 
-**Note (V1 limitation):** For complex LHS expressions (not a variable or field), the expression
-is evaluated twice at runtime — once for the null check and once for the result.  Use a named
-temporary if double evaluation causes side effects.
+**Note:** For complex LHS expressions (function calls, field chains), the compiler automatically
+materialises the result into a temporary variable so the expression is evaluated exactly once.
+Simple variable reads skip the temporary since they have no side effects.
 
 ### The `as` operator
 

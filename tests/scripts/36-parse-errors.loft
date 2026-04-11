@@ -245,4 +245,13 @@ fn test_partial_key_null_assign() {
   db.pe_map[1] = null;
 }
 
+// --- L4: literal passed to & parameter ---
+
+fn pe_ref_fill(pe_rv: &vector<integer>) { pe_rv += [1]; }
+
+// @EXPECT_ERROR: Cannot pass a literal or expression to a '&' parameter
+fn test_literal_to_ref_param() {
+  pe_ref_fill([]);
+}
+
 // --- Return path warnings ---

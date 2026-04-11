@@ -503,6 +503,7 @@ if f.exists() { }
 | ~~Doubled text in function return~~ | ~~Text-returning fn accumulates~~ | **Fixed** — always clear RefVar(Text) before append |
 | `character == text` always true | Now a compile error | Use `"{c}" == t` to compare as text |
 | `Cannot reassign text parameter` | Text params are 12-byte Str, not 24-byte String | Copy to local first: `local = param; local = ...` |
+| `Cannot pass a literal or expression to a '&' parameter` | Passing `[]`, struct literal, or expression to `&vector<T>` / `&StructType` | Assign to a named variable first, then pass the variable |
 
 ---
 
