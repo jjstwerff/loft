@@ -214,7 +214,8 @@ fn place_large_and_recurse(
                     if function.logging {
                         eprintln!(
                             "[assign_slots]   loop-seq  '{}' scope={scope} size={v_size}B → slot={tos}",
-                            function.variables[v].name, tos = *tos,
+                            function.variables[v].name,
+                            tos = *tos,
                         );
                     }
                     function.variables[v].stack_pos = *tos;
@@ -332,8 +333,14 @@ fn inner_has_pre_assignments(val: &Value) -> bool {
     match val {
         Value::Block(_) | Value::Loop(_) => true,
         Value::Set(_, _) => true, // inner Set is evaluated before the outer Set's target
-        Value::Call(_, args) | Value::CallRef(_, args) => args.iter().any(inner_has_pre_assignments),
-        Value::If(c, t, e) => inner_has_pre_assignments(c) || inner_has_pre_assignments(t) || inner_has_pre_assignments(e),
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            args.iter().any(inner_has_pre_assignments)
+        }
+        Value::If(c, t, e) => {
+            inner_has_pre_assignments(c)
+                || inner_has_pre_assignments(t)
+                || inner_has_pre_assignments(e)
+        }
         Value::Insert(ops) => ops.iter().any(inner_has_pre_assignments),
         Value::Drop(inner) | Value::Return(inner) => inner_has_pre_assignments(inner),
         _ => false,
@@ -347,7 +354,9 @@ fn place_orphaned_vars(function: &mut Function) {
         .iter()
         .enumerate()
         .filter(|(_, v)| {
-            !v.argument && v.first_def != u32::MAX && v.stack_pos == u16::MAX
+            !v.argument
+                && v.first_def != u32::MAX
+                && v.stack_pos == u16::MAX
                 && size(&v.type_def, &Context::Variable) > 0
         })
         .map(|(i, _)| i)
@@ -363,12 +372,16 @@ fn place_orphaned_vars(function: &mut Function) {
         loop {
             let end = candidate + v_size;
             let conflict = function.variables.iter().enumerate().any(|(j, jv)| {
-                if j == i || jv.stack_pos == u16::MAX { return false; }
+                if j == i || jv.stack_pos == u16::MAX {
+                    return false;
+                }
                 let js = jv.stack_pos;
                 let je = js + size(&jv.type_def, &Context::Variable);
                 candidate < je && end > js && v_first <= jv.last_use && v_last >= jv.first_def
             });
-            if !conflict { break; }
+            if !conflict {
+                break;
+            }
             candidate += 1;
         }
         if function.logging {
@@ -1216,14 +1229,7 @@ mod tests {
 
         // Parent scope (1): 13 reference variables, all live across the loop
         for i in 0..13u32 {
-            add_scoped_var(
-                &mut f,
-                &format!("lift{}", i + 1),
-                &ref_tp,
-                1,
-                i * 10,
-                100,
-            );
+            add_scoped_var(&mut f, &format!("lift{}", i + 1), &ref_tp, 1, i * 10, 100);
         }
         // r: the last parent zone2 ref, live across the loop
         let r_var = add_scoped_var(&mut f, "r", &ref_tp, 1, 45, 95);
@@ -1277,7 +1283,10 @@ mod tests {
         let elm_var = add_scoped_var(&mut f, "elm", &ref_tp, 5, 23, 29);
 
         let scope5 = Value::Block(Box::new(Block {
-            name: "", scope: 5, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 5,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![
                 Value::Set(vec_var, Box::new(Value::Null)),
                 Value::Set(elm_var, Box::new(Value::Null)),
@@ -1285,11 +1294,17 @@ mod tests {
         }));
         let gen_set = Value::Set(gen_var, Box::new(Value::Call(999, vec![scope5])));
         let loop3 = Value::Loop(Box::new(Block {
-            name: "", scope: 3, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![gen_set],
         }));
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![Value::Set(work, Box::new(Value::Null)), loop3],
         }));
         assign_slots(&mut f, &mut code, 4);
@@ -1299,7 +1314,8 @@ mod tests {
         assert!(
             f.stack(vec_var) < f.stack(gen_var),
             "vec at {} must be below gen at {} — Call args evaluated first",
-            f.stack(vec_var), f.stack(gen_var)
+            f.stack(vec_var),
+            f.stack(gen_var)
         );
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
@@ -1323,11 +1339,17 @@ mod tests {
 
         // IR: Set(work, Null), Set(tv, Block(scope=2, [Set(a, "12"), ...]))
         let scope2 = Value::Block(Box::new(Block {
-            name: "", scope: 2, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![Value::Set(a, Box::new(Value::Null))],
         }));
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![
                 Value::Set(work, Box::new(Value::Null)),
                 Value::Set(tv, Box::new(scope2)),
@@ -1373,19 +1395,31 @@ mod tests {
         //     Block(scope=2, [Set(f, Block(scope=3))]),
         //     Set(tv, Call(fn, [Block(scope=4)]))
         let scope3 = Value::Block(Box::new(Block {
-            name: "", scope: 3, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![],
         }));
         let scope2 = Value::Block(Box::new(Block {
-            name: "", scope: 2, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![Value::Set(f_var, Box::new(scope3))],
         }));
         let scope4 = Value::Block(Box::new(Block {
-            name: "", scope: 4, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 4,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![],
         }));
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![
                 Value::Set(work, Box::new(Value::Null)),
                 Value::Set(greeting, Box::new(Value::Null)),
@@ -1395,13 +1429,10 @@ mod tests {
         }));
         assign_slots(&mut f, &mut code, 4);
 
-        let f_slot = f.stack(f_var);
-        let f_end = f_slot + size(&ref_tp, &Context::Variable);
-        let tv_slot = f.stack(tv);
-        let tv_end = tv_slot + size(&text_tp, &Context::Variable);
+        let _f_slot = f.stack(f_var);
+        let _tv_slot = f.stack(tv);
 
         // f dies at 20, tv born at 25 → no temporal overlap, spatial reuse is OK
-        // But if they DO overlap temporally, spatial must not overlap.
         if tv.min(f_var) <= tv.max(f_var) {
             // Check find_conflict which handles all cases
         }
@@ -1435,22 +1466,28 @@ mod tests {
         //     Set(tv, Null)           ← scope=1 var inside scope=2's operators!
         //   ])
         let scope3 = Value::Block(Box::new(Block {
-            name: "", scope: 3, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![],
         }));
         let scope2 = Value::Block(Box::new(Block {
-            name: "", scope: 2, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![
                 Value::Set(fv, Box::new(scope3)),
-                Value::Set(tv, Box::new(Value::Null)),  // parent var in child scope!
+                Value::Set(tv, Box::new(Value::Null)), // parent var in child scope!
             ],
         }));
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
-            operators: vec![
-                Value::Set(work, Box::new(Value::Null)),
-                scope2,
-            ],
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
+            operators: vec![Value::Set(work, Box::new(Value::Null)), scope2],
         }));
         assign_slots(&mut f, &mut code, 4);
 
@@ -1501,19 +1538,31 @@ mod tests {
             Value::Set(lift1, Box::new(Value::Null)),
             Value::Set(lift2, Box::new(Value::Null)),
             Value::Set(lift3, Box::new(Value::Null)),
-            Value::Call(999, vec![Value::Var(lift1), Value::Var(lift2), Value::Var(lift3)]),
+            Value::Call(
+                999,
+                vec![Value::Var(lift1), Value::Var(lift2), Value::Var(lift3)],
+            ),
         ]);
         let view_set = Value::Set(view, Box::new(insert));
         let block3 = Value::Block(Box::new(Block {
-            name: "", scope: 3, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 3,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![view_set],
         }));
         let loop2 = Value::Loop(Box::new(Block {
-            name: "", scope: 2, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 2,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![block3],
         }));
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![loop2],
         }));
         assign_slots(&mut f, &mut code, 4);
@@ -1524,17 +1573,20 @@ mod tests {
         assert!(
             f.stack(lift1) < f.stack(view),
             "lift1 at {} must be below view at {} — Insert preamble evaluated first",
-            f.stack(lift1), f.stack(view)
+            f.stack(lift1),
+            f.stack(view)
         );
         assert!(
             f.stack(lift2) < f.stack(view),
             "lift2 at {} must be below view at {}",
-            f.stack(lift2), f.stack(view)
+            f.stack(lift2),
+            f.stack(view)
         );
         assert!(
             f.stack(lift3) < f.stack(view),
             "lift3 at {} must be below view at {}",
-            f.stack(lift3), f.stack(view)
+            f.stack(lift3),
+            f.stack(view)
         );
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
@@ -1572,7 +1624,10 @@ mod tests {
             Value::Call(999, vec![Value::Var(lift2)]),
         ]);
         let mut code = Value::Block(Box::new(Block {
-            name: "", scope: 1, var_size: 0, result: Type::Void,
+            name: "",
+            scope: 1,
+            var_size: 0,
+            result: Type::Void,
             operators: vec![
                 Value::Set(fv, Box::new(insert1)),
                 Value::Set(sv, Box::new(insert2)),
@@ -1586,18 +1641,26 @@ mod tests {
         assert_ne!(f.stack(lift1), u16::MAX, "lift1 must be placed");
         assert_ne!(f.stack(fv), u16::MAX, "fv must be placed");
         assert_eq!(
-            f.stack(fv), f.stack(lift1) + ref_size,
+            f.stack(fv),
+            f.stack(lift1) + ref_size,
             "fv must be right after lift1: lift1={} + {}B = {}, fv={}",
-            f.stack(lift1), ref_size, f.stack(lift1) + ref_size, f.stack(fv)
+            f.stack(lift1),
+            ref_size,
+            f.stack(lift1) + ref_size,
+            f.stack(fv)
         );
 
         // lift2 must follow fv, sv right after lift2
         assert_ne!(f.stack(lift2), u16::MAX, "lift2 must be placed");
         assert_ne!(f.stack(sv), u16::MAX, "sv must be placed");
         assert_eq!(
-            f.stack(sv), f.stack(lift2) + ref_size,
+            f.stack(sv),
+            f.stack(lift2) + ref_size,
             "sv must be right after lift2: lift2={} + {}B = {}, sv={}",
-            f.stack(lift2), ref_size, f.stack(lift2) + ref_size, f.stack(sv)
+            f.stack(lift2),
+            ref_size,
+            f.stack(lift2) + ref_size,
+            f.stack(sv)
         );
 
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());

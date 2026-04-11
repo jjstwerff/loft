@@ -973,7 +973,8 @@ impl Scopes {
                 } else {
                     ls.push(Value::Insert(ops));
                 }
-            } else if let Some(struct_d_nr) = Self::inline_struct_return(&scanned, data, outer_call) {
+            } else if let Some(struct_d_nr) = Self::inline_struct_return(&scanned, data, outer_call)
+            {
                 // P135-fix: inline struct-returning call as argument — lift to
                 // a temporary variable so get_free_vars emits OpFreeRef at scope
                 // exit.  Without this, the callee's store leaks every call.
@@ -1006,11 +1007,7 @@ impl Scopes {
     /// Skips lifting when the outer call's return type depends on this argument
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
-    fn inline_struct_return(
-        val: &Value,
-        data: &Data,
-        outer_call: u32,
-    ) -> Option<u32> {
+    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<u32> {
         if let Value::Call(fn_nr, _) = val {
             let def = data.def(*fn_nr);
             if def.name.starts_with("n_")
