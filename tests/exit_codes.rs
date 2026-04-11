@@ -148,3 +148,48 @@ fn p131_arguments_returns_only_script_args() {
         "arguments() should return only script-level args, not loft flags; got: {lines:?}"
     );
 }
+
+// ── W1.1: --html produces a self-contained HTML file ──────────────────────
+
+/// W1.1: `--html` must produce a valid HTML file with embedded WASM.
+#[test]
+fn w1_1_html_export_produces_file() {
+    let dir = std::env::temp_dir();
+    let src = dir.join("loft_w1_1_test.loft");
+    let out = dir.join("loft_w1_1_test.html");
+    std::fs::write(&src, "fn main() { println(\"html-ok\"); }\n").unwrap();
+    let result = Command::new(loft_bin())
+        .arg("--html")
+        .arg(&out)
+        .arg(&src)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&src);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        result.status.success(),
+        "expected --html to succeed; stdout={stdout:?}; stderr={stderr:?}"
+    );
+    let html = std::fs::read_to_string(&out).unwrap_or_default();
+    let _ = std::fs::remove_file(&out);
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "HTML should start with doctype"
+    );
+    assert!(
+        html.contains("loft_start"),
+        "HTML should reference loft_start entry point"
+    );
+    assert!(
+        html.contains("buildLoftImports"),
+        "HTML should contain the GL bridge"
+    );
+    // WASM binary is embedded as base64 — file should be substantial
+    assert!(
+        html.len() > 5000,
+        "HTML too small ({} bytes) — WASM likely missing",
+        html.len()
+    );
+}
