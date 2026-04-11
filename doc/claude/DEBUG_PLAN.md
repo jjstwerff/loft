@@ -18,11 +18,13 @@ Created: 2026-04-10.
 
 | #    | Title                                              | Category     | Severity | Status           |
 |------|----------------------------------------------------|-------------|----------|------------------|
-| P120 | Delete on locked store in `copy_record`            | Safety      | **High** | Open — 11 GL examples panic |
-| P122 | Store leak: struct/vector in tight game loops       | Leak        | **High** | Open — workarounds in breakout |
+| P120 | Store leak on struct field overwrite in loop        | Safety/Leak | **High** | **Open** — confirmed: debug-mode `Database N not correctly freed` |
 | P127 | File-scope vector constant corrupts caller slots   | Data loss   | Medium   | Open — `#[ignore]`d reproducer |
-| P117 | Struct-text-param store leak                        | Leak        | Medium   | ⚠ Appears fixed — valgrind clean |
-| P121 | Float tuple heap corruption (interpreter)           | Safety      | **High** | ⚠ Appears fixed — valgrind clean |
+| P117 | ~~Struct-text-param store leak~~                   | ~~Leak~~    | ~~Medium~~ | **Fixed** (2026-04-11) — GL-pattern tests pass in debug |
+| P121 | ~~Float tuple heap corruption (interpreter)~~      | ~~Safety~~  | ~~**High**~~ | **Fixed** (2026-04-11) — sustained-loop tests pass in debug |
+| P122 | ~~Store leak: struct/vector in tight game loops~~  | ~~Leak~~    | ~~**High**~~ | **Fixed** (2026-04-11) — mat4 + collision GL tests pass in debug |
+| P123 | ~~Per-frame vector literal allocation leaks~~      | ~~Leak~~    | ~~Medium~~ | **Fixed** (2026-04-11) — multi-vector GL tests pass in debug |
+| P126 | ~~Negative integer tail expression~~               | ~~Parser~~  | ~~Low~~  | **Fixed** (2026-04-11) — test un-ignored |
 | P133 | RGB↔BGR channel swap in GL output                  | Library     | Low      | Open — Mesa/Xvfb artifact? |
 | P135 | Sprite atlas row indexing swap                     | Library     | Low      | Open — cosmetic |
 

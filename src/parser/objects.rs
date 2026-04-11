@@ -464,8 +464,24 @@ impl Parser {
                     }
                 }
             } else if self.data.def_type(d_nr) == DefType::Constant {
-                *code = self.data.def(d_nr).code.clone();
-                return self.data.def(d_nr).returned.clone();
+                let const_code = self.data.def(d_nr).code.clone();
+                let const_tp = self.data.def(d_nr).returned.clone();
+                // P127: vector constants are pre-built in CONST_STORE during
+                // byte_code(). Emit OpConstRef + OpCopyRecord to deep-copy
+                // from the constant store into a fresh runtime store.
+                // On pass 1 const_ref is None but we still emit the same IR
+                // shape so create_unique runs on both passes (counter sync).
+                if matches!(const_tp, Type::Vector(_, _))
+                    && matches!(const_code, Value::Block(_))
+                {
+                    // Emit a simple Call to OpConstRef. The constant's DbRef
+                    // will be deep-copied at the call site — the caller's
+                    // gen_set_first_ref_call_copy handles the CopyRecord.
+                    *code = self.cl("OpConstRef", &[Value::Int(d_nr as i32)]);
+                    return const_tp;
+                }
+                *code = const_code;
+                return const_tp;
             }
             if let Type::Enum(en, _, _) = t {
                 for a_nr in 0..self.data.attributes(en) {

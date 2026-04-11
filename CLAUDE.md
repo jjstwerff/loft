@@ -210,6 +210,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`), `--native` default plan, fix plans |
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
+| [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
 | [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [DEBUG_PLAN.md](doc/claude/DEBUG_PLAN.md) | Systematic plan for all open safety/leak/data-loss issues (P120–P135) |

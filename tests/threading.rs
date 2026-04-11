@@ -197,11 +197,14 @@ fn worker_id(r: const Num) -> integer { r.v }
         assert!(alloc.is_locked(), "worker store should be locked read-only");
     }
 
-    // The main stores should NOT be locked.
-    for alloc in &state.database.allocations {
+    // The main stores should NOT be locked (except the constant store
+    // which is pre-locked during byte_code() — P127).
+    let const_store = loft::database::CONST_STORE as usize;
+    for (i, alloc) in state.database.allocations.iter().enumerate() {
+        if i == const_store { continue; }
         assert!(
             !alloc.is_locked(),
-            "main stores should remain unlocked after clone"
+            "main store {i} should remain unlocked after clone"
         );
     }
     let _ = input; // ensure input is not dropped before this check

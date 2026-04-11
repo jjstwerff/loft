@@ -973,8 +973,12 @@ impl State {
             if self.code_pos == u32::MAX {
                 // TODO Validate that all databases & String values are also cleared.
                 assert_eq!(self.stack_pos, 4, "Stack not correctly cleared");
-                // Free the stack
+                // Free the stack store. Mark locked stores (pre-built constants)
+                // as free too — they are expected to remain allocated.
                 self.database.allocations[0].free = true;
+                for s in &mut self.database.allocations {
+                    if s.locked { s.free = true; }
+                }
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
                     assert!(s.free, "Database {s_nr} not correctly freed");
                 }

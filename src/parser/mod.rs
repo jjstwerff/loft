@@ -1396,6 +1396,10 @@ impl Parser {
                     Value::Int(i32::from(self.data.def(inner_tp).known_type))
                 };
                 let field_ref = self.cl("OpGetField", &[ref_code, pos_val, type_nr.clone()]);
+                // Note: the free-source high-bit for Issue #120 is set in
+                // copy_ref() (operators.rs), which is the path for struct
+                // field reassignment. This set_field_check path is for
+                // construction (initial field population).
                 self.cl("OpCopyRecord", &[val_code.clone(), field_ref, type_nr])
             }
             Type::Enum(_, false, _) => self.cl("OpSetEnum", &[ref_code, pos_val, val_code]),

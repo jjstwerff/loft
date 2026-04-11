@@ -133,6 +133,9 @@ pub struct State {
     pub(crate) parallel_n_arms: u8,
     /// A15: bytecode offsets for each arm (relative to join point).
     pub(crate) parallel_arm_positions: Vec<u16>,
+    /// P127: DbRef for each pre-built vector constant, indexed by definition number.
+    /// Zeroed entries for non-constant definitions. Populated during `byte_code()`.
+    pub const_refs: Vec<DbRef>,
 }
 
 pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
@@ -151,10 +154,20 @@ impl State {
     */
     #[must_use]
     pub fn new(mut db: Stores) -> State {
+        let stack_cur = db.database(1000);
+        // Allocate the constant store (CONST_STORE = 1). Starts empty,
+        // populated during byte_code(), locked before execution.
+        let _const_store = db.database(100);
+        debug_assert_eq!(
+            _const_store.store_nr,
+            crate::database::CONST_STORE,
+            "Constant store must be at index {}",
+            crate::database::CONST_STORE
+        );
         State {
             bytecode: Arc::new(Vec::new()),
             text_code: Arc::new(Vec::new()),
-            stack_cur: db.database(1000),
+            stack_cur,
             stack_pos: 4,
             code_pos: 0,
             def_pos: 0,
@@ -179,6 +192,7 @@ impl State {
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
+            const_refs: Vec::new(),
         }
     }
 
@@ -1554,6 +1568,7 @@ impl State {
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
+            const_refs: Vec::new(),
         }
     }
 

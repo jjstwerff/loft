@@ -6,7 +6,8 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(dead_code)]
 //! Fast interpreter for binary code.
-use crate::data::{Data, DefType};
+use crate::data::{Data, DefType, Type, Value};
+use crate::keys::DbRef;
 use crate::log_config::LogConfig;
 use crate::native;
 use crate::state::State;
@@ -27,6 +28,86 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
         }
         state.def_code(d_nr, data);
     }
+    // P127: pre-build vector constants (each gets its own locked store).
+    build_const_vectors(state, data);
+    // Lock the reserved CONST_STORE (even if empty — it's a program-lifetime store).
+    state.database.allocations[crate::database::CONST_STORE as usize].lock();
+}
+
+/// P127: extract literal values from vector constant Block IR and build
+/// the vectors in CONST_STORE. Populates `state.const_refs` and
+/// `data.definitions[d_nr].const_ref`.
+fn build_const_vectors(state: &mut State, data: &mut Data) {
+    // Ensure const_refs is large enough for all definitions.
+    let null_ref = DbRef { store_nr: u16::MAX, rec: 0, pos: 0 };
+    state.const_refs.resize(data.definitions() as usize, null_ref);
+
+    for d_nr in 0..data.definitions() {
+        if data.def(d_nr).def_type != DefType::Constant {
+            continue;
+        }
+        let Type::Vector(ref elem_tp, _) = data.def(d_nr).returned else {
+            continue;
+        };
+        let elem_tp = (**elem_tp).clone();
+        let values = extract_literal_values(&data.def(d_nr).code, data);
+        if values.is_empty() {
+            continue;
+        }
+        // Build the vector in its own store using the normal Stores API.
+        // This mirrors what OpDatabase + OpNewRecord + OpFinishRecord do at runtime.
+        // Look up the main_vector<T> struct that wraps the vector field.
+        let vec_struct_name = format!("main_vector<{}>", elem_tp.name(data));
+        let vec_struct_dnr = data.def_nr(&vec_struct_name);
+        if vec_struct_dnr == u32::MAX { continue; }
+        let vec_tp = data.def(vec_struct_dnr).known_type;
+        let size = u32::from(state.database.size(vec_tp));
+        let db = state.database.database(size);
+        state.database.store_mut(&db).set_int(db.rec, 4, i32::from(vec_tp));
+        state.database.set_default_value(vec_tp, &db);
+        let vec_ref = DbRef { store_nr: db.store_nr, rec: 1, pos: 8 };
+        for val in &values {
+            let rec = state.database.record_new(&vec_ref, vec_tp, 0);
+            match val {
+                Value::Int(v) => { state.database.store_mut(&rec).set_int(rec.rec, rec.pos, *v); }
+                Value::Float(v) => { state.database.store_mut(&rec).set_float(rec.rec, rec.pos, *v); }
+                Value::Single(v) => { state.database.store_mut(&rec).set_single(rec.rec, rec.pos, *v); }
+                Value::Long(v) => { state.database.store_mut(&rec).set_long(rec.rec, rec.pos, *v); }
+                _ => {}
+            }
+            state.database.record_finish(&vec_ref, &rec, vec_tp, 0);
+        }
+        state.database.allocations[db.store_nr as usize].lock();
+        data.definitions[d_nr as usize].const_ref = Some(vec_ref);
+        state.const_refs[d_nr as usize] = vec_ref;
+    }
+}
+
+/// Walk the Block IR for a vector constant and extract the literal values.
+/// Returns an empty Vec if the IR contains non-literal expressions.
+fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
+    let Value::Block(block) = code else { return vec![]; };
+    let mut values = Vec::new();
+    // Look for patterns: Call(OpSetInt/Float/Single, [_, Int(0), literal_value])
+    let set_int_nr = data.def_nr("OpSetInt");
+    let set_float_nr = data.def_nr("OpSetFloat");
+    let set_single_nr = data.def_nr("OpSetSingle");
+    let set_long_nr = data.def_nr("OpSetLong");
+    for op in &block.operators {
+        let Value::Call(fn_nr, args) = op else { continue; };
+        if args.len() < 3 { continue; }
+        if *fn_nr == set_int_nr || *fn_nr == set_float_nr
+            || *fn_nr == set_single_nr || *fn_nr == set_long_nr
+        {
+            match &args[2] {
+                v @ (Value::Int(_) | Value::Float(_) | Value::Single(_) | Value::Long(_)) => {
+                    values.push(v.clone());
+                }
+                _ => return vec![], // non-literal value — can't pre-build
+            }
+        }
+    }
+    values
 }
 
 /// PKG.1: For each `#native "symbol"` declaration, register a stub function
