@@ -35,10 +35,11 @@ impl State {
         self.stack_pos += size_of::<Str>() as u32;
     }
 
-    pub fn string_from_texts(&mut self, start: i32, size: i32) {
-        unsafe {
-            self.set_string(size, self.text_code.as_ptr().offset(start as isize));
-        }
+    /// # Panics
+    /// Always — `OpConstLongText` is obsolete; long strings now use `OpConstStoreText`.
+    #[allow(clippy::unused_self)]
+    pub fn string_from_texts(&mut self, _start: i32, _size: i32) {
+        panic!("OpConstLongText is obsolete — use OpConstStoreText");
     }
 
     /// Push a Str pointing into the constant store's string data.

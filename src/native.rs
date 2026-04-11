@@ -471,13 +471,11 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
         );
         let fn_pos = data.def(d_nr).code_position;
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let text_code = unsafe { Arc::clone(&*ctx.text_code) };
         let library = unsafe { Arc::clone(&*ctx.library) };
         (
             fn_pos,
             WorkerProgram {
                 bytecode,
-                text_code,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
@@ -561,13 +559,11 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             .filter(|a| a.name.starts_with("__"))
             .count();
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let text_code = unsafe { Arc::clone(&*ctx.text_code) };
         let library = unsafe { Arc::clone(&*ctx.library) };
         (
             fn_pos,
             WorkerProgram {
                 bytecode,
-                text_code,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },
@@ -661,13 +657,11 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
         let d_nr = v_func as u32;
         let fn_pos = data.def(d_nr).code_position;
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let text_code = unsafe { Arc::clone(&*ctx.text_code) };
         let library = unsafe { Arc::clone(&*ctx.library) };
         (
             fn_pos,
             WorkerProgram {
                 bytecode,
-                text_code,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
             },

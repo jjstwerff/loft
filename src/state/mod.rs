@@ -92,7 +92,6 @@ pub struct CoroutineFrame {
 /// Internal State of the interpreter to run bytecode.
 pub struct State {
     pub(crate) bytecode: Arc<Vec<u8>>,
-    pub(crate) text_code: Arc<Vec<u8>>,
     pub(crate) stack_cur: DbRef,
     pub stack_pos: u32,
     pub code_pos: u32,
@@ -166,7 +165,6 @@ impl State {
         );
         State {
             bytecode: Arc::new(Vec::new()),
-            text_code: Arc::new(Vec::new()),
             stack_cur,
             stack_pos: 4,
             code_pos: 0,
@@ -628,16 +626,9 @@ impl State {
     }
 
     /// S25.1 (CO1.3d): check whether a raw text pointer is inside a static text pool.
-    /// Static Str values (from `text_code` or the constant store) are permanently
+    /// Static Str values (from bytecode or the constant store) are permanently
     /// live and need no ownership transfer.
     fn is_in_text_code(&self, ptr: *const u8) -> bool {
-        // Check the legacy text_code buffer (short-path for strings < 256 bytes
-        // is in bytecode, but older long strings may still be here).
-        let base = self.text_code.as_ptr();
-        let end = unsafe { base.add(self.text_code.len()) };
-        if ptr >= base && ptr < end {
-            return true;
-        }
         // Check the constant store (long strings >= 256 bytes stored via set_str).
         let cs = crate::database::CONST_STORE as usize;
         if cs < self.database.allocations.len() {
@@ -1252,12 +1243,6 @@ impl State {
         }
     }
 
-    pub fn static_str(&mut self) -> &str {
-        let from = *self.code::<u32>() as usize;
-        let len = *self.code::<u32>() as usize;
-        std::str::from_utf8(&self.text_code[from..from + len]).unwrap_or_default()
-    }
-
     /**
     Pull a value from stack
     # Panics
@@ -1300,7 +1285,6 @@ impl State {
             .collect();
         let program = crate::parallel::WorkerProgram {
             bytecode: Arc::clone(&self.bytecode),
-            text_code: Arc::clone(&self.text_code),
             library: Arc::clone(&self.library),
             stack_trace_lib_nr: self.stack_trace_lib_nr,
         };
@@ -1372,10 +1356,9 @@ impl State {
         let d_nr = data.def_nr(&format!("n_{name}"));
         let pos = data.def(d_nr).code_position;
 
-        // Expose bytecode, text_code, library, and Data to native functions
+        // Expose bytecode, library, and Data to native functions
         // that need to spawn worker threads (e.g. n_parallel_for_int).
         let bc_ptr = &raw const self.bytecode;
-        let tc_ptr = &raw const self.text_code;
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
         self.data_ptr = data_ptr;
@@ -1386,7 +1369,6 @@ impl State {
             .unwrap_or(u16::MAX);
         self.database.parallel_ctx = Some(Box::new(ParallelCtx {
             bytecode: bc_ptr,
-            text_code: tc_ptr,
             library: lib_ptr,
             data: data_ptr,
             stack_trace_lib_nr: stk_lib_nr,
@@ -1535,7 +1517,6 @@ impl State {
             .unwrap_or(u16::MAX);
         crate::parallel::WorkerProgram {
             bytecode: Arc::clone(&self.bytecode),
-            text_code: Arc::clone(&self.text_code),
             library: Arc::clone(&self.library),
             stack_trace_lib_nr,
         }
@@ -1550,7 +1531,6 @@ impl State {
     pub fn new_worker(
         worker: WorkerStores,
         bytecode: Arc<Vec<u8>>,
-        text_code: Arc<Vec<u8>>,
         library: Arc<Vec<Call>>,
     ) -> State {
         let mut db = worker.stores;
@@ -1563,7 +1543,6 @@ impl State {
             database: db,
             arguments: 0,
             bytecode,
-            text_code,
             library,
             library_names: HashMap::new(),
             stack: HashMap::new(),
