@@ -19,3 +19,4 @@ test_scene_debug.loft
 # open by another process (e.g. an editor or watcher). They're stale OS
 # artefacts, never source code.
 .fuse_hidden*
+*.loftc
