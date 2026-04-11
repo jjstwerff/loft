@@ -837,6 +837,11 @@ impl Function {
             }
             return self.is_new(var_nr);
         }
+        // Allow assigning an iterator (vector slice) to a vector variable
+        // when element types are compatible — the iterator is materialised.
+        if let (Type::Vector(_, _), Type::Iterator(_, _)) = (var_tp, type_def) {
+            return self.is_new(var_nr);
+        }
         if let (Type::Vector(tp, _), Type::Vector(to, _)) = (var_tp, type_def) {
             if to.is_unknown() {
                 return self.is_new(var_nr);
