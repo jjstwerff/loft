@@ -152,6 +152,8 @@ fn p131_arguments_returns_only_script_args() {
 // ── W1.1: --html produces a self-contained HTML file ──────────────────────
 
 /// W1.1: `--html` must produce a valid HTML file with embedded WASM.
+/// Requires the `wasm32-unknown-unknown` rustup target — skipped in CI
+/// environments where the target is not installed.
 #[test]
 fn w1_1_html_export_produces_file() {
     let dir = std::env::temp_dir();
@@ -168,6 +170,10 @@ fn w1_1_html_export_produces_file() {
     let _ = std::fs::remove_file(&src);
     let stderr = String::from_utf8_lossy(&result.stderr);
     let stdout = String::from_utf8_lossy(&result.stdout);
+    if stderr.contains("wasm32-unknown-unknown") && stderr.contains("not be installed") {
+        eprintln!("SKIP: wasm32-unknown-unknown target not installed");
+        return;
+    }
     assert!(
         result.status.success(),
         "expected --html to succeed; stdout={stdout:?}; stderr={stderr:?}"
