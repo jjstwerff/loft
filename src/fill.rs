@@ -9,7 +9,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 253] = &[
+pub const OPERATORS: &[fn(&mut State); 254] = &[
     goto,
     goto_word,
     goto_false,
@@ -263,6 +263,7 @@ pub const OPERATORS: &[fn(&mut State); 253] = &[
     var_fn_ref,
     put_fn_ref,
     const_ref,
+    const_store_text,
 ];
 
 fn goto(s: &mut State) {
@@ -1948,4 +1949,10 @@ fn const_ref(s: &mut State) {
     let v_d_nr = *s.code::<i32>();
     let new_value = s.const_refs[v_d_nr as usize];
     s.put_stack(new_value);
+}
+
+fn const_store_text(s: &mut State) {
+    let v_rec = *s.code::<i32>();
+    let v_pos = *s.code::<i32>();
+    s.string_from_const_store(v_rec as u32, v_pos as u32)
 }

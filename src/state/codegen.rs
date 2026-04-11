@@ -19,7 +19,6 @@ use crate::stack::Stack;
 use crate::variables::Function;
 use crate::variables::size;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 /// Text-returning natives that accept a destination buffer instead of allocating one.
 fn is_text_dest_native(name: &str) -> bool {
@@ -402,22 +401,14 @@ impl State {
             stack.add_op("OpConstText", self);
             self.code_add_str(value);
         } else {
-            let tc = Arc::make_mut(&mut self.text_code);
-            debug_assert!(
-                i32::try_from(tc.len()).is_ok(),
-                "text_code offset overflow: {}",
-                tc.len()
-            );
-            let start = tc.len() as i32;
-            tc.extend_from_slice(value.as_bytes());
-            stack.add_op("OpConstLongText", self);
-            self.code_add(start);
-            debug_assert!(
-                i32::try_from(value.len()).is_ok(),
-                "long-text length overflow: {}",
-                value.len()
-            );
-            self.code_add(value.len() as i32);
+            // Store long strings in CONST_STORE via Store::set_str().
+            let const_store = &mut self.database.allocations[crate::database::CONST_STORE as usize];
+            let rec = const_store.set_str(value);
+            stack.add_op("OpConstStoreText", self);
+            self.code_add(rec as i32);
+            // set_str stores length at (rec, 4); text bytes start at (rec, 8).
+            // We encode the record position; the opcode reads length from the store.
+            self.code_add(0i32); // pos offset within the record (length is at rec+4)
         }
         Type::Text(Vec::new())
     }

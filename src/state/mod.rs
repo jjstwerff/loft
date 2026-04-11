@@ -627,14 +627,28 @@ impl State {
             .expect("coroutine_frame_mut: empty slot")
     }
 
-    /// S25.1 (CO1.3d): check whether a raw text pointer is inside the static text pool.
-    /// Static Str values (from string literals compiled into `text_code`) are permanently
+    /// S25.1 (CO1.3d): check whether a raw text pointer is inside a static text pool.
+    /// Static Str values (from `text_code` or the constant store) are permanently
     /// live and need no ownership transfer.
     fn is_in_text_code(&self, ptr: *const u8) -> bool {
+        // Check the legacy text_code buffer (short-path for strings < 256 bytes
+        // is in bytecode, but older long strings may still be here).
         let base = self.text_code.as_ptr();
-        // SAFETY: offset by known length stays within the same allocation.
         let end = unsafe { base.add(self.text_code.len()) };
-        ptr >= base && ptr < end
+        if ptr >= base && ptr < end {
+            return true;
+        }
+        // Check the constant store (long strings >= 256 bytes stored via set_str).
+        let cs = crate::database::CONST_STORE as usize;
+        if cs < self.database.allocations.len() {
+            let store = &self.database.allocations[cs];
+            let store_base = store.ptr;
+            let store_end = unsafe { store_base.add(store.capacity_words() as usize * 8) };
+            if ptr >= store_base && ptr < store_end {
+                return true;
+            }
+        }
+        false
     }
 
     /// S25.1 (CO1.3d / P2-R1): scan the first `args_size` bytes of `stack_bytes` for
