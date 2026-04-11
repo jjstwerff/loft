@@ -41,6 +41,18 @@ impl State {
         }
     }
 
+    /// Push a Str pointing into the constant store's string data.
+    /// The string was written by `Store::set_str()` during compilation:
+    /// length at `get_int(rec, 4)`, bytes at `ptr + rec*8 + 8`.
+    pub fn string_from_const_store(&mut self, rec: u32, _pos: u32) {
+        let store = &self.database.allocations[crate::database::CONST_STORE as usize];
+        let len = store.get_int(rec, 4);
+        let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
+        unsafe {
+            self.set_string(len, ptr);
+        }
+    }
+
     #[must_use]
     pub fn string(&mut self) -> Str {
         self.stack_pos -= size_ptr();

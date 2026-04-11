@@ -310,4 +310,7 @@ fn OpPutFnRef(pos: const u16, _fnref: text);
 // P127: push a pre-built constant's DbRef from the constant store.
 fn OpConstRef(d_nr: const integer) -> reference;
 #rust"s.const_refs[@d_nr as usize]"
+// Push a Str pointing into the constant store for long string literals.
+fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
+#rust"s.string_from_const_store(@rec as u32, @pos as u32)"
 
