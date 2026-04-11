@@ -197,6 +197,11 @@ pub fn file(path: text) -> File {
 pub fn exists(path: text) -> boolean {
   file(path).format != Format.NotExists
 }
+// Method form: f = file("path"); if f.exists() { ... }
+// Also callable as exists(file_obj) via the 'both' parameter name.
+pub fn exists(both: File) -> boolean {
+  both.format != Format.NotExists
+}
 // Use to remove a file after processing or as a cleanup step.
 // Returns FileResult.Ok on success, FileResult.NotFound when the file did
 // not exist or is outside the project directory.

@@ -842,6 +842,25 @@ len(collection)
 round(PI * 1000.0)
 ```
 
+### The `both` parameter name
+
+When the first parameter is named `both` instead of `self`, the function is
+registered as **both** a method and a free function:
+
+```loft
+pub fn exists(both: File) -> boolean {
+  both.format != Format.NotExists
+}
+
+// Can be called as:
+f.exists()      // method syntax
+exists(f)       // free function syntax
+```
+
+Use `both` when a function should be equally natural as either form.
+`self` registers as a method only; a plain parameter name registers as a
+free function only.
+
 ### Named arguments
 
 Any parameter can be passed by name using `name: value` syntax.  Positional arguments
