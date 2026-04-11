@@ -67,24 +67,31 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
         depth <= 1000,
         "assign_slots scope nesting limit exceeded at depth {depth}"
     );
+    let is_loop = matches!(block_val, Value::Loop(_));
     let bl_scope = match block_val {
         Value::Block(bl) | Value::Loop(bl) => bl.scope,
         _ => return,
     };
 
     // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
-    let mut small_vars: Vec<usize> = function
-        .variables
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| {
-            !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
-                let s = size(&v.type_def, &Context::Variable);
-                s > 0 && s <= 8
-            }
-        })
-        .map(|(i, _)| i)
-        .collect();
+    // Loops skip zone1: no OpReserveFrame (loop vars persist across iterations).
+    // All loop vars are placed sequentially via the zone2 IR-walk.
+    let mut small_vars: Vec<usize> = if is_loop {
+        Vec::new()
+    } else {
+        function
+            .variables
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| {
+                !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
+                    let s = size(&v.type_def, &Context::Variable);
+                    s > 0 && s <= 8
+                }
+            })
+            .map(|(i, _)| i)
+            .collect()
+    };
     small_vars.sort_by_key(|&i| function.variables[i].first_def);
 
     if function.logging {
@@ -163,9 +170,8 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
 
     // Store var_size in the Block/Loop node.
     // Loops: var_size=0 (no OpReserveFrame, zone1 is empty).
-    // Blocks: var_size=zone1_size (OpReserveFrame pre-claims zone1).
     if let Value::Block(bl) | Value::Loop(bl) = block_val {
-        bl.var_size = zone1_size;
+        bl.var_size = if is_loop { 0 } else { zone1_size };
     }
 
     // ── Zone 2: place large variables and recurse into child scopes ────────────
@@ -202,6 +208,21 @@ fn place_large_and_recurse(
             let v = *v_nr as usize;
             if function.variables[v].scope == scope && function.variables[v].stack_pos == u16::MAX {
                 let v_size = size(&function.variables[v].type_def, &Context::Variable);
+                // Loop small vars: place sequentially at *tos.
+                // No zone1 coloring, no block-return, no inner_has_pre_assignments.
+                if v_size > 0 && v_size <= 8 && function.is_loop_scope(scope) {
+                    if function.logging {
+                        eprintln!(
+                            "[assign_slots]   loop-seq  '{}' scope={scope} size={v_size}B → slot={tos}",
+                            function.variables[v].name, tos = *tos,
+                        );
+                    }
+                    function.variables[v].stack_pos = *tos;
+                    function.variables[v].pre_assigned_pos = *tos;
+                    *tos += v_size;
+                    place_large_and_recurse(function, inner, scope, tos, depth + 1);
+                    return;
+                }
                 if v_size > 8 {
                     // Block-return pattern: Set(v, Block([..., Var(inner_result)])).
                     // For non-Text types, generate_block is called with `to = v.stack_pos`,
