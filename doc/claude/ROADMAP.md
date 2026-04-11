@@ -156,20 +156,24 @@ highlighting, decent error messages, and a REPL for experimentation.
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
 
-### Verify "appears fixed" issues
+### Compilation cache and constant store
 
-These regressed during today's release-mode test switch — the regression
-guards now pass but the original symptoms have not been re-validated under
-the original conditions. 0.9.0 must close them definitively or reopen them
-with a fresh root-cause investigation.
+The `.loftc` bytecode cache and `CONST_STORE` are implemented (Phase A + D).
+Remaining work must land in 0.9.0 to avoid stability risk in later milestones.
+Design: [CONST_STORE.md](CONST_STORE.md).
 
-| ID    | Title                                                  | Verification needed                              |
-|-------|--------------------------------------------------------|--------------------------------------------------|
-| P117  | Struct-text-param store leak                           | Fresh `file()`-style pattern + `LOFT_STORES=warn`|
-| P120  | Vector field in returned struct                        | Full GL example suite end-to-end on a display    |
-| P121  | Float tuple heap corruption                            | Debug build under valgrind                       |
-| P124  | Native inline array indexing                           | `--native-emit` inspection of generated Rust     |
-| P127  | File-scope vector constant inlined into call          | Implement Var-index remapping (PROBLEMS.md fix path) |
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| CS.B   | mmap cache loading (native)                            | S  | ✓      | CONST_STORE.md   |
+| CS.C1  | Serialize `Data` struct to binary                      | MH | ~      | CONST_STORE.md   |
+| CS.C2  | `build.rs` pre-compile stdlib to `.loftc`              | M  | ✓      | CONST_STORE.md   |
+| CS.C3  | WASM: `include_bytes!` stdlib cache, skip re-parse     | S  | ✓      | CONST_STORE.md   |
+
+CS.B becomes worthwhile after CS.C2 produces a larger cache file. CS.C1 is
+the prerequisite for CS.C2/C3 — it requires serializing `Definition`,
+`Value`, `Type`, `Attribute`, and `Function` (recursive enums, ~2K lines
+in `data.rs`). Hand-written binary serialization preferred over serde to
+avoid adding serde to the default feature set.
 
 ### Developer experience
 
