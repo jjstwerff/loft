@@ -1800,10 +1800,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        // Optional: wasm-opt
+        // wasm-opt: optimize size + enable asyncify for frame yield.
+        // Asyncify lets loft_gl_swap_buffers suspend the WASM execution
+        // so the browser can render the frame via requestAnimationFrame.
         let opt_path = std::env::temp_dir().join("loft_html_opt.wasm");
         let final_wasm = if std::process::Command::new("wasm-opt")
-            .args(["-Oz", "--strip-debug", "--strip-producers"])
+            .args([
+                "-Oz",
+                "--strip-debug",
+                "--strip-producers",
+                "--asyncify",
+                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers",
+            ])
             .arg("-o")
             .arg(&opt_path)
             .arg(&wasm_path)
@@ -1839,10 +1847,22 @@ const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const canvas=document.getElementById('c');
 const output=document.getElementById('out');
 let mem;
-const imports=buildLoftImports(canvas,output,()=>mem);
+const ctrl={{ac:null}};
+const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;
-  r.instance.exports.loft_start();
+  if(r.instance.exports.asyncify_start_unwind){{
+    const ac=new AsyncifyCtrl(r.instance);
+    ctrl.ac=ac;
+    ac.start('loft_start');
+    if(ac.sleeping){{
+      (function frame(){{
+        if(ac.resume('loft_start'))requestAnimationFrame(frame);
+      }})();
+    }}
+  }}else{{
+    r.instance.exports.loft_start();
+  }}
 }});
 </script></body></html>"#
         );

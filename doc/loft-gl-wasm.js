@@ -1,9 +1,55 @@
 // loft-gl-wasm.js — WebGL2 bridge for compiled loft WASM (--html export).
 // Returns a WASM imports object with loft_gl.* and loft_io.* modules.
-// Unlike loft-gl.js (which uses loftHost), this reads raw pointers from
-// WASM linear memory for string/vector arguments.
+// Uses asyncify for frame yield: gl_swap_buffers suspends execution so
+// the browser can render via requestAnimationFrame.
 
-function buildLoftImports(canvas, output, getMem) {
+// Asyncify controller — manages suspend/resume across frames.
+// Usage: const ac = new AsyncifyCtrl(instance);
+//        ac.start('loft_start');  // runs until first swap_buffers
+//        // on each rAF: ac.resume('loft_start');
+function AsyncifyCtrl(instance) {
+  // Asyncify data area: 16 bytes in WASM memory for the unwind/rewind buffer.
+  // We allocate it at the very start of the heap (right after __heap_base).
+  const DATA_ADDR = (instance.exports.__heap_base?.value || 65536);
+  const STACK_SIZE = 16384;  // 16KB for asyncify stack
+  this.sleeping = false;
+  this.exports = instance.exports;
+
+  this.start = function(fn) {
+    this.sleeping = false;
+    this.exports[fn]();
+    // If sleeping was set by swap_buffers, we need to stop_unwind
+    if (this.sleeping) {
+      this.exports.asyncify_stop_unwind();
+    }
+  };
+
+  this.resume = function(fn) {
+    if (!this.sleeping) return false;
+    this.sleeping = false;
+    // Set up rewind: tell asyncify where the saved stack is
+    const mem = new Int32Array(this.exports.memory.buffer);
+    mem[DATA_ADDR >> 2] = DATA_ADDR + 8;
+    mem[(DATA_ADDR + 4) >> 2] = DATA_ADDR + 8 + STACK_SIZE;
+    this.exports.asyncify_start_rewind(DATA_ADDR);
+    this.exports[fn]();
+    if (this.sleeping) {
+      this.exports.asyncify_stop_unwind();
+    }
+    return true;
+  };
+
+  // Called from loft_gl_swap_buffers to trigger suspension
+  this.suspend = function() {
+    this.sleeping = true;
+    const mem = new Int32Array(this.exports.memory.buffer);
+    mem[DATA_ADDR >> 2] = DATA_ADDR + 8;
+    mem[(DATA_ADDR + 4) >> 2] = DATA_ADDR + 8 + STACK_SIZE;
+    this.exports.asyncify_start_unwind(DATA_ADDR);
+  };
+}
+
+function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
   const decoder = new TextDecoder();
   function readStr(ptr, len) {
@@ -53,7 +99,11 @@ function buildLoftImports(canvas, output, getMem) {
         return 1;
       },
       loft_gl_poll_events() { return shouldClose ? 0 : 1; },
-      loft_gl_swap_buffers() { gl.flush(); },
+      loft_gl_swap_buffers() {
+        gl.flush();
+        // Trigger asyncify suspension so the browser can render this frame.
+        if (asyncCtrl && asyncCtrl.ac) asyncCtrl.ac.suspend();
+      },
       loft_gl_clear(color) {
         const a = ((color >>> 24) & 0xff) / 255, r = ((color >>> 16) & 0xff) / 255;
         const g = ((color >>> 8) & 0xff) / 255, b = (color & 0xff) / 255;
