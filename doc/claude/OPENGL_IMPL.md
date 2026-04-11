@@ -87,8 +87,7 @@ Tests:
 **Not yet implemented:**
 - Phase 2.11 AA fill boundary
 - Phase 2.13 Dashed/Dotted lines
-- G5 Audio (native + Web Audio)
-- W1.1 Single-file HTML export
+- G6 Background music (layer on G5)
 
 The original Rust-native design is preserved below for reference.
 
