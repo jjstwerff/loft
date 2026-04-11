@@ -469,6 +469,12 @@ impl Store {
         self.borrowed
     }
 
+    /// Return whether this store has an empty claims set (worker clones).
+    #[must_use]
+    pub fn claims_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
+
     /// Create a locked deep-copy of this store for use in a worker thread.
     /// The clone always has `locked = true`; the mmap file is not shared (data is copied).
     pub fn clone_locked(&self) -> Store {

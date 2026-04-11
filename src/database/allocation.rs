@@ -301,7 +301,11 @@ impl Stores {
     pub fn unlock_store(&mut self, r: &DbRef) {
         if r.rec != 0 && (r.store_nr as usize) < self.allocations.len() {
             let store = &mut self.allocations[r.store_nr as usize];
-            if !store.is_borrowed() {
+            // Skip worker stores: they are locked at creation and must stay
+            // locked.  Worker stores have borrowed=true (light workers) or
+            // empty claims (full clone workers).  Only unlock stores that
+            // were explicitly locked by lock_store (const param lock).
+            if !store.is_borrowed() && !store.claims_empty() {
                 store.unlock();
             }
         }
