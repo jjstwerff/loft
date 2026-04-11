@@ -827,8 +827,11 @@ use #count instead"
         };
         // error if the loop variable reuses a name with a different type.
         // Same-type reuse is idiomatic in loft (flat variable scoping).
+        // `_` is exempt — it's the universal "unused" name and must work
+        // across different element types within the same function.
         let existing_var = self.vars.var(id);
         if !self.first_pass
+            && id != "_"
             && existing_var != u16::MAX
             && self.vars.is_defined(existing_var)
             && !self.vars.var_type(existing_var).is_same(&var_tp)

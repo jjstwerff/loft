@@ -385,7 +385,7 @@ Rules to avoid codegen panics:
 - Never reuse the same loop variable name in a different function
 - Descriptive parameter names help avoid parameter collisions
 
-**Unused loop variable = exit 1.** If a loop variable is declared but never read, loft exits with code 1. Use `_` when the value is not needed. But `_` also participates in the flat namespace — if two functions both use `for _ in ...` and interact, use unique named variables instead.
+**Unused loop variable = exit 1.** If a loop variable is declared but never read, loft exits with code 1. Use `_` when the value is not needed. `_` can be reused across different element types within the same function — it automatically adapts its type.
 
 ### `const vector<T>` recursive call bug
 

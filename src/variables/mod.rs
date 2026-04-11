@@ -826,6 +826,11 @@ impl Function {
         lexer: &mut Lexer,
     ) -> bool {
         let var_tp = &self.variables[var_nr as usize].type_def;
+        // `_` is the universal unused variable — allow type changes silently.
+        if self.variables[var_nr as usize].name == "_" && !type_def.is_unknown() {
+            self.variables[var_nr as usize].type_def = type_def.clone();
+            return self.is_new(var_nr);
+        }
         if type_def.is_unknown() || var_tp.is_equal(type_def) {
             for on in type_def.depend() {
                 self.depend(var_nr, on);
