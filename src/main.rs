@@ -32,6 +32,7 @@
 #[macro_use]
 pub mod diagnostics;
 mod base64;
+mod cache;
 mod calc;
 mod codegen_runtime;
 mod compile;
@@ -1583,7 +1584,11 @@ fn main() {
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    compile::byte_code(&mut state, &mut p.data);
+    // Bytecode cache: read source content for the cache key, use .loftc path.
+    let source_content = std::fs::read_to_string(&abs_file).unwrap_or_default();
+    let cache_file = cache::cache_path(&abs_file);
+    let sources = [(abs_file.as_str(), source_content.as_str())];
+    compile::byte_code_with_cache(&mut state, &mut p.data, Some(&cache_file), &sources);
     // A7.2: load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);

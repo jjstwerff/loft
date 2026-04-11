@@ -1468,6 +1468,10 @@ impl State {
             if s_nr == 0 {
                 continue; // stack store — always alive
             }
+            // Skip locked constant stores (program-lifetime, never freed).
+            if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {
+                continue;
+            }
             if !s.free {
                 leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
             }
