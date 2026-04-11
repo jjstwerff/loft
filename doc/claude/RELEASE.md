@@ -53,18 +53,15 @@ Completed historical gate items (T0-1 through T0-7, T1-5, PROBLEMS #10,
 #37–#40, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, R1) are
 recorded in CHANGELOG.md.
 
-**Open as of 2026-04-10:**
+**Open as of 2026-04-11:**
 
-- **P122** — store leak in tight game loops. Currently worked around in
-  `25-breakout.loft` with bitmasks and raw-float collision APIs. Slated
-  for 0.8.4.
-- **P117 / P120 / P121 / P124** — flagged `⚠️ Appears fixed but unverified`
-  in PROBLEMS.md. Regression-guard tests pass; the original symptoms have
-  not been re-validated under their original conditions. Slated for 0.9.0.
-- **P127** — file-scope vector constants leak Var() refs into calling
-  functions. Has a `#[ignore]`d reproducer test. Slated for 0.9.0.
+- **P117 / P120–P131** — all **fixed and verified** with regression tests.
+  See PROBLEMS.md § Fixed for the full list.
 - **Stability gate** — see ROADMAP.md § 1.0.0 for the full hands-on
   checklist (valgrind, 4-platform binaries, INCONSISTENCIES.md sweep).
+
+No High or Medium severity issues remain open.  All remaining items in
+PROBLEMS.md are Low severity with documented workarounds.
 
 ---
 

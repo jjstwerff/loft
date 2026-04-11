@@ -45,7 +45,7 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | Levels    | Procedurally generated rows    | Several hand-designed levels with themes     |
 | Visuals   | Procedural sprite atlas        | Polished art + screen shake + better particles |
 | Sharing   | Run from `cargo run …`         | Single-file HTML export, hosted on itch.io   |
-| Smoothness| Per-frame store leak workarounds (raw-float APIs, bitmasks) | Idiomatic loft — fix the underlying #122 leak |
+| Smoothness| ~~Per-frame store leak workarounds~~ | **Done** — P122 fixed; idiomatic struct APIs work |
 
 ### Game infrastructure
 
@@ -70,19 +70,17 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | BK.7  | High-score persistence (file or localStorage in WASM)  | S  |
 | BK.8  | Polish pass on sprite atlas (better art, consistent style) | S |
 
-### Language fix that unblocks idiomatic game code
+### Language fixes (all completed)
 
-| ID    | Title                                                  | E  | Severity | Source       |
-|-------|--------------------------------------------------------|----|----------|--------------|
-| P122  | Store leak: free struct/vector temporaries at end of loop iteration | MH | High | PROBLEMS.md  |
+All language blockers for 0.8.4 are resolved:
+- **P117–P131** — fixed and verified (store leaks, slot allocation, native codegen,
+  CLI args, headless GL safety). See PROBLEMS.md § Fixed.
+- **L4** — compile error for literal passed to `&` parameter.
+- **L5/L6/S5** — confirmed already fixed.
+- **Bytecode cache** — `build.rs` adds git commit hash; rebuilds invalidate stale `.loftc`.
 
-**Fixed (2026-04-11):** P122 is confirmed fixed — GL-pattern stress tests
-pass in both release and debug mode (mat4 with vector fields, collision
-Rect/Overlap structs, combined game loop). The breakout raw-float
-workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced with
-idiomatic struct-based APIs. **Note:** P120 (struct field overwrite leak)
-is still open and may affect the renderer's `node.transform = mat4_trs(…)`
-pattern — test before removing workarounds in the renderer path.
+Breakout's raw-float workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced
+with idiomatic struct-based APIs.
 
 ---
 
