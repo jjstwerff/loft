@@ -794,6 +794,38 @@ point.x
 arg.long.len()
 ```
 
+### Shared field names
+
+Field names are type-scoped, not globally unique.  Different structs and enum
+variants can share a field name — the compiler resolves the correct field by
+the type of the receiver:
+
+```loft
+struct Point { x: float, y: float }
+struct Rect { x: float, y: float, w: float, h: float }
+
+p = Point { x: 1.0, y: 2.0 };
+r = Rect { x: 10.0, y: 20.0, w: 30.0, h: 40.0 };
+p.x;   // 1.0 — Point's x
+r.x;   // 10.0 — Rect's x (different offset, same name)
+```
+
+This also works between struct-enum variants:
+```loft
+enum Shape {
+  Circle { radius: float, label: text },
+  Square { side: float, label: text }
+}
+c = Circle { radius: 5.0, label: "big" };
+s = Square { side: 3.0, label: "small" };
+c.label;  // "big"
+s.label;  // "small"
+```
+
+Verified: works in vectors (`pts[0].x`), function parameters, and across
+struct/enum boundaries.  See `tests/scripts/23-field-overlap-structs.loft`
+and `tests/scripts/24-field-overlap-enum-struct.loft`.
+
 ---
 
 ## Methods and function calls
