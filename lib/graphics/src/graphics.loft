@@ -961,3 +961,90 @@ pub fn audio_stop(sink: integer);
 // Set volume of a playing clip (0.0-1.0).
 pub fn audio_set_volume(sink: integer, volume: float);
 #native "loft_audio_set_volume"
+// Play raw PCM samples (mono, values -1.0 to 1.0) at the given sample rate.
+// Returns playback handle, or null on failure.
+pub fn audio_play_raw(samples: vector<single>, sample_rate: integer, volume: float) -> integer;
+#native "loft_audio_play_raw"
+
+// --- Procedural audio synthesis (chiptune) ---
+
+SFX_RATE = 22050;
+
+// Square wave sample: phase 0.0-1.0, duty 0.0-1.0.
+fn sfx_sq(sfx_sq_phase: single, sfx_sq_duty: single) -> single {
+  if sfx_sq_phase < sfx_sq_duty { return 1.0f; }
+  return -1.0f;
+}
+// Triangle wave sample: phase 0.0-1.0.
+fn sfx_tri(sfx_tri_p: single) -> single {
+  if sfx_tri_p < 0.5f { return sfx_tri_p * 4.0f - 1.0f; }
+  return 3.0f - sfx_tri_p * 4.0f;
+}
+// Sawtooth wave sample: phase 0.0-1.0.
+fn sfx_saw(sfx_saw_p: single) -> single {
+  return sfx_saw_p * 2.0f - 1.0f;
+}
+// Linear attack-decay envelope: returns 0.0-1.0.
+fn sfx_env(sfx_env_t: single, sfx_env_atk: single, sfx_env_dur: single) -> single {
+  if sfx_env_t < sfx_env_atk { return sfx_env_t / sfx_env_atk; }
+  sfx_env_rem = sfx_env_dur - sfx_env_t;
+  if sfx_env_rem < 0.0f { return 0.0f; }
+  sfx_env_dec = sfx_env_dur - sfx_env_atk;
+  if sfx_env_dec <= 0.0f { return 0.0f; }
+  return sfx_env_rem / sfx_env_dec;
+}
+
+// Short percussive beep — brick hit, UI click.
+pub fn sfx_beep(sb_freq: single, sb_dur: single, sb_vol: single) -> integer {
+  sb_n = (sb_dur * SFX_RATE as single) as integer;
+  sb_buf: vector<single> = [for sb_i in 0..sb_n {
+    sb_t = sb_i as single / SFX_RATE as single;
+    sb_p = (sb_t * sb_freq) % 1.0f;
+    sfx_sq(sb_p, 0.5f) * sfx_env(sb_t, 0.005f, sb_dur) * sb_vol
+  }];
+  return audio_play_raw(sb_buf, SFX_RATE, 1.0);
+}
+
+// Descending tone — life lost, negative event.
+pub fn sfx_descend(sd_f0: single, sd_f1: single, sd_dur: single, sd_vol: single) -> integer {
+  sd_n = (sd_dur * SFX_RATE as single) as integer;
+  sd_ph = 0.0f;
+  sd_buf: vector<single> = [for sd_i in 0..sd_n {
+    sd_t = sd_i as single / SFX_RATE as single;
+    sd_f = sd_f0 + (sd_f1 - sd_f0) * (sd_t / sd_dur);
+    sd_ph = (sd_ph + sd_f / SFX_RATE as single) % 1.0f;
+    sfx_saw(sd_ph) * sfx_env(sd_t, 0.01f, sd_dur) * sd_vol
+  }];
+  return audio_play_raw(sd_buf, SFX_RATE, 1.0);
+}
+
+// Rising chirp — pickup collected, positive event.
+pub fn sfx_chirp(sc_f0: single, sc_f1: single, sc_dur: single, sc_vol: single) -> integer {
+  sc_n = (sc_dur * SFX_RATE as single) as integer;
+  sc_ph = 0.0f;
+  sc_buf: vector<single> = [for sc_i in 0..sc_n {
+    sc_t = sc_i as single / SFX_RATE as single;
+    sc_f = sc_f0 + (sc_f1 - sc_f0) * (sc_t / sc_dur);
+    sc_ph = (sc_ph + sc_f / SFX_RATE as single) % 1.0f;
+    sfx_tri(sc_ph) * sfx_env(sc_t, 0.005f, sc_dur) * sc_vol
+  }];
+  return audio_play_raw(sc_buf, SFX_RATE, 1.0);
+}
+
+// White noise burst — percussion, explosion, brick break.
+pub fn sfx_noise(sn_dur: single, sn_vol: single) -> integer {
+  sn_n = (sn_dur * SFX_RATE as single) as integer;
+  sn_seed = 12345;
+  sn_buf: vector<single> = [for sn_i in 0..sn_n {
+    sn_t = sn_i as single / SFX_RATE as single;
+    sn_seed = (sn_seed * 1103515245 + 12345) % 2147483647;
+    sn_rnd = (sn_seed as single / 1073741824.0f) - 1.0f;
+    sn_rnd * sfx_env(sn_t, 0.002f, sn_dur) * sn_vol
+  }];
+  return audio_play_raw(sn_buf, SFX_RATE, 1.0);
+}
+
+// Paddle bounce — low square wave thud with pitch drop.
+pub fn sfx_bounce(sp_freq: single, sp_vol: single) -> integer {
+  return sfx_beep(sp_freq, 0.08f, sp_vol);
+}

@@ -16,7 +16,9 @@ use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::WindowId;
 
 mod audio;
-use audio::{loft_audio_load, loft_audio_play, loft_audio_set_volume, loft_audio_stop};
+use audio::{
+    loft_audio_load, loft_audio_play, loft_audio_set_volume, loft_audio_stop, n_audio_play_raw,
+};
 mod shader;
 mod text;
 mod window;
@@ -1034,6 +1036,7 @@ loft_ffi::loft_register! {
     loft_audio_play,
     loft_audio_stop,
     loft_audio_set_volume,
+    loft_audio_play_raw => n_audio_play_raw,
 }
 
 // ── Text / Font C-ABI exports (GL3) ─────────────────────────────────────

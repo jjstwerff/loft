@@ -256,12 +256,28 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
       // G5: Audio via Web Audio API
       loft_audio_load(pp, pl) {
-        // TODO: async audio loading from embedded assets
-        return -2147483648; // i32::MIN = null sentinel
+        return -2147483648; // i32::MIN — file-based audio not yet supported in WASM
       },
       loft_audio_play(clip, volume) { return -1; },
       loft_audio_stop(sink) {},
       loft_audio_set_volume(sink, volume) {},
+      loft_audio_play_raw(ptr, count, sample_rate, volume) {
+        try {
+          if (!window._loftAudioCtx) window._loftAudioCtx = new AudioContext();
+          const ctx = window._loftAudioCtx;
+          const f32 = new Float32Array(getMem().buffer, ptr, count);
+          const buf = ctx.createBuffer(1, count, sample_rate);
+          buf.getChannelData(0).set(f32);
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          const gain = ctx.createGain();
+          gain.gain.value = volume;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+          src.start();
+          return 0;
+        } catch(e) { return -1; }
+      },
     },
     env: {}
   };
