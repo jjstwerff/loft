@@ -126,11 +126,8 @@ fn p131_arguments_returns_only_script_args() {
     let dir = std::env::temp_dir();
     let path = dir.join("loft_p131_arguments_content.loft");
     // Print each argument on its own line so we can inspect them.
-    std::fs::write(
-        &path,
-        "fn main() { for a in arguments() { println(a) } }\n",
-    )
-    .expect("write temp file");
+    std::fs::write(&path, "fn main() { for a in arguments() { println(a) } }\n")
+        .expect("write temp file");
     let out = Command::new(loft_bin())
         .arg("--interpret")
         .arg(&path)
@@ -143,10 +140,7 @@ fn p131_arguments_returns_only_script_args() {
     let _ = std::fs::remove_file(&path);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        out.status.success(),
-        "expected exit 0; stderr={stderr:?}"
-    );
+    assert!(out.status.success(), "expected exit 0; stderr={stderr:?}");
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
         lines,

@@ -1585,7 +1585,7 @@ fn main() {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     // P131: store script-level arguments so arguments() returns only these.
-    state.database.user_args = user_args.clone();
+    state.database.user_args.clone_from(&user_args);
     // Bytecode cache: read source content for the cache key, use .loftc path.
     let source_content = std::fs::read_to_string(&abs_file).unwrap_or_default();
     let cache_file = cache::cache_path(&abs_file);
