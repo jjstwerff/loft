@@ -4,9 +4,9 @@
 
 # Interfaces — Design and Implementation Plan
 
-> **Status: implemented (I1–I8).  Stdlib interfaces (I9) shipped.**
-> Known issue: P136 — for-loop + interface method on struct causes use-after-free.
-> Native codegen: text-returning interface methods have a Str wrapping issue.
+> **Status: implemented (I1–I9).  P136 fixed.**
+> Native codegen: text-returning interface methods have a Str wrapping issue
+> (86-interfaces skipped in native test suite).
 
 Structural interfaces for loft: implicit satisfaction, static dispatch only.
 Primarily motivated by enabling bounded generic functions (`<T: Ordered>`).

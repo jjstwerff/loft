@@ -86,15 +86,11 @@ check catches accidental sentinel collisions.
 
 ---
 
-## C55 — Interface method in for-loop on struct vector (P136)
+## ~~C55~~ — Interface method in for-loop on struct vector (P136) — FIXED
 
-Calling an interface method inside a `for` loop on a vector of structs
-in a bounded generic function causes a use-after-free in the interpreter.
-Works correctly for non-loop calls and for built-in types.
-
-**Test:** `tests/scripts/86-interfaces.loft` (loop test commented out).
-**Workaround:** avoid calling interface methods inside for-loops on struct
-vectors; use direct dispatch or a non-generic helper.
+Fixed: `type_element_size` now computes struct field size from attributes,
+and `subst_type` preserves deps during generic specialisation.
+**Test:** `tests/scripts/86-interfaces.loft::test_bounded_for_loop_struct`.
 
 ---
 
@@ -112,7 +108,7 @@ Last retested: **2026-04-12** against commit `d5c20fd` (main branch).
 | ~~C51~~ | **Removed** | Native extensions now load via `extensions::load_all`; 15 native_loader tests pass |
 | C53 | Still applies | No library-enum match test exists; workaround documented |
 | C54 | Still applies | Integer overflow debug panic — by design |
-| C55 | **New** | P136 — interface + for-loop + struct → use-after-free |
+| ~~C55~~ | **Fixed** | P136 — `type_element_size` + deps preservation |
 
 ---
 

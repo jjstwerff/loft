@@ -1205,9 +1205,8 @@ Multiple bounds: `<T: Ordered + Printable>`.
 `Addable`, `Numeric`, `Scalable`, `Printable`.  Built-in types (`integer`, `float`,
 `text`) satisfy them automatically via their existing operator definitions.
 
-**Known limitation (P136):** calling an interface method inside a `for` loop on
-a struct-typed vector can cause a use-after-free in the interpreter.  Works
-correctly for non-loop calls and for built-in types.
+Bounded generics work with for-loops, method calls, and operator dispatch
+on all types including structs.
 
 ---
 

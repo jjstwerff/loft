@@ -239,8 +239,7 @@ Structural satisfaction: if the methods exist, the type satisfies the interface.
 No `impl` block needed. Built-in types satisfy `Ordered`, `Equatable`, `Addable`,
 `Numeric`, `Scalable`, `Printable` automatically.
 
-**Limitation (P136):** calling interface methods inside a `for` loop on struct vectors
-causes use-after-free. Works for non-loop calls and built-in types.
+Bounded generics work with for-loops, method calls, and operator dispatch on all types.
 
 ---
 

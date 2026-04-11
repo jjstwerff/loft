@@ -82,12 +82,17 @@ fn test_stdlib_ordered_interface() {
   assert(if_max_pair(9.0, 2.0) == 9.0, "ordered float");
 }
 
-// ── Known limitation: for-loop + bounded method on struct → P136 ──────
-// fn if_min<T: Labelable>(if_v: vector<T>) -> T {
-//   if_result = if_v[0];
-//   for if_item in if_v {
-//     if if_item.to_label() < if_result.to_label() { if_result = if_item; }
-//   }
-//   return if_result;
-// }
+// ── P136 fixed: for-loop + bounded method on struct ─────────────────
+fn if_count_valid<T: Validatable>(if_cv: vector<T>) -> integer {
+  if_cn = 0;
+  for if_ci in if_cv {
+    if if_ci.is_valid() { if_cn += 1; }
+  }
+  return if_cn;
+}
+
+fn test_bounded_for_loop_struct() {
+  if_loop_data = [IfItem { if_name: "a", if_score: 1 }, IfItem { if_name: "b", if_score: 0 }, IfItem { if_name: "c", if_score: 3 }];
+  assert(if_count_valid(if_loop_data) == 2, "bounded for-loop count");
+}
 // This crashes with use-after-free (P136). Uncomment when fixed.

@@ -504,7 +504,18 @@ impl Function {
 
     fn subst_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
-            Type::Reference(d, _) if d == tv_nr => concrete.clone(),
+            Type::Reference(d, deps) if d == tv_nr => {
+                // P136: preserve the original deps when substituting T → concrete.
+                // The deps carry vector-element borrowing info needed by get_free_vars
+                // to suppress FreeRef on loop element variables.
+                let mut result = concrete.clone();
+                if !deps.is_empty() {
+                    for dep in deps {
+                        result = result.depending(dep);
+                    }
+                }
+                result
+            }
             Type::Vector(inner, deps) => {
                 Type::Vector(Box::new(Self::subst_type(*inner, tv_nr, concrete)), deps)
             }

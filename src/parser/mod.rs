@@ -1046,7 +1046,7 @@ impl Parser {
                     && new_args.len() == 3
                     && matches!(&new_args[1], Value::Int(0) | Value::Int(12))
                 {
-                    let elm_size = Self::type_element_size(concrete);
+                    let elm_size = Self::type_element_size(concrete, data);
                     let mut fixed = new_args;
                     fixed[1] = Value::Int(elm_size);
                     let call = Value::Call(new_d, fixed);
@@ -1122,7 +1122,7 @@ impl Parser {
     }
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
-    fn type_element_size(tp: &Type) -> i32 {
+    fn type_element_size(tp: &Type, data: &Data) -> i32 {
         match tp {
             Type::Integer(_, _, _)
             | Type::Single
@@ -1131,7 +1131,27 @@ impl Parser {
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
             Type::Long | Type::Float => 8,
-            _ => 12, // reference types: DbRef = 12 bytes
+            // P136: for Reference(struct_nr), compute the struct's inline field
+            // size from its attributes rather than assuming 12 (DbRef size).
+            // Vector elements of struct type are stored inline, not as pointers.
+            Type::Reference(d_nr, _) => {
+                if (*d_nr as usize) < data.definitions.len()
+                    && data.def(*d_nr).def_type == DefType::Struct
+                {
+                    let mut total = 0i32;
+                    for attr in &data.def(*d_nr).attributes {
+                        if attr.constant {
+                            continue;
+                        }
+                        total += Self::type_element_size(&attr.typedef, data);
+                    }
+                    if total > 0 {
+                        return total;
+                    }
+                }
+                12 // non-struct reference: DbRef = 12 bytes
+            }
+            _ => 12,
         }
     }
 
