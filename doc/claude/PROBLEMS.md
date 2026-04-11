@@ -365,8 +365,22 @@ sees `data_ptr.is_null()` and skips the snapshot.
 - **119** Native OpenGL `n_` functions registered under `loft_` names for auto-marshaller.
 - **134** `gl_load_font` sentinel mismatch — now returns `i32::MIN` on failure.
 
+### 117, 120–127. Fixed
 
-### 120. Struct constructor doesn't deep-copy vector fields into struct store
+- **117** Struct-text-param store leak — verified with 2000-iteration GL-pattern tests in debug.
+- **120** Struct field overwrite leak — high-bit on CopyRecord type in `copy_ref()`.
+  6 isolation tests + 2 GL-pattern tests pass in debug mode.
+- **121** Tuple heap corruption — verified with sustained-loop + nested-ops tests in debug.
+- **122** Store leak in game loops — 100k-iteration stress test + GL collision/mat4 tests pass.
+- **123** Per-frame vector literal leak — 1000-frame + multi-vector tests pass in debug.
+- **124** Native inline array indexing — verified via `--native-emit`, no `as DbRef` cast.
+- **125** `use` import sibling packages — `lib_path` walks up to `loft.toml`.
+- **126** Negative tail expression — test un-ignored, passes.
+- **127** File-scope vector constants — pre-built in CONST_STORE via `OpConstRef`.
+  See [CONST_STORE.md](CONST_STORE.md).
+
+
+### 128. File-scope constants reject type annotations with misleading error
 
 **Status (2026-04-11):** ❌ **Open — confirmed with pure-loft unit tests.**
 
