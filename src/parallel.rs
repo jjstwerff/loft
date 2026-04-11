@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::thread;
 
 /// Shared bytecode + library for a single `parallel_for` dispatch.
-type ProgramRefs = (Arc<Vec<u8>>, Arc<Vec<u8>>, Arc<Vec<crate::database::Call>>);
+type ProgramRefs = (Arc<Vec<u8>>, Arc<Vec<crate::database::Call>>);
 
 /// Wrapper for `*mut u8` that is `Send + Sync` for cross-thread direct writes.
 /// SAFETY: callers must ensure non-overlapping writes and join all threads.
@@ -39,7 +39,6 @@ unsafe impl Sync for SendMutPtr {}
 /// bytecode and library on every `parallel_for` call.
 pub struct WorkerProgram {
     pub bytecode: Arc<Vec<u8>>,
-    pub text_code: Arc<Vec<u8>>,
     pub library: Arc<Vec<Call>>,
     /// Cached library index of `n_stack_trace`; `u16::MAX` = not found.
     /// Copied into each worker's `State::stack_trace_lib_nr` so that
@@ -54,17 +53,13 @@ unsafe impl Sync for WorkerProgram {}
 impl WorkerProgram {
     /// Clone the shared program references for a new worker `State` — O(1).
     fn clone_refs(&self) -> ProgramRefs {
-        (
-            Arc::clone(&self.bytecode),
-            Arc::clone(&self.text_code),
-            Arc::clone(&self.library),
-        )
+        (Arc::clone(&self.bytecode), Arc::clone(&self.library))
     }
 
     /// Create a worker `State` from this program, with `stack_trace_lib_nr` propagated.
     fn new_state(&self, worker_stores: WorkerStores) -> State {
-        let (bytecode, text_code, library) = self.clone_refs();
-        let mut state = State::new_worker(worker_stores, bytecode, text_code, library);
+        let (bytecode, library) = self.clone_refs();
+        let mut state = State::new_worker(worker_stores, bytecode, library);
         state.stack_trace_lib_nr = self.stack_trace_lib_nr;
         state
     }

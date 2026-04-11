@@ -35,9 +35,22 @@ impl State {
         self.stack_pos += size_of::<Str>() as u32;
     }
 
-    pub fn string_from_texts(&mut self, start: i32, size: i32) {
+    /// # Panics
+    /// Always — `OpConstLongText` is obsolete; long strings now use `OpConstStoreText`.
+    #[allow(clippy::unused_self)]
+    pub fn string_from_texts(&mut self, _start: i32, _size: i32) {
+        panic!("OpConstLongText is obsolete — use OpConstStoreText");
+    }
+
+    /// Push a Str pointing into the constant store's string data.
+    /// The string was written by `Store::set_str()` during compilation:
+    /// length at `get_int(rec, 4)`, bytes at `ptr + rec*8 + 8`.
+    pub fn string_from_const_store(&mut self, rec: u32, _pos: u32) {
+        let store = &self.database.allocations[crate::database::CONST_STORE as usize];
+        let len = store.get_int(rec, 4);
+        let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         unsafe {
-            self.set_string(size, self.text_code.as_ptr().offset(start as isize));
+            self.set_string(len, ptr);
         }
     }
 

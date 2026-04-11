@@ -448,15 +448,25 @@ flag (A14.1) prevents `Drop` from deallocating static memory.
 
 ---
 
-## Phasing
+## Phasing and status
 
-The mmap cache and WASM pre-compilation are **not required for the P127 fix**.
+1. **Phase A** (P127 fix): **Done.** Heap-backed constant store, vector
+   constants pre-built in `byte_code()`, `OpConstRef` opcode, long strings
+   in CONST_STORE, `text_code` buffer removed.
 
-1. **Phase A** (P127 fix): heap-backed constant store, always rebuilt.
-   No mmap, no cache file. Fixes the crash, unifies constant handling.
-2. **Phase B** (native optimization): write constant store to disk after build,
-   load via mmap on cache hit. Faster startup for large programs.
-3. **Phase C** (WASM optimization): pre-compile stdlib into `include_bytes!`
-   static data. 10x faster WASM startup.
-4. **Phase D** (bytecode cache): extend to cache bytecode alongside
-   constants in a single `.loftc` file. Full compilation cache.
+2. **Phase D** (bytecode cache): **Done.** `.loftc` file format caches
+   bytecode + stores + const_refs + function positions. SHA-256 cache key
+   from source content + version. `byte_code_with_cache()` skips the
+   `def_code()` loop on cache hit. `src/cache.rs` module.
+
+3. **Phase B** (mmap): **Deferred.** Cache files are 5-10 KB — mmap
+   overhead (syscall + page tables) exceeds memcpy savings at this size.
+   Becomes worthwhile when Phase C embeds a large stdlib cache.
+
+4. **Phase C** (WASM pre-compiled stdlib): **Deferred.** The bottleneck is
+   re-parsing the stdlib from source (~100ms). Skipping this requires
+   serializing the `Data` struct (definitions, types, attributes) — not
+   just bytecode. The `Data` struct has 130+ public members across
+   recursive enums (`Value`, `Type`), requiring either serde or hand-written
+   binary serialization. Estimated effort: Medium-High. The `include_bytes!`
+   approach from the design works once serialization exists.
