@@ -1,329 +1,147 @@
 
 # Stack Slot Assignment — Design and Implementation
 
-This document is the working reference for the `assign_slots` redesign.
+This document describes how `assign_slots` assigns stack positions to local
+variables and the invariants codegen enforces.
 
 ---
 
-## Contents
+## Overview
 
-- [Background](#background)
-- [Current state](#current-state)
-- [Diagnostic tools](#diagnostic-tools)
-- [The TOS-estimate problem](#the-tos-estimate-problem)
-- [New design — two-zone block pre-claim](#new-design--two-zone-block-pre-claim)
-- [Implementation details](#implementation-details)
-- [Open issues](#open-issues)
-- [Stack efficiency comparison](#stack-efficiency-comparison)
-- [Remaining steps](#remaining-steps)
+`assign_slots` (`src/variables/slots.rs`) runs after `compute_intervals` and
+before codegen.  It assigns `stack_pos` to every local variable.  Codegen
+(`src/state/codegen.rs::generate_set`) reads the pre-assigned position and
+asserts it matches the runtime stack pointer (TOS).
 
----
-
-## Background
-
-`assign_slots` (`src/variables/`) runs after `compute_intervals` and before codegen.
-It assigns `stack_pos` to every local variable using greedy interval colouring:
-variables with non-overlapping live intervals may share a slot; large types (Text 24 B,
-Reference 12 B, Vector 12 B) always get a fresh slot because their init opcodes write
-at the current TOS.
-
-Codegen (`src/state/codegen.rs::generate_set`) then reads the pre-assigned `stack_pos`.
-Two override cases exist:
-
-- **`pos > stack.position`** — pre-assigned slot above current TOS.  Overrides to TOS for
-  any type.
-- **`pos < stack.position` + large type** — pre-assigned slot below TOS for a large type.
-  Overrides to TOS so the init opcode writes at the correct position.
-
-When `assign_slots` gives a variable the wrong slot, codegen overrides it, potentially
-landing it on top of another still-live variable.  `validate_slots` (debug-only) detects
-this and panics.
-
-The `pre_assigned_pos` field captures the `assign_slots` value before any override,
-making overrides visible in diagnostics.
+**Key invariant:** `assign_slots` is the single authority for slot positions.
+Codegen never moves variables.  If a variable's slot doesn't match TOS at
+first assignment, that's a bug in `assign_slots` — not something codegen
+should silently fix.
 
 ---
 
-## Current State
+## Frame Layout
 
-### Passing
-
-```
-cargo test -p loft --test strings    # 14/14
-cargo test -p loft --test enums      #  6/6
-cargo test -p loft --test vectors    # 45/45
+```text
+┌──────────────────┐  ← frame base (args + return address)
+│  zone 1: small   │  ≤8-byte types, greedy interval colouring
+│                  │  pre-claimed via OpReserveFrame (Blocks only)
+├──────────────────┤
+│  zone 2: large   │  >8-byte types (text, refs, vectors)
+│                  │  placed sequentially in IR-walk order
+└──────────────────┘  ← TOS
 ```
 
-### Reproduction tests (`tests/slots.rs`)
+**Blocks** use both zones.  `OpReserveFrame(var_size)` pre-claims zone 1
+at block entry.  `generate_block` cleans up with `OpFreeStack` at exit.
 
-| Test | Bug class | Status |
-|------|-----------|--------|
-| `text_below_tos_nested_loops` | B-dir | ✅ passes (ignore removed) |
-| `vector_iteration_index_inside_vec_slot` | B-stress | ✅ passes (ignore removed) |
-| `sequential_file_blocks_read_conflict` | B-binary | ✅ passes (ignore removed) |
+**Loops** skip zone 1 entirely.  `var_size = 0`, no `OpReserveFrame`.
+All loop variables (small and large) are placed sequentially via the
+zone 2 IR-walk.  This is because:
+- Loop variables persist across iterations (can't re-reserve each time)
+- `OpFreeStack` after loop exit corrupts nested/parallel loop patterns
+- Zone 1 slot reuse is pointless for loops (nothing dies mid-loop)
 
-### Two-zone design — implementation status
+---
 
-All steps complete.  See [Implementation Status](#implementation-status) for detail.
+## Zone 1: Greedy Interval Colouring (Blocks only)
+
+Small variables (≤ 8 bytes) in a Block scope are packed densely at
+`frame_base`.  Dead variables' slots are reused within the same scope
+if sizes match.  The `zone1_hwm` (high-water mark) determines the
+`var_size` written into the Block node.
+
+---
+
+## Zone 2: Sequential IR-Walk Placement
+
+Large variables (> 8 bytes) and ALL loop-scope variables are placed at
+`*tos` in the order they appear during the IR tree walk.  `*tos` advances
+by `v_size` after each placement.
+
+### Special cases in the IR-walk
+
+- **Block-return:** `Set(v, Block([..., result]))` — the block starts at
+  `v`'s slot (non-Text refs share the frame).
+- **Inner pre-assignments:** `Set(v, Insert([Set(__lift, ...), Call(...)]))` —
+  the Insert's preamble Sets are processed first so `__lift` vars get
+  lower slots than `v`.
+- **Orphaned variables:** Variables whose scope has no Block/Loop node in
+  the IR tree are placed by `place_orphaned_vars` after the main walk,
+  using interval colouring against already-placed variables.
+
+---
+
+## Codegen Invariants
+
+### `gen_set_first_at_tos` assertion
+
+```rust
+assert!(pos == stack.position, "slot={pos} but TOS={}", stack.position);
+```
+
+Every first assignment goes through `gen_set_first_at_tos` (if `pos >= TOS`)
+or `set_var` (if `pos < TOS`).  The assertion catches any case where
+`assign_slots` placed a variable above codegen's TOS.
+
+### `set_stack_pos` assertion
+
+```rust
+debug_assert!(pre_assigned_pos == u16::MAX || pre_assigned_pos == pos || argument);
+```
+
+Codegen never moves a variable after `assign_slots` has placed it.
+
+### `gen_loop` — no OpReserveFrame
+
+Loops do not emit `OpReserveFrame`.  All loop variables are placed at TOS
+by codegen on first encounter.  `clear_stack` at the end of each iteration
+resets TOS to the loop start.
 
 ---
 
 ## Diagnostic Tools
 
-### `pre_assigned_pos` on `Variable`
+### `LOFT_ASSIGN_LOG=<name>`
 
-Set by `assign_slots`, never touched by codegen.  Shown as `pre:[lo, hi)` in
-`validate_slots` output when it differs from the final slot.
+Set to a function name (or `*` for all) to trace `assign_slots` placement
+decisions.  Only active in debug builds (`#[cfg(debug_assertions)]`).
 
-### Seq ranges in scope column
+### `validate_slots` (debug only)
 
-Loop scopes show `seq:[start..end)` to make it clear when their `OpFreeStack` fires
-relative to any given `first_def`.
+After codegen, scans all assigned variables for spatial+temporal overlaps.
+Panics with variable names, slots, and live intervals if a conflict exists.
 
-### `.slots()` assertions
+### `.slots()` test assertions
 
-`[first_def..last_use]` shown per variable, `[seq S..E]` on loop scope headers.
-Pass an empty string to print the calculated layout without asserting.
-
-### Loop/recursion guards
-
-Three `assert!` guards prevent the slot-assignment pass from hanging indefinitely:
-
-- **`process_scope` / `place_large_and_recurse` depth** — `depth` parameter, asserts
-  `depth <= 1000`.  Catches infinite IR tree recursion (would indicate a malformed IR).
-
-- **Greedy coloring retry loop** — `retry_count`, asserts `retry_count <= 10_000`.
-  Panics with the variable name, size, scope and current candidate if the placement
-  loop cannot find a free slot.
-
-- **`is_scope_ancestor` step counter** — asserts `steps <= 10_000` and also has an
-  explicit self-loop check (`p == cur`).  Fires if `build_scope_parents` produced a
-  cycle in the scope parent map.
+Unit tests in `slots.rs` verify slot assignments for specific patterns
+without running codegen.
 
 ---
 
-## The TOS-Estimate Problem
+## Known Patterns and Tests
 
-`assign_slots` must know the physical TOS at each variable's `first_def`, so it can
-place large types exactly at TOS (required by their init opcodes).
-
-### Three bug classes, one root cause
-
-All three failing tests share the same root: the TOS at a variable's `first_def` cannot
-be derived accurately from variable intervals alone, because it depends on exactly when
-`generate_block` emits `OpFreeStack` — which is determined by the full recursive
-structure of the IR tree, not by any per-variable property.
-
-- **Bug A (dir/last):** A non-loop block scope's estimated exit fires too early because
-  it is computed from `max(last_use of direct vars)`, which ignores variables in nested
-  child scopes.  Text variable `f` gets a slot below actual TOS.
-  **→ Fixed by two-zone design.**
-
-- **Bug B (binary/loft_suite):** `running_tos` stays too high because a dead-but-never-
-  freed variable (scope 2 spans the whole function) keeps it elevated.  A ref variable
-  is pre-assigned above actual TOS; codegen overrides it downward onto a conflicting slot.
-  **→ Partially fixed; residual conflict remains (see Open Issues).**
-
-- **Bug C (stress):** A For-block scope is nested inside an outer loop body in the IR
-  even though it appears after the outer loop in source.  `scope_exit` misfires; `sv`
-  (vector) gets a slot 4 bytes below actual TOS; cascade conflict with `x#index`.
-  **→ Fixed by two-zone design.**
-
-### Why `running_tos` cannot be fixed incrementally
-
-`running_tos` is an attempt to predict when `OpFreeStack` fires by maintaining a
-monotonically-updated estimate of TOS.  Every bug fix adds another special case
-(scope_exit map, inside_active_loop guard, ...) to compensate for structure that is
-only visible in the IR tree.  The model will always be one IR pattern away from the
-next bug.  The correct approach reads the IR tree directly.
+| Pattern | Test | Status |
+|---------|------|--------|
+| Many parent refs + child loop index | `parent_zone2_does_not_overlap_child_zone1` | ✅ |
+| Call with Block arg (coroutine) | `call_with_block_arg_places_block_vars_first` | ✅ |
+| Insert preamble (P135 lift) | `insert_preamble_sets_placed_before_target` | ✅ |
+| Sequential lifted calls | `sequential_lifted_calls_slots_match_codegen_tos` | ✅ |
+| Parent var Set inside child scope | `parent_var_set_inside_child_scope_operators` | ✅ |
+| Text block-return | `text_block_return_no_overlap_with_child_text` | ✅ |
+| Sibling scope reuse | `sibling_scopes_share_frame_area` | ✅ |
+| Comprehension then literal | `p122p_vector_comprehension_slot_gap` | ✅ |
+| Sorted range comprehension | `p122q_comprehension_zone1_zone2_ordering` | ✅ |
+| Par loop with inner for | `p122r_par_loop_with_inner_for` | ✅ |
 
 ---
 
-## Two-Zone Design
+## Files
 
-See `src/variables/slots.rs` module docs for the frame layout diagram and
-zone 1 / zone 2 semantics.
-
----
-
-## Implementation Details
-
-All steps complete.  Code details are in commit history and CHANGELOG.md.
-The summaries below describe the design intent of each component.
-
-### 1. `Block.var_size` (`src/data.rs`)
-
-`u16` field added to `Block`.  Stores the zone-1 pre-claim size in bytes (0 until
-`assign_slots` runs).  Default-initialised to 0 in all Block constructors.
-
-### 2. `OpReserveFrame` (`default/01_code.loft`, `src/fill.rs`, `src/state/mod.rs`)
-
-New opcode inserted at index 7 in the `OPERATORS` table.  At runtime, advances
-`stack.stack_pos` by its `size: u16` operand.  This is the only change to `fill.rs`
-and the interpreter — no structural change to the bytecode format.
-
-### 3. `assign_slots` — new algorithm (`src/variables/`)
-
-Signature: `assign_slots(function, code: &mut Value, local_start)`.
-
-Entry: `process_scope(function, code, local_start, 0)`.
-
-`process_scope` — colours small variables (≤ 8 B) within `[frame_base, frame_base + zone1_size)`,
-stores `zone1_size` in `bl.var_size`, then walks the block via `place_large_and_recurse`.
-
-`place_large_and_recurse` — places large variables (> 8 B) at the running `*tos` in IR-walk
-order (matching codegen order).  Recurses into child Blocks/Loops via `process_scope`
-(child `*tos` unchanged after — child has its own `OpFreeStack`).  If/else arms each
-start from a saved `branch_tos` that is restored after both arms.
-Special case: `Set(v, Block)` for non-Text large `v` — calls `process_scope` on the Block
-with `frame_base = v.stack_pos` (the block runs in-place at v's slot at codegen time).
-
-### 4. `generate_block` — emit `OpReserveFrame` (`src/state/codegen.rs`)
-
-Before the first operator, if `block.var_size > 0`, emits `OpReserveFrame(var_size)` and
-advances `stack.position` by `var_size`.  `OpFreeStack` at block exit uses the
-pre-`OpReserveFrame` `to` value, correctly freeing both zones.
-
-### 5. `scopes.rs` call site
-
-`assign_slots(&mut d.variables, &mut d.code, local_start)` called once per function after
-scope analysis.
-
-### 6. `validate_slots` — scope ancestry check (`src/variables/`)
-
-`find_conflict` skips variable pairs in sibling execution branches (neither scope is an
-ancestor of the other).  `build_scope_parents` builds a parent map from the IR tree;
-`scopes_can_conflict(sa, sb, parents)` returns `false` for siblings.
-
-**Known limitation:** variables with `scope == u16::MAX` (no scope assigned) are treated
-as always-conflicting.  Currently safe because all such synthetics (`_read_N`) are
-created without user-facing Set nodes in sibling branches (see Open Issues for latent
-`Value::Iter` risk).
-
----
-
-## Open Issues
-
-### B-binary: `_read_N` scope is `u16::MAX` → false-positive conflict — **FIXED**
-
-**Was:** `validate_slots` panicked because `_read_23.scope == u16::MAX`, making
-`scopes_can_conflict` always return `true` → false-positive conflict with `f`.
-
-**Root cause (confirmed):** `f#read(4) as i32;` (a discarded read in the test, line 142)
-produces `Value::Drop(Block([Set(_read_23, null_int), ...]))`.  `scopes::scan_inner` did
-not handle `Value::Drop` — it fell through to `_ => val.clone()`, skipping the inner
-block entirely.  `Set(_read_23, ...)` was never seen by `scan_set`, so `_read_23` was
-never inserted into `var_scope`, and `scopes::check` never called `set_scope` for it.
-
-**Fix (one line in `scopes.rs`):**
-```rust
-Value::Drop(inner) => Value::Drop(Box::new(self.scan(inner, function, data))),
-```
-Added before the `_ => val.clone()` catch-all in `scan_inner`.  The inner block now gets
-fully scanned: `_read_23` is inserted into `var_scope` with its correct scope, and
-`scopes::check` sets its `.scope` field accordingly.
-
-### `scan_inner` — `Value::Iter` sub-expressions *(FIXED)*
-
-`scan_inner` in `scopes.rs` now handles `Value::Iter` by recursing into all three
-sub-expressions (`create`, `next`, `extra`), mirroring the `compute_intervals` arm.
-A full cross-check (2026-03-24) confirmed that `scan_inner`, `build_scope_parents`,
-and `compute_intervals` all handle every `Value` variant containing nested expressions.
-
-### `place_large_and_recurse` — Zone-2 ordering invariant
-
-**Status:** documented in code; invariant maintained by parser.
-
-**Assumption:** every large variable's first `Value::Set(v, ...)` appears as a direct
-top-level operator of its scope's Block — never nested inside a `Call` argument or other
-non-recursed position.  `place_large_and_recurse` only visits Set nodes it encounters
-while walking block operators and their directly-recursed children.
-
-**If violated:** `v` would never be visited, keeps `stack_pos = u16::MAX`, and
-`generate_set` would panic trying to use that as a stack position.
-
-**Invariant source:** the parser always emits variable first-assignments as block-level
-statements.  Any future parser change that produces a Set inside an expression argument
-must either update `place_large_and_recurse` or ensure the new Set node is reached via
-an already-recursed arm (e.g. `Value::Drop`, `Value::Return`).
-
-### `is_scope_ancestor` — cycle in parent map *(FIXED)*
-
-**Was:** `build_scope_parents` did `parents.insert(bl.scope, parent)` unconditionally.
-If a scope number appeared more than once in the IR (e.g., a synthetic block sharing
-a scope number with an outer block), the second insert could overwrite the first with
-a wrong parent, creating a self-loop `map[S] = S`.  `is_scope_ancestor` then looped.
-
-**Fix (2026-03-24):** `build_scope_parents` now uses `entry().or_insert()` to keep the
-first-seen (structurally outermost) parent, and skips the insert entirely when
-`bl.scope == parent` (which would be a self-loop).  The step-counter safety guard in
-`is_scope_ancestor` is retained as a belt-and-suspenders defence.
-
----
-
-## Stack Efficiency Comparison
-
-### What the new approach cannot do
-
-Cross-scope slot sharing: a child-scope variable reusing a dead slot from a parent scope.
-In the new approach each scope has its own frame; child frames start above the parent
-frame even if parent variables are already dead.
-
-### When it doesn't matter
-
-If all variables in every scope overlap with each other (no dead parent slots to share),
-the two approaches produce identical layouts.  The `string_scope` test (7 levels of
-nesting, all variables live simultaneously) gives **172 bytes** in both approaches.
-
-### When the new approach costs extra
-
-The `loop_variable` test: `a` (block:2, size 4) and `test_value` (block:1, size 4) have
-non-overlapping intervals and share slot 28 in the old approach.  In the new approach
-`a` is in its own frame starting at 32.  Overhead: 4 bytes.
-
-### Sequential blocks — no overhead
-
-22 sequential `{f = file(...); ...}` blocks: each block pre-claims and releases the same
-12-byte zone1 frame.  Identical to old approach.
-
-### Summary
-
-| Pattern | Old | New | Δ |
-|---------|-----|-----|---|
-| Same-scope colouring | N B | N B | 0 |
-| Sequential sibling blocks | reuse | reuse | 0 |
-| All vars live simultaneously at every level | N B | N B | 0 |
-| Child var reuses dead parent slot | allowed | not allowed | +child size |
-| TOS estimate wrong → codegen override → waste | possible | impossible | new wins |
-
-Worst-case overhead per nesting level: size of dead parent-scope variables that could
-have been shared.  Typically 0–8 bytes per level; up to 24 bytes for a dead Text
-variable.  Immaterial on desktop targets.
-
----
-
-## Implementation Status
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | `Block.var_size` field | ✅ |
-| 2 | `OpReserveFrame` opcode + interpreter | ✅ |
-| 3 | New `assign_slots` / `process_scope` / `place_large_and_recurse` | ✅ |
-| 4 | `generate_block` emits `OpReserveFrame` | ✅ |
-| 5 | Enable `slots.rs` regression tests | ✅ all 3/3 |
-| 6 | Replace override branches with debug assertions | ⚠️ partial — `pos > TOS` guarded by `debug_assert`; `pos < TOS + large_type` retained for `&vector<T>` args |
-| 7 | Remove `eager_slots` / `assign_slots_old` dead machinery | ✅ |
-| 8 | Fix `Set(v, Block)` ordering in `place_large_and_recurse` (Issue 72) | ✅ |
-| 9 | `pos != u16::MAX` release guard + `pos <= stack.position` regression assert | ✅ |
-| 10 | Audit `build_scope_parents` for missing IR variants; fix scope-cycle root cause | ✅ |
-
-**Step 10 detail (completed 2026-03-24):** Full cross-check confirmed all `Value` variants
-with nested expressions are handled in `build_scope_parents`, `scan_inner`, and
-`compute_intervals`.  Scope-cycle root cause fixed: `build_scope_parents` now uses
-`entry().or_insert()` and skips self-loops.
-
----
-
-## See Also
-
-- [PROBLEMS.md](PROBLEMS.md) — General known issues tracker
+| File | Role |
+|------|------|
+| `src/variables/slots.rs` | `assign_slots`, `process_scope`, `place_large_and_recurse`, `place_orphaned_vars` |
+| `src/state/codegen.rs` | `generate_set`, `gen_set_first_at_tos`, `gen_loop`, `generate_block` |
+| `src/variables/mod.rs` | `set_stack_pos` assertion, `Function` struct |
+| `src/scopes.rs` | `scan_set` (Insert flattening), `inline_struct_return` (P122 lift) |
+| `src/stack.rs` | `size_code` (eval stack size), `loop_position` |
