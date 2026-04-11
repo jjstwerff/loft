@@ -1112,44 +1112,37 @@ fn describe(self: Circle) -> text { }   // stub: returns null, no warning
 
 A complete list of open issues is in [PROBLEMS.md](PROBLEMS.md).
 
-### Error handling: null as the error channel
+### Error handling: null + FileResult, no exceptions
 
-Loft uses null returns instead of exceptions.  Every fallible operation returns
-null on failure, and the caller handles it with `??` (null coalescing), `!` (null
-check), or explicit `if`:
+Loft uses two mechanisms instead of exceptions:
+
+**Null returns** for simple fallible operations — handled with `??`, `!`, or `if`:
 
 ```loft
-// Fallback with ??
-name = config.get("user") ?? "anonymous";
-
-// Guard with !
+name = config.get("user") ?? "anonymous";  // fallback
 f = file("data.txt");
-if !f { println("file not found"); return; }
-
-// Graceful degradation
+if !f.exists() { println("not found"); return; }   // guard
 clip = audio_load("hit.wav");
-if clip { audio_play(clip, 0.5); }  // skip if audio unavailable
+if clip { audio_play(clip, 0.5); }         // graceful skip
 ```
 
-This replaces `try`/`catch` with simpler, more predictable control flow.  There are
-no hidden exception paths — every function's failure mode is visible at the call site.
-
-`assert` and `panic` are for programmer errors (bugs), not expected failures.
-In production mode (`--production`), failed asserts are logged instead of aborting.
-
-### Generics: single type variable, no bounds
-
-Generics support one type variable `<T>` inferred from the first argument.  Only
-assign, return, and store operations are allowed on `T` — no arithmetic, field
-access, or method calls.  Multiple type variables (`<T, U>`) are not supported.
+**`FileResult` enum** for filesystem operations that need specific error reasons:
 
 ```loft
-fn first<T>(items: vector<T>) -> T { items[0] }  // ok
-// fn map<T, U>(v: vector<T>, f: fn(T)->U) -> vector<U>  // not supported
+result = delete("temp.dat");
+if result == FileResult.NotFound { println("already gone"); }
+if result == FileResult.PermissionDenied { println("access denied"); }
+if !result.ok() { println("delete failed"); }
 ```
 
-A structural interface system (`interface` keyword with `<T: Bound>` syntax) is
-designed ([INTERFACES.md](INTERFACES.md)) but deferred to post-1.0.
+`FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
+`NotDirectory`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
+`set_file_size`.
+
+There are no hidden exception paths — every function's failure mode is visible
+at the call site.  `assert` and `panic` are for programmer errors (bugs), not
+expected failures.  In production mode (`--production`), failed asserts are
+logged instead of aborting.
 
 ### Closure capture: copy-at-definition, mutable within copy
 
@@ -1180,16 +1173,33 @@ Collisions only occur in specific codegen edge cases:
 
 Regular parameter and local variable reuse across functions works correctly.
 
-### Hash collections: must be struct fields
+### Hash collections: struct fields only, no iteration
 
-Hash collections cannot be standalone local variables.  Wrap in a struct:
+Hash collections cannot be standalone local variables — wrap in a struct.
+Lookup and mutation work; iteration does not:
 
 ```loft
 struct Table { data: hash<Entry[name]> }
 t = Table { data: [] };
+t.data += [Entry { name: "x", value: 1 }];
+e = t.data["x"];         // lookup — works
+t.data["x"] = null;      // remove — works
+for kv in t.data { }     // iteration — NOT supported
 ```
 
-Hash collections cannot be iterated directly (`for kv in hash` is not supported).
+### Generics: single type variable, no bounds
+
+Only one type variable `<T>` is allowed, inferred from the first argument.
+Only assign, return, and store are allowed on `T` — no arithmetic, field
+access, or method calls.  Multiple type variables (`<T, U>`) are not supported.
+A structural interface system is designed ([INTERFACES.md](INTERFACES.md))
+but deferred to post-1.0.
+
+### Text: most operations exist
+
+The stdlib provides `starts_with`, `ends_with`, `find`, `contains`, `replace`,
+`trim`, `split(char)`, `to_uppercase`, `to_lowercase`, `len`, and slicing.
+**Missing:** `join` (concatenate vector of strings with separator).
 
 ## See also
 - [STDLIB.md](STDLIB.md) — Standard library API (math, text, collections, file I/O, logging, parallel)
