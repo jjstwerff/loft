@@ -15,6 +15,8 @@ use winit::event_loop::ActiveEventLoop;
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::WindowId;
 
+mod audio;
+use audio::{loft_audio_load, loft_audio_play, loft_audio_set_volume, loft_audio_stop};
 mod shader;
 mod text;
 mod window;
@@ -1027,6 +1029,11 @@ loft_ffi::loft_register! {
     loft_gl_upload_canvas => n_gl_upload_canvas,
     // PNG export
     loft_save_png => n_save_png,
+    // G5: Audio
+    loft_audio_load,
+    loft_audio_play,
+    loft_audio_stop,
+    loft_audio_set_volume,
 }
 
 // ── Text / Font C-ABI exports (GL3) ─────────────────────────────────────

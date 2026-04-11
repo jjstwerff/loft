@@ -254,6 +254,14 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_save_png(pp, pl, w, h, dp, dc) { return 0; },
       loft_gl_upload_alpha_texture(dp, w, h) { return 0; },
       loft_gl_text_texture(fi, tp, tl, sz, wp, hp) { return 0; },
+      // G5: Audio via Web Audio API
+      loft_audio_load(pp, pl) {
+        // TODO: async audio loading from embedded assets
+        return -2147483648; // i32::MIN = null sentinel
+      },
+      loft_audio_play(clip, volume) { return -1; },
+      loft_audio_stop(sink) {},
+      loft_audio_set_volume(sink, volume) {},
     },
     env: {}
   };

@@ -947,3 +947,17 @@ pub fn create_text_texture(font: integer, content: text, size: float, color: int
   ctn_cv.draw_text(font, content, size, ctn_pad, ctn_pad, color);
   gl_upload_canvas(ctn_cv.data, ctn_tw, ctn_th)
 }
+
+// --- G5: Audio ---
+// Load an audio clip (WAV or OGG). Returns handle (>= 0) or null on failure.
+pub fn audio_load(path: text) -> integer;
+#native "loft_audio_load"
+// Play a loaded clip at the given volume (0.0-1.0). Returns playback handle.
+pub fn audio_play(clip: integer, volume: float) -> integer;
+#native "loft_audio_play"
+// Stop a playing clip by its playback handle.
+pub fn audio_stop(sink: integer);
+#native "loft_audio_stop"
+// Set volume of a playing clip (0.0-1.0).
+pub fn audio_set_volume(sink: integer, volume: float);
+#native "loft_audio_set_volume"
