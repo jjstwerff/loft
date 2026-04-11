@@ -1044,7 +1044,7 @@ impl Parser {
                     && (new_d as usize) < data.definitions.len()
                     && data.def(new_d).name == "OpGetVector"
                     && new_args.len() == 3
-                    && matches!(&new_args[1], Value::Int(0))
+                    && matches!(&new_args[1], Value::Int(0) | Value::Int(12))
                 {
                     let elm_size = Self::type_element_size(concrete);
                     let mut fixed = new_args;
