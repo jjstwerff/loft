@@ -42,8 +42,7 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 - [S — Stability Hardening](#s--stability-hardening)
   - [S4 — Binary I/O type coverage (Issue 59, 63)](#s4--binary-io-type-coverage)
   - [S6 — `for` loop in recursive function](#s6--fix-for-loop-in-recursive-function----too-few-parameters-panic) *(1.1+)*
-- [I — Interfaces](#i--interfaces)
-  - [I1–I10 — Structural interfaces and bounded generics](#i1i10--structural-interfaces-and-bounded-generics) *(0.8.3)*
+- [I — Interfaces](#i--interfaces) *(completed — I1–I8 + I9 stdlib; P136 loop bug open)*
 - [P — Prototype Features](#p--prototype-features)
   - [T1 — Tuple types](#t1--tuple-types) *(1.1+)*
   - [CO1 — Coroutines](#co1--coroutines) *(1.1+)*

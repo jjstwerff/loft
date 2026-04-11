@@ -1159,6 +1159,58 @@ fn describe(self: Circle) -> text { }   // stub: returns null, no warning
 
 ---
 
+## Interfaces and bounded generics
+
+Interfaces declare a set of required methods.  A type satisfies an interface
+by defining the required methods — no `impl` declaration is needed (structural
+satisfaction, like Go interfaces):
+
+```loft
+interface Comparable {
+  fn less_than(self: Self, other: Self) -> boolean
+}
+
+struct Priority { value: integer }
+fn less_than(self: Priority, other: Priority) -> boolean {
+  self.value < other.value
+}
+// Priority now satisfies Comparable — no explicit declaration.
+```
+
+Bounded generics use `<T: InterfaceName>` to constrain the type variable:
+
+```loft
+fn find_min<T: Comparable>(v: vector<T>) -> T {
+  result = v[0];
+  for item in v {
+    if item.less_than(result) { result = item; }
+  }
+  result
+}
+```
+
+Operator interfaces use `op` syntax:
+
+```loft
+interface Summable {
+  op + (self: Self, other: Self) -> Self
+}
+fn total<T: Summable>(a: T, b: T) -> T { a + b }
+total(10, 20);  // integer satisfies Summable automatically
+```
+
+Multiple bounds: `<T: Ordered + Printable>`.
+
+**Stdlib interfaces** (defined in `default/01_code.loft`): `Ordered`, `Equatable`,
+`Addable`, `Numeric`, `Scalable`, `Printable`.  Built-in types (`integer`, `float`,
+`text`) satisfy them automatically via their existing operator definitions.
+
+**Known limitation (P136):** calling an interface method inside a `for` loop on
+a struct-typed vector can cause a use-after-free in the interpreter.  Works
+correctly for non-loop calls and for built-in types.
+
+---
+
 ## Design decisions and constraints
 
 A complete list of open issues is in [PROBLEMS.md](PROBLEMS.md).
@@ -1238,13 +1290,14 @@ t.data["x"] = null;      // remove — works
 for kv in t.data { }     // iteration — NOT supported
 ```
 
-### Generics: single type variable, no bounds
+### Generics: single type variable
 
 Only one type variable `<T>` is allowed, inferred from the first argument.
-Only assign, return, and store are allowed on `T` — no arithmetic, field
-access, or method calls.  Multiple type variables (`<T, U>`) are not supported.
-A structural interface system is designed ([INTERFACES.md](INTERFACES.md))
-but deferred to post-1.0.
+Multiple type variables (`<T, U>`) are not supported.
+
+**Without bounds:** only assign, return, and store are allowed on `T`.
+**With bounds (`<T: Interface>`):** method calls and operators declared
+in the interface are allowed on `T`.  See § Interfaces above.
 
 ### Text: comprehensive operations
 

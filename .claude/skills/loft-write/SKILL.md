@@ -219,6 +219,44 @@ t.data["x"] = null;   // remove entry
 
 ---
 
+## Interfaces and bounded generics
+
+```loft
+interface Comparable {
+  fn less_than(self: Self, other: Self) -> boolean
+}
+
+// Bounded generic — T must satisfy Comparable
+fn find_min<T: Comparable>(v: vector<T>) -> T { ... }
+
+// Operator interfaces use 'op' syntax
+interface Summable {
+  op + (self: Self, other: Self) -> Self
+}
+```
+
+Structural satisfaction: if the methods exist, the type satisfies the interface.
+No `impl` block needed. Built-in types satisfy `Ordered`, `Equatable`, `Addable`,
+`Numeric`, `Scalable`, `Printable` automatically.
+
+**Limitation (P136):** calling interface methods inside a `for` loop on struct vectors
+causes use-after-free. Works for non-loop calls and built-in types.
+
+---
+
+## The `both` parameter name
+
+Name the first parameter `both` instead of `self` to register a function as
+both a method and a free function:
+
+```loft
+pub fn exists(both: File) -> boolean { both.format != Format.NotExists }
+// f.exists()  — method
+// exists(f)   — free function
+```
+
+---
+
 ## Operators
 
 | Precedence | Operators | Notes |

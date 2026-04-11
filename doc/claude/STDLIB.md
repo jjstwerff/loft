@@ -362,6 +362,7 @@ Mutating filesystem operations return a `FileResult` enum:
 |----------|-------------|
 | `ok(self: FileResult) -> boolean` | Returns `true` if `Ok`. |
 | `exists(path: text) -> boolean` | Returns `true` if the path exists and is inside the project. |
+| `exists(both: File) -> boolean` | Method form: `f.exists()` or `exists(f)`. Uses `both` parameter. |
 | `delete(path: text) -> FileResult` | Removes a file. |
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |

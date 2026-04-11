@@ -86,20 +86,33 @@ check catches accidental sentinel collisions.
 
 ---
 
+## C55 — Interface method in for-loop on struct vector (P136)
+
+Calling an interface method inside a `for` loop on a vector of structs
+in a bounded generic function causes a use-after-free in the interpreter.
+Works correctly for non-loop calls and for built-in types.
+
+**Test:** `tests/scripts/86-interfaces.loft` (loop test commented out).
+**Workaround:** avoid calling interface methods inside for-loops on struct
+vectors; use direct dispatch or a non-generic helper.
+
+---
+
 ## Verification log
 
-Last retested: **2026-04-11** against commit `8761101` (consilidate branch).
+Last retested: **2026-04-12** against commit `d5c20fd` (main branch).
 
 | Caveat | Status | How verified |
 |--------|--------|-------------|
 | C3 | Still applies | Design constraint — WASM has no thread pool |
 | C7 | Still applies | `--tests 36-parse-errors.loft::test_spacial_not_implemented` → expected error |
-| C12 | Still applies | Design constraint — no `try`/`catch` syntax |
+| C12 | Still applies | Design choice — null + `??` instead of exceptions |
 | C38 | Still applies | `--tests 56-closures.loft::test_capture_timing` → passes |
 | C45 | Still applies | Slot allocator still text-only for zone-2 reuse |
 | ~~C51~~ | **Removed** | Native extensions now load via `extensions::load_all`; 15 native_loader tests pass |
 | C53 | Still applies | No library-enum match test exists; workaround documented |
-| C54 | **New** | Integer overflow debug panic — by design, documented |
+| C54 | Still applies | Integer overflow debug panic — by design |
+| C55 | **New** | P136 — interface + for-loop + struct → use-after-free |
 
 ---
 
