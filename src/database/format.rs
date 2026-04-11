@@ -217,6 +217,10 @@ impl Stores {
     */
     #[must_use]
     pub fn os_arguments(&mut self) -> DbRef {
+        if !self.user_args.is_empty() {
+            let args = self.user_args.clone();
+            return self.text_vector(&args);
+        }
         #[cfg(not(feature = "wasm"))]
         let args: Vec<String> = std::env::args_os()
             .map(|a| a.to_str().unwrap().to_string())

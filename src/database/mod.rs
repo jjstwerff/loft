@@ -175,6 +175,9 @@ pub struct Stores {
     pub report_asserts: bool,
     /// Structured assert results: (passed, message, file, line).
     pub assert_results: Vec<(bool, String, String, u32)>,
+    /// Script-level arguments (set by the CLI after parsing its own flags).
+    /// When non-empty, `os_arguments()` returns these instead of raw `std::env::args`.
+    pub user_args: Vec<String>,
     /// Monotonic timestamp captured at `Stores::new()`.  Used by `ticks()` to return
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
@@ -225,6 +228,7 @@ impl Clone for Stores {
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
+            user_args: self.user_args.clone(),
             #[cfg(not(feature = "wasm"))]
             start_time: self.start_time,
             #[cfg(feature = "wasm")]
@@ -483,6 +487,7 @@ impl Stores {
             frame_yield: false,
             report_asserts: false,
             assert_results: Vec::new(),
+            user_args: Vec::new(),
             #[cfg(not(feature = "wasm"))]
             start_time: Instant::now(),
             #[cfg(feature = "wasm")]

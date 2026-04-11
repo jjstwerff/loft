@@ -142,3 +142,12 @@ fn test_ref_param_multiple_appends() {
   assert(nums[3] == 30, "nums[3]: {nums[3]}");
 }
 
+// L4: passing a named empty vector to `&vector<T>` works correctly.
+fn l4_fill_ref(l4v: &vector<integer>) { l4v += [1]; l4v += [2]; l4v += [3]; }
+
+fn test_l4_empty_vec_annotated_as_ref_param() {
+  l4_buf: vector<integer> = [];
+  l4_fill_ref(l4_buf);
+  assert(len(l4_buf) == 3, "L4 annotated: len={len(l4_buf)}");
+}
+

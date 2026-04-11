@@ -54,16 +54,43 @@ the actual implementation diverged:
 | GL7 glTF compliance | material on primitive (not node); node transform matrix | `glb.loft`, `scene.loft` |
 | GL8 mesh primitives | Complete 6-face cube; `plane(w, d)`; `sphere(r, slices, stacks)` | `mesh.loft` |
 
-Tests:
-- `lib/graphics/tests/canvas.loft` — 30 canvas tests. Run: `cargo run --bin loft -- --lib lib/graphics/src --tests lib/graphics/tests/canvas.loft`
-- `lib/graphics/tests/math.loft` — 9 math tests.
-- `lib/graphics/tests/mesh.loft` — 6 mesh tests (cube, plane, sphere).
-- `lib/graphics/tests/scene.loft` — 5 scene graph tests.
-- `lib/graphics/tests/glb.loft` — 5 single-mesh GLB tests.
-- `lib/graphics/tests/scene_glb.loft` — 9 scene GLB tests (binary structure + JSON content).
+**Phases 8–9 (OpenGL + WebGL) — implemented in native crate + WASM bridge:**
 
-The original Rust-native design is preserved below for reference.  Future phases (text,
-OpenGL) will likely need native extensions via the `#native` mechanism.
+| Component | Status | Location |
+|---|---|---|
+| Window + event loop | ✓ Complete | `native/src/lib.rs`, `window.rs` |
+| Shader compile + link | ✓ Complete | `native/src/shader.rs` |
+| VAO/VBO/EBO upload | ✓ Complete | `native/src/lib.rs` |
+| Uniforms (float/int/vec3/mat4) | ✓ Complete | `native/src/lib.rs` |
+| GL state (blend/cull/depth/viewport) | ✓ Complete | `native/src/lib.rs` |
+| Framebuffers + render-to-texture | ✓ Complete | `native/src/lib.rs` |
+| Texture loading (PNG/JPG) | ✓ Complete | `native/src/lib.rs` |
+| Canvas → texture upload | ✓ Complete | `native/src/lib.rs` |
+| Font loading + text raster | ✓ Complete | `native/src/text.rs` |
+| Input (keyboard + mouse) | ✓ Complete | `native/src/lib.rs` |
+| Headless GL safety (P130) | ✓ Complete | `GL_READY` guard on all 50+ functions |
+| WebGL2 bridge | ✓ Complete | `src/wasm_gl.rs` (full parity, 50+ functions) |
+| GLSL 330→300es patching | ✓ Complete | `src/wasm_gl.rs::patch_shader()` |
+| PBR renderer | ✓ Complete | `render.loft` (shadow + 5-light GGX/Schlick) |
+| Examples | ✓ 24 working | `lib/graphics/examples/00–24` |
+| Breakout game | WIP | `lib/graphics/examples/25-breakout.loft` (936 lines) |
+
+Tests:
+- `lib/graphics/tests/canvas.loft` — 30+ canvas tests
+- `lib/graphics/tests/math.loft` — 9 math tests
+- `lib/graphics/tests/mesh.loft` — 6 mesh tests (cube, plane, sphere)
+- `lib/graphics/tests/scene.loft` — 5 scene graph tests
+- `lib/graphics/tests/glb.loft` — 5 single-mesh GLB tests
+- `lib/graphics/tests/scene_glb.loft` — 9 scene GLB tests (binary structure + JSON content)
+- `lib/graphics/native/tests/headless_safety.rs` — P130 headless GL no-crash test
+
+**Not yet implemented:**
+- Phase 2.11 AA fill boundary
+- Phase 2.13 Dashed/Dotted lines
+- G5 Audio (native + Web Audio)
+- W1.1 Single-file HTML export
+
+The original Rust-native design is preserved below for reference.
 
 ---
 

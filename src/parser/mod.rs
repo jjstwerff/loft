@@ -1682,6 +1682,23 @@ impl Parser {
                 all_types[nr] = tp.clone();
                 continue;
             }
+            // L4: reject non-variable expressions passed to `&` parameters (except &text
+            // which has its own work-text copy handling in convert()).  The `&` modifier
+            // means "mutations propagate back to the caller" — passing a literal means
+            // the mutations are silently discarded, which is almost certainly a bug.
+            if let Type::RefVar(inner) = &tp
+                && !matches!(inner.as_ref(), Type::Text(_))
+                && !matches!(&actual_code, Value::Var(_))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot pass a literal or expression to a '&' parameter — \
+                     assign to a variable first"
+                );
+                actual.push(actual_code);
+                continue;
+            }
             if actual_type.is_unknown() && matches!(&tp, Type::Vector(_, _)) {
                 self.change_var(&actual_code, &tp);
                 actual.push(actual_code);
@@ -2274,9 +2291,16 @@ impl Parser {
             // PKG.4: register native function symbols and package crate info.
             if let Some(ref crate_name) = m.native_crate {
                 let rust_crate = crate_name.replace('-', "_");
-                self.data
+                if !self
+                    .data
                     .native_packages
-                    .push((crate_name.clone(), pkg_dir.clone()));
+                    .iter()
+                    .any(|(c, _)| c == crate_name)
+                {
+                    self.data
+                        .native_packages
+                        .push((crate_name.clone(), pkg_dir.clone()));
+                }
                 for (loft_name, rust_symbol) in &m.native_functions {
                     self.data
                         .native_symbols

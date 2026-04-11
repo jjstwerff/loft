@@ -17,11 +17,18 @@ const MAGIC: &[u8; 4] = b"LFC1";
 /// Loft version baked into the cache key so a different binary invalidates the cache.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Compute the cache key: SHA-256(version + source contents).
+/// Git commit hash (or timestamp) from `build.rs`.  Ensures that a rebuild of
+/// the interpreter (e.g. a parser fix without a version bump) invalidates all
+/// cached `.loftc` files.
+const BUILD_ID: &str = env!("LOFT_BUILD_ID");
+
+/// Compute the cache key: SHA-256(version + build_id + source contents).
 /// `sources` is a list of (filename, content) pairs.
 pub fn cache_key(sources: &[(&str, &str)]) -> [u8; 32] {
     let mut buf = Vec::new();
     buf.extend_from_slice(VERSION.as_bytes());
+    buf.push(0);
+    buf.extend_from_slice(BUILD_ID.as_bytes());
     buf.push(0);
     for (name, content) in sources {
         buf.extend_from_slice(name.as_bytes());

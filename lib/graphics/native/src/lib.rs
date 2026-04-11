@@ -7,7 +7,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use glutin::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -32,6 +32,27 @@ struct GlState {
 
 thread_local! {
     static GL: RefCell<Option<GlState>> = const { RefCell::new(None) };
+    /// Set to `true` only after `gl::load_with` succeeds inside
+    /// `loft_gl_create_window`.  Every function that calls a `gl::*`
+    /// entry-point must check this first — when GL function pointers are
+    /// not loaded, calling through them is undefined behaviour (P130).
+    static GL_READY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Early-return when GL function pointers have not been loaded.
+/// Use `gl_guard!()` in void functions and `gl_guard!(expr)` to return a
+/// default value.
+macro_rules! gl_guard {
+    () => {
+        if !GL_READY.with(|c| c.get()) {
+            return;
+        }
+    };
+    ($default:expr) => {
+        if !GL_READY.with(|c| c.get()) {
+            return $default;
+        }
+    };
 }
 
 fn with_gl<R>(f: impl FnOnce(&GlState) -> R) -> Option<R> {
@@ -132,6 +153,7 @@ pub extern "C" fn loft_gl_create_window(
     match window::create_gl_state(width, height, title) {
         Ok(state) => {
             GL.with(|cell| *cell.borrow_mut() = Some(state));
+            GL_READY.with(|c| c.set(true));
             true
         }
         Err(e) => {
@@ -170,6 +192,7 @@ pub extern "C" fn loft_gl_poll_events() -> bool {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_swap_buffers() {
+    gl_guard!();
     // On Wayland the compositor uses framebuffer alpha for window
     // transparency. Force the alpha channel to 1.0 (opaque) on every
     // frame before presenting, regardless of what shaders wrote.
@@ -186,6 +209,7 @@ pub extern "C" fn loft_gl_swap_buffers() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_clear(color: u32) {
+    gl_guard!();
     // Color is packed as 0xAARRGGBB by graphics::rgba().
     let a = ((color >> 24) & 0xFF) as f32 / 255.0;
     let r = ((color >> 16) & 0xFF) as f32 / 255.0;
@@ -199,6 +223,7 @@ pub extern "C" fn loft_gl_clear(color: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_destroy_window() {
+    GL_READY.with(|c| c.set(false));
     GL.with(|cell| *cell.borrow_mut() = None);
 }
 
@@ -209,6 +234,7 @@ pub extern "C" fn loft_gl_create_shader(
     frag_ptr: *const u8,
     frag_len: usize,
 ) -> u32 {
+    gl_guard!(0);
     let vert = unsafe { loft_ffi::text(vert_ptr, vert_len) };
     let frag = unsafe { loft_ffi::text(frag_ptr, frag_len) };
     shader::compile_program(vert, frag).unwrap_or(0)
@@ -216,6 +242,7 @@ pub extern "C" fn loft_gl_create_shader(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_use_shader(program: u32) {
+    gl_guard!();
     unsafe {
         gl::UseProgram(program);
     }
@@ -229,6 +256,7 @@ pub unsafe extern "C" fn loft_gl_upload_mesh(
     out_vao: *mut u32,
     out_vbo: *mut u32,
 ) {
+    gl_guard!();
     let mut vao = 0u32;
     let mut vbo = 0u32;
     unsafe {
@@ -280,6 +308,7 @@ pub unsafe extern "C" fn loft_gl_upload_mesh(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw(vao: u32, n_vertices: u32) {
+    gl_guard!();
     unsafe {
         gl::BindVertexArray(vao);
         gl::DrawArrays(gl::TRIANGLES, 0, n_vertices as i32);
@@ -302,6 +331,7 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
     data: loft_ffi::LoftRef,
     stride: i32,
 ) -> i32 {
+    gl_guard!(0);
     let count = unsafe { store.vector_len(&data) } as u32;
     let n_vertices = count / stride as u32;
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const f32;
@@ -321,6 +351,7 @@ pub unsafe extern "C" fn n_gl_set_mat4(
     name_len: usize,
     mat: loft_ffi::LoftRef,
 ) {
+    gl_guard!();
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     // Mat4.m is stored as vector<float> — 16 f64 values in the store.
     // OpenGL needs f32, so we convert on the fly.
@@ -356,6 +387,7 @@ pub unsafe extern "C" fn loft_gl_upload_vertices(
     count: u32,
     stride: i32,
 ) -> i32 {
+    gl_guard!(0);
     let n_vertices = if stride == 0 { 0 } else { count / stride as u32 };
     let mut vao = 0u32;
     let mut vbo = 0u32;
@@ -373,6 +405,7 @@ pub unsafe extern "C" fn loft_gl_set_mat4(
     mat_ptr: *const f64,
     mat_count: u32,
 ) {
+    gl_guard!();
     if mat_count < 16 {
         return;
     }
@@ -396,6 +429,7 @@ pub unsafe extern "C" fn loft_gl_set_mat4(
 pub extern "C" fn loft_gl_set_uniform_float(
     program: u32, name_ptr: *const u8, name_len: usize, val: f64,
 ) {
+    gl_guard!();
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
@@ -408,6 +442,7 @@ pub extern "C" fn loft_gl_set_uniform_float(
 pub extern "C" fn loft_gl_set_uniform_int(
     program: u32, name_ptr: *const u8, name_len: usize, val: i32,
 ) {
+    gl_guard!();
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
@@ -421,6 +456,7 @@ pub extern "C" fn loft_gl_set_uniform_vec3(
     program: u32, name_ptr: *const u8, name_len: usize,
     x: f64, y: f64, z: f64,
 ) {
+    gl_guard!();
     let name = unsafe { loft_ffi::text(name_ptr, name_len) };
     let c_name = std::ffi::CString::new(name).unwrap_or_default();
     unsafe {
@@ -433,6 +469,7 @@ pub extern "C" fn loft_gl_set_uniform_vec3(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_enable(cap: i32) {
+    gl_guard!();
     let gl_cap = match cap {
         1 => gl::DEPTH_TEST,
         2 => gl::BLEND,
@@ -444,6 +481,7 @@ pub extern "C" fn loft_gl_enable(cap: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_disable(cap: i32) {
+    gl_guard!();
     let gl_cap = match cap {
         1 => gl::DEPTH_TEST,
         2 => gl::BLEND,
@@ -455,6 +493,7 @@ pub extern "C" fn loft_gl_disable(cap: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
+    gl_guard!();
     let map = |v: i32| -> u32 {
         match v {
             0 => gl::ZERO, 1 => gl::ONE,
@@ -468,17 +507,20 @@ pub extern "C" fn loft_gl_blend_func(src: i32, dst: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_cull_face(face: i32) {
+    gl_guard!();
     let f = if face == 0 { gl::BACK } else { gl::FRONT };
     unsafe { gl::CullFace(f); }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_depth_mask(write: bool) {
+    gl_guard!();
     unsafe { gl::DepthMask(if write { gl::TRUE } else { gl::FALSE }); }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_viewport(x: i32, y: i32, w: i32, h: i32) {
+    gl_guard!();
     unsafe { gl::Viewport(x, y, w, h); }
 }
 
@@ -486,6 +528,7 @@ pub extern "C" fn loft_gl_viewport(x: i32, y: i32, w: i32, h: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_framebuffer() -> i32 {
+    gl_guard!(0);
     let mut fbo = 0u32;
     unsafe { gl::GenFramebuffers(1, &mut fbo); }
     fbo as i32
@@ -493,12 +536,14 @@ pub extern "C" fn loft_gl_create_framebuffer() -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_bind_framebuffer(fbo: i32) {
+    gl_guard!();
     unsafe { gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32); }
 }
 
 /// Attach a texture as the color (attachment=0) or depth (attachment=1) target.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i32) {
+    gl_guard!();
     let att = if attachment == 0 { gl::COLOR_ATTACHMENT0 } else { gl::DEPTH_ATTACHMENT };
     unsafe {
         gl::BindFramebuffer(gl::FRAMEBUFFER, fbo as u32);
@@ -523,6 +568,7 @@ pub extern "C" fn loft_gl_framebuffer_texture(fbo: i32, attachment: i32, tex: i3
 /// Create a depth-only texture (for shadow mapping).
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
+    gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
         gl::GenTextures(1, &mut tex);
@@ -544,6 +590,7 @@ pub extern "C" fn loft_gl_create_depth_texture(width: i32, height: i32) -> i32 {
 /// Create an empty RGBA texture (for render-to-texture / post-processing).
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
+    gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
         gl::GenTextures(1, &mut tex);
@@ -563,6 +610,7 @@ pub extern "C" fn loft_gl_create_color_texture(width: i32, height: i32) -> i32 {
 /// Draw a fullscreen quad (for post-processing passes). Uses a built-in VAO.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_fullscreen_quad() {
+    gl_guard!();
     thread_local! {
         static QUAD_VAO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
@@ -630,6 +678,7 @@ pub unsafe extern "C" fn loft_gl_upload_indexed_mesh(
     idx_ptr: *const u32, n_indices: u32,
     out_vao: *mut u32,
 ) {
+    gl_guard!();
     let mut vao = 0u32;
     let mut vbo = 0u32;
     let mut ebo = 0u32;
@@ -667,6 +716,7 @@ pub unsafe extern "C" fn loft_gl_upload_indexed_mesh(
 /// Draw using index buffer (EBO). mode: 0=triangles, 1=lines, 2=points.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_elements(vao: i32, n_indices: i32, mode: i32) {
+    gl_guard!();
     let gl_mode = match mode { 1 => gl::LINES, 2 => gl::POINTS, _ => gl::TRIANGLES };
     unsafe {
         gl::BindVertexArray(vao as u32);
@@ -678,6 +728,7 @@ pub extern "C" fn loft_gl_draw_elements(vao: i32, n_indices: i32, mode: i32) {
 /// Draw with explicit mode: 0=triangles, 1=lines, 2=points.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
+    gl_guard!();
     let gl_mode = match mode { 1 => gl::LINES, 2 => gl::POINTS, _ => gl::TRIANGLES };
     unsafe {
         gl::BindVertexArray(vao as u32);
@@ -690,17 +741,20 @@ pub extern "C" fn loft_gl_draw_mode(vao: i32, n_vertices: i32, mode: i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_shader(program: i32) {
+    gl_guard!();
     unsafe { gl::DeleteProgram(program as u32); }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_vao(vao: i32) {
+    gl_guard!();
     let v = vao as u32;
     unsafe { gl::DeleteVertexArrays(1, &v); }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_framebuffer(fbo: i32) {
+    gl_guard!();
     let f = fbo as u32;
     unsafe { gl::DeleteFramebuffers(1, &f); }
 }
@@ -713,6 +767,7 @@ pub extern "C" fn loft_gl_delete_framebuffer(fbo: i32) {
 pub extern "C" fn loft_gl_upload_alpha_texture(
     data_ptr: *const u8, width: i32, height: i32,
 ) -> i32 {
+    gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
         gl::GenTextures(1, &mut tex);
@@ -738,6 +793,7 @@ pub extern "C" fn loft_gl_text_texture(
     font_idx: i32, text_ptr: *const u8, text_len: usize, size: f32,
     out_width: *mut i32, out_height: *mut i32,
 ) -> i32 {
+    gl_guard!(0);
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
     let (w, h, pixels) = text::rasterize_text(font_idx, s, size);
     unsafe {
@@ -810,6 +866,7 @@ pub extern "C" fn loft_gl_load_texture(
     path_ptr: *const u8,
     path_len: usize,
 ) -> i32 {
+    gl_guard!(0);
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
     let img = match image::open(path) {
         Ok(img) => img.to_rgba8(),
@@ -827,6 +884,7 @@ pub extern "C" fn loft_gl_upload_canvas(
     width: i32,
     height: i32,
 ) -> i32 {
+    gl_guard!(0);
     let w = width as u32;
     let h = height as u32;
     if w == 0 || h == 0 || data_count < w * h {
@@ -856,6 +914,7 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
     width: i32,
     height: i32,
 ) -> i32 {
+    gl_guard!(0);
     let count = unsafe { store.vector_len(&data) } as u32;
     let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i32;
     loft_gl_upload_canvas(data_ptr, count, width, height)
@@ -898,12 +957,14 @@ pub extern "C" fn loft_rasterize_text_into(
 /// Set line width for GL_LINES rendering.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_line_width(width: f64) {
+    gl_guard!();
     unsafe { gl::LineWidth(width as f32); }
 }
 
 /// Set point size for GL_POINTS rendering.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_point_size(size: f64) {
+    gl_guard!();
     unsafe { gl::PointSize(size as f32); }
 }
 
@@ -1042,6 +1103,7 @@ pub unsafe extern "C" fn loft_gl_upload_texture(
     width: u32,
     height: u32,
 ) -> u32 {
+    gl_guard!(0);
     let mut tex = 0u32;
     unsafe {
         gl::GenTextures(1, &mut tex);
@@ -1063,6 +1125,7 @@ pub unsafe extern "C" fn loft_gl_upload_texture(
 /// Bind a texture to a texture unit for rendering.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_bind_texture(texture_id: u32, unit: u32) {
+    gl_guard!();
     unsafe {
         gl::ActiveTexture(gl::TEXTURE0 + unit);
         gl::BindTexture(gl::TEXTURE_2D, texture_id);
@@ -1072,6 +1135,7 @@ pub extern "C" fn loft_gl_bind_texture(texture_id: u32, unit: u32) {
 /// Delete a texture.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_delete_texture(texture_id: u32) {
+    gl_guard!();
     unsafe {
         gl::DeleteTextures(1, &texture_id);
     }
