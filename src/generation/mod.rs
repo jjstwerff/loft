@@ -439,11 +439,21 @@ extern crate loft;"
                             let elem = Self::vector_elem_rust_type(elem_tp);
                             let _ = write!(params, "ptr: *const {elem}, count: u32");
                         }
-                        Type::Long => { let _ = write!(params, "{name}: i64"); }
-                        Type::Float => { let _ = write!(params, "{name}: f64"); }
-                        Type::Single => { let _ = write!(params, "{name}: f32"); }
-                        Type::Boolean => { let _ = write!(params, "{name}: bool"); }
-                        _ => { let _ = write!(params, "{name}: i32"); }
+                        Type::Long => {
+                            let _ = write!(params, "{name}: i64");
+                        }
+                        Type::Float => {
+                            let _ = write!(params, "{name}: f64");
+                        }
+                        Type::Single => {
+                            let _ = write!(params, "{name}: f32");
+                        }
+                        Type::Boolean => {
+                            let _ = write!(params, "{name}: bool");
+                        }
+                        _ => {
+                            let _ = write!(params, "{name}: i32");
+                        }
                     }
                 }
                 let ret = match &def.returned {
