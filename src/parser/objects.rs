@@ -471,9 +471,7 @@ impl Parser {
                 // from the constant store into a fresh runtime store.
                 // On pass 1 const_ref is None but we still emit the same IR
                 // shape so create_unique runs on both passes (counter sync).
-                if matches!(const_tp, Type::Vector(_, _))
-                    && matches!(const_code, Value::Block(_))
-                {
+                if matches!(const_tp, Type::Vector(_, _)) && matches!(const_code, Value::Block(_)) {
                     // Emit a simple Call to OpConstRef. The constant's DbRef
                     // will be deep-copied at the call site — the caller's
                     // gen_set_first_ref_call_copy handles the CopyRecord.

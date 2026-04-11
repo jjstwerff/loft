@@ -39,8 +39,14 @@ pub fn byte_code(state: &mut State, data: &mut Data) {
 /// `data.definitions[d_nr].const_ref`.
 fn build_const_vectors(state: &mut State, data: &mut Data) {
     // Ensure const_refs is large enough for all definitions.
-    let null_ref = DbRef { store_nr: u16::MAX, rec: 0, pos: 0 };
-    state.const_refs.resize(data.definitions() as usize, null_ref);
+    let null_ref = DbRef {
+        store_nr: u16::MAX,
+        rec: 0,
+        pos: 0,
+    };
+    state
+        .const_refs
+        .resize(data.definitions() as usize, null_ref);
 
     for d_nr in 0..data.definitions() {
         if data.def(d_nr).def_type != DefType::Constant {
@@ -59,20 +65,46 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         // Look up the main_vector<T> struct that wraps the vector field.
         let vec_struct_name = format!("main_vector<{}>", elem_tp.name(data));
         let vec_struct_dnr = data.def_nr(&vec_struct_name);
-        if vec_struct_dnr == u32::MAX { continue; }
+        if vec_struct_dnr == u32::MAX {
+            continue;
+        }
         let vec_tp = data.def(vec_struct_dnr).known_type;
         let size = u32::from(state.database.size(vec_tp));
         let db = state.database.database(size);
-        state.database.store_mut(&db).set_int(db.rec, 4, i32::from(vec_tp));
+        state
+            .database
+            .store_mut(&db)
+            .set_int(db.rec, 4, i32::from(vec_tp));
         state.database.set_default_value(vec_tp, &db);
-        let vec_ref = DbRef { store_nr: db.store_nr, rec: 1, pos: 8 };
+        let vec_ref = DbRef {
+            store_nr: db.store_nr,
+            rec: 1,
+            pos: 8,
+        };
         for val in &values {
             let rec = state.database.record_new(&vec_ref, vec_tp, 0);
             match val {
-                Value::Int(v) => { state.database.store_mut(&rec).set_int(rec.rec, rec.pos, *v); }
-                Value::Float(v) => { state.database.store_mut(&rec).set_float(rec.rec, rec.pos, *v); }
-                Value::Single(v) => { state.database.store_mut(&rec).set_single(rec.rec, rec.pos, *v); }
-                Value::Long(v) => { state.database.store_mut(&rec).set_long(rec.rec, rec.pos, *v); }
+                Value::Int(v) => {
+                    state.database.store_mut(&rec).set_int(rec.rec, rec.pos, *v);
+                }
+                Value::Float(v) => {
+                    state
+                        .database
+                        .store_mut(&rec)
+                        .set_float(rec.rec, rec.pos, *v);
+                }
+                Value::Single(v) => {
+                    state
+                        .database
+                        .store_mut(&rec)
+                        .set_single(rec.rec, rec.pos, *v);
+                }
+                Value::Long(v) => {
+                    state
+                        .database
+                        .store_mut(&rec)
+                        .set_long(rec.rec, rec.pos, *v);
+                }
                 _ => {}
             }
             state.database.record_finish(&vec_ref, &rec, vec_tp, 0);
@@ -86,7 +118,9 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
 /// Walk the Block IR for a vector constant and extract the literal values.
 /// Returns an empty Vec if the IR contains non-literal expressions.
 fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
-    let Value::Block(block) = code else { return vec![]; };
+    let Value::Block(block) = code else {
+        return vec![];
+    };
     let mut values = Vec::new();
     // Look for patterns: Call(OpSetInt/Float/Single, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
@@ -94,10 +128,16 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
     let set_single_nr = data.def_nr("OpSetSingle");
     let set_long_nr = data.def_nr("OpSetLong");
     for op in &block.operators {
-        let Value::Call(fn_nr, args) = op else { continue; };
-        if args.len() < 3 { continue; }
-        if *fn_nr == set_int_nr || *fn_nr == set_float_nr
-            || *fn_nr == set_single_nr || *fn_nr == set_long_nr
+        let Value::Call(fn_nr, args) = op else {
+            continue;
+        };
+        if args.len() < 3 {
+            continue;
+        }
+        if *fn_nr == set_int_nr
+            || *fn_nr == set_float_nr
+            || *fn_nr == set_single_nr
+            || *fn_nr == set_long_nr
         {
             match &args[2] {
                 v @ (Value::Int(_) | Value::Float(_) | Value::Single(_) | Value::Long(_)) => {

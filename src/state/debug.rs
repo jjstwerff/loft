@@ -977,7 +977,9 @@ impl State {
                 // as free too — they are expected to remain allocated.
                 self.database.allocations[0].free = true;
                 for s in &mut self.database.allocations {
-                    if s.locked { s.free = true; }
+                    if s.locked {
+                        s.free = true;
+                    }
                 }
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
                     assert!(s.free, "Database {s_nr} not correctly freed");

@@ -201,7 +201,9 @@ fn worker_id(r: const Num) -> integer { r.v }
     // which is pre-locked during byte_code() — P127).
     let const_store = loft::database::CONST_STORE as usize;
     for (i, alloc) in state.database.allocations.iter().enumerate() {
-        if i == const_store { continue; }
+        if i == const_store {
+            continue;
+        }
         assert!(
             !alloc.is_locked(),
             "main store {i} should remain unlocked after clone"
