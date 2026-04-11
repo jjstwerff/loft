@@ -192,7 +192,9 @@ pub fn read_cache(path: &str, expected_key: &[u8; 32]) -> Option<CacheData> {
 /// Convert a `.loft` path to its cache path (`.loftc`).
 pub fn cache_path(source_path: &str) -> String {
     let p = std::path::Path::new(source_path);
-    if p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("loft")) {
+    if p.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("loft"))
+    {
         format!("{source_path}c")
     } else {
         format!("{source_path}.loftc")
