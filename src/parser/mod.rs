@@ -2274,9 +2274,16 @@ impl Parser {
             // PKG.4: register native function symbols and package crate info.
             if let Some(ref crate_name) = m.native_crate {
                 let rust_crate = crate_name.replace('-', "_");
-                self.data
+                if !self
+                    .data
                     .native_packages
-                    .push((crate_name.clone(), pkg_dir.clone()));
+                    .iter()
+                    .any(|(c, _)| c == crate_name)
+                {
+                    self.data
+                        .native_packages
+                        .push((crate_name.clone(), pkg_dir.clone()));
+                }
                 for (loft_name, rust_symbol) in &m.native_functions {
                     self.data
                         .native_symbols
