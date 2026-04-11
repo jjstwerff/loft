@@ -224,6 +224,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [WEB_SERVER_LIB.md](doc/claude/WEB_SERVER_LIB.md) | `server` library design — HTTP server, WebSockets, TLS, ACME, auth, RBAC, game server additions |
 | [GAME_CLIENT_LIB.md](doc/claude/GAME_CLIENT_LIB.md) | `game_client` library design — WebSocket client, multiplayer protocol, prediction, WASM script loading |
 | [SERVER_FEATURES.md](doc/claude/SERVER_FEATURES.md) | Language features for server/client ergonomics — C55 type aliases, C56 `?? return`, A15 `parallel {}`, I13 iterator protocol, C57 decorators |
+| [HTML_EXPORT.md](doc/claude/HTML_EXPORT.md) | W1.1 single-file HTML export — native WASM compilation for browser |
 | [OPENGL.md](doc/claude/OPENGL.md) | 2D RGBA drawing library + OpenGL/WebGL/GLB 3D rendering design |
 | [OPENGL_IMPL.md](doc/claude/OPENGL_IMPL.md) | Step-by-step implementation checklist: canvas → GLB → OpenGL → WebGL |
 | [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |

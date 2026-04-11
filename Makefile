@@ -22,6 +22,8 @@ check-targets:
 
 install: check-targets all
 	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
+	# W1.1: browser WASM target for --html export
+	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 	# Build library in isolated target dir so deps/ contains exactly one copy
 	# of each crate — no binary-only duplicates (e.g. libloading) that cause
 	# StableCrateId collisions during native compilation.
@@ -36,6 +38,11 @@ install: check-targets all
 	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
 	sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
 	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
+	# W1.1: install browser WASM rlib
+	sudo install -d /usr/local/share/loft/wasm32-unknown-unknown/deps
+	sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
+	sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
+	sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
 	@if ! cmp -s target/release/loft /usr/local/bin/loft; then \
 		sudo install -m 755 target/release/loft /usr/local/bin/loft; \
 	fi

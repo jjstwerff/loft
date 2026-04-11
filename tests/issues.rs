@@ -949,6 +949,7 @@ fn n1_native_pipeline_trivial_program() {
         yield_collect: false,
         fn_ref_context: false,
         call_stack_prefix: None,
+        wasm_browser: false,
     };
     out.output_native_reachable(&mut f, start_def, end_def, &[main_nr])
         .expect("output_native_reachable");

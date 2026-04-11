@@ -216,6 +216,9 @@ pub struct Output<'a> {
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
+    /// W1.1: when true, emit `#[no_mangle] pub extern "C" fn loft_start()`
+    /// instead of `fn main()` and use WASM imports for native package functions.
+    pub wasm_browser: bool,
 }
 
 /// Use this to convert loft names that contain `#` into valid Rust identifiers.
@@ -377,7 +380,7 @@ impl Output<'_> {
     }
 
     /// Emit the common Rust file header (attributes, imports, `mod external`).
-    fn emit_file_header(w: &mut dyn Write, data: &Data) -> std::io::Result<()> {
+    fn emit_file_header(w: &mut dyn Write, data: &Data, wasm_browser: bool) -> std::io::Result<()> {
         writeln!(
             w,
             "\
@@ -398,10 +401,79 @@ impl Output<'_> {
 
 extern crate loft;"
         )?;
-        // Emit extern crate declarations for native packages.
-        for (crate_name, _) in &data.native_packages {
-            let ident = crate_name.replace('-', "_");
-            writeln!(w, "extern crate {ident};")?;
+        if wasm_browser {
+            // W1.1: declare host-imported functions for browser WASM.
+            writeln!(w, "#[link(wasm_import_module = \"loft_io\")]")?;
+            writeln!(w, "unsafe extern \"C\" {{")?;
+            writeln!(
+                w,
+                "    safe fn loft_host_print(ptr: *const u8, len: usize);"
+            )?;
+            writeln!(w, "}}")?;
+            // W1.1 step 6: emit WASM import declarations for all #native functions.
+            // Each native symbol gets declared as an imported extern "C" function so
+            // the generated code can call it directly (unqualified).
+            writeln!(w, "#[link(wasm_import_module = \"loft_gl\")]")?;
+            writeln!(w, "unsafe extern \"C\" {{")?;
+            let mut declared_natives = std::collections::HashSet::new();
+            for d_nr in 0..data.definitions() {
+                let def = data.def(d_nr);
+                if def.native.is_empty() || declared_natives.contains(&def.native) {
+                    continue;
+                }
+                declared_natives.insert(def.native.clone());
+                // Build the C-ABI signature from loft parameter types.
+                use std::fmt::Write as _;
+                let mut params = String::new();
+                for attr in &def.attributes {
+                    if attr.name.starts_with("__") {
+                        continue;
+                    }
+                    if !params.is_empty() {
+                        params.push_str(", ");
+                    }
+                    let name = sanitize(&attr.name);
+                    match &attr.typedef {
+                        Type::Text(_) => params.push_str("ptr: *const u8, len: usize"),
+                        Type::Vector(elem_tp, _) => {
+                            let elem = Self::vector_elem_rust_type(elem_tp);
+                            let _ = write!(params, "ptr: *const {elem}, count: u32");
+                        }
+                        Type::Long => {
+                            let _ = write!(params, "{name}: i64");
+                        }
+                        Type::Float => {
+                            let _ = write!(params, "{name}: f64");
+                        }
+                        Type::Single => {
+                            let _ = write!(params, "{name}: f32");
+                        }
+                        Type::Boolean => {
+                            let _ = write!(params, "{name}: bool");
+                        }
+                        _ => {
+                            let _ = write!(params, "{name}: i32");
+                        }
+                    }
+                }
+                let ret = match &def.returned {
+                    Type::Void => String::new(),
+                    Type::Integer(_, _, _) | Type::Character => " -> i32".to_string(),
+                    Type::Long => " -> i64".to_string(),
+                    Type::Float => " -> f64".to_string(),
+                    Type::Single => " -> f32".to_string(),
+                    Type::Boolean => " -> bool".to_string(),
+                    _ => " -> i32".to_string(),
+                };
+                writeln!(w, "    safe fn {}({params}){ret};", def.native)?;
+            }
+            writeln!(w, "}}")?;
+        } else {
+            // Emit extern crate declarations for native packages.
+            for (crate_name, _) in &data.native_packages {
+                let ident = crate_name.replace('-', "_");
+                writeln!(w, "extern crate {ident};")?;
+            }
         }
         writeln!(w, "use loft::database::Stores;")?;
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
@@ -430,7 +502,7 @@ extern crate loft;"
         from: u32,
         till: u32,
     ) -> std::io::Result<()> {
-        Self::emit_file_header(w, self.data)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
@@ -454,19 +526,27 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
-        Self::emit_file_header(w, self.data)?;
+        Self::emit_file_header(w, self.data, self.wasm_browser)?;
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
-        // Emit a Rust `main` that bootstraps the loft `main` function, if present.
+        // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name == "n_main") {
-            writeln!(
-                w,
-                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
-            )?;
+            if self.wasm_browser {
+                // W1.1: exported cdylib entry point for browser WASM.
+                writeln!(
+                    w,
+                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                )?;
+            }
         }
         Ok(())
     }
@@ -932,9 +1012,13 @@ extern crate loft;"
                 // Emit a call to the native Rust function with type marshalling.
                 self.output_native_api_call(w, def_nr, rust_symbol)?;
             } else if !def.native.is_empty() {
-                // #native "symbol" with a known crate — emit direct call with
-                // type marshalling derived from the loft function signature.
-                if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
+                // #native "symbol" — emit direct call with type marshalling.
+                if self.wasm_browser {
+                    // W1.1: call the imported function directly (unqualified).
+                    // The function is declared in the preamble via
+                    // #[link(wasm_import_module = "loft_gl")].
+                    self.output_native_direct_call(w, def_nr, &def.native)?;
+                } else if let Some(krate) = self.data.native_symbol_crates.get(&def.native) {
                     let qualified = format!("{}::{}", krate, def.native);
                     self.output_native_direct_call(w, def_nr, &qualified)?;
                 } else {

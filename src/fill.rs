@@ -1728,7 +1728,9 @@ fn panic(s: &mut State) {
 
 fn print(s: &mut State) {
     let v_v1 = s.string();
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+    loft_host_print(v_v1.str().as_ptr(), v_v1.str().len());
+    #[cfg(not(target_arch = "wasm32"))]
     print!("{}", v_v1.str());
     #[cfg(feature = "wasm")]
     crate::wasm::output_push(v_v1.str());

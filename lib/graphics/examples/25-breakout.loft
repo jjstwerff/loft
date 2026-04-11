@@ -39,6 +39,12 @@ PARTICLE_LIFE = 0.6;
 FLASH_DURATION = 0.3;
 LEVEL_PAUSE = 1.5;
 
+// Game states
+GS_TITLE = 0;
+GS_PLAYING = 1;
+GS_PAUSED = 2;
+GS_GAME_OVER = 3;
+
 // Sprite indices (4x4 atlas = icons only)
 // Small icons overlaid on special bricks
 S_IC_EXTEND = 0;
@@ -234,6 +240,15 @@ fn main() {
   // "SCORE" label
   br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
 
+  // BK.5/BK.6: Title, pause, and game-over screen textures.
+  br_title_tex = graphics::create_text_texture(br_font, "BREAKOUT", 64.0, br_white);
+  br_start_tex = graphics::create_text_texture(br_font, "Press SPACE to start", 24.0, br_gray);
+  br_paused_tex = graphics::create_text_texture(br_font, "PAUSED", 48.0, br_white);
+  br_resume_tex = graphics::create_text_texture(br_font, "Press SPACE to continue", 20.0, br_gray);
+  br_over_tex = graphics::create_text_texture(br_font, "GAME OVER", 48.0, graphics::rgba(255, 80, 80, 255));
+  br_restart_tex = graphics::create_text_texture(br_font, "Press SPACE to restart", 20.0, br_gray);
+  br_controls_tex = graphics::create_text_texture(br_font, "A/D or Arrows to move  |  P to pause", 16.0, br_gray);
+
   // ── Game state ─────────────────────────────────────────────────
   br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
   br_pw = PADDLE_W_DEFAULT;
@@ -332,6 +347,9 @@ fn main() {
   br_score = 0;
   br_won = false;
   br_lost = false;
+  br_game_state = GS_TITLE;
+  br_space_was_down = false;
+  br_p_was_down = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
   graphics::gl_enable(graphics::GL_BLEND);
@@ -339,12 +357,78 @@ fn main() {
 
   for _ in 0..10000000 {
     if !graphics::gl_poll_events() { break; }
-    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
 
     br_now = ticks();
     br_dt = (br_now - br_last) as float / 1000000.0;
     br_last = br_now;
     if br_dt > 0.05 { br_dt = 0.05; }
+
+    // BK.5/BK.6: Key edge detection (react on press, not hold)
+    br_space_down = graphics::gl_key_pressed(32);
+    br_space_pressed = br_space_down && !br_space_was_down;
+    br_space_was_down = br_space_down;
+    br_p_down = graphics::gl_key_pressed(112);
+    br_p_pressed = br_p_down && !br_p_was_down;
+    br_p_was_down = br_p_down;
+
+    // BK.5/BK.6: State transitions
+    if br_game_state == GS_TITLE {
+      if br_space_pressed { br_game_state = GS_PLAYING; }
+    }
+    if br_game_state == GS_PLAYING {
+      if br_p_pressed || graphics::gl_key_pressed(graphics::KEY_ESCAPE) {
+        br_game_state = GS_PAUSED;
+      }
+      if br_lost { br_game_state = GS_GAME_OVER; }
+    }
+    if br_game_state == GS_PAUSED {
+      if br_space_pressed { br_game_state = GS_PLAYING; }
+    }
+    if br_game_state == GS_GAME_OVER {
+      if br_space_pressed {
+        // Restart: reset all game state
+        br_px = (SCREEN_W - PADDLE_W_DEFAULT) / 2.0;
+        br_pw = PADDLE_W_DEFAULT;
+        br_extend_timer = 0.0;
+        br_fire_timer = 0.0;
+        br_shield_on = false;
+        br_paddle_state = 0;
+        br_explode_timer = 0.0;
+        br_ball_x[0]  = SCREEN_W / 2.0 - BALL_SIZE / 2.0;
+        br_ball_y[0]  = PADDLE_Y - 30.0;
+        br_ball_dx[0] = BALL_SPEED_BASE * 0.7;
+        br_ball_dy[0] = 0.0 - BALL_SPEED_BASE;
+        br_ball_on[0] = 1;
+        br_ball_on[1] = 0;
+        br_ball_on[2] = 0;
+        br_rows = START_ROWS;
+        br_alive = 0;
+        br_level = 1;
+        for br_rr in 0..START_ROWS {
+          for br_rc in 0..BRICK_COLS {
+            br_ri = br_rr * BRICK_COLS + br_rc;
+            br_bricks[br_ri] = 1;
+            br_specials[br_ri] = assign_special(br_ri);
+            br_hp[br_ri] = 1;
+            br_alive += 1;
+          }
+        }
+        for br_rp in 0..8 { br_pk_on[br_rp] = 0; }
+        for br_rt in 0..MAX_PARTICLES { br_pt_t[br_rt] = 0.0; }
+        br_bl_on = false;
+        br_flash_timer = 0.0;
+        br_level_timer = 0.0;
+        br_intro_timer = 0.0;
+        br_combo = 0;
+        br_ball_speed = BALL_SPEED_BASE;
+        br_lives = 3;
+        br_score = 0;
+        br_won = false;
+        br_lost = false;
+        br_game_state = GS_PLAYING;
+      }
+    }
+
     if br_intro_timer > 0.0 { br_intro_timer -= br_dt; }
 
     // Level transition pause
@@ -352,7 +436,7 @@ fn main() {
       br_level_timer -= br_dt;
     }
 
-    if !br_won && !br_lost && br_level_timer <= 0.0 {
+    if br_game_state == GS_PLAYING && !br_won && !br_lost && br_level_timer <= 0.0 {
       // ── Input ────────────────────────────────────────────────
       // Paddle movement is disabled during the explosion respawn pause
       // so the player can't slide a non-existent paddle around the screen.
@@ -383,9 +467,11 @@ fn main() {
         br_ball_y[br_bi] += br_ball_dy[br_bi] * br_dt;
 
         // Walls
-        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); }
-        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); }
-        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); }
+        br_wall_hit = false;
+        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); br_wall_hit = true; }
+        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); br_wall_hit = true; }
+        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); br_wall_hit = true; }
+        if br_wall_hit { graphics::sfx_beep(600.0f, 0.03f, 0.1f); }
 
         // Paddle (skipped during the explosion respawn pause)
         if br_paddle_state == 0 && br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
@@ -396,6 +482,7 @@ fn main() {
           br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
           br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
           br_combo = 0;  // reset combo on paddle hit
+          graphics::sfx_bounce(180.0f, 0.3f);
         }
 
         // Shield
@@ -434,6 +521,8 @@ fn main() {
                 br_bricks[br_ci] = 0;
                 br_alive -= 1;
                 br_combo += 1;
+                // BK.1: brick break sound — pitch rises with combo
+                graphics::sfx_beep(400.0f + br_combo as single * 40.0f, 0.06f, 0.25f);
                 if br_combo > br_combo_best { br_combo_best = br_combo; }
                 br_pts = br_combo;
                 if br_pts > 10 { br_pts = 10; }
@@ -493,6 +582,7 @@ fn main() {
       if !br_any_ball && br_paddle_state == 0 {
         br_lives -= 1;
         br_combo = 0;
+        graphics::sfx_descend(500.0f, 150.0f, 0.4f, 0.4f);
         if br_lives <= 0 {
           br_lost = true;
         } else {
@@ -578,6 +668,7 @@ fn main() {
             br_px, PADDLE_Y, br_pw, PADDLE_H) { continue; }
         br_pk_on[br_pi] = 0;
         br_pkt = br_pk_type[br_pi];
+        graphics::sfx_chirp(400.0f, 900.0f, 0.12f, 0.3f);
 
         if br_pkt == SP_EXTEND {
           br_pw = PADDLE_W_DEFAULT + EXTEND_EXTRA;
@@ -927,6 +1018,35 @@ fn main() {
       br_fa = br_flash_timer / FLASH_DURATION * 0.4;
       graphics::draw_rect_at(br_painter,
         0.0, 0.0, SCREEN_W, SCREEN_H, br_flash_r, br_flash_g, br_flash_b, br_fa);
+    }
+
+    // BK.6: Title screen
+    if br_game_state == GS_TITLE {
+      graphics::draw_rect_at(br_painter, 0.0, 0.0, SCREEN_W, SCREEN_H, 0.0, 0.0, 0.1, 0.85);
+      graphics::draw_texture_at(br_painter, br_title_tex,
+        SCREEN_W / 2.0 - 200.0, SCREEN_H / 2.0 - 80.0, 400.0, 80.0);
+      graphics::draw_texture_at(br_painter, br_start_tex,
+        SCREEN_W / 2.0 - 160.0, SCREEN_H / 2.0 + 20.0, 320.0, 30.0);
+      graphics::draw_texture_at(br_painter, br_controls_tex,
+        SCREEN_W / 2.0 - 200.0, SCREEN_H / 2.0 + 70.0, 400.0, 20.0);
+    }
+
+    // BK.5: Pause screen
+    if br_game_state == GS_PAUSED {
+      graphics::draw_rect_at(br_painter, 0.0, 0.0, SCREEN_W, SCREEN_H, 0.0, 0.0, 0.0, 0.6);
+      graphics::draw_texture_at(br_painter, br_paused_tex,
+        SCREEN_W / 2.0 - 150.0, SCREEN_H / 2.0 - 40.0, 300.0, 60.0);
+      graphics::draw_texture_at(br_painter, br_resume_tex,
+        SCREEN_W / 2.0 - 160.0, SCREEN_H / 2.0 + 30.0, 320.0, 26.0);
+    }
+
+    // BK.6: Game over screen
+    if br_game_state == GS_GAME_OVER {
+      graphics::draw_rect_at(br_painter, 0.0, 0.0, SCREEN_W, SCREEN_H, 0.1, 0.0, 0.0, 0.7);
+      graphics::draw_texture_at(br_painter, br_over_tex,
+        SCREEN_W / 2.0 - 180.0, SCREEN_H / 2.0 - 50.0, 360.0, 60.0);
+      graphics::draw_texture_at(br_painter, br_restart_tex,
+        SCREEN_W / 2.0 - 160.0, SCREEN_H / 2.0 + 30.0, 320.0, 26.0);
     }
 
     graphics::gl_swap_buffers();

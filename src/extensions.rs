@@ -1310,6 +1310,13 @@ fn dispatch_call(
                 i32_arg!(6),
             );
         }
+        // (Ref, I32, F64) -> I32  (e.g. audio_play_raw: vector<single>, sample_rate, volume)
+        (&[ArgT::Ref, ArgT::I32, ArgT::F64], Some(ArgT::I32)) => {
+            let ls = make_loft_store(stores, first_ref_store(args));
+            let f: extern "C" fn(LoftStore, LoftRef, i32, f64) -> i32 =
+                unsafe { std::mem::transmute(fp) };
+            stores.put(stack, f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2)));
+        }
         _ => {
             let sig_str: Vec<String> = params.iter().map(|t| format!("{t:?}")).collect();
             panic!(
