@@ -686,6 +686,9 @@ pub struct Definition {
     /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
     /// are stored as multiple entries; checked for conflicting method signatures at I6.
     pub bounds: Vec<u32>,
+    /// P127: DbRef into CONST_STORE for pre-built vector constants.
+    /// `None` for non-constant definitions or constants that couldn't be pre-built.
+    pub const_ref: Option<crate::keys::DbRef>,
 }
 
 impl Definition {
@@ -981,6 +984,7 @@ impl Data {
             pub_visible: false,
             closure_record: u32::MAX,
             bounds: Vec::new(),
+            const_ref: None,
         };
         self.definitions.push(new_def);
         rec

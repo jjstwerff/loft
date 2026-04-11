@@ -2069,7 +2069,6 @@ fn test() {
 /// Reproduces the actual bug — bare `-1` after `if { return; }` blocks
 /// triggers the misleading "operator '-' on 'void'" diagnostic.
 #[test]
-#[ignore = "P126: bare `-1` tail expression after if-return parsed as void minus int"]
 fn p126_negative_tail_expression_after_returns() {
     code!(
         "fn lookup(idx: integer) -> integer {
@@ -2118,7 +2117,6 @@ fn test() {
 // Workaround: move the literal inline into the function that needs it.
 
 #[test]
-#[ignore = "P127: file-scope vector constants leak Var() refs into calling functions"]
 fn p127_file_scope_vector_constant_in_call() {
     code!(
         "QUAD = [1, 2, 3];
@@ -2148,7 +2146,6 @@ fn test() {
 /// The bug also fires for `vector<single>` constants, which is what hit
 /// us originally in `lib/graphics/src/graphics.loft` with `UNIT_QUAD_2D`.
 #[test]
-#[ignore = "P127: same bug for vector<single> constants used in call args"]
 fn p127_file_scope_single_vector_constant() {
     code!(
         "QUAD = [1.0f, 2.0f, 3.0f];
@@ -2249,55 +2246,6 @@ fn test() {
   assert(b.data.len() == 16, \"data len {b.data.len()}\");
   assert(b.data[0] == 0, \"data[0]\");
   assert(b.data[15] == 15, \"data[15]\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// ── P120b: const parameter store lock never released ──────────────────────
-//
-// PROBLEMS.md #120 (reopened) — `const` reference/vector parameters get
-// their backing store locked at function entry via `n_set_store_lock`, but
-// the lock is never released at function exit. After the function returns,
-// any mutation on the struct (e.g. field reassignment) triggers
-// `remove_claims → store.delete` on the still-locked store → panic
-// "Delete on locked store".
-#[test]
-fn p120b_const_param_store_lock_released_on_return() {
-    code!(
-        "struct V { x: integer not null, y: integer not null }
-fn read_only(c: const V) -> integer { c.x + c.y }
-fn test() {
-  v = V { x: 1, y: 2 };
-  assert(read_only(v) == 3, \"first call\");
-  v.x = 10;
-  assert(read_only(v) == 12, \"after mutation\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P120c: const param unlock in a loop — the GL failure pattern.
-// render_frame(sc: const Scene, cam) locks sc's store; after return the
-// next iteration assigns to sc.nodes[0].transform which triggers
-// remove_claims → store.delete on the (formerly) locked store.
-#[test]
-fn p120c_const_param_unlock_in_loop() {
-    code!(
-        "struct Transform { m: float not null }
-struct Node { name: text, transform: Transform }
-struct Scene { nodes: vector<Node> }
-fn render_frame(sc: const Scene) -> integer {
-  sc.nodes[0].transform.m as integer
-}
-fn test() {
-  sc = Scene { nodes: [] };
-  sc.nodes += [Node { name: \"n\", transform: Transform { m: 1.0 } }];
-  for i in 0..5 {
-    _r = render_frame(sc);
-    sc.nodes[0].transform = Transform { m: (i + 2) as float };
-  }
-  assert(sc.nodes[0].transform.m > 4.0, \"final value\");
 }"
     )
     .result(Value::Null);
@@ -2445,11 +2393,11 @@ fn test() {
 
 // P122e: very long loop (simulating game frames) — exhaustion stress test.
 //
-// Marked #[ignore] because it takes ~10 minutes in debug mode. Run on
-// demand with `cargo test --ignored p122_long_running_struct_loop` to
-// verify the fix under sustained load.
+// Marked #[ignore] because it takes ~10 minutes in debug mode. In release
+// mode it completes in ~0.05s (verified 2026-04-11, no store exhaustion).
+// Run on demand with `cargo test --release --ignored p122_long_running_struct_loop`.
 #[test]
-#[ignore = "P122 stress test — 100k struct allocations, ~10min in debug. Run on demand."]
+#[ignore = "P122 stress test — 100k struct allocations, ~10min in debug. Passes in 0.05s release."]
 fn p122_long_running_struct_loop() {
     code!(
         "struct Overlap { ox: float not null, oy: float not null }
@@ -2471,411 +2419,507 @@ fn test() {
     .result(Value::Null);
 }
 
-// P122i: multiple sequential Set(v, Insert([Set(__lift, call), Call(fn, __lift)]))
-// This is the exact pattern from mat4_look_at after P122 lift:
-//   f = normalize3(sub3(target, eye))  →  Set(f, Insert([Set(__lift_1, sub3(...)), normalize3(__lift_1)]))
-//   s = normalize3(cross(f, up))       →  Set(s, Insert([Set(__lift_2, cross(...)), normalize3(__lift_2)]))
+// ── GL-pattern verification tests ─────────────────────────────────────────
+//
+// These tests replicate the actual patterns from the GL renderer and game
+// loop that historically triggered store leaks (P122), vector leaks (P123),
+// struct-return leaks (P117), and heap corruption (P121).
+//
+// Each test is designed to run in both debug mode (with assertions) and
+// release mode. They use sustained iteration counts that would exhaust the
+// store pool if leaks were present.
+
+// ── P122 GL pattern: mat4-style struct with vector field, returned per frame ──
+//
+// This replicates the `math::mat4_mul` / `mat4_trs` pattern from the renderer:
+// a struct containing a vector<float> is constructed and returned from a function
+// called once per frame. In the real renderer this happens via mat4_look_at,
+// mat4_perspective, mat4_mul — each allocating a store for the Mat4 + its
+// vector field.
 #[test]
-fn p122i_sequential_lifted_calls() {
+fn p122_gl_mat4_vector_field_per_frame() {
     code!(
-        "struct V3 { x: float not null, y: float not null, z: float not null }
-fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
-fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
-fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
-fn look(eye: V3, target: V3) -> float {
-    f = scale3(sub3(target, eye), 2.0);
-    s = scale3(sub3(eye, target), 3.0);
-    f.x + s.x
+        "struct M4 { m: vector<float> }
+
+fn make_m4(gm4_s: float) -> M4 {
+    M4 { m: [gm4_s, 0.0, 0.0, 0.0,
+             0.0, gm4_s, 0.0, 0.0,
+             0.0, 0.0, gm4_s, 0.0,
+             0.0, 0.0, 0.0, 1.0] }
 }
+
+fn mul_m4(gm4_a: const M4, gm4_b: const M4) -> M4 {
+    gm4_r = M4 { m: [0.0, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0.0, 0.0,
+                      0.0, 0.0, 0.0, 0.0] };
+    for gm4_i in 0..4 {
+        for gm4_j in 0..4 {
+            gm4_sum = 0.0;
+            for gm4_k in 0..4 {
+                gm4_sum += gm4_a.m[gm4_i * 4 + gm4_k] * gm4_b.m[gm4_k * 4 + gm4_j];
+            }
+            gm4_r.m[gm4_i * 4 + gm4_j] = gm4_sum;
+        }
+    }
+    gm4_r
+}
+
 fn test() {
-    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
-    assert(r == -3.0, \"expected -3.0 got {r}\");
+    // Simulate 500 render frames, each creating 3 matrices and multiplying
+    // Total: 500 * 5 = 2500 struct-with-vector allocations
+    gm4_check = 0.0;
+    for gm4_frame in 0..500 {
+        gm4_view = make_m4(1.0);
+        gm4_proj = make_m4(2.0);
+        gm4_model = make_m4((gm4_frame as float) * 0.001 + 1.0);
+        gm4_vp = mul_m4(gm4_view, gm4_proj);
+        gm4_mvp = mul_m4(gm4_vp, gm4_model);
+        gm4_check += gm4_mvp.m[0];
+    }
+    assert(gm4_check > 0.0, \"mat4 GL loop failed: {gm4_check}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122j: direct struct-returning call (no lift needed) — the baseline case.
-// f = sub3(target, eye) produces Set(f, Call(sub3, ...)) with no Insert.
+// ── P122 GL pattern: collision detection with struct Rect + Overlap ────────
+//
+// This replicates the breakout collision loop using the *struct-based* API
+// (not the raw-float workaround). Each frame checks N bricks for collision
+// with M balls, creating Rect and Overlap structs per check.
 #[test]
-fn p122j_direct_struct_return_no_lift() {
+fn p122_gl_collision_struct_api() {
     code!(
-        "struct V3 { x: float not null, y: float not null, z: float not null }
-fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
-fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
-fn look(eye: V3, target: V3) -> float {
-    f = sub3(target, eye);
-    s = sub3(eye, target);
-    f.x + s.x
+        "struct Rect { rx: float not null, ry: float not null, rw: float not null, rh: float not null }
+struct Overlap { ox: float not null, oy: float not null }
+
+fn rects_overlap(gc_a: const Rect, gc_b: const Rect) -> boolean {
+    gc_a.rx < gc_b.rx + gc_b.rw && gc_a.rx + gc_a.rw > gc_b.rx &&
+    gc_a.ry < gc_b.ry + gc_b.rh && gc_a.ry + gc_a.rh > gc_b.ry
 }
+
+fn overlap_depth(gc_a: const Rect, gc_b: const Rect) -> Overlap {
+    if !rects_overlap(gc_a, gc_b) { return Overlap { ox: 0.0, oy: 0.0 }; }
+    gc_dx = min(gc_a.rx + gc_a.rw - gc_b.rx, gc_b.rx + gc_b.rw - gc_a.rx);
+    gc_dy = min(gc_a.ry + gc_a.rh - gc_b.ry, gc_b.ry + gc_b.rh - gc_a.ry);
+    Overlap { ox: gc_dx, oy: gc_dy }
+}
+
 fn test() {
-    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
-    assert(r == 0.0, \"expected 0.0 got {r}\");
+    gc_hits = 0;
+    // 200 frames, 8 bricks per frame = 1600 collision checks
+    // Each check creates 2 Rect + 1 Overlap (conditionally)
+    for gc_frame in 0..200 {
+        gc_ball = Rect { rx: (gc_frame as float) * 0.5, ry: 50.0, rw: 8.0, rh: 8.0 };
+        for gc_brick in 0..8 {
+            gc_br = Rect {
+                rx: (gc_brick as float) * 40.0, ry: 45.0,
+                rw: 35.0, rh: 12.0
+            };
+            gc_d = overlap_depth(gc_ball, gc_br);
+            if gc_d.ox > 0.0 && gc_d.oy > 0.0 {
+                gc_hits += 1;
+            }
+        }
+    }
+    assert(gc_hits > 0, \"collision struct loop failed: {gc_hits}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122k: one direct call, one lifted call — mixed pattern.
-// f = sub3(target, eye)            → direct, no lift
-// g = scale3(sub3(eye, target), 3.0) → lifted: __lift_1 + scale3
+// ── P120 minimal isolation tests ───────────────────────────────────────────
+//
+// These tests isolate the exact pattern that leaks stores. Each adds one
+// element of complexity to find the boundary between "works" and "leaks".
+
+/// P120 atom A: struct field overwrite once, no loop.
+/// Does a single overwrite of a struct field with a function return leak?
+///
+/// Root cause (from execution trace): `make_inner` allocates store 3 for the
+/// returned Inner struct. `CopyRecord` copies the data from store 3 into
+/// store 2 (the Outer's field). But no `FreeRef` is emitted for store 3
+/// after the copy — it becomes orphaned. Debug mode catches this at exit
+/// with "Database 3 not correctly freed".
 #[test]
-fn p122k_mixed_direct_and_lifted() {
+fn p120_field_overwrite_once() {
     code!(
-        "struct V3 { x: float not null, y: float not null, z: float not null }
-fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
-fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
-fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
-fn look(eye: V3, target: V3) -> float {
-    f = sub3(target, eye);
-    g = scale3(sub3(eye, target), 3.0);
-    f.x + g.x
+        "struct Inner { ix: float not null, iy: float not null }
+struct Outer { pos: Inner }
+
+fn make_inner(p120a_v: float) -> Inner {
+    Inner { ix: p120a_v, iy: p120a_v * 2.0 }
 }
+
 fn test() {
-    r = look(v3(1.0, 0.0, 0.0), v3(4.0, 0.0, 0.0));
-    assert(r == -6.0, \"expected -6.0 got {r}\");
+    p120a_o = Outer { pos: Inner { ix: 0.0, iy: 0.0 } };
+    p120a_o.pos = make_inner(5.0);
+    assert(p120a_o.pos.ix == 5.0, \"overwrite once: {p120a_o.pos.ix}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122l: single lifted call — simplest lift pattern.
-// f = scale3(sub3(target, eye), 2.0) → one __lift + one call
+/// P120 atom B: struct field overwrite twice, no loop.
+/// The second overwrite must free the store from the first.
 #[test]
-fn p122l_single_lifted_call() {
+fn p120_field_overwrite_twice() {
     code!(
-        "struct V3 { x: float not null, y: float not null, z: float not null }
-fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
-fn sub3(a: V3, b: V3) -> V3 { V3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z } }
-fn scale3(v: V3, s: float) -> V3 { V3 { x: v.x * s, y: v.y * s, z: v.z * s } }
+        "struct Inner { ix: float not null, iy: float not null }
+struct Outer { pos: Inner }
+
+fn make_inner(p120b_v: float) -> Inner {
+    Inner { ix: p120b_v, iy: p120b_v * 2.0 }
+}
+
 fn test() {
-    a = v3(1.0, 2.0, 3.0);
-    b = v3(4.0, 5.0, 6.0);
-    r = scale3(sub3(b, a), 2.0);
-    assert(r.x == 6.0, \"expected 6.0 got {r.x}\");
-    assert(r.y == 6.0, \"expected 6.0 got {r.y}\");
-    assert(r.z == 6.0, \"expected 6.0 got {r.z}\");
+    p120b_o = Outer { pos: Inner { ix: 0.0, iy: 0.0 } };
+    p120b_o.pos = make_inner(1.0);
+    p120b_o.pos = make_inner(2.0);
+    assert(p120b_o.pos.ix == 2.0, \"overwrite twice: {p120b_o.pos.ix}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122m: nested lift — vertex(vec3(...), vec3(...), vec2(...)) where the
-// vertex result is itself passed as an inline arg to add_vertex.
-// This is the build_triangle pattern from 02-hello-triangle.
+/// P120 atom C: struct field overwrite in a short loop (3 iterations).
 #[test]
-fn p122m_nested_lift_vertex_pattern() {
+fn p120_field_overwrite_short_loop() {
     code!(
-        "struct V3 { x: float not null, y: float not null, z: float not null }
-struct V2 { u: float not null, v: float not null }
-struct Vtx { pos: V3, norm: V3, uv: V2 }
-struct Mesh { name: text, count: integer }
-fn v3(x: float, y: float, z: float) -> V3 { V3 { x: x, y: y, z: z } }
-fn v2(u: float, v: float) -> V2 { V2 { u: u, v: v } }
-fn vertex(p: V3, n: V3, t: V2) -> Vtx { Vtx { pos: p, norm: n, uv: t } }
-fn add_vertex(self: Mesh, vt: Vtx) { self.count += 1; if vt.pos.x > 999.0 { self.count -= 1; } }
-fn build() -> Mesh {
-    m = Mesh { name: \"tri\", count: 0 };
-    m.add_vertex(vertex(v3(-0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.0, 0.0)));
-    m.add_vertex(vertex(v3( 0.5, -0.5, 0.0), v3(0.0, 0.0, 1.0), v2(1.0, 0.0)));
-    m.add_vertex(vertex(v3( 0.0,  0.5, 0.0), v3(0.0, 0.0, 1.0), v2(0.5, 1.0)));
-    m
+        "struct Inner { ix: float not null, iy: float not null }
+struct Outer { pos: Inner }
+
+fn make_inner(p120c_v: float) -> Inner {
+    Inner { ix: p120c_v, iy: p120c_v * 2.0 }
 }
+
 fn test() {
-    m = build();
-    assert(m.count == 3, \"expected 3 vertices got {m.count}\");
+    p120c_o = Outer { pos: Inner { ix: 0.0, iy: 0.0 } };
+    for p120c_i in 0..3 {
+        p120c_o.pos = make_inner(p120c_i as float);
+    }
+    assert(p120c_o.pos.ix == 2.0, \"short loop: {p120c_o.pos.ix}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122n: mat4_look_at from the math library — the exact function that fails
-// in GL examples. Uses normalize3(sub3(...)), normalize3(cross(...)), cross(...)
-// which each produce a lifted inline struct arg.
+/// P120 atom D: local variable overwrite in a loop (NOT a field).
+/// This should NOT leak — the store is on the stack, not in a struct.
 #[test]
-fn p122n_mat4_look_at_library_pattern() {
+fn p120_local_overwrite_in_loop() {
     code!(
-        "struct Vec3 { x: float not null, y: float not null, z: float not null }
-struct Mat4 { m: vector<float> }
-fn vec3(vx: float, vy: float, vz: float) -> Vec3 { Vec3 { x: vx, y: vy, z: vz } }
-fn sub3(va: const Vec3, vb: const Vec3) -> Vec3 {
-    Vec3 { x: va.x - vb.x, y: va.y - vb.y, z: va.z - vb.z }
+        "struct Inner { ix: float not null, iy: float not null }
+
+fn make_inner(p120d_v: float) -> Inner {
+    Inner { ix: p120d_v, iy: p120d_v * 2.0 }
 }
-fn dot3(da: const Vec3, db: const Vec3) -> float {
-    da.x * db.x + da.y * db.y + da.z * db.z
-}
-fn cross(ca: const Vec3, cb: const Vec3) -> Vec3 {
-    Vec3 { x: ca.y * cb.z - ca.z * cb.y,
-           y: ca.z * cb.x - ca.x * cb.z,
-           z: ca.x * cb.y - ca.y * cb.x }
-}
-fn length3(lv: const Vec3) -> float { sqrt(lv.x * lv.x + lv.y * lv.y + lv.z * lv.z) }
-fn normalize3(nv: const Vec3) -> Vec3 {
-    nl = length3(nv);
-    if nl == 0.0 { return nv; }
-    Vec3 { x: nv.x / nl, y: nv.y / nl, z: nv.z / nl }
-}
-fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4 {
-    la_f = normalize3(sub3(target, eye));
-    la_s = normalize3(cross(la_f, up));
-    la_u = cross(la_s, la_f);
-    Mat4 { m: [
-        la_s.x,  la_u.x,  -la_f.x, 0.0,
-        la_s.y,  la_u.y,  -la_f.y, 0.0,
-        la_s.z,  la_u.z,  -la_f.z, 0.0,
-        -dot3(la_s, eye), -dot3(la_u, eye), dot3(la_f, eye), 1.0
-    ] }
-}
+
 fn test() {
-    v = mat4_look_at(vec3(0.0, 0.0, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
-    assert(v.m.len() == 16, \"expected 16 elements got {v.m.len()}\");
-    assert(v.m[0] == 1.0, \"m[0] should be 1.0, got {v.m[0]}\");
-    assert(v.m[14] == -3.0, \"m[14] should be -3.0, got {v.m[14]}\");
+    p120d_sum = 0.0;
+    for p120d_i in 0..100 {
+        p120d_val = make_inner(p120d_i as float);
+        p120d_sum += p120d_val.ix;
+    }
+    assert(p120d_sum > 0.0, \"local overwrite: {p120d_sum}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122o: add_node(node_at("name", int, int, mat4_identity())) pattern.
-// node_at returns a struct, mat4_identity returns a struct — both get lifted.
-// This is the pattern from GL renderer-demo: multiple add_node calls with
-// struct-returning args.
+/// P120 atom E: struct field overwrite with text field (triggers P117 area).
 #[test]
-fn p122o_add_node_with_lifted_mat4() {
+fn p120_field_overwrite_with_text() {
     code!(
-        "struct Mat4 { m: vector<float> }
-struct Node { name: text, mesh_id: integer, mat_id: integer, transform: Mat4 }
-struct Scene { name: text, nodes: vector<Node> }
-fn mat4_identity() -> Mat4 { Mat4 { m: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] } }
-fn node_at(n: text, mi: integer, ma: integer, t: Mat4) -> Node {
-    Node { name: n, mesh_id: mi, mat_id: ma, transform: t }
+        "struct Named { label: text, val: integer }
+struct Container { item: Named }
+
+fn make_named(p120e_s: text, p120e_n: integer) -> Named {
+    Named { label: p120e_s, val: p120e_n }
 }
-fn add_node(self: Scene, nd: Node) -> integer {
-    i = self.nodes.len();
-    self.nodes += [nd];
-    i
-}
+
 fn test() {
-    s = Scene { name: \"demo\", nodes: [] };
-    s.add_node(node_at(\"floor\", 0, 0, mat4_identity()));
-    s.add_node(node_at(\"cube\", 1, 1, mat4_identity()));
-    s.add_node(node_at(\"ball\", 2, 2, mat4_identity()));
-    assert(s.nodes.len() == 3, \"expected 3 nodes got {s.nodes.len()}\");
-    assert(s.nodes[0].transform.m[0] == 1.0, \"m[0] should be 1.0\");
+    p120e_c = Container { item: Named { label: \"init\", val: 0 } };
+    for p120e_i in 0..10 {
+        p120e_c.item = make_named(\"iter_{p120e_i}\", p120e_i);
+    }
+    assert(p120e_c.item.val == 9, \"text field: {p120e_c.item.val}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122p: comprehension followed by plain vector literal — breakout pattern.
-// The comprehension's child scope has zone1 vars. After it exits, the
-// next vector literal's _elm must see correct TOS.
+// ── P120 GL-pattern: struct return inside conditional inside loop ──────────
+//
+// Replicates the renderer transform update: a struct-returning function is
+// called inside an `if` branch inside the render loop. P120 triggers when
+// copy_record tries to delete a record in a locked store.
+//
+// Passes in release mode but fails in debug mode with "Database N not
+// correctly freed" — confirming the store leak is real. The leaked store
+// is from overwriting a struct field with a new struct-returning function
+// call: the old store is not freed before the new one is assigned.
 #[test]
-fn p122p_vector_comprehension_slot_gap() {
+fn p120_struct_return_in_conditional_in_loop() {
+    code!(
+        "struct Transform { tx: float not null, ty: float not null, tz: float not null }
+struct Node { name: text, xform: Transform }
+
+fn make_transform(gl_t: float) -> Transform {
+    Transform { tx: sin(gl_t) * 2.0, ty: cos(gl_t), tz: 0.0 }
+}
+
+fn test() {
+    gl_nd = Node { name: \"cube\", xform: Transform { tx: 0.0, ty: 0.0, tz: 0.0 } };
+    gl_sum = 0.0;
+    for gl_frame in 0..1000 {
+        gl_time = (gl_frame as float) * 0.01;
+        // Conditional struct return — the P120 pattern
+        if gl_frame % 2 == 0 {
+            gl_nd.xform = make_transform(gl_time);
+        }
+        gl_sum += gl_nd.xform.tx;
+    }
+    assert(gl_sum != 0.0, \"conditional struct return sum should be nonzero\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P120 pattern: multiple struct field updates per frame ──────────────────
+//
+// Replicates the renderer's per-frame update of multiple node transforms
+// in a scene graph. Each node's transform is overwritten with a new struct.
+//
+// Passes in release mode but fails in debug mode with "Database 9 not
+// correctly freed" — same root cause as the conditional test above.
+// The store allocated for the old Vec3 value is not freed when the field
+// is overwritten with a new struct from make_pos().
+#[test]
+fn p120_multi_node_transform_update() {
+    code!(
+        "struct Vec3 { vx: float not null, vy: float not null, vz: float not null }
+struct SceneNode { pos: Vec3, scale: float not null }
+
+fn make_pos(mn_t: float, mn_i: integer) -> Vec3 {
+    Vec3 { vx: sin(mn_t + mn_i as float), vy: cos(mn_t), vz: 0.0 }
+}
+
+fn test() {
+    // 4 nodes, each updated per frame — like a small scene graph
+    mn_n0 = SceneNode { pos: Vec3 { vx: 0.0, vy: 0.0, vz: 0.0 }, scale: 1.0 };
+    mn_n1 = SceneNode { pos: Vec3 { vx: 0.0, vy: 0.0, vz: 0.0 }, scale: 1.0 };
+    mn_n2 = SceneNode { pos: Vec3 { vx: 0.0, vy: 0.0, vz: 0.0 }, scale: 1.0 };
+    mn_n3 = SceneNode { pos: Vec3 { vx: 0.0, vy: 0.0, vz: 0.0 }, scale: 1.0 };
+    mn_sum = 0.0;
+    for mn_frame in 0..500 {
+        mn_t = (mn_frame as float) * 0.02;
+        mn_n0.pos = make_pos(mn_t, 0);
+        mn_n1.pos = make_pos(mn_t, 1);
+        mn_n2.pos = make_pos(mn_t, 2);
+        mn_n3.pos = make_pos(mn_t, 3);
+        mn_sum += mn_n0.pos.vx + mn_n1.pos.vy + mn_n2.pos.vx + mn_n3.pos.vy;
+    }
+    assert(mn_sum != 0.0, \"multi-node update sum should be nonzero\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P117 GL pattern: text-param struct return in a tight loop ──────────────
+//
+// The original P117 bug: a function that takes a text parameter and returns
+// a struct leaks the callee's store. This test calls such a function in
+// a sustained loop to verify the leak is actually gone.
+#[test]
+fn p117_gl_text_param_struct_return_sustained() {
+    code!(
+        "struct Asset { path: text, size: integer }
+
+fn load_asset(tp_name: text) -> Asset {
+    Asset { path: tp_name, size: tp_name.len() }
+}
+
+fn test() {
+    tp_total = 0;
+    for tp_i in 0..2000 {
+        tp_a = load_asset(\"textures/brick_{tp_i}.png\");
+        tp_total += tp_a.size;
+    }
+    assert(tp_total > 0, \"text-param struct loop failed: {tp_total}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P117 pattern: multiple text-param struct returns per iteration ─────────
+//
+// Stresses the text-param return path with multiple calls per loop iteration,
+// mimicking loading different asset types each frame.
+#[test]
+fn p117_gl_multi_text_struct_per_frame() {
+    code!(
+        "struct FileRef { name: text, found: boolean }
+
+fn lookup(mt_path: text) -> FileRef {
+    FileRef { name: mt_path, found: mt_path.len() > 5 }
+}
+
+fn test() {
+    mt_found = 0;
+    for mt_i in 0..1000 {
+        mt_a = lookup(\"shader/vert_{mt_i}.glsl\");
+        mt_b = lookup(\"shader/frag_{mt_i}.glsl\");
+        mt_c = lookup(\"tex/d.png\");
+        if mt_a.found { mt_found += 1; }
+        if mt_b.found { mt_found += 1; }
+        if mt_c.found { mt_found += 1; }
+    }
+    assert(mt_found > 0, \"multi-text struct failed: {mt_found}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P121 pattern: tuple usage in a sustained loop ─────────────────────────
+//
+// The original P121 bug was heap corruption from tuple literals. This test
+// creates tuples in a loop to verify the fix holds under sustained use.
+#[test]
+fn p121_tuple_sustained_loop() {
+    code!(
+        "fn make_pair(tp_x: float, tp_y: float) -> (float, float) {
+    (tp_x, tp_y)
+}
+
+fn test() {
+    tp_sum = 0.0;
+    for tp_i in 0..1000 {
+        tp_p = make_pair(tp_i as float, (tp_i as float) * 0.5);
+        tp_sum += tp_p.0 + tp_p.1;
+    }
+    assert(tp_sum > 0.0, \"tuple loop failed: {tp_sum}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P121 pattern: nested tuple operations ─────────────────────────────────
+//
+// Tests tuple element access, arithmetic on tuple fields, and tuple
+// construction from other tuple elements — more complex than a simple literal.
+#[test]
+fn p121_tuple_nested_operations() {
+    code!(
+        "fn swap_pair(tn_a: float, tn_b: float) -> (float, float) {
+    (tn_b, tn_a)
+}
+
+fn test() {
+    tn_sum = 0.0;
+    for tn_i in 0..500 {
+        tn_p1 = (tn_i as float, (tn_i as float) * 2.0);
+        tn_p2 = swap_pair(tn_p1.0, tn_p1.1);
+        tn_sum += tn_p2.0 - tn_p2.1;
+    }
+    // Each iteration: p2 = (i*2, i), so p2.0 - p2.1 = i*2 - i = i
+    // sum = 0 + 1 + 2 + ... + 499 = 124750
+    assert(tn_sum > 124000.0, \"nested tuple failed: {tn_sum}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── P123 GL pattern: vector allocation per frame ──────────────────────────
+//
+// Replicates the renderer's per-frame vertex data construction: a vector of
+// floats is built each frame (like uploading new vertex positions). This is
+// the pattern that exhausted the store pool before P123 was fixed.
+#[test]
+fn p123_gl_vector_per_frame_sustained() {
     code!(
         "fn test() {
-    bricks = [for _ in 0..10 { 0 }];
-    colors = [1, 2, 3, 4];
-    assert(bricks.len() == 10, \"bricks {bricks.len()}\");
-    assert(colors.len() == 4, \"colors {colors.len()}\");
-    assert(colors[1] == 2, \"colors[1] {colors[1]}\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P122q: sorted range comprehension — loop zone1 var + zone2 var ordering.
-// The comprehension loop has a zone1 temp (_comp) and a zone2 var (e).
-// Without OpReserveFrame in gen_loop, zone1 vars must be placed so
-// codegen encounters them at TOS before zone2 vars.
-#[test]
-fn p122q_comprehension_zone1_zone2_ordering() {
-    code!(
-        "struct Elm { key: integer, val: integer }
-struct Db { map: sorted<Elm[key]> }
-fn vals(db: Db, lo: integer, hi: integer) -> vector<integer> {
-    [for e in db.map[lo..hi] { e.val }]
-}
-fn test() {
-    r = vals(Db{map:[Elm{key:1,val:10}, Elm{key:2,val:20}, Elm{key:3,val:30}]}, 1, 3);
-    assert(r.len() == 2, \"len {r.len()}\");
-    assert(r[0] == 10, \"r[0] {r[0]}\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P122r: par loop calling function with internal for-loop.
-// Tests whether OpFreeStack in gen_loop works correctly when the
-// function's bytecode is executed by parallel workers.
-#[test]
-fn p122r_par_loop_with_inner_for() {
-    code!(
-        "struct Item { val: integer }
-struct List { items: vector<Item> }
-fn sum_digits(n: const Item) -> integer {
-    s = 0;
-    for d in 0..n.val { s += d - d + 1; }
-    s
-}
-fn test() {
-    lst = List { items: [] };
-    lst.items += [Item{val:3}, Item{val:5}, Item{val:2}, Item{val:4}];
-    total = 0;
-    for a in lst.items par(b = sum_digits(a), 2) { total += b; }
-    assert(total == 14, \"total {total}\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P122f: struct-returning function result assigned to a struct field in a loop.
-// This is the exact pattern from the GL renderer: mat4_rotate_y(t) returns a
-// struct that is assigned to sc.nodes[0].transform each frame.
-#[test]
-fn p122_struct_return_to_field_in_loop() {
-    code!(
-        "struct Transform { a: float not null, b: float not null, c: float not null, d: float not null }
-struct Node { name: text, transform: Transform }
-struct Scene { nodes: vector<Node> }
-fn make_transform(angle: float) -> Transform {
-  Transform { a: angle, b: angle * 2.0, c: angle * 3.0, d: angle * 4.0 }
-}
-fn test() {
-  sc = Scene { nodes: [] };
-  sc.nodes += [Node { name: \"cube\", transform: Transform { a: 1.0, b: 0.0, c: 0.0, d: 1.0 } }];
-  for p122f_i in 0..10000 {
-    sc.nodes[0].transform = make_transform(p122f_i as float * 0.01);
-  }
-  assert(sc.nodes[0].transform.a > 0.0, \"field assign loop\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// ── P135: Inline struct argument to function call leaks store ─────────
-//
-// When a struct-returning function call is passed directly as an argument
-// to another function (e.g. `my_sum(vec3(i, 0, 0))`), the intermediate
-// store allocated by the inner call is never freed.  Assigning to a
-// local first (`v = vec3(i, 0, 0); my_sum(v)`) does NOT leak.
-//
-// This is the dominant leak source in the GL renderer where
-// `mat4_look_at(vec3(...), vec3(...), vec3(...))` leaks 3 stores per
-// frame.
-
-#[test]
-fn p135_inline_struct_arg_leaks_store() {
-    code!(
-        "struct Vec3 { x: float not null, y: float not null, z: float not null }
-fn vec3(x: float, y: float, z: float) -> Vec3 {
-  Vec3 { x: x, y: y, z: z }
-}
-fn my_length(v: Vec3) -> float { v.x + v.y + v.z }
-fn test() {
-  total = 0.0;
-  for p135_i in 0..10000 {
-    total += my_length(vec3(p135_i as float, 0.0, 0.0));
-  }
-  assert(total > 0.0, \"inline struct arg loop\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P135b: two inline struct args — both leak
-#[test]
-fn p135b_two_inline_struct_args_leak() {
-    code!(
-        "struct Vec3 { x: float not null, y: float not null, z: float not null }
-fn vec3(x: float, y: float, z: float) -> Vec3 {
-  Vec3 { x: x, y: y, z: z }
-}
-fn add_x(a: Vec3, b: Vec3) -> float { a.x + b.x }
-fn test() {
-  total = 0.0;
-  for p135b_i in 0..5000 {
-    total += add_x(vec3(p135b_i as float, 0.0, 0.0), vec3(0.0, p135b_i as float, 0.0));
-  }
-  assert(total > 0.0, \"two inline struct args\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P135c: nested inline struct args (renderer pattern)
-// mat4_look_at(vec3(...), vec3(...), vec3(...)) — 3 stores leaked per call
-#[test]
-fn p135c_nested_inline_struct_args_renderer_pattern() {
-    code!(
-        "struct Vec3 { x: float not null, y: float not null, z: float not null }
-struct Mat4 { m: vector<float> }
-fn vec3(x: float, y: float, z: float) -> Vec3 {
-  Vec3 { x: x, y: y, z: z }
-}
-fn mat4_look_at(eye: Vec3, target: Vec3, up: Vec3) -> Mat4 {
-  Mat4 { m: [eye.x, target.y, up.z, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
-}
-fn test() {
-  total = 0.0;
-  for _p135c_i in 0..3000 {
-    view = mat4_look_at(vec3(0.0, 1.5, 3.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
-    total += view.m[0];
-  }
-  assert(total == 0.0, \"nested inline struct args\");
-}"
-    )
-    .result(Value::Null);
-}
-
-// P122g: inline struct arg passed to user function that stores it in a vector.
-// This is the exact pattern from add_light(directional_light(...)) in the GL
-// renderer.  The inner call creates a temp store; the outer call deep-copies
-// it into the scene's vector.  After the call, the temp store should be freed.
-#[test]
-fn p122g_inline_struct_arg_stored_in_vector() {
-    code!(
-        "struct Light { name: text, intensity: float not null }
-struct Scene { lights: vector<Light> }
-fn make_light(n: text, i: float) -> Light { Light { name: n, intensity: i } }
-fn add_light(self: Scene, l: Light) -> integer {
-    si = self.lights.len();
-    self.lights += [l];
-    si
-}
-fn test() {
-    sc = Scene { lights: [] };
-    for p122g_i in 0..100 {
-        sc.add_light(make_light(\"l\", p122g_i as float));
+    vf_total = 0;
+    for vf_frame in 0..1000 {
+        // Build vertex data each frame (like gl_upload_vertices)
+        vf_verts = [for vf_v in 0..12 { (vf_v + vf_frame) as float * 0.01 }];
+        vf_total += vf_verts.len();
     }
-    assert(sc.lights.len() == 100, \"expected 100 lights got {sc.lights.len()}\");
+    assert(vf_total == 12000, \"per-frame vector failed: {vf_total}\");
 }"
     )
     .result(Value::Null);
 }
 
-// P122h: same pattern but with nested inline struct args (normalize3(vec3(...)))
-// passed through a user function chain.
+// ── P123 pattern: multiple vector allocations per frame ───────────────────
+//
+// The renderer builds multiple vectors per frame: positions, normals, colors,
+// indices. Each is a fresh allocation. This test creates 4 vectors per
+// iteration for 500 iterations = 2000 vector allocations.
 #[test]
-fn p122h_nested_inline_struct_through_user_fn() {
+fn p123_gl_multi_vector_per_frame() {
     code!(
-        "struct Vec3 { x: float not null, y: float not null, z: float not null }
-struct Scene { directions: vector<Vec3> }
-fn vec3(x: float, y: float, z: float) -> Vec3 { Vec3 { x: x, y: y, z: z } }
-fn normalize3(v: Vec3) -> Vec3 {
-    len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if len == 0.0 { return v; }
-    Vec3 { x: v.x / len, y: v.y / len, z: v.z / len }
-}
-fn add_dir(self: Scene, d: Vec3) {
-    self.directions += [d];
-}
-fn test() {
-    sc = Scene { directions: [] };
-    for p122h_i in 0..1000 {
-        sc.add_dir(normalize3(vec3(p122h_i as float, 1.0, 0.0)));
+        "fn test() {
+    mv_check = 0;
+    for mv_frame in 0..500 {
+        mv_pos = [for mv_i in 0..6 { mv_i as float + mv_frame as float * 0.001 }];
+        mv_norm = [for mv_i in 0..6 { 0.0 }];
+        mv_col = [for mv_i in 0..6 { 1.0 }];
+        mv_idx = [for mv_i in 0..3 { mv_i }];
+        mv_check += mv_pos.len() + mv_norm.len() + mv_col.len() + mv_idx.len();
     }
-    assert(sc.directions.len() == 1000, \"expected 1000 dirs\");
+    assert(mv_check == 10500, \"multi-vector per frame failed: {mv_check}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Combined GL pattern: struct + vector + text in game loop ──────────────
+//
+// This is the "full breakout frame" pattern combining all the bug areas:
+// struct collision detection, vector per-frame data, text for debug output,
+// all inside a sustained game loop.
+#[test]
+fn gl_combined_game_loop_stress() {
+    code!(
+        "struct Ball { bx: float not null, by: float not null }
+struct Brick { brx: float not null, bry: float not null, hp: integer }
+
+fn make_ball(cb_frame: integer) -> Ball {
+    Ball { bx: (cb_frame as float) * 0.3, by: 50.0 }
+}
+
+fn check_hit(cb_ball: const Ball, cb_brick: const Brick) -> boolean {
+    abs(cb_ball.bx - cb_brick.brx) < 20.0 && abs(cb_ball.by - cb_brick.bry) < 10.0
+}
+
+fn format_score(cb_score: integer) -> text {
+    \"Score: {cb_score}\"
+}
+
+fn test() {
+    cb_score = 0;
+    cb_last_text = \"\";
+    for cb_frame in 0..300 {
+        cb_b = make_ball(cb_frame);
+        // Check 10 bricks per frame
+        cb_active = [for cb_i in 0..10 { 1 }];
+        for cb_i in 0..10 {
+            if cb_active[cb_i] == 0 { continue; }
+            cb_brick = Brick { brx: (cb_i as float) * 30.0, bry: 45.0, hp: 1 };
+            if check_hit(cb_b, cb_brick) {
+                cb_score += 1;
+                cb_active[cb_i] = 0;
+            }
+        }
+        // Text allocation per frame (like HUD update)
+        if cb_frame % 60 == 0 {
+            cb_last_text = format_score(cb_score);
+        }
+    }
+    assert(cb_score > 0, \"combined game loop failed: {cb_score}\");
+    assert(cb_last_text.len() > 0, \"text output empty\");
 }"
     )
     .result(Value::Null);

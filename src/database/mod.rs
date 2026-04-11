@@ -15,6 +15,11 @@ mod types;
 
 pub use types::Type;
 
+/// Store index reserved for compile-time constant data (vectors, long strings).
+/// Always allocated during `State::new()`, locked before execution begins.
+/// See `doc/claude/CONST_STORE.md` for the full design.
+pub const CONST_STORE: u16 = 1;
+
 use crate::keys::{Content, DbRef};
 use crate::store::Store;
 use std::collections::HashMap;

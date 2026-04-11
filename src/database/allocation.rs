@@ -227,7 +227,10 @@ impl Stores {
         // Clear any stale lock before reinitialising — OpDatabase may
         // reinitialise a store that was previously locked by a const
         // parameter in a prior function call within the same loop iteration.
-        store.unlock();
+        // P127: never unlock a constant store (ref_count >= u32::MAX / 2).
+        if store.ref_count < u32::MAX / 2 {
+            store.unlock();
+        }
         store.init();
     }
 

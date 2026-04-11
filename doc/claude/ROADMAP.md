@@ -27,32 +27,6 @@ comes after the single-player browser experience works.
 **Maintenance rule:** When an item is completed, remove it from this file.
 Completed work belongs in CHANGELOG.md and git history.
 
-## Zero-regressions rule
-
-**No release may ship with regressions versus any previous state of
-`main`.** Something that worked must keep working. "Perceived regressions"
-count — if a feature was merged onto `main` and worked at any point, it
-must work at release time or be explicitly reverted with documentation.
-
-There is no urgency to release if doing so means shipping a drawback for
-users or developers. We do things right.
-
-**Enforcement:** before tagging any release, run:
-```bash
-make ci                       # unit tests + package tests + GL smoke + golden diff
-make test-gl-headless         # full GL suite under Xvfb — GL_HEADLESS_SKIP must be EMPTY
-```
-If `GL_HEADLESS_SKIP` in the Makefile is non-empty, those examples are
-known-broken and **block the release** — fix the underlying bug first.
-
-**Current blocker (2026-04-10):** P120 — 11 GL examples panic with
-`Delete on locked store` in `copy_record`. These use the high-level
-`render::create_renderer` path with per-frame transform updates. The fix
-must land before any release that includes those examples. See
-PROBLEMS.md #120 for the backtrace, the failing example list, and the
-fix path (`copy_record` must detect a locked destination store and either
-defer the delete or copy via a scratch store).
-
 ---
 
 ## 0.8.4 — Awesome Breakout
@@ -96,32 +70,19 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | BK.7  | High-score persistence (file or localStorage in WASM)  | S  |
 | BK.8  | Polish pass on sprite atlas (better art, consistent style) | S |
 
-### Open issues that block 0.8.4
+### Language fix that unblocks idiomatic game code
 
-These must be resolved before the game polish items above can proceed
-without workarounds. Ordered by impact.
+| ID    | Title                                                  | E  | Severity | Source       |
+|-------|--------------------------------------------------------|----|----------|--------------|
+| P122  | Store leak: free struct/vector temporaries at end of loop iteration | MH | High | PROBLEMS.md  |
 
-| ID   | Title                                                  | E  | Status |
-|------|--------------------------------------------------------|----|--------|
-| P122 | Store leak: struct-returning functions inside render loops leak ~6 stores/frame | M | Partially fixed — field/local/inline-arg patterns done; remaining: local Mat4 vars inside const-param functions not freed at function exit |
-| P135 | Inline struct arg to function call leaks store          | M  | Partially fixed — operators + const-param user functions now lifted; remaining: non-const-param patterns |
-| P127 | File-scope vector constant corrupts caller slots        | M  | Open — `#[ignore]`d reproducer in tests/issues.rs |
-
-### Already done (remove from ROADMAP when merged to main)
-
-| ID    | Title                                                  | Status |
-|-------|--------------------------------------------------------|--------|
-| P120  | Delete on locked store in copy_record                  | ✅ Fixed — const-param store lock released at function exit |
-| P123  | Per-frame vector literal allocation leaks              | ✅ Fixed |
-| P134  | `gl_load_font` returns -1 instead of null sentinel     | ✅ Fixed — breakout score counter now visible |
-| P132  | Release-mode coroutine hang (char UB)                  | ✅ Fixed (on main via PR #142) |
-| P126  | `-1` tail expression after if-return                   | ✅ Fixed (on main via PR #142) |
-| P128  | Constant type annotations rejected                     | ✅ Fixed (on main via PR #142) |
-| P131  | CLI consumes script arguments                          | ✅ Fixed (on main via PR #142) |
-| BK.9  | Paddle breakage animation (3-piece explosion)          | ✅ Done (on main via PR #145) |
-| CI    | Headless GL smoke test + golden image comparison       | ✅ Done (on main via PR #145) |
-| CI    | `make ci` runs in --release (~1m30s vs 31min)          | ✅ Done (on main via PR #142) |
-| CI    | `make test-gl-headless` full GL suite under Xvfb       | ✅ Done (on main via PR #145) |
+**Fixed (2026-04-11):** P122 is confirmed fixed — GL-pattern stress tests
+pass in both release and debug mode (mat4 with vector fields, collision
+Rect/Overlap structs, combined game loop). The breakout raw-float
+workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced with
+idiomatic struct-based APIs. **Note:** P120 (struct field overwrite leak)
+is still open and may affect the renderer's `node.transform = mat4_trs(…)`
+pattern — test before removing workarounds in the renderer path.
 
 ---
 

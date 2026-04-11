@@ -973,8 +973,21 @@ impl State {
             if self.code_pos == u32::MAX {
                 // TODO Validate that all databases & String values are also cleared.
                 assert_eq!(self.stack_pos, 4, "Stack not correctly cleared");
-                // Free the stack
+                // Free the stack store. Mark constant stores (pre-built by
+                // build_const_vectors) as free — they are program-lifetime.
                 self.database.allocations[0].free = true;
+                let const_store = crate::database::CONST_STORE as usize;
+                if const_store < self.database.allocations.len() {
+                    self.database.allocations[const_store].free = true;
+                }
+                // Mark all stores referenced by const_refs as free.
+                for cr in &self.const_refs {
+                    if cr.store_nr != u16::MAX
+                        && (cr.store_nr as usize) < self.database.allocations.len()
+                    {
+                        self.database.allocations[cr.store_nr as usize].free = true;
+                    }
+                }
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
                     assert!(s.free, "Database {s_nr} not correctly freed");
                 }
