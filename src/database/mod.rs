@@ -39,7 +39,6 @@ pub type Call = fn(&mut Stores, &mut DbRef);
 /// that set them.
 pub struct ParallelCtx {
     pub bytecode: *const Arc<Vec<u8>>,
-    pub text_code: *const Arc<Vec<u8>>,
     pub library: *const Arc<Vec<Call>>,
     pub data: *const crate::data::Data,
     /// Cached library index of `n_stack_trace`; `u16::MAX` = not found.

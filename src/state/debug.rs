@@ -1468,7 +1468,6 @@ pub(super) fn execute_log_impl(
     state.database.parallel_ctx = Some(Box::new(super::ParallelCtx {
         data: data_ptr,
         bytecode: &raw const state.bytecode,
-        text_code: &raw const state.text_code,
         library: &raw const state.library,
         stack_trace_lib_nr: stk_lib_nr,
     }));
