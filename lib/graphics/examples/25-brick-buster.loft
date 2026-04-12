@@ -16,7 +16,7 @@ SCREEN_H = 600.0;
 PADDLE_W_DEFAULT = 100.0;
 PADDLE_H = 15.0;
 PADDLE_Y = 560.0;
-PADDLE_SPEED = 500.0;
+PADDLE_SPEED = 620.0;
 // Visual draw size of the ball.  The in-flight sprite is a circle
 // inscribed in the 32x32 atlas cell, so BALL_SIZE is also the
 // visible diameter on screen.
@@ -25,7 +25,7 @@ BALL_SIZE = 30.0;
 // BALL_SIZE/2 so the outline can visually touch a surface a frame
 // before the rebound fires — feels punchier than pixel-perfect.
 BALL_RADIUS = 13.0;
-BALL_SPEED_BASE = 300.0;
+BALL_SPEED_BASE = 420.0;
 SPEED_RAMP = 0.04;
 MAX_ROWS = 20;
 BRICK_COLS = 10;
@@ -46,7 +46,10 @@ BALLOON_RISE     = -140.0;  // negative = upward
 BALLOON_DRIFT    =   20.0;  // ± random horizontal drift
 BALLOON_BOUNCE_DV =  60.0;  // pushback velocity when the ball hits
 EXTEND_EXTRA = 60.0;
-START_ROWS = 5;
+// Starting board height.  Lower number → fewer bricks for the first
+// few (sparse-powerup) levels; the existing per-level row bump keeps
+// the later levels filling the playfield.
+START_ROWS = 3;
 MAX_BALLS = 3;
 // Fire-ball after-image trail length (frames).  Larger looks smoother
 // but draws more rects per frame; 10 gives a ~0.17 s tail at 60 fps.
@@ -382,7 +385,17 @@ fn level_brick(dl_lv: integer, dl_r: integer, dl_c: integer) -> integer {
   -2
 }
 
-fn assign_special(seed: integer) -> integer {
+// Special-brick allocator for procedural levels (6+).  `lvl` controls
+// overall density: baseline is ~8/50 specials (16 %), growing by
+// 1/50 per extra level above 5, capped at 20/50 so the board never
+// turns into a powerup soup.  The seed is still hashed the same way
+// so existing per-level layouts are stable.
+fn assign_special(seed: integer, lvl: integer) -> integer {
+  as_density = 8;
+  if lvl > 5 {
+    as_density = 8 + (lvl - 5);
+    if as_density > 20 { as_density = 20; }
+  }
   as_v = (seed * 7 + 13) % 50;
   if as_v < 2 { return SP_EXTEND; }
   if as_v < 3 { return SP_EXPLODE; }
@@ -390,7 +403,7 @@ fn assign_special(seed: integer) -> integer {
   if as_v < 5 { return SP_NEWROW; }
   if as_v < 6 { return SP_MULTI; }
   if as_v < 7 { return SP_FIRE; }
-  if as_v < 8 { return SP_SHIELD; }
+  if as_v < as_density { return SP_SHIELD; }
   SP_NONE
 }
 
@@ -564,7 +577,7 @@ fn main() {
         br_hp[br_ii] = 0;
       } else {
         br_bricks[br_ii] = 1;
-        br_specials[br_ii] = if br_it == -2 { assign_special(br_ii) } else { br_it };
+        br_specials[br_ii] = if br_it == -2 { assign_special(br_ii, br_level) } else { br_it };
         br_hp[br_ii] = 1;
         br_alive += 1;
       }
@@ -644,7 +657,6 @@ fn main() {
   // (bounces, pops, ball-hit) pop instead of competing.
   // `0` in a pattern = rest for one tick.
   MUSIC_VOL = 0.05f;  // headroom — sfx peaks are 3-6x louder
-  MUSIC_PAUSE = 4.0f;
   MUSIC_TRACK_LEN = 24;
   MUSIC_TRACKS = 3;
   // Frequencies (Hz): A4=440 B4=494 C5=523 D5=587 E5=659 F5=698
@@ -661,10 +673,16 @@ fn main() {
                    392, 494, 587, 784, 587, 494, 392, 0,
                    440, 523, 698, 880, 698, 523, 440, 349];
   TRACK_C_DUR   = 0.24f;
-  br_mus_t      = MUSIC_PAUSE;  // start with a short pause so title gets air
+  // Per-level playlist: the three tracks each play once, in a random
+  // rotation, at random moments during the level.  Once all three
+  // have played the music stays silent until the next level change
+  // (tracked via br_mus_lvl so br_level advancing triggers a reset).
+  br_mus_t      = 4.0f;         // initial delay before the first track
   br_mus_idx    = 0;
-  br_mus_song   = 0;            // 0=A, 1=B, 2=C; rotates through tracks
-  br_mus_resting = true;         // true while counting down the inter-track gap
+  br_mus_song   = 0;            // current track index (0..2)
+  br_mus_resting = true;         // true while counting down a silence
+  br_mus_played = 0;            // tracks finished this level (0..3)
+  br_mus_lvl    = 0;            // last observed br_level; mismatch → reset
   // High-score persistence — load at boot, save on game-over or win
   // when the current run beat the stored value.  Kept beside the
   // other hidden state in `.loft/` next to the script so it doesn't
@@ -834,7 +852,7 @@ fn main() {
               br_hp[br_ri] = 0;
             } else {
               br_bricks[br_ri] = 1;
-              br_specials[br_ri] = if br_rt == -2 { assign_special(br_ri) } else { br_rt };
+              br_specials[br_ri] = if br_rt == -2 { assign_special(br_ri, br_level) } else { br_rt };
               br_hp[br_ri] = 1;
               br_alive += 1;
             }
@@ -863,40 +881,60 @@ fn main() {
       br_level_timer -= br_dt;
     }
 
-    // Background-music sequencer.  Advances while the game is
-    // playing; rotates the three tracks with a MUSIC_PAUSE silence
-    // between them so the loop reads as a small playlist rather than
-    // a constant drone.  Gated to GS_PLAYING so menus / pauses /
-    // game-over / level-transition fades stay silent.
+    // Background-music sequencer.  Each level plays the three tracks
+    // once, in a random rotation, spaced by random-ish 3-8 s
+    // silences — so a level feels quieter than the old non-stop
+    // loop.  When the level counter advances, the playlist resets.
     if br_game_state == GS_PLAYING && !br_lost && br_level_timer <= 0.0 {
+      // Reset queue on level change (also covers GS_TITLE → L1 first
+      // start, since br_mus_lvl starts at 0 and br_level at 1).
+      if br_mus_lvl != br_level {
+        br_mus_lvl    = br_level;
+        br_mus_played = 0;
+        br_mus_song   = ((br_now / 11l) as integer) % MUSIC_TRACKS;
+        br_mus_idx    = 0;
+        br_mus_resting = true;
+        // Random 2-6 s silence before the first song.
+        br_mus_t = 2.0f + (((br_now / 17l) as integer) % 4) as single;
+      }
       br_mus_t -= br_dt as single;
       if br_mus_t <= 0.0f {
-        if br_mus_resting {
-          // Inter-track silence ended; roll over to the next track.
+        if br_mus_played >= MUSIC_TRACKS {
+          // Playlist exhausted for this level — stay silent.
+          br_mus_t = 9999.0f;
+        } else if br_mus_resting {
+          // Silence ended; start playing the next track.
           br_mus_resting = false;
           br_mus_idx = 0;
-          br_mus_song = (br_mus_song + 1) % MUSIC_TRACKS;
         }
-        // Pick the current track's note + duration.
-        if br_mus_song == 0 {
-          br_mnote = TRACK_A_NOTES[br_mus_idx];
-          br_mus_step = TRACK_A_DUR;
-        } else if br_mus_song == 1 {
-          br_mnote = TRACK_B_NOTES[br_mus_idx];
-          br_mus_step = TRACK_B_DUR;
-        } else {
-          br_mnote = TRACK_C_NOTES[br_mus_idx];
-          br_mus_step = TRACK_C_DUR;
-        }
-        if br_mnote > 0 {
-          graphics::sfx_beep(br_mnote as single, br_mus_step, MUSIC_VOL);
-        }
-        br_mus_t = br_mus_step;
-        br_mus_idx += 1;
-        if br_mus_idx >= MUSIC_TRACK_LEN {
-          // End of track — pause before the next one starts.
-          br_mus_resting = true;
-          br_mus_t = MUSIC_PAUSE;
+        if !br_mus_resting && br_mus_played < MUSIC_TRACKS {
+          if br_mus_song == 0 {
+            br_mnote = TRACK_A_NOTES[br_mus_idx];
+            br_mus_step = TRACK_A_DUR;
+          } else if br_mus_song == 1 {
+            br_mnote = TRACK_B_NOTES[br_mus_idx];
+            br_mus_step = TRACK_B_DUR;
+          } else {
+            br_mnote = TRACK_C_NOTES[br_mus_idx];
+            br_mus_step = TRACK_C_DUR;
+          }
+          if br_mnote > 0 {
+            graphics::sfx_beep(br_mnote as single, br_mus_step, MUSIC_VOL);
+          }
+          br_mus_t = br_mus_step;
+          br_mus_idx += 1;
+          if br_mus_idx >= MUSIC_TRACK_LEN {
+            // End of track — advance the queue and schedule a random
+            // silence before the next song (or forever if done).
+            br_mus_played += 1;
+            br_mus_song = (br_mus_song + 1) % MUSIC_TRACKS;
+            br_mus_resting = true;
+            if br_mus_played >= MUSIC_TRACKS {
+              br_mus_t = 9999.0f;
+            } else {
+              br_mus_t = 3.0f + (((br_now / 23l) as integer) % 5) as single;
+            }
+          }
         }
       }
     }
@@ -1284,7 +1322,7 @@ fn main() {
           }
           for br_nc in 0..BRICK_COLS {
             br_bricks[br_nc] = 1;
-            br_specials[br_nc] = assign_special(br_nr_seed + br_nc);
+            br_specials[br_nc] = assign_special(br_nr_seed + br_nc, br_level);
             br_hp[br_nc] = 1;
             br_alive += 1;
           }
@@ -1435,7 +1473,7 @@ fn main() {
               br_hp[br_li] = 0;
             } else {
               br_bricks[br_li] = 1;
-              br_specials[br_li] = if br_lt == -2 { assign_special(br_li + br_level * 100) } else { br_lt };
+              br_specials[br_li] = if br_lt == -2 { assign_special(br_li + br_level * 100, br_level) } else { br_lt };
               // Boss row: top row gets extra HP every 3 levels
               if br_lr == 0 && br_level % 3 == 0 {
                 br_hp[br_li] = 3;
