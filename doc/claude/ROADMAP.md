@@ -92,17 +92,12 @@ export to GLB. Web only — multiplayer comes in 1.0.0.
 
 Design: `../moros/doc/claude/`
 
-### Blockers carried over from 0.8.4
-
-These user-facing issues surfaced during 0.8.4 release testing. They
-ship with 0.8.5 because the Moros editor relies on the same browser
-WASM path Brick Buster does, and the same `loft --native` path that
-Moros's renderer tests will use.
+### Must-fix blockers (share the Moros editor's code paths)
 
 | ID    | Title                                                  | E  | Source         |
 |-------|--------------------------------------------------------|----|----------------|
-| P137  | `loft --html` Brick Buster: runtime `unreachable` panic in browser | M  | PROBLEMS.md    |
-| ~~P138~~ | ~~`--native` rustc E0460 `rand_core` mismatch~~ | XS | **Done** — driver now detects E0460 + "rand_core" in rustc stderr and prints the `cargo build --lib --bin loft` hint instead of the 700-error cascade |
+| P137  | `loft --html` Brick Buster runtime `unreachable` panic — browser WASM wedges on first `loft_start` call. Blocks every WASM-shipped loft program, Moros editor included | M | PROBLEMS.md #137 |
+| P135  | Canvas Y-flip is a three-way compensation — off-by-ones 2×N sprite atlases. **Decision:** normalise to screen-top-left `(0,0)` throughout, remove upload-side row reversal, re-bake the one atlas (Brick Buster) that depended on the previous convention | S | PROBLEMS.md #135, CAVEATS.md C58 |
 
 ### Sprint A–C: Data model + editor + loft backend
 
@@ -166,20 +161,24 @@ highlighting, decent error messages, and a REPL for experimentation.
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
 
-### User-biting caveats promoted for fix
+### User-biting caveats — all ship in 0.9.0
 
-Issues surfaced during 0.8.4 Brick Buster work that are not blockers
-but routinely cost users hours. Fix in 0.9.0 so the "fully working
-language" label is honest.
+Each of these is a commitment, not a maybe.  Deferring any of them
+makes the "fully working language" label dishonest.
 
-| ID     | Title                                                  | E  | Design | Source           |
-|--------|--------------------------------------------------------|----|--------|------------------|
-| ~~C61~~ | ~~Nested same-name for-loops silently alias~~ | S | **Done** — parse-time diagnostic with rename hint (`tests/parse_errors.rs::c61_nested_same_name_loop_rejected`) |
-| C61.local | Outer-local shadowed by `for` loop (`x = 5; for x in …`) — reject when the outer value has live reads after the loop | S | Infrastructure landed (`Variable::was_loop_var` + `Function::was_loop_var`); reject branch awaits liveness integration. Naive reject broke stdlib docs relying on the reuse idiom |
-| C60    | Hash iteration — adopt the I13 iterator protocol for `for kv in hash`, or emit a compile-time diagnostic + documented parallel-vector pattern everywhere `hash<>` appears | M  | ✓      | CAVEATS.md, SERVER_FEATURES.md I13 |
-| P91    | `init(expr)` parameter form for dynamic default arguments | S  | ✓      | PROBLEMS.md      |
-| ~~P86~~ | ~~Lambda capture regression guard~~ | XS | **Done** — real closures shipped; `tests/issues.rs::p1_1_lambda_void_body` covers the original misleading-error reproducer end-to-end, plus three capture-detection guards in `tests/parse_errors.rs` |
-| P135   | Sprite atlas Y-flip: unify to a single canonical direction and drop the compensating flip | S  | ✓      | PROBLEMS.md, CAVEATS.md C58 |
+| ID     | Title                                                  | E  | Source |
+|--------|--------------------------------------------------------|----|--------|
+| C60    | **Hash iteration.** Adopt the I13 iterator protocol so `for (k, v) in hash` works (unspecified order, like Python/Rust). Removes a top-level collection-promise gap | M | CAVEATS.md, SERVER_FEATURES.md I13 |
+| C61.local | **Outer-local shadow diagnostic.** Reject `x = 5; for x in …` only when the outer `x` has a live read after the loop — needs post-parse liveness info. Infrastructure (`Variable::was_loop_var`) already landed; add the liveness pass and flip the reject | S | CAVEATS.md |
+| C54    | **`i32::MIN` null sentinel.** Emit a compiler warning when `integer` is used for arithmetic likely to land on the sentinel (multiplicative code, sums over large vectors). Teach users to reach for `long` | S | CAVEATS.md |
+| P22    | **Remove `spacial<T>` keyword.** A reserved word that always errors is user-hostile. Drop it from the parser/type system until A4 actually implements the backing tree (1.1+) | XS | PROBLEMS.md #22 |
+| P54    | **`JsonValue` enum.** Replace opaque `vector<text>` returned by `json_items` with a typed enum (Object / Array / String / Number / Boolean / Null) | MH | PROBLEMS.md #54 |
+| P91    | **`init(expr)` parameter defaults referencing earlier args.** `fn make_rect(w: integer, h: integer = w)` should parse | S | PROBLEMS.md #91 |
+
+**Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
+- ~~C61-nested~~ — parse-time reject for `for i { for i { } }` (`tests/parse_errors.rs::c61_nested_same_name_loop_rejected`)
+- ~~P86~~ — real closures; regression guards in `tests/issues.rs` and `tests/parse_errors.rs`
+- ~~P138~~ — `loft --native` prints actionable hint on E0460 + rand_core
 
 ### Compilation cache and constant store
 

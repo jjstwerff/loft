@@ -23,36 +23,36 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 22 | Spatial index (`spacial<T>`) operations not implemented | Low | Compile-time error; use `sorted<T>` or `index<T>` |
-| 54 | `json_items` returns opaque `vector<text>` | Low | Accepted limitation; `JsonValue` enum deferred |
-| 55 | Thread-local `http_status()` not parallel-safe | Medium | Design constraint — use `HttpResponse` struct |
-| ~~86~~ | Lambda capture | — | **Fully resolved** — real closures shipped in 0.8.3; the original codegen self-reference error is no longer reachable. Regression guards: `tests/issues.rs::p1_1_lambda_void_body` (runtime `count == 42`), plus `capture_detected` / `no_capture_no_error` / `local_not_captured` in `tests/parse_errors.rs` |
-| 90 | `fn_call` HashMap lookup per call | Low | Negligible overhead; encode line in `OpCall` if measured |
-| 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
-| 135 | Sprite atlas row indexing swap | Low | Cosmetic — affects 2×2 atlas layout |
-| 137 | `loft --html` Brick Buster runtime `unreachable` panic | Medium | Native mode works; browser build broken after instantiate |
-| 138 | `--native` rustc E0460: rand_core version mismatch | Low | Mitigated — `make play` builds `--lib --bin` together and the `--native` driver prints an actionable hint on E0460 |
+| 22 | `spacial<T>` keyword reserved but unimplemented | Low | **0.9.0:** remove the keyword until A4 ships (treat as unknown type) |
+| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** ship `JsonValue` enum (promoted from 1.1+) — typeless API contradicts loft's type-system promise |
+| 91 | `init(expr)` parameter defaults cannot reference earlier args | Medium | **0.9.0:** inject earlier args into `self.vars` during `parse_arguments` |
+| 135 | Canvas Y-flip three-way compensation off-by-ones 2×N atlases | Medium | **0.8.5:** normalise to screen-top-left `(0,0)` — remove upload-side row reversal |
+| 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
 
 ---
 
 ## Unimplemented Features
 
-### 22. Spatial index operations are not implemented
+### 22. `spacial<T>` keyword reserved but unimplemented — 0.9.0: remove
 
-`spacial<T>` in any field or variable type emits a compile-time error:
+`spacial<T>` emits a compile-time error today:
 
 ```
 spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups
 ```
 
-Both first-pass and second-pass parsers reject it, so no program reaches
-the runtime "Not implemented" panics.  Test:
-`spacial_not_implemented` in `tests/parse_errors.rs`.
+**Decision:** a keyword that always errors claims namespace and
+misleads users.  Remove `spacial` as a reserved keyword in 0.9.0 —
+treat `spacial<T>` as a plain unknown-type error alongside any other
+misspelled identifier.  Re-add when A4 actually ships the radix/R-tree
+backing (1.1+).
 
-**Remaining work:** implement insert, lookup, copy, remove, iteration in
-`database.rs` and `fill.rs`.  Iteration first, then remove, then copy.
-The spacial index structure (radix tree or R-tree) is already allocated
-in the schema; iteration traversal is the main missing piece.
+**Fix path:** delete the `"spacial"` match arm in
+`src/parser/definitions.rs`, remove `Type::Spacial` from `src/data.rs`,
+and drop the surrounding schema hooks in `src/database/types.rs`.
+The existing schema allocation is dead code.  Update
+`tests/parse_errors.rs::spacial_not_implemented` to expect the generic
+"unknown type" diagnostic instead of the current bespoke message.
 
 ---
 
@@ -88,83 +88,42 @@ the next 0.9.0 maintenance sweep.
 
 ---
 
-### 90. `fn_call` HashMap lookup for source line on every call
+### 91. `init(expr)` / default-from-earlier-parameter — 0.9.0
 
-**Symptom:** Every loft function call performs
-`self.line_numbers.get(&self.code_pos)` inside `fn_call`.  Before
-stack-trace support, the line lookup only ran during the rare
-`stack_trace()` snapshot.
+**Symptom:** `fn make_rect(w: integer, h: integer = w)` fails with
+*"Unknown variable 'w'"*; the default expression cannot reference
+earlier parameters of the same function.
 
-**Root cause:** The source line is not encoded in `OpCall` operands; it
-lives in `line_numbers: HashMap<u32, u32>` keyed by bytecode position
-and must be looked up at runtime.
+**Decision:** implement for 0.9.0.  This is an idiomatic default
+most scripting languages support; failing with an "unknown variable"
+message is a stumbling-stone for new users.
 
-**Workaround:** None needed — O(1) amortised lookup, small against the
-`Vec::push` + dispatch already in `fn_call`.
-
-**Fix path (if measured significant):** encode the source line as an
-extra `u32` operand of `OpCall` in codegen; the `call` handler reads it
-and passes it to `fn_call`, eliminating the runtime lookup at the cost
-of 4 bytes per `OpCall`.
+**Fix path:** in `parse_arguments`, inject each parsed argument into
+`self.vars` (via `add_variable` + `become_argument` + `defined`)
+before parsing the next default expression.  A first attempt hit
+two-pass-parser state issues; the re-attempt needs to cleanly
+separate "scratch binding for default resolution" from the real
+argument slots the caller adds afterwards.
 
 ---
 
-### 91. `init(expr)` parameter form missing
+## Web Services
 
-**Symptom:** `init(expr)` on function parameters (dynamic defaults
-computed from earlier parameters) is not implemented.
+### 54. `json_items` returns opaque `vector<text>` — 0.9.0
 
-**Scope:** The core struct-field `init(expr)` works correctly —
-evaluated once at creation, `$` references resolved, writable after
-construction.  Circular detection on struct fields is also in place
-(`tests/scripts/72-parse-error-caveats.loft`).  Only the parameter-form
-extension is missing.
+**Symptom:** `json_items(body)` returns `vector<text>` where each
+element is either a JSON object body or garbage.  The caller writes
+`MyStruct.parse(body)` and gets a partial zero-value struct on malformed
+input — no type checking, no diagnostic.
 
-**Workaround:** Compute the default at the call site and pass it
-explicitly.
+**Decision:** ship the `JsonValue` enum in 0.9.0 (promoted from 1.1+).
+Typeless "vector<text>" APIs contradict loft's own pitch as a
+statically-typed language.
 
-**Fix path:** in `parse_arguments`, accept `init(expr)` alongside
-`= expr`; store the expression in `Attribute.value`; at the call site,
-emit the expression when no argument is supplied.
-
----
-
-## Web Services Design Constraints
-
-### 54. `json_items` returns opaque `vector<text>` — no compile-time element type
-
-**Severity:** Low — accepted design limitation
-
-`json_items(body)` parses a JSON array and returns element bodies as
-`vector<text>`.  The compiler cannot verify that the caller's parse
-function receives a valid JSON object body rather than an arbitrary
-string; a runtime parse error produces a partial zero-value struct
-rather than a diagnostic.
-
-**Workaround:** validate the HTTP response status before parsing
-(`if resp.ok()`).
-
-**Fix path (deferred):** a `JsonValue` enum (Object / Array / String /
-Number / Boolean / Null) gives compile-time structure but at high design
-cost.  Target: 1.1+.
-
-See also: [WEB_SERVICES.md](WEB_SERVICES.md).
-
----
-
-### 55. Thread-local `http_status()` is not parallel-safe
-
-**Severity:** Medium — design trap; do not introduce this API.
-
-An `http_status()` returning the most-recent HTTP status as a
-thread-local integer (C `errno` pattern) is incorrect under loft's
-parallel execution model.  A `parallel_for` worker calling `http_get`
-would corrupt the thread-local of the calling thread.
-
-**Resolution:** return an `HttpResponse` struct from all HTTP functions.
-Status is a field on the returned value, not global state.  See
-WEB_SERVICES.md Approach B.  This is a design constraint to observe,
-not a bug to fix.
+**Fix path:** `JsonValue { Object(hash<JsonPair[key]>), Array(vector<JsonValue>),
+String(text), Number(float), Boolean(boolean), Null }` with
+`JsonValue.parse(text) -> JsonValue` and `value.as_struct<T>() -> T`.
+See [WEB_SERVICES.md](WEB_SERVICES.md).
 
 ---
 
