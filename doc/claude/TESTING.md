@@ -1065,7 +1065,7 @@ xvfb-run -a -s "-screen 0 800x600x24" \
     target/release/loft --interpret \
         --path /home/ubuntu/loft/ \
         --lib /home/ubuntu/loft/lib/ \
-        lib/graphics/examples/25-breakout.loft
+        lib/graphics/examples/25-brick-buster.loft
 ```
 
 `-a` picks an unused display number. `-s` passes args to Xvfb itself.
@@ -1121,12 +1121,12 @@ Then run it inside `xvfb-run`:
 ```bash
 xvfb-run -a -s "-screen 0 800x600x24" \
     /tmp/snap_inner.sh \
-    lib/graphics/examples/25-breakout.loft \
-    /tmp/breakout.png 6
+    lib/graphics/examples/25-brick-buster.loft \
+    /tmp/brick-buster.png 6
 ```
 
 `POST_WAIT` matters: short scripts (`for _ in 0..300`) finish before the
-capture; long-running ones (e.g. `for _ in 0..1000000` like breakout) stay
+capture; long-running ones (e.g. `for _ in 0..1000000` like brick-buster) stay
 alive indefinitely. For animated examples, increase `POST_WAIT` to capture
 a different frame in the animation cycle.
 
@@ -1172,7 +1172,7 @@ xvfb-run -a -s "-screen 0 800x600x24" \
              --show-leak-kinds=all --log-file=/tmp/v.log \
         target/debug/loft --interpret \
             --path /home/ubuntu/loft/ --lib /home/ubuntu/loft/lib/ \
-            lib/graphics/examples/25-breakout.loft
+            lib/graphics/examples/25-brick-buster.loft
 
 grep -E "definitely lost|indirectly lost|possibly lost|ERROR SUMMARY" /tmp/v.log
 ```

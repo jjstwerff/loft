@@ -1,0 +1,42 @@
+# GL snapshot test registry — visual regression tests for long-running
+# GL examples.
+#
+# Requirements for an entry:
+#   - the example must hold its window open long enough to be captured
+#     (i.e. a game loop like `for _ in 0..1000000 { ... }`, not a finite
+#     `for _ in 0..200 { ... }` that exits in <1 second);
+#   - `gl_create_window(..., "NameHere")` must set a title matching the
+#     window_regex column so xdotool can find it.
+#
+# Short-lived examples (00-smoke etc.) use a dedicated snap script (see
+# tests/scripts/snap_smoke.sh, wired via `make test-gl-golden`) that
+# inlines a long-running variant of their body.
+#
+
+# One line per golden-PNG test; tab-separated.
+# Columns:
+#   1. loft_file            path under lib/graphics/examples/ (basename.loft)
+#   2. golden_png           path under tests/golden/
+#   3. wait_seconds         seconds to let the example render before `import`
+#   4. window_regex         xdotool --name regex to locate the window (case-ins)
+#   5. screen_geometry      Xvfb geometry (WxHxDEPTH)
+#   6. key_script           (optional) `;`-separated KEY@MS steps sent via
+#                           xdotool before capture, e.g. `space@500` or
+#                           `space@300;p@200` (send SPACE, wait 300ms,
+#                           send P, wait 200ms).  Use xdotool key names
+#                           (`space`, `Return`, `p`, `k`, `x`, etc.).
+#
+# Comment lines start with '#'; blank lines are ignored.
+#
+# To add a new test:
+#   1. Add a row below
+#   2. `make update-gl-snapshots` to create the golden PNG
+#   3. Inspect the golden in tests/golden/ and commit
+#   4. `make test-gl-snapshots` runs the comparison
+
+25-brick-buster.loft	25-brick-buster-title.png	2	rick Buster	800x600x24
+25-brick-buster.loft	25-brick-buster-playing.png	1	rick Buster	800x600x24	space@800
+25-brick-buster.loft	25-brick-buster-paused.png	1	rick Buster	800x600x24	space@500;p@300
+25-brick-buster.loft	25-brick-buster-powerups.png	1	rick Buster	800x600x24	space@500;u@400
+25-brick-buster.loft	25-brick-buster-explosion.png	1	rick Buster	800x600x24	space@500;x@600
+25-brick-buster.loft	25-brick-buster-gameover.png	1	rick Buster	800x600x24	space@500;k@400

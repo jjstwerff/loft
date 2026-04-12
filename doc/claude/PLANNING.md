@@ -76,7 +76,7 @@ current milestone definitions live in [ROADMAP.md](ROADMAP.md) and
 | Version | Goal                                       | Status        |
 |---------|--------------------------------------------|---------------|
 | 0.8.0–0.8.3 | Stability, native codegen, slot correctness, lambdas, parallel, stack trace, sprite sheet API | **Shipped** |
-| 0.8.4   | **Awesome Breakout** — a game worth sharing on itch.io | In progress |
+| 0.8.4   | **Awesome Brick Buster** — a game worth sharing on itch.io | In progress |
 | 0.8.5   | **Working Moros editor** — paint hex scenes in the browser | Planned   |
 | 0.9.0   | **Fully working loft language** — feature-complete + verified | Planned |
 | 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract | Planned |

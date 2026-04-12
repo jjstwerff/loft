@@ -1045,7 +1045,7 @@ loft_ffi::loft_register! {
 /// `i32::MIN` on error — that's loft's null sentinel for `integer`, so the
 /// loft-side `if !font { … }` check works correctly. (Returning -1 would
 /// look like a valid handle to loft, since -1 is not the null sentinel.
-/// The bug that caused breakout's score counter and every text texture in
+/// The bug that caused Brick Buster's score counter and every text texture in
 /// 00-smoke.loft to be silently invisible was: -1 returned here, the loft
 /// fallback path skipped, font_idx=-1 cast to usize=MAX in measure_text,
 /// `fonts.get()` returns None, width returned as 0, canvas allocated as

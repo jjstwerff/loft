@@ -3,8 +3,8 @@
 
 ## What each milestone means
 
-**0.8.4 — Awesome Breakout.**
-The Breakout demo has audio (chiptune synthesis), title/pause/game-over
+**0.8.4 — Awesome Brick Buster.**
+The Brick Buster demo has audio (chiptune synthesis), title/pause/game-over
 screens with restart, and ships as a single-file HTML export via
 `loft --html`. All language blockers (P117–P131, L4–L6, S5) are fixed.
 Remaining polish (hand-designed levels, background music, art) can go
@@ -87,13 +87,13 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 
 | Item | Notes |
 |---|---|
-| **P122** store leak in game loops | Free struct/vector temps at end of loop iteration. Today's breakout has to use bitmasks + raw-float collision APIs to dodge this. **Headline language fix for 0.8.4.** |
+| **P122** store leak in game loops | Free struct/vector temps at end of loop iteration. Today's brick-buster has to use bitmasks + raw-float collision APIs to dodge this. **Headline language fix for 0.8.4.** |
 | G3 tilemap rendering | Lets BK.3 levels be data instead of code |
 | G5 audio sound effects | Brick hit, paddle bounce, pickup chimes |
 | G6 background music | With volume mix during play |
 | W1.1 single-file HTML export | `loft --html game.loft` → one file |
 | BK.1–BK.8 game polish | Audio, levels, screen shake, pause menu, title/game-over screens, high scores, art pass |
-| G7.P playable Breakout on itch.io | The actual ship target |
+| G7.P playable Brick Buster on itch.io | The actual ship target |
 
 ### 0.8.5 gate items
 

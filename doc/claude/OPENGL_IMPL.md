@@ -73,7 +73,7 @@ the actual implementation diverged:
 | GLSL 330→300es patching | ✓ Complete | `src/wasm_gl.rs::patch_shader()` |
 | PBR renderer | ✓ Complete | `render.loft` (shadow + 5-light GGX/Schlick) |
 | Examples | ✓ 24 working | `lib/graphics/examples/00–24` |
-| Breakout game | WIP | `lib/graphics/examples/25-breakout.loft` (936 lines) |
+| Brick Buster game | WIP | `lib/graphics/examples/25-brick-buster.loft` (936 lines) |
 
 Tests:
 - `lib/graphics/tests/canvas.loft` — 30+ canvas tests

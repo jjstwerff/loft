@@ -432,10 +432,10 @@ WebAssembly.instantiate(wasmBytes, imports).then(({{instance}}) => {{
 
 **Test:**
 ```bash
-cargo run --bin loft -- --html /tmp/breakout.html \
-    --lib lib/ lib/graphics/examples/25-breakout.loft
-ls -la /tmp/breakout.html  # check size
-# Open in browser — Breakout should run
+cargo run --bin loft -- --html /tmp/brick-buster.html \
+    --lib lib/ lib/graphics/examples/25-brick-buster.loft
+ls -la /tmp/brick-buster.html  # check size
+# Open in browser — Brick Buster should run
 ```
 
 ---

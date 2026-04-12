@@ -2349,7 +2349,7 @@ fn test() {
 }
 
 // P122c: struct-returning function used inside conditional inside loop
-// This is the exact pattern from the breakout collision detection.
+// This is the exact pattern from the Brick Buster collision detection.
 #[test]
 fn p122_struct_return_conditional_loop() {
     // Iterations reduced 100*50=5000 → 30*15=450 for CI speed. Still
@@ -2486,7 +2486,7 @@ fn test() {
 
 // ── P122 GL pattern: collision detection with struct Rect + Overlap ────────
 //
-// This replicates the breakout collision loop using the *struct-based* API
+// This replicates the Brick Buster collision loop using the *struct-based* API
 // (not the raw-float workaround). Each frame checks N bricks for collision
 // with M balls, creating Rect and Overlap structs per check.
 #[test]
@@ -2878,7 +2878,7 @@ fn p123_gl_multi_vector_per_frame() {
 
 // ── Combined GL pattern: struct + vector + text in game loop ──────────────
 //
-// This is the "full breakout frame" pattern combining all the bug areas:
+// This is the "full Brick Buster frame" pattern combining all the bug areas:
 // struct collision detection, vector per-frame data, text for debug output,
 // all inside a sustained game loop.
 #[test]
