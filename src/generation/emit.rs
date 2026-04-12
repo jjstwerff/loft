@@ -540,18 +540,15 @@ impl Output<'_> {
         // body block — without the patch, native codegen emits the Call as a
         // discarded statement and returns STRING_NULL.
         let fn_name = &self.data.def(self.def_nr).name;
-        let is_t_stub_text_body =
-            matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
+        let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
         let patched_ops;
-        let operators: &[Value] = if is_void_block
-            || matches!(bl.result, Type::Never)
-            || is_t_stub_text_body
-        {
-            patched_ops = self.patch_hoisted_returns(&bl.operators);
-            &patched_ops
-        } else {
-            &bl.operators
-        };
+        let operators: &[Value] =
+            if is_void_block || matches!(bl.result, Type::Never) || is_t_stub_text_body {
+                patched_ops = self.patch_hoisted_returns(&bl.operators);
+                &patched_ops
+            } else {
+                &bl.operators
+            };
         // When the block expects a non-void result but trailing operator(s) are
         // void (drops, if-without-else, etc.), find the last non-void operator
         // and capture its value before the trailing void ops run.
