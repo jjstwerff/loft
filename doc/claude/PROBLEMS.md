@@ -31,6 +31,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
 | 135 | Sprite atlas row indexing swap | Low | Cosmetic — affects 2×2 atlas layout |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | Medium | Native mode works; browser build broken after instantiate |
+| 138 | `--native` rustc E0460: rand_core version mismatch | Medium | `make play` now builds `--lib --bin` together; cascades 700+ E0425 errors if stale |
 
 ---
 
@@ -254,6 +255,49 @@ only the browser build is broken.
 
 **Tracking:** discovered 2026-04-12 while verifying the
 `make play` target.  Native path works; browser path wedged.
+
+---
+
+### 138. `--native` rustc E0460: `rand_core` version mismatch
+
+**Severity:** Medium — blocks `loft --native <script>` and `make play`
+on a checkout where `cargo build --release --bin loft` has run without
+`--lib`.
+
+**Symptom:** `rustc` fails compiling the generated `/tmp/loft_native.rs`
+with
+
+```
+error[E0460]: found possibly newer version of crate `rand_core` which `loft` depends on
+  --> /tmp/loft_native.rs:16:1
+   |
+16 | extern crate loft;
+   | ^^^^^^^^^^^^^^^^^^
+   = note: the following crate versions were found:
+           crate `rand_core`: …/librand_core-<hashA>.rmeta
+           crate `rand_core`: …/librand_core-<hashB>.rmeta
+           crate `rand_core`: …/librand_core-<hashC>.rmeta
+           crate `loft`: …/libloft.rlib
+```
+
+The E0460 cascades: every subsequent `use loft::codegen_runtime::*;`
+fails to resolve, producing 700+ "cannot find function `OpNewRecord`"
+/ `cr_call_push` / `OpFreeRef` / `n_set_store_lock` etc. E0425 errors.
+The generated source itself is fine — rustc can't load the `loft` crate.
+
+**Root cause:** cargo's incremental-build state has `libloft.rlib`
+referencing an older `rand_core` rmeta hash than what's currently in
+`target/release/deps/`.  This happens when `--bin loft` rebuilds but
+`--lib` is left stale.
+
+**Workaround (already shipped):** `make play` step 1 now runs
+`cargo build --release -q --lib --bin loft` so the rlib is always
+current.  A manual `cargo clean && cargo build --release` is the
+fallback when a user's tree has other stale artefacts.
+
+**Fix path:** no code-level fix required — this is a cargo caching
+artefact.  Document in DEVELOPERS.md so new contributors know why
+`cargo build --bin loft` alone sometimes breaks the native path.
 
 ---
 

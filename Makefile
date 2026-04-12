@@ -274,8 +274,13 @@ game:
 # Buster, then launch the game.  Prerequisites checked in order so
 # the first missing item fails fast with an actionable message.
 play:
-	@echo "  [1/5] checking loft binary ..."
-	@cargo build --release -q --bin loft 2>/tmp/loft_play_host.log || { \
+	@echo "  [1/5] checking loft binary + libloft.rlib ..."
+	@# Build both --lib and --bin so libloft.rlib (consumed by the
+	@# /tmp/loft_native.rs compile in step 5) matches the current
+	@# transitive dep set.  Building only --bin can leave a stale
+	@# libloft.rlib referencing an older rand_core and rustc fails
+	@# with E0460 "found possibly newer version of crate `rand_core`".
+	@cargo build --release -q --lib --bin loft 2>/tmp/loft_play_host.log || { \
 	    echo "    FAIL: host cargo build — see /tmp/loft_play_host.log"; \
 	    tail -20 /tmp/loft_play_host.log; exit 1; }
 	@echo "  [2/5] checking system GL libraries ..."
