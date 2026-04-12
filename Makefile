@@ -5,6 +5,10 @@
 #
 # If you just want to try things:
 #
+#   make play       Launch Brick Buster natively (full OpenGL window).
+#                   Checks prerequisites first; fails fast with a clear
+#                   message if any native library is missing.
+#
 #   make game       Build the Brick Buster arcade game into one HTML file
 #                   (doc/brick-buster.html). Double-click to play.
 #                   Works even from a half-broken checkout.
@@ -38,7 +42,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game help
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -265,6 +269,52 @@ game:
 	@echo ""
 	@echo "    Or serve locally:"
 	@echo "      make serve  →  http://localhost:8000/brick-buster.html"
+
+# play: validate everything needed for a native OpenGL run of Brick
+# Buster, then launch the game.  Prerequisites checked in order so
+# the first missing item fails fast with an actionable message.
+play:
+	@echo "  [1/5] checking loft binary ..."
+	@cargo build --release -q --bin loft 2>/tmp/loft_play_host.log || { \
+	    echo "    FAIL: host cargo build — see /tmp/loft_play_host.log"; \
+	    tail -20 /tmp/loft_play_host.log; exit 1; }
+	@echo "  [2/5] checking system GL libraries ..."
+	@if command -v pkg-config >/dev/null 2>&1; then \
+	    pkg-config --exists gl || { \
+	        echo "    FAIL: OpenGL development headers not found"; \
+	        echo "    install:  apt install libgl1-mesa-dev  (debian/ubuntu)"; \
+	        echo "              dnf install mesa-libGL-devel  (fedora)"; \
+	        echo "              brew install mesa             (macos)"; \
+	        exit 1; }; \
+	else \
+	    echo "    note: pkg-config not found; trusting rustc to link GL"; \
+	fi
+	@echo "  [3/5] building native graphics cdylib ..."
+	@cd lib/graphics/native && cargo build --release -q 2>/tmp/loft_play_graphics.log || { \
+	    echo "    FAIL: lib/graphics/native build — see /tmp/loft_play_graphics.log"; \
+	    tail -30 /tmp/loft_play_graphics.log; \
+	    echo ""; \
+	    echo "    Common causes:"; \
+	    echo "      - missing X11 / Wayland dev headers (libx11-dev, libwayland-dev)"; \
+	    echo "      - missing GLFW system dependency"; \
+	    exit 1; }
+	@test -f lib/graphics/native/target/release/libloft_graphics_native.so \
+	    -o -f lib/graphics/native/target/release/libloft_graphics_native.dylib \
+	    -o -f lib/graphics/native/target/release/loft_graphics_native.dll || { \
+	    echo "    FAIL: native graphics cdylib missing after build"; exit 1; }
+	@echo "  [4/5] checking display available ..."
+	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ]; then \
+	    echo "    FAIL: no \$$DISPLAY or \$$WAYLAND_DISPLAY set"; \
+	    echo "    headless? prefix the command with 'xvfb-run -a' or run on a desktop session"; \
+	    exit 1; \
+	fi
+	@echo "  [5/5] launching Brick Buster ..."
+	@echo ""
+	@echo "    Controls: ←/→ or A/D to move, Space to launch, Esc to quit"
+	@echo ""
+	@./target/release/loft --native \
+	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
+	    lib/graphics/examples/25-brick-buster.loft
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
