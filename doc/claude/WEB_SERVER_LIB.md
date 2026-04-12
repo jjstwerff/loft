@@ -884,71 +884,18 @@ readable, testable, and modifiable in loft.
 
 ## Implementation phases
 
-**Prerequisites (interpreter features — all land in Sprint 10 before server work begins):**
-- **C55** — `type Handler = fn(Request) -> Response` — used throughout for readable signatures
-- **C56** — `?? return expr` — used in every handler for concise null-safe early exit
-- **A15** — `parallel { }` — required for running the game loop alongside `serve_all`
-- **I13** — iterator protocol — required for Phase 3 (`for msg in ws`)
+**Interpreter prerequisites** (Sprint 10, all land before server work):
+C55 type aliases, C56 `?? return`, A15 `parallel { }`, I13 iterator
+protocol (needed for Phase 3 `for msg in ws`).
 
-### Phase 1 — Plain HTTP server (no TLS)
-*(Requires: C55, C56 from interpreter Sprint 10)*
-
-- TCP listen + accept loop (native)
-- HTTP/1.1 request parsing (native: hyper)
-- `Request` / `Response` / `Header` structs in loft
-- `Handler` and `WsHandler` type aliases (C55) in `server.loft`
-- `new_app`, `route`, `get`/`post`/`put`/`delete`, `serve` in loft
-- Route matching engine in loft
-- `Middleware.Logger` in loft
-- Response builder functions in loft (all handlers use `?? return` idiom from C56)
-- Tests: routing, response codes, query params, path params
-
-### Phase 2 — HTTPS with static certificates
-
-- `rustls` integration in native layer
-- `TlsConfig.Pem` support
-- `Server.port` redirect (port 80 → 443) in loft
-- `Middleware.SecureHeaders` in loft
-- Tests: HTTPS handshake, certificate loading, redirect
-
-### Phase 3 — WebSockets
-*(Requires: I13 from interpreter Sprint 10)*
-
-- `tokio-tungstenite` in native layer
-- `WebSocket` opaque struct, `ws_send`/`ws_receive`/`ws_close`/`ws_poll` in native
-- `route_ws`, `WsMessage` enum (from `game_protocol`) in loft
-- `for msg in ws` handler pattern using I13 iterator protocol
-- `Middleware.Authenticate` pre-handshake support
-- Tests: echo server, message types, close handling
-
-### Phase 4 — Authentication
-
-- `n_jwt_verify_hs256`, `n_argon2_hash/verify`, `n_session_id_new` in native
-- `AuthConfig` enum, `Middleware.Authenticate` in loft
-- JWT decode pipeline (loft base64url decode + JSON parse + native verify)
-- Session store (Memory + File) in loft
-- `Middleware.RequireAuth`, `Middleware.RequireRoles` in loft
-- `create_session`, `destroy_session`, login/logout pattern in loft
-- Tests: JWT issuance + verification, session lifecycle, 401/403 responses
-
-### Phase 5 — ACME / Let's Encrypt
-
-- `instant-acme` integration in native layer
-- `n_acme_provision`, `n_acme_renew_loop` in native
-- `TlsConfig.Acme` config struct in loft
-- HTTP-01 challenge handler wired into the port-80 listener
-- Automatic renewal background loop
-- Tests: staging environment, certificate storage, renewal trigger
-
-### Phase 6 — Middleware + polish
-
-- `Middleware.Cors` in loft
-- `Middleware.RateLimit` in loft (using parallel store for thread safety)
-- `Middleware.Decompress` in native (flate2)
-- `serve_dir` + `content_type_for` in loft
-- `parse_form`, `parse_multipart` in loft
-- `serve_all` combining multiple Apps
-- Performance testing: requests/second baseline on target hardware
+| # | Phase              | Requires | Deliverables |
+|---|--------------------|----------|-------------|
+| 1 | Plain HTTP         | C55, C56 | TCP listener + hyper HTTP/1.1; `Request`/`Response`/`Header` in loft; `new_app`, `route`, `get`/`post`/`put`/`delete`, `serve`; route matcher; `Middleware.Logger`. Tests: routing, codes, query, path params. |
+| 2 | HTTPS (static PEM) | Phase 1  | `rustls` native; `TlsConfig.Pem`; port-80 → 443 redirect; `Middleware.SecureHeaders`.  Tests: handshake, cert loading, redirect. |
+| 3 | WebSockets         | I13      | `tokio-tungstenite` native; `WebSocket` struct + `ws_send`/`receive`/`close`/`poll`; `route_ws`, `WsMessage` enum; `for msg in ws` pattern; pre-handshake `Middleware.Authenticate`. Tests: echo, message types, close. |
+| 4 | Authentication     | Phase 1  | JWT (HS256) + argon2 + session id natives; `AuthConfig`; memory/file session stores; `Middleware.RequireAuth`/`RequireRoles`; login/logout.  Tests: JWT round-trip, session lifecycle, 401/403. |
+| 5 | ACME / LE          | Phase 2  | `instant-acme` native; `TlsConfig.Acme`; HTTP-01 challenge on port 80; renewal loop.  Tests: staging issuance, storage, renewal trigger. |
+| 6 | Middleware + polish| Phase 1  | CORS, rate-limit, decompress, `serve_dir` + `content_type_for`, form/multipart parsers, `serve_all`, req/s baseline. |
 
 ---
 
