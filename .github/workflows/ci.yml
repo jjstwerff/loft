@@ -131,23 +131,14 @@ jobs:
       - name: make game
         run: make game
 
-      # Fail the PR if the committed doc/pkg/ or doc/brick-buster.html
-      # is stale relative to a fresh rebuild.  Pages serves main:/docs
-      # directly, so a stale bundle in the merge commit immediately
-      # breaks the deployed "Try it in the browser" link with the
-      # classic "Failed to grow table" LinkError.  This guard forces
-      # contributors to re-run `make gallery` / `make game` and commit
-      # the result before merging.
-      - name: Verify committed browser bundle matches rebuild
-        run: |
-          # Use --quiet + --stat so we get a one-line summary rather than
-          # a full textual diff of the multi-MB base64-embedded
-          # doc/brick-buster.html, which blocks on the Actions log
-          # buffer.  --quiet returns non-zero on any diff.
-          if ! git diff --quiet -- doc/pkg/ doc/brick-buster.html; then
-            echo "::error::Committed doc/pkg/ or doc/brick-buster.html is out of date."
-            echo "Changed files:"
-            git diff --stat -- doc/pkg/ doc/brick-buster.html
-            echo "Run 'make gallery && make game' locally and commit the result."
-            exit 1
-          fi
+      # NOTE: we deliberately do NOT byte-compare the CI rebuild to
+      # the committed doc/pkg/ + doc/brick-buster.html.  Different
+      # rustc / wasm-opt versions produce non-bit-identical wasm even
+      # for identical source, so a strict diff check is
+      # non-deterministic across environments.  The real deploy-time
+      # protection lives in .github/workflows/release.yml's docs job
+      # (and, long-term, a main-push workflow that rebuilds and
+      # commits the bundle back).  What this CI job guarantees is
+      # that both pipelines *build* and every asset loads — which
+      # catches the common failure mode of a source change that
+      # breaks the browser pipeline without the contributor noticing.
