@@ -1,0 +1,23 @@
+# cargo-nextest configuration.
+#
+# The `ci` profile used in .github/workflows/ci.yml tunes nextest for
+# GitHub Actions: retry flaky tests once, cap parallelism to the
+# runner's reported threads, and use the JUnit reporter so the
+# Actions UI can surface failures.
+
+[profile.default]
+# Local runs: fail fast, no retries.
+failure-output   = "immediate"
+success-output   = "never"
+status-level     = "pass"
+
+[profile.ci]
+# CI runs: retry flaky tests once, emit JUnit for the Actions UI.
+retries          = 1
+failure-output   = "immediate-final"
+success-output   = "never"
+status-level     = "pass"
+final-status-level = "slow"
+
+[profile.ci.junit]
+path = "target/nextest/junit.xml"

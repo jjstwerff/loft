@@ -1821,7 +1821,13 @@ fn main() {
         let opt_path = std::env::temp_dir().join("loft_html_opt.wasm");
         let final_wasm = if std::process::Command::new("wasm-opt")
             .args([
-                "-Oz",
+                // -O / -Oz plus --asyncify strips the host imports
+                // (loft_gl.*, loft_io.*) entirely — wasm goes from 25
+                // imports to 0 and every GL call runtime-panics as
+                // "unreachable executed".  -O1 with the explicit
+                // --asyncify pass keeps imports intact while still
+                // producing a smaller, asyncify-ready bundle.
+                "-O1",
                 "--strip-debug",
                 "--strip-producers",
                 "--asyncify",
