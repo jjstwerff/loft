@@ -1142,10 +1142,12 @@ a different frame in the animation cycle.
   2026-04-10; 11 panic with `Delete on locked store` — that's the **P120
   use-after-free** still alive in real GL paths, despite the regression
   guard tests passing).
-- **There's an RGB↔BGR channel swap somewhere in loft's GL clear path.**
-  `gl_clear(rgba(40, 80, 120, 255))` produces the pixel `(120, 80, 40)`
-  on screen. Affects every example's appearance but not whether it runs.
-  Tracked separately.
+- ~~**RGB↔BGR channel swap in GL captures.**~~  **Fixed (P133)** —
+  Xvfb + Mesa-swrast + ImageMagick `import` reads the framebuffer with
+  R and B swapped.  On-screen rendering is correct; only captured PNGs
+  were wrong.  `tests/scripts/snap_smoke.sh` now applies
+  `convert -separate -swap 0,2 -combine` post-`import`, and the golden
+  PNG was regenerated.
 - **Polling for `xdotool search --name "."`** matches *any* named window.
   If the test environment has other X clients running, narrow it down by
   passing the window title used in `gl_create_window`.
