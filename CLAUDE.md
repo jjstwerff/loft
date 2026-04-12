@@ -117,8 +117,16 @@ give each item a traceable history.
 2. **Never `git push` without an explicit user instruction** — see the Remote CI section
    of [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md).
 3. **Never create a branch, push, or open a PR unless the user explicitly asks.**
-   Branching and pushing disrupt the development flow.  Work on the current branch,
-   commit locally, and wait for the user to say "push", "create PR", or "merge".
+   Each pull request costs the user real review time — more than the code took to
+   write.  Default mode is: work on the current branch, commit locally, report what
+   changed, and wait.  Only run `gh pr create`, `git push`, or `git checkout -b`
+   after the user explicitly says "push", "create PR", "open a PR", "merge", or
+   "switch to a new branch".
+   - "fix X" or "implement Y" is *not* a PR instruction.  Commit locally and stop.
+   - "commit and push" is a push instruction, not a PR instruction.
+   - A previous prompt that said "open a PR" does not authorise the next PR.
+     Ask each time, or infer from the exact current prompt.
+   - When in doubt, summarise what is ready and ask whether to push.
 4. Create branches from the tip of `main` using the naming convention in
    [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) (e.g. `p1-1-lambda-parser`, `benchmark`).
 5. Merging back to `main` is done via a GitHub pull request — not a local `git merge`.
