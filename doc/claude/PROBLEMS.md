@@ -28,6 +28,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | 91 | Default-from-earlier-parameter | Medium | **0.9.0:** evaluate at function entry via codegen prologue + supplied-args bitmap |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
+| 139 | `_vector_N` slot-allocator TOS mismatch (`slot=363 TOS=362`) | Medium | **0.9.0:** discovered during C61.local rename sweep; layout-sensitive codegen bug, reproducer in `tests/scripts/05-enums.loft` with two loop-var renames |
 
 ---
 
@@ -287,6 +288,40 @@ This replaces the previous 700-error cascade with a single recovery
 instruction.  Test: introduce a stale rlib (`cargo build --bin loft`
 after modifying a dependency version) and run
 `loft --native <any-file>` — the hint should appear.
+
+---
+
+### 139. `_vector_N` slot-allocator TOS mismatch — 0.9.0
+
+**Symptom:** codegen panics from `src/state/codegen.rs:922`:
+
+```
+[gen_set_first_at_tos] '_vector_3' in 'n_main': slot=363 but TOS=362
+— caller must ensure TOS matches the variable's slot before calling
+```
+
+**Reproducer:** with `tests/scripts/05-enums.loft`, rename both
+`for d in dirs` loops to different identifiers (e.g. `for _ in dirs`
+in the counter loop and `for elem in dirs` in the collector loop).
+The resulting internal-variable count triggers the mismatch.  The
+original file sidesteps it by the specific layout its current names
+produce.
+
+**Root cause:** the slot allocator's `gen_set_first_at_tos` expects
+a specific TOS/slot alignment.  One of two things: (a) a `_vector_N`
+temp variable is being created in a place that doesn't advance TOS
+before the `set_first_at_tos` call, or (b) the assertion itself is
+too strict for a legitimate layout.  Needs a phase-B dump at the
+`_vector_3` creation site to decide which.
+
+**Why it matters now:** blocks the C61.local rename sweep (any
+scheme that touches multiple loop variables in one function risks
+tripping the bug).  It is latent in main today — no CI test
+exercises the triggering layout — but C61.local's fix is blocked
+on this one.
+
+**Discovered:** 2026-04-12 during C61.local unconditional-reject
+attempt (commit b716d1d, reverted).
 
 ---
 

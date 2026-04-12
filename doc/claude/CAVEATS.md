@@ -77,15 +77,33 @@ Tuples shipped already, so the API shape is natural.
 
 ### C61.local — Outer-local silently clobbered by a for-loop
 `x = 5; for x in …` silently reassigns `x` to the loop's last value.
-**Decision (revised):** reject unconditionally — the "dead outer local
-reused as loop variable" idiom that stdlib docs currently rely on is
-*sloppy code we should push users away from*, not a pattern to
-preserve.  A liveness pass is overengineering for ~30 lines of doc
-that can be updated in one review.  The stdlib `a = 12; for a in 1..6`
-becomes either `for a in 1..6` (if the init was dead) or
-`for loop_a in 1..6` (if it wasn't).  Infrastructure
-(`Variable::was_loop_var`) already landed; flip the reject branch and
-clean up docs together.
+**Decision (final, after failed unconditional-reject attempt):**
+liveness-aware reject — fires only when the outer `x` has a live read
+*after* the loop body.  The unconditional variant was tried
+(b716d1d, reverted) and hit two problems:
+  1. **Blast radius.** 6+ stdlib/example files rely on the
+     `a = 12; for a in 1..6` teaching idiom.  Renaming to `loop_a`
+     reads worse than the current permissive form.
+  2. **Latent slot-allocator crash.** The required renames in
+     `05-enums.loft` shift the internal unique-variable count and
+     trip a pre-existing codegen bug (`_vector_3 slot=363 TOS=362`
+     in `src/state/codegen.rs:922`).  The bug is *masked by current
+     variable layouts*, not caused by my changes, but it blocks any
+     rename-sweep today.
+
+Liveness is the principled line: the language should catch
+*unambiguous* bugs (outer `x` read after the loop — the silent
+clobber is observable), not *plausible* ones (outer `x` dead after
+the loop — the rewrite is semantically equivalent).
+
+Prerequisite: **fix the `_vector_3` slot bug** independently so the
+diagnostic's doc-cleanup sweep is possible.  Without that fix, even
+the liveness-aware version will trip on downstream tests.
+
+Infrastructure landed (`Variable::was_loop_var`); remaining work is
+~50 lines in `src/variables/intervals.rs` to produce per-variable
+last-read positions, then gate the diagnostic on "last read > for
+loop start".
 
 ### P91 — Default-from-earlier-parameter
 `fn make_rect(w: integer, h: integer = w)` is an idiomatic default.
@@ -135,7 +153,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | C54    | 0.9.0     | **Switch `integer` from i32 to i64.** `long` becomes historical alias. Breaking change, pre-1.0 window |
 | C58/P135 | 0.8.5   | Canonical `(0, 0) = screen-top-left`; lock in LOFT.md; re-bake brick-buster atlas |
 | C60    | 0.9.0     | `for (k, v) in hash` returning `(K, V)` tuples in unspecified order |
-| C61.local | 0.9.0  | Reject shadow unconditionally; fix stdlib docs (drop dead `a = 12` inits) |
+| C61.local | 0.9.0  | Liveness-aware reject (not unconditional); depends on slot-allocator bug fix first |
 | P54    | 0.9.0     | `JsonBody` newtype + `.is_object/array/null()`; full `JsonValue` deferred to 1.1+ |
 | P91    | 0.9.0     | Default evaluated at function entry via prologue; call-site supplied-args bitmap. Scope M |
 | P137   | 0.8.5     | Browser WASM `unreachable` panic fix |
