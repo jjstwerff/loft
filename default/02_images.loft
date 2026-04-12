@@ -131,7 +131,10 @@ pub fn split(self: text, separator: character) -> vector < text > {
       p = c#next;
     }
   }
-  if p > 0 {
+  // Always append the trailing segment when the input is non-empty, including
+  // the case where no separator was found at all.  Without this, "hello".split(',')
+  // returned [] instead of ["hello"].  An empty input returns [] (no segments).
+  if self.len() > 0 {
     result +=[self[p..self.len()]];
   }
   result
