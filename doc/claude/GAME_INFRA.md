@@ -260,14 +260,14 @@ each `requestAnimationFrame`.  Loft game code is identical on native and browser
 A simple game that proves the full pipeline: loft → renderer → WebGL →
 browser.  Something a person can play in 30 seconds.
 
-**Candidate: Breakout clone**
+**Candidate: Brick Buster clone**
 - One paddle, one ball, rows of colored bricks
 - Uses: sprite sheet (G1/G2), collision (G4), audio (G5), renderer (R1)
 - Input: left/right arrow keys or mouse
 - Win condition: all bricks destroyed
 - ~200 lines of loft code
 
-**Why Breakout:**
+**Why Brick Buster:**
 - Exercises 2D rendering, input, collision, and audio
 - Simple enough to write in one session
 - Immediately recognizable — anyone knows how to play

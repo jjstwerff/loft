@@ -15,11 +15,11 @@
 # KEY uses xdotool names: `space`, `Return`, `p`, `Left`, `Right`, `F1`.
 #
 # Example:
-#   snap_example.sh breakout.loft /tmp/play.png 0.5 "reakout" "space@500"
-#     → opens breakout, waits 0.5s, sends SPACE, waits 500ms, captures.
+#   snap_example.sh brick-buster.loft /tmp/play.png 0.5 "rick Buster" "space@500"
+#     → opens the game, waits 0.5s, sends SPACE, waits 500ms, captures.
 #
 # Examples:
-#   snap_example.sh lib/graphics/examples/25-breakout.loft /tmp/brk.png
+#   snap_example.sh lib/graphics/examples/25-brick-buster.loft /tmp/brk.png
 #   snap_example.sh lib/graphics/examples/10-2d-canvas.loft /tmp/canvas.png 2 "canvas"
 #
 # Run under Xvfb: `xvfb-run -a -s "-screen 0 800x600x24" snap_example.sh …`

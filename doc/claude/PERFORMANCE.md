@@ -1313,7 +1313,7 @@ use-after-free for complex return types.**
 
 ### Problem
 
-`br_mvp = rect_mvp(proj, x, y, w, h)` — called 60×/frame in Breakout.
+`br_mvp = rect_mvp(proj, x, y, w, h)` — called 60×/frame in Brick Buster.
 Each call: callee constructs Mat4, returns it, caller OpCopyRecord deep
 copies it into `br_mvp`'s store.  The callee's original is immediately
 freed.  The copy is wasted — the data could transfer ownership.
@@ -1357,7 +1357,7 @@ is the natural next step.
 | `mat4_perspective()` | 1 | ~128 bytes |
 | `mat4_look_at()` | 1 | ~128 bytes |
 
-**~15 KB/frame** eliminated in Breakout.  Proportionally more in the
+**~15 KB/frame** eliminated in Brick Buster.  Proportionally more in the
 renderer (PBR pass constructs Mat4 per node).
 
 ---
@@ -1748,7 +1748,7 @@ copy-on-write.  Both deferred until the simpler O-B2 is in place.
 | `x = func()` (func returns param) | Deep copy + store leak | Deep copy, no leak (O-B2 phase 1) |
 | Loop: `acc = transform(acc)` | Deep copy per iter | 12B move per iter (O-B1) |
 
-For Breakout (60 rect_mvp/frame): ~15 KB deep copies + 60 leaked
+For Brick Buster (60 rect_mvp/frame): ~15 KB deep copies + 60 leaked
 stores/frame → 720B moves + 0 leaks.
 
 ---

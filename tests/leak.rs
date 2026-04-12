@@ -46,7 +46,7 @@ fn run_leak_check_str(code: &str) {
 /// Inner function assigns constructor to a local variable, then returns it.
 /// The wrapper leaks the inner's return store on fn_return.
 ///
-/// Root cause of the breakout / WASM store-14 bug: `r = S{...}; r` in the
+/// Root cause of the Brick Buster / WASM store-14 bug: `r = S{...}; r` in the
 /// callee triggers a different codegen path than returning `S{...}` directly.
 #[test]
 fn local_var_return_leak() {
@@ -209,10 +209,10 @@ pub fn test() {
     );
 }
 
-/// Full breakout pattern with yield/resume using real math + graphics libraries.
+/// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
 #[test]
-fn breakout_yield_resume() {
+fn brick_buster_yield_resume() {
     let mut p = Parser::new();
     let (data, db) = cached_default();
     p.data = data;

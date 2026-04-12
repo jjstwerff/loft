@@ -4,7 +4,7 @@ This document explains how to run, inspect, and regression-test
 interactive GL programs (games, editors, demos) **headlessly** — without
 a monitor, without a window manager, without repeatedly mashing keys by
 hand.  The workflow is battle-tested on
-`lib/graphics/examples/25-breakout.loft` and designed to generalise to
+`lib/graphics/examples/25-brick-buster.loft` and designed to generalise to
 every long-running GL example.
 
 Tools used: `xvfb-run` (headless X server), `xdotool` (X automation),
@@ -59,10 +59,10 @@ The `key_script` column feeds xdotool before capture.  Each step sends
 one key, then sleeps.  Example from `gl_snapshots.tsv`:
 
 ```
-25-breakout.loft   25-breakout-paused.png    1   reakout   800x600x24   space@500;p@300
+25-brick-buster.loft   25-brick-buster-paused.png    1   rick Buster   800x600x24   space@500;p@300
 ```
 
-reads as: *"launch breakout, wait 1 s for the window, press SPACE,
+reads as: *"launch Brick Buster, wait 1 s for the window, press SPACE,
 wait 500 ms (the game has ~30 frames to react), press P, wait 300 ms,
 capture."*
 
@@ -77,7 +77,7 @@ Natural input can take many seconds to drive a game into an interesting
 state (waiting 10 s for the ball to fall off the paddle three times to
 reach game-over is both slow and flaky).  Add **cheat keys** to the
 game that are harmless during normal play but jump straight to a target
-state when pressed.  See `lib/graphics/examples/25-breakout.loft`:
+state when pressed.  See `lib/graphics/examples/25-brick-buster.loft`:
 
 ```loft
 // Test cheat keys — not bound to any normal gameplay action.
@@ -108,9 +108,9 @@ if br_game_state == GS_PLAYING {
 Then register one row per state:
 
 ```
-25-breakout.loft   25-breakout-gameover.png    1   reakout   800x600x24   space@500;k@400
-25-breakout.loft   25-breakout-explosion.png   1   reakout   800x600x24   space@500;x@600
-25-breakout.loft   25-breakout-powerups.png    1   reakout   800x600x24   space@500;u@400
+25-brick-buster.loft   25-brick-buster-gameover.png    1   rick Buster   800x600x24   space@500;k@400
+25-brick-buster.loft   25-brick-buster-explosion.png   1   rick Buster   800x600x24   space@500;x@600
+25-brick-buster.loft   25-brick-buster-powerups.png    1   rick Buster   800x600x24   space@500;u@400
 ```
 
 Guidelines for cheat keys:
@@ -147,10 +147,10 @@ is actually doing, run it directly under Xvfb and send keys manually:
 ```bash
 xvfb-run -a -s "-screen 0 800x600x24" bash -c '
   ./target/release/loft --interpret --path "$(pwd)/" --lib "$(pwd)/lib/" \
-    lib/graphics/examples/25-breakout.loft > /tmp/loft.log 2>&1 &
+    lib/graphics/examples/25-brick-buster.loft > /tmp/loft.log 2>&1 &
   pid=$!
   sleep 1.5                       # wait for window
-  WID=$(xdotool search --name reakout | tail -1)
+  WID=$(xdotool search --name rick Buster | tail -1)
   xdotool windowfocus "$WID"
   xdotool key space               # start game
   sleep 0.5
@@ -197,16 +197,16 @@ On a real display this step is a no-op; under Xvfb it restores the
 colours the loft program actually asked for.  Goldens must be
 captured with the swap applied so that they hold the true colours.
 
-## Verifying the existing breakout suite
+## Verifying the existing Brick Buster suite
 
 ```bash
 tests/scripts/test_gl_snapshots.sh
-#   25-breakout-title.png          ok (0 px differ)
-#   25-breakout-playing.png        ok (0 px differ)
-#   25-breakout-paused.png         ok (0 px differ)
-#   25-breakout-powerups.png       ok (0 px differ)
-#   25-breakout-explosion.png      ok (0 px differ)
-#   25-breakout-gameover.png       ok (0 px differ)
+#   25-brick-buster-title.png          ok (0 px differ)
+#   25-brick-buster-playing.png        ok (0 px differ)
+#   25-brick-buster-paused.png         ok (0 px differ)
+#   25-brick-buster-powerups.png       ok (0 px differ)
+#   25-brick-buster-explosion.png      ok (0 px differ)
+#   25-brick-buster-gameover.png       ok (0 px differ)
 ```
 
 Each golden covers a distinct `GS_*` state or visual effect.  A future
@@ -222,5 +222,5 @@ with a per-pixel diff written to
   `test_gl_snapshots.sh` generalises.
 - [PROBLEMS.md](PROBLEMS.md) P133 — background on the R↔B swap and why
   the post-process `-swap 0,2` is needed.
-- `lib/graphics/examples/25-breakout.loft` — reference implementation
+- `lib/graphics/examples/25-brick-buster.loft` — reference implementation
   of edge-detected cheat keys (`br_cheat_k_pressed`, etc.).

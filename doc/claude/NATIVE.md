@@ -1380,10 +1380,10 @@ make test-packages-native   # native: 16/16
 
 ### Design
 
-Test the Breakout game in native mode:
+Test the Brick Buster game in native mode:
 
 ```bash
-cargo run --bin loft -- --native lib/graphics/examples/25-breakout.loft
+cargo run --bin loft -- --native lib/graphics/examples/25-brick-buster.loft
 ```
 
 ### Requirements
@@ -1482,6 +1482,6 @@ loops, string allocation overhead.
 2. `loft --interpret program.loft` runs the interpreter
 3. All 108 native tests pass
 4. All 16 package tests pass in native mode
-5. Breakout game runs natively with OpenGL
+5. Brick Buster game runs natively with OpenGL
 6. Graceful fallback when rustc is missing
 7. No performance regression vs interpreter

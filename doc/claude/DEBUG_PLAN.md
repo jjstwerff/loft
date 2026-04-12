@@ -271,7 +271,7 @@ valgrind … target/debug/deps/issues-* p122_long_running       # no OS-level le
 make ci
 ```
 
-After fixing: breakout can replace bitmask/raw-float workarounds with
+After fixing: brick-buster can replace bitmask/raw-float workarounds with
 idiomatic struct-based collision code.
 
 ---
@@ -391,7 +391,7 @@ sprite indices.
 **Phase D — Fix:** trace the full coordinate chain from canvas pixel to
 screen pixel. The fix is either removing the upload flip (and adjusting
 `TEX_VERT_2D`'s shader which already has its own V-flip) OR inverting
-the V computation in `draw_sprite`. Must not break breakout's existing
+the V computation in `draw_sprite`. Must not break brick-buster's existing
 sprite atlas layout.
 
 ---
@@ -421,8 +421,8 @@ After ALL fixes land:
 make ci                       # full test suite (643+ tests + packages + GL smoke + golden)
 make test-gl-headless         # all GL examples — GL_HEADLESS_SKIP must be EMPTY
 make test-gl-golden           # golden image pixel-for-pixel comparison
-valgrind --leak-check=full \  # no OS-level leaks on the breakout sim
-    target/debug/loft --interpret … breakout_headless.loft
+valgrind --leak-check=full \  # no OS-level leaks on the brick-buster sim
+    target/debug/loft --interpret … brick_buster_headless.loft
 ```
 
 **No release ships until all four commands pass clean.**

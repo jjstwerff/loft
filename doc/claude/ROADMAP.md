@@ -15,7 +15,7 @@ comes after the single-player browser experience works.
 
 | Version | Headline                                       |
 |---------|------------------------------------------------|
-| 0.8.4   | **Awesome Breakout** — a game worth sharing    |
+| 0.8.4   | **Awesome Brick Buster** — a game worth sharing    |
 | 0.8.5   | **Working Moros editor** — paint hex scenes in the browser |
 | 0.9.0   | **Fully working loft language** — feature-complete + verified |
 | 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract |
@@ -29,10 +29,10 @@ Completed work belongs in CHANGELOG.md and git history.
 
 ---
 
-## 0.8.4 — Awesome Breakout
+## 0.8.4 — Awesome Brick Buster
 
-**Goal:** ship a Breakout game that is fun to play, not just a tech demo. The
-current `lib/graphics/examples/25-breakout.loft` already has multi-hit bricks,
+**Goal:** ship a Brick Buster game that is fun to play, not just a tech demo. The
+current `lib/graphics/examples/25-brick-buster.loft` already has multi-hit bricks,
 pickups, particles, combos, multi-ball, level transitions, and a sprite
 atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 "a game someone would actually want to share with a friend."
@@ -55,9 +55,9 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | ~~G5~~| ~~Audio: sound effect playback~~                       | S  | **Done** — rodio + audio_play_raw + chiptune synthesis |
 | G6    | Audio: background music with crossfade                 | S  | Planned (layer on G5) |
 | ~~W1.1~~| ~~Single-file HTML export~~                          | M  | **Done** — native WASM + asyncify + GL bridge |
-| G7.P  | 🌐 **Playable Breakout** — share link on itch.io        | S  | Ready (--html works) |
+| G7.P  | 🌐 **Playable Brick Buster** — share link on itch.io        | S  | Ready (--html works) |
 
-### Game polish (`lib/graphics/examples/25-breakout.loft`)
+### Game polish (`lib/graphics/examples/25-brick-buster.loft`)
 
 | ID    | Title                                                  | E  | Status |
 |-------|--------------------------------------------------------|----|--------|
@@ -79,7 +79,7 @@ All language blockers for 0.8.4 are resolved:
 - **L5/L6/S5** — confirmed already fixed.
 - **Bytecode cache** — `build.rs` adds git commit hash; rebuilds invalidate stale `.loftc`.
 
-Breakout's raw-float workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced
+Brick Buster's raw-float workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced
 with idiomatic struct-based APIs.
 
 ---
@@ -263,7 +263,7 @@ before tagging — no "appears fixed" exceptions.
 - [ ] All `⚠️ Appears fixed but unverified` flags from 0.9.0 have been
       definitively closed via real-world testing (not just regression guards)
 - [ ] **valgrind clean** on a debug build of `tests/scripts/50-tuples.loft`
-      and the full breakout game (`25-breakout.loft`) for 5+ minutes of play
+      and the full brick-buster game (`25-brick-buster.loft`) for 5+ minutes of play
 - [ ] `make ci` green on Linux, macOS Intel, macOS ARM, Windows
 - [ ] All `~~Fixed~~` PROBLEMS.md entries removed (history lives in CHANGELOG.md)
 - [ ] `doc/claude/INCONSISTENCIES.md` reviewed: each entry resolved or

@@ -1,5 +1,5 @@
 #!/usr/bin/env -S LOFT_STORES=warn loft --native
-// Breakout — Full-featured sprite-based version
+// Brick Buster — Full-featured sprite-based version
 //
 // Features: multi-hit bricks, ball speed ramp, combo multiplier,
 // screen flash effects, multi-ball, brick destruction particles,
@@ -194,7 +194,7 @@ fn pickup_sprite(sp_type: integer) -> integer {
 // ── Main ─────────────────────────────────────────────────────────────
 
 fn main() {
-  if !graphics::gl_create_window(800, 600, "Breakout") {
+  if !graphics::gl_create_window(800, 600, "Brick Buster") {
     println("Failed to create window");
     return;
   }
@@ -241,7 +241,7 @@ fn main() {
   br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
 
   // BK.5/BK.6: Title, pause, and game-over screen textures.
-  br_title_tex = graphics::create_text_texture(br_font, "BREAKOUT", 64.0, br_white);
+  br_title_tex = graphics::create_text_texture(br_font, "BRICK BUSTER", 64.0, br_white);
   br_start_tex = graphics::create_text_texture(br_font, "Press SPACE to start", 24.0, br_gray);
   br_paused_tex = graphics::create_text_texture(br_font, "PAUSED", 48.0, br_white);
   br_resume_tex = graphics::create_text_texture(br_font, "Press SPACE to continue", 20.0, br_gray);
@@ -385,7 +385,7 @@ fn main() {
       if br_watchdog_cleared {
         br_watchdog_expect = 0;
       } else if br_now > br_watchdog_deadline {
-        panic("breakout watchdog: cheat {br_watchdog_expect} did not reach expected state within 2s");
+        panic("brick_buster watchdog: cheat {br_watchdog_expect} did not reach expected state within 2s");
       }
     }
 

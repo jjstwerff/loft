@@ -34,9 +34,9 @@
 #   3. Inspect the golden in tests/golden/ and commit
 #   4. `make test-gl-snapshots` runs the comparison
 
-25-breakout.loft	25-breakout-title.png	2	reakout	800x600x24
-25-breakout.loft	25-breakout-playing.png	1	reakout	800x600x24	space@800
-25-breakout.loft	25-breakout-paused.png	1	reakout	800x600x24	space@500;p@300
-25-breakout.loft	25-breakout-powerups.png	1	reakout	800x600x24	space@500;u@400
-25-breakout.loft	25-breakout-explosion.png	1	reakout	800x600x24	space@500;x@600
-25-breakout.loft	25-breakout-gameover.png	1	reakout	800x600x24	space@500;k@400
+25-brick-buster.loft	25-brick-buster-title.png	2	rick Buster	800x600x24
+25-brick-buster.loft	25-brick-buster-playing.png	1	rick Buster	800x600x24	space@800
+25-brick-buster.loft	25-brick-buster-paused.png	1	rick Buster	800x600x24	space@500;p@300
+25-brick-buster.loft	25-brick-buster-powerups.png	1	rick Buster	800x600x24	space@500;u@400
+25-brick-buster.loft	25-brick-buster-explosion.png	1	rick Buster	800x600x24	space@500;x@600
+25-brick-buster.loft	25-brick-buster-gameover.png	1	rick Buster	800x600x24	space@500;k@400
