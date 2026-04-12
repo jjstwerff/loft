@@ -355,7 +355,7 @@ pub fn OpIterate(
             let fields = arg as u16;
             let store = crate::keys::store(&data, all);
             if reverse {
-                // A8.5-idx: start = one past last element, finish = one before first.
+                // start = one past last element, finish = one before first.
                 let till_node = tree::find(&data, true, fields, all, keys, till);
                 let start = if ex {
                     tree::next(store, &iter_ref(&data, till_node, fields))
@@ -1693,7 +1693,7 @@ pub fn fs_mkdir_all(path: &str) -> bool {
     }
 }
 
-/// A5.6g: Store a closure DbRef associated with a lambda definition number.
+/// Store a closure DbRef associated with a lambda definition number.
 /// Called in generated native code when `OpStoreClosure` appears in the IR,
 /// immediately before the fn-ref variable is stored.
 /// The closure is later retrieved by `OpGetClosure` in the match-dispatch arm.
@@ -1701,7 +1701,7 @@ pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
     stores.closure_map.insert(d_nr, closure);
 }
 
-/// A5.6g: Retrieve the closure DbRef for a lambda definition number.
+/// Retrieve the closure DbRef for a lambda definition number.
 /// Called in generated native code inside match-dispatch arms for closure-capturing lambdas.
 /// Returns a null DbRef if no closure was registered for `d_nr`.
 #[must_use]

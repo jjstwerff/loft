@@ -85,7 +85,7 @@ impl Stores {
         }
         if let Parts::Struct(fld) | Parts::EnumValue(_, fld) = &self.types[structure as usize].parts
         {
-            // P110: only link fields that are indexing types (sorted, hash, index),
+            // only link fields that are indexing types (sorted, hash, index),
             // not plain vectors. Two vector<integer> fields must NOT be linked —
             // inserting into one must not propagate to the other.
             let is_index_type = matches!(

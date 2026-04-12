@@ -79,7 +79,7 @@ impl Parser {
             for wt in self.vars.work_texts() {
                 ls.insert(0, v_set(wt, Value::Text(String::new())));
             }
-            // P115: copy text arguments into promoted shadow locals at function entry.
+            // copy text arguments into promoted shadow locals at function entry.
             for (shadow, original) in self.vars.promoted_text_args() {
                 ls.insert(0, v_set(shadow, Value::Var(original)));
             }
@@ -132,7 +132,7 @@ impl Parser {
             // start of the function body (after work-variable initialisations).
             // Applies in all build profiles so that writes to const parameters panic in
             // release builds too (S22 — previously guarded by #[cfg(debug_assertions)]).
-            // P58: detect variables that remain Unknown(0) after the second pass.
+            // detect variables that remain Unknown(0) after the second pass.
             // These are names from the first pass that were never resolved — likely typos.
             // Note: `known_var_or_type()` in objects.rs already emits "Unknown variable"
             // during expression parsing for variables with Unknown type or undefined status.
@@ -217,7 +217,7 @@ impl Parser {
             Type::Void
         } else if self.lexer.has_token("yield") {
             // CO1.3c: yield expr — only valid inside generator functions.
-            // P2-R6 M11-a: also forbidden inside a par() body (worker runs in a
+            // M11-a: also forbidden inside a par() body (worker runs in a
             // separate thread; there is no safe coroutine resumption path).
             if self.in_par_body && !self.first_pass {
                 diagnostic!(
@@ -468,7 +468,7 @@ use a separate collection or add after the loop"
         // Save parent struct type before the RHS parse overwrites parent_tp.
         let lhs_parent_tp = parent_tp.clone();
         let mut s_type = self.parse_operators(f_type, code, &mut parent_tp, 0);
-        // P58: check RHS of assignment for unresolved variables.
+        // check RHS of assignment for unresolved variables.
         self.known_var_or_type(code);
         if let Type::Rewritten(tp) = s_type {
             s_type = *tp;
@@ -510,7 +510,7 @@ use a separate collection or add after the loop"
         }
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
-            // P115: auto-promote text argument to local String on first mutation.
+            // auto-promote text argument to local String on first mutation.
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
                 && self.vars.is_argument(var_nr)
@@ -800,13 +800,13 @@ use a separate collection or add after the loop"
                     self.append_to_file(code, file_v);
                     return Type::Void;
                 }
-                // A5.3: record closure association if the RHS was a capturing lambda.
+                // record closure association if the RHS was a capturing lambda.
                 // NOTE: must come AFTER parse_assign_op because that is where the RHS
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
                 if op == "=" && self.last_closure_work_var != u16::MAX && var_nr != u16::MAX {
                     self.closure_vars.insert(var_nr, self.last_closure_work_var);
-                    // A5.6-2: store mapping in Function struct for native codegen.
+                    // store mapping in Function struct for native codegen.
                     self.vars
                         .set_closure_var_of(var_nr, self.last_closure_work_var);
                     self.last_closure_work_var = u16::MAX;

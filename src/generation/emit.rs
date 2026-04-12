@@ -27,7 +27,7 @@ impl Output<'_> {
             Value::Long(v) => write!(w, "{v}_i64")?,
             Value::Int(v) => {
                 if self.fn_ref_context {
-                    // C39: in fn-ref context (if-else branch), emit tuple.
+                    // in fn-ref context (if-else branch), emit tuple.
                     write!(
                         w,
                         "({v}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
@@ -126,7 +126,7 @@ impl Output<'_> {
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
-                    // P86n: skip the `Str::new(...)` wrapper when the inner
+                    // skip the `Str::new(...)` wrapper when the inner
                     // expression is already a call to another text-returning
                     // user function (returns `Str`) — wrapping would fail
                     // type-checking as `Str::new(Str)`.  `#rust` template ops
@@ -276,7 +276,7 @@ impl Output<'_> {
             if def.name.starts_with("Op") {
                 continue;
             }
-            // A5.6g: closure-capturing lambdas have a hidden __closure param as the last
+            // closure-capturing lambdas have a hidden __closure param as the last
             // attribute. The closure is injected explicitly at the call site (in arg_exprs),
             // so total arg count must equal the full attribute count.
             let has_closure = def.attributes.last().is_some_and(|a| a.name == "__closure");
@@ -316,7 +316,7 @@ impl Output<'_> {
         }
         // Look up the closure work-var for this fn-ref variable (if any).
         let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
-        // C39: match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
+        // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, fn_name, has_closure) in &candidates {
             write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
@@ -329,7 +329,7 @@ impl Output<'_> {
                     let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
                     write!(w, ", var_{clos_name}")?;
                 } else {
-                    // C47: cross-scope closure — pass .1 from the fn-ref tuple.
+                    // cross-scope closure — pass .1 from the fn-ref tuple.
                     write!(w, ", var_{var_name}.1")?;
                 }
             }
@@ -405,7 +405,7 @@ impl Output<'_> {
             write!(w, " {{")?;
         }
         self.indent += u32::from(!b_true);
-        // C39: save/restore fn_ref_context — Call arguments inside the branch
+        // save/restore fn_ref_context — Call arguments inside the branch
         // must NOT inherit it (OpDatabase int args would be misinterpreted).
         let saved_ctx = self.fn_ref_context;
         self.output_code_inner(w, true_v)?;
@@ -527,8 +527,8 @@ impl Output<'_> {
         // Fix "hoisted return value" pattern from scopes::free_vars before iterating.
         // This replaces [expr, OpFreeText…, Return(Null)] with [OpFreeText…, Return(expr)]
         // so native code emits `return expr` rather than a dropped `expr` + `return ()`.
-        // P117: also patch Type::Never blocks (unconditional return with cleanup).
-        // P86n: also patch `Type::Text` blocks when the enclosing function is
+        // also patch Type::Never blocks (unconditional return with cleanup).
+        // also patch `Type::Text` blocks when the enclosing function is
         // a bounded-generic T-stub (name like `t_<len><Type>_<method>`).
         // Their IR is produced by template specialisation and shows the same
         // `[Call, OpFreeText(work), Return(Null)]` pattern at the top of the

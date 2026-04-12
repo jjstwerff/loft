@@ -90,12 +90,12 @@ impl Parser {
             let fnr = self.data.attr(closure_d_nr, name);
             *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
             t = self.data.attr_type(closure_d_nr, fnr);
-            // A5.6-text: closure record is a struct — add __closure as dep so the
+            // closure record is a struct — add __closure as dep so the
             // store allocation stays alive while derived text/references are in use.
             t = t.depending(self.closure_param);
         } else if self.vars.name_exists(name) {
             let index_var = self.vars.var(name);
-            // C15: on pass 2, if a variable has Unknown type, it may be a pass-1
+            // on pass 2, if a variable has Unknown type, it may be a pass-1
             // placeholder for a forward-declared function. Try fn-ref resolution.
             if !self.first_pass && self.vars.tp(index_var).is_unknown() {
                 let prefixed = format!("n_{nm}");
@@ -160,13 +160,13 @@ impl Parser {
             .find(|(n, _)| n == name)
             .cloned()
         {
-            // A5.2: record the capture for closure record synthesis.
+            // record the capture for closure record synthesis.
             if !self.captured_names.iter().any(|(n, _)| n == name) {
                 self.captured_names.push((name.to_string(), ctype.clone()));
             }
-            // A5.4: if we have a closure parameter (second pass), emit field read
+            // if we have a closure parameter (second pass), emit field read
             // from the closure record.  Otherwise create a placeholder variable.
-            // A5.4: if we have a closure parameter (second pass), emit field read.
+            // if we have a closure parameter (second pass), emit field read.
             let closure_d_nr = if self.closure_param == u16::MAX || self.first_pass {
                 u32::MAX
             } else {
@@ -186,7 +186,7 @@ impl Parser {
             } else {
                 *code = self.get_field(closure_d_nr, fnr, Value::Var(self.closure_param));
                 t = self.data.attr_type(closure_d_nr, fnr);
-                // A5.6-text: closure record is a struct — add __closure as dep.
+                // closure record is a struct — add __closure as dep.
                 t = t.depending(self.closure_param);
             }
         } else if self.data.def_nr(name) != u32::MAX
@@ -463,7 +463,7 @@ impl Parser {
             } else if self.data.def_type(d_nr) == DefType::Constant {
                 let const_code = self.data.def(d_nr).code.clone();
                 let const_tp = self.data.def(d_nr).returned.clone();
-                // P127: vector constants are pre-built in CONST_STORE during
+                // vector constants are pre-built in CONST_STORE during
                 // byte_code(). Emit OpConstRef + OpCopyRecord to deep-copy
                 // from the constant store into a fresh runtime store.
                 // On pass 1 const_ref is None but we still emit the same IR
@@ -933,7 +933,7 @@ impl Parser {
             self.lexer.has_identifier();
             self.lexer.token("(");
             reverse = true;
-            // A8.5: set the reverse flag BEFORE parsing the inner expression so that
+            // set the reverse flag BEFORE parsing the inner expression so that
             // rev(col[lo..hi]) passes the flag through parse_key → fill_iter.
             self.reverse_iterator = true;
         }
@@ -946,7 +946,7 @@ impl Parser {
         };
         if !self.lexer.has_token("..") {
             if reverse {
-                // A8.5: if the inner expression was a subscript that already produced
+                // if the inner expression was a subscript that already produced
                 // a range iterator (parse_key consumed the `..`), the Value::Iter is
                 // ready with the reverse flag — just consume ')' and return.
                 if matches!(expr, Value::Iter(_, _, _, _)) {

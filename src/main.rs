@@ -1207,7 +1207,7 @@ fn main() {
                 String::new() // sentinel: compute default from file_name later
             });
         } else if a == "--html" {
-            // W1.1: single-file HTML export with compiled browser WASM.
+            // single-file HTML export with compiled browser WASM.
             html_out = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
                 let p = argv[i].clone();
                 i += 1;
@@ -1368,7 +1368,7 @@ fn main() {
             }
             return;
         } else if a.starts_with('-') {
-            // P131: once the script path has been seen, treat every later
+            // once the script path has been seen, treat every later
             // token (including `--*` ones) as a script argument and forward
             // it to the script's `arguments()`. The loft CLI cannot ambiguate
             // its own options from script options after the script path is
@@ -1594,14 +1594,14 @@ fn main() {
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // P131: store script-level arguments so arguments() returns only these.
+    // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
     // Bytecode cache: read source content for the cache key, use .loftc path.
     let source_content = std::fs::read_to_string(&abs_file).unwrap_or_default();
     let cache_file = cache::cache_path(&abs_file);
     let sources = [(abs_file.as_str(), source_content.as_str())];
     compile::byte_code_with_cache(&mut state, &mut p.data, Some(&cache_file), &sources);
-    // A7.2: load native extension shared libraries registered during parsing.
+    // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
     for nlp in &native_lib_paths {
@@ -1719,7 +1719,7 @@ fn main() {
         return;
     }
 
-    // W1.1: --html — compile to browser WASM and assemble self-contained HTML.
+    // --html — compile to browser WASM and assemble self-contained HTML.
     if let Some(ref html_path) = html_out {
         let html_path = if html_path.is_empty() {
             default_artifact_path(&abs_file, "html")

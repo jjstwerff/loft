@@ -81,7 +81,7 @@ pub fn check(data: &mut Data) {
         let code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
         data.definitions[d_nr as usize].code = code;
         data.definitions[d_nr as usize].variables = function;
-        // A5.6: in debug builds, assert that every owned Reference variable emitted an
+        // in debug builds, assert that every owned Reference variable emitted an
         // OpFreeRef.  Catches scope-registration bugs before they reach the runtime
         // "Database N not correctly freed" assertion (which fires with no context).
         #[cfg(debug_assertions)]
@@ -285,7 +285,7 @@ impl Scopes {
                 ))
             }
             Value::Block(bl) => {
-                // A5.6: pre-register a block-result Reference variable at the OUTER scope
+                // pre-register a block-result Reference variable at the OUTER scope
                 // before entering the block's inner scope.
                 //
                 // Without this, `scan_set(w, Null)` registers w at the inner scope.
@@ -731,11 +731,11 @@ impl Scopes {
             if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
                 function.tp(v)
             {
-                // A5.6-text: check both the block result type (tp) and the function's
+                // check both the block result type (tp) and the function's
                 // declared return type.  When a closure escapes via implicit return,
                 // the block result type may lack the dep that was propagated to the
                 // function's declared return type (vectors.rs:704-711).
-                // P117-fix: tp.depend() and returned.depend() contain attribute
+                // tp.depend() and returned.depend() contain attribute
                 // indices (parameter positions), not variable numbers.  Resolve
                 // each attribute index to its actual variable number before
                 // comparing, to avoid false matches when a local var_nr happens
@@ -778,7 +778,7 @@ impl Scopes {
                     ls.push(call("OpFreeRef", v, data));
                 }
             }
-            // A5.6-text: free the closure DbRef embedded at offset+4 in a fn-ref slot.
+            // free the closure DbRef embedded at offset+4 in a fn-ref slot.
             // The 16-byte fn-ref stack slot is reclaimed by FreeStack, but the closure
             // store record at offset+4 must be explicitly freed via OpFreeRef.
             if let Type::Function(_, _, _) = function.tp(v) {
@@ -800,7 +800,7 @@ impl Scopes {
                 }
             }
         }
-        // P120-fix: unlock const reference/vector parameters at function exit.
+        // unlock const reference/vector parameters at function exit.
         // The lock was set in parse_code (expressions.rs:163-178) at function entry.
         // Arguments live at scope 0 which `variables()` intentionally skips, so
         // we handle them here as a separate pass.  Only emit when exiting to
@@ -956,7 +956,7 @@ impl Scopes {
                     } else {
                         false
                     };
-                // P135: hoist Set(__lift_N, ...) preamble from nested scan_args.
+                // hoist Set(__lift_N, ...) preamble from nested scan_args.
                 // These are produced when an inner call's arguments contained
                 // inline struct-returning calls that were already lifted.
                 let n = ops.len();
@@ -970,7 +970,7 @@ impl Scopes {
                         preamble.push(it.next().unwrap());
                     }
                     let final_val = it.next().unwrap();
-                    // P135: the remaining Call may also be struct-returning
+                    // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
                     if let Some(struct_d_nr) =
                         Self::inline_struct_return(&final_val, data, outer_call)
@@ -991,7 +991,7 @@ impl Scopes {
                 }
             } else if let Some(struct_d_nr) = Self::inline_struct_return(&scanned, data, outer_call)
             {
-                // P135-fix: inline struct-returning call as argument — lift to
+                // inline struct-returning call as argument — lift to
                 // a temporary variable so get_free_vars emits OpFreeRef at scope
                 // exit.  Without this, the callee's store leaks every call.
                 //
@@ -1197,7 +1197,7 @@ fn check_ref_leaks(
                 function.name(v),
                 fn_name
             );
-            // P117: warn about variables with deps that are only text-return work refs.
+            // warn about variables with deps that are only text-return work refs.
             // These deps are spurious (struct copies the text), but OpFreeRef is still
             // skipped, causing a store leak at runtime.
             if !dep.is_empty()

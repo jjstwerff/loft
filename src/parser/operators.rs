@@ -5,7 +5,7 @@ use super::{
     Level, OPERATORS, Parser, Type, Value, diagnostic_format, rename, v_block, v_if, v_set,
 };
 
-/// P113: check if a Value tree contains a reference to the given variable.
+/// Check if a Value tree contains a reference to the given variable.
 fn code_references_var(code: &Value, var_nr: u16) -> bool {
     match code {
         Value::Var(v) => *v == var_nr,
@@ -80,7 +80,7 @@ impl Parser {
                 }
             }
         } else if op == "=" && var_nr != u16::MAX {
-            // P113: detect self-reference (t = t[N..], t = fn(t), etc.)
+            // detect self-reference (t = t[N..], t = fn(t), etc.)
             // If the RHS reads from the same variable being assigned, use a
             // work text to avoid the clear-before-read problem.
             if code_references_var(code, var_nr) {
@@ -159,7 +159,7 @@ impl Parser {
     pub(crate) fn copy_ref(&mut self, to: &Value, code: &Value, f_type: &Type) -> Value {
         let d_nr = self.data.type_def_nr(f_type);
         let tp = self.data.def(d_nr).known_type;
-        // P122-fix: when the source is a struct-returning function call,
+        // when the source is a struct-returning function call,
         // set the high bit (0x8000) on the type parameter to signal
         // copy_record to free the callee's temporary store after the
         // deep copy.  Without this, the __ref_N work-ref store allocated
@@ -283,7 +283,7 @@ impl Parser {
         };
         let mut current_type = self.parse_operators(var_tp, code, parent_tp, precedence + 1);
         loop {
-            // P126: a void left operand cannot have any binary operator
+            // a void left operand cannot have any binary operator
             // applied to it. Returning early prevents the pratt loop from
             // consuming a token that's actually the start of the *next*
             // statement — e.g. `if cond { return 0; }\n -1` where `-1` is
@@ -478,7 +478,7 @@ impl Parser {
                 t = self.parse_index(code, &t);
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
-                // A5.6-4: chained call on a Type::Function expression — expr(args).
+                // chained call on a Type::Function expression — expr(args).
                 if let Type::Function(param_types, ret_type, _) = t.clone() {
                     let fn_type = Type::Function(param_types.clone(), ret_type.clone(), vec![]);
                     // Allocate temp variable on BOTH passes (consistent unique counter).
@@ -595,7 +595,7 @@ impl Parser {
             self.expr_not_null = false;
             let lhs_type = ctp.clone();
             if self.lexer.has_token("return") {
-                // C56: `x ?? return ret_expr` — if LHS is null, return from the function.
+                // `x ?? return ret_expr` — if LHS is null, return from the function.
                 // Desugars to: { tmp = x; if (tmp == null) { return ret_expr; }; tmp }
                 let mut ret_val = Value::Null;
                 let r_type = self.data.def(self.context).returned.clone();

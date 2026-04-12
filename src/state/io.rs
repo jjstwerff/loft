@@ -136,7 +136,7 @@ impl State {
                 };
                 match File::create(&file_name) {
                     Ok(mut f) => {
-                        // P108: apply stored seek position on first open.
+                        // apply stored seek position on first open.
                         if next_pos != 0 {
                             let _ = f.seek(SeekFrom::Start(next_pos as u64));
                         }
@@ -251,7 +251,7 @@ impl State {
             if file_ref == i32::MIN {
                 let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
                 if let Ok(mut f) = File::open(file_name) {
-                    // P108: apply stored seek position on first open.
+                    // apply stored seek position on first open.
                     if next_pos != 0 {
                         let _ = f.seek(SeekFrom::Start(next_pos as u64));
                     }
@@ -576,7 +576,7 @@ impl State {
             1 => {
                 // index points to the record position inside the store
                 if reverse {
-                    // A8.5-idx: for reverse, start must be ONE PAST the last
+                    // for reverse, start must be ONE PAST the last
                     // element to visit (so previous(start) = last element).
                     // finish must be ONE BEFORE the first element to visit
                     // (so when n == finish, iteration is done).
@@ -615,7 +615,7 @@ impl State {
             }
             2 => {
                 // sorted points to the position of the record inside the vector
-                // A8.1: empty from/till arrays signal "no constraint on this side".
+                // empty from/till arrays signal "no constraint on this side".
                 // S-lexer: get_int returns i32::MIN for unresolved-type fields;
                 // guard against negative values (0 = empty, i32::MIN = unresolved).
                 let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
@@ -631,13 +631,13 @@ impl State {
                 };
                 if reverse {
                     start = if till.is_empty() {
-                        // A8.1: no upper bound → start past the last element
+                        // no upper bound → start past the last element
                         vec_len
                     } else {
                         vector::sorted_find(&data, ex, arg, all, &keys, &till).0 + u32::from(!ex)
                     };
                     finish = if from.is_empty() {
-                        // A8.1: no lower bound → finish at 0 (visit all elements down to first)
+                        // no lower bound → finish at 0 (visit all elements down to first)
                         0
                     } else {
                         vector::sorted_find(&data, ex, arg, all, &keys, &from).0 + 1
@@ -954,7 +954,7 @@ impl State {
         let data = *self.get_stack::<DbRef>();
         let code_pos = self.code_pos;
         let size = u32::from(self.database.size(tp));
-        // P109: free any nested vectors/strings already owned by the destination
+        // free any nested vectors/strings already owned by the destination
         // before overwriting it, to prevent double-free and leaks when a struct
         // field containing a nested vector is reassigned.
         self.database.remove_claims(&to, tp);

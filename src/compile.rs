@@ -146,7 +146,7 @@ fn load_from_cache(state: &mut State, data: &mut Data, cached: &crate::cache::Ca
     true
 }
 
-/// P127: extract literal values from vector constant Block IR and build
+/// Extract literal values from vector constant Block IR and build
 /// the vectors in CONST_STORE. Populates `state.const_refs` and
 /// `data.definitions[d_nr].const_ref`.
 fn build_const_vectors(state: &mut State, data: &mut Data) {

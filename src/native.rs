@@ -635,7 +635,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(feature = "threading")]
-/// A14.7: lightweight variant — borrows stores read-only instead of deep-copying.
+/// Lightweight variant — borrows stores read-only instead of deep-copying.
 /// Same stack layout as `n_parallel_for` plus an extra `pool_m` argument.
 fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     // Same stack layout as n_parallel_for: n_extra on top, then declared params.
@@ -706,7 +706,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 #[cfg(feature = "threading")]
-/// A14.7: allocate result vector, create pool, dispatch light workers, collect.
+/// Allocate result vector, create pool, dispatch light workers, collect.
 #[allow(clippy::too_many_arguments)]
 fn parallel_light_execute_and_collect(
     stores: &mut Stores,
@@ -944,7 +944,7 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
     let sf_size = u32::from(stores.size(sf_elm));
     let var_elm = stores.name("VarInfo");
     let var_size = u32::from(stores.size(var_elm));
-    // P89: look up every field position from the schema instead of hard-coding
+    // look up every field position from the schema instead of hard-coding
     // byte offsets.  If a future edit to `default/04_stacktrace.loft` reorders
     // fields, renames them, or changes their type sizes, the lookups update
     // automatically — no silent garbage at runtime.  A missing field name
@@ -1037,7 +1037,7 @@ fn populate_frame_variables(
         .store_mut(sf_vec)
         .set_int(parent_rec, vars_field_abs, inner_rec as i32);
 
-    // P89: schema-driven field position lookup.  A typo or rename in
+    // schema-driven field position lookup.  A typo or rename in
     // default/04_stacktrace.loft surfaces as a clear panic instead of a
     // silent write to byte 65535.
     let lookup = |tp: u16, ty_name: &str, field: &str| {

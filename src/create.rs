@@ -194,7 +194,7 @@ pub const OPERATORS: &[fn(&mut State); {count}] = &["
                 if matches!(a.typedef, Type::Text(_)) {
                     writeln!(into, "    let v_{} = s.string();", a.name)?;
                 } else if matches!(a.typedef, Type::Character) {
-                    // P132: character values on the stack may be the
+                    // character values on the stack may be the
                     // `i32::MIN` (0x80000000) coroutine-exhaustion sentinel
                     // pushed by `push_null_value`. That bit pattern is not a
                     // valid Unicode scalar value, so reading the bytes as

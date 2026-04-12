@@ -24,7 +24,7 @@
     clippy::semicolon_if_nothing_returned
 )]
 
-// W1.1 HTML export: when loft's own lib is compiled for
+// HTML export: when loft's own lib is compiled for
 // `wasm32-unknown-unknown` without the full `wasm` feature (the target
 // used by `loft --html`), the `print` opcode's `#rust` template calls
 // `loft_host_print` — a function the browser host is expected to

@@ -65,7 +65,7 @@ pub struct Store {
     /// that may have invalidated `DbRef` locals held by the generator.  Always compiled in
     /// (was debug-only before CO1.9) so the guard fires in release builds too.
     pub generation: u32,
-    /// A14.1: when true, this Store borrows another's buffer — `Drop` must NOT dealloc.
+    /// When true, this Store borrows another's buffer — `Drop` must NOT dealloc.
     borrowed: bool,
     /// Bytecode position that allocated this store (via OpDatabase).
     /// Used for diagnostics when a store is leaked at program exit.
@@ -92,7 +92,7 @@ impl PartialEq for Store {
 
 impl Drop for Store {
     fn drop(&mut self) {
-        // A14.1: borrowed stores share another Store's buffer — do not free.
+        // borrowed stores share another Store's buffer — do not free.
         if self.borrowed {
             return;
         }
@@ -518,7 +518,7 @@ impl Store {
         }
     }
 
-    /// A14.1: create a read-only view that shares the original's buffer pointer.
+    /// Create a read-only view that shares the original's buffer pointer.
     /// The borrow is `locked = true` (writes panic/discard) and `borrowed = true`
     /// (Drop does NOT free the buffer — the main thread owns it).
     ///
@@ -543,7 +543,7 @@ impl Store {
         }
     }
 
-    /// A14.1: create a sentinel for a freed main-thread slot.
+    /// Create a sentinel for a freed main-thread slot.
     /// Tiny allocation, no data — just a placeholder so the worker's slot indices align.
     pub fn new_freed_sentinel() -> Store {
         let mut s = Store::new(4);
@@ -889,7 +889,7 @@ impl Store {
 
     // ---- End of LLRB free-space tree -----------------------------------------
 
-    /// P64: checked offset calculation — `rec * 8 + fld` using u64 to detect overflow.
+    /// Checked offset calculation — `rec * 8 + fld` using u64 to detect overflow.
     #[inline]
     fn checked_offset(rec: u32, fld: u32) -> isize {
         let off = u64::from(rec) * 8 + u64::from(fld);
@@ -969,7 +969,7 @@ impl Store {
         }
     }
 
-    /// P105: fast check whether a value looks like a valid live record.
+    /// Fast check whether a value looks like a valid live record.
     /// Used by `get_ref()` to detect inline data that was misinterpreted
     /// as a record pointer.  Cheaper than `HashSet` lookup — just a range
     /// check and one memory read (the record header).
@@ -1334,7 +1334,7 @@ unsafe impl Send for Store {}
 mod tests {
     use super::{MAX_STORE_WORDS, Store};
 
-    /// growing the store through many claims must not wrap or silently fail.
+    /// Growing the store through many claims must not wrap or silently fail.
     #[test]
     fn store_grows_without_overflow() {
         let mut store = Store::new(4);
@@ -1365,7 +1365,7 @@ mod tests {
         let _: &mut u8 = store.addr_mut::<u8>(rec, 4);
     }
 
-    /// A14.1: borrowed store reads return the same data as the original.
+    /// Borrowed store reads return the same data as the original.
     #[test]
     fn borrow_locked_reads_original_data() {
         let mut store = Store::new(64);
@@ -1385,7 +1385,7 @@ mod tests {
         );
     }
 
-    /// A14.1: writing to a borrowed store panics.
+    /// Writing to a borrowed store panics.
     #[test]
     #[should_panic(expected = "Write to locked store")]
     fn borrow_locked_write_panics() {
@@ -1397,7 +1397,7 @@ mod tests {
         let _: &mut u8 = borrow.addr_mut::<u8>(rec, 0);
     }
 
-    /// A14.1: freed sentinel is a minimal store.
+    /// Freed sentinel is a minimal store.
     #[test]
     fn freed_sentinel_is_free() {
         let sentinel = Store::new_freed_sentinel();

@@ -101,7 +101,7 @@ pub fn run_parallel_direct(
     if n_rows == 0 {
         return;
     }
-    // W1.18-1: WASM threading dispatches to JS host bridge (Worker Threads).
+    // WASM threading dispatches to JS host bridge (Worker Threads).
     #[cfg(all(feature = "threading", feature = "wasm"))]
     {
         let _ = (stores, program, extra_args);
@@ -504,7 +504,7 @@ pub fn run_parallel_int(
 
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
 
-/// A14.4: lightweight parallel dispatch — borrows main stores read-only instead
+/// Lightweight parallel dispatch — borrows main stores read-only instead
 /// of deep-copying them.  Structurally identical to `run_parallel_direct` but
 /// uses `clone_for_light_worker` with a pre-allocated `WorkerPool`.
 ///
@@ -538,7 +538,7 @@ pub fn run_parallel_light(
             for t in 0..threads {
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
-                // A14.3: borrow main stores + get pool slice for this worker.
+                // borrow main stores + get pool slice for this worker.
                 let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
                 let prog = Arc::clone(&program);
                 let input_t = *input;
@@ -599,7 +599,7 @@ pub fn run_parallel_light(
 
 use crate::store::Store;
 
-/// A14.2: pre-allocated pool of stores for `par_light` workers.
+/// Pre-allocated pool of stores for `par_light` workers.
 /// Worker `i` owns the exclusive slice `[i*spw .. (i+1)*spw]`.
 pub struct WorkerPool {
     stores: Vec<Store>,
@@ -627,7 +627,7 @@ impl WorkerPool {
     }
 }
 
-/// A15: Run N independent arms concurrently, each at a given bytecode position.
+/// Run N independent arms concurrently, each at a given bytecode position.
 #[allow(dead_code)]
 /// Each arm runs as a void function (no args, no return value).
 /// Uses the same store-isolation model as `par()`: each arm gets a read-only snapshot.

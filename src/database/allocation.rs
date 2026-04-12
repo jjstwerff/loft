@@ -227,7 +227,7 @@ impl Stores {
         // Clear any stale lock before reinitialising — OpDatabase may
         // reinitialise a store that was previously locked by a const
         // parameter in a prior function call within the same loop iteration.
-        // P127: never unlock a constant store (ref_count >= u32::MAX / 2).
+        // never unlock a constant store (ref_count >= u32::MAX / 2).
         if store.ref_count < u32::MAX / 2 {
             store.unlock();
         }
@@ -423,7 +423,7 @@ impl Stores {
         })
     }
 
-    /// A14.3: produce a light-worker view — main stores borrowed read-only,
+    /// Produce a light-worker view — main stores borrowed read-only,
     /// pool stores provide allocation capacity.
     ///
     /// # Safety

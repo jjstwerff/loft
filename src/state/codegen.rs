@@ -47,7 +47,7 @@ impl State {
         }
         let is_empty_stub =
             matches!(&stack.data.def(def_nr).code, Value::Block(bl) if bl.operators.is_empty());
-        // P115: use arguments() instead of names map lookup — the names map may
+        // use arguments() instead of names map lookup — the names map may
         // redirect promoted text parameters to shadow locals.
         let args = stack.function.arguments();
         for v in &args {
@@ -382,7 +382,7 @@ impl State {
                 Type::Void
             }
             Value::FnRef(d_nr, clos_var, fn_type) => {
-                // A5.6-1: Construct 16-byte fn-ref on stack: push d_nr (4B) then closure DbRef (12B).
+                // Construct 16-byte fn-ref on stack: push d_nr (4B) then closure DbRef (12B).
                 // Uses existing OpConstInt + OpVarRef — no new opcode needed.
                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
                 stack.add_op("OpConstInt", self);
@@ -472,7 +472,7 @@ impl State {
             let fp = self.generate(f_val, stack, false);
             let false_stack = stack.position;
             self.code_put(end, (self.code_pos - false_pos) as i16); // actual end
-            // C16: when one branch diverges (return/break/continue), use the
+            // when one branch diverges (return/break/continue), use the
             // other branch's stack position. The divergent branch exits the
             // scope so its stack delta is irrelevant at the join point.
             if is_divergent(t_val) {
@@ -487,7 +487,7 @@ impl State {
         tp
     }
 
-    /// A5.6-2: generate a fn-ref assignment value, ensuring every branch in an if-else
+    /// Generate a fn-ref assignment value, ensuring every branch in an if-else
     /// expression produces a full 16-byte fn-ref slot ([d_nr 4B][closure DbRef 12B]).
     /// A plain branch only pushes 4 bytes (d_nr via OpConstInt); OpNullRefSentinel pads
     /// to 16 bytes.  For if-else, the sentinel must be emitted *inside* each branch so
@@ -558,12 +558,12 @@ impl State {
         Type::Void
     }
 
-    /// A15: Generate bytecode for `parallel { arm1; arm2; ... }`.
+    /// Generate bytecode for `parallel { arm1; arm2; ... }`.
     ///
     /// Current implementation: sequential execution inline.
     /// The opcodes are emitted for future threading support but act as noops.
     /// Arms run inline in sequence, each dropping its result value.
-    /// A15: Generate bytecode for `parallel { arm1; arm2; ... }`.
+    /// Generate bytecode for `parallel { arm1; arm2; ... }`.
     ///
     /// Layout:
     ///   `OpParallelBegin(n)`
@@ -818,7 +818,7 @@ impl State {
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
 
-                // P117-reassign: when the value is a call with visible Ref
+                // when the value is a call with visible Ref
                 // params, the callee returns via a hidden __ref_N that is
                 // reused across calls.  OpPutRef would alias v with __ref_N;
                 // the next FreeRef would free __ref_N's store → use-after-free.
@@ -963,7 +963,7 @@ impl State {
             && stack.data.def(*fn_nr).name.starts_with("n_")
             && stack.data.def(*fn_nr).code != Value::Null
         {
-            // P117: when the callee has no visible Reference params, the
+            // when the callee has no visible Reference params, the
             // caller and callee share __ref_N's store. No deep copy needed
             // since OpAppendVector in handle_field already deep-copies vector
             // field data into the struct's store during construction.
@@ -992,7 +992,7 @@ impl State {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
             if *value == Value::Null {
-                // A5.6-text: pre-init a fn-ref slot with 16 null bytes.
+                // pre-init a fn-ref slot with 16 null bytes.
                 // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
                 stack.add_op("OpConstInt", self);
                 self.code_add(i32::MIN);
@@ -1127,7 +1127,7 @@ impl State {
         }
     }
 
-    /// destination-passing for text-producing natives inside `OpAppendText`.
+    /// Destination-passing for text-producing natives inside `OpAppendText`.
     /// Returns true if the optimisation was applied (caller should return Void).
     fn try_text_dest_pass(&mut self, stack: &mut Stack, op: u32, parameters: &[Value]) -> bool {
         if stack.data.def(op).name != "OpAppendText" || parameters.len() < 2 {
@@ -1197,7 +1197,7 @@ impl State {
         {
             return Type::Void;
         }
-        // A5.6-text: free the closure DbRef embedded at offset+4 in a 16-byte fn-ref
+        // free the closure DbRef embedded at offset+4 in a 16-byte fn-ref
         // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout is
         // [d_nr 4B][closure DbRef 12B], so the closure is at var_pos - 4.
         // OpNullRefSentinel produces store_nr=u16::MAX; database.free() is a no-op
@@ -1239,7 +1239,7 @@ impl State {
                     if parameters[a_nr] == Value::Null && stack.position == stack_before {
                         self.emit_typed_null(stack, &a.typedef);
                     }
-                    // A5.6-1: Function args are 16B (4B d_nr + 12B closure DbRef).
+                    // Function args are 16B (4B d_nr + 12B closure DbRef).
                     // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
                     if matches!(a.typedef, Type::Function(_, _, _))
                         && stack.position - stack_before < 16
@@ -1337,7 +1337,7 @@ impl State {
             stack.position += 1;
             return Type::Boolean;
         }
-        // A7.1: resolve library index — prefer #native symbol, fall back to def name.
+        // resolve library index — prefer #native symbol, fall back to def name.
         let native_sym = stack.data.def(op).native.clone();
         let lib_lookup: &str = if native_sym.is_empty() {
             &name
@@ -1710,7 +1710,7 @@ impl State {
                 self.code_add(size as u8);
                 self.code_add(stack.position - to);
             } else if matches!(&block.result, Type::Function(_, _, _)) && stack.position < after {
-                // A5.6-2: a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
+                // a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
                 // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
                 // OpNullRefSentinel so both branches of an if-else reach the join point with
                 // the same stack delta.
@@ -1830,7 +1830,7 @@ impl State {
                 if value == &Value::Text(String::new()) {
                     return;
                 }
-                // P112: always clear RefVar(Text) before appending — prevents
+                // always clear RefVar(Text) before appending — prevents
                 // text accumulation across reassignments in text-returning functions.
                 {
                     let var_pos = stack.position - stack.function.stack(var);
@@ -1940,7 +1940,7 @@ impl State {
         self.code_add(var_pos);
     }
 
-    /// emit a destination-passing call for a text-returning native function.
+    /// Emit a destination-passing call for a text-returning native function.
     ///
     /// Instead of: evaluate call → Str on stack → OpAppendText(var)
     /// Emits:      args → OpCreateStack(var) → `OpStaticCall`  (native writes to var directly)

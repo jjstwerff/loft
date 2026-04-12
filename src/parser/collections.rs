@@ -393,7 +393,7 @@ impl Parser {
             self.file_op(code, t, index_var);
             return;
         }
-        // A10: detect #fields for compile-time field iteration.
+        // detect #fields for compile-time field iteration.
         if self.lexer.has_keyword("fields") {
             let var = self.vars.var(name);
             let var_type = if var == u16::MAX {
@@ -868,7 +868,7 @@ use #count instead"
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
-            // A10: if #fields was detected, take the compile-time unrolling path.
+            // if #fields was detected, take the compile-time unrolling path.
             if self.fields_of != u32::MAX {
                 let struct_def_nr = self.fields_of;
                 self.fields_of = u32::MAX;
@@ -1178,7 +1178,7 @@ use #count instead"
         self.vars.loop_var(b_var);
         let in_loop = self.in_loop;
         self.in_loop = true;
-        // P2-R6 M11-a: flag that we are inside a par() body so that any `yield`
+        // M11-a: flag that we are inside a par() body so that any `yield`
         // encountered during parsing can emit a compile-time error.
         let outer_par = self.in_par_body;
         self.in_par_body = true;
@@ -1363,7 +1363,7 @@ use #count instead"
             );
             return placeholder;
         }
-        // C48: accept both static fn-refs (Value::Int) and fn-ref variables/lambdas.
+        // accept both static fn-refs (Value::Int) and fn-ref variables/lambdas.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
             Some(*d as u32)
         } else {
@@ -1403,7 +1403,7 @@ use #count instead"
         let for_next = v_set(for_var, iter_next);
 
         let mut fill = v_set(vec_copy_var, list[0].clone());
-        // C48: for CallRef path, assign the fn-ref value before the loop.
+        // for CallRef path, assign the fn-ref value before the loop.
         if let Some(fv) = fn_ref_var {
             fill = Value::Insert(vec![fill, v_set(fv, list[1].clone())]);
         }
@@ -1494,7 +1494,7 @@ use #count instead"
             );
             return Err(placeholder);
         }
-        // C48: accept both static fn-refs and fn-ref variables/lambdas.
+        // accept both static fn-refs and fn-ref variables/lambdas.
         let fn_d_nr = if let Value::Int(d) = &list[1] {
             Some(*d as u32)
         } else {
@@ -1518,7 +1518,7 @@ use #count instead"
             Ok(v) => v,
             Err(t) => return t,
         };
-        // C48: for CallRef path, store the fn-ref value in a local variable.
+        // for CallRef path, store the fn-ref value in a local variable.
         let fn_ref_var = if fn_d_nr.is_none() {
             let v = self.create_unique("filter_fn", &types[1]);
             self.vars.defined(v);
@@ -1608,7 +1608,7 @@ use #count instead"
         (list, w)
     }
 
-    /// A10: compile-time unroll `for f in s#fields` into one block per field.
+    /// Compile-time unroll `for f in s#fields` into one block per field.
     fn parse_field_iteration(
         &mut self,
         loop_var_name: &str,

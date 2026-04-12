@@ -91,7 +91,7 @@ pub struct Variable {
     /// Set by `clean_work_refs` for work-ref temporaries that have been re-purposed
     /// and must not be freed at scope exit (A14 replacement for type-mutation hack).
     pub skip_free: bool,
-    /// A5.6-text: variable is captured by a closure.  Suppresses the "never read"
+    /// Variable is captured by a closure.  Suppresses the "never read"
     /// warning in `test_used` without affecting the dead-assignment uses counter.
     pub captured: bool,
     /// Sequence number of the first `Value::Set` node for this variable; `u32::MAX` = never defined.
@@ -102,7 +102,7 @@ pub struct Variable {
     /// `u16::MAX` means `assign_slots` has not run yet.  Shown as `pre:` in `validate_slots`
     /// diagnostics when it differs from the final `stack_pos`.
     pub pre_assigned_pos: u16,
-    /// P115: if this variable is a shadow local promoted from a text argument,
+    /// If this variable is a shadow local promoted from a text argument,
     /// `promoted_from` holds the var_nr of the original argument. `u16::MAX` = not promoted.
     pub promoted_from: u16,
 }
@@ -156,7 +156,7 @@ pub struct Function {
     scope_origins: HashMap<u16, &'static str>,
     pub done: bool,
     pub logging: bool,
-    // A5.6-2: maps fn_ref_var_nr → closure_var_nr for native codegen.
+    // maps fn_ref_var_nr → closure_var_nr for native codegen.
     closure_var_map: HashMap<u16, u16>,
 }
 
@@ -492,7 +492,7 @@ impl Function {
         }
     }
 
-    /// P5.2: Replace all occurrences of `Type::Reference(tv_nr, _)` with `concrete`
+    /// Replace all occurrences of `Type::Reference(tv_nr, _)` with `concrete`
     /// in every variable's type definition.  Used when instantiating a generic template.
     pub fn substitute_type(&mut self, tv_nr: u32, concrete: &Type) {
         for v in &mut self.variables {
@@ -503,7 +503,7 @@ impl Function {
     fn subst_type(tp: Type, tv_nr: u32, concrete: &Type) -> Type {
         match tp {
             Type::Reference(d, deps) if d == tv_nr => {
-                // P136: preserve the original deps when substituting T → concrete.
+                // preserve the original deps when substituting T → concrete.
                 // The deps carry vector-element borrowing info needed by get_free_vars
                 // to suppress FreeRef on loop element variables.
                 let mut result = concrete.clone();
@@ -660,7 +660,7 @@ impl Function {
         u16::MAX
     }
 
-    /// A5.1: Return all variable names and their types for capture analysis.
+    /// Return all variable names and their types for capture analysis.
     pub fn all_names_and_types(&self) -> Vec<(String, Type)> {
         self.variables
             .iter()
@@ -909,7 +909,7 @@ impl Function {
         }
     }
 
-    // P115: text argument auto-promotion helpers
+    // text argument auto-promotion helpers
 
     pub fn set_promoted_from(&mut self, shadow: u16, original: u16) {
         self.variables[shadow as usize].promoted_from = original;
@@ -1070,7 +1070,7 @@ impl Function {
         self.variables[v as usize].skip_free = true;
     }
 
-    /// A5.6-text: mark a variable as captured by a closure.
+    /// Mark a variable as captured by a closure.
     /// Suppresses the "never read" warning without affecting dead-assignment tracking.
     pub fn set_captured(&mut self, v: u16) {
         self.variables[v as usize].captured = true;
@@ -1083,12 +1083,12 @@ impl Function {
         self.work_refs.insert(v);
     }
 
-    /// A5.6-2: Record that fn_ref variable `fn_ref` has its closure stored in `clos`.
+    /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.
     pub fn set_closure_var_of(&mut self, fn_ref: u16, clos: u16) {
         self.closure_var_map.insert(fn_ref, clos);
     }
 
-    /// A5.6-2: Return the closure variable number for a fn_ref variable, if any.
+    /// Return the closure variable number for a fn_ref variable, if any.
     pub fn closure_var_of(&self, fn_ref: u16) -> Option<u16> {
         self.closure_var_map.get(&fn_ref).copied()
     }

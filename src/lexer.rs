@@ -505,7 +505,7 @@ impl Lexer {
         }
     }
 
-    /// parse a character constant for the lexer.
+    /// Parse a character constant for the lexer.
     fn char(&mut self) -> LexResult {
         let pos = self.position.clone();
         let mut res = String::new();
@@ -561,7 +561,7 @@ impl Lexer {
         }
     }
 
-    /// parse a string for the lexer.
+    /// Parse a string for the lexer.
     fn string(&mut self) -> LexResult {
         let pos = self.position.clone();
         let mut res = String::new();
@@ -886,7 +886,7 @@ impl Lexer {
         number
     }
 
-    /// parse a number for the lexer.
+    /// Parse a number for the lexer.
     fn number(&mut self) -> LexResult {
         let pos = self.position.clone();
         let mut val = self.get_number();
@@ -1001,7 +1001,7 @@ impl Lexer {
     }
 
     pub fn switch(&mut self, filename: &str) {
-        // W1.9: try VIRT_FS first (WASM has no real filesystem for library files).
+        // try VIRT_FS first (WASM has no real filesystem for library files).
         #[cfg(feature = "wasm")]
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             self.lines = Box::new(
@@ -1045,7 +1045,7 @@ impl Lexer {
         diagnostic!(self, level, "{error}");
     }
 
-    /// debug feature to check the amount of currently in use links
+    /// Debug feature to check the amount of currently in use links
     pub fn count_links(&self) -> u32 {
         *self.links.borrow()
     }

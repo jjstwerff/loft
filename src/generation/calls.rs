@@ -48,7 +48,7 @@ impl Output<'_> {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
             } else {
-                // C39: wrap i32 literal into (u32, null_DbRef) for fn-ref params.
+                // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
                 let param_is_fnref = idx < def_fn.attributes.len()
                     && matches!(def_fn.attributes[idx].typedef, Type::Function(_, _, _));
                 let param_is_routine = idx < def_fn.attributes.len()

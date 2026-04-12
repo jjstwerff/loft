@@ -1132,7 +1132,7 @@ impl State {
         for a_nr in (0..def.attributes.len()).rev() {
             let a = &def.attributes[a_nr];
             if a.mutable {
-                // C30: OpPutFnRef/OpVarFnRef _fnref attribute is typed as text but
+                // OpPutFnRef/OpVarFnRef _fnref attribute is typed as text but
                 // the stack holds a 16-byte fn-ref (d_nr + closure DbRef).  Reading
                 // it as Str dereferences a garbage pointer → SIGSEGV.
                 if (def.name == "OpPutFnRef" || def.name == "OpVarFnRef")
