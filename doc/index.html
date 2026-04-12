@@ -10,14 +10,46 @@
 <header class="index-header">
 <div class="index-hero">
 <h1>Loft</h1>
-<p class="tagline">A statically-typed scripting language inspired by Rust.</p>
+<p class="tagline">Build small games and interactive things — share a link, anyone plays.</p>
+<p class="subtagline">A statically-typed scripting language inspired by Rust.</p>
 <p class="version">v0.8.3</p>
+<div class="hero-ctas">
+<a class="hero-btn hero-btn-primary" href="playground.html">Try it in the browser</a>
+<a class="hero-btn" href="gallery.html">See the gallery</a>
+<a class="hero-btn" href="install.html">Install</a>
+</div>
 </div>
 <div class="search-wrap index-search">
 <input id="search" type="search" placeholder="Search docs…" autocomplete="off">
 <div class="search-results" id="search-results" hidden></div>
 </div>
 </header>
+<section class="showcase">
+<a class="showcase-tile showcase-hero" href="gallery.html">
+<img src="images/hero-brick-buster.png" alt="Brick Buster — a complete loft game" loading="lazy">
+<div class="showcase-caption">
+<span class="showcase-tag">Built with loft</span>
+<h2>Brick Buster</h2>
+<p>A complete arcade game — sprites, collision, audio, powerups, pause, game over. Written in loft, runs in your browser.</p>
+</div>
+</a>
+<div class="showcase-side">
+<a class="showcase-tile showcase-sub" href="playground.html">
+<div class="showcase-caption">
+<span class="showcase-tag">No install</span>
+<h3>Live playground</h3>
+<p>Type a few lines of loft code. Press run. See output. That is the whole tutorial.</p>
+</div>
+</a>
+<a class="showcase-tile showcase-sub" href="gallery.html">
+<div class="showcase-caption">
+<span class="showcase-tag">24 demos</span>
+<h3>Graphics gallery</h3>
+<p>From a hello-triangle to physically-based rendering with shadows — all running live in WebGL.</p>
+</div>
+</a>
+</div>
+</section>
 <section class="intro">
 <p>Welcome to Loft! Loft is a concise, statically-typed language designed to be safe and easy to embed in larger Rust projects. It is great for scripting game logic, configuration, data transformations, and anywhere you want a friendly language backed by a fast Rust runtime.</p>
 <p>These documentation pages are your guided tour — each page is also a live test, so every example you see has already been verified to work exactly as shown. The best way to get started is to read the pages in order. This first page introduces the handful of ideas that shape every other part of the language.</p>
@@ -25,8 +57,6 @@
 <section class="topics">
 <h2 class="topics-heading">Getting Started</h2>
 <div class="grid">
-      <a class="card card-featured" href="playground.html"><h2>Playground</h2><p>Write and run Loft code in your browser — no install needed.</p></a>
-      <a class="card card-featured" href="gallery.html"><h2>Graphics Gallery</h2><p>24 interactive OpenGL examples running live in WebGL.</p></a>
       <a class="card card-featured" href="install.html"><h2>Install</h2><p>Get loft running and write your first Loft program in minutes.</p></a>
       <a class="card" href="roadmap.html"><h2>Roadmap</h2><p>Planned features for version 1.0 and beyond, with syntax previews.</p></a>
 </div>

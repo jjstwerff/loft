@@ -240,14 +240,46 @@ fn write_index(
   <header class=\"index-header\">\n\
     <div class=\"index-hero\">\n\
       <h1>Loft</h1>\n\
-      <p class=\"tagline\">{title}</p>\n\
+      <p class=\"tagline\">Build small games and interactive things \u{2014} share a link, anyone plays.</p>\n\
+      <p class=\"subtagline\">{title}</p>\n\
       <p class=\"version\">v{version}</p>\n\
+      <div class=\"hero-ctas\">\n\
+        <a class=\"hero-btn hero-btn-primary\" href=\"playground.html\">Try it in the browser</a>\n\
+        <a class=\"hero-btn\" href=\"gallery.html\">See the gallery</a>\n\
+        <a class=\"hero-btn\" href=\"install.html\">Install</a>\n\
+      </div>\n\
     </div>\n\
     <div class=\"search-wrap index-search\">\n\
       <input id=\"search\" type=\"search\" placeholder=\"Search docs\u{2026}\" autocomplete=\"off\">\n\
       <div class=\"search-results\" id=\"search-results\" hidden></div>\n\
     </div>\n\
   </header>\n\
+  <section class=\"showcase\">\n\
+    <a class=\"showcase-tile showcase-hero\" href=\"gallery.html\">\n\
+      <img src=\"images/hero-brick-buster.png\" alt=\"Brick Buster \u{2014} a complete loft game\" loading=\"lazy\">\n\
+      <div class=\"showcase-caption\">\n\
+        <span class=\"showcase-tag\">Built with loft</span>\n\
+        <h2>Brick Buster</h2>\n\
+        <p>A complete arcade game \u{2014} sprites, collision, audio, powerups, pause, game over. Written in loft, runs in your browser.</p>\n\
+      </div>\n\
+    </a>\n\
+    <div class=\"showcase-side\">\n\
+      <a class=\"showcase-tile showcase-sub\" href=\"playground.html\">\n\
+        <div class=\"showcase-caption\">\n\
+          <span class=\"showcase-tag\">No install</span>\n\
+          <h3>Live playground</h3>\n\
+          <p>Type a few lines of loft code. Press run. See output. That is the whole tutorial.</p>\n\
+        </div>\n\
+      </a>\n\
+      <a class=\"showcase-tile showcase-sub\" href=\"gallery.html\">\n\
+        <div class=\"showcase-caption\">\n\
+          <span class=\"showcase-tag\">24 demos</span>\n\
+          <h3>Graphics gallery</h3>\n\
+          <p>From a hello-triangle to physically-based rendering with shadows \u{2014} all running live in WebGL.</p>\n\
+        </div>\n\
+      </a>\n\
+    </div>\n\
+  </section>\n\
   <section class=\"intro\">\n\
 {intro}\
   </section>\n\

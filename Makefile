@@ -1,7 +1,7 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery
 
 all:
 	rustfmt src/*.rs --edition 2024
@@ -71,6 +71,87 @@ profile:
 
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
+
+# gallery: verify-and-rebuild the web gallery end-to-end so it can
+# recover from a partially-broken state.  Use this when the browser
+# reports errors like "Failed to grow table" (wasm/JS glue mismatch),
+# "404 on pkg/loft_bg.wasm" (out-of-tree build), or just after an
+# upstream change that invalidates the generated pkg.
+#
+# Steps (each fails loudly, no silent skips):
+#   1. Clean doc/pkg/ entirely so a partial cache cannot hide staleness.
+#   2. Check wasm-pack is installed; abort with an actionable message
+#      ("cargo install wasm-pack") if not.
+#   3. Rebuild the wasm bundle via `make wasm`.
+#   4. Verify every file the gallery imports actually exists at the
+#      expected path AND is non-empty.
+#   5. Verify loft.js and loft_bg.wasm were generated in the SAME run
+#      (timestamps within 120s) — a mismatch is the most common source
+#      of "failed to grow table" runtime errors.
+#   6. Start a transient http.server on a fixed ephemeral port,
+#      HEAD-request every asset the gallery loads, fail on non-200.
+#   7. Print a one-line "gallery ready" summary with the URL.
+#
+# After a successful run, `make serve` will work for local browsing.
+gallery:
+	@echo "  [1/7] cleaning doc/pkg ..."
+	@rm -rf doc/pkg
+	@echo "  [2/7] checking wasm-pack ..."
+	@if [ ! -x "$$HOME/.cargo/bin/wasm-pack" ] && ! command -v wasm-pack >/dev/null 2>&1; then \
+		echo "    FAIL: wasm-pack not installed."; \
+		echo "    install with: cargo install wasm-pack"; \
+		exit 1; \
+	fi
+	@echo "  [3/7] building wasm bundle ..."
+	@$(MAKE) wasm >/tmp/loft_gallery_wasm.log 2>&1 || { \
+		echo "    FAIL: wasm-pack build failed — see /tmp/loft_gallery_wasm.log"; \
+		tail -20 /tmp/loft_gallery_wasm.log; \
+		exit 1; \
+	}
+	@echo "  [4/7] checking required gallery files ..."
+	@missing=0; \
+	for f in doc/gallery.html doc/gallery-examples.js doc/loft-gl.js \
+	         doc/pkg/loft.js doc/pkg/loft_bg.wasm doc/pkg/loft.d.ts; do \
+		if [ ! -s "$$f" ]; then \
+			echo "    FAIL: $$f is missing or empty"; \
+			missing=$$((missing + 1)); \
+		fi; \
+	done; \
+	if [ $$missing -gt 0 ]; then exit 1; fi
+	@echo "  [5/7] checking wasm/js glue are from the same build ..."
+	@js_mtime=$$(stat -c %Y doc/pkg/loft.js); \
+	wasm_mtime=$$(stat -c %Y doc/pkg/loft_bg.wasm); \
+	delta=$$((wasm_mtime - js_mtime)); \
+	delta=$${delta#-}; \
+	if [ $$delta -gt 120 ]; then \
+		echo "    FAIL: loft.js and loft_bg.wasm timestamps differ by $$delta s"; \
+		echo "    One or both is stale — rerun 'make gallery'."; \
+		exit 1; \
+	fi
+	@echo "  [6/7] starting transient http.server and probing assets ..."
+	@port=18765; \
+	cd doc && python3 -m http.server $$port --bind 127.0.0.1 \
+	  >/tmp/loft_gallery_server.log 2>&1 & \
+	echo $$! > /tmp/loft_gallery_server.pid; \
+	# Give the server a moment to bind the port. \
+	for _ in 1 2 3 4 5 6 7 8 9 10; do \
+		sleep 0.3; \
+		if curl -s -o /dev/null "http://127.0.0.1:$$port/gallery.html"; then break; fi; \
+	done; \
+	failed=0; \
+	for path in /gallery.html /gallery-examples.js /loft-gl.js \
+	            /pkg/loft.js /pkg/loft_bg.wasm /pkg/loft.d.ts; do \
+		code=$$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$$port$$path"); \
+		if [ "$$code" != "200" ]; then \
+			echo "    FAIL: http://127.0.0.1:$$port$$path returned $$code"; \
+			failed=$$((failed + 1)); \
+		fi; \
+	done; \
+	kill $$(cat /tmp/loft_gallery_server.pid) 2>/dev/null || true; \
+	wait $$(cat /tmp/loft_gallery_server.pid) 2>/dev/null || true; \
+	rm -f /tmp/loft_gallery_server.pid /tmp/loft_gallery_server.log; \
+	if [ $$failed -gt 0 ]; then exit 1; fi
+	@echo "  [7/7] gallery ready — run 'make serve' and open http://localhost:8000/gallery.html"
 
 serve:
 	@echo "Playground: http://localhost:8000/playground.html"

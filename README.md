@@ -1,27 +1,42 @@
 
-# loft
-
-A programming language for making games that run in the browser.
+# loft — build small games, share a link, anyone plays
 
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-blue.svg)](LICENSE)
 
----
-
-## Vision
-
-**Write a game in loft.  Share a link.  Anyone can play.**
-
-Loft is a statically-typed language designed for small games and interactive
-experiences that run directly in the browser — no install, no app store, no
-engine download.  Your game compiles to WebAssembly + WebGL and deploys as
-static files on any web host.
-
-The same code also runs natively with OpenGL on desktop, and scenes export to
-standard GLB files for 3D tools.  One language, three outputs.
+[**▶ Try it in the browser**](https://jjstwerff.github.io/loft/playground.html) · [**🎮 Play Brick Buster**](https://jjstwerff.github.io/loft/gallery.html#25-brick-buster) · [**🖼 Graphics gallery**](https://jjstwerff.github.io/loft/gallery.html) · [**📘 Docs**](https://jjstwerff.github.io/loft/)
 
 ---
 
-## Quick look
+## What can you actually make with it?
+
+<p align="center">
+  <a href="https://jjstwerff.github.io/loft/gallery.html#25-brick-buster">
+    <img src="doc/images/hero-brick-buster.png" alt="Brick Buster — a complete arcade game written in loft" width="640">
+  </a>
+</p>
+
+**A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
+
+And it's one file: [`25-brick-buster.loft`](lib/graphics/examples/25-brick-buster.loft).
+
+## Three ways to see loft
+
+| | |
+|---|---|
+| **🌐 [Playground](https://jjstwerff.github.io/loft/playground.html)** | Type a few lines of loft, press run, see output. That *is* the whole tutorial. |
+| **🖼 [Gallery](https://jjstwerff.github.io/loft/gallery.html)** | 24 interactive graphics demos, from hello-triangle to physically-based rendering with shadows — every one running live in WebGL. |
+| **💻 [Install locally](doc/claude/DEVELOPMENT.md)** | `cargo install --git https://github.com/jjstwerff/loft --bin loft` |
+
+---
+
+## Why people like it
+
+- **Write once, runs in the browser and on your desktop.** The same source compiles to WebAssembly+WebGL for browsers and to a native binary using OpenGL for Mac/Linux/Windows.
+- **Reads like Python, runs fast like Rust.** Statically typed with almost no annotations — loft infers types, catches mistakes at compile time, and runs interpreted *or* compiled.
+- **Shareable by link.** A finished loft program is a directory of static files. Put it on any web host. Send someone the URL. They play.
+- **Trivially embeddable.** Loft is a Rust crate. Drop it into an existing Rust application to script game logic, hot-reload configs, or run untrusted code safely.
+
+## What does the code look like?
 
 ```loft
 struct Point { x: float, y: float }
@@ -44,81 +59,57 @@ $ loft hello.loft
 distance: 5.0
 ```
 
----
+Everything you might want is there: `vector<T>`, `sorted<T>`, `index<T>`, `hash<T>` collections; `par(...)` for parallel loops; `yield` for generators; pattern matching with `match`; null-safe with `?? default`; format strings like Rust's.
 
-## Highlights
-
-- **Browser-first graphics** — WebGL rendering, native OpenGL, GLB export
-- **Static types with inference** — no annotations required, errors caught at compile time
-- **Null safety** — `?? default` recovery, null propagation
-- **Collections** — `vector<T>`, `sorted<T>`, `index<T>`, `hash<T>`
-- **Parallel for** — `par(...)` distributes work across cores
-- **Generators** — `yield` for lazy sequences
-- **Native compilation** — compile to native binary or WebAssembly
-
-See the full [language reference](https://jjstwerff.github.io/loft/) and
-[what makes loft different](doc/claude/DESIGN.md) for the store-based memory
-model and performance design.
-
----
-
-## Install
+## Getting started
 
 ```sh
+# one-line install (requires Rust toolchain)
+cargo install --git https://github.com/jjstwerff/loft --bin loft
+
+# or clone + build
 git clone https://github.com/jjstwerff/loft
 cd loft
-cargo build --release
-# binary is at target/release/loft
-```
+cargo build --release     # binary at target/release/loft
 
-Or: `cargo install --git https://github.com/jjstwerff/loft --bin loft`
+# try an example
+./target/release/loft lib/graphics/examples/01-hello-window.loft
+```
 
 Pre-built binaries on the [Releases](https://github.com/jjstwerff/loft/releases) page.
 
----
-
-## Try it now
-
-**[Playground](https://jjstwerff.github.io/loft/playground.html)** — write and run loft code in the browser, no install needed.
-
-**[Graphics Gallery](https://jjstwerff.github.io/loft/gallery.html)** — 24 interactive OpenGL examples running live in WebGL.
-
 ## Graphics examples
 
-24 progressive examples from hello-triangle to PBR with shadow mapping.
-All run natively and [live in the browser](https://jjstwerff.github.io/loft/gallery.html):
+24 progressive examples. Hover each for a live preview in the [gallery](https://jjstwerff.github.io/loft/gallery.html):
 
-```sh
-./08-basic-lighting.loft       # Phong lighting in a window
-./24-renderer-demo.loft        # PBR scene with shadows — no shader code
-./21-keyboard-camera.loft      # WASD + mouse drag first-person camera
-```
+| File | What it shows |
+|---|---|
+| `01-hello-window.loft` | A green window |
+| `10-2d-canvas.loft` | 2D drawing primitives |
+| `08-basic-lighting.loft` | Phong lighting on a 3D cube |
+| `16-shadow-mapping.loft` | Real-time shadows |
+| `18-pbr.loft` | Physically-based rendering |
+| `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
+| **`25-brick-buster.loft`** | **A complete arcade game** |
 
-See the full [example list](lib/graphics/examples/README.md).
+See the [full example list](lib/graphics/examples/README.md).
 
----
+## Contributing
 
-## Get involved
+Highest-impact areas today:
 
-Loft is looking for contributors.  The highest-impact areas:
-
-- **WebGL backend** — making games run in the browser
 - **Example games** — small playable demos that showcase the language
-- **Game library** — input, sprites, tilemaps, collision, audio
+- **Game library** — input, sprites, tilemaps, collision, audio abstractions
+- **WebGL backend** — closing the last gaps between native and browser rendering
+- **Documentation polish** — every page runs as a test, so contributions stay correct by construction
 
-See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and
-[PLANNING.md](doc/claude/PLANNING.md) for the backlog.
-
----
+See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and [PLANNING.md](doc/claude/PLANNING.md) for the roadmap.
 
 ## Documentation
 
-Full docs at **<https://jjstwerff.github.io/loft/>** — tutorial, API reference,
-and [printable reference](https://jjstwerff.github.io/loft/loft-reference.pdf).
+Full reference, tutorial, API, and printable PDF at <https://jjstwerff.github.io/loft/>.
 
-Build locally: `cargo run --bin gendoc`, then open `doc/index.html`.
-
----
+Build locally: `make wasm` (Playground + Gallery) then `cargo run --bin gendoc` (HTML pages), open `doc/index.html`. Or `make gallery` for a one-shot verify-and-rebuild of the whole gallery stack.
 
 ## License
 

@@ -29,6 +29,9 @@
 <pre><code>pub fn split(self: text, separator: character) -&gt; vector &lt; text &gt;</code></pre>
 </div>
 <div class="item">
+<pre><code>pub fn join(self: vector&lt;text&gt;, jn_sep: text) -&gt; text</code></pre>
+</div>
+<div class="item">
 <pre><code>pub fn starts_with(self: text, value: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
 </div>
