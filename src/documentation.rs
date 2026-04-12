@@ -255,7 +255,7 @@ fn write_index(
     </div>\n\
   </header>\n\
   <section class=\"showcase\">\n\
-    <a class=\"showcase-tile showcase-hero\" href=\"gallery.html\">\n\
+    <a class=\"showcase-tile showcase-hero\" href=\"brick-buster.html\">\n\
       <img src=\"images/hero-brick-buster.png\" alt=\"Brick Buster \u{2014} a complete loft game\" loading=\"lazy\">\n\
       <div class=\"showcase-caption\">\n\
         <span class=\"showcase-tag\">Built with loft</span>\n\

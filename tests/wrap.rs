@@ -292,6 +292,11 @@ fn ignored_scripts() -> HashSet<&'static str> {
     HashSet::from([
         // Requires lib_dirs (graphics, math, yield_test) — tested via leak.rs instead.
         "85-yield-resume.loft",
+        // Requires `--lib tests/lib` (declared via file-level @ARGS) to
+        // resolve importlib.  wrap.rs's run_test does not honour @ARGS,
+        // so the script runner picks it up via its own invocation path
+        // and tests/imports.rs covers the same ground at the Rust level.
+        "88-imports.loft",
     ])
 }
 
