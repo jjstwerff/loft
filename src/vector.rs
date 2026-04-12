@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#![allow(clippy::checked_conversions)]
-
 use crate::keys;
 use crate::keys::{Content, DbRef, Key};
 use crate::store::Store;
@@ -12,22 +10,16 @@ use std::cmp::Ordering;
 #[inline]
 fn checked_vec_pos(index: u32, size: u32) -> u32 {
     let pos = u64::from(index) * u64::from(size) + 8;
-    assert!(
-        pos <= u64::from(u32::MAX),
-        "Vector position overflow: index={index} size={size}"
-    );
-    pos as u32
+    u32::try_from(pos)
+        .unwrap_or_else(|_| panic!("Vector position overflow: index={index} size={size}"))
 }
 
 /// P66: checked vector capacity — `(count * size + 15) / 8` using u64.
 #[inline]
 fn checked_vec_cap(count: u32, size: u32) -> u32 {
     let bytes = u64::from(count) * u64::from(size) + 15;
-    assert!(
-        bytes <= u64::from(u32::MAX),
-        "Vector capacity overflow: count={count} size={size}"
-    );
-    (bytes / 8) as u32
+    u32::try_from(bytes / 8)
+        .unwrap_or_else(|_| panic!("Vector capacity overflow: count={count} size={size}"))
 }
 
 // TODO change slice to its own vector on updating it

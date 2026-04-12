@@ -19,7 +19,6 @@
 //! Record 0 is the store header; record 1 (`PRIMARY`) is the main record
 //! describing vectors and indexes with sub-records.  A store may optionally
 //! be backed by a memory-mapped file (`mmap` feature).
-#![allow(clippy::checked_conversions)]
 
 #[cfg(feature = "mmap")]
 use mmap_storage::file::Storage as MmapStorage;
@@ -894,11 +893,8 @@ impl Store {
     #[inline]
     fn checked_offset(rec: u32, fld: u32) -> isize {
         let off = u64::from(rec) * 8 + u64::from(fld);
-        assert!(
-            off <= isize::MAX as u64,
-            "Store offset overflow: rec={rec} fld={fld}"
-        );
-        off as isize
+        isize::try_from(off)
+            .unwrap_or_else(|_| panic!("Store offset overflow: rec={rec} fld={fld}"))
     }
 
     #[inline]

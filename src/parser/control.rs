@@ -2168,8 +2168,8 @@ impl Parser {
     /// Extract the assert condition expression from the source line.
     /// Reads the line at `pos.file:pos.line`, finds `assert(`, and extracts
     /// the text up to the matching `)`.
-    fn extract_assert_expr(&self, pos: &crate::lexer::Position) -> String {
-        let line = self.read_source_line(&pos.file, pos.line);
+    fn extract_assert_expr(pos: &crate::lexer::Position) -> String {
+        let line = Self::read_source_line(&pos.file, pos.line);
         // Find "assert(" and extract the condition
         if let Some(start) = line.find("assert(") {
             let after = start + 7; // skip "assert("
@@ -2219,8 +2219,7 @@ impl Parser {
     }
 
     /// Read a single source line from a file (or VirtFS under WASM).
-    #[allow(clippy::unused_self)]
-    fn read_source_line(&self, file: &str, line: u32) -> String {
+    fn read_source_line(file: &str, line: u32) -> String {
         #[cfg(feature = "wasm")]
         {
             if let Some(content) = crate::wasm::virt_fs_get(file) {
@@ -2258,7 +2257,7 @@ impl Parser {
                 list[1].clone()
             } else {
                 // Extract the assert expression from the source line.
-                let expr = self.extract_assert_expr(call_pos);
+                let expr = Self::extract_assert_expr(call_pos);
                 Value::str(&expr)
             };
             if self.first_pass {

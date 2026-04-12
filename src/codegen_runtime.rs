@@ -404,7 +404,7 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             let mut pos = if cur == u32::MAX {
                 i32::MAX
             } else {
-                { cur as i32 }
+                cur as i32
             };
             if reverse {
                 vector::vector_step_rev(&data, &mut pos, all);
