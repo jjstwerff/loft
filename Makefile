@@ -1,7 +1,51 @@
 # Copyright (c) 2022-2025 Jurjen Stellingwerff
 # SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# ==== What can this Makefile do for you? ================================
+#
+# If you just want to try things:
+#
+#   make game       Build the Brick Buster arcade game into one HTML file
+#                   (doc/brick-buster.html). Double-click to play.
+#                   Works even from a half-broken checkout.
+#
+#   make gallery    Build the Graphics Gallery (24 demos) for the browser
+#                   and verify every asset loads. Run `make serve` after.
+#
+#   make serve      Start a local web server on http://localhost:8000/
+#                   so you can open the Playground and Gallery.
+#
+#   make help       Print this overview again.
+#
+# If you are working on loft itself:
+#
+#   make all        Format source + build the native binary.
+#   make test       Full test suite (fmt + clippy + tests). ~1-2 minutes.
+#   make quick      Same tests without the clippy/fmt gate. Faster iteration.
+#   make ci         What gets run before every push.
+#   make clean      Nuke build artifacts.
+#
+# More specialised:
+#
+#   make wasm            Build the wasm-pack bundle that drives the gallery.
+#   make install         System-wide install (sudo).
+#   make test-gl-golden  Pixel-compare the smoke-test screenshot (Xvfb).
+#   make fill            Regenerate src/fill.rs from default/*.loft annotations.
+#   make profile         Build with debug symbols + run a flamegraph.
+#   make pdf             Rebuild the printable reference PDF.
+#
+# Every target above is defined as a real rule later in this file.  Scroll
+# down to any name to see exactly what it does.
+# =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game help
+
+# Print the overview at the top of this file.  Useful when you land on a
+# fresh checkout and want to know what buttons are available without
+# reading a 300-line Makefile.
+help:
+	@sed -n '/^# ==== What can this Makefile do for you/,/^# ====/p' Makefile \
+	  | sed 's/^# \{0,1\}//'
 
 all:
 	rustfmt src/*.rs --edition 2024
@@ -157,6 +201,67 @@ serve:
 	@echo "Playground: http://localhost:8000/playground.html"
 	@echo "Gallery:    http://localhost:8000/gallery.html"
 	cd doc && python3 -m http.server 8000
+
+# game: rebuild the efficient browser build of Brick Buster from any
+# state — clean rebuild of the wasm32-unknown-unknown rlibs + host
+# binary + `loft --html`, then publish the resulting self-contained
+# HTML to doc/brick-buster.html.  Use when the check-in looks broken
+# or after an upstream change that invalidates either the wasm rlib
+# or the host tooling.
+#
+# Steps (each fails loudly, no silent skips):
+#   1. Rebuild the host binary so --html and its native_utils helpers
+#      are current.
+#   2. Ensure the wasm32-unknown-unknown target is installed.
+#   3. Rebuild the wasm32-unknown-unknown libloft.rlib + deps via
+#      `make wasm-assets`; this is the ingredient `--html` links
+#      against and is the single most common source of "W1.1"
+#      compile failures.
+#   4. Verify libloft.rlib exists for both wasm32 and the host
+#      (proc-macros need the host deps dir).
+#   5. Run `loft --html doc/brick-buster.html ...brick-buster.loft`.
+#   6. Sanity-check the output HTML: doctype + loft_start + > 5kB.
+#   7. Print the file:// URL so the user can click through.
+game:
+	@echo "  [1/7] building host binary ..."
+	@cargo build --release -q --bin loft || { echo "    FAIL: host cargo build"; exit 1; }
+	@echo "  [2/7] checking wasm32-unknown-unknown target ..."
+	@rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown || { \
+	    echo "    FAIL: rustup target not installed"; \
+	    echo "    install with: rustup target add wasm32-unknown-unknown"; \
+	    exit 1; }
+	@echo "  [3/7] rebuilding wasm32-unknown-unknown rlibs ..."
+	@cargo build --release -q --target wasm32-unknown-unknown --lib --no-default-features --features random \
+	    >/tmp/loft_game_wasm.log 2>&1 || { \
+	    echo "    FAIL: wasm rlib build — see /tmp/loft_game_wasm.log"; \
+	    tail -20 /tmp/loft_game_wasm.log; exit 1; }
+	@echo "  [4/7] verifying libloft.rlib for both targets ..."
+	@test -f target/wasm32-unknown-unknown/release/libloft.rlib || { \
+	    echo "    FAIL: target/wasm32-unknown-unknown/release/libloft.rlib missing"; exit 1; }
+	@test -f target/release/libloft.rlib || { \
+	    echo "    FAIL: target/release/libloft.rlib missing (needed for proc-macros)"; exit 1; }
+	@echo "  [5/7] compiling Brick Buster to self-contained HTML ..."
+	@./target/release/loft --html doc/brick-buster.html \
+	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
+	    lib/graphics/examples/25-brick-buster.loft \
+	    >/tmp/loft_game_html.log 2>&1 || { \
+	    echo "    FAIL: --html compilation — see /tmp/loft_game_html.log"; \
+	    tail -30 /tmp/loft_game_html.log; exit 1; }
+	@echo "  [6/7] sanity-checking HTML output ..."
+	@test -f doc/brick-buster.html || { echo "    FAIL: doc/brick-buster.html not created"; exit 1; }
+	@size=$$(stat -c %s doc/brick-buster.html 2>/dev/null || stat -f %z doc/brick-buster.html); \
+	if [ $$size -lt 5000 ]; then \
+	    echo "    FAIL: doc/brick-buster.html is only $$size bytes (expected > 5000)"; exit 1; \
+	fi; \
+	grep -q "<!DOCTYPE html>" doc/brick-buster.html || { echo "    FAIL: missing DOCTYPE"; exit 1; }; \
+	grep -q "loft_start" doc/brick-buster.html || { echo "    FAIL: missing loft_start entry"; exit 1; }
+	@echo "  [7/7] Brick Buster ready."
+	@echo ""
+	@echo "    Open in your browser:"
+	@echo "      file://$$(pwd)/doc/brick-buster.html"
+	@echo ""
+	@echo "    Or serve locally:"
+	@echo "      make serve  →  http://localhost:8000/brick-buster.html"
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg

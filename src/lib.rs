@@ -27,6 +27,21 @@
     clippy::map_unwrap_or
 )]
 
+// W1.1 HTML export: when loft's own lib is compiled for
+// `wasm32-unknown-unknown` without the full `wasm` feature (the target
+// used by `loft --html`), the `print` opcode's `#rust` template calls
+// `loft_host_print` — a function the browser host is expected to
+// provide via the `loft_io` WASM import module.  Declare it here so
+// `src/fill.rs` (auto-generated) can reference it unqualified.  This
+// cfg is deliberately narrow so native builds, wasm32-wasip2 builds,
+// and the full-featured `wasm` feature all see their own branch of
+// the template.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+#[link(wasm_import_module = "loft_io")]
+unsafe extern "C" {
+    pub(crate) safe fn loft_host_print(ptr: *const u8, len: usize);
+}
+
 #[macro_use]
 pub mod diagnostics;
 pub mod base64;
