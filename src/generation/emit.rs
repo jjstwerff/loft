@@ -126,14 +126,30 @@ impl Output<'_> {
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
+                    // P86n: skip the `Str::new(...)` wrapper when the inner
+                    // expression is already a call to another text-returning
+                    // user function (returns `Str`) — wrapping would fail
+                    // type-checking as `Str::new(Str)`.  `#rust` template ops
+                    // (non-empty `rust`/`native`) and `Op*` special-cases
+                    // (dispatch.rs handles names beginning with `Op`) still
+                    // produce `&str` and need the wrap.
+                    let inner_already_str = matches!(
+                        &**val,
+                        Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
+                            && matches!(self.data.def(*d).returned, Type::Text(_))
+                            && self.data.def(*d).rust.is_empty()
+                            && self.data.def(*d).native.is_empty()
+                            && !self.data.def(*d).name.starts_with("Op")
+                    );
+                    let wrap_text = returns_text && !inner_already_str;
                     write!(w, "return ")?;
-                    if returns_text {
+                    if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
-                    if returns_text {
+                    if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
@@ -517,8 +533,20 @@ impl Output<'_> {
         // This replaces [expr, OpFreeText…, Return(Null)] with [OpFreeText…, Return(expr)]
         // so native code emits `return expr` rather than a dropped `expr` + `return ()`.
         // P117: also patch Type::Never blocks (unconditional return with cleanup).
+        // P86n: also patch `Type::Text` blocks when the enclosing function is
+        // a bounded-generic T-stub (name like `t_<len><Type>_<method>`).
+        // Their IR is produced by template specialisation and shows the same
+        // `[Call, OpFreeText(work), Return(Null)]` pattern at the top of the
+        // body block — without the patch, native codegen emits the Call as a
+        // discarded statement and returns STRING_NULL.
+        let fn_name = &self.data.def(self.def_nr).name;
+        let is_t_stub_text_body =
+            matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
         let patched_ops;
-        let operators: &[Value] = if is_void_block || matches!(bl.result, Type::Never) {
+        let operators: &[Value] = if is_void_block
+            || matches!(bl.result, Type::Never)
+            || is_t_stub_text_body
+        {
             patched_ops = self.patch_hoisted_returns(&bl.operators);
             &patched_ops
         } else {
