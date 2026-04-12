@@ -254,4 +254,30 @@ fn test_literal_to_ref_param() {
   pe_ref_fill([]);
 }
 
+// --- P85c: struct / enum / named fn inside a function body ---
+
+// @EXPECT_ERROR: 'struct' definitions must be at file scope
+fn test_p85c_struct_inside_fn() {
+  struct PeInner { pe_v: integer }
+  pe_x = 5;
+}
+
+// @EXPECT_ERROR: 'enum' definitions must be at file scope
+fn test_p85c_enum_inside_fn() {
+  enum PeInner { PeA, PeB }
+  pe_x = 5;
+}
+
+// @EXPECT_ERROR: 'fn' definitions must be at file scope
+fn test_p85c_named_fn_inside_fn() {
+  fn pe_inner() -> integer { 5 }
+  pe_x = 5;
+}
+
+// Regression: lambda expressions must NOT trigger the file-scope diagnostic.
+fn test_p85c_lambda_still_works() {
+  pe_f = fn(x: integer) -> integer { x * 2 };
+  assert(pe_f(5) == 10, "lambda works inside fn");
+}
+
 // --- Return path warnings ---
