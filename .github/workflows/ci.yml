@@ -130,3 +130,18 @@ jobs:
       # `make gallery` protects the demo grid.
       - name: make game
         run: make game
+
+      # Fail the PR if the committed doc/pkg/ or doc/brick-buster.html
+      # is stale relative to a fresh rebuild.  Pages serves main:/docs
+      # directly, so a stale bundle in the merge commit immediately
+      # breaks the deployed "Try it in the browser" link with the
+      # classic "Failed to grow table" LinkError.  This guard forces
+      # contributors to re-run `make gallery` / `make game` and commit
+      # the result before merging.
+      - name: Verify committed browser bundle matches rebuild
+        run: |
+          if ! git diff --exit-code -- doc/pkg/ doc/brick-buster.html; then
+            echo "::error::Committed doc/pkg/ or doc/brick-buster.html is out of date."
+            echo "Run 'make gallery && make game' locally and commit the result."
+            exit 1
+          fi
