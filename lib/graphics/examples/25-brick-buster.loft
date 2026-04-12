@@ -41,6 +41,9 @@ BALLOON_DELAY = 2.0;
 EXTEND_EXTRA = 60.0;
 START_ROWS = 5;
 MAX_BALLS = 3;
+// Fire-ball after-image trail length (frames).  Larger looks smoother
+// but draws more rects per frame; 10 gives a ~0.17 s tail at 60 fps.
+MAX_TRAIL = 10;
 MAX_PARTICLES = 48;
 PARTICLE_LIFE = 0.6;
 FLASH_DURATION = 0.3;
@@ -406,6 +409,18 @@ fn main() {
   br_pw = PADDLE_W_DEFAULT;
   br_extend_timer = 0.0;
   br_fire_timer = 0.0;
+  // Fire-ball trail — ring buffer of the ball's last MAX_TRAIL positions
+  // (one entry per frame a fire-ball was active).  Drawn behind the
+  // ball, shrinking and desaturating with age so the tail fades from
+  // hot orange to mid-grey and dissolves.
+  //   br_ft_x/y — captured top-left position
+  //   br_ft_age — 0 for the newest entry, incrementing toward MAX_TRAIL;
+  //               MAX_TRAIL (or above) means the slot is empty.
+  //   br_ft_head — next ring index to overwrite.
+  br_ft_x    = [for _ in 0..MAX_TRAIL { 0.0 }];
+  br_ft_y    = [for _ in 0..MAX_TRAIL { 0.0 }];
+  br_ft_age  = [for _ in 0..MAX_TRAIL { MAX_TRAIL }];
+  br_ft_head = 0;
   br_shield_on = false;
 
   // Paddle break-and-respawn state.
@@ -1205,6 +1220,43 @@ fn main() {
             2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
         }
       }
+    }
+
+    // Fire-ball trail maintenance: age existing entries each frame,
+    // and while a fire-ball is active capture the first live ball's
+    // current position into the ring buffer head.
+    for br_fti in 0..MAX_TRAIL {
+      if br_ft_age[br_fti] < MAX_TRAIL { br_ft_age[br_fti] += 1; }
+    }
+    if br_fire_timer > 0.0 {
+      for br_ftb in 0..MAX_BALLS {
+        if br_ball_on[br_ftb] == 1 {
+          br_ft_x[br_ft_head]   = br_ball_x[br_ftb];
+          br_ft_y[br_ft_head]   = br_ball_y[br_ftb];
+          br_ft_age[br_ft_head] = 0;
+          br_ft_head = (br_ft_head + 1) % MAX_TRAIL;
+          break;
+        }
+      }
+    }
+    // Draw the fire trail FIRST so the live ball renders on top.
+    // Oldest entries (age nearing MAX_TRAIL) shrink, desaturate and
+    // fade — no blur primitive so the "dissolve" is alpha × scale.
+    for br_ftd in 0..MAX_TRAIL {
+      br_fta = br_ft_age[br_ftd];
+      if br_fta >= MAX_TRAIL { continue; }
+      br_trp = (br_fta as float) / (MAX_TRAIL as float);  // 0..1
+      // Orange → grey by lerping channels toward (0.3, 0.3, 0.3).
+      br_trr = 1.0 - br_trp * 0.7;
+      br_trg = 0.5 - br_trp * 0.2;
+      br_trb = 0.0 + br_trp * 0.3;
+      br_tra = 0.85 - br_trp * 0.7;
+      br_trsc = 1.0 - br_trp * 0.6;   // 1.0 newest → 0.4 oldest
+      br_trw = BALL_SIZE * br_trsc;
+      br_trox = br_ft_x[br_ftd] + (BALL_SIZE - br_trw) / 2.0;
+      br_troy = br_ft_y[br_ftd] + (BALL_SIZE - br_trw) / 2.0;
+      graphics::draw_rect_at(br_painter, br_trox, br_troy, br_trw, br_trw,
+        br_trr, br_trg, br_trb, br_tra);
     }
 
     // Balls — round sprite with a 4-frame squash animation.
