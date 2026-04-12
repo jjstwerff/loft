@@ -3075,10 +3075,9 @@ fn main() {
   l.parse_string("Texts", "\"123\" + '4'");
   assert(l.constant_text() == "123", "Incorrect text literal");
   assert(l.matches("+"), "Incorrect add");
-  assert(l.constant_character() == "123", "Incorrect text literal");
 ```
 
-The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
+P111: constant_character() returns a character, not text "123". This assert was passing only because char == text always returned true. TODO: fix the test to match actual constant_character() semantics. assert("{l.constant_character()}" == "123", "Incorrect text literal"); The lexer collects `//` comments automatically as it scans. You do not need to handle them yourself. `last_comment()` returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. `comment_behind()` is true when the comment appeared on the same line as the preceding token rather than on its own line above. `is_finished()` returns true once every token has been consumed.
 
 ```rust
   l.parse_string("Comments", "// starting comments\n123 // same line comment\n// extra comment\n4");
@@ -5472,6 +5471,10 @@ pub fn split(self: text, separator: character) -> vector < text >
 ```
 
 ```rust
+pub fn join(self: vector<text>, jn_sep: text) -> text
+```
+
+```rust
 pub fn starts_with(self: text, value: text) -> boolean
 ```
 
@@ -5813,6 +5816,12 @@ pub fn exists(path: text) -> boolean
 ```
 
 ```rust
+pub fn exists(both: File) -> boolean
+```
+
+Method form: f = file("path"); if f.exists() { ... } Also callable as exists(file\_obj) via the 'both' parameter name.
+
+```rust
 pub fn delete(path: text) -> FileResult
 ```
 
@@ -5854,7 +5863,7 @@ pub fn env_variable(name: text) -> text
 
 Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.
 
-Functions for interacting with the host operating system. Returns the command-line arguments passed to the program. The first element is typically the program name.
+Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
 
 ```rust
 pub fn arguments() -> vector < text >
@@ -5877,6 +5886,12 @@ pub fn program_directory(v:  & text = "") -> text
 ```
 
 Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.
+
+```rust
+pub fn source_dir() -> text
+```
+
+Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.
 
 == Time
 

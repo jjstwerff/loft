@@ -86,6 +86,7 @@ const SEARCH_INDEX=[
 {name:"size",kind:"fn",url:"stdlib-text.html"},
 {name:"len",kind:"fn",url:"stdlib-text.html"},
 {name:"split",kind:"fn",url:"stdlib-text.html"},
+{name:"join",kind:"fn",url:"stdlib-text.html"},
 {name:"starts_with",kind:"fn",url:"stdlib-text.html"},
 {name:"ends_with",kind:"fn",url:"stdlib-text.html"},
 {name:"trim",kind:"fn",url:"stdlib-text.html"},
@@ -138,6 +139,7 @@ const SEARCH_INDEX=[
 {name:"path_sep",kind:"fn",url:"stdlib-file-system.html"},
 {name:"file",kind:"fn",url:"stdlib-file-system.html"},
 {name:"exists",kind:"fn",url:"stdlib-file-system.html"},
+{name:"exists",kind:"fn",url:"stdlib-file-system.html"},
 {name:"delete",kind:"fn",url:"stdlib-file-system.html"},
 {name:"move",kind:"fn",url:"stdlib-file-system.html"},
 {name:"mkdir",kind:"fn",url:"stdlib-file-system.html"},
@@ -151,6 +153,7 @@ const SEARCH_INDEX=[
 {name:"directory",kind:"fn",url:"stdlib-environment.html"},
 {name:"user_directory",kind:"fn",url:"stdlib-environment.html"},
 {name:"program_directory",kind:"fn",url:"stdlib-environment.html"},
+{name:"source_dir",kind:"fn",url:"stdlib-environment.html"},
 {name:"now",kind:"fn",url:"stdlib-time.html"},
 {name:"ticks",kind:"fn",url:"stdlib-time.html"}
 ];

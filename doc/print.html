@@ -1157,9 +1157,8 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
 <p><code>constant_text()</code> reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). <code>constant_character()</code> reads a single-quoted character literal and returns it as text.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_character</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);</code></pre>
-<p>The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);</code></pre>
+<p>P111: constant_character() returns a character, not text "123". This assert was passing only because char == text always returned true. TODO: fix the test to match actual constant_character() semantics. assert("{l.constant_character()}" == "123", "Incorrect text literal"); The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
 <pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Comments"</span>, <span class="st">"// starting comments\n123 // same line comment\n// extra comment\n4"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">comment_behind</span>(), <span class="st">"Initial comment not behind"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"starting comments"</span>, <span class="st">"Initial comment"</span>);
@@ -2708,6 +2707,9 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn split(self: text, separator: character) -&gt; vector &lt; text &gt;</code></pre>
 </div>
 <div class="item">
+<pre><code>pub fn join(self: vector&lt;text&gt;, jn_sep: text) -&gt; text</code></pre>
+</div>
+<div class="item">
 <pre><code>pub fn starts_with(self: text, value: text) -&gt; boolean</code></pre>
 <p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).</p>
 </div>
@@ -2950,6 +2952,10 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn exists(path: text) -&gt; boolean</code></pre>
 </div>
 <div class="item">
+<pre><code>pub fn exists(both: File) -&gt; boolean</code></pre>
+<p>Method form: f = file(&quot;path&quot;); if f.exists() { ... } Also callable as exists(file_obj) via the 'both' parameter name.</p>
+</div>
+<div class="item">
 <pre><code>pub fn delete(path: text) -&gt; FileResult</code></pre>
 </div>
 <div class="item">
@@ -2979,7 +2985,7 @@ for e in data#errors { log_warn(e) }
 <pre><code>pub fn env_variable(name: text) -&gt; text</code></pre>
 <p>Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.</p>
 </div>
-<p class="section-desc">Functions for interacting with the host operating system. Returns the command-line arguments passed to the program. The first element is typically the program name.</p>
+<p class="section-desc">Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.</p>
 <div class="item">
 <pre><code>pub fn arguments() -&gt; vector &lt; text &gt;</code></pre>
 </div>
@@ -2994,6 +3000,10 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn program_directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.</p>
+</div>
+<div class="item">
+<pre><code>pub fn source_dir() -&gt; text</code></pre>
+<p>Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.</p>
 </div>
 <h2 id="stdlib-time">Time</h2>
 <div class="item">
