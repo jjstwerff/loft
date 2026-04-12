@@ -51,9 +51,9 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 
 | ID    | Title                                                  | E  | Status |
 |-------|--------------------------------------------------------|----|--------|
-| G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | Planned |
+| G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | Partial — the brick grid + `level_brick(lv,r,c)` dispatcher in Brick Buster is the tilemap for that game; a generic `lib/tilemap` package is still open. |
 | ~~G5~~| ~~Audio: sound effect playback~~                       | S  | **Done** — rodio + audio_play_raw + chiptune synthesis |
-| G6    | Audio: background music with crossfade                 | S  | Planned (layer on G5) |
+| ~~G6~~| ~~Audio: background music with crossfade~~             | S  | **Done** — three-track rotating playlist with inter-track silence |
 | ~~W1.1~~| ~~Single-file HTML export~~                          | M  | **Done** — native WASM + asyncify + GL bridge |
 | G7.P  | 🌐 **Playable Brick Buster** — share link on itch.io        | S  | Ready (--html works) |
 
@@ -62,13 +62,13 @@ atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
 | ID    | Title                                                  | E  | Status |
 |-------|--------------------------------------------------------|----|--------|
 | ~~BK.1~~ | ~~Audio integration~~                              | S  | **Done** — brick/paddle/wall/pickup/life sounds |
-| BK.2  | Background music + low-volume mix during play          | S  | Planned |
-| BK.3  | Multiple hand-designed levels (5+) loaded from tilemaps | M | Planned |
-| BK.4  | Screen shake on brick break + life lost                | XS | Planned |
+| ~~BK.2~~ | ~~Background music~~                               | S  | **Done** — 3 early-Capcom tracks (Heroic / Determined / Calm) rotating with 4-s silences |
+| ~~BK.3~~ | ~~Hand-designed levels (5+)~~                      | M  | **Done** — 5 layouts via `level_brick` dispatcher, procedural fallback at 6+ |
+| ~~BK.4~~ | ~~Screen shake on brick break + life lost~~        | XS | **Done** — `br_shake_t/mag` applied via painter projection matrix |
 | ~~BK.5~~ | ~~Pause menu + restart~~                           | S  | **Done** — P to pause, SPACE to resume |
 | ~~BK.6~~ | ~~Title screen + game-over screen~~                | S  | **Done** — state machine with restart |
-| BK.7  | High-score persistence (file or localStorage in WASM)  | S  | Planned |
-| BK.8  | Polish pass on sprite atlas (better art, consistent style) | S | Planned |
+| ~~BK.7~~ | ~~High-score persistence~~                         | S  | **Done** — `.loft/brickbuster_score.txt` + `HI <n>` HUD row |
+| ~~BK.8~~ | ~~Sprite-atlas polish pass~~                       | S  | **Done** — cel-shaded outlines, round ball with velocity-directional squash, hearts, Roman-numeral levels, balloon projectile, fireball after-images |
 
 ### Language fixes (all completed)
 

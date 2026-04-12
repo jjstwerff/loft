@@ -468,7 +468,10 @@ fn main() {
     br_ln = br_tl + 1;
     br_rn = roman(br_ln);
     br_lvl_tex[br_tl]     = graphics::create_text_texture(br_font, "LEVEL {br_rn}", 48.0, br_white);
-    br_lvl_num_tex[br_tl] = graphics::create_text_texture(br_font, br_rn,           20.0, br_white);
+    // Bake the HUD numeral at 28pt so single-character strings ("I",
+    // "V", "X") still have a chunky on-screen presence at the 28-px
+    // draw height below.
+    br_lvl_num_tex[br_tl] = graphics::create_text_texture(br_font, br_rn,           28.0, br_white);
   }
 
   // "SCORE" label
@@ -1790,10 +1793,13 @@ fn main() {
     // pre-baked "LEVEL <n>" texture is used during the level-pause
     // fade below; here we use a separate tighter texture that holds
     // just the numeral so the centred HUD element stays compact.
+    // Drawn at 28 px to match the baked font size so single-character
+    // numerals ("I", "V", "X") have readable width; wider numerals
+    // like "VIII" still fit inside the 72-px-wide box.
     br_lvli = br_level - 1;
     if br_lvli >= 0 && br_lvli < 20 && br_lvl_num_tex[br_lvli] != 0 {
       graphics::draw_texture_at(br_painter, br_lvl_num_tex[br_lvli],
-        SCREEN_W / 2.0 - 20.0, 6.0, 40.0, 20.0);
+        SCREEN_W / 2.0 - 36.0, 4.0, 72.0, 28.0);
     }
 
     // Atlas diagnostic overlay (toggled by the I cheat key).  Draws
