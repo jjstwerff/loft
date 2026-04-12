@@ -794,6 +794,38 @@ point.x
 arg.long.len()
 ```
 
+### Shared field names
+
+Field names are type-scoped, not globally unique.  Different structs and enum
+variants can share a field name — the compiler resolves the correct field by
+the type of the receiver:
+
+```loft
+struct Point { x: float, y: float }
+struct Rect { x: float, y: float, w: float, h: float }
+
+p = Point { x: 1.0, y: 2.0 };
+r = Rect { x: 10.0, y: 20.0, w: 30.0, h: 40.0 };
+p.x;   // 1.0 — Point's x
+r.x;   // 10.0 — Rect's x (different offset, same name)
+```
+
+This also works between struct-enum variants:
+```loft
+enum Shape {
+  Circle { radius: float, label: text },
+  Square { side: float, label: text }
+}
+c = Circle { radius: 5.0, label: "big" };
+s = Square { side: 3.0, label: "small" };
+c.label;  // "big"
+s.label;  // "small"
+```
+
+Verified: works in vectors (`pts[0].x`), function parameters, and across
+struct/enum boundaries.  See `tests/scripts/23-field-overlap-structs.loft`
+and `tests/scripts/24-field-overlap-enum-struct.loft`.
+
 ---
 
 ## Methods and function calls
@@ -809,6 +841,25 @@ Otherwise they are called as free functions:
 len(collection)
 round(PI * 1000.0)
 ```
+
+### The `both` parameter name
+
+When the first parameter is named `both` instead of `self`, the function is
+registered as **both** a method and a free function:
+
+```loft
+pub fn exists(both: File) -> boolean {
+  both.format != Format.NotExists
+}
+
+// Can be called as:
+f.exists()      // method syntax
+exists(f)       // free function syntax
+```
+
+Use `both` when a function should be equally natural as either form.
+`self` registers as a method only; a plain parameter name registers as a
+free function only.
 
 ### Named arguments
 
@@ -1108,24 +1159,151 @@ fn describe(self: Circle) -> text { }   // stub: returns null, no warning
 
 ---
 
-## Known Limitations
+## Interfaces and bounded generics
 
-A complete list with workarounds is in [PROBLEMS.md](PROBLEMS.md) at the repository root.
-The most commonly encountered limitations are summarised here.
+Interfaces declare a set of required methods.  A type satisfies an interface
+by defining the required methods — no `impl` declaration is needed (structural
+satisfaction, like Go interfaces):
 
-### Exit codes
+```loft
+interface Comparable {
+  fn less_than(self: Self, other: Self) -> boolean
+}
 
-`loft` exits with code 0 even when a parse error occurs. To detect failures in
-shell scripts, capture output and check for `Error:` or `panicked`:
-
-```sh
-out=$(loft myfile.loft 2>&1)
-if [ $? -ne 0 ] || echo "$out" | grep -q "^Error:\|panicked"; then
-    echo "FAILED: $out"
-fi
+struct Priority { value: integer }
+fn less_than(self: Priority, other: Priority) -> boolean {
+  self.value < other.value
+}
+// Priority now satisfies Comparable — no explicit declaration.
 ```
 
+Bounded generics use `<T: InterfaceName>` to constrain the type variable:
+
+```loft
+fn find_min<T: Comparable>(v: vector<T>) -> T {
+  result = v[0];
+  for item in v {
+    if item.less_than(result) { result = item; }
+  }
+  result
+}
+```
+
+Operator interfaces use `op` syntax:
+
+```loft
+interface Summable {
+  op + (self: Self, other: Self) -> Self
+}
+fn total<T: Summable>(a: T, b: T) -> T { a + b }
+total(10, 20);  // integer satisfies Summable automatically
+```
+
+Multiple bounds: `<T: Ordered + Printable>`.
+
+**Stdlib interfaces** (defined in `default/01_code.loft`): `Ordered`, `Equatable`,
+`Addable`, `Numeric`, `Scalable`, `Printable`.  Built-in types (`integer`, `float`,
+`text`) satisfy them automatically via their existing operator definitions.
+
+Bounded generics work with for-loops, method calls, and operator dispatch
+on all types including structs.
+
 ---
+
+## Design decisions and constraints
+
+A complete list of open issues is in [PROBLEMS.md](PROBLEMS.md).
+
+### Error handling: null + FileResult, no exceptions
+
+Loft uses two mechanisms instead of exceptions:
+
+**Null returns** for simple fallible operations — handled with `??`, `!`, or `if`:
+
+```loft
+name = config.get("user") ?? "anonymous";  // fallback
+f = file("data.txt");
+if !f.exists() { println("not found"); return; }   // guard
+clip = audio_load("hit.wav");
+if clip { audio_play(clip, 0.5); }         // graceful skip
+```
+
+**`FileResult` enum** for filesystem operations that need specific error reasons:
+
+```loft
+result = delete("temp.dat");
+if result == FileResult.NotFound { println("already gone"); }
+if result == FileResult.PermissionDenied { println("access denied"); }
+if !result.ok() { println("delete failed"); }
+```
+
+`FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
+`NotDirectory`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
+`set_file_size`.
+
+There are no hidden exception paths — every function's failure mode is visible
+at the call site.  `assert` and `panic` are for programmer errors (bugs), not
+expected failures.  In production mode (`--production`), failed asserts are
+logged instead of aborting.
+
+### Closure capture: copy-at-definition, mutable within copy
+
+Captured variables are copied into the closure at definition time (value semantics,
+like Rust `move`).  Mutations after capture are not visible inside the lambda, and
+mutations inside the lambda are not visible outside.  However, the closure's own
+copy persists across invocations:
+
+```loft
+counter = 0;
+inc = fn() -> integer { counter += 1; counter };
+inc();   // 1
+inc();   // 2
+inc();   // 3
+counter; // still 0 — outer variable unchanged
+```
+
+### Variable scoping: shared name table per file
+
+All functions in a `.loft` file share one variable name table.  In practice this
+works transparently — the compiler tracks which function each variable belongs to.
+Collisions only occur in specific codegen edge cases:
+
+- A function with `const vector<T>` parameters that calls itself recursively AND
+  contains a `for` loop may panic with "Too few parameters" (PROBLEMS.md #84).
+- Workaround: use function-prefixed loop variable names in library code
+  (e.g. `wu_x` for Wu line algorithm, `bz_t` for Bezier).
+
+Regular parameter and local variable reuse across functions works correctly.
+
+### Hash collections: struct fields only, no iteration
+
+Hash collections cannot be standalone local variables — wrap in a struct.
+Lookup and mutation work; iteration does not:
+
+```loft
+struct Table { data: hash<Entry[name]> }
+t = Table { data: [] };
+t.data += [Entry { name: "x", value: 1 }];
+e = t.data["x"];         // lookup — works
+t.data["x"] = null;      // remove — works
+for kv in t.data { }     // iteration — NOT supported
+```
+
+### Generics: single type variable
+
+Only one type variable `<T>` is allowed, inferred from the first argument.
+Multiple type variables (`<T, U>`) are not supported.
+
+**Without bounds:** only assign, return, and store are allowed on `T`.
+**With bounds (`<T: Interface>`):** method calls and operators declared
+in the interface are allowed on `T`.  See § Interfaces above.
+
+### Text: comprehensive operations
+
+The stdlib provides `starts_with`, `ends_with`, `find`, `contains`, `replace`,
+`trim`, `split(char)`, `join(separator)`, `to_uppercase`, `to_lowercase`,
+`len`, and slicing.  `split` and `join` are inverses:
+`"a,b,c".split(',').join(",") == "a,b,c"`.
 
 ## See also
 - [STDLIB.md](STDLIB.md) — Standard library API (math, text, collections, file I/O, logging, parallel)

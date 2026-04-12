@@ -478,6 +478,12 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                // n_parallel_for path does not propagate line_numbers; workers
+                // get function name + file but report line 0.  Fixing this
+                // requires threading line_numbers through ParallelCtx.
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
             },
         )
     };
@@ -566,6 +572,12 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                // n_parallel_for path does not propagate line_numbers; workers
+                // get function name + file but report line 0.  Fixing this
+                // requires threading line_numbers through ParallelCtx.
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
             },
             n_hidden,
         )
@@ -664,6 +676,12 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
                 bytecode,
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                // n_parallel_for path does not propagate line_numbers; workers
+                // get function name + file but report line 0.  Fixing this
+                // requires threading line_numbers through ParallelCtx.
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
             },
         )
     };
@@ -929,24 +947,26 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
     let sf_size = u32::from(stores.size(sf_elm));
     let var_elm = stores.name("VarInfo");
     let var_size = u32::from(stores.size(var_elm));
-    // Fix #89: validate that hard-coded field offsets match the actual type layout.
-    debug_assert_eq!(
-        stores.position(sf_elm, "function"),
-        0,
-        "StackFrame.function offset mismatch"
-    );
-    debug_assert_eq!(
-        stores.position(sf_elm, "file"),
-        4,
-        "StackFrame.file offset mismatch"
-    );
-    debug_assert_eq!(
-        stores.position(sf_elm, "line"),
-        8,
-        "StackFrame.line offset mismatch"
-    );
-    // Field offset for `variables: vector<VarInfo>` on StackFrame.
-    let vars_field_pos = stores.position(sf_elm, "variables");
+    // P89: look up every field position from the schema instead of hard-coding
+    // byte offsets.  If a future edit to `default/04_stacktrace.loft` reorders
+    // fields, renames them, or changes their type sizes, the lookups update
+    // automatically — no silent garbage at runtime.  A missing field name
+    // panics with a clear message in both debug and release.
+    let lookup = |field: &str| {
+        let p = stores.position(sf_elm, field);
+        assert_ne!(
+            p,
+            u16::MAX,
+            "StackFrame schema is missing field '{field}' — \
+             default/04_stacktrace.loft has drifted from src/native.rs::n_stack_trace"
+        );
+        u32::from(p)
+    };
+    let function_pos = lookup("function");
+    let file_pos = lookup("file");
+    let line_pos = lookup("line");
+    let arguments_pos = lookup("arguments");
+    let vars_field_pos = lookup("variables");
     let vec = stores.database(sf_size);
     stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
 
@@ -955,18 +975,22 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         let fn_str = stores.store_mut(&vec).set_str(fn_name.as_str());
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos, fn_str as i32);
+            .set_int(elm.rec, elm.pos + function_pos, fn_str as i32);
         let file_str = stores.store_mut(&vec).set_str(file.as_str());
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 4, file_str as i32);
+            .set_int(elm.rec, elm.pos + file_pos, file_str as i32);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 8, *line as i32);
+            .set_int(elm.rec, elm.pos + line_pos, *line as i32);
         // Explicitly zero arguments and variables so that reused (non-zeroed) store
         // blocks don't leave garbage data that looks like a valid first_block_rec.
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + arguments_pos, 0);
+        stores
+            .store_mut(&vec)
+            .set_int(elm.rec, elm.pos + vars_field_pos, 0);
 
         // TR1.4: build vector<VarInfo> for this frame from the snapshot.
         if let Some(frame_vars) = vars_snapshot.get(frame_idx) {
@@ -974,7 +998,7 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
                 stores,
                 &vec,
                 elm.rec,
-                elm.pos + u32::from(vars_field_pos),
+                elm.pos + vars_field_pos,
                 var_size,
                 frame_vars,
             );
@@ -1016,9 +1040,22 @@ fn populate_frame_variables(
         .store_mut(sf_vec)
         .set_int(parent_rec, vars_field_abs, inner_rec as i32);
 
-    let name_pos = stores.position(var_elm, "name");
-    let type_pos = stores.position(var_elm, "type_name");
-    let val_pos = stores.position(var_elm, "value");
+    // P89: schema-driven field position lookup.  A typo or rename in
+    // default/04_stacktrace.loft surfaces as a clear panic instead of a
+    // silent write to byte 65535.
+    let lookup = |tp: u16, ty_name: &str, field: &str| {
+        let p = stores.position(tp, field);
+        assert_ne!(
+            p,
+            u16::MAX,
+            "{ty_name} schema is missing field '{field}' — \
+             default/04_stacktrace.loft has drifted from src/native.rs"
+        );
+        p
+    };
+    let name_pos = lookup(var_elm, "VarInfo", "name");
+    let type_pos = lookup(var_elm, "VarInfo", "type_name");
+    let val_pos = lookup(var_elm, "VarInfo", "value");
 
     // ArgValue variant types (resolve once).
     let bool_tp = stores.name("BoolVal");
@@ -1031,17 +1068,17 @@ fn populate_frame_variables(
     let ref_tp = stores.name("RefVal");
     let other_tp = stores.name("OtherVal");
 
-    let bool_b_pos = stores.position(bool_tp, "b");
-    let int_n_pos = stores.position(int_tp, "n");
-    let long_n_pos = stores.position(long_tp, "n");
-    let float_f_pos = stores.position(float_tp, "f");
-    let single_f_pos = stores.position(single_tp, "f");
-    let char_c_pos = stores.position(char_tp, "c");
-    let text_t_pos = stores.position(text_tp, "t");
-    let ref_store_pos = stores.position(ref_tp, "store");
-    let ref_rec_pos = stores.position(ref_tp, "rec");
-    let ref_pos_pos = stores.position(ref_tp, "pos");
-    let other_desc_pos = stores.position(other_tp, "description");
+    let bool_b_pos = lookup(bool_tp, "BoolVal", "b");
+    let int_n_pos = lookup(int_tp, "IntVal", "n");
+    let long_n_pos = lookup(long_tp, "LongVal", "n");
+    let float_f_pos = lookup(float_tp, "FloatVal", "f");
+    let single_f_pos = lookup(single_tp, "SingleVal", "f");
+    let char_c_pos = lookup(char_tp, "CharVal", "c");
+    let text_t_pos = lookup(text_tp, "TextVal", "t");
+    let ref_store_pos = lookup(ref_tp, "RefVal", "store");
+    let ref_rec_pos = lookup(ref_tp, "RefVal", "rec");
+    let ref_pos_pos = lookup(ref_tp, "RefVal", "pos");
+    let other_desc_pos = lookup(other_tp, "OtherVal", "description");
 
     for (i, vs) in frame_vars.iter().enumerate() {
         let inline_pos = 8 + (i as u32) * var_elm_size;

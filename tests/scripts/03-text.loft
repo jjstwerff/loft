@@ -190,6 +190,17 @@ fn main() {
   assert(len(words) == 3, "split by space: len={len(words)}");
   assert(words[0] == "one", "split by space [0]={words[0]}");
   assert(words[2] == "three", "split by space [2]={words[2]}");
+  // --- join ---
+  jn_abc = ["a", "b", "c"];
+  assert(jn_abc.join(",") == "a,b,c", "join comma");
+  assert(jn_abc.join(" ") == "a b c", "join space");
+  assert(jn_abc.join("") == "abc", "join empty sep");
+  jn_one = ["only"];
+  assert(jn_one.join(",") == "only", "join single element");
+  jn_empty: vector<text> = [];
+  assert(jn_empty.join(",") == "", "join empty vector");
+  // roundtrip: split then join recovers original
+  assert("x-y-z".split('-').join("-") == "x-y-z", "split/join roundtrip");
   // --- A8: destination-passing — assign result to variable ---
   s = "Hello World";
   lo = s.to_lowercase();

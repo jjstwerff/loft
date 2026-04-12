@@ -115,8 +115,8 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 | W-warn developer warnings | Clippy-inspired diagnostics |
 | AOT auto-compile libraries | Native shared libs without manual `cargo build` |
 | C52 stdlib name clash + `std::` prefix | Naming hygiene |
-| C53 match arms with library enums + bare names | Match ergonomics |
-| **P127** file-scope vector constants | Already has a reproducer test (`#[ignore]`d); needs Var-index remapping fix |
+| ~~C53 match arms with library enums + bare names~~ | **Done** — `tests/imports.rs::match_accepts_library_enum_variants` |
+| ~~**P127** file-scope vector constants~~ | **Done** — pre-built in CONST_STORE via `OpConstRef`; both reproducers pass |
 | **Verify P117** | Re-test the original `file()` pattern with `LOFT_STORES=warn` |
 | **Verify P120** | Re-run the full GL example suite end-to-end on a display |
 | **Verify P121** | Debug-build valgrind pass over `tests/scripts/50-tuples.loft` |

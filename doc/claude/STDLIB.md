@@ -147,6 +147,7 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 | `trim_start(self: text) -> text` | Removes leading whitespace only. |
 | `trim_end(self: text) -> text` | Removes trailing whitespace only. |
 | `split(self: text, separator: character) -> vector<text>` | Splits `self` on every occurrence of `separator` and returns the parts as a vector. |
+| `join(self: vector<text>, separator: text) -> text` | Concatenates all elements of `self` with `separator` between each pair. Inverse of `split`. |
 
 ### Iterating over text
 
@@ -361,6 +362,7 @@ Mutating filesystem operations return a `FileResult` enum:
 |----------|-------------|
 | `ok(self: FileResult) -> boolean` | Returns `true` if `Ok`. |
 | `exists(path: text) -> boolean` | Returns `true` if the path exists and is inside the project. |
+| `exists(both: File) -> boolean` | Method form: `f.exists()` or `exists(f)`. Uses `both` parameter. |
 | `delete(path: text) -> FileResult` | Removes a file. |
 | `move(from: text, to: text) -> FileResult` | Renames or relocates a file within the project. |
 | `mkdir(path: text) -> FileResult` | Creates a single directory level. |

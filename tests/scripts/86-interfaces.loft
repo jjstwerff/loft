@@ -1,0 +1,98 @@
+// Interface / bounded generics tests.
+// Tests I1-I8: declaration, bounds, satisfaction, method/operator dispatch.
+
+// ── Custom interface declarations ─────────────────────────────────────
+
+interface Labelable {
+  fn to_label(self: Self) -> text
+}
+
+interface Validatable {
+  fn is_valid(self: Self) -> boolean
+}
+
+interface Summable {
+  op + (self: Self, other: Self) -> Self
+}
+
+// ── Test types ────────────────────────────────────────────────────────
+
+struct IfItem { if_name: text, if_score: integer }
+fn to_label(self: IfItem) -> text { return self.if_name; }
+fn is_valid(self: IfItem) -> boolean { return self.if_score > 0; }
+
+// ── Bounded generic functions ─────────────────────────────────────────
+
+fn if_label<T: Labelable>(if_x: T) -> text {
+  return if_x.to_label();
+}
+
+fn if_describe<T: Labelable + Validatable>(if_x: T) -> text {
+  if if_x.is_valid() { return if_x.to_label(); }
+  return "invalid";
+}
+
+fn if_first<T: Labelable>(if_v: vector<T>) -> T {
+  return if_v[0];
+}
+
+fn if_pair_sum<T: Summable>(if_a: T, if_b: T) -> T {
+  return if_a + if_b;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────
+
+fn test_single_bound() {
+  if_it = IfItem { if_name: "widget", if_score: 5 };
+  assert(if_label(if_it) == "widget", "single bound method call");
+}
+
+fn test_multiple_bounds() {
+  if_it = IfItem { if_name: "valid", if_score: 10 };
+  assert(if_describe(if_it) == "valid", "multi bound valid");
+  if_bad = IfItem { if_name: "broken", if_score: 0 };
+  assert(if_describe(if_bad) == "invalid", "multi bound invalid");
+}
+
+fn test_bounded_vector_access() {
+  if_items = [IfItem { if_name: "first", if_score: 1 }, IfItem { if_name: "second", if_score: 2 }];
+  if_f = if_first(if_items);
+  assert(if_f.if_name == "first", "bounded vec access: {if_f.if_name}");
+}
+
+fn test_operator_interface_int() {
+  if_sum = if_pair_sum(10, 20);
+  assert(if_sum == 30, "int operator: {if_sum}");
+}
+
+fn test_operator_interface_float() {
+  if_fsum = if_pair_sum(1.5, 2.5);
+  assert(if_fsum == 4.0, "float operator: {if_fsum}");
+}
+
+// ── Stdlib interfaces ─────────────────────────────────────────────────
+
+fn if_max_pair<T: Ordered>(if_a: T, if_b: T) -> T {
+  if if_a > if_b { return if_a; }
+  return if_b;
+}
+
+fn test_stdlib_ordered_interface() {
+  assert(if_max_pair(3, 7) == 7, "ordered int");
+  assert(if_max_pair(9.0, 2.0) == 9.0, "ordered float");
+}
+
+// ── P136 fixed: for-loop + bounded method on struct ─────────────────
+fn if_count_valid<T: Validatable>(if_cv: vector<T>) -> integer {
+  if_cn = 0;
+  for if_ci in if_cv {
+    if if_ci.is_valid() { if_cn += 1; }
+  }
+  return if_cn;
+}
+
+fn test_bounded_for_loop_struct() {
+  if_loop_data = [IfItem { if_name: "a", if_score: 1 }, IfItem { if_name: "b", if_score: 0 }, IfItem { if_name: "c", if_score: 3 }];
+  assert(if_count_valid(if_loop_data) == 2, "bounded for-loop count");
+}
+// This crashes with use-after-free (P136). Uncomment when fixed.

@@ -845,3 +845,92 @@ fn p128_constant_with_type_annotation_parses() {
     code!("QUAD: vector<integer> = [1, 2, 3];\nfn test() {}");
     // No .error() calls — parses cleanly.
 }
+
+// ── P85b: User type/enum/struct shadowing a stdlib constant ─────────────────
+//
+// Defining a user type whose name collides with a stdlib constant (e.g.
+// `enum E { ... }` collides with `pub E = OpMathEFloat()`) used to produce
+// a compiler PANIC like `Cannot change returned type on [164]E to float
+// twice was E`.  Both `enum` and `struct` now emit a clear, actionable
+// diagnostic naming the conflicting definition's location.
+#[test]
+fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
+    let s = loft::platform::sep_str();
+    code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
+        "enum 'E' conflicts with a constant of the same name already defined \
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
+    ));
+}
+
+#[test]
+fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
+    let s = loft::platform::sep_str();
+    code!("struct E { n: integer }\nfn test() {}").error(&format!(
+        "struct 'E' conflicts with a constant of the same name already defined \
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
+    ));
+}
+
+#[test]
+fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
+    let s = loft::platform::sep_str();
+    code!("type E = integer;\nfn test() {}").error(&format!(
+        "type 'E' conflicts with a constant of the same name already defined \
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
+    ));
+}
+
+#[test]
+fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
+    let s = loft::platform::sep_str();
+    code!("E = 42;\nfn test() {}").error(&format!(
+        "constant 'E' conflicts with a constant of the same name already defined \
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
+    ));
+}
+
+// ── P85c: file-scope-only declarations rejected with a clean diagnostic ─────
+//
+// Putting `struct`, `enum`, `type`, `interface`, `use`, `pub`, or a named
+// `fn name(...)` inside a function body used to produce a cascade of
+// confusing errors (`Expect token =`, `Expect constants to be in upper case`,
+// `Syntax error: unexpected ...`).  parse_block now detects these keywords
+// at the statement boundary and emits a single clear diagnostic.  Lambdas
+// (`fn(args) { ... }`) are still allowed because they parse as expressions.
+#[test]
+fn p85c_struct_inside_fn_emits_diagnostic() {
+    code!("fn test() {\n  struct Inner { v: integer }\n  x = 5;\n}").error(
+        "'struct' definitions must be at file scope, not inside a function or block \
+         at p85c_struct_inside_fn_emits_diagnostic:2:9",
+    );
+}
+
+#[test]
+fn p85c_enum_inside_fn_emits_diagnostic() {
+    code!("fn test() {\n  enum Inner { A, B }\n  x = 5;\n}").error(
+        "'enum' definitions must be at file scope, not inside a function or block \
+         at p85c_enum_inside_fn_emits_diagnostic:2:7",
+    );
+}
+
+#[test]
+fn p85c_named_fn_inside_fn_emits_diagnostic() {
+    code!("fn test() {\n  fn inner() -> integer { 5 }\n  x = 5;\n}").error(
+        "'fn' definitions must be at file scope, not inside a function or block \
+         at p85c_named_fn_inside_fn_emits_diagnostic:2:11",
+    );
+}
+
+#[test]
+fn p85c_lambda_inside_fn_still_works() {
+    // Regression guard: lambda expressions (`fn(args) { ... }`) must not
+    // trigger the file-scope-only diagnostic.
+    code!(
+        "fn test() {\n  f = fn(x: integer) -> integer { x * 2 };\n  \
+         assert(f(5) == 10, \"lambda\");\n}"
+    );
+}

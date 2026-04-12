@@ -219,6 +219,43 @@ t.data["x"] = null;   // remove entry
 
 ---
 
+## Interfaces and bounded generics
+
+```loft
+interface Comparable {
+  fn less_than(self: Self, other: Self) -> boolean
+}
+
+// Bounded generic — T must satisfy Comparable
+fn find_min<T: Comparable>(v: vector<T>) -> T { ... }
+
+// Operator interfaces use 'op' syntax
+interface Summable {
+  op + (self: Self, other: Self) -> Self
+}
+```
+
+Structural satisfaction: if the methods exist, the type satisfies the interface.
+No `impl` block needed. Built-in types satisfy `Ordered`, `Equatable`, `Addable`,
+`Numeric`, `Scalable`, `Printable` automatically.
+
+Bounded generics work with for-loops, method calls, and operator dispatch on all types.
+
+---
+
+## The `both` parameter name
+
+Name the first parameter `both` instead of `self` to register a function as
+both a method and a free function:
+
+```loft
+pub fn exists(both: File) -> boolean { both.format != Format.NotExists }
+// f.exists()  — method
+// exists(f)   — free function
+```
+
+---
+
 ## Operators
 
 | Precedence | Operators | Notes |
@@ -348,7 +385,7 @@ Rules to avoid codegen panics:
 - Never reuse the same loop variable name in a different function
 - Descriptive parameter names help avoid parameter collisions
 
-**Unused loop variable = exit 1.** If a loop variable is declared but never read, loft exits with code 1. Use `_` when the value is not needed. But `_` also participates in the flat namespace — if two functions both use `for _ in ...` and interact, use unique named variables instead.
+**Unused loop variable = exit 1.** If a loop variable is declared but never read, loft exits with code 1. Use `_` when the value is not needed. `_` can be reused across different element types within the same function — it automatically adapts its type.
 
 ### `const vector<T>` recursive call bug
 

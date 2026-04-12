@@ -145,6 +145,7 @@ static KEYWORDS: &[&str] = &[
     "fn",
     "type",
     "enum",
+    "interface",
     "pub",
     "and",
     "or",

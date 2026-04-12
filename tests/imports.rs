@@ -57,3 +57,19 @@ fn selective_import_of_unknown_name_is_error() {
         "Expected an error for importing nonexistent name 'nope'"
     );
 }
+
+/// C53: match arms accept bare and qualified library enum variants.
+#[test]
+fn match_accepts_library_enum_variants() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}match_lib_enum_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "Expected no errors; got: {:?}",
+        p.diagnostics.lines()
+    );
+}

@@ -34,11 +34,14 @@ runtime.  A compile-time error is emitted for basic usage.
 
 ---
 
-## C12 — No exception handling
+## C12 — No exception handling (by design)
 
-Runtime errors from `assert` and `panic` abort the program.  No `try`/`catch`.
+Loft uses null returns + `??` coalescing instead of exceptions.  Fallible
+operations return null; callers handle with `??`, `!`, or `if`.  `assert`
+and `panic` are for bugs, not expected failures.  Production mode logs
+asserts instead of aborting.
 
-**Workaround:** validate inputs; use `FileResult` for file I/O errors.
+**Pattern:** `value = fallible_call() ?? default;`
 
 ---
 
@@ -60,14 +63,13 @@ works.  No correctness impact — just wastes some stack space.
 
 ---
 
-## C53 — Match arms cannot use library enum variants
+## ~~C53~~ — Match arms with library enum variants — FIXED
 
-Match arms do not support `testlib::Ok` or bare `Ok` for library enums.
-Only same-file enum variants work in match patterns.
-
-**Workaround:** use if-else with `==` comparisons.
-**Test:** `tests/imports.rs` (library enum tests).
-**Docs:** [PLANNING.md](PLANNING.md) § C53.
+Match arms now accept bare (`Yay`), enum-qualified (`Status::Yay`), and
+library-qualified (`enumlib::Yay`) variant names.  When the bare name is
+not visible in the current source, the parser falls back to searching
+the matched enum's `children_of` by name.
+**Test:** `tests/imports.rs::match_accepts_library_enum_variants`.
 
 ---
 
@@ -83,20 +85,76 @@ check catches accidental sentinel collisions.
 
 ---
 
+## C57 — Nested file-scope-only declarations rejected with a clear diagnostic
+
+Putting `struct`, `enum`, `type`, `interface`, `use`, `pub`, or a named
+`fn name(...)` inside a function body produces a single, clear diagnostic:
+
+```
+Error: 'struct' definitions must be at file scope, not inside a function
+       or block at file.loft:2:9
+```
+
+Previously the same code triggered a cascade of confusing errors like
+`Expect token =`, `Expect constants to be in upper case`, and
+`Syntax error: unexpected ...`.
+
+Lambdas (`fn(args) { body }`) are unchanged — they parse as expressions
+so the file-scope check does not fire.
+
+**Workaround:** move the declaration to file scope.
+**Tests:** `tests/parse_errors.rs::p85c_struct_inside_fn_emits_diagnostic`
+plus three siblings (`_enum_`, `_named_fn_`, `_lambda_inside_fn_still_works`).
+
+---
+
+## C56 — Naming a user definition after a stdlib symbol is rejected with a clear diagnostic
+
+Defining a user `enum`, `struct`, `type`, or top-level constant whose
+identifier collides with a stdlib symbol (e.g. `E` from `pub E = OpMathEFloat()`,
+`PI`, `TAU`) produces a diagnostic naming the conflicting definition's
+location:
+
+```
+Error: enum 'E' conflicts with a constant of the same name already defined
+       at default/01_code.loft:383:24 — pick a different name
+```
+
+Previously the same code crashed the compiler — `enum`/`struct` panicked
+with `Cannot change returned type on [164]E to float twice was E`, and
+`type`/constant panicked with `Dual definition of E`.
+
+**Workaround:** rename the user definition (e.g. `MyE`, `Status`).
+**Tests:** `tests/parse_errors.rs::p85b_enum_shadowing_stdlib_constant_emits_diagnostic`
+plus three siblings (`_struct_`, `_type_`, `_constant_`).
+
+---
+
+## ~~C55~~ — Interface method in for-loop on struct vector (P136) — FIXED
+
+Fixed: `type_element_size` now computes struct field size from attributes,
+and `subst_type` preserves deps during generic specialisation.
+**Test:** `tests/scripts/86-interfaces.loft::test_bounded_for_loop_struct`.
+
+---
+
 ## Verification log
 
-Last retested: **2026-04-11** against commit `8761101` (consilidate branch).
+Last retested: **2026-04-12** against commit `d5c20fd` (main branch).
 
 | Caveat | Status | How verified |
 |--------|--------|-------------|
 | C3 | Still applies | Design constraint — WASM has no thread pool |
 | C7 | Still applies | `--tests 36-parse-errors.loft::test_spacial_not_implemented` → expected error |
-| C12 | Still applies | Design constraint — no `try`/`catch` syntax |
+| C12 | Still applies | Design choice — null + `??` instead of exceptions |
 | C38 | Still applies | `--tests 56-closures.loft::test_capture_timing` → passes |
 | C45 | Still applies | Slot allocator still text-only for zone-2 reuse |
 | ~~C51~~ | **Removed** | Native extensions now load via `extensions::load_all`; 15 native_loader tests pass |
-| C53 | Still applies | No library-enum match test exists; workaround documented |
-| C54 | **New** | Integer overflow debug panic — by design, documented |
+| ~~C53~~ | **Fixed** | `tests/imports.rs::match_accepts_library_enum_variants` covers bare/qualified library variants |
+| C54 | Still applies | Integer overflow debug panic — by design |
+| ~~C55~~ | **Fixed** | P136 — `type_element_size` + deps preservation |
+| C56 | Documented | Stdlib name collisions now emit a clean diagnostic instead of panicking |
+| C57 | Documented | Nested file-scope keywords now emit a single diagnostic instead of cascading errors |
 
 ---
 

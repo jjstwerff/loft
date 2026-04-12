@@ -1,0 +1,27 @@
+use enumlib::*;
+
+fn test() {
+  s = make();
+  // C53: bare variant from library wildcard import
+  r = match s {
+    Yay => "ok",
+    Boo => "boo",
+    _ => "other",
+  };
+  assert(r == "ok", "match library bare variant");
+
+  // C53: qualified Status::Yay
+  q = match s {
+    Status::Yay => "ok",
+    Status::Boo => "boo",
+    _ => "other",
+  };
+  assert(q == "ok", "match library qualified variant");
+
+  // C53: enumlib::Yay form
+  l = match s {
+    enumlib::Yay => "ok",
+    _ => "other",
+  };
+  assert(l == "ok", "match enumlib::Yay variant");
+}
