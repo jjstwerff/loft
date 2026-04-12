@@ -616,6 +616,24 @@ fn main() {
   br_last = ticks();
   br_lives = 3;
   br_score = 0;
+  // ── Background music (G6 / BK.2) ────────────────────────────────
+  // Two fixed 16-note patterns that alternate each phase:
+  //   mellow  — slower tempo, lower volume, descending arpeggios
+  //   upbeat  — faster tempo, brighter register, punchy rhythm
+  // Only plays during GS_PLAYING so menus stay quiet.  Notes are
+  // pushed through the existing sfx_beep synth; 0 means "rest".
+  MUSIC_MELLOW = [262, 330, 392, 523, 392, 330, 262, 0,
+                  294, 349, 440, 523, 440, 349, 294, 0];
+  MUSIC_UPBEAT = [523, 392, 659, 523, 784, 659, 523, 392,
+                  587, 440, 698, 587, 880, 698, 587, 440];
+  MUSIC_MELLOW_DUR = 0.32f;
+  MUSIC_UPBEAT_DUR = 0.16f;
+  MUSIC_MELLOW_VOL = 0.06f;
+  MUSIC_UPBEAT_VOL = 0.09f;
+  br_mus_t     = 0.0f;  // seconds until next note trigger
+  br_mus_idx   = 0;     // index into the active phase pattern
+  br_mus_phase = 0;     // 0 = mellow, 1 = upbeat
+  br_mus_count = 0;     // notes played in current phase; switch after 16
   // High-score persistence — load at boot, save on game-over or win
   // when the current run beat the stored value.  Kept beside the
   // other hidden state in `.loft/` next to the script so it doesn't
@@ -801,6 +819,37 @@ fn main() {
     // Level transition pause
     if br_level_timer > 0.0 {
       br_level_timer -= br_dt;
+    }
+
+    // Background-music sequencer — advances every frame while the
+    // game is actively playing and alternates between the mellow and
+    // upbeat patterns every 16 notes.  Gated to GS_PLAYING so menus,
+    // pauses, and the game-over screen stay silent.
+    if br_game_state == GS_PLAYING && !br_lost && br_level_timer <= 0.0 {
+      br_mus_t -= br_dt as single;
+      if br_mus_t <= 0.0f {
+        if br_mus_phase == 0 {
+          br_mnote = MUSIC_MELLOW[br_mus_idx];
+          if br_mnote > 0 {
+            graphics::sfx_beep(br_mnote as single, MUSIC_MELLOW_DUR, MUSIC_MELLOW_VOL);
+          }
+          br_mus_t = MUSIC_MELLOW_DUR;
+        } else {
+          br_mnote = MUSIC_UPBEAT[br_mus_idx];
+          if br_mnote > 0 {
+            graphics::sfx_beep(br_mnote as single, MUSIC_UPBEAT_DUR, MUSIC_UPBEAT_VOL);
+          }
+          br_mus_t = MUSIC_UPBEAT_DUR;
+        }
+        br_mus_idx += 1;
+        br_mus_count += 1;
+        if br_mus_idx >= 16 { br_mus_idx = 0; }
+        if br_mus_count >= 16 {
+          br_mus_count = 0;
+          br_mus_idx = 0;
+          br_mus_phase = if br_mus_phase == 0 { 1 } else { 0 };
+        }
+      }
     }
 
     if br_game_state == GS_PLAYING && !br_won && !br_lost && br_level_timer <= 0.0 {
