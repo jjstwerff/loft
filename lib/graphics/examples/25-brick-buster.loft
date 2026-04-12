@@ -222,22 +222,27 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_rect(32 + 12, 32 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
   at.hline(32 + 8, 32 + 24, 32 + 5, graphics::rgba(180, 220, 255, 120));
 
-  // S_HEART (14) at (64, 96) — lives icon, cel-shaded red heart.
-  // Two lobes + downward-pointing triangular body, drawn at full cell
-  // size so it still reads clearly at the 14-px HUD size.
-  at.fill_circle(64 +  9, 32 + 12, 8, ol);
-  at.fill_circle(64 + 23, 32 + 12, 8, ol);
-  at.fill_circle(64 +  9, 32 + 12, 7, graphics::rgba(230, 60, 70, 255));
-  at.fill_circle(64 + 23, 32 + 12, 7, graphics::rgba(230, 60, 70, 255));
-  // Triangular body: shrinking rows from y=17 down to the tip at y=26.
+  // S_HEART (14) — lives icon, cel-shaded red heart oriented with
+  // the point facing DOWN (standard heart).  Within-cell Y is
+  // mirrored because the canvas upload flips texture rows — so a
+  // sprite drawn with lobes at canvas-top would render with lobes at
+  // screen-bottom.  Here we put the lobes at canvas-bottom of the
+  // cell so they land at screen-top, giving a point-down heart.
+  at.fill_circle(64 +  9, 32 + 19, 8, ol);
+  at.fill_circle(64 + 23, 32 + 19, 8, ol);
+  at.fill_circle(64 +  9, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
+  at.fill_circle(64 + 23, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
+  // Triangular body: rows above the lobes, shrinking toward the tip
+  // (at canvas-top of cell = screen-bottom of the rendered sprite).
   for ht_i in 0..10 {
     ht_w = 14 - ht_i;
     ht_x = 64 + 16 - ht_w;
-    at.fill_rect(ht_x - 1, 32 + 17 + ht_i, 2 * ht_w + 2, 1, ol);
-    at.fill_rect(ht_x, 32 + 17 + ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
+    at.fill_rect(ht_x - 1, 32 + 14 - ht_i, 2 * ht_w + 2, 1, ol);
+    at.fill_rect(ht_x,     32 + 14 - ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
   }
-  // Highlight — small white glint on the upper-left lobe.
-  at.fill_circle(64 +  6, 32 + 9, 2, graphics::rgba(255, 210, 215, 200));
+  // Highlight — small white glint on the upper-left lobe (screen
+  // orientation), which is canvas-bottom-left after the Y-flip.
+  at.fill_circle(64 +  6, 32 + 22, 2, graphics::rgba(255, 210, 215, 200));
 
   // Ball frames — row 4, y=128.  Each sprite fills most of its 32x32
   // cell so that when rendered at BALL_SIZE (22 px) the visible ball
@@ -451,12 +456,19 @@ fn main() {
   // Intro text
   br_intro_tex = graphics::create_text_texture(br_font, "A / D  or  Arrow Keys to move", 28.0, br_white);
 
-  // "LEVEL N" textures — one per level.
-  br_lvl_tex = [for _ in 0..20 { 0 }];
+  // "LEVEL N" textures — one per level.  Two flavours:
+  //   br_lvl_tex      — full "LEVEL III" text used on the big
+  //                     level-transition fade.
+  //   br_lvl_num_tex  — just "III" at a smaller size, used in the
+  //                     top-middle HUD so the numeral is visible
+  //                     at a glance while playing.
+  br_lvl_tex     = [for _ in 0..20 { 0 }];
+  br_lvl_num_tex = [for _ in 0..20 { 0 }];
   for br_tl in 0..20 {
     br_ln = br_tl + 1;
     br_rn = roman(br_ln);
-    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_rn}", 48.0, br_white);
+    br_lvl_tex[br_tl]     = graphics::create_text_texture(br_font, "LEVEL {br_rn}", 48.0, br_white);
+    br_lvl_num_tex[br_tl] = graphics::create_text_texture(br_font, br_rn,           20.0, br_white);
   }
 
   // "SCORE" label
@@ -1759,12 +1771,14 @@ fn main() {
       graphics::draw_rect_at(br_painter, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0, 1.0);
     }
 
-    // HUD: level dots (top-center)
-    for br_lv in 0..br_level {
-      if br_lv < 10 {
-        graphics::draw_rect_at(br_painter,
-          370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5, 1.0);
-      }
+    // HUD: level — Roman numeral in the top middle.  The full
+    // pre-baked "LEVEL <n>" texture is used during the level-pause
+    // fade below; here we use a separate tighter texture that holds
+    // just the numeral so the centred HUD element stays compact.
+    br_lvli = br_level - 1;
+    if br_lvli >= 0 && br_lvli < 20 && br_lvl_num_tex[br_lvli] != 0 {
+      graphics::draw_texture_at(br_painter, br_lvl_num_tex[br_lvli],
+        SCREEN_W / 2.0 - 20.0, 6.0, 40.0, 20.0);
     }
 
     // Atlas diagnostic overlay (toggled by the I cheat key).  Draws
