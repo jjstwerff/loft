@@ -3,14 +3,14 @@
 
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-blue.svg)](LICENSE)
 
-[**▶ Try it in the browser**](https://jjstwerff.github.io/loft/playground.html) · [**🎮 Play Brick Buster**](https://jjstwerff.github.io/loft/gallery.html#25-brick-buster) · [**🖼 Graphics gallery**](https://jjstwerff.github.io/loft/gallery.html) · [**📘 Docs**](https://jjstwerff.github.io/loft/)
+[**▶ Try it in the browser**](https://jjstwerff.github.io/loft/playground.html) · [**🎮 Play Brick Buster**](https://jjstwerff.github.io/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://jjstwerff.github.io/loft/gallery.html) · [**📘 Docs**](https://jjstwerff.github.io/loft/)
 
 ---
 
 ## What can you actually make with it?
 
 <p align="center">
-  <a href="https://jjstwerff.github.io/loft/gallery.html#25-brick-buster">
+  <a href="https://jjstwerff.github.io/loft/brick-buster.html">
     <img src="doc/images/hero-brick-buster.png" alt="Brick Buster — a complete arcade game written in loft" width="640">
   </a>
 </p>
