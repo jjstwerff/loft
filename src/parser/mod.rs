@@ -329,8 +329,37 @@ impl Parser {
             self.lexer.switch(filename);
             self.parse_file();
         }
+        self.backfill_native_symbol_crates();
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// After both parse passes, every `#native "<sym>"` annotation should map
+    /// to its owning native package crate in `native_symbol_crates`.  If the
+    /// manifest was registered before the .loft source that declared the
+    /// native symbol was parsed, the original mapping pass in
+    /// `lib_path_manifest` / `register_native_manifest` saw no definitions
+    /// and left the symbol unmapped — which later surfaces as a `todo!()`
+    /// stub in the `--native` output and a runtime panic.
+    ///
+    /// Walk every definition once more: if it has a `#native` symbol not in
+    /// the map and exactly one native package is registered, bind the symbol
+    /// to that package.  With multiple packages we conservatively skip — the
+    /// original per-manifest passes have already matched the first-seen
+    /// symbols to their owners.
+    fn backfill_native_symbol_crates(&mut self) {
+        if self.data.native_packages.len() != 1 {
+            return;
+        }
+        let rust_crate = self.data.native_packages[0].0.replace('-', "_");
+        for d_nr in 0..self.data.definitions() {
+            let sym = self.data.def(d_nr).native.clone();
+            if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(&sym) {
+                self.data
+                    .native_symbol_crates
+                    .insert(sym, rust_crate.clone());
+            }
+        }
     }
 
     /// Parse `content` as if it were the file at `filename`.
@@ -2141,12 +2170,24 @@ impl Parser {
                 if search_dir.join("loft.toml").exists() {
                     if let Some(parent) = search_dir.parent() {
                         let candidate = parent.join(id).join("src").join(format!("{id}.loft"));
-                        if candidate.exists() {
-                            f = candidate.to_string_lossy().to_string();
+                        let chosen = if candidate.exists() {
+                            Some(candidate)
                         } else {
                             let flat = parent.join(format!("{id}.loft"));
-                            if flat.exists() {
-                                f = flat.to_string_lossy().to_string();
+                            flat.exists().then_some(flat)
+                        };
+                        if let Some(path) = chosen {
+                            f = path.to_string_lossy().to_string();
+                            // The sibling path resolves the file directly without
+                            // going through lib_path_manifest, so the target
+                            // package's loft.toml (one dir up from `src/`) would
+                            // otherwise never register its native crate — which
+                            // later leaves `#native` symbols unmapped and makes
+                            // `--native` emit `todo!()` stubs.
+                            let pkg_root = parent.join(id);
+                            let manifest = pkg_root.join("loft.toml");
+                            if manifest.exists() {
+                                self.register_native_manifest(&manifest, &pkg_root);
                             }
                         }
                     }
