@@ -368,278 +368,89 @@ Error: native function 'save_png' expects 2 parameters (Canvas, text)
 
 ## Package test suite
 
-### Directory convention
+Tests live in `tests/` alongside `src/` in the package root; each
+`.loft` file is a test module.  Zero-parameter functions named
+`test_*` (plus `main`) are discovered and run in isolation with a
+fresh `State` — same rules as `loft --tests` on the main project.
+The runner adds `src/` to the import path so `use graphics;` works,
+sets cwd to the package root for fixture paths, and honours
+`@EXPECT_FAIL` / `@EXPECT_ERROR` / `@EXPECT_WARNING` / `@IGNORE` /
+`@ARGS` annotations.
 
-Tests live in `tests/` alongside `src/`.  Each `.loft` file in `tests/`
-is a test module.  Functions named `fn test_*()` with zero parameters
-are discovered and run — same convention as `loft --tests` on the main
-project.
+### Layout
 
 ```
 graphics/
 ├── src/
-│   ├── graphics.loft
-│   ├── draw.loft
-│   └── math.loft
 ├── tests/
-│   ├── draw.loft           # tests for draw module
-│   ├── math.loft           # tests for math module
-│   ├── integration.loft    # cross-module tests
-│   └── fixtures/           # test data (PNG files, configs)
-│       └── reference.png
+│   ├── draw.loft
+│   ├── math.loft
+│   ├── integration.loft
+│   └── fixtures/           # PNG / text / binary test data
 ```
 
-### Running tests
+### Running
 
 ```bash
-# Run all tests in a package
-loft --tests graphics/tests
-
-# Run a single test file
-loft --tests graphics/tests/draw.loft
-
-# Run a single test function
+loft --tests graphics/tests                # interpreter
+loft --tests graphics/tests/draw.loft      # single file
 loft --tests graphics/tests/draw.loft::test_clear_canvas
-
-# Run tests via all backends
-loft --tests graphics/tests                      # interpreter
-loft --tests --native graphics/tests             # native
-loft --tests --native-wasm graphics/tests        # WASM (if wasmtime available)
+loft --tests --native graphics/tests       # native backend
+loft --tests --native-wasm graphics/tests  # WASM
 ```
 
-The `--tests` runner:
-1. Adds `src/` to the import search path so `use graphics;` works
-2. Loads the default library and the package's `.loft` files
-3. Discovers all `fn test_*()` functions in each test file
-4. Runs each in isolation with a fresh State (same as `loft --tests` today)
-5. Reports per-function pass/fail with `@EXPECT_FAIL`/`@EXPECT_ERROR` support
+Inside a package directory, `loft test` is shorthand for
+`loft --tests tests/` with `src/` on the lib path; accepts optional
+`<file>` or `<file>::<fn>` targets.  CI: `loft test` exits 0 on
+all-pass, 1 on any unexpected failure.
 
-### Manifest test configuration
+### Manifest config
 
 ```toml
 [test]
-# Extra directories added to lib search path during tests.
-# Useful when the package depends on other local packages.
-lib = ["../other-package/src"]
-
-# Files or patterns to skip (broken tests, platform-specific).
-skip = ["tests/webgl.loft"]
-
-# Timeout per test function (seconds). Default: 30.
-timeout = 10
+lib      = ["../other-package/src"]  # extra --lib dirs
+skip     = ["tests/webgl.loft"]      # files or patterns
+timeout  = 10                        # seconds per test (default 30)
+fixtures = "tests/fixtures"          # copied by `loft install`
 ```
 
-### Test file structure
+### Fixtures
 
-Test files import the package and use `assert`:
+Test data under `tests/fixtures/`.  Text via `file(...).lines()` or
+`.content()`; binary via `f#format = LittleEndian; f#read(n) as T`.
+Declare `fixtures = "tests/fixtures"` in `[test]` so `loft install`
+copies it alongside the source.
 
-```loft
-// tests/draw.loft
-use graphics;
-
-fn test_clear_canvas() {
-  canvas = Canvas { width: 10, height: 10 };
-  canvas.clear(0xFF000000);
-  assert(canvas.data[0] == 0xFF000000, "clear sets all pixels");
-  assert(canvas.data[99] == 0xFF000000, "clear sets last pixel");
-}
-
-fn test_draw_rect() {
-  canvas = Canvas { width: 100, height: 100 };
-  canvas.clear(0xFF000000);
-  draw_rect(canvas, 10, 10, 20, 20, 0xFFFF0000);
-  assert(canvas.data[10 * 100 + 10] == 0xFFFF0000, "top-left corner");
-  assert(canvas.data[5 * 100 + 5] == 0xFF000000, "outside rect unchanged");
-}
-```
-
-### Annotations
-
-Same annotation system as the main project's `tests/scripts/`:
-
-| Annotation | Effect |
-|---|---|
-| `// @EXPECT_FAIL: <text>` | Tolerate runtime panic matching `<text>` |
-| `// @EXPECT_ERROR: <text>` | Expect compile-time error matching `<text>` |
-| `// @EXPECT_WARNING: <text>` | Expect compiler warning matching `<text>` |
-| `// @IGNORE` | Skip this function or file |
-| `// @ARGS: --production` | Run with extra CLI flags |
-
-### Fixtures and test data
-
-Test data lives in `tests/fixtures/`.  The test runner sets the working
-directory to the package root so relative paths work directly.
-
-```
-tests/
-├── draw.loft
-├── math.loft
-└── fixtures/
-    ├── reference.png         # binary: expected render output
-    ├── terrain.txt           # text: map configuration
-    ├── vertices.bin          # binary: pre-computed mesh data
-    └── expected/
-        ├── clear_black.txt   # text: expected pixel dump
-        └── rect_red.txt      # text: expected pixel dump
-```
-
-#### Text fixtures
-
-Read with `file(...).lines()` or `file(...).content()`:
-
-```loft
-fn test_terrain_loading() {
-  lines = file("tests/fixtures/terrain.txt").lines();
-  assert(lines.len() > 0, "terrain file has content");
-  assert(lines[0] == "width=100", "first line is width");
-}
-
-fn test_pixel_dump_matches() {
-  canvas = Canvas { width: 4, height: 4 };
-  canvas.clear(0xFF000000);
-  expected = file("tests/fixtures/expected/clear_black.txt").content();
-  actual = canvas_to_text(canvas);
-  assert(actual == expected, "pixel dump matches reference");
-}
-```
-
-#### Binary fixtures
-
-Read with `f#format = LittleEndian` and `f#read(n) as T`:
-
-```loft
-fn test_load_binary_mesh() {
-  f = file("tests/fixtures/vertices.bin");
-  f#format = LittleEndian;
-  count = f#read(4) as i32;
-  assert(count == 36, "expected 36 vertices");
-  for vtx_i in 0..count {
-    vx = f#read(4) as single;
-    vy = f#read(4) as single;
-    vz = f#read(4) as single;
-    // verify data is in expected range
-    assert(vx >= -1.0f, "x in range");
-    assert(vx <= 1.0f, "x in range");
-  }
-}
-```
-
-#### Generating reference data
-
-Test functions can write reference data on first run, then compare
-on subsequent runs.  Use a helper pattern:
+**Update-or-compare pattern** for reference files:
 
 ```loft
 fn update_or_compare(path: text, actual: text) {
   ref = file(path);
   if ref#format == NotExists {
-    // First run: write the reference
-    {uc_f = file(path); uc_f += actual; uc_f += "\n";}
+    uc_f = file(path); uc_f += actual; uc_f += "\n";
   } else {
     expected = ref.content();
     assert(actual + "\n" == expected, "output differs from {path}");
   }
 }
-
-fn test_render_output() {
-  canvas = Canvas { width: 10, height: 10 };
-  draw_rect(canvas, 2, 2, 6, 6, 0xFFFF0000);
-  dump = canvas_to_hex(canvas);
-  update_or_compare("tests/fixtures/expected/small_rect.txt", dump);
-}
 ```
 
-On first run, `small_rect.txt` is created.  On subsequent runs, the
-output is compared against it.  To update references after an intentional
-change, delete the fixture files and re-run.
+First run writes the reference; later runs compare.  Delete the
+fixture to regenerate after an intentional change.
 
-#### Binary output comparison
-
-For binary formats (PNG), compare file size and a sample of bytes
-rather than exact equality (compression may vary):
-
-```loft
-fn test_png_round_trip() {
-  canvas = Canvas { width: 8, height: 8 };
-  canvas.clear(0xFFFF0000);
-  save_png(canvas, "tests/fixtures/actual.png");
-
-  actual = file("tests/fixtures/actual.png");
-  assert(actual#format != NotExists, "PNG written");
-  assert(actual#size > 50l, "PNG has header + data");
-  assert(actual#size < 500l, "PNG is reasonable size for 8x8");
-
-  // Read back and verify pixels
-  loaded = Image { };
-  loaded.png("tests/fixtures/actual.png");
-  assert(loaded.width == 8, "width preserved");
-  assert(loaded.height == 8, "height preserved");
-  assert(loaded.data[0].r == 255, "red channel preserved");
-
-  delete("tests/fixtures/actual.png");
-}
-```
-
-#### Fixture data in `loft.toml`
-
-Declare fixture directories so `loft install` includes them and
-`loft test` knows where to find them:
-
-```toml
-[test]
-fixtures = "tests/fixtures"
-```
-
-When `loft install` copies a package, `tests/` and `tests/fixtures/`
-are included so consumers can run the package's test suite to verify
-their installation works.
-```
-
-### `loft test` shorthand
-
-Inside a package directory, `loft test` is equivalent to
-`loft --tests tests/` with the package's `src/` on the lib path:
-
-```bash
-cd graphics/
-loft test              # runs all tests
-loft test draw         # runs tests/draw.loft
-loft test draw::test_clear_canvas  # single function
-```
-
-This is implemented as:
-1. Detect `loft.toml` in the current directory
-2. Read `[library] entry` to find `src/`
-3. Add `src/` to `--lib` search path
-4. Invoke `--tests tests/` (or the specified target)
-
-### CI integration
-
-Package authors add a test step to their CI:
-
-```yaml
-- name: Test loft package
-  run: |
-    loft test
-    loft test --native       # optional: also test native backend
-```
-
-The `loft test` command exits 0 on all-pass, 1 on any failure — standard
-CI-compatible exit codes.  `@EXPECT_FAIL` tests count as passes (the
-failure is expected).  Only unexpected failures cause exit 1.
+**Binary output** (PNGs, meshes): compare `f#size` bounds + re-load
+and inspect structural fields rather than byte-identity, since
+compression may vary across libraries.
 
 ### Test discovery rules
 
-| Pattern | Discovered? | Notes |
-|---|---|---|
-| `fn test_foo()` | Yes | Zero-param, name starts with `test_` or is `main` |
-| `fn helper(x: integer)` | No | Has parameters |
-| `fn main()` | Yes | Always an entry point |
-| `fn count() -> iterator<integer>` | No | Generator (returns iterator) |
-| `fn _internal()` | No | Starts with `_` (private helper) |
-
-Functions starting with `_` are skipped by convention — they're private
-helpers called by test functions but not entry points themselves.
+| Pattern | Discovered? |
+|---------|-------------|
+| `fn test_foo()` | yes (zero-param, `test_` prefix) |
+| `fn main()` | yes (always an entry point) |
+| `fn helper(x: integer)` | no — has parameters |
+| `fn count() -> iterator<integer>` | no — returns an iterator |
+| `fn _internal()` | no — leading `_` marks private helper |
 
 ---
 
