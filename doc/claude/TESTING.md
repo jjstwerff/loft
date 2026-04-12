@@ -702,18 +702,27 @@ tests/scripts/
   20-binary.loft           binary file I/O: typed reads/writes, endianness
   21-binary-ops.loft       binary operations: seek, set_size, incomplete read
   22-threading.loft        parallel_for: all return types, context args, methods, text
-  23-sizeof.loft           sizeof expressions and struct layout
-  24-immutability.loft     immutability constraints
-  25-null-coalescing.loft  null coalescing operator
+  23-field-overlap-structs.loft  field-offset overlap across structs
+  24-field-overlap-enum-struct.loft  field-offset overlap enum/struct
+  25-sorted-enum-variant-range.loft  sorted collection with enum keys
   26-dead-assignment.loft  dead assignment detection
   27-format-specifiers.loft  extended format specifiers
   28-references.loft       reference parameter semantics
   29-strings.loft          complex string operations
   30-expressions.loft      expression edge cases
-  31-vectors.loft          vector regressions and advanced cases
+  31-text-param.loft       text parameter handling
   32-collections-regressions.loft  collection regression tests
   33-lambdas-fn-refs.loft  bare function references, fn-ref dispatch
-  34-slot-assign.loft      slot assignment correctness
+  89-sizeof.loft           sizeof expressions and struct layout
+  90-immutability.loft     immutability constraints
+  91-null-coalescing.loft  null coalescing operator
+  92-vector-loop-push.loft loop-variable push into vector
+  93-vector-advanced.loft  vector regressions and advanced cases
+  94-block-copy-opt.loft   block-copy optimisation
+  95-alias-copy.loft       alias/copy semantics
+  96-slot-assign.loft      slot assignment correctness
+  97-native-vectors.loft   native-mode vector behaviour
+  98-struct-order-in-use.loft  struct declaration order across `use`
   35-format-errors.loft    format string error handling
   36-parse-errors.loft     parse error recovery
   37-stress.loft           build-and-free cycles; reads wordlist.txt
