@@ -140,8 +140,14 @@ jobs:
       # the result before merging.
       - name: Verify committed browser bundle matches rebuild
         run: |
-          if ! git diff --exit-code -- doc/pkg/ doc/brick-buster.html; then
+          # Use --quiet + --stat so we get a one-line summary rather than
+          # a full textual diff of the multi-MB base64-embedded
+          # doc/brick-buster.html, which blocks on the Actions log
+          # buffer.  --quiet returns non-zero on any diff.
+          if ! git diff --quiet -- doc/pkg/ doc/brick-buster.html; then
             echo "::error::Committed doc/pkg/ or doc/brick-buster.html is out of date."
+            echo "Changed files:"
+            git diff --stat -- doc/pkg/ doc/brick-buster.html
             echo "Run 'make gallery && make game' locally and commit the result."
             exit 1
           fi
