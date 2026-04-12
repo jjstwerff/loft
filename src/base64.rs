@@ -39,7 +39,7 @@ pub fn encode_url(data: &[u8]) -> String {
         .to_string()
 }
 
-#[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
+#[allow(clippy::cast_lossless)]
 #[must_use]
 pub fn decode(input: &str) -> Vec<u8> {
     fn val(c: u8) -> u8 {

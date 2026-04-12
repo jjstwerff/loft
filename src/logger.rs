@@ -6,9 +6,6 @@
 //! Distinct from `log_config.rs` (the compile/test trace framework):
 //! this module handles structured, file-based output from running loft code.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_wrap)]
 #![allow(dead_code)]
 
 use std::collections::HashMap;

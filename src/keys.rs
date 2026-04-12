@@ -11,9 +11,6 @@
 //! - [`Key`] / [`Content`] — typed keys and values for hash/sorted/index
 //!   collections, used by the collection lookup operators.
 
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::float_cmp)]
 #![allow(dead_code)]
 

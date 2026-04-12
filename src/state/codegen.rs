@@ -492,7 +492,6 @@ impl State {
     /// A plain branch only pushes 4 bytes (d_nr via OpConstInt); OpNullRefSentinel pads
     /// to 16 bytes.  For if-else, the sentinel must be emitted *inside* each branch so
     /// both paths reach the join point with the same stack delta.
-    #[allow(clippy::doc_markdown)]
     fn gen_fn_ref_value(&mut self, value: &Value, stack: &mut Stack) {
         if let Value::If(test, t_val, f_val) = value {
             self.generate(test, stack, false);

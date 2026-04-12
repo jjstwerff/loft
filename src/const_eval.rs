@@ -7,9 +7,7 @@
 //! `Some(literal)` when fully evaluable or `None` for runtime fallback.
 //! Conservative: any unrecognised pattern returns `None`.
 
-#![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(dead_code)] // used by parser (lib) and will be used by O8.1 optimisation
 
 use crate::data::{Data, Value};

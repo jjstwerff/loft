@@ -9,7 +9,6 @@
 // These structures are rather inefficient right now, but they are the basis
 // for a far more efficient database design later.
 #![allow(dead_code)]
-#![allow(clippy::cast_possible_truncation)]
 
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
 use crate::keys::Key;
@@ -1022,7 +1021,6 @@ impl Data {
     }
 
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // definition count is always < u32::MAX in practice
     pub fn definitions(&self) -> u32 {
         self.definitions.len() as u32
     }
@@ -1668,7 +1666,6 @@ impl Data {
         .to_string()
     }
 
-    #[allow(clippy::cast_possible_truncation)] // d_nr and a_nr are definition/attribute indices, always < u32::MAX
     pub fn find_unused(&self, diagnostics: &mut Diagnostics) {
         for (d_nr, def) in self.definitions.iter().enumerate() {
             if self.used_definitions.contains(&(d_nr as u32)) {

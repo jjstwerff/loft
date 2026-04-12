@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::checked_conversions)]
 
 use crate::keys;
@@ -241,7 +238,6 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
 }
 
 #[must_use]
-#[allow(clippy::cast_sign_loss)] // vec_rec is stored as i32 but is always a non-negative record index; negative values are structurally impossible
 pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
     if db.rec == 0 || db.pos == 0 {
         return 0;

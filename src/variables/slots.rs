@@ -22,10 +22,6 @@
 //! within the same scope.  Zone 2 variables are never reused because their
 //! large size makes overlap-checking expensive and the savings minimal.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-
 use crate::data::{Context, Type, Value};
 
 use super::{Function, size};

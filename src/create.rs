@@ -44,8 +44,6 @@ pub fn generate_lib(data: &Data) -> std::io::Result<()> {
     writeln!(
         into,
         "#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(non_snake_case)]
 use crate::database::Stores;
 use crate::keys::{{DbRef, Str}};
@@ -153,8 +151,6 @@ pub fn generate_code_into(data: &Data, into: &mut dyn Write) -> std::io::Result<
     writeln!(
         into,
         "#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(unused_parens)]
 
 use crate::codegen_runtime;

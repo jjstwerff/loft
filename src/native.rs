@@ -1,8 +1,5 @@
 //! Native function registry: Rust implementations of loft built-ins.
 //! Naming: `n_<name>` for globals, `t_<LEN><Type>_<method>` for methods.
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(non_snake_case)]
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};

@@ -4,8 +4,6 @@
 //! A radix tree implementation.
 //! This is especially useful for spacial indexes.
 #![allow(dead_code)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
 
 use crate::store::Store;
 

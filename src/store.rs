@@ -19,9 +19,6 @@
 //! Record 0 is the store header; record 1 (`PRIMARY`) is the main record
 //! describing vectors and indexes with sub-records.  A store may optionally
 //! be backed by a memory-mapped file (`mmap` feature).
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(clippy::checked_conversions)]
 
 #[cfg(feature = "mmap")]

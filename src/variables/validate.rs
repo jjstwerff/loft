@@ -4,8 +4,6 @@
 //! Slot validation and variable table dump: assert no overlapping live intervals,
 //! scope-parent analysis, and debug output.
 
-#![allow(clippy::cast_possible_truncation)]
-
 #[cfg(any(debug_assertions, test))]
 use crate::data::Value;
 use crate::data::{Context, Data, Type};
