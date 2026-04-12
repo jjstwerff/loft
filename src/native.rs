@@ -479,9 +479,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
                 data_ptr: ctx.data,
-                fn_positions: Arc::new(
-                    data.definitions.iter().map(|d| d.code_position).collect(),
-                ),
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
                 // n_parallel_for path does not propagate line_numbers; workers
                 // get function name + file but report line 0.  Fixing this
                 // requires threading line_numbers through ParallelCtx.
@@ -575,9 +573,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
                 data_ptr: ctx.data,
-                fn_positions: Arc::new(
-                    data.definitions.iter().map(|d| d.code_position).collect(),
-                ),
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
                 // n_parallel_for path does not propagate line_numbers; workers
                 // get function name + file but report line 0.  Fixing this
                 // requires threading line_numbers through ParallelCtx.
@@ -681,9 +677,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
                 library,
                 stack_trace_lib_nr: ctx.stack_trace_lib_nr,
                 data_ptr: ctx.data,
-                fn_positions: Arc::new(
-                    data.definitions.iter().map(|d| d.code_position).collect(),
-                ),
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
                 // n_parallel_for path does not propagate line_numbers; workers
                 // get function name + file but report line 0.  Fixing this
                 // requires threading line_numbers through ParallelCtx.

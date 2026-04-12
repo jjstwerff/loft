@@ -60,7 +60,6 @@ pub struct WorkerProgram {
     pub line_numbers: Arc<std::collections::BTreeMap<u32, u32>>,
 }
 
-
 // Safety: WorkerProgram is read-only after construction; Call is fn ptr (Send).
 unsafe impl Send for WorkerProgram {}
 unsafe impl Sync for WorkerProgram {}

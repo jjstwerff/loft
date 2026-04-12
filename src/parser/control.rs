@@ -110,7 +110,8 @@ impl Parser {
                 // distinguish `fn(args)` (lambda) from `fn name(args)`.
                 let link = self.lexer.link();
                 self.lexer.token("fn");
-                let is_named_fn = self.lexer.peek().has != crate::lexer::LexItem::Token("(".to_string());
+                let is_named_fn =
+                    self.lexer.peek().has != crate::lexer::LexItem::Token("(".to_string());
                 self.lexer.revert(link);
                 if is_named_fn { Some("fn") } else { None }
             } else {
@@ -498,11 +499,7 @@ impl Parser {
             let pattern_name = if self.lexer.has_token("::") {
                 let Some(vname) = self.lexer.has_identifier() else {
                     if !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "expect variant name after '::'"
-                        );
+                        diagnostic!(self.lexer, Level::Error, "expect variant name after '::'");
                     }
                     break;
                 };
@@ -632,11 +629,7 @@ impl Parser {
                 let next_name = if self.lexer.has_token("::") {
                     let Some(vname) = self.lexer.has_identifier() else {
                         if !self.first_pass {
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "expect variant name after '::'"
-                            );
+                            diagnostic!(self.lexer, Level::Error, "expect variant name after '::'");
                         }
                         break;
                     };
