@@ -1147,10 +1147,10 @@ a different frame in the animation cycle.
 - **`LIBGL_ALWAYS_SOFTWARE=1` makes things WORSE under Xvfb.** Without it,
   Mesa picks `swrast_dri.so` automatically; with it, the GL context fails
   to initialise and `gl_create_window` returns false.
-- **Some loft examples panic under Xvfb** (15 of 26 ran clean as of
-  2026-04-10; 11 panic with `Delete on locked store` — that's the **P120
-  use-after-free** still alive in real GL paths, despite the regression
-  guard tests passing).
+- ~~**Some loft examples panic under Xvfb with `Delete on locked store`.**~~
+  **Fixed** — the underlying P120 use-after-free is closed
+  (see `tests/issues.rs::p120_*` and CHANGELOG).  Retest on HEAD if a
+  similar panic reappears; it's a new bug, not P120.
 - ~~**RGB↔BGR channel swap in GL captures.**~~  **Fixed (P133)** —
   Xvfb + Mesa-swrast + ImageMagick `import` reads the framebuffer with
   R and B swapped.  On-screen rendering is correct; only captured PNGs

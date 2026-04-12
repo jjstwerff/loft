@@ -4,9 +4,9 @@
 
 # Interfaces — Design and Implementation Plan
 
-> **Status: implemented (I1–I9).  P136 fixed.**
-> Native codegen: text-returning interface methods have a Str wrapping issue
-> (86-interfaces skipped in native test suite).
+> **Status: implemented (I1–I9).**  P136 fixed; `tests/scripts/86-interfaces.loft`
+> covers the generics+for-loop+struct vector case in both interpreter and
+> native-compiled suites.
 
 Structural interfaces for loft: implicit satisfaction, static dispatch only.
 Primarily motivated by enabling bounded generic functions (`<T: Ordered>`).
