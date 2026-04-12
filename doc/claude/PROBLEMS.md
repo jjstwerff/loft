@@ -296,32 +296,49 @@ after modifying a dependency version) and run
 **Symptom:** codegen panics from `src/state/codegen.rs:922`:
 
 ```
-[gen_set_first_at_tos] '_vector_3' in 'n_main': slot=363 but TOS=362
+[gen_set_first_at_tos] '_vector_3' in 'n_main': slot=N but TOS=N-1
 — caller must ensure TOS matches the variable's slot before calling
 ```
 
-**Reproducer:** with `tests/scripts/05-enums.loft`, rename both
-`for d in dirs` loops to different identifiers (e.g. `for _ in dirs`
-in the counter loop and `for elem in dirs` in the collector loop).
-The resulting internal-variable count triggers the mismatch.  The
-original file sidesteps it by the specific layout its current names
-produce.
+**Minimal reproducer** (plain enum + vector + same-typed
+cross-variable assignment inside a for-loop body):
 
-**Root cause:** the slot allocator's `gen_set_first_at_tos` expects
-a specific TOS/slot alignment.  One of two things: (a) a `_vector_N`
-temp variable is being created in a place that doesn't advance TOS
-before the `set_first_at_tos` call, or (b) the assertion itself is
-too strict for a legitimate layout.  Needs a phase-B dump at the
-`_vector_3` creation site to decide which.
+```loft
+enum Dir { North, East, South, West }
+fn main() {
+    dirs = [North, East, South, West];
+    first_d = North;
+    for elem in dirs { first_d = elem; }
+}
+```
 
-**Why it matters now:** blocks the C61.local rename sweep (any
-scheme that touches multiple loop variables in one function risks
-tripping the bug).  It is latent in main today — no CI test
-exercises the triggering layout — but C61.local's fix is blocked
-on this one.
+Trips `slot=N but TOS=N-1` — slot > TOS by exactly 1 byte, matching
+the enum discriminant size.  An alignment gap the allocator reserved
+(for the vector temp `_vector_N`) that the TOS counter didn't advance
+through.
+
+**Not a simple "advance TOS" fix:** naïvely setting
+`stack.position = pos` in `gen_set_first_at_tos` (the mirror of the
+existing `pos < TOS` correction) makes the assert pass but produces
+garbage at runtime (`index out of bounds: the len is 4 but the
+index is 768`).  The padded byte isn't actually free — it's either
+initialised by a prior op the allocator expected to run or the
+slot was pre-assigned without accounting for the enum's 1-byte
+discriminant.
+
+**Real fix path:** phase-B dump at the `_vector_N` creation site —
+what op produces the slot offset?  what writes into the alignment
+gap?  The assert is only the symptom; the root is in either
+`src/variables/slots.rs` (slot pre-assignment not accounting for
+byte-sized discriminants) or one of the `OpNewVector*` emit sites.
+
+**Why it matters now:** blocks C61.local's stdlib rename sweep.
+Latent in main today — no CI exercises the triggering layout — but
+independently reproducible via the enum + for-loop snippet above.
 
 **Discovered:** 2026-04-12 during C61.local unconditional-reject
-attempt (commit b716d1d, reverted).
+attempt (commit b716d1d, reverted).  Narrowed 2026-04-12 via a
+5-line reproducer and a failed naïve fix.
 
 ---
 
