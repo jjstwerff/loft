@@ -350,6 +350,16 @@ fn main() {
   br_game_state = GS_TITLE;
   br_space_was_down = false;
   br_p_was_down = false;
+  // Cheat-key watchdog: if a cheat key was pressed but the expected
+  // game state change did not occur within the deadline, the game
+  // exits with an error.  Prevents a hung automated test from running
+  // to timeout when a cheat's side effects are broken.  expect==0
+  // means "no cheat active, don't check"; deadline is absolute µs.
+  br_watchdog_expect = 0;
+  br_watchdog_deadline = 0l;
+  br_cheat_k_was_down = false;
+  br_cheat_x_was_down = false;
+  br_cheat_u_was_down = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
   graphics::gl_enable(graphics::GL_BLEND);
@@ -363,6 +373,22 @@ fn main() {
     br_last = br_now;
     if br_dt > 0.05 { br_dt = 0.05; }
 
+    // Watchdog: a cheat key pressed earlier set br_watchdog_expect and
+    // br_watchdog_deadline.  If the expected state has been reached,
+    // clear the watchdog; otherwise, if the deadline passed, panic so
+    // automated tests fail loudly instead of hanging until timeout.
+    if br_watchdog_expect != 0 {
+      br_watchdog_cleared = false;
+      if br_watchdog_expect == 1 && br_game_state == GS_GAME_OVER { br_watchdog_cleared = true; }
+      if br_watchdog_expect == 2 && br_paddle_state != 0 { br_watchdog_cleared = true; }
+      if br_watchdog_expect == 3 && br_pk_on[0] == 1 { br_watchdog_cleared = true; }
+      if br_watchdog_cleared {
+        br_watchdog_expect = 0;
+      } else if br_now > br_watchdog_deadline {
+        panic("breakout watchdog: cheat {br_watchdog_expect} did not reach expected state within 2s");
+      }
+    }
+
     // BK.5/BK.6: Key edge detection (react on press, not hold)
     br_space_down = graphics::gl_key_pressed(32);
     br_space_pressed = br_space_down && !br_space_was_down;
@@ -371,6 +397,24 @@ fn main() {
     br_p_pressed = br_p_down && !br_p_was_down;
     br_p_was_down = br_p_down;
 
+    // Test cheat keys for headless snapshot testing (tests/scripts/
+    // gl_snapshots.tsv):
+    //   K (107)  — force game over from any state
+    //   X (120)  — trigger paddle-explosion phase (lose a life)
+    //   U (117)  — spawn all 8 pickups falling from the brick grid
+    // These are harmless in normal play — the keys are not bound to
+    // anything gameplay-related.  Edge-detected so holding a cheat key
+    // does not retrigger every frame.
+    br_cheat_k_down = graphics::gl_key_pressed(107);
+    br_cheat_k_pressed = br_cheat_k_down && !br_cheat_k_was_down;
+    br_cheat_k_was_down = br_cheat_k_down;
+    br_cheat_x_down = graphics::gl_key_pressed(120);
+    br_cheat_x_pressed = br_cheat_x_down && !br_cheat_x_was_down;
+    br_cheat_x_was_down = br_cheat_x_down;
+    br_cheat_u_down = graphics::gl_key_pressed(117);
+    br_cheat_u_pressed = br_cheat_u_down && !br_cheat_u_was_down;
+    br_cheat_u_was_down = br_cheat_u_down;
+
     // BK.5/BK.6: State transitions
     if br_game_state == GS_TITLE {
       if br_space_pressed { br_game_state = GS_PLAYING; }
@@ -378,6 +422,30 @@ fn main() {
     if br_game_state == GS_PLAYING {
       if br_p_pressed || graphics::gl_key_pressed(graphics::KEY_ESCAPE) {
         br_game_state = GS_PAUSED;
+      }
+      if br_cheat_k_pressed {
+        br_lost = true;
+        br_watchdog_expect = 1;        // expect GS_GAME_OVER
+        br_watchdog_deadline = br_now + 2000000l;  // 2s (ticks() is µs)
+      }
+      if br_cheat_x_pressed && br_paddle_state == 0 {
+        // Force paddle-explosion phase: kill all active balls so the
+        // normal "all balls lost" branch runs next frame.
+        for br_ck_bi in 0..3 { br_ball_on[br_ck_bi] = 0; }
+        br_watchdog_expect = 2;        // expect br_paddle_state != 0
+        br_watchdog_deadline = br_now + 2000000l;
+      }
+      if br_cheat_u_pressed {
+        // Spawn all 8 pickups, one of each type, distributed across the
+        // playfield width — covers the balloon / falling-powerup states.
+        for br_ck_pi in 0..8 {
+          br_pk_x[br_ck_pi] = (br_ck_pi as float + 0.5) * (SCREEN_W / 8.0) - PICKUP_W / 2.0;
+          br_pk_y[br_ck_pi] = 100.0 + (br_ck_pi as float) * 12.0;
+          br_pk_type[br_ck_pi] = 1 + (br_ck_pi % 7);
+          br_pk_on[br_ck_pi] = 1;
+        }
+        br_watchdog_expect = 3;        // expect br_pk_on[0] == 1
+        br_watchdog_deadline = br_now + 2000000l;
       }
       if br_lost { br_game_state = GS_GAME_OVER; }
     }
