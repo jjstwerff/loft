@@ -189,6 +189,14 @@ impl Parser {
                 ) => (),
                 _ => {
                     if !self.lexer.token(";") {
+                        // L1: recover to the next statement boundary or the
+                        // block end so a missing `;` doesn't cascade into
+                        // "Expect token }", "Expect constants to be in upper
+                        // case style", etc. on the following lines.
+                        if self.lexer.recover_to(&[";", "}"]) {
+                            self.lexer.has_token(";");
+                            continue;
+                        }
                         break;
                     }
                 }

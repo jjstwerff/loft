@@ -401,18 +401,27 @@ in a better state than it found it, with passing tests).
 
 ## L — Language Quality
 
-### L1  Error recovery after token failures
+### L1  Error recovery after token failures — **Partially done**
 **Sources:** [DEVELOPERS.md](../DEVELOPERS.md) § "Diagnostic message quality" Step 5
 **Severity:** Medium — a single missing `)` or `}` produces a flood of cascading errors
-**Description:** Add `Lexer::recover_to(tokens: &[&str])` that skips tokens until one
-of the given delimiters is found.  Call it after `token()` failures in contexts where
-cascading is likely: missing `)` skips to `)` or `{`; missing `}` skips to `}` at same
-brace depth; missing `=>` in match skips to `=>` or `,`.
-**Fix path:**
-1. Add `recover_to()` to `lexer.rs` — linear scan forward, stop at matching token or EOF.
-2. Modify `token()` to call `recover_to` with context-appropriate delimiters.
-3. Add tests that verify a single-error input produces at most 2 diagnostics.
-**Effort:** Medium (lexer.rs + parser call sites; needs per-construct recovery targets)
+
+`Lexer::recover_to(targets)` landed in `src/lexer.rs`: linear scan forward
+over the token stream, balances `{`/`(`/`[` and their closers so a target
+inside a nested group does not falsely terminate recovery.  The target is
+NOT consumed — the caller decides.
+
+Applied at the statement-boundary site in `src/parser/control.rs::parse_block`
+(after a failed `token(";")`) with targets `[";", "}"]`.  A missing `;`
+inside a function body now produces a single diagnostic instead of the
+previous 4-error cascade.
+**Tests:** `tests/parse_errors.rs::l1_missing_semicolon_single_diagnostic`,
+`l1_missing_semicolon_in_body_single_diagnostic`.
+
+**Remaining work:** apply `recover_to` at other cascading-prone call sites
+— `parse_arguments::token(")")`, `parse_block::token("}")` at block end,
+match-arm `token("=>")`, struct-literal `token(",")` after a missing field
+value.  Each is small but needs per-construct target lists.
+**Effort:** Small per site.
 **Target:** 0.9.0
 
 ---
