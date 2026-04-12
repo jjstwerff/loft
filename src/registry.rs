@@ -3,7 +3,7 @@
 
 //! Package registry — parse registry files, resolve versions, classify installed packages.
 
-#![allow(clippy::must_use_candidate, clippy::missing_errors_doc)]
+#![allow(clippy::missing_errors_doc)]
 
 use std::path::{Path, PathBuf};
 

@@ -5,8 +5,6 @@
 //!
 //! See `doc/claude/CONST_STORE.md` § Bytecode Cache for the design.
 
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::keys::DbRef;
 use crate::sha256;
 use std::io::{Read, Write};

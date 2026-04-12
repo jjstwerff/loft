@@ -5,14 +5,21 @@
 
 const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-#[allow(clippy::cast_lossless)]
 #[must_use]
 pub fn encode(data: &[u8]) -> String {
     let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let b0 = u32::from(chunk[0]);
+        let b1 = if chunk.len() > 1 {
+            u32::from(chunk[1])
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            u32::from(chunk[2])
+        } else {
+            0
+        };
         let n = (b0 << 16) | (b1 << 8) | b2;
         result.push(CHARS[((n >> 18) & 63) as usize] as char);
         result.push(CHARS[((n >> 12) & 63) as usize] as char);
@@ -39,7 +46,6 @@ pub fn encode_url(data: &[u8]) -> String {
         .to_string()
 }
 
-#[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
 #[must_use]
 pub fn decode(input: &str) -> Vec<u8> {
     fn val(c: u8) -> u8 {
@@ -61,15 +67,15 @@ pub fn decode(input: &str) -> Vec<u8> {
         if chunk.len() < 2 {
             break;
         }
-        let n = (val(chunk[0]) as u32) << 18
-            | (val(chunk[1]) as u32) << 12
+        let n = u32::from(val(chunk[0])) << 18
+            | u32::from(val(chunk[1])) << 12
             | if chunk.len() > 2 {
-                (val(chunk[2]) as u32) << 6
+                u32::from(val(chunk[2])) << 6
             } else {
                 0
             }
             | if chunk.len() > 3 {
-                val(chunk[3]) as u32
+                u32::from(val(chunk[3]))
             } else {
                 0
             };

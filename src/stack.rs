@@ -8,8 +8,6 @@
 //! the position by the operator's net stack effect.  [`Loop`] records the
 //! stack depth at loop entry so `break`/`continue` can restore it.
 
-#![allow(clippy::cast_possible_truncation)]
-
 use crate::data::{Context, Data, Value};
 use crate::state::State;
 use crate::variables;

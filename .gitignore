@@ -20,3 +20,5 @@ test_scene_debug.loft
 # artefacts, never source code.
 .fuse_hidden*
 *.loftc
+.claude/scheduled_tasks.lock
+lib/graphics/native/libloft_graphics_native.so

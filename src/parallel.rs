@@ -7,9 +7,6 @@
 //! threads.  When `threading` is disabled (e.g. under WASM), the loop body runs
 //! sequentially in the caller's thread — same results, no parallelism.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-
 use crate::database::{Call, Stores, WorkerStores};
 use crate::keys::DbRef;
 use crate::state::State;

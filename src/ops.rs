@@ -13,9 +13,6 @@
 //! * `op_negate_X`       — unary negation (single operand; not a minimum-of-two).
 //! * `op_abs_X`          — absolute value.
 //! * `op_<verb>_X`       — binary arithmetic (`add`, `min`, `mul`, `div`, `rem`, …).
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(dead_code)]
 #[cfg(feature = "random")]

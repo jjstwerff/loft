@@ -242,8 +242,6 @@ impl Output<'_> {
     /// The variable `v_nr` holds a `u32` definition number at runtime.
     /// We enumerate all reachable definitions with a matching signature and
     /// generate a `match` dispatch.
-    #[allow(clippy::unnecessary_map_or)]
-    #[allow(clippy::collapsible_if)]
     fn output_call_ref(
         &mut self,
         w: &mut dyn Write,
@@ -281,10 +279,7 @@ impl Output<'_> {
             // A5.6g: closure-capturing lambdas have a hidden __closure param as the last
             // attribute. The closure is injected explicitly at the call site (in arg_exprs),
             // so total arg count must equal the full attribute count.
-            let has_closure = def
-                .attributes
-                .last()
-                .map_or(false, |a| a.name == "__closure");
+            let has_closure = def.attributes.last().is_some_and(|a| a.name == "__closure");
             let visible_attr_count = if has_closure {
                 def.attributes.len() - 1
             } else {

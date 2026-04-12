@@ -978,7 +978,6 @@ impl Lexer {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)] // r is validated to fit in i32 range (< i32::MAX) before the u64 → i32 cast
     fn ret_number(&mut self, r: u64, p: Position, start_zero: bool) -> LexResult {
         let max = i32::MAX as usize;
         if let Some('l') = self.iter.peek() {

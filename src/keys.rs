@@ -11,10 +11,6 @@
 //! - [`Key`] / [`Content`] — typed keys and values for hash/sorted/index
 //!   collections, used by the collection lookup operators.
 
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::float_cmp)]
 #![allow(dead_code)]
 
 use crate::store::Store;
@@ -189,24 +185,12 @@ impl DbRef {
 
 #[inline]
 fn single_cmp(v1: f32, v2: f32) -> Ordering {
-    if v1 == v2 {
-        Ordering::Equal
-    } else if v1 < v2 {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    }
+    v1.total_cmp(&v2)
 }
 
 #[inline]
 fn float_cmp(v1: f64, v2: f64) -> Ordering {
-    if v1 == v2 {
-        Ordering::Equal
-    } else if v1 < v2 {
-        Ordering::Less
-    } else {
-        Ordering::Greater
-    }
+    v1.total_cmp(&v2)
 }
 
 #[must_use]

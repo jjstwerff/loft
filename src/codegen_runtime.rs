@@ -16,9 +16,6 @@
 //! interpreter or test suite directly.
 #![allow(dead_code)]
 #![allow(non_snake_case)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
 
 use crate::database::{ShowDb, Stores};
 use crate::keys::{Content, DbRef, Key, Str};
@@ -175,7 +172,6 @@ pub fn OpGetRecord(
 /// Bytecode equivalent: `State::get_text_sub` in `src/state/text.rs`.
 #[must_use]
 pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
-    #![allow(clippy::cast_possible_wrap)]
     let bytes = text.as_bytes();
     let len = bytes.len() as i32;
     if from < 0 || from >= len {
@@ -408,10 +404,7 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             let mut pos = if cur == u32::MAX {
                 i32::MAX
             } else {
-                #[allow(clippy::cast_possible_wrap)]
-                {
-                    cur as i32
-                }
+                cur as i32
             };
             if reverse {
                 vector::vector_step_rev(&data, &mut pos, all);
@@ -594,7 +587,6 @@ pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
 /// Open (or reuse) a file handle for writing.  Returns the index into
 /// `stores.files`, or `i32::MIN` on error.
 #[cfg(not(feature = "wasm"))]
-#[allow(clippy::cast_possible_wrap)]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
@@ -634,7 +626,6 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 /// Open (or reuse) a file handle for reading, seeking to `initial_pos`.
 /// Returns the index into `stores.files`, or `i32::MIN` on error.
 #[cfg(not(feature = "wasm"))]
-#[allow(clippy::cast_possible_wrap)]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
     let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
@@ -936,7 +927,6 @@ impl FileVal for DbRef {
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-#[allow(clippy::cast_possible_wrap)]
 pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db_tp: i32) {
     if file.rec == 0 {
         return;
@@ -980,7 +970,6 @@ pub fn OpWriteFile<T: FileVal>(_stores: &mut Stores, _file: DbRef, _val: &mut T,
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-#[allow(clippy::cast_possible_wrap)]
 pub fn OpReadFile<T: FileVal>(
     stores: &mut Stores,
     file: DbRef,
@@ -1288,7 +1277,6 @@ pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-#[allow(clippy::cast_possible_wrap)]
 pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     let count = if n == i32::MIN || n <= 0 {
         0usize
@@ -1332,7 +1320,6 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
 ///   `header_rec`, `pos=4` → `i32` pointing to `vec_rec`
 ///   `vec_rec`, `pos=4`    → element count (`n`)
 ///   `vec_rec`, `pos=8+i*S` → element `i`  (`S` = 4 int / 8 long+float / 1 bool bytes)
-#[allow(clippy::cast_possible_wrap)]
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,
@@ -1710,7 +1697,6 @@ pub fn fs_mkdir_all(path: &str) -> bool {
 /// Called in generated native code when `OpStoreClosure` appears in the IR,
 /// immediately before the fn-ref variable is stored.
 /// The closure is later retrieved by `OpGetClosure` in the match-dispatch arm.
-#[allow(clippy::doc_markdown)]
 pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
     stores.closure_map.insert(d_nr, closure);
 }
@@ -1719,7 +1705,6 @@ pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
 /// Called in generated native code inside match-dispatch arms for closure-capturing lambdas.
 /// Returns a null DbRef if no closure was registered for `d_nr`.
 #[must_use]
-#[allow(clippy::doc_markdown)]
 pub fn OpGetClosure(stores: &Stores, d_nr: u32) -> DbRef {
     stores.closure_map.get(&d_nr).copied().unwrap_or(DbRef {
         store_nr: 0,

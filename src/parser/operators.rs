@@ -1,8 +1,5 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
 
 use super::{
     Level, OPERATORS, Parser, Type, Value, diagnostic_format, rename, v_block, v_if, v_set,

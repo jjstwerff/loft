@@ -3,9 +3,6 @@
 
 //! Parse scripts and create internal code from it.
 //! Including type checking.
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
 
 use crate::data::{
     Argument, Context, Data, DefType, I32, Type, Value, to_default, v_block, v_if, v_loop, v_set,

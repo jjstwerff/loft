@@ -4,9 +4,6 @@
 //! Live-interval analysis: walk the IR tree and record first-def / last-use
 //! sequence numbers for every variable.
 
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-
 use crate::data::{Context, Type, Value};
 
 use super::{Function, size};

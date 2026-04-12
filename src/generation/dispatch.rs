@@ -752,11 +752,11 @@ impl Output<'_> {
                     }
                     self.output_code_inner(w, &vals[3])?;
                     // Build the extra arg list for the worker call inside the closure.
-                    #[allow(clippy::format_push_string)]
                     let extras = {
+                        use std::fmt::Write;
                         let mut s = String::new();
                         for i in 0..n_extra {
-                            s += &format!(", _ex{i}");
+                            write!(s, ", _ex{i}").unwrap();
                         }
                         s
                     };

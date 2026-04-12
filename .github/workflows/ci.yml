@@ -130,3 +130,15 @@ jobs:
       # `make gallery` protects the demo grid.
       - name: make game
         run: make game
+
+      # NOTE: we deliberately do NOT byte-compare the CI rebuild to
+      # the committed doc/pkg/ + doc/brick-buster.html.  Different
+      # rustc / wasm-opt versions produce non-bit-identical wasm even
+      # for identical source, so a strict diff check is
+      # non-deterministic across environments.  The real deploy-time
+      # protection lives in .github/workflows/release.yml's docs job
+      # (and, long-term, a main-push workflow that rebuilds and
+      # commits the bundle back).  What this CI job guarantees is
+      # that both pipelines *build* and every asset loads — which
+      # catches the common failure mode of a source change that
+      # breaks the browser pipeline without the contributor noticing.

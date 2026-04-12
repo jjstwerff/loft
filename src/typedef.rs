@@ -13,8 +13,6 @@
 //! - [`fill_all`] — allocate database stores for each struct/enum and
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
 
 use crate::data::{Data, DefType, I32, Type, Value};
 use crate::database::Stores;

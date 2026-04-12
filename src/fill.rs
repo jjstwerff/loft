@@ -1,6 +1,4 @@
 #![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_truncation)]
 #![allow(unused_parens)]
 
 use crate::codegen_runtime;

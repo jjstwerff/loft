@@ -1,8 +1,5 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
 
 use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_set};
 

@@ -566,7 +566,6 @@ extern crate loft;"
     /// Use this to emit only the `init` body that registers all types.
     /// Sorting by `known_type` ensures the runtime recreates type IDs in the same order
     /// as the compile-time database, keeping field indices consistent.
-    #[allow(clippy::cast_possible_truncation)]
     fn output_init(&mut self, w: &mut dyn Write, from: u32, till: u32) -> std::io::Result<()> {
         let mut type_defs: Vec<(u16, u32)> = Vec::new();
         for dnr in from..till {

@@ -1,9 +1,6 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //! Database operations on stores
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(dead_code)]
 
 mod allocation;
@@ -134,7 +131,6 @@ impl Debug for Content {
     }
 }
 
-#[allow(clippy::doc_markdown)]
 pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,

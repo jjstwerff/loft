@@ -1,8 +1,5 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
 
 use super::{
     Context, I32, Level, LexItem, OutputState, Parser, Parts, Type, Value, diagnostic_format,
@@ -1873,7 +1870,6 @@ use #count instead"
 
     /// Build the iteration preamble shared by `any`/`all`/`count_if`: copies the
     /// vector, creates an iterator, and returns the loop scaffolding.
-    #[allow(clippy::type_complexity)]
     fn predicate_loop_scaffold(
         &mut self,
         name: &str,

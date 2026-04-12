@@ -1,8 +1,6 @@
 // Copyright (c) 2023-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::cast_possible_wrap)]
 // Should be removed when actually in use
 #![allow(dead_code)]
 
