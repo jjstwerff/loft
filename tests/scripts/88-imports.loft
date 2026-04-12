@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @ARGS: --lib tests/lib
+//
+// Wildcard and selective import smoke tests — mirror of
+// tests/imports.rs, but exercised end-to-end through the script
+// runner so any regression in `use <lib>::*` / `use <lib>::name`
+// resolution surfaces here alongside the Rust-level assertions.
+//
+// The @ARGS line above points the test runner at tests/lib/ where
+// the `importlib.loft` fixture (already used by imports.rs) lives.
+
+use importlib::*;
+
+fn test_wildcard_brings_all_names() {
+  ia_r = add(1, 2);
+  ia_p = Point { x: 3, y: 4 };
+  assert(ia_r == 3, "add via wildcard: {ia_r}");
+  assert(ia_p.x == 3, "Point.x via wildcard: {ia_p.x}");
+  assert(ia_p.y == 4, "Point.y via wildcard: {ia_p.y}");
+}
+
+fn test_wildcard_mul_is_callable() {
+  ia_m = mul(6, 7);
+  assert(ia_m == 42, "mul via wildcard: {ia_m}");
+}
