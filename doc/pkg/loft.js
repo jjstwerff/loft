@@ -79,7 +79,7 @@ export function resume_frame() {
 }
 
 /**
- * W1.18-2: Entry point called by each Worker Thread.  The JS worker loop calls
+ * Entry point called by each Worker Thread.  The JS worker loop calls
  * this with the function index and element range.  The worker reads from the
  * shared WASM memory (Store heap) and writes results directly back.
  *
