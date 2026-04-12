@@ -223,8 +223,11 @@ serve:
 #   6. Sanity-check the output HTML: doctype + loft_start + > 5kB.
 #   7. Print the file:// URL so the user can click through.
 game:
-	@echo "  [1/7] building host binary ..."
-	@cargo build --release -q --bin loft || { echo "    FAIL: host cargo build"; exit 1; }
+	@echo "  [1/7] building host binary + libloft.rlib ..."
+	@# `--bin loft` alone does not always produce the top-level
+	@# libloft.rlib that step 4 requires for proc-macro lookup;
+	@# building both explicitly guarantees both artefacts exist.
+	@cargo build --release -q --lib --bin loft || { echo "    FAIL: host cargo build"; exit 1; }
 	@echo "  [2/7] checking wasm32-unknown-unknown target ..."
 	@rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown || { \
 	    echo "    FAIL: rustup target not installed"; \
