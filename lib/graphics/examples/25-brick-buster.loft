@@ -45,7 +45,7 @@ GS_PLAYING = 1;
 GS_PAUSED = 2;
 GS_GAME_OVER = 3;
 
-// Sprite indices (4x4 atlas = icons only)
+// Sprite indices (4x5 atlas — 16 icon cells + 4 ball frames)
 // Small icons overlaid on special bricks
 S_IC_EXTEND = 0;
 S_IC_EXPLODE = 1;
@@ -62,6 +62,17 @@ S_PK_NEWROW = 10;
 S_PK_MULTI = 11;
 S_PK_FIRE = 12;
 S_PK_SHIELD = 13;
+// Ball animation frames (row 4, indices 16-19; 14 and 15 reserved).
+// The sprites are drawn in a "vertical-squash" orientation (wider than
+// tall).  At runtime the ball draw code swaps width <-> height to
+// rotate the sprite 90 degrees when the bounce axis is horizontal.
+S_BALL_NORMAL  = 16;  // Perfect circle — ball in free flight
+S_BALL_SQUASH1 = 17;  // Mild squash — first contact frame
+S_BALL_SQUASH2 = 18;  // Full squash — peak compression
+S_BALL_RELEASE = 19;  // Slight stretch — returning to round
+// Squash animation duration (seconds).  Picked short so it's a punchy
+// game-feel beat rather than a visual delay.
+BALL_SQUASH_DURATION = 0.09;
 
 // Special types
 SP_NONE = 0;
@@ -76,77 +87,159 @@ SP_SHIELD = 7;
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
 fn build_atlas() -> graphics::Canvas {
-  // 4x4 grid, 32x32 per cell = 128x128
-  // Row 0: small icons for brick overlay
-  // Row 1: (continued)
-  // Row 2-3: large pickup icons with text labels
-  at = graphics::canvas(128, 128, 0);
+  // 4x5 grid, 32x32 per cell = 128x160
+  // Row 0:   small icons for brick overlay
+  // Row 1:   (continued)
+  // Row 2-3: large pickup icons
+  // Row 4:   ball animation frames (normal + 3 squash states)
+  at = graphics::canvas(128, 160, 0);
+
+  // Cel-shaded look: draw every filled shape as a dark outline (1 px
+  // wider on each side) first, then the coloured body on top.  The
+  // outline colour is a near-black with full alpha so it reads well
+  // against both the bricks and the canvas background.
+  ol = graphics::rgba(20, 20, 24, 240);
 
   // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
   // S_IC_EXTEND (0) — white ↔
-  at.fill_rect(12, 14, 8, 3, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(10, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(19, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(11, 13, 10,  5, ol);
+  at.fill_rect( 9, 11,  5,  9, ol);
+  at.fill_rect(18, 11,  5,  9, ol);
+  at.fill_rect(12, 14,  8,  3, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(10, 12,  3,  7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(19, 12,  3,  7, graphics::rgba(255, 255, 255, 230));
   // S_IC_EXPLODE (1) — white skull
+  at.fill_circle(32 + 16, 14, 6, ol);
   at.fill_circle(32 + 16, 14, 5, graphics::rgba(255, 230, 200, 240));
   at.fill_rect(32 + 13, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(32 + 17, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(32 + 14, 18, 4, 2, graphics::rgba(40, 40, 40, 255));
   // S_IC_BALLOON (2) — red balloon
+  at.fill_circle(64 + 16, 12, 6, ol);
   at.fill_circle(64 + 16, 12, 5, graphics::rgba(255, 70, 70, 240));
   at.fill_circle(64 + 14, 10, 2, graphics::rgba(255, 150, 150, 130));
   at.vline(64 + 16, 17, 20, graphics::rgba(200, 200, 200, 200));
   // S_IC_NEWROW (3) — blue ⬇
-  at.fill_rect(96 + 14, 8, 4, 8, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 10, 14, 12, 3, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 13, 17, 6, 2, graphics::rgba(130, 180, 255, 200));
+  at.fill_rect(96 + 13,  7,  6, 10, ol);
+  at.fill_rect(96 +  9, 13, 14,  5, ol);
+  at.fill_rect(96 + 12, 16,  8,  4, ol);
+  at.fill_rect(96 + 14,  8,  4,  8, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 10, 14, 12,  3, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 13, 17,  6,  2, graphics::rgba(130, 180, 255, 200));
   // S_IC_MULTI (4) — white circles
-  at.fill_circle(8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
+  at.fill_circle( 8, 32 + 14, 5, ol);
+  at.fill_circle(18, 32 + 10, 4, ol);
+  at.fill_circle(20, 32 + 17, 4, ol);
+  at.fill_circle( 8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
   at.fill_circle(18, 32 + 10, 3, graphics::rgba(230, 230, 255, 200));
   at.fill_circle(20, 32 + 17, 3, graphics::rgba(210, 210, 255, 180));
   // S_IC_FIRE (5) — orange flame
-  at.fill_rect(32 + 14, 32 + 6, 4, 12, graphics::rgba(255, 150, 0, 240));
-  at.fill_rect(32 + 12, 32 + 10, 8, 8, graphics::rgba(255, 90, 0, 220));
-  at.fill_rect(32 + 15, 32 + 4, 2, 4, graphics::rgba(255, 220, 50, 200));
+  at.fill_rect(32 + 13, 32 +  5,  6, 14, ol);
+  at.fill_rect(32 + 11, 32 +  9, 10, 10, ol);
+  at.fill_rect(32 + 14, 32 +  3,  4,  6, ol);
+  at.fill_rect(32 + 14, 32 +  6,  4, 12, graphics::rgba(255, 150, 0, 240));
+  at.fill_rect(32 + 12, 32 + 10,  8,  8, graphics::rgba(255,  90, 0, 220));
+  at.fill_rect(32 + 15, 32 +  4,  2,  4, graphics::rgba(255, 220, 50, 200));
   // S_IC_SHIELD (6) — blue shield
-  at.fill_rect(64 + 9, 32 + 8, 14, 6, graphics::rgba(80, 160, 255, 240));
-  at.fill_rect(64 + 11, 32 + 14, 10, 3, graphics::rgba(80, 140, 230, 220));
-  at.fill_rect(64 + 13, 32 + 17, 6, 2, graphics::rgba(80, 120, 210, 200));
+  at.fill_rect(64 +  8, 32 +  7, 16,  8, ol);
+  at.fill_rect(64 + 10, 32 + 13, 12,  5, ol);
+  at.fill_rect(64 + 12, 32 + 16,  8,  4, ol);
+  at.fill_rect(64 +  9, 32 +  8, 14,  6, graphics::rgba(80, 160, 255, 240));
+  at.fill_rect(64 + 11, 32 + 14, 10,  3, graphics::rgba(80, 140, 230, 220));
+  at.fill_rect(64 + 13, 32 + 17,  6,  2, graphics::rgba(80, 120, 210, 200));
   at.hline(64 + 10, 64 + 22, 32 + 9, graphics::rgba(200, 230, 255, 120));
 
   // Large pickup icons — fill most of 32x32 cell
   // S_PK_EXTEND (7) at (96, 32) — large green ↔
-  at.fill_rect(96 + 4, 32 + 12, 24, 8, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 2, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 24, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  3, 32 + 11, 26, 10, ol);
+  at.fill_rect(96 +  1, 32 +  7,  8, 18, ol);
+  at.fill_rect(96 + 23, 32 +  7,  8, 18, ol);
+  at.fill_rect(96 +  4, 32 + 12, 24,  8, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  2, 32 +  8,  6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 24, 32 +  8,  6, 16, graphics::rgba(60, 230, 80, 255));
   // S_PK_EXPLODE (8) at (0, 64) — large red skull
+  at.fill_circle(16, 64 + 14, 13, ol);
   at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
   at.fill_rect(10, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(18, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(11, 64 + 20, 10, 4, graphics::rgba(40, 40, 40, 255));
   // S_PK_BALLOON (9) at (32, 64) — large red balloon
+  at.fill_circle(32 + 16, 64 + 12, 11, ol);
   at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(32 + 12, 64 + 8, 4, graphics::rgba(255, 130, 130, 130));
+  at.fill_circle(32 + 12, 64 +  8,  4, graphics::rgba(255, 130, 130, 130));
   at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
   // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
-  at.fill_rect(64 + 12, 64 + 2, 8, 16, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 + 6, 64 + 14, 20, 6, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 + 10, 64 + 20, 12, 5, graphics::rgba(60, 110, 240, 230));
-  at.fill_rect(64 + 13, 64 + 25, 6, 4, graphics::rgba(60, 110, 240, 200));
+  at.fill_rect(64 + 11, 64 +  1, 10, 18, ol);
+  at.fill_rect(64 +  5, 64 + 13, 22,  8, ol);
+  at.fill_rect(64 +  9, 64 + 19, 14,  7, ol);
+  at.fill_rect(64 + 12, 64 + 24,  8,  6, ol);
+  at.fill_rect(64 + 12, 64 +  2,  8, 16, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 +  6, 64 + 14, 20,  6, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 10, 64 + 20, 12,  5, graphics::rgba(60, 110, 240, 230));
+  at.fill_rect(64 + 13, 64 + 25,  6,  4, graphics::rgba(60, 110, 240, 200));
   // S_PK_MULTI (11) at (96, 64) — large white balls
+  at.fill_circle(96 + 10, 64 + 16, 8, ol);
+  at.fill_circle(96 + 22, 64 + 10, 7, ol);
+  at.fill_circle(96 + 24, 64 + 22, 6, ol);
   at.fill_circle(96 + 10, 64 + 16, 7, graphics::rgba(255, 255, 255, 255));
   at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
   at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
   // S_PK_FIRE (12) at (0, 96) — large flame
-  at.fill_rect(12, 96 + 6, 8, 22, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect(8, 96 + 12, 16, 16, graphics::rgba(255, 80, 0, 240));
-  at.fill_rect(13, 96 + 2, 6, 8, graphics::rgba(255, 210, 20, 230));
-  at.fill_rect(14, 96 + 0, 4, 4, graphics::rgba(255, 240, 80, 180));
+  at.fill_rect(11, 96 +  5, 10, 24, ol);
+  at.fill_rect( 7, 96 + 11, 18, 18, ol);
+  at.fill_rect(12, 96 +  1,  8, 10, ol);
+  at.fill_rect(13, 96 -  1,  6,  6, ol);
+  at.fill_rect(12, 96 +  6,  8, 22, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect( 8, 96 + 12, 16, 16, graphics::rgba(255,  80, 0, 240));
+  at.fill_rect(13, 96 +  2,  6,  8, graphics::rgba(255, 210, 20, 230));
+  at.fill_rect(14, 96 +  0,  4,  4, graphics::rgba(255, 240, 80, 180));
   // S_PK_SHIELD (13) at (32, 96) — large blue shield
-  at.fill_rect(32 + 6, 96 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
-  at.fill_rect(32 + 9, 96 + 16, 14, 6, graphics::rgba(60, 130, 240, 240));
-  at.fill_rect(32 + 12, 96 + 22, 8, 4, graphics::rgba(60, 110, 220, 220));
+  at.fill_rect(32 +  5, 96 +  3, 22, 14, ol);
+  at.fill_rect(32 +  8, 96 + 15, 16,  8, ol);
+  at.fill_rect(32 + 11, 96 + 21, 10,  6, ol);
+  at.fill_rect(32 +  6, 96 +  4, 20, 12, graphics::rgba(60, 150, 255, 255));
+  at.fill_rect(32 +  9, 96 + 16, 14,  6, graphics::rgba(60, 130, 240, 240));
+  at.fill_rect(32 + 12, 96 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
   at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
+
+  // Ball frames — row 4, y=128.  All drawn "squashed vertically"
+  // (wide-flat) so the runtime can render a horizontal-axis bounce
+  // by swapping draw width <-> height.
+  //
+  // Dark outline first, then white body, with a small highlight for
+  // roundness.  Sprite occupies ~16x16 inside the 32x32 cell; the
+  // renderer scales to BALL_SIZE (10 px) so each sprite pixel reads
+  // as about 0.6 screen pixels — chunky but cel-shaded by design.
+
+  // S_BALL_NORMAL (16) at (0, 128) — perfect round ball
+  at.fill_circle( 0 + 16, 128 + 16, 7, ol);
+  at.fill_circle( 0 + 16, 128 + 16, 6, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle( 0 + 14, 128 + 14, 2, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_SQUASH1 (17) at (32, 128) — first contact: ~14x10 oval
+  at.fill_circle(32 + 11, 128 + 16, 6, ol);
+  at.fill_circle(32 + 21, 128 + 16, 6, ol);
+  at.fill_circle(32 + 11, 128 + 16, 5, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 21, 128 + 16, 5, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect(32 + 11, 128 + 11, 10, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 13, 128 + 14, 2, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_SQUASH2 (18) at (64, 128) — peak squash: very flat ~18x6
+  at.fill_circle(64 +  9, 128 + 16, 5, ol);
+  at.fill_circle(64 + 23, 128 + 16, 5, ol);
+  at.fill_rect(64 +  9, 128 + 13, 14, 7, ol);
+  at.fill_circle(64 +  9, 128 + 16, 4, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(64 + 23, 128 + 16, 4, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect(64 +  9, 128 + 14, 14, 5, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect(64 + 12, 128 + 14, 2, 1, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_RELEASE (19) at (96, 128) — mid-recovery: round-ish ~14x12
+  at.fill_circle(96 + 12, 128 + 16, 6, ol);
+  at.fill_circle(96 + 20, 128 + 16, 6, ol);
+  at.fill_circle(96 + 12, 128 + 16, 5, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 20, 128 + 16, 5, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect(96 + 12, 128 + 11, 8, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 14, 128 + 14, 2, graphics::rgba(255, 255, 255, 255));
 
   at
 }
@@ -201,7 +294,7 @@ fn main() {
 
   br_atlas = build_atlas();
   br_painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
-  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, graphics::painter_vao(br_painter));
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 5, graphics::painter_vao(br_painter));
 
   // Font — try local first, then absolute path
   br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
@@ -278,6 +371,14 @@ fn main() {
   br_ball_dx = [BALL_SPEED_BASE * 0.7, 0.0, 0.0];
   br_ball_dy = [0.0 - BALL_SPEED_BASE, 0.0, 0.0];
   br_ball_on = [1, 0, 0];
+  // Squash animation state per ball.
+  //   br_ball_sq_t[i]    — seconds remaining in the squash (0 = none)
+  //   br_ball_sq_axis[i] — 0 for vertical-axis bounce (top/bottom of a
+  //                        brick, paddle, top wall), 1 for horizontal
+  //                        (side walls, side of a brick).  Drives the
+  //                        90-degree flip when rendering.
+  br_ball_sq_t    = [0.0, 0.0, 0.0];
+  br_ball_sq_axis = [0, 0, 0];
 
   br_max = MAX_ROWS * BRICK_COLS;
   br_bricks = [for _ in 0..br_max { 0 }];
@@ -524,6 +625,13 @@ fn main() {
         if br_extend_timer <= 0.0 { br_pw = PADDLE_W_DEFAULT; }
       }
       if br_fire_timer > 0.0 { br_fire_timer -= br_dt; }
+      // Advance per-ball squash timers so the animation plays out.
+      for br_sqi in 0..MAX_BALLS {
+        if br_ball_sq_t[br_sqi] > 0.0 {
+          br_ball_sq_t[br_sqi] -= br_dt;
+          if br_ball_sq_t[br_sqi] < 0.0 { br_ball_sq_t[br_sqi] = 0.0; }
+        }
+      }
 
       // ── Update all balls ─────────────────────────────────────
       br_any_ball = false;
@@ -536,9 +644,27 @@ fn main() {
 
         // Walls
         br_wall_hit = false;
-        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); br_wall_hit = true; }
-        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); br_wall_hit = true; }
-        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); br_wall_hit = true; }
+        if br_ball_x[br_bi] < 0.0 {
+          br_ball_x[br_bi] = 0.0;
+          br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 1;  // horizontal bounce
+          br_wall_hit = true;
+        }
+        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE {
+          br_ball_x[br_bi] = SCREEN_W - BALL_SIZE;
+          br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 1;
+          br_wall_hit = true;
+        }
+        if br_ball_y[br_bi] < 0.0 {
+          br_ball_y[br_bi] = 0.0;
+          br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 0;  // vertical bounce
+          br_wall_hit = true;
+        }
         if br_wall_hit { graphics::sfx_beep(600.0f, 0.03f, 0.1f); }
 
         // Paddle (skipped during the explosion respawn pause)
@@ -549,6 +675,8 @@ fn main() {
           br_bh = (br_ball_x[br_bi] + BALL_SIZE / 2.0 - br_px) / br_pw;
           br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
           br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 0;
           br_combo = 0;  // reset combo on paddle hit
           graphics::sfx_bounce(180.0f, 0.3f);
         }
@@ -557,6 +685,8 @@ fn main() {
         if br_ball_y[br_bi] > SCREEN_H - 4.0 && br_shield_on {
           br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
           br_ball_y[br_bi] = SCREEN_H - 4.0;
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 0;
           br_shield_on = false;
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 0.3; br_flash_g = 0.6; br_flash_b = 1.0;
@@ -581,8 +711,14 @@ fn main() {
             if br_cdx > 0.0 || br_cdy > 0.0 {
               // Fireball passes through without bouncing
               if br_fire_timer <= 0.0 {
-                if br_cdx < br_cdy { br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi]; }
-                else { br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi]; }
+                if br_cdx < br_cdy {
+                  br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi];
+                  br_ball_sq_axis[br_bi] = 1;  // hit side of brick
+                } else {
+                  br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi];
+                  br_ball_sq_axis[br_bi] = 0;  // hit top/bottom of brick
+                }
+                br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
               }
               br_hp[br_ci] -= 1;
               if br_hp[br_ci] <= 0 {
@@ -982,17 +1118,64 @@ fn main() {
       }
     }
 
-    // Balls — flat color
+    // Balls — round sprite with a 4-frame squash animation.
+    //   t=0                     → S_BALL_NORMAL (idle).
+    //   0 < t < 0.33*DUR        → S_BALL_RELEASE   (recovery tail).
+    //   0.33*DUR <= t < 0.66*DUR → S_BALL_SQUASH2  (peak squash).
+    //   0.66*DUR <= t <= DUR    → S_BALL_SQUASH1  (first contact).
+    // Timer counts DOWN from BALL_SQUASH_DURATION, so the newest
+    // bounce is at the top of the range.
+    //
+    // Axis 0 (vertical bounce: paddle, top wall, top/bottom of brick)
+    // draws the sprite in its natural "wide and flat" orientation.
+    // Axis 1 (horizontal bounce: side walls, side of brick) swaps
+    // width <-> height to rotate the sprite 90 degrees.
+    //
+    // Fireball mode still draws a flat orange rect so it reads as a
+    // distinct power-up (no fire sprite in the atlas).
     for br_bd in 0..MAX_BALLS {
-      if br_ball_on[br_bd] == 1 {
-        if br_fire_timer > 0.0 {
-          graphics::draw_rect_at(br_painter,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0, 1.0);
+      if br_ball_on[br_bd] == 0 { continue; }
+      if br_fire_timer > 0.0 {
+        // Fire: cel-shaded orange square, no squash animation.
+        graphics::draw_rect_at(br_painter,
+          br_ball_x[br_bd] - 1.0, br_ball_y[br_bd] - 1.0,
+          BALL_SIZE + 2.0, BALL_SIZE + 2.0,
+          0.08, 0.08, 0.10, 1.0);
+        graphics::draw_rect_at(br_painter,
+          br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE,
+          1.0, 0.5, 0.0, 1.0);
+        continue;
+      }
+      br_sqt = br_ball_sq_t[br_bd];
+      br_sprite = S_BALL_NORMAL;
+      br_dw = BALL_SIZE;
+      br_dh = BALL_SIZE;
+      if br_sqt > 0.0 {
+        br_phase = 1.0 - br_sqt / BALL_SQUASH_DURATION;  // 0..1
+        if br_phase < 0.33 {
+          br_sprite = S_BALL_SQUASH1;
+          br_dw = BALL_SIZE + 3.0;
+          br_dh = BALL_SIZE - 2.0;
+        } else if br_phase < 0.66 {
+          br_sprite = S_BALL_SQUASH2;
+          br_dw = BALL_SIZE + 5.0;
+          br_dh = BALL_SIZE - 4.0;
         } else {
-          graphics::draw_rect_at(br_painter,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0, 1.0);
+          br_sprite = S_BALL_RELEASE;
+          br_dw = BALL_SIZE + 1.0;
+          br_dh = BALL_SIZE - 1.0;
+        }
+        // Horizontal-axis bounce — flip 90 degrees.
+        if br_ball_sq_axis[br_bd] == 1 {
+          br_tmp = br_dw; br_dw = br_dh; br_dh = br_tmp;
         }
       }
+      // Centre the (possibly scaled) sprite on the ball's hitbox so
+      // the squash expands outward instead of shifting the visual.
+      br_ox = br_ball_x[br_bd] + (BALL_SIZE - br_dw) / 2.0;
+      br_oy = br_ball_y[br_bd] + (BALL_SIZE - br_dh) / 2.0;
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        br_ox, br_oy, br_dw, br_dh, br_sprite);
     }
 
     // Particles — alpha fades with remaining life
