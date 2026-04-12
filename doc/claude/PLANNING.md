@@ -27,11 +27,8 @@ The items below are ordered by tier: things that break programs come first, then
 and prototype-friction items, then architectural work.  See [RELEASE.md](RELEASE.md) for the full
 release gate criteria, project structure changes, and release artifact checklist.
 
-**Completed items are removed entirely** — this document is strictly for future work.
-Completion history lives in git (commit messages and CHANGELOG.md).  Leaving "done" markers
-creates noise and makes the document harder to scan for remaining work.
-
-Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) · [SLOTS.md](SLOTS.md) · [THREADING.md](THREADING.md) · [LOGGER.md](LOGGER.md) · [WEB_IDE.md](WEB_IDE.md) · [RELEASE.md](RELEASE.md) · [PACKAGES.md](PACKAGES.md) · [PERFORMANCE.md](PERFORMANCE.md) · [TUPLES.md](TUPLES.md) · [STACKTRACE.md](STACKTRACE.md) · [COROUTINE.md](COROUTINE.md)
+**Completed items are removed entirely** — history lives in git and `CHANGELOG.md`.
+Cross-document links are at the end; this doc is for future work.
 
 ---
 
@@ -66,41 +63,19 @@ Sources: [PROBLEMS.md](PROBLEMS.md) · [INCONSISTENCIES.md](INCONSISTENCIES.md) 
 
 ## Version Milestones
 
-### Current plan (2026-04-10)
+Authoritative milestone definitions live in [ROADMAP.md](ROADMAP.md) and
+[RELEASE.md](RELEASE.md).  High-level shape:
 
-**The narrative sub-sections below are historical** — they document what was
-*planned* at each version, not necessarily what shipped. The authoritative
-current milestone definitions live in [ROADMAP.md](ROADMAP.md) and
-[RELEASE.md](RELEASE.md). The high-level shape is:
-
-| Version | Goal                                       | Status        |
-|---------|--------------------------------------------|---------------|
+| Version | Goal                                       | Status      |
+|---------|--------------------------------------------|-------------|
 | 0.8.0–0.8.3 | Stability, native codegen, slot correctness, lambdas, parallel, stack trace, sprite sheet API | **Shipped** |
 | 0.8.4   | **Awesome Brick Buster** — a game worth sharing on itch.io | In progress |
-| 0.8.5   | **Working Moros editor** — paint hex scenes in the browser | Planned   |
-| 0.9.0   | **Fully working loft language** — feature-complete + verified | Planned |
-| 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract | Planned |
+| 0.8.5   | **Working Moros editor** — paint hex scenes in the browser | Planned     |
+| 0.9.0   | **Fully working loft language** — feature-complete + verified | Planned     |
+| 1.0.0   | **Everything works** — IDE + multiplayer + stability contract | Planned     |
 
-When updating priorities, edit ROADMAP.md / RELEASE.md first; this section
-catches up later. Items still listed under "Version 0.9.0" or "Version
-0.8.4" below may have been moved to a different milestone or shipped
-already — cross-check against ROADMAP.md before relying on them.
-
----
-
-### Version 0.8.2 — Stability, native codegen, and slot correctness (in progress)
-
-Goal: harden the interpreter, complete native code generation, fix slot assignment, and
-improve runtime efficiency.  No new language syntax.  Most items are independent and can be developed
-in parallel.
-
-**Remaining for 0.8.2:** *(none — all items completed or deferred)*
-
-**Deferred from 0.8.2 (too complex / disruptive for stability):**
-- **O1** — Superinstruction peephole rewriting pass — deferred indefinitely (opcode table is full: 254/256 used; adding superinstructions would require an opcode-space redesign).
-- **A12** — Lazy work-variable initialization — deferred to 1.1+ (also blocked by Issues 68–70).
-
----
+When updating priorities, edit ROADMAP.md / RELEASE.md first; this document
+catches up later.
 
 ---
 
@@ -2897,51 +2872,16 @@ JS tests (4): ZIP contains `src/main.loft`, `run.sh` invokes `loft`, import roun
 ---
 ## P70 — Text in `generate_set` TOS-override causes SIGSEGV
 
-**Problem:** Adding `Type::Text(_)` to the large-type TOS-override in
-`generate_set` (`codegen.rs:~689`) causes `append_fn` to crash.  When a text
-variable's slot is bumped from a pre-assigned position to TOS, `OpFreeText`
-still uses the original slot offset, freeing wrong memory.
+**Status:** Workaround in place — `Type::Text` excluded from the large-type
+TOS-override in `generate_set` (`codegen.rs:~689`).  Stable; no regressions.
 
-**Root cause:** Scope analysis emits `OpFreeText(v)` using the variable's slot
-position at scan time.  Codegen runs later and may move the variable to TOS
-via `set_stack_pos`.  The `OpFreeText` operand is a stack offset baked into
-the IR — it does not update when the variable moves.
+**Real fix (only if C43 text slot reuse needs it):** switch `OpFreeText` to
+take a variable number instead of a pre-resolved stack offset, so codegen
+resolves the final position at emit time — same pattern as `OpFreeRef`.
+Touches `scopes.rs` (emit `Value::Var(v)`) and `codegen.rs` (resolve at
+emit).  Safe but affects every text-variable scope exit.
 
-**Status:** The TOS-override excludes `Type::Text` (workaround in place).
-The workaround is safe: text variables always land at their pre-assigned
-zone-2 slot, and `OpFreeText` addresses are always correct.
-
-**Files:** `src/state/codegen.rs`, `src/scopes.rs`
-
-### Step 1 — Confirm workaround is stable
-
-The workaround (`Type::Text` excluded from the `pos < stack.position`
-branch at `codegen.rs:~689`) has been in place since Issue 70 was
-discovered.  No regressions have been observed.  The only cost: text
-variables cannot benefit from the TOS-override optimization, but this
-only matters if C43 text slot reuse is enabled.
-
-### Step 2 — Design the real fix (deferred to C43)
-
-The proper fix: change `OpFreeText` to use a variable number instead of
-a raw stack offset, so codegen can resolve the final position at emit time.
-This requires:
-- `scopes.rs`: emit `Value::Call("OpFreeText", [Value::Var(v)])` instead
-  of a pre-resolved offset
-- `codegen.rs`: resolve `v` to `stack.position - stack.function.stack(v)`
-  at bytecode emission time (same as other var-referencing opcodes)
-
-This is the same pattern as `OpFreeRef` which already uses `Value::Var(v)`.
-The refactor is safe but touches the hot path of scope exit for every text
-variable.
-
-### Step 3 — Implement (only if C43 needs it)
-
-If C43 text slot reuse can work without the TOS-override (text-to-text
-same-size reuse in zone 2), P70 is not blocking and can be deferred.
-
-**Effort:** Medium (touches OpFreeText emission across scopes.rs + codegen.rs)
-**Target:** 0.8.3 (only if needed for C43)
+**Effort:** Medium.  **Target:** deferred to C43.
 
 ---
 
