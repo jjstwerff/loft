@@ -52,8 +52,13 @@ GS_PLAYING = 1;
 GS_PAUSED = 2;
 GS_GAME_OVER = 3;
 
-// Sprite indices (4x5 atlas — 16 icon cells + 4 ball frames)
-// Small icons overlaid on special bricks
+// Sprite indices.  Icons are packed into the top of the atlas in a
+// 4-column layout so their indices match the original 4x4 game.  The
+// ball animation then lives in its own dedicated BOTTOM row — see
+// build_atlas for the exact canvas y-range.  Atlas grows from 128x128
+// to 128x192: extra 64 px of height for two ball sub-rows (16 frames
+// × 32 px tall would be overkill; 4 frames need 32 px but a whole
+// ball row gives each 32x32 cell).
 S_IC_EXTEND = 0;
 S_IC_EXPLODE = 1;
 S_IC_BALLOON = 2;
@@ -61,7 +66,6 @@ S_IC_NEWROW = 3;
 S_IC_MULTI = 4;
 S_IC_FIRE = 5;
 S_IC_SHIELD = 6;
-// Large pickup icons (falling)
 S_PK_EXTEND = 7;
 S_PK_EXPLODE = 8;
 S_PK_BALLOON = 9;
@@ -69,16 +73,15 @@ S_PK_NEWROW = 10;
 S_PK_MULTI = 11;
 S_PK_FIRE = 12;
 S_PK_SHIELD = 13;
-// Ball animation frames (row 4, indices 16-19; 14 and 15 reserved).
-// The sprites are drawn in a "vertical-squash" orientation (wider than
-// tall).  At runtime the ball draw code swaps width <-> height to
-// rotate the sprite 90 degrees when the bounce axis is horizontal.
-S_BALL_NORMAL  = 16;  // Perfect circle — ball in free flight
-S_BALL_SQUASH1 = 17;  // Mild squash — first contact frame
-S_BALL_SQUASH2 = 18;  // Full squash — peak compression
-S_BALL_RELEASE = 19;  // Slight stretch — returning to round
-// Squash animation duration (seconds).  Picked short so it's a punchy
-// game-feel beat rather than a visual delay.
+// Lives HUD icon in the spare cell of row 3.
+S_HEART = 14;  // Row 3, col 2 — red heart, drawn in the top-right HUD
+// Ball animation frames live in the last row of a 4x5 atlas.  Each
+// frame occupies a whole 32x32 cell so the round body has plenty of
+// pixels to read through the 30-px on-screen draw size.
+S_BALL_NORMAL  = 16;  // Perfect circle
+S_BALL_SQUASH1 = 17;  // First contact — mild squash
+S_BALL_SQUASH2 = 18;  // Peak squash — flat oval
+S_BALL_RELEASE = 19;  // Mid-recovery — slight stretch
 BALL_SQUASH_DURATION = 0.09;
 
 // Special types
@@ -95,10 +98,10 @@ SP_SHIELD = 7;
 
 fn build_atlas() -> graphics::Canvas {
   // 4x5 grid, 32x32 per cell = 128x160
-  // Row 0:   small icons for brick overlay
-  // Row 1:   (continued)
+  // Row 0: small icons for brick overlay
+  // Row 1: (continued)
   // Row 2-3: large pickup icons
-  // Row 4:   ball animation frames (normal + 3 squash states)
+  // Row 4: ball animation (normal + 3 squash frames)
   at = graphics::canvas(128, 160, 0);
 
   // Cel-shaded look: draw every filled shape as a dark outline (1 px
@@ -209,6 +212,23 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_rect(32 + 12, 96 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
   at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
 
+  // S_HEART (14) at (64, 96) — lives icon, cel-shaded red heart.
+  // Two lobes + downward-pointing triangular body, drawn at full cell
+  // size so it still reads clearly at the 14-px HUD size.
+  at.fill_circle(64 +  9, 96 + 12, 8, ol);
+  at.fill_circle(64 + 23, 96 + 12, 8, ol);
+  at.fill_circle(64 +  9, 96 + 12, 7, graphics::rgba(230, 60, 70, 255));
+  at.fill_circle(64 + 23, 96 + 12, 7, graphics::rgba(230, 60, 70, 255));
+  // Triangular body: shrinking rows from y=17 down to the tip at y=26.
+  for ht_i in 0..10 {
+    ht_w = 14 - ht_i;
+    ht_x = 64 + 16 - ht_w;
+    at.fill_rect(ht_x - 1, 96 + 17 + ht_i, 2 * ht_w + 2, 1, ol);
+    at.fill_rect(ht_x,     96 + 17 + ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
+  }
+  // Highlight — small white glint on the upper-left lobe.
+  at.fill_circle(64 +  6, 96 +  9, 2, graphics::rgba(255, 210, 215, 200));
+
   // Ball frames — row 4, y=128.  Each sprite fills most of its 32x32
   // cell so that when rendered at BALL_SIZE (22 px) the visible ball
   // is almost the full draw size, not a tiny dot centred in a cell.
@@ -255,6 +275,34 @@ fn build_atlas() -> graphics::Canvas {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// Map 1..20 to their Roman-numeral text — the level progression is
+// capped at MAX_ROWS=20, so that's all we ever render.  Anything
+// beyond that falls back to the Arabic form so a future bump in
+// MAX_ROWS fails gracefully rather than silently.
+fn roman(rn_n: integer) -> text {
+  if rn_n == 1  { return "I"; }
+  if rn_n == 2  { return "II"; }
+  if rn_n == 3  { return "III"; }
+  if rn_n == 4  { return "IV"; }
+  if rn_n == 5  { return "V"; }
+  if rn_n == 6  { return "VI"; }
+  if rn_n == 7  { return "VII"; }
+  if rn_n == 8  { return "VIII"; }
+  if rn_n == 9  { return "IX"; }
+  if rn_n == 10 { return "X"; }
+  if rn_n == 11 { return "XI"; }
+  if rn_n == 12 { return "XII"; }
+  if rn_n == 13 { return "XIII"; }
+  if rn_n == 14 { return "XIV"; }
+  if rn_n == 15 { return "XV"; }
+  if rn_n == 16 { return "XVI"; }
+  if rn_n == 17 { return "XVII"; }
+  if rn_n == 18 { return "XVIII"; }
+  if rn_n == 19 { return "XIX"; }
+  if rn_n == 20 { return "XX"; }
+  "{rn_n}"
+}
 
 fn bk_x(col: integer) -> float { (col as float) * (BRICK_W + BRICK_PAD) + 12.0 }
 fn bk_y(row: integer) -> float { (row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP }
@@ -337,7 +385,8 @@ fn main() {
   br_lvl_tex = [for _ in 0..20 { 0 }];
   for br_tl in 0..20 {
     br_ln = br_tl + 1;
-    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_ln}", 48.0, br_white);
+    br_rn = roman(br_ln);
+    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_rn}", 48.0, br_white);
   }
 
   // "SCORE" label
@@ -1228,10 +1277,11 @@ fn main() {
       }
     }
 
-    // HUD: lives (red squares, top-right)
+    // HUD: lives (cel-shaded hearts, top-right).
     for br_lh in 0..br_lives {
-      graphics::draw_rect_at(br_painter,
-        SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3, 1.0);
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        SCREEN_W - 24.0 - (br_lh as float) * 22.0, 6.0,
+        20.0, 20.0, S_HEART);
     }
 
     // HUD: numeric score (top-left, digit textures)
