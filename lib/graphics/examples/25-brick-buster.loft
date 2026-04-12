@@ -401,6 +401,7 @@ fn main() {
 
   // "SCORE" label
   br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
+  br_hi_label_tex    = graphics::create_text_texture(br_font, "HI",    10.0, br_gray);
 
   // BK.5/BK.6: Title, pause, and game-over screen textures.
   br_title_tex = graphics::create_text_texture(br_font, "BRICK BUSTER", 64.0, br_white);
@@ -548,6 +549,18 @@ fn main() {
   br_last = ticks();
   br_lives = 3;
   br_score = 0;
+  // High-score persistence — load at boot, save on game-over or win
+  // when the current run beat the stored value.  Kept beside the
+  // other hidden state in `.loft/` next to the script so it doesn't
+  // clutter the user's working directory.
+  HIGHSCORE_PATH = ".loft/brickbuster_score.txt";
+  br_highscore = 0;
+  br_hs_file = file(HIGHSCORE_PATH);
+  if br_hs_file.exists() {
+    br_hs_txt = br_hs_file.content();
+    br_highscore = br_hs_txt as integer;
+    if !br_highscore { br_highscore = 0; }
+  }
   br_won = false;
   br_lost = false;
   br_game_state = GS_TITLE;
@@ -650,7 +663,16 @@ fn main() {
         br_watchdog_expect = 3;        // expect br_pk_on[0] == 1
         br_watchdog_deadline = br_now + 2000000l;
       }
-      if br_lost { br_game_state = GS_GAME_OVER; }
+      if br_lost {
+        br_game_state = GS_GAME_OVER;
+        // Persist the high score on loss.  Same logic runs on
+        // win — see the win transition further down.
+        if br_score > br_highscore {
+          br_highscore = br_score;
+          br_hs_out = file(HIGHSCORE_PATH);
+          br_hs_out.write("{br_highscore}");
+        }
+      }
     }
     if br_game_state == GS_PAUSED {
       if br_space_pressed { br_game_state = GS_PLAYING; }
@@ -1536,6 +1558,30 @@ fn main() {
         graphics::draw_texture_at(br_painter, br_dig_tex[br_sd_d], br_sx, 2.0, 14.0, 20.0);
         br_sx -= 14.0;
         br_sc_tmp = br_sc_tmp / 10;
+      }
+    }
+
+    // HUD: high score (below current score, slightly smaller digits
+    // in grey so it reads as "previous best" rather than the live
+    // total).  Hidden when 0 so a fresh install stays clean.
+    if br_highscore > 0 {
+      graphics::draw_texture_at(br_painter, br_hi_label_tex, 10.0, 26.0, 20.0, 10.0);
+      br_hsc = br_highscore;
+      br_hx = 34.0;
+      br_hs_digits = 0;
+      br_hsc_tmp = br_hsc;
+      for _br_hsd in 0..6 {
+        if br_hsc_tmp > 0 { br_hs_digits += 1; br_hsc_tmp = br_hsc_tmp / 10; }
+      }
+      if br_hs_digits > 0 {
+        br_hx = 34.0 + (br_hs_digits - 1) as float * 9.0;
+        br_hsc_tmp = br_hsc;
+        for _br_hsd2 in 0..br_hs_digits {
+          br_hsd_d = br_hsc_tmp % 10;
+          graphics::draw_texture_at(br_painter, br_dig_tex[br_hsd_d], br_hx, 26.0, 9.0, 12.0);
+          br_hx -= 9.0;
+          br_hsc_tmp = br_hsc_tmp / 10;
+        }
       }
     }
 
