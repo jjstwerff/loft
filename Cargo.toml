@@ -85,3 +85,13 @@ assets = [
     ["target/release/your_app_name", "/usr/bin/your_app_name", "755"]
 ]
 
+
+
+[package.metadata.wasm-pack.profile.release]
+# wasm-opt strips the externref table's max field, so
+# __wbindgen_init_externref_table's `table.grow(4)` call fails at
+# instantiation time with "Failed to grow table" in browsers and Node.
+# Skip wasm-opt to keep the table descriptor intact; the ~30 % size
+# increase is acceptable compared to a non-functional deployed site.
+wasm-opt = false
+

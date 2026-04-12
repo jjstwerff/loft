@@ -34,7 +34,7 @@ fn host_call(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
         .unwrap_or(wasm_bindgen::JsValue::UNDEFINED)
 }
 
-/// W1.18-1: public version of `host_call` for use from `parallel.rs`.
+/// Public version of `host_call` for use from `parallel.rs`.
 #[cfg(feature = "wasm")]
 pub fn host_call_raw(method: &str, args: &js_sys::Array) -> wasm_bindgen::JsValue {
     host_call(method, args)
@@ -955,7 +955,7 @@ pub fn output_take() -> String {
 
 // ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
 
-/// W1.18-2: Entry point called by each Worker Thread.  The JS worker loop calls
+/// Entry point called by each Worker Thread.  The JS worker loop calls
 /// this with the function index and element range.  The worker reads from the
 /// shared WASM memory (Store heap) and writes results directly back.
 ///

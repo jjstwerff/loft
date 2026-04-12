@@ -296,7 +296,7 @@ fn place_large_and_recurse(
     }
 }
 
-/// C43.1: find a dead zone-2 variable whose slot can be reused by variable `v`.
+/// Find a dead zone-2 variable whose slot can be reused by variable `v`.
 /// Returns `Some(slot)` if a conflict-free candidate exists, `None` otherwise.
 /// Guards: same size, same type discriminant, dead (`last_use` < `first_def`),
 /// no spatial+temporal overlap with any other assigned variable.
@@ -392,7 +392,7 @@ fn place_orphaned_vars(function: &mut Function) {
 }
 
 fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
-    // C43: only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
+    // only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
     // have complex interactions with IR-walk-order placement that cause partial
     // overlaps.  Text is safe because gen_set_first_text emits OpText before the
     // block runs, so there's no block-return frame-sharing to worry about.
@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(slot2, None, "v2 must not reuse v1 (temporal overlap)");
     }
 
-    /// C46: text reuse works even when a non-text variable is placed between
+    /// Text reuse works even when a non-text variable is placed between
     /// the dead text and the new one (no top-of-stack restriction).
     #[test]
     fn zone2_text_reuse_non_consecutive() {

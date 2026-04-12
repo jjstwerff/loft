@@ -26,7 +26,7 @@ impl Parser {
             let vec = self.create_unique("vec", tp);
             let elm_tp = tp.content();
             let db_ops = self.vector_db(&elm_tp, vec);
-            // P103: vector concat as an inline expression (not assigned to a variable)
+            // vector concat as an inline expression (not assigned to a variable)
             // creates a temporary with database allocation that corrupts the stack when
             // the result is used inside a compound assignment expression.
             // Emit an error so the user assigns to a variable first.
@@ -347,10 +347,10 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
-        // A5.1: save outer scope variable names/types for capture detection.
+        // save outer scope variable names/types for capture detection.
         let outer_capture =
             std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
-        // A5.2: clear captured_names so we collect only this lambda's captures.
+        // clear captured_names so we collect only this lambda's captures.
         let outer_captured = std::mem::take(&mut self.captured_names);
 
         self.lexer.token("(");
@@ -439,7 +439,7 @@ impl Parser {
         // Neither should appear in the public Function type — only declared params do.
         let arg_types: Vec<Type> = arguments.iter().map(|a| a.typedef.clone()).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        // A5.6-text: include the closure work var dep so that get_free_vars knows
+        // include the closure work var dep so that get_free_vars knows
         // a local ___clos_N variable owns the closure (and will free it).  Without
         // this dep, the Function arm in get_free_vars would emit a duplicate free.
         let dep = if self.last_closure_work_var == u16::MAX {
@@ -540,7 +540,7 @@ impl Parser {
         );
         let outer_loop = self.in_loop;
         self.in_loop = false;
-        // A5.1: save outer scope variable names/types for capture detection.
+        // save outer scope variable names/types for capture detection.
         let outer_capture =
             std::mem::replace(&mut self.capture_context, outer_vars.all_names_and_types());
         let outer_captured = std::mem::take(&mut self.captured_names);
@@ -618,7 +618,7 @@ impl Parser {
             .variables
             .append(&mut self.vars);
 
-        // A5.2: synthesize closure record if any captures were detected.
+        // synthesize closure record if any captures were detected.
         if !self.captured_names.is_empty() {
             self.synthesize_closure_record(d_nr, &lambda_name);
         }
@@ -637,7 +637,7 @@ impl Parser {
         let n_args = self.data.attributes(d_nr);
         let arg_types: Vec<Type> = (0..n_args).map(|a| self.data.attr_type(d_nr, a)).collect();
         let ret_type = self.data.def(d_nr).returned.clone();
-        // A5.6-text: include closure work var dep (same as fn-form lambda).
+        // include closure work var dep (same as fn-form lambda).
         let dep = if self.last_closure_work_var == u16::MAX {
             vec![]
         } else {
@@ -646,7 +646,7 @@ impl Parser {
         Type::Function(arg_types, Box::new(ret_type), dep)
     }
 
-    // A5.3-complete: emit the lambda value — plain Int(d_nr) for non-capturing
+    // emit the lambda value — plain Int(d_nr) for non-capturing
     // lambdas, or an Insert block that allocates and populates the closure record.
     #[allow(clippy::similar_names)]
     fn emit_lambda_code(&mut self, code: &mut Value, d_nr: u32) {
@@ -687,7 +687,7 @@ impl Parser {
                 .map(|aid| self.data.attr_type(d_nr, aid).clone())
                 .collect();
             let ret_tp = self.data.def(d_nr).returned.clone();
-            // A5.6-text: fn-ref depends on closure work var `w` so that
+            // fn-ref depends on closure work var `w` so that
             // get_free_vars does not emit OpFreeRef for the closure record
             // before the fn-ref escapes the defining scope.
             let fn_type = Type::Function(visible_params, Box::new(ret_tp.clone()), vec![w]);
@@ -702,7 +702,7 @@ impl Parser {
                 let v_nr = self.vars.var(&cap_name);
                 if v_nr != u16::MAX {
                     captured_var_nrs.push(v_nr);
-                    // A5.6-text: mark as captured so test_used does not emit
+                    // mark as captured so test_used does not emit
                     // a false "never read" warning.  Do NOT call var_usages —
                     // that would interfere with the dead-assignment check.
                     self.vars.set_captured(v_nr);
@@ -722,7 +722,7 @@ impl Parser {
             *code = crate::data::v_block(alloc_steps, fn_type, "fn_ref_with_closure");
             // A5.6-1/2: closure is embedded in fn-ref — no explicit call-site injection.
             self.last_closure_alloc = None;
-            // A5.6-text: propagate closure dep and work-buffer info to the
+            // propagate closure dep and work-buffer info to the
             // enclosing function's declared return type.  Two things are needed:
             // 1. The closure work var `w` in the Function dep list, so
             //    get_free_vars does not emit OpFreeRef for the closure record.
@@ -735,7 +735,7 @@ impl Parser {
                 self.data.definitions[self.context as usize].returned =
                     Type::Function(params, Box::new(ret_tp), vec![w]);
             }
-            // A5.6c: record the work var so parse_assign can populate closure_vars
+            // record the work var so parse_assign can populate closure_vars
             // (used by write-back and native codegen's closure_var_of lookup).
             self.last_closure_work_var = w;
         } else {
@@ -743,7 +743,7 @@ impl Parser {
         }
     }
 
-    /// A5.2: Synthesize an anonymous struct definition for the captured variables
+    /// Synthesize an anonymous struct definition for the captured variables
     /// of a lambda. Emits a diagnostic with the record layout for test verification.
     fn synthesize_closure_record(&mut self, lambda_d_nr: u32, lambda_name: &str) {
         let record_name = lambda_name.replace("__lambda_", "__closure_");

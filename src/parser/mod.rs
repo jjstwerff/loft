@@ -66,7 +66,7 @@ pub struct Parser {
     context: u32,
     /// Extra library directories for 'use' resolution (from --lib / --project flags)
     pub lib_dirs: Vec<String>,
-    /// A7.2: resolved paths of native shared libraries to load after `byte_code()`.
+    /// Resolved paths of native shared libraries to load after `byte_code()`.
     /// Populated during `use` processing when a package manifest contains `native`.
     pub pending_native_libs: Vec<String>,
     /// PKG.3: package dependencies discovered during manifest reading.
@@ -108,26 +108,26 @@ pub struct Parser {
     /// lambdas (`|x| { … }`) can infer parameter types from the call-site context.
     /// Cleared to `Type::Unknown(0)` immediately after the argument is parsed.
     pub(crate) lambda_hint: Type,
-    /// A10: set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
+    /// Set by `iter_op` when `#fields` is encountered. Holds the struct `def_nr`.
     /// Checked by `parse_for` to take the unrolling path. Reset after use.
     pub(crate) fields_of: u32,
-    /// A5.1: outer-scope variable names and types, populated when parsing a lambda body.
+    /// Outer-scope variable names and types, populated when parsing a lambda body.
     /// When a variable is not found in the lambda's scope but exists here, it is a capture.
     /// Empty when not inside a lambda.
     pub(crate) capture_context: Vec<(String, Type)>,
-    /// A5.2: accumulates captured variable names and types during lambda body parsing.
+    /// Accumulates captured variable names and types during lambda body parsing.
     /// Reset at the start of each lambda; read after parsing to synthesize the closure record.
     pub(crate) captured_names: Vec<(String, Type)>,
-    /// A5.4: variable number of the __closure parameter inside a lambda body (second pass).
+    /// Variable number of the __closure parameter inside a lambda body (second pass).
     /// `u16::MAX` when not inside a capturing lambda.
     pub(crate) closure_param: u16,
-    // A5.3: maps fn-ref variable numbers to their closure record work variable numbers.
+    // maps fn-ref variable numbers to their closure record work variable numbers.
     pub(crate) closure_vars: std::collections::HashMap<u16, u16>,
-    // A5.3: last closure work variable created by emit_lambda_code (transient).
+    // last closure work variable created by emit_lambda_code (transient).
     pub(crate) last_closure_work_var: u16,
-    // A5.3: closure allocation expression to inject at the call site.
+    // closure allocation expression to inject at the call site.
     pub(crate) last_closure_alloc: Option<Box<Value>>,
-    // A5.6d: outer variable numbers captured by the most recently parsed lambda.
+    // outer variable numbers captured by the most recently parsed lambda.
     // Consumed by try_fn_ref_call to mark them as read at call-injection time.
     pub(crate) last_closure_captured_vars: Vec<u16>,
     /// #91: when > 0, record $.<field> accesses for circular-init detection.
@@ -135,7 +135,7 @@ pub struct Parser {
     pub(crate) init_field_tracking: bool,
     /// #91: field names accessed via $ during the current init(expr) parse.
     pub(crate) init_field_deps: Vec<String>,
-    /// P2-R6 M11-a: true while parsing the body of a `for … par(…) { … }` loop.
+    /// M11-a: true while parsing the body of a `for … par(…) { … }` loop.
     /// `yield` inside a `par()` body is illegal — the worker runs in a separate
     /// thread with its own store; there is no safe coroutine resumption path.
     pub(crate) in_par_body: bool,
@@ -307,7 +307,7 @@ impl Parser {
     /// # Panics
     /// With filesystem problems.
     pub fn parse(&mut self, filename: &str, default: bool) -> bool {
-        // W1.9: under the `wasm` feature, check VIRT_FS before trying the real filesystem.
+        // under the `wasm` feature, check VIRT_FS before trying the real filesystem.
         #[cfg(feature = "wasm")]
         if let Some(content) = crate::wasm::virt_fs_get(filename) {
             return self.parse_virtual(&content, filename, default);
@@ -333,7 +333,7 @@ impl Parser {
         self.diagnostics.is_empty()
     }
 
-    /// W1.9: Parse `content` as if it were the file at `filename`.
+    /// Parse `content` as if it were the file at `filename`.
     /// Used by the WASM virtual-FS path to bypass real filesystem access.
     #[cfg(feature = "wasm")]
     fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
@@ -667,11 +667,11 @@ impl Parser {
             {
                 return true;
             }
-            // A5.6-text: Text types with different dep lists are structurally compatible.
+            // Text types with different dep lists are structurally compatible.
             if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
                 return true;
             }
-            // A5.6-text: Function types with compatible params and return type.
+            // Function types with compatible params and return type.
             if let (Type::Function(tp, tr, _), Type::Function(sp, sr, _)) = (test_type, should)
                 && tp.len() == sp.len()
                 && tp.iter().zip(sp.iter()).all(|(a, b)| a.is_equal(b))
@@ -699,7 +699,7 @@ impl Parser {
         }
     }
 
-    /// P5.3: Check if a type is a generic type variable (a dummy struct used as T).
+    /// Check if a type is a generic type variable (a dummy struct used as T).
     /// Returns the type variable name if it is, None otherwise.
     pub(crate) fn generic_type_name(&self, tp: &Type) -> Option<&str> {
         if let Type::Reference(d, _) = tp {
@@ -764,11 +764,11 @@ impl Parser {
                 },
             )
         };
-        // P5.2: skip generic templates — they are not callable directly.
+        // skip generic templates — they are not callable directly.
         if d_nr != u32::MAX && self.data.def(d_nr).def_type == DefType::Generic {
             d_nr = u32::MAX;
         }
-        // P5.2: if no exact match, try generic instantiation.
+        // if no exact match, try generic instantiation.
         if d_nr == u32::MAX && !self.first_pass && !self.default {
             d_nr = self.try_generic_instantiation(name, types);
         }
@@ -777,7 +777,7 @@ impl Parser {
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else {
-            // P5.3: generic-specific error for method calls on T.
+            // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
                 diagnostic!(
                     self.lexer,
@@ -791,7 +791,7 @@ impl Parser {
         }
     }
 
-    /// P5.2: Try to instantiate a generic function template for the given call-site types.
+    /// Try to instantiate a generic function template for the given call-site types.
     /// Returns the `def_nr` of the instantiated function, or `u32::MAX` if no generic matches.
     fn try_generic_instantiation(&mut self, name: &str, types: &[Type]) -> u32 {
         let generic_name = format!("n_{name}");
@@ -1128,7 +1128,7 @@ impl Parser {
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
             Type::Long | Type::Float => 8,
-            // P136: for Reference(struct_nr), compute the struct's inline field
+            // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.
             Type::Reference(d_nr, _) => {
@@ -1556,7 +1556,7 @@ impl Parser {
                 possible.push(*pos);
             }
             for pos in possible {
-                // P111: skip OpEqBool when comparing character with text —
+                // skip OpEqBool when comparing character with text —
                 // prevents 'a' == "b" from resolving as true == true.
                 if self.data.def(pos).name == "OpEqBool"
                     && types.len() >= 2
@@ -1579,7 +1579,7 @@ impl Parser {
                 }
             }
         }
-        // P5.3: generic-specific error message for operators on T.
+        // generic-specific error message for operators on T.
         let generic_name = types.iter().find_map(|t| self.generic_type_name(t));
         if let Some(tv_name) = generic_name {
             specific!(
@@ -1757,7 +1757,7 @@ impl Parser {
     // Gather depended on variables from arguments of the given called routine.
     fn call_dependencies(&mut self, d_nr: u32, types: &[Type]) -> Type {
         let tp = self.data.def(d_nr).returned.clone();
-        // P117: for Reference returns (structs), filter out hidden return-mechanism
+        // for Reference returns (structs), filter out hidden return-mechanism
         // attributes from dep resolution. The struct owns its store independently —
         // hidden return-store buffers are implementation artifacts.
         // Text/Vector returns genuinely depend on their hidden work buffers.
@@ -1860,7 +1860,7 @@ impl Parser {
                     let mut ls = Vec::new();
                     let vr = if matches!(**vtp, Type::Text(_)) {
                         let wv = self.vars.work_text(&mut self.lexer);
-                        // A5.6f: clear the work buffer before each call so loop
+                        // clear the work buffer before each call so loop
                         // iterations start fresh (matches fn-ref path in control.rs).
                         ls.push(v_set(wv, Value::Text(String::new())));
                         if default != Value::Null
@@ -2099,7 +2099,7 @@ impl Parser {
     }
 
     fn lib_path(&mut self, id: &String) -> String {
-        // W1.9: under the `wasm` feature, check VIRT_FS before filesystem lookups.
+        // under the `wasm` feature, check VIRT_FS before filesystem lookups.
         #[cfg(feature = "wasm")]
         if crate::wasm::virt_fs_get(&format!("{id}.loft")).is_some() {
             return format!("{id}.loft");
@@ -2305,7 +2305,7 @@ impl Parser {
                     return None;
                 }
             }
-            // A7.2: register native shared library path for loading after byte_code().
+            // register native shared library path for loading after byte_code().
             // Try pre-built location first, then auto-build from source.
             if let Some(ref stem) = m.native {
                 let filename = crate::extensions::platform_lib_name(stem);

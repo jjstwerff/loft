@@ -74,7 +74,7 @@ fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
                 calls.insert((*n).cast_unsigned());
             }
         }
-        // A5.6-1: FnRef(d_nr, clos_var, _) is used for closure fn-refs.
+        // FnRef(d_nr, clos_var, _) is used for closure fn-refs.
         Value::FnRef(d_nr, _, _) => {
             if *d_nr >= 0 {
                 calls.insert((*d_nr).cast_unsigned());
@@ -152,7 +152,7 @@ fn collect_fn_ref_literals(
             collect_fn_ref_literals(next, data, variables, calls);
             collect_fn_ref_literals(extra, data, variables, calls);
         }
-        // C47.3: FnRef inside a Block result (closure allocation block).
+        // FnRef inside a Block result (closure allocation block).
         Value::FnRef(d_nr, _, _) => {
             if *d_nr >= 0 {
                 calls.insert((*d_nr).cast_unsigned());
@@ -209,14 +209,14 @@ pub struct Output<'a> {
     /// instead of `yield expr`.  Used in the eager-collect factory function
     /// for `ForLoopBody` coroutine segments.
     pub yield_collect: bool,
-    /// C39: when true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
+    /// When true, `Value::Int` emits a `(d_nr_u32, null_DbRef)` tuple
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.
     pub fn_ref_context: bool,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
-    /// W1.1: when true, emit `#[no_mangle] pub extern "C" fn loft_start()`
+    /// When true, emit `#[no_mangle] pub extern "C" fn loft_start()`
     /// instead of `fn main()` and use WASM imports for native package functions.
     pub wasm_browser: bool,
 }
@@ -402,7 +402,7 @@ impl Output<'_> {
 extern crate loft;"
         )?;
         if wasm_browser {
-            // W1.1: declare host-imported functions for browser WASM.
+            // declare host-imported functions for browser WASM.
             writeln!(w, "#[link(wasm_import_module = \"loft_io\")]")?;
             writeln!(w, "unsafe extern \"C\" {{")?;
             writeln!(
@@ -536,7 +536,7 @@ extern crate loft;"
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
         if (0..till).any(|d| self.data.def(d).name == "n_main") {
             if self.wasm_browser {
-                // W1.1: exported cdylib entry point for browser WASM.
+                // exported cdylib entry point for browser WASM.
                 writeln!(
                     w,
                     "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
@@ -1013,7 +1013,7 @@ extern crate loft;"
             } else if !def.native.is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
-                    // W1.1: call the imported function directly (unqualified).
+                    // call the imported function directly (unqualified).
                     // The function is declared in the preamble via
                     // #[link(wasm_import_module = "loft_gl")].
                     self.output_native_direct_call(w, def_nr, &def.native)?;

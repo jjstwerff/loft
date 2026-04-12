@@ -6,7 +6,7 @@ use crate::keys::{Content, DbRef, Key};
 use crate::store::Store;
 use std::cmp::Ordering;
 
-/// P66: checked vector position — `8 + index * size` using u64 to detect overflow.
+/// Checked vector position — `8 + index * size` using u64 to detect overflow.
 #[inline]
 fn checked_vec_pos(index: u32, size: u32) -> u32 {
     let pos = u64::from(index) * u64::from(size) + 8;
@@ -14,7 +14,7 @@ fn checked_vec_pos(index: u32, size: u32) -> u32 {
         .unwrap_or_else(|_| panic!("Vector position overflow: index={index} size={size}"))
 }
 
-/// P66: checked vector capacity — `(count * size + 15) / 8` using u64.
+/// Checked vector capacity — `(count * size + 15) / 8` using u64.
 #[inline]
 fn checked_vec_cap(count: u32, size: u32) -> u32 {
     let bytes = u64::from(count) * u64::from(size) + 15;

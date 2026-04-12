@@ -191,7 +191,7 @@ pub struct Stores {
     /// variables in that frame as `(name, type_name, ArgValueSnapshot)`.
     /// Populated alongside `call_stack_snapshot` in `State::static_call`.
     pub variables_snapshot: Vec<Vec<VarSnapshot>>,
-    /// A5.6g: native-code closure store. Maps lambda d_nr → closure DbRef.
+    /// Native-code closure store. Maps lambda d_nr → closure DbRef.
     /// Set by `OpStoreClosure` (native) immediately before calling the lambda;
     /// read by `OpGetClosure` in the match-dispatch arm.
     pub closure_map: HashMap<u32, DbRef>,

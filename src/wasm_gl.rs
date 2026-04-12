@@ -705,7 +705,7 @@ fn wgl_mouse_button(stores: &mut Stores, stack: &mut DbRef) {
 
 // ── GL7.2: PNG save ──────────────────────────────────────────────────────────
 
-/// save_png_raw(path, width, height, data) -> boolean
+/// Save_png_raw(path, width, height, data) -> boolean
 fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
     let data_ref = *stores.get::<DbRef>(stack);
     let height = *stores.get::<i32>(stack);
@@ -752,7 +752,7 @@ thread_local! {
     static FONTS: RefCell<Vec<fontdue::Font>> = const { RefCell::new(Vec::new()) };
 }
 
-/// gl_load_font(path) -> integer
+/// Gl_load_font(path) -> integer
 fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
     let path = *stores.get::<Str>(stack);
     #[cfg(feature = "wasm")]
@@ -795,7 +795,7 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
-/// gl_measure_text(font, content, size) -> float
+/// Gl_measure_text(font, content, size) -> float
 fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
     let size = *stores.get::<f64>(stack);
     let content = *stores.get::<Str>(stack);
@@ -825,14 +825,14 @@ fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
-/// gl_text_height(font, size) -> integer
+/// Gl_text_height(font, size) -> integer
 fn wgl_text_height(stores: &mut Stores, stack: &mut DbRef) {
     let size = *stores.get::<f64>(stack);
     let _font_idx = *stores.get::<i32>(stack);
     stores.put(stack, (size * 1.2) as i32);
 }
 
-/// rasterize_text_into(font, content, size, buf) -> integer (width)
+/// Rasterize_text_into(font, content, size, buf) -> integer (width)
 /// Rasterizes text into a pre-allocated loft vector<integer> of alpha values.
 fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
     let buf_ref = *stores.get::<DbRef>(stack);

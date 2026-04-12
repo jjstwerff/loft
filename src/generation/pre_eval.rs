@@ -460,7 +460,7 @@ impl Output<'_> {
                                     arg_code = arg_code.replacen(pcode.as_str(), pname.as_str(), 1);
                                 }
                             }
-                            // C39: set fn_ref_context for fn-ref parameter evaluation.
+                            // set fn_ref_context for fn-ref parameter evaluation.
                             let param_is_fnref = idx < self.data.def(*d_nr).attributes.len()
                                 && matches!(
                                     self.data.def(*d_nr).attributes[idx].typedef,

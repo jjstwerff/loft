@@ -3,8 +3,6 @@
 
 //! Package registry — parse registry files, resolve versions, classify installed packages.
 
-#![allow(clippy::missing_errors_doc)]
-
 use std::path::{Path, PathBuf};
 
 /// Default registry URL — used when no `source:` header or env var is set.
@@ -292,6 +290,11 @@ pub fn default_registry_path() -> PathBuf {
 }
 
 /// Download a URL to a local file path.  Returns `Err` with a human-readable message on failure.
+///
+/// # Errors
+///
+/// Returns an error string if the HTTP request fails, the destination cannot
+/// be created, or the response body cannot be copied to disk.
 #[cfg(feature = "registry")]
 pub fn download_file(url: &str, dst: &Path) -> Result<(), String> {
     let resp = ureq::get(url)
@@ -306,6 +309,12 @@ pub fn download_file(url: &str, dst: &Path) -> Result<(), String> {
 
 /// Download and extract a package zip.  Returns the path to the package root
 /// (directory containing `loft.toml`).
+///
+/// # Errors
+///
+/// Returns an error string if the download fails, the temp directory cannot
+/// be created, the zip is malformed, extraction fails, or no `loft.toml`
+/// is found in the extracted contents.
 #[cfg(feature = "registry")]
 pub fn download_and_extract(entry: &RegistryEntry, tmp_base: &Path) -> Result<PathBuf, String> {
     // Download zip to temp file.
@@ -372,6 +381,11 @@ pub fn staleness_warning(registry_path: &Path) -> Option<String> {
 
 /// Validate downloaded registry content.
 /// Returns `Ok(())` if the content is valid, `Err` with a reason otherwise.
+///
+/// # Errors
+///
+/// Returns an error string if the content is empty or contains no parseable
+/// registry entries.
 pub fn validate_registry_content(content: &str) -> Result<(), String> {
     if content.is_empty() {
         return Err("downloaded registry is empty".to_string());

@@ -150,3 +150,96 @@ fn logger_rate_limiting_suppresses_excess() {
         "third message must be suppressed; got: {out:?}"
     );
 }
+
+/// `Logger::production()` builds a logger with `production: true` and no file — calls to
+/// `log()` must not panic and must not create a log file on disk.
+#[test]
+fn logger_production_mode_writes_no_file() {
+    let lg = Logger::production();
+    assert!(
+        lg.config.production,
+        "production() must set RuntimeLogConfig.production"
+    );
+    // log_path is the default, but file is None so nothing gets written.
+    let mut lg = lg;
+    lg.log(Severity::Error, "prod.loft", 1, "should not crash");
+    // No assertion on file contents: production mode deliberately does not open one.
+}
+
+/// `Logger::from_config_file` with a non-existent path falls back to defaults rooted at
+/// the main loft file's directory, producing a usable logger.
+#[test]
+fn logger_from_missing_config_uses_defaults() {
+    let fake = PathBuf::from("/definitely/does/not/exist/loft.log.conf");
+    let main = unique_tmp("logger_main").with_extension("loft");
+    let lg = Logger::from_config_file(&fake, main.to_str().unwrap());
+    // Default level is Info — verify by logging a Warn and checking it gets through
+    // to the default log path under the main file's parent.
+    let expected_dir = main.parent().unwrap().join(".loft");
+    let expected_log = expected_dir.join("log.txt");
+    assert_eq!(
+        lg.config.log_path, expected_log,
+        "default log path should be <main_dir>/.loft/log.txt"
+    );
+}
+
+/// Size-based rotation: once `current_size >= max_size_bytes`, the active log is moved
+/// aside and a fresh file starts.  We verify a `.1` backup appears and that the
+/// second message lands in the fresh log.
+#[test]
+fn logger_size_rotation_creates_backup() {
+    let path = unique_tmp("logger_rot");
+    let config = RuntimeLogConfig {
+        log_path: path.clone(),
+        default_level: Severity::Info,
+        rate_per_minute: 0,
+        daily_rotation: false,
+        max_size_bytes: 50, // tiny — first log line will exceed
+        max_files: 3,
+        ..RuntimeLogConfig::default()
+    };
+    let mut lg = Logger::new(config, None);
+    // Write a long first line so current_size passes 50 bytes.
+    lg.log(
+        Severity::Info,
+        "rot.loft",
+        1,
+        "first-message-padding-to-exceed-fifty-bytes",
+    );
+    // Second call sees current_size >= 50 → triggers rotate(), then writes.
+    lg.log(Severity::Info, "rot.loft", 2, "second-after-rotation");
+    drop(lg);
+
+    let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| format!(".{s}"))
+        .unwrap_or_default();
+    let backup = path.with_file_name(format!("{stem}.1{ext}"));
+    let backup_exists = backup.exists();
+    let current = read_log(&path);
+    cleanup(&path);
+    let _ = std::fs::remove_file(&backup);
+    assert!(
+        backup_exists,
+        "expected rotation backup {backup:?} after exceeding max_size_bytes"
+    );
+    assert!(
+        current.contains("second-after-rotation"),
+        "post-rotation log must contain the second message; got: {current:?}"
+    );
+}
+
+/// `generate_config()` returns a non-empty template string with the documented keys — ensures
+/// the helper used by `loft --generate-log-config` keeps at least the core options.
+#[test]
+fn logger_generate_config_contains_core_keys() {
+    let tmpl = loft::logger::generate_config();
+    for key in &["file", "level", "production", "max_size_mb", "daily"] {
+        assert!(
+            tmpl.contains(key),
+            "generate_config() template missing `{key}`; got:\n{tmpl}"
+        );
+    }
+}

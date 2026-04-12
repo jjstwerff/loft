@@ -323,7 +323,7 @@ impl Parser {
             self.data.definitions[d_nr as usize].def_type = DefType::Enum;
             self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
         } else if self.first_pass {
-            // P85b: a name that already exists must not be reused — that
+            // a name that already exists must not be reused — that
             // would overwrite the existing definition's type and crash in
             // `set_returned` below.  Emit a clear diagnostic naming the
             // existing definition's location.
@@ -371,7 +371,7 @@ impl Parser {
                 "Expect type definitions to be in camel case style"
             );
         }
-        // P85b: detect a name collision before calling `add_def`, which
+        // detect a name collision before calling `add_def`, which
         // would otherwise panic with `Dual definition of <name>`.  Emit a
         // clear diagnostic citing the prior definition's location.
         let mut conflict = false;
@@ -420,7 +420,6 @@ impl Parser {
     // Accepts either `NAME = expr;` or `NAME: type = expr;`. The optional
     // type annotation is parsed (so the parser doesn't reject the form)
     // but the inferred type from the initialiser is the source of truth.
-    // P128 fix.
     pub(crate) fn parse_constant(&mut self) -> bool {
         if let Some(id) = self.lexer.has_identifier() {
             // Optional `: type` annotation between the identifier and `=`.
@@ -441,7 +440,7 @@ impl Parser {
             let mut val = Value::Null;
             let tp = self.expression(&mut val);
             if self.first_pass {
-                // P85b: detect a name collision before calling `add_def`,
+                // detect a name collision before calling `add_def`,
                 // which would otherwise panic with `Dual definition of <name>`.
                 let existing = self.data.def_nr(&id);
                 if existing == u32::MAX {
@@ -506,7 +505,7 @@ impl Parser {
                 "Expect function names to be in lower case style"
             );
         }
-        // P5.1: detect `<T>` type parameter after function name.
+        // detect `<T>` type parameter after function name.
         let mut is_generic = false;
         let mut type_var_name = String::new();
         // I4: bound names collected from `<T: A + B>` — resolved to def_nrs in the second pass.
@@ -551,7 +550,7 @@ impl Parser {
         }
         let mut arguments = Vec::new();
         if self.lexer.token("(") {
-            // P5.1: register the type variable as a struct so parse_type
+            // register the type variable as a struct so parse_type
             // resolves it to Reference(d, []).  The definition is never
             // compiled — it only exists for the template's type resolution.
             if is_generic && self.first_pass && self.data.def_nr(&type_var_name) == u32::MAX {
@@ -566,7 +565,7 @@ impl Parser {
             }
             self.lexer.token(")");
         }
-        // P5.1: validate that the type variable appears in the first parameter.
+        // validate that the type variable appears in the first parameter.
         if is_generic && !arguments.is_empty() {
             let tv_nr = self.data.def_nr(&type_var_name);
             let has_tv = Self::type_contains_def(&arguments[0].typedef, tv_nr);
@@ -740,7 +739,7 @@ impl Parser {
                     }
                 }
             }
-            // P115: re-apply name remaps for promoted text arguments in second pass.
+            // re-apply name remaps for promoted text arguments in second pass.
             if !self.first_pass {
                 for (shadow, original) in self.vars.promoted_text_args() {
                     let orig_name = self.vars.name(original).to_string();
@@ -750,7 +749,7 @@ impl Parser {
                 }
             }
             self.parse_code();
-            // C47.4: reset transient closure state after each function body.
+            // reset transient closure state after each function body.
             // Without this, a lambda inside make_adder leaks last_closure_work_var
             // into the next function parsed (main), causing closure_var_of to
             // return a stale value for add5 = make_adder(5).

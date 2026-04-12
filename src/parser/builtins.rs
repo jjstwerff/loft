@@ -397,7 +397,7 @@ impl Parser {
         result_ref_type
     }
 
-    /// A14.5: check if a worker function qualifies for the light parallel path.
+    /// Check if a worker function qualifies for the light parallel path.
     /// Returns `Some(M)` (pool stores per worker) if eligible, `None` otherwise.
     /// Eligible = no text return AND no store allocation inside recursive calls.
     pub(crate) fn check_light_eligible(&self, worker_d_nr: u32) -> Option<usize> {

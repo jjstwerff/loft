@@ -119,6 +119,40 @@ jobs:
             target
           key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}
 
+      # Instantiate the committed doc/pkg/{loft.js, loft_bg.wasm} pair
+      # exactly as the browser would.  A drifted pair fails here with
+      # the same LinkError ("Failed to grow table" / "Function import
+      # mismatch") that users see on the deployed site — catches the
+      # case where one of the two was re-committed without the other
+      # (the cause of the PR #165 post-merge breakage).  Runs before
+      # make gallery so the failure blames the committed state, not
+      # the rebuild.
+      - name: Probe committed wasm/js pair
+        run: |
+          # Instantiate the committed wasm using the committed JS glue
+          # exactly as a browser would.  A drifted pair fails here with
+          # the identical LinkError ("WebAssembly.Table.grow() failed"
+          # or "Function import mismatch") that users see on the
+          # deployed site — catches the case where one of the two files
+          # was re-committed without the other.
+          node --input-type=module -e "
+            import { readFileSync } from 'fs';
+            import { pathToFileURL } from 'url';
+            import { resolve } from 'path';
+            const wasm = await WebAssembly.compile(readFileSync('doc/pkg/loft_bg.wasm'));
+            const glue = await import(pathToFileURL(resolve('doc/pkg/loft.js')).href);
+            try {
+              await glue.default(wasm);
+              console.log('committed bundle instantiates OK');
+            } catch (e) {
+              console.error('Committed doc/pkg/loft.js and loft_bg.wasm are out of sync.');
+              console.error('Browsers will show the same LinkError on the deployed site:');
+              console.error('  ' + (e && e.message || e));
+              console.error('Fix: run \`make gallery\` locally and commit BOTH files together.');
+              process.exit(1);
+            }
+          "
+
       # Rebuilds doc/pkg/ (wasm-pack bundle behind gallery.html +
       # playground.html), verifies every asset HEAD-loads.
       - name: make gallery

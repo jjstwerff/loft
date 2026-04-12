@@ -514,7 +514,7 @@ pub fn op_conv_bool_from_int(v: i32) -> bool {
 #[inline]
 #[must_use]
 pub fn op_conv_bool_from_character(v: char) -> bool {
-    // P132: callers must read raw bytes via `char::from_u32(...).unwrap_or('\0')`
+    // callers must read raw bytes via `char::from_u32(...).unwrap_or('\0')`
     // (handled in `create.rs::generate_code_to`), so an invalid bit pattern
     // — including the `i32::MIN` (0x80000000) coroutine-exhaustion sentinel
     // pushed by `push_null_value` for `iterator<character>` — is mapped to
@@ -912,7 +912,7 @@ mod test {
         let _ = op_min_long(i64::MIN + 1, 1);
     }
 
-    /// compile-time guard — `_int` functions must never reference `i64::MIN`.
+    /// Compile-time guard — `_int` functions must never reference `i64::MIN`.
     /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
     /// in an `_int` function would add an unnecessary branch on every integer op.
     #[test]

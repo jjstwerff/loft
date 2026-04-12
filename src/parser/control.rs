@@ -17,7 +17,7 @@ fn is_block_divergent(ops: &[Value]) -> bool {
 
 /// Collected match arm data for enum/struct-enum match expressions.
 struct EnumArm {
-    /// discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
+    /// Discriminants for this arm — Vec allows or-patterns (multiple variants per arm).
     discs: Vec<i32>,
     code: Value,
     tp: Type,
@@ -86,7 +86,7 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
-            // P85c: detect file-scope-only declarations inside a block and
+            // detect file-scope-only declarations inside a block and
             // emit a single clean diagnostic instead of cascading parse
             // errors like "Expect token =" + "Expect constants to be in
             // upper case".  `fn` is special-cased because `fn(args) {...}`
@@ -499,7 +499,7 @@ impl Parser {
                 break;
             };
 
-            // C53: accept `Library::Variant` or `EnumName::Variant` qualified patterns.
+            // accept `Library::Variant` or `EnumName::Variant` qualified patterns.
             // The `::` resolves the right-hand identifier in the named scope.
             let pattern_name = if self.lexer.has_token("::") {
                 let Some(vname) = self.lexer.has_identifier() else {
@@ -628,7 +628,7 @@ impl Parser {
                     }
                     break;
                 };
-                // C53: accept Lib::Variant in or-patterns as well.
+                // accept Lib::Variant in or-patterns as well.
                 let next_name = if self.lexer.has_token("::") {
                     let Some(vname) = self.lexer.has_identifier() else {
                         if !self.first_pass {
@@ -1263,7 +1263,7 @@ impl Parser {
         }
     }
 
-    /// parse a match expression over a scalar (integer, text, boolean, etc.).
+    /// Parse a match expression over a scalar (integer, text, boolean, etc.).
     /// Builds an if/else chain: `if subject == lit1 { arm1 } else if subject == lit2 { arm2 } else { wildcard }`
     #[allow(clippy::too_many_lines)] // match-arm dispatch with pattern/guard/binding logic
     fn parse_scalar_match(
@@ -1404,7 +1404,7 @@ impl Parser {
         result_type
     }
 
-    /// parse a match expression over a vector subject.
+    /// Parse a match expression over a vector subject.
     /// Slice patterns: `[a, b] =>`, `[first, ..] =>`, `[.., last] =>`, `_ =>`.
     /// Each arm generates a length check and element bindings.
     #[allow(clippy::too_many_lines)] // slice pattern parsing with head/tail/rest dispatch
@@ -1808,7 +1808,7 @@ impl Parser {
         result_type
     }
 
-    /// build a boolean condition for a single scalar pattern value.
+    /// Build a boolean condition for a single scalar pattern value.
     fn build_scalar_cond(&mut self, cond: &mut Value, v: u16, subject_type: &Type, pat: Value) {
         // Reuse the same logic as build_scalar_chain for special block patterns.
         if let Value::Block(ref bl) = pat
@@ -1951,7 +1951,7 @@ impl Parser {
                     }
                     continue;
                 }
-                // A5.6b.1: captured text variables are read from the closure record at
+                // captured text variables are read from the closure record at
                 // runtime — they must NOT be registered as hidden RefVar(Text) work-buffer
                 // arguments.  Adding them would shift __closure to a wrong stack position.
                 if self.captured_names.iter().any(|(name, _)| name == n) {
@@ -2044,7 +2044,7 @@ impl Parser {
                 let a = self
                     .data
                     .add_attribute(&mut self.lexer, self.context, n, ret.clone());
-                // P117: mark as hidden return-mechanism parameter
+                // mark as hidden return-mechanism parameter
                 self.data.definitions[self.context as usize].attributes[a].hidden = true;
                 self.vars.become_argument(*v);
                 dep.push(a as u16);
@@ -2332,7 +2332,7 @@ impl Parser {
                 if let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone()
                     && param_types.is_empty()
                 {
-                    // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+                    // create/find work-buffer text variables for text-returning fn-ref calls.
                     // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
                     // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
                     let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
@@ -2345,8 +2345,8 @@ impl Parser {
                     if !self.first_pass {
                         self.var_usages(v_nr, true);
                         let mut args = vec![];
-                        // A5.6b.2: inject work-buffer DbRef blocks before __closure (zero-param case).
-                        // A5.6f: clear the work buffer before each call so loop iterations start fresh.
+                        // inject work-buffer DbRef blocks before __closure (zero-param case).
+                        // clear the work buffer before each call so loop iterations start fresh.
                         let ref_def = self.data.def_nr("reference");
                         for &wv in &work_vars {
                             args.push(v_block(
@@ -2358,9 +2358,9 @@ impl Parser {
                                 "cref_work_buf",
                             ));
                         }
-                        // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+                        // closure is embedded in the 16-byte fn-ref slot; fn_call_ref
                         // pushes it automatically — no explicit injection needed here.
-                        // A5.6d: mark captured vars as read at the call site
+                        // mark captured vars as read at the call site
                         for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
                             self.var_usages(cv, true);
                         }
@@ -2526,7 +2526,7 @@ impl Parser {
         let Type::Function(param_types, ret_type, _) = self.vars.tp(v_nr).clone() else {
             return None;
         };
-        // A5.6b.2: create/find work-buffer text variables for text-returning fn-ref calls.
+        // create/find work-buffer text variables for text-returning fn-ref calls.
         // work_text() adds each var to work_texts; parse_code inserts v_set(wv, Text(""))
         // so Zone 2 slot assignment fires.  Must run on both passes for counter sync.
         let work_vars: Vec<u16> = if let Type::Text(deps) = ret_type.as_ref() {
@@ -2551,10 +2551,10 @@ impl Parser {
             for (i, expected) in param_types.iter().enumerate() {
                 self.convert(&mut converted[i], &types[i], expected);
             }
-            // A5.6b.2: inject hidden work-buffer DbRef args for text-returning lambdas.
+            // inject hidden work-buffer DbRef args for text-returning lambdas.
             // Each block emits OpCreateStack → 12-byte DbRef, matching callee's &text param.
             // Order: visible params → work bufs → __closure (must match callee slot layout).
-            // A5.6f: prepend v_set(wv, "") to clear the buffer so loop iterations start fresh.
+            // prepend v_set(wv, "") to clear the buffer so loop iterations start fresh.
             let ref_def = self.data.def_nr("reference");
             for &wv in &work_vars {
                 converted.push(v_block(
@@ -2566,17 +2566,17 @@ impl Parser {
                     "cref_work_buf",
                 ));
             }
-            // A5.3: inject hidden __closure argument — the closure allocation
+            // inject hidden __closure argument — the closure allocation
             // expression is generated inline so it runs at the call site, avoiding
-            // A5.6-3: closure is embedded in the 16-byte fn-ref slot; fn_call_ref
+            // closure is embedded in the 16-byte fn-ref slot; fn_call_ref
             // pushes it automatically — no explicit injection needed at call sites.
-            // A5.6d: mark captured vars as read at the call site
+            // mark captured vars as read at the call site
             for &cv in &std::mem::take(&mut self.last_closure_captured_vars) {
                 self.var_usages(cv, true);
             }
             self.var_usages(v_nr, true);
             *val = Value::CallRef(v_nr, converted);
-            // A5.6c: for void-return capturing lambdas, write updated closure
+            // for void-return capturing lambdas, write updated closure
             // record fields back to the corresponding outer variables so the caller
             // observes mutations made inside the lambda body (e.g. `count += x`).
             // Non-void returns are not handled here — they require a temp to hold
@@ -2854,7 +2854,7 @@ impl Parser {
         (types, list)
     }
 
-    /// A15: Parse `parallel { arm1; arm2; ... }`.
+    /// Parse `parallel { arm1; arm2; ... }`.
     /// Each semicolon-separated expression in the block becomes one concurrent arm.
     pub(crate) fn parse_parallel(&mut self, code: &mut Value) {
         self.lexer.token("{");

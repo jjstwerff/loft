@@ -81,7 +81,7 @@ impl Parser {
                         return self.parse_method(code, stub_nr, t.clone());
                     }
                 }
-                // P5.3: generic-specific error for field access on T.
+                // generic-specific error for field access on T.
                 if let Some(tv_name) = self.generic_type_name(&t) {
                     diagnostic!(
                         self.lexer,
@@ -413,7 +413,7 @@ impl Parser {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
-        // A8.1: detect open-start `col[..hi]` or `col[..]` before parsing expression.
+        // detect open-start `col[..hi]` or `col[..]` before parsing expression.
         let open_start = self.lexer.peek_token("..") || self.lexer.peek_token("..=");
         let mut p = Value::Null;
         let _index_t = if open_start {
@@ -465,7 +465,7 @@ impl Parser {
                 ls.push(Value::Int(nr as i32));
                 ls.append(&mut key);
             }
-            // A8.1: open-end — if next token is `]` or `,`, skip upper-bound expression.
+            // open-end — if next token is `]` or `,`, skip upper-bound expression.
             let open_end = self.lexer.peek_token("]") || self.lexer.peek_token(",");
             let mut nr = 0;
             if !open_end {
@@ -519,7 +519,7 @@ impl Parser {
             && key_types.len() > 1
             && nr < key_types.len()
         {
-            // A8.3: partial-key match — rewrite idx[k1] as idx[k1..=k1].
+            // partial-key match — rewrite idx[k1] as idx[k1..=k1].
             // Uses the existing inclusive-range iteration path with from=till=key.
             let inclusive = true;
             let iter = self.create_unique("iter", &Type::Long);
@@ -618,7 +618,7 @@ pair the hash with a vector to iterate in insertion order"
         if inclusive {
             on += 128;
         }
-        // P98: for index collections with a descending primary key, the tree
+        // for index collections with a descending primary key, the tree
         // in-order is reversed from user-logical order.  XOR the reverse bit
         // so that step() uses previous() instead of next(), matching user order.
         // When the user also applies rev(), the XOR cancels out.

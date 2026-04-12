@@ -33,7 +33,7 @@ impl Output<'_> {
         }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
-        // P117-native: when a call returns a Reference and the callee has
+        // when a call returns a Reference and the callee has
         // visible Reference params, the returned DbRef may alias a parameter.
         // Deep-copy to prevent aliasing.
         if let (Type::Reference(d_nr, _), Value::Call(fn_nr, args)) = (variables.tp(var), to)
@@ -230,13 +230,13 @@ impl Output<'_> {
                     )?;
                 }
             } else {
-                // C39: wrap plain Int or If-with-Int values assigned to Function vars.
+                // wrap plain Int or If-with-Int values assigned to Function vars.
                 let is_fn_ref_var = matches!(variables.tp(var), Type::Function(_, _, _));
                 let wrap_fn_ref = is_fn_ref_var && matches!(to, Value::Int(_));
                 if wrap_fn_ref {
                     write!(w, "(")?;
                 }
-                // C39: set fn_ref_context so if-else branches with bare Int
+                // set fn_ref_context so if-else branches with bare Int
                 // values produce (u32, null_DbRef) tuples.  Cleared inside
                 // Call argument processing to avoid wrapping OpDatabase args.
                 let prev_ctx = self.fn_ref_context;
@@ -340,7 +340,7 @@ impl Output<'_> {
         def_nr: u32,
         vals: &[Value],
     ) -> std::io::Result<()> {
-        // C39: clear fn_ref_context inside calls — arguments like OpDatabase's
+        // clear fn_ref_context inside calls — arguments like OpDatabase's
         // type number are plain integers, not fn-ref d_nr values.
         let saved_ctx = self.fn_ref_context;
         self.fn_ref_context = false;
@@ -460,7 +460,7 @@ impl Output<'_> {
                         write!(w, "()")?;
                         return Ok(());
                     }
-                    // C39: free the closure component of fn-ref (u32, DbRef) variables.
+                    // free the closure component of fn-ref (u32, DbRef) variables.
                     // Non-capturing lambdas have store_nr = u16::MAX (null sentinel).
                     if let Value::Var(v) = db_val
                         && matches!(

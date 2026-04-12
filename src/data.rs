@@ -98,10 +98,10 @@ pub enum Value {
     TuplePut(u16, u16, Box<Value>),
     // CO1.3c: Yield a value from a generator function.
     Yield(Box<Value>),
-    // A5.6-1: Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
+    // Construct a 16-byte fn-ref on the stack: push d_nr (4B via OpConstInt)
     // then push the closure DbRef (12B via OpVarRef of clos_var_nr). No new opcode.
     FnRef(i32, u16, Box<Type>),
-    /// A15: parallel { arm1; arm2; } — each arm runs concurrently.
+    /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
 }
 
@@ -587,7 +587,7 @@ pub struct Attribute {
     pub nullable: bool,
     /// This attribute is holding the primary reference of its records.
     primary: bool,
-    /// P117: hidden return-mechanism parameter added by `text_return` or `ref_return`.
+    /// Hidden return-mechanism parameter added by `text_return` or `ref_return`.
     /// Not a user-declared parameter — should be excluded from dep propagation.
     pub hidden: bool,
     /// The initial value of this attribute if it is not given.
@@ -678,14 +678,14 @@ pub struct Definition {
     pub variables: Function,
     /// Whether this definition was declared with `pub`.
     pub pub_visible: bool,
-    /// A5.2: definition number of the closure record struct for capturing lambdas.
+    /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
     /// I2: for generic functions — the `def_nr`s of all required interface bounds.
     /// Empty for non-generic or unbounded generic functions.  Multiple bounds (`<T: A + B>`)
     /// are stored as multiple entries; checked for conflicting method signatures at I6.
     pub bounds: Vec<u32>,
-    /// P127: DbRef into CONST_STORE for pre-built vector constants.
+    /// DbRef into CONST_STORE for pre-built vector constants.
     /// `None` for non-constant definitions or constants that couldn't be pre-built.
     pub const_ref: Option<crate::keys::DbRef>,
 }

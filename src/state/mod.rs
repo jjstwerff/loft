@@ -123,13 +123,13 @@ pub struct State {
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
-    /// P60: runtime call depth counter. Panics at MAX_CALL_DEPTH.
+    /// Runtime call depth counter. Panics at MAX_CALL_DEPTH.
     pub(crate) call_depth: u32,
-    /// A15: number of arms in the current `parallel {}` block.
+    /// Number of arms in the current `parallel {}` block.
     pub(crate) parallel_n_arms: u8,
-    /// A15: bytecode offsets for each arm (relative to join point).
+    /// Bytecode offsets for each arm (relative to join point).
     pub(crate) parallel_arm_positions: Vec<u16>,
-    /// P127: DbRef for each pre-built vector constant, indexed by definition number.
+    /// DbRef for each pre-built vector constant, indexed by definition number.
     /// Zeroed entries for non-constant definitions. Populated during `byte_code()`.
     pub const_refs: Vec<DbRef>,
 }
@@ -191,7 +191,7 @@ impl State {
         }
     }
 
-    /// P60: maximum runtime call depth before panicking.
+    /// Maximum runtime call depth before panicking.
     /// Set below the store stack limit (~8000 bytes / ~8 bytes per frame)
     /// so the depth check fires before a store out-of-bounds panic.
     const MAX_CALL_DEPTH: u32 = 500;
@@ -279,7 +279,7 @@ impl State {
     /// Panics if `fn_var < 16` (the fn-ref slot is 16 bytes: `d_nr` + closure `DbRef`), or if
     /// the slot holds a negative definition number (un-initialised / null sentinel).
     pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
-        // A5.6: fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
+        // fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
         assert!(
             fn_var >= 16,
             "fn_call_ref: fn_var={fn_var} < 16 — fn-ref slot is 16B (d_nr + closure DbRef)"
@@ -947,7 +947,7 @@ impl State {
         }
     }
 
-    /// P2-R5 (debug-only, 64-bit): scan `locals_bytes` for text locals whose first
+    /// Scan `locals_bytes` for text locals whose first
     /// 8 bytes (the `Str.ptr` field) fall inside a live non-stack store allocation.
     /// Emits a diagnostic warning; does not panic.  See COROUTINE.md CL-2b.
     #[cfg(all(debug_assertions, target_pointer_width = "64"))]
@@ -1019,7 +1019,7 @@ impl State {
             }
         }
 
-        // P2-R5 (debug-only, 64-bit only): warn if any text local is a store-backed Str.
+        // warn if any text local is a store-backed Str.
         // See COROUTINE.md CL-2b and SAFE.md § P2-R5.
         #[cfg(all(debug_assertions, target_pointer_width = "64"))]
         self.warn_store_backed_text(
@@ -1280,20 +1280,20 @@ impl State {
             .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
     }
 
-    /// A15: `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
+    /// `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
     pub fn parallel_begin(&mut self) {
         let n_arms = *self.code::<u8>();
         self.parallel_n_arms = n_arms;
         self.parallel_arm_positions.clear();
     }
 
-    /// A15: `parallel {}` — read the arm's bytecode offset and record it.
+    /// `parallel {}` — read the arm's bytecode offset and record it.
     pub fn parallel_arm(&mut self) {
         let offset = *self.code::<u16>();
         self.parallel_arm_positions.push(offset);
     }
 
-    /// A15: `parallel {}` — spawn threads for all recorded arms and join.
+    /// `parallel {}` — spawn threads for all recorded arms and join.
     /// Each arm runs as a void function at its bytecode position.
     pub fn parallel_join(&mut self) {
         let positions: Vec<u32> = self
@@ -1834,7 +1834,7 @@ impl State {
         result
     }
 
-    /// A15: Execute a void function at `fn_pos` with no arguments.
+    /// Execute a void function at `fn_pos` with no arguments.
     /// Used by `parallel {}` arms.
     pub fn execute_at_void(&mut self, fn_pos: u32) {
         self.stack_pos = 4;
