@@ -317,6 +317,66 @@ fn roman(rn_n: integer) -> text {
 fn bk_x(col: integer) -> float { (col as float) * (BRICK_W + BRICK_PAD) + 12.0 }
 fn bk_y(row: integer) -> float { (row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP }
 
+// Hand-designed levels — returns the brick type at (r, c) for level
+// `lv`.  Return codes:
+//    -1  empty slot (no brick)
+//     0  normal brick (no special)
+//  1..7  brick carrying that SP_* special, matching the existing
+//        special-type constants.
+// Levels beyond the hand-designed set fall back to the procedural
+// `assign_special` generator so the game stays playable indefinitely.
+fn level_brick(dl_lv: integer, dl_r: integer, dl_c: integer) -> integer {
+  // ── Level 1 — gentle intro: solid 4 rows, no specials at all. ──
+  if dl_lv == 1 { return 0; }
+
+  // ── Level 2 — one SP_EXTEND to teach the powerup system. ──
+  if dl_lv == 2 {
+    if dl_r == 1 && dl_c == 4 { return SP_EXTEND; }
+    if dl_r == 1 && dl_c == 5 { return SP_MULTI; }
+    return 0;
+  }
+
+  // ── Level 3 — top row has shoulder gaps, one fire in the centre. ──
+  if dl_lv == 3 {
+    if dl_r == 0 && (dl_c < 2 || dl_c >= 8) { return -1; }
+    if dl_r == 1 && (dl_c < 1 || dl_c >= 9) { return -1; }
+    if dl_r == 0 && dl_c == 5 { return SP_FIRE; }
+    if dl_r == 2 && dl_c == 2 { return SP_SHIELD; }
+    if dl_r == 2 && dl_c == 7 { return SP_SHIELD; }
+    return 0;
+  }
+
+  // ── Level 4 — downward arrow with an SP_EXPLODE at the point. ──
+  if dl_lv == 4 {
+    dl_half = BRICK_COLS / 2;
+    if dl_r < 3 {
+      // top 3 rows form the arrow shaft: narrow central band.
+      if dl_c < dl_half - 1 || dl_c > dl_half { return -1; }
+      if dl_r == 2 && dl_c == dl_half - 1 { return SP_EXPLODE; }
+      return 0;
+    }
+    if dl_r == 3 {
+      // shoulders where the arrow wings spread out.
+      if dl_c == 0 || dl_c == BRICK_COLS - 1 { return SP_BALLOON; }
+      return 0;
+    }
+    return 0;
+  }
+
+  // ── Level 5 — "smile" pattern of specials inside a solid wall. ──
+  if dl_lv == 5 {
+    if dl_r == 2 && dl_c == 2 { return SP_BALLOON; }
+    if dl_r == 2 && dl_c == 7 { return SP_BALLOON; }
+    if dl_r == 4 && dl_c == 1 { return SP_FIRE; }
+    if dl_r == 4 && dl_c == 8 { return SP_FIRE; }
+    if dl_r == 5 && (dl_c == 3 || dl_c == 4 || dl_c == 5 || dl_c == 6) { return SP_MULTI; }
+    return 0;
+  }
+
+  // ── Levels 6+ — fallback to procedural randomness. ──
+  -2
+}
+
 fn assign_special(seed: integer) -> integer {
   as_v = (seed * 7 + 13) % 50;
   if as_v < 2 { return SP_EXTEND; }
@@ -482,10 +542,17 @@ fn main() {
   for br_ir in 0..START_ROWS {
     for br_ic in 0..BRICK_COLS {
       br_ii = br_ir * BRICK_COLS + br_ic;
-      br_bricks[br_ii] = 1;
-      br_specials[br_ii] = assign_special(br_ii);
-      br_hp[br_ii] = 1;
-      br_alive += 1;
+      br_it = level_brick(br_level, br_ir, br_ic);
+      if br_it == -1 {
+        br_bricks[br_ii] = 0;
+        br_specials[br_ii] = SP_NONE;
+        br_hp[br_ii] = 0;
+      } else {
+        br_bricks[br_ii] = 1;
+        br_specials[br_ii] = if br_it == -2 { assign_special(br_ii) } else { br_it };
+        br_hp[br_ii] = 1;
+        br_alive += 1;
+      }
     }
   }
 
@@ -700,10 +767,17 @@ fn main() {
         for br_rr in 0..START_ROWS {
           for br_rc in 0..BRICK_COLS {
             br_ri = br_rr * BRICK_COLS + br_rc;
-            br_bricks[br_ri] = 1;
-            br_specials[br_ri] = assign_special(br_ri);
-            br_hp[br_ri] = 1;
-            br_alive += 1;
+            br_rt = level_brick(1, br_rr, br_rc);
+            if br_rt == -1 {
+              br_bricks[br_ri] = 0;
+              br_specials[br_ri] = SP_NONE;
+              br_hp[br_ri] = 0;
+            } else {
+              br_bricks[br_ri] = 1;
+              br_specials[br_ri] = if br_rt == -2 { assign_special(br_ri) } else { br_rt };
+              br_hp[br_ri] = 1;
+              br_alive += 1;
+            }
           }
         }
         for br_rp in 0..8 { br_pk_on[br_rp] = 0; }
@@ -1253,17 +1327,24 @@ fn main() {
         for br_lr in 0..br_rows {
           for br_lc in 0..BRICK_COLS {
             br_li = br_lr * BRICK_COLS + br_lc;
-            br_bricks[br_li] = 1;
-            br_specials[br_li] = assign_special(br_li + br_level * 100);
-            // Boss row: top row gets extra HP every 3 levels
-            if br_lr == 0 && br_level % 3 == 0 {
-              br_hp[br_li] = 3;
-            } else if br_lr < 2 && br_level > 3 {
-              br_hp[br_li] = 2;
+            br_lt = level_brick(br_level, br_lr, br_lc);
+            if br_lt == -1 {
+              br_bricks[br_li] = 0;
+              br_specials[br_li] = SP_NONE;
+              br_hp[br_li] = 0;
             } else {
-              br_hp[br_li] = 1;
+              br_bricks[br_li] = 1;
+              br_specials[br_li] = if br_lt == -2 { assign_special(br_li + br_level * 100) } else { br_lt };
+              // Boss row: top row gets extra HP every 3 levels
+              if br_lr == 0 && br_level % 3 == 0 {
+                br_hp[br_li] = 3;
+              } else if br_lr < 2 && br_level > 3 {
+                br_hp[br_li] = 2;
+              } else {
+                br_hp[br_li] = 1;
+              }
+              br_alive += 1;
             }
-            br_alive += 1;
           }
         }
         // Reset ball
