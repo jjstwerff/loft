@@ -131,7 +131,7 @@ impl State {
                 .variables
                 .set_skip_free(v_nr);
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, test))]
         crate::variables::validate_slots(
             &data.definitions[def_nr as usize].variables,
             data,
@@ -971,21 +971,21 @@ impl State {
             let has_ref_params = stack.data.def(*fn_nr).attributes.iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
-            if !has_ref_params {
+            if has_ref_params {
+                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
+            } else {
                 self.generate(value, stack, false);
                 // Suppress OpFreeRef for __ref_N to prevent double-free —
                 // the caller now owns this store.
                 if let Value::Call(_, args) = value {
                     for arg in args {
-                        if let Value::Var(wv) = arg {
-                            if stack.function.name(*wv).starts_with("__ref_") {
-                                stack.function.set_skip_free(*wv);
-                            }
+                        if let Value::Var(wv) = arg
+                            && stack.function.name(*wv).starts_with("__ref_")
+                        {
+                            stack.function.set_skip_free(*wv);
                         }
                     }
                 }
-            } else {
-                self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);

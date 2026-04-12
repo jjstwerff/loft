@@ -1782,6 +1782,21 @@ fn main() {
                 .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
             let deps = lib_dir.join("deps");
             cmd.arg("-L").arg(format!("dependency={}", deps.display()));
+            // W1.1 env fix: libloft.rlib depends on wasm-bindgen, which pulls
+            // in the proc-macro crate wasm_bindgen_macro.  Proc-macros are
+            // always built for the host (never for wasm32), so rustc needs
+            // the *host* deps directory on its search path in addition to
+            // the target deps dir.  Without this, compilation fails with:
+            //   error[E0463]: can't find crate for `wasm_bindgen_macro`
+            // and subsequent errors cascade (every `use loft::...` fails,
+            // so `cr_call_push` is reported unfound as a collateral).
+            if let Some(host_lib_dir) = loft_lib_dir_for(None) {
+                let host_deps = host_lib_dir.join("deps");
+                if host_deps.exists() {
+                    cmd.arg("-L")
+                        .arg(format!("dependency={}", host_deps.display()));
+                }
+            }
         }
         let status = cmd.status();
         let _ = std::fs::remove_file(&rs_path);

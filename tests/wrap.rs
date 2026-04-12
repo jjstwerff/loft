@@ -770,6 +770,7 @@ fn expected_annotations(source: &str) -> (Vec<String>, Vec<String>) {
     (errors, warnings)
 }
 
+#[cfg_attr(not(debug_assertions), allow(unused_variables, unused_mut))]
 fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()> {
     println!("run {entry:?}");
     let source = std::fs::read_to_string(&entry)?;

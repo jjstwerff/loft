@@ -536,14 +536,12 @@ impl Parser {
                 || self.data.def_type(variant_def_nr) != DefType::EnumValue
                 || self.data.def(variant_def_nr).parent != e_nr)
                 && e_nr != u32::MAX
-            {
-                if let Some(child) = self
+                && let Some(child) = self
                     .data
                     .children_of(e_nr)
                     .find(|&c| self.data.def(c).name == pattern_name)
-                {
-                    variant_def_nr = child;
-                }
+            {
+                variant_def_nr = child;
             }
 
             // for plain struct match, the pattern name must match the struct type.
@@ -650,14 +648,12 @@ impl Parser {
                     || self.data.def_type(next_def_nr) != DefType::EnumValue
                     || self.data.def(next_def_nr).parent != e_nr)
                     && e_nr != u32::MAX
-                {
-                    if let Some(child) = self
+                    && let Some(child) = self
                         .data
                         .children_of(e_nr)
                         .find(|&c| self.data.def(c).name == next_name)
-                    {
-                        next_def_nr = child;
-                    }
+                {
+                    next_def_nr = child;
                 }
                 if !self.first_pass
                     && (next_def_nr == u32::MAX
@@ -1999,10 +1995,11 @@ impl Parser {
                 let mut result = Vec::new();
                 let attrs = &data.def(*d_nr).attributes;
                 for (i, attr) in attrs.iter().enumerate() {
-                    if attr.hidden && matches!(attr.typedef, Type::Reference(_, _)) {
-                        if let Some(Value::Var(v)) = args.get(i) {
-                            result.push(*v);
-                        }
+                    if attr.hidden
+                        && matches!(attr.typedef, Type::Reference(_, _))
+                        && let Some(Value::Var(v)) = args.get(i)
+                    {
+                        result.push(*v);
                     }
                 }
                 result

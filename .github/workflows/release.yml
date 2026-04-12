@@ -123,6 +123,29 @@ jobs:
       - name: Generate HTML docs
         run: cargo run --bin gendoc
 
+      # Always rebuild the wasm gallery bundle from the tag's source
+      # before deploy — never ship whatever stale doc/pkg/ was in the
+      # committed tree.  This is the primary defence against the
+      # "Failed to grow table" browser error: users open gallery.html,
+      # the JS glue loads loft_bg.wasm, and the two must agree.  By
+      # regenerating both here we guarantee they do.
+      - name: Install wasm-pack
+        run: curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Rebuild gallery assets
+        run: make gallery
+
+      # Same story for Brick Buster: the self-contained
+      # doc/brick-buster.html embeds a wasm produced by a *different*
+      # pipeline (loft --html) than the wasm-pack bundle used by the
+      # gallery.  Rebuild it from the tag's source so Pages never
+      # ships a stale version.
+      - name: Rebuild Brick Buster HTML
+        run: make game
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:

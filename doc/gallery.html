@@ -267,6 +267,27 @@ exampleSelect.addEventListener('change', () => {
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
+//
+// Friendly-error guard — the native error surface for a stale gallery
+// build is `LinkError: WebAssembly.instantiate(): Failed to grow table`
+// or `ImportObject ... function import mismatch`.  Those messages do
+// not tell the user what to do.  We catch them here and print the
+// actionable recovery steps.
+function explainLoadError(e) {
+  const msg = String(e && e.message || e);
+  if (msg.includes('grow table') || msg.includes('function import') ||
+      msg.includes('imported function') || msg.includes('link error')) {
+    return (
+      'The gallery\u2019s WASM bundle and JS glue are out of sync ' +
+      '(classic "failed to grow table" error). This usually means ' +
+      'the deployed build is stale. On a local clone, run ' +
+      '"make gallery" to rebuild both together. If you are on the ' +
+      'deployed site and still see this, please file an issue.'
+    );
+  }
+  return 'Failed to load: ' + msg;
+}
+
 async function initLoft() {
   try {
     await init();
@@ -277,7 +298,7 @@ async function initLoft() {
     statusEl.textContent = 'Ready';
     statusEl.className = 'ok';
   } catch (e) {
-    document.getElementById('loading').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('loading').textContent = explainLoadError(e);
     statusEl.textContent = 'Failed';
     statusEl.className = 'err';
   }

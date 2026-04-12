@@ -24,6 +24,7 @@ const BUILD_ID: &str = env!("LOFT_BUILD_ID");
 
 /// Compute the cache key: SHA-256(version + build_id + source contents).
 /// `sources` is a list of (filename, content) pairs.
+#[must_use]
 pub fn cache_key(sources: &[(&str, &str)]) -> [u8; 32] {
     let mut buf = Vec::new();
     buf.extend_from_slice(VERSION.as_bytes());
@@ -116,6 +117,7 @@ pub fn write_cache(path: &str, key: &[u8; 32], data: &CacheData) -> std::io::Res
 }
 
 /// Try to read and validate a cache file. Returns None on any mismatch.
+#[must_use]
 pub fn read_cache(path: &str, expected_key: &[u8; 32]) -> Option<CacheData> {
     let mut f = std::fs::File::open(path).ok()?;
 
@@ -197,6 +199,7 @@ pub fn read_cache(path: &str, expected_key: &[u8; 32]) -> Option<CacheData> {
 }
 
 /// Convert a `.loft` path to its cache path (`.loftc`).
+#[must_use]
 pub fn cache_path(source_path: &str) -> String {
     let p = std::path::Path::new(source_path);
     if p.extension()
@@ -209,6 +212,7 @@ pub fn cache_path(source_path: &str) -> String {
 }
 
 /// Collect the CacheData from current State + Data after byte_code().
+#[must_use]
 pub fn collect_cache_data(state: &crate::state::State, data: &crate::data::Data) -> CacheData {
     use crate::data::DefType;
 
