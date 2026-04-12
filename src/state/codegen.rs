@@ -980,9 +980,10 @@ impl State {
                 if let Value::Call(_, args) = value {
                     for arg in args {
                         if let Value::Var(wv) = arg
-                            && stack.function.name(*wv).starts_with("__ref_") {
-                                stack.function.set_skip_free(*wv);
-                            }
+                            && stack.function.name(*wv).starts_with("__ref_")
+                        {
+                            stack.function.set_skip_free(*wv);
+                        }
                     }
                 }
             }

@@ -27,7 +27,7 @@ use crate::tree;
 
 /// Convert a DbRef to a loft_ffi::LoftRef for passing to native C-ABI functions.
 /// Both types have identical layout (u16 + u32 + u32).
-#[must_use] 
+#[must_use]
 pub fn to_loft_ref(db: DbRef) -> loft_ffi::LoftRef {
     loft_ffi::LoftRef {
         store_nr: db.store_nr,

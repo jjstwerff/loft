@@ -49,7 +49,11 @@ impl Default for Diagnostics {
 
 impl Debug for Diagnostics {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let lines: Vec<String> = self.entries.iter().map(DiagEntry::to_string_compact).collect();
+        let lines: Vec<String> = self
+            .entries
+            .iter()
+            .map(DiagEntry::to_string_compact)
+            .collect();
         fmt.write_str(&format!("{lines:?}"))
     }
 }
@@ -113,7 +117,10 @@ impl Diagnostics {
     /// Backward-compatible: return each entry as a formatted string.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
-        self.entries.iter().map(DiagEntry::to_string_compact).collect()
+        self.entries
+            .iter()
+            .map(DiagEntry::to_string_compact)
+            .collect()
     }
 
     #[must_use]

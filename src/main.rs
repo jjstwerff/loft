@@ -1793,7 +1793,8 @@ fn main() {
             if let Some(host_lib_dir) = loft_lib_dir_for(None) {
                 let host_deps = host_lib_dir.join("deps");
                 if host_deps.exists() {
-                    cmd.arg("-L").arg(format!("dependency={}", host_deps.display()));
+                    cmd.arg("-L")
+                        .arg(format!("dependency={}", host_deps.display()));
                 }
             }
         }

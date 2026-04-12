@@ -297,9 +297,10 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
             }
             let sym = &def.native;
             if let Some(stubs) = stub_syms
-                && !stubs.contains(sym) {
-                    continue;
-                }
+                && !stubs.contains(sym)
+            {
+                continue;
+            }
             let found = reg_guard.as_ref().is_some_and(|r| r.contains_key(sym));
             if !found {
                 to_resolve.push(sym.clone());
@@ -365,9 +366,10 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
 
         // Only replace stubs — skip hand-written glue from native::init().
         if let Some(stubs) = stub_syms
-            && !stubs.contains(sym) {
-                continue;
-            }
+            && !stubs.contains(sym)
+        {
+            continue;
+        }
 
         if !registry.contains_key(sym) {
             continue;
