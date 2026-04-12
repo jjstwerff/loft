@@ -105,6 +105,12 @@ pub struct Variable {
     /// If this variable is a shadow local promoted from a text argument,
     /// `promoted_from` holds the var_nr of the original argument. `u16::MAX` = not promoted.
     pub promoted_from: u16,
+    /// C61.local: set by `loop_var()` when this variable has served as
+    /// the body variable of a `for <id> in …` loop.  Survives slot reuse
+    /// across sequential loops in the same function, letting
+    /// `parse_for_iter_setup` distinguish a safe sequential reuse from
+    /// an outer-local shadow.
+    pub was_loop_var: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +276,26 @@ impl Function {
 
     pub fn loop_var(&mut self, variable: u16) {
         self.loops[self.current_loop as usize].variable = variable;
+        // C61.local: track that this variable has served as a for-loop
+        // variable at some point in the function.  Used to distinguish
+        // a sequential for-loop reuse (safe) from an outer-local shadow
+        // (silent clobber) at parse-for time.
+        if (variable as usize) < self.variables.len() {
+            self.variables[variable as usize].was_loop_var = true;
+        }
+    }
+
+    /// C61.local (planned): reserved for the future liveness-aware
+    /// diagnostic that rejects `x = 5; for x in …` when the outer `x`
+    /// has a live read after the loop.  Unused today — kept so the
+    /// `was_loop_var` flag on Variable has a read path and is not
+    /// dead-code-linted away before the diagnostic ships.
+    #[allow(dead_code)]
+    pub fn was_loop_var(&self, var_nr: u16) -> bool {
+        if var_nr == u16::MAX || (var_nr as usize) >= self.variables.len() {
+            return false;
+        }
+        self.variables[var_nr as usize].was_loop_var
     }
 
     pub fn set_loop(&mut self, on: u8, db_tp: u16, value: &Value) {
@@ -300,6 +326,23 @@ impl Function {
     /// temp-copy variable that `set_loop` records.
     pub fn set_coll_value(&mut self, orig_value: Value) {
         *self.loops[self.current_loop as usize].value = orig_value;
+    }
+
+    /// C61: returns true when `var_nr` is the loop *variable* (the `<id>`
+    /// bound by `for <id> in …`) of any currently active for-loop,
+    /// including outer loops.  Used to detect nested same-name loops.
+    pub fn is_active_loop_var(&self, var_nr: u16) -> bool {
+        if var_nr == u16::MAX {
+            return false;
+        }
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == var_nr {
+                return true;
+            }
+            c = self.loops[c as usize].inside;
+        }
+        false
     }
 
     /// Returns true when `var_nr` is the collection variable of any currently active
@@ -732,6 +775,7 @@ impl Function {
             last_use: 0,
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
+            was_loop_var: false,
         });
         v
     }
@@ -758,6 +802,7 @@ impl Function {
             last_use: 0,
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
+            was_loop_var: false,
         });
         v
     }
@@ -786,6 +831,7 @@ impl Function {
             last_use: 0,
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
+            was_loop_var: false,
         });
         v
     }
@@ -812,6 +858,7 @@ impl Function {
             last_use: 0,
             pre_assigned_pos: u16::MAX,
             promoted_from: u16::MAX,
+            was_loop_var: false,
         });
         v
     }

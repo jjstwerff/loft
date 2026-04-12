@@ -1089,6 +1089,48 @@ fn p1_1_lambda_void_body() {
     .result(loft::data::Value::Null);
 }
 
+// ── P86 regression guards ───────────────────────────────────────────────────
+// Pre-0.8.3 the parser's mitigation for P86 turned this source into a
+// compile error ("closure capture is not yet supported"), and before that
+// mitigation existed it produced a misleading codegen self-reference panic
+// ("[generate_set] ... Var(1) self-reference — storage not yet allocated").
+// With real closure capture shipped, both paths have to stay closed forever.
+// `p1_1_lambda_void_body` above covers one integer-mutation case; the two
+// tests below expand coverage to multi-variable mutation (integer) and
+// text accumulation, which exercises the text work-buffer path in codegen
+// and is the most common place where capture regressions hide.
+#[test]
+fn p86_lambda_capture_multi_mutation() {
+    code!(
+        "fn test() {
+    count = 0;
+    total = 0;
+    add = fn(x: integer) { count += 1; total += x; };
+    add(10);
+    add(20);
+    add(12);
+    assert(count == 3, \"count: {count}\");
+    assert(total == 42, \"total: {total}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+#[test]
+fn p86_lambda_capture_text_mutation() {
+    code!(
+        "fn test() {
+    log = \"\";
+    append = fn(s: text) { log += s; log += \",\"; };
+    append(\"a\");
+    append(\"bb\");
+    append(\"ccc\");
+    assert(log == \"a,bb,ccc,\", \"log: {log}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── Issue 82 ─────────────────────────────────────────────────────────────────
 // `string` is not a valid type name — the canonical text type is `text`.
 // Using `string` in a struct field produces "Undefined type string" and a

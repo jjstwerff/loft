@@ -31,7 +31,7 @@ and can emit Rust code for host integration.
 - [Shebang](#shebang)
 - [Summary of grammar (informal)](#summary-of-grammar-informal)
 - [Best Practices](#best-practices)
-- [Known Limitations](#known-limitations)
+- [Design decisions and constraints](#design-decisions-and-constraints)
 
 ---
 

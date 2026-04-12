@@ -3,6 +3,8 @@
 
 extern crate loft;
 
+use loft::data::Value;
+
 mod testing;
 
 #[test]
@@ -923,6 +925,78 @@ fn p85c_named_fn_inside_fn_emits_diagnostic() {
         "'fn' definitions must be at file scope, not inside a function or block \
          at p85c_named_fn_inside_fn_emits_diagnostic:2:11",
     );
+}
+
+#[test]
+fn c61_nested_same_name_loop_rejected() {
+    // C61: nested `for i { for i { } }` silently aliases the outer
+    // iterator's `#index` companion, causing wrong runtime results.
+    // The parser now rejects it with an actionable rename hint.
+    code!(
+        "fn test() {\n  \
+           for i in 0..3 {\n    \
+             for i in 10..13 { }\n  \
+           }\n\
+         }"
+    )
+    .error(
+        "loop variable 'i' shadows the enclosing loop's 'i' — \
+         rename the inner loop variable (e.g. inner_i); loft does \
+         not support nested same-name loops at c61_nested_same_name_loop_rejected:3:22",
+    )
+    .warning("Variable i is never read at c61_nested_same_name_loop_rejected:2:18");
+}
+
+#[test]
+fn c61_local_shadow_still_silent_tracked_as_c61_local() {
+    // C61.local (tracked, not yet rejected): a for-loop variable that
+    // silently clobbers a same-named local still compiles today.  The
+    // naive reject-at-parse approach broke existing stdlib docs that
+    // rely on the reuse idiom (a dead initial `a = 12`, then
+    // `for a in 1..6 { … }`).  A future liveness-aware diagnostic will
+    // catch only cases where the outer value is actually live.  This
+    // test pins today's behaviour so the planned fix has something
+    // concrete to flip.
+    code!(
+        "fn run() -> integer {\n  \
+           x = 99;\n  \
+           for loop_x in 0..3 { loop_x; }\n  \
+           x\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(99));
+}
+
+#[test]
+fn c61_nested_different_names_ok() {
+    // Regression guard: nested loops with *different* names still parse.
+    code!(
+        "fn run() -> integer {\n  \
+           total = 0;\n  \
+           for i in 0..3 { for j in 10..13 { total += j + i; } }\n  \
+           total\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(108));
+}
+
+#[test]
+fn c61_sequential_same_name_ok() {
+    // Regression guard: sequential same-name loops (non-nested) remain
+    // valid — only nested aliasing is rejected.
+    code!(
+        "fn run() -> integer {\n  \
+           a = 0;\n  \
+           for i in 0..3 { a += i; }\n  \
+           b = 0;\n  \
+           for i in 10..13 { b += i; }\n  \
+           a + b\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(36));
 }
 
 #[test]

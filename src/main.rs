@@ -2103,9 +2103,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             };
             // PKG.4: add --extern flags for native packages.
             add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
-            let status = cmd.status();
-            let status = match status {
-                Ok(s) => s,
+            let output = cmd.output();
+            let output = match output {
+                Ok(o) => o,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
                         "loft: rustc not found; install the Rust toolchain to use --native mode"
@@ -2117,10 +2117,32 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                     std::process::exit(1);
                 }
             };
+            // Relay rustc's own output to the user.
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &output.stderr);
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
+            let status = output.status;
             if !status.success() {
-                eprintln!(
-                    "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
-                );
+                // P138: detect the rand_core / cargo-cache staleness and print a
+                // clear recovery hint instead of a generic codegen-bug message.
+                let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
+                if stderr_utf8.contains("E0460")
+                    && (stderr_utf8.contains("rand_core")
+                        || stderr_utf8.contains("possibly newer version of crate"))
+                {
+                    eprintln!(
+                        "\nloft: native compilation failed because the cached `libloft.rlib` \
+                         references a different dependency version than the one now in \
+                         `target/release/deps/`.\n\n\
+                         This happens when `cargo build --bin loft` rebuilt the binary but \
+                         left the library (`--lib`) stale.\n\n\
+                         Fix:  cargo build --release --lib --bin loft\n\
+                         Or:   cargo clean && cargo build --release\n"
+                    );
+                } else {
+                    eprintln!(
+                        "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
+                    );
+                }
                 std::process::exit(1);
             }
             // Store in cache for next run.

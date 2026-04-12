@@ -26,12 +26,12 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | 22 | Spatial index (`spacial<T>`) operations not implemented | Low | Compile-time error; use `sorted<T>` or `index<T>` |
 | 54 | `json_items` returns opaque `vector<text>` | Low | Accepted limitation; `JsonValue` enum deferred |
 | 55 | Thread-local `http_status()` not parallel-safe | Medium | Design constraint — use `HttpResponse` struct |
-| 86 | Lambda capture: misleading self-reference error | Low | Mitigated — clear error message at parse time |
+| ~~86~~ | Lambda capture | — | **Fully resolved** — real closures shipped in 0.8.3; the original codegen self-reference error is no longer reachable. Regression guards: `tests/issues.rs::p1_1_lambda_void_body` (runtime `count == 42`), plus `capture_detected` / `no_capture_no_error` / `local_not_captured` in `tests/parse_errors.rs` |
 | 90 | `fn_call` HashMap lookup per call | Low | Negligible overhead; encode line in `OpCall` if measured |
 | 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
 | 135 | Sprite atlas row indexing swap | Low | Cosmetic — affects 2×2 atlas layout |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | Medium | Native mode works; browser build broken after instantiate |
-| 138 | `--native` rustc E0460: rand_core version mismatch | Medium | `make play` now builds `--lib --bin` together; cascades 700+ E0425 errors if stale |
+| 138 | `--native` rustc E0460: rand_core version mismatch | Low | Mitigated — `make play` builds `--lib --bin` together and the `--native` driver prints an actionable hint on E0460 |
 
 ---
 
@@ -58,32 +58,33 @@ in the schema; iteration traversal is the main missing piece.
 
 ## Interpreter Robustness
 
-### 86. Lambda capture produces a misleading codegen self-reference error
+### ~~86~~. Lambda capture — FULLY RESOLVED (closures shipped)
 
-**Symptom:** A lambda referencing an outer-scope variable crashed in codegen with
+With real closure capture in 0.8.3, the original codegen error
+`[generate_set] ... Var(1) self-reference — storage not yet allocated`
+is no longer reachable.  The parser-level mitigation
+(*"lambda captures variable X — closure capture is not yet supported"*)
+is also gone since the feature is implemented.
 
-```
-[generate_set] first-assignment of 'count' (var_nr=1) in 'n___lambda_0'
-contains a Var(1) self-reference — storage not yet allocated
-```
+The original reproducer now runs correctly end-to-end:
 
-**Reproducer:**
 ```loft
 fn test() {
     count = 0;
     f = fn(x: integer) { count += x; };
-    f(1);
+    f(10); f(32);
+    assert(count == 42);   // passes
 }
 ```
 
-The parser created a new local `count` inside the lambda; `count += x`
-desugars to `count = count + x` — the RHS reads the same uninitialised
-variable, tripping the self-reference guard in `generate_set`.
+**Regression guards:**
+- `tests/issues.rs::p1_1_lambda_void_body` — runtime behaviour (`count == 42`)
+- `tests/parse_errors.rs::capture_detected` — parse succeeds, no diagnostic
+- `tests/parse_errors.rs::no_capture_no_error` — no false capture positives
+- `tests/parse_errors.rs::local_not_captured` — lambda-local vars don't trigger capture
 
-**Status:** *(mitigated)* — The parser detects the outer-scope reference
-and emits `lambda captures variable 'count' — closure capture is not yet
-supported` before codegen runs.  Underlying feature (real closure capture)
-is tracked as A5.2–A5.5.
+No open action.  Kept here as a marker for CHANGELOG readers; remove on
+the next 0.9.0 maintenance sweep.
 
 ---
 
@@ -295,9 +296,23 @@ referencing an older `rand_core` rmeta hash than what's currently in
 current.  A manual `cargo clean && cargo build --release` is the
 fallback when a user's tree has other stale artefacts.
 
-**Fix path:** no code-level fix required — this is a cargo caching
-artefact.  Document in DEVELOPERS.md so new contributors know why
-`cargo build --bin loft` alone sometimes breaks the native path.
+**Mitigation (shipped, `src/main.rs`):** the `--native` driver now
+captures rustc's stderr and, on E0460 with "rand_core" or
+"possibly newer version of crate", prints an actionable hint —
+
+```
+loft: native compilation failed because the cached `libloft.rlib`
+references a different dependency version than the one now in
+`target/release/deps/`.
+
+Fix:  cargo build --release --lib --bin loft
+Or:   cargo clean && cargo build --release
+```
+
+This replaces the previous 700-error cascade with a single recovery
+instruction.  Test: introduce a stale rlib (`cargo build --bin loft`
+after modifying a dependency version) and run
+`loft --native <any-file>` — the hint should appear.
 
 ---
 

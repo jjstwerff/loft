@@ -138,9 +138,122 @@ and `subst_type` preserves deps during generic specialisation.
 
 ---
 
+## C58 — Canvas Y is flipped on GPU upload
+
+`loft_gl_upload_canvas` reverses row order when uploading the RGBA
+canvas to a GL texture, so UV `v=0` samples the canvas's bottom row and
+`v=1` samples the top row. Consequence for sprite atlases: the cell at
+canvas `(col*W, 0)` is rendered as the **last** row of a
+`create_sprite_sheet(_, cols, rows, _)` — not the first. Art with an
+orientation (hearts, arrows, text) must also be mirrored **within** its
+cell, because the Y-flip applies to every pixel, not just cell
+boundaries.
+
+**How to reason:** `draw_sprite(idx)` picks cell `(idx%cols, idx/cols)`
+in *sprite-sheet* coordinates. On upload the canvas is flipped, so
+sprite row `r` reads canvas row `rows-1-r`. Bake accordingly, or use
+the `I`-key diagnostic overlay in
+`lib/graphics/examples/25-brick-buster.loft` to visually confirm the
+index→cell mapping.
+
+**Reproducer:** any atlas that draws a recognisable shape at
+`(0, 0)` on the canvas and expects `draw_sprite(0)` to render it —
+it will render at the bottom-row cell instead.
+
+---
+
+## C60 — Hash collections cannot be iterated directly
+
+`for kv in some_hash { ... }` is not supported by the interpreter. The
+native codegen inherits the same limitation. Track any aggregate (sum,
+count, max) in a scalar variable while *inserting* into the hash, or
+keep a parallel `vector<Key>` alongside the hash for ordered traversal.
+
+**Workaround pattern:**
+
+```loft
+struct Bag { data: hash<Entry[key]>, keys: vector<text> }
+
+fn add(b: &Bag, k: text, v: integer) {
+  e = b.data[k];
+  if e == null { b.data += [Entry { key: k, value: v }]; b.keys += [k]; }
+  else         { e.value += v; }
+}
+
+for k in b.keys { println("{k} = {b.data[k].value}"); }
+```
+
+---
+
+## ~~C61~~ — Nested same-name for-loops — REJECTED WITH DIAGNOSTIC
+
+The most damaging class of flat-namespace aliasing — `for i in … { for i in … { } }`
+silently reusing the outer iterator's `#index` companion and making the outer
+loop exit after one iteration — is now caught at parse time:
+
+```
+Error: loop variable 'i' shadows the enclosing loop's 'i' —
+       rename the inner loop variable (e.g. inner_i); loft does
+       not support nested same-name loops
+```
+
+Cross-function reuse (two functions both writing `for i in …`) was never a
+real problem — each function has its own `Function` variable table.
+
+Sequential same-name loops in one function (`for i in … { } for i in … { }`)
+still work as before.
+
+Outer-local shadow (`x = 5; for x in …`) remains silent — tracked below as
+C61.local.
+
+**Tests:** `tests/parse_errors.rs::c61_nested_same_name_loop_rejected`,
+`c61_nested_different_names_ok`, `c61_sequential_same_name_ok`;
+`tests/scripts/46-caveats.loft::test_c61_sequential_same_name`,
+`test_c61_nested_different_names`.
+
+---
+
+## C61.local — Outer-local silently clobbered by a for-loop (PLANNED)
+
+A parse-time reject for `x = 5; for x in …` would catch the remaining
+silent-clobber class.  The naive "any defined outer local" check was
+tried and reverted because the stdlib docs (and many examples) rely on
+the reuse idiom — a dead initial assignment `a = 12;` followed by
+`for a in 1..6 { … }` where the outer `a` is not read after the loop.
+A safe fix needs post-parse liveness info so the diagnostic fires only
+when the outer value is actually live.  Infrastructure landed (the
+`was_loop_var` flag on `Variable` and `Function::was_loop_var()`);
+the reject branch awaits the liveness integration.
+
+**Current status:** pins today's behaviour via
+`tests/parse_errors.rs::c61_local_shadow_still_silent_tracked_as_c61_local` —
+the test records that a renamed loop variable correctly keeps the
+outer local intact, so the eventual fix's positive case is already
+pinned.
+
+---
+
+## C61.original — Loop variables share a flat namespace across the whole file
+
+Every variable — including `for` loop variables and parameters —
+lives in one file-wide namespace in the interpreter. Two functions
+that both write `for i in 0..n` can trigger codegen panics such as
+*"Too few parameters on n_&lt;fn&gt;"* when one calls the other, or
+produce silently wrong values if a recursive function contains a
+`for` loop.
+
+**Workaround:** give loop variables unique, function-scoped names
+(`fib_i`, `sort_j`, `brick_c`). When in doubt, rename. Plain `_` also
+participates in the flat namespace, so two `for _ in ...` loops in
+interacting functions still collide.
+
+**Planned fix:** proper per-function scoping (0.9.0 language polish).
+
+---
+
 ## Verification log
 
-Last retested: **2026-04-12** against commit `d5c20fd` (main branch).
+Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 
 | Caveat | Status | How verified |
 |--------|--------|-------------|
@@ -155,6 +268,10 @@ Last retested: **2026-04-12** against commit `d5c20fd` (main branch).
 | ~~C55~~ | **Fixed** | P136 — `type_element_size` + deps preservation |
 | C56 | Documented | Stdlib name collisions now emit a clean diagnostic instead of panicking |
 | C57 | Documented | Nested file-scope keywords now emit a single diagnostic instead of cascading errors |
+| C58 | Still applies | GL canvas Y-flip — confirmed by 4×5 atlas diagnostic overlay in brick-buster (I key) |
+| C60 | Still applies | Interpreter + native: no hash iteration protocol yet (see I13, 1.1+ backlog) |
+| ~~C61~~ | **Fixed** (nested case) | `tests/parse_errors.rs::c61_nested_same_name_loop_rejected` — diagnostic with rename hint |
+| C61.local | Still applies | Outer-local shadow (`x = 5; for x in …`) — planned, needs liveness info; infrastructure (`was_loop_var`) already in place |
 
 ---
 

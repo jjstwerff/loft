@@ -92,6 +92,18 @@ export to GLB. Web only — multiplayer comes in 1.0.0.
 
 Design: `../moros/doc/claude/`
 
+### Blockers carried over from 0.8.4
+
+These user-facing issues surfaced during 0.8.4 release testing. They
+ship with 0.8.5 because the Moros editor relies on the same browser
+WASM path Brick Buster does, and the same `loft --native` path that
+Moros's renderer tests will use.
+
+| ID    | Title                                                  | E  | Source         |
+|-------|--------------------------------------------------------|----|----------------|
+| P137  | `loft --html` Brick Buster: runtime `unreachable` panic in browser | M  | PROBLEMS.md    |
+| ~~P138~~ | ~~`--native` rustc E0460 `rand_core` mismatch~~ | XS | **Done** — driver now detects E0460 + "rand_core" in rustc stderr and prints the `cargo build --lib --bin loft` hint instead of the 700-error cascade |
+
 ### Sprint A–C: Data model + editor + loft backend
 
 | ID     | Title                                                  | E  | Design | Depends on    |
@@ -153,6 +165,21 @@ highlighting, decent error messages, and a REPL for experimentation.
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
+
+### User-biting caveats promoted for fix
+
+Issues surfaced during 0.8.4 Brick Buster work that are not blockers
+but routinely cost users hours. Fix in 0.9.0 so the "fully working
+language" label is honest.
+
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| ~~C61~~ | ~~Nested same-name for-loops silently alias~~ | S | **Done** — parse-time diagnostic with rename hint (`tests/parse_errors.rs::c61_nested_same_name_loop_rejected`) |
+| C61.local | Outer-local shadowed by `for` loop (`x = 5; for x in …`) — reject when the outer value has live reads after the loop | S | Infrastructure landed (`Variable::was_loop_var` + `Function::was_loop_var`); reject branch awaits liveness integration. Naive reject broke stdlib docs relying on the reuse idiom |
+| C60    | Hash iteration — adopt the I13 iterator protocol for `for kv in hash`, or emit a compile-time diagnostic + documented parallel-vector pattern everywhere `hash<>` appears | M  | ✓      | CAVEATS.md, SERVER_FEATURES.md I13 |
+| P91    | `init(expr)` parameter form for dynamic default arguments | S  | ✓      | PROBLEMS.md      |
+| ~~P86~~ | ~~Lambda capture regression guard~~ | XS | **Done** — real closures shipped; `tests/issues.rs::p1_1_lambda_void_body` covers the original misleading-error reproducer end-to-end, plus three capture-detection guards in `tests/parse_errors.rs` |
+| P135   | Sprite atlas Y-flip: unify to a single canonical direction and drop the compensating flip | S  | ✓      | PROBLEMS.md, CAVEATS.md C58 |
 
 ### Compilation cache and constant store
 

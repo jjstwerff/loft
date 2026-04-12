@@ -5909,140 +5909,114 @@ Returns microseconds elapsed since program start (monotonic clock). Unaffected b
 
 = Roadmap
 
-Loft is under active development. Everything documented on the language pages works today. This page describes what is planned for upcoming releases.
+Loft is under active development. Everything documented on the language pages works today. This page describes where the project is headed.
 
-=== Current release — 0.8.3
+The project goal is *browser games that anyone can play via a shared link*. Native OpenGL is supported for desktop enthusiasts. Server and multiplayer features come after the single-player browser experience works.
 
-0.8.3 focuses on language completeness and correctness. All items below are implemented and will ship with the next release.
+=== Current release — 0.8.4: Awesome Brick Buster
 
-==== Closures
+0.8.4 turns Brick Buster from a tech demo into a game someone would actually want to share with a friend, and makes sharing trivial via single-file HTML export.
 
-Lambdas can capture variables from the surrounding scope. Captured values are copied at definition time (value semantics). A function can return a closure to its caller — the captured values travel with the lambda. See Closures.
+==== Game polish
 
-```
-fn make_adder(n: integer) - fn(integer) - integer {
-    fn(x: integer) - integer { n + x }
-}
-add5 = make_adder(5);
-add5(10)   // 15
-```
+- *Hand-designed levels* — five themed layouts dispatched by `level_brick(lv, r, c)`, with a procedural fallback for deeper runs.
+- *Cel-shaded sprite atlas* — outlined icons, a round ball with velocity-directional squash, hearts for lives, balloon projectiles, fireball after-images.
+- *Roman-numeral level display* and *persistent high score* (`.loft/brickbuster_score.txt`).
+- *Chiptune soundtrack* — three early-Capcom-style tracks (Heroic / Determined / Calm) that play once per level with silences between, plus brick/paddle/wall/pickup/life sound effects.
+- *Screen shake* on brick breaks and life lost; pause menu; title and game-over screens.
 
-==== Coroutines and generators
+==== Single-file HTML export
 
-Functions can `yield` values lazily. Consumers iterate with a normal `for` loop — the generator suspends and resumes automatically. See Coroutines.
-
-==== Tuples
-
-Functions can return multiple values as tuples. Destructuring assignment unpacks them at the call site. See Tuples.
-
-==== Generics and interfaces
-
-Generic functions and interface-bounded type parameters. See Generics.
-
-==== Native compilation
-
-Compile loft programs to standalone native executables via `loft --native app.loft`. Generates Rust code, compiles with `rustc`. All language features are supported including closures, coroutines, tuples, and generics.
-
-==== Parallel execution
-
-Data-parallel `for` loops with the `par(...)` clause. The runtime splits work across CPU cores automatically. See Parallel execution.
-
-=== Next — 0.8.4
-
-0.8.4 adds networking, graphics, and a test server. All features are designed as libraries that work across the interpreter, native codegen, and WASM backends.
-
-==== HTTP client
-
-Built-in HTTP requests. JSON parsing already works via `Type.parse(text)` and the `:j` format specifier — only the transport layer is new.
+Compile any loft program to a self-contained `.html` file that runs in any browser — no install, no server.
 
 ```
-struct User { name: text, age: integer }
-
-resp = http_get("https://api.example.com/users/1");
-if resp.ok() {
-    user = User.parse(resp.body);
-    println("{user.name} is {user.age}");
-}
+$ loft --html app.loft
 ```
 
-Works on all backends: the interpreter and native codegen use `ureq`; the WASM build bridges to the browser's `fetch()` API.
+The game's WebAssembly, textures, and audio are all embedded. Host the file anywhere, send someone the URL, they play.
 
-==== Test server
+==== Infrastructure
 
-A minimal HTTP server built in Rust that loads a loft script and calls a user-defined `fn handle(Request) - Response` for each incoming request.
+- *Audio* — `rodio`-backed playback on desktop; WebAudio bridge in the browser.
+- *Store-leak fixes* — per-frame idiomatic struct APIs now work without workarounds (P122 + P117–P131 resolved).
+- *CLI hardening* — script-level arguments, file-scope constants, and release-mode coroutine-iterator fixes (P126, P128, P131, P132).
+- *Bytecode cache* — `.loftc` files are invalidated on interpreter rebuild via the embedded git commit hash.
 
-```
-$ loft serve app.loft --port 8080
-```
+=== Next — 0.8.5: Working Moros editor
 
-```
-fn handle(r: Request) - Response {
-    if r.path == "/hello" {
-        Response { body: "Hello, {r.method}!" }
-    } else {
-        Response { status: 404, body: "not found" }
-    }
-}
-```
+The Moros hex RPG scene editor runs end-to-end in the browser: load a map, paint hexes, place walls and items, see a live 3D preview, export to GLB. Web only — multiplayer comes in 1.0.0.
 
-Primary purpose: provide a local test target for HTTP client integration tests without depending on external services. Also useful for rapid prototyping of web APIs in loft.
+- *Map model* — `Hex`, `Chunk`, `Map` with material/wall/item palettes and spawn/NPC routines, serialised as JSON.
+- *2D scene canvas* — hex coordinate math, pan/zoom/hit-test, layered rendering.
+- *Editor shell* — toolbar, palettes, Paint / Height / Wall / Item tools, undo/redo, localStorage autosave.
+- *3D renderer* — hex surface geometry (flat and slope), wall slabs, stairs, camera orbit, hex picking, GLB export.
+- *Live 3D preview* alongside the 2D editor, powered by the loft graphics library compiled to WASM.
 
-==== Graphics library
+=== 0.9.0 — Fully working loft language
 
-A 2D/3D graphics library with the rasterizer and math written entirely in loft. Rust provides only platform I/O (PNG files, GPU context, font loading).
+The language itself becomes feature-complete, well-documented, and tooling-friendly. No "appears fixed but unverified" bugs. Anyone can write loft code in their preferred editor with syntax highlighting, decent error messages, and a REPL for experimentation.
 
-- *2D canvas* — RGBA pixel buffer with blend, line, rectangle, circle, Bezier curve, and scanline fill — all implemented in loft.
-- *Text rendering* — Glyph rasterization via `fontdue`; layout and drawing in loft.
-- *GLB export* — Write 3D meshes, scenes, and materials to binary glTF files. Pure loft implementation using binary file I/O.
-- *OpenGL desktop* — Real-time rendering window using `glutin` + `glow`. Optional feature (`--features opengl`).
-- *WebGL browser* — Render to a `<canvas>` element via WebGL2 in WASM builds.
+==== Language polish
 
-The graphics workloads (pixel blending, Bezier subdivision, matrix math) also serve as a real-world performance benchmark for the loft interpreter.
+- *Error recovery* — the parser continues after a token-level failure and reports multiple errors in a single pass.
+- *REPL* — running `loft` with no arguments starts an interactive session; definitions persist across lines.
+- *Developer warnings* — Clippy-inspired lints for common mistakes.
+- *AOT library compilation* — automatically compile libraries to native shared libs for faster startup.
+- *Stdlib hygiene* — name-clash warnings and a `std::` prefix for shadowed builtins; library enums in `match` arms without qualification.
 
-=== 0.9.0 — Standalone executable
+==== Compilation cache
 
-==== Interactive mode (REPL)
+Bytecode cache (`.loftc`) and the shared constant store are already implemented. Remaining work — mmap-based native cache loading, serialised `Data` definitions, pre-compiled stdlib for WASM — lands in 0.9.0.
 
-Running `loft` with no arguments starts an interactive session. Definitions persist across lines. Syntax errors discard the failed line and continue.
+==== Developer experience
 
-```
-$ loft
-> x = 42
-> "{x * 2}"
-84
-> struct Point { x: float, y: float }
-> p = Point { x: 1.0, y: 2.0 }
-> p.x + p.y
-3.0
-```
+- TextMate grammar for `.loft` syntax highlighting.
+- VS Code extension with snippets and a run task.
+- Quick-start `examples/` directory.
+- CI covering package tests and native codegen.
 
-==== Error recovery
+==== Packaging and FFI
 
-The parser currently stops at the first error. 0.9.0 will recover from token-level failures, report multiple errors in a single pass, and continue parsing after bad statements.
+- *Lock file* (`loft.lock`) for reproducible builds.
+- *Generic FFI marshaller* — zero-boilerplate native functions from a `#native` signature; generic `cdylib` loader scans exports into a hash map.
 
-==== Logger improvements
+=== 1.0.0 — Totally sure everything works
 
-Hot-reloadable log levels, `--release` flag for eliding `debug_assert` calls, `--debug` flag for per-type safety logging (null-origin tracking, division-by-zero source locations).
-
-=== 1.0.0 — IDE + stability contract
+The stability contract. Anyone can write, run, and share a program — terminal or browser — and trust that it will keep working.
 
 ==== Web IDE
 
 A browser-based IDE running the full loft interpreter as WebAssembly — no installation, no server.
 
-- Syntax highlighting and error markers (CodeMirror 6)
-- Run button with console output
-- Go-to-definition and find-usages
-- Multiple projects stored locally (IndexedDB)
-- Documentation browser built in
-- Works offline (PWA with export/import ZIP)
+- Editor shell with CodeMirror 6 and a loft grammar.
+- Symbol navigation (go-to-definition, find-usages).
+- Multi-file projects stored locally (IndexedDB).
+- Documentation and examples browser built in.
+- Export/import ZIP; PWA offline mode.
+
+==== Scene scripting
+
+The Moros scene editor gains a loft scripting panel with in-browser compile and hot reload. Scene scripts are sandboxed, travel with the scene JSON, and can be shared alongside the map.
+
+==== Multiplayer
+
+- *Server library* — plain HTTP routing, HTTPS with static certs or automatic ACME, WebSockets, JWT / session / API-key auth, CORS, rate limiting, static file serving.
+- *Game loop primitives* — WebSocket polling, broadcast, connection registry.
+- *Game client library* — `GameEnvelope` protocol, lobby + matchmaking, fixed-timestep loop, client-side prediction and reconciliation, WASM script loading with Ed25519 verification.
+- *Moros multiplayer* — DM and players share a live scene hosted on a loft server.
 
 ==== Stability contract
 
 Version 1.0 means: any program that works on 1.0 will compile and run identically on all future 1.x releases. The language syntax, type system, standard library, and command-line flags are frozen. Until then, breaking changes are possible between minor versions.
 
+Tagging 1.0 requires every stability gate to be satisfied without shortcuts: zero open high-severity bugs, valgrind-clean debug builds of the full Brick Buster and tuple tests, green CI on Linux, macOS Intel, macOS ARM, and Windows, pre-built binaries on the GitHub release, and the reference + PDF linked from the release page.
+
+=== 1.1 and beyond
+
+Post-1.0 items include route decorators (`@get` / `@post` / `@ws`), WASM Web Worker pools for browser-side `par()`, iterator protocol (`for msg in ws`), interface factory methods, lazy work-variable initialisation, stack raw-pointer cache, spatial index operations, and additional native codegen optimisations.
+
 === Following progress
 
-Development is tracked in the GitHub repository. The full internal roadmap with effort estimates and designs is in the repository's `doc/claude/ROADMAP.md`.
+Development is tracked in the GitHub repository. The full internal roadmap with effort estimates, dependencies, and design pointers is in the repository's `doc/claude/ROADMAP.md`.
 
 
