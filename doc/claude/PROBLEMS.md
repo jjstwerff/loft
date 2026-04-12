@@ -23,36 +23,37 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 22 | `spacial<T>` keyword reserved but unimplemented | Low | **0.9.0:** remove the keyword until A4 ships (treat as unknown type) |
-| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** ship `JsonValue` enum (promoted from 1.1+) — typeless API contradicts loft's type-system promise |
-| 91 | `init(expr)` parameter defaults cannot reference earlier args | Medium | **0.9.0:** inject earlier args into `self.vars` during `parse_arguments` |
-| 135 | Canvas Y-flip three-way compensation off-by-ones 2×N atlases | Medium | **0.8.5:** normalise to screen-top-left `(0,0)` — remove upload-side row reversal |
+| 22 | `spacial<T>` keyword reserved but unimplemented | Low | **0.9.0:** keep keyword; one-line diagnostic update to reference 1.1+ timing |
+| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** typed `JsonBody` newtype — 80% of safety for 20% of design surface; full `JsonValue` deferred to 1.1+ |
+| 91 | Default-from-earlier-parameter | Medium | **0.9.0:** evaluate at function entry via codegen prologue + supplied-args bitmap |
+| 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
 
 ---
 
 ## Unimplemented Features
 
-### 22. `spacial<T>` keyword reserved but unimplemented — 0.9.0: remove
+### 22. `spacial<T>` diagnostic wording — 0.9.0
 
-`spacial<T>` emits a compile-time error today:
+Today's message:
 
 ```
 spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups
 ```
 
-**Decision:** a keyword that always errors claims namespace and
-misleads users.  Remove `spacial` as a reserved keyword in 0.9.0 —
-treat `spacial<T>` as a plain unknown-type error alongside any other
-misspelled identifier.  Re-add when A4 actually ships the radix/R-tree
-backing (1.1+).
+is *more helpful* than a generic "unknown type" would be.  A user who
+typed `spacial` is asking a real question — loft knows the answer
+(substitute + timeline).  **Decision (revised):** keep the keyword
+and the bespoke error; update the one-line message to reference the
+milestone:
 
-**Fix path:** delete the `"spacial"` match arm in
-`src/parser/definitions.rs`, remove `Type::Spacial` from `src/data.rs`,
-and drop the surrounding schema hooks in `src/database/types.rs`.
-The existing schema allocation is dead code.  Update
-`tests/parse_errors.rs::spacial_not_implemented` to expect the generic
-"unknown type" diagnostic instead of the current bespoke message.
+```
+spacial<T> is planned for 1.1+; until then use sorted<T> or
+index<T> for ordered lookups
+```
+
+**Fix path:** one-line string edit in `src/parser/definitions.rs`
+at the existing `"spacial"` match arm.  Test unchanged.
 
 ---
 
@@ -88,22 +89,32 @@ the next 0.9.0 maintenance sweep.
 
 ---
 
-### 91. `init(expr)` / default-from-earlier-parameter — 0.9.0
+### 91. Default-from-earlier-parameter — 0.9.0
 
 **Symptom:** `fn make_rect(w: integer, h: integer = w)` fails with
 *"Unknown variable 'w'"*; the default expression cannot reference
 earlier parameters of the same function.
 
-**Decision:** implement for 0.9.0.  This is an idiomatic default
-most scripting languages support; failing with an "unknown variable"
-message is a stumbling-stone for new users.
+**Semantics decision:** the default is evaluated *at function entry*,
+not at the call site.  That is deliberately different from struct-
+field `init(expr)`, which evaluates once at construction.  Required
+because the default's whole point is to see the earlier parameters'
+call-site values.
 
-**Fix path:** in `parse_arguments`, inject each parsed argument into
-`self.vars` (via `add_variable` + `become_argument` + `defined`)
-before parsing the next default expression.  A first attempt hit
-two-pass-parser state issues; the re-attempt needs to cleanly
-separate "scratch binding for default resolution" from the real
-argument slots the caller adds afterwards.
+**Fix path (three parts):**
+1. `parse_arguments` — accept `= expr` referencing earlier params.
+   Earlier params are injected into `self.vars` as arguments
+   (via `add_variable` + `become_argument` + `defined`) before
+   parsing the default, then removed before returning so the
+   caller's own argument-registration is unaffected.
+2. Call site — pass a supplied-args bitmap (one bit per argument
+   with a default) so the callee knows which defaults to evaluate.
+3. Function prologue — emit `if !supplied(N) { arg_N = <default> }`
+   for each defaulted parameter, using the bitmap bit.
+
+**Scope: M**, three moving parts.  The first naive attempt hit
+two-pass state issues in the parser alone; call-site + prologue are
+still to do.
 
 ---
 
@@ -116,14 +127,18 @@ element is either a JSON object body or garbage.  The caller writes
 `MyStruct.parse(body)` and gets a partial zero-value struct on malformed
 input — no type checking, no diagnostic.
 
-**Decision:** ship the `JsonValue` enum in 0.9.0 (promoted from 1.1+).
-Typeless "vector<text>" APIs contradict loft's own pitch as a
-statically-typed language.
+**Decision (revised):** introduce a typed newtype `JsonBody` that
+wraps `text` and is the *only* type `MyStruct.parse` accepts from
+`json_items`.  Expose `.is_object()`, `.is_array()`, `.is_null()` for
+cheap shape discrimination.  `json_items` returns `vector<JsonBody>`;
+the compiler catches any place a caller tries to pass arbitrary `text`
+to a struct parser.  80% of the type-safety gain at 20% of the design
+surface.
 
-**Fix path:** `JsonValue { Object(hash<JsonPair[key]>), Array(vector<JsonValue>),
-String(text), Number(float), Boolean(boolean), Null }` with
-`JsonValue.parse(text) -> JsonValue` and `value.as_struct<T>() -> T`.
-See [WEB_SERVICES.md](WEB_SERVICES.md).
+The full `JsonValue` enum (Object / Array / String / Number / Boolean /
+Null) for dynamic shape-unknown access (`v["users"][0]["name"]`) stays
+deferred to 1.1+ — it's a large design surface for a use case that
+hasn't been concretely asked for.  See [WEB_SERVICES.md](WEB_SERVICES.md).
 
 ---
 

@@ -168,12 +168,12 @@ makes the "fully working language" label dishonest.
 
 | ID     | Title                                                  | E  | Source |
 |--------|--------------------------------------------------------|----|--------|
-| C60    | **Hash iteration.** Adopt the I13 iterator protocol so `for (k, v) in hash` works (unspecified order, like Python/Rust). Removes a top-level collection-promise gap | M | CAVEATS.md, SERVER_FEATURES.md I13 |
-| C61.local | **Outer-local shadow diagnostic.** Reject `x = 5; for x in …` only when the outer `x` has a live read after the loop — needs post-parse liveness info. Infrastructure (`Variable::was_loop_var`) already landed; add the liveness pass and flip the reject | S | CAVEATS.md |
-| C54    | **`i32::MIN` null sentinel.** Emit a compiler warning when `integer` is used for arithmetic likely to land on the sentinel (multiplicative code, sums over large vectors). Teach users to reach for `long` | S | CAVEATS.md |
-| P22    | **Remove `spacial<T>` keyword.** A reserved word that always errors is user-hostile. Drop it from the parser/type system until A4 actually implements the backing tree (1.1+) | XS | PROBLEMS.md #22 |
-| P54    | **`JsonValue` enum.** Replace opaque `vector<text>` returned by `json_items` with a typed enum (Object / Array / String / Number / Boolean / Null) | MH | PROBLEMS.md #54 |
-| P91    | **`init(expr)` parameter defaults referencing earlier args.** `fn make_rect(w: integer, h: integer = w)` should parse | S | PROBLEMS.md #91 |
+| C54    | **Switch `integer` from i32 to i64.** Eliminates the `i32::MIN` null-sentinel trap entirely. `long` keeps working as a historical alias. Breaking change, pre-1.0 window. Revisit `size(Type::Integer)` + schema layout tests | MH | CAVEATS.md |
+| C60    | **Hash iteration** via `for (k, v) in hash` → `(K, V)` tuples, unspecified order. Ordered traversal stays the parallel-vector pattern | M | CAVEATS.md |
+| C61.local | **Reject outer-local shadow unconditionally**; update the ~30 lines of stdlib docs that use the dead-local idiom. Infrastructure (`was_loop_var`) already landed | S | CAVEATS.md |
+| C7/P22 | **Improve `spacial<T>` diagnostic wording.** Keep the keyword + bespoke error (it's more helpful than a generic unknown-type); one-line text update to reference 1.1+ timing | XS | PROBLEMS.md #22 |
+| P54    | **Typed `JsonBody` newtype** + `.is_object/array/null`. Full `JsonValue` enum stays 1.1+ until dynamic-shape use case lands | M | PROBLEMS.md #54 |
+| P91    | **Function-prologue default expressions** referencing earlier args. Parser + call-site supplied-bitmap + codegen prologue emission. Three moving parts | M | PROBLEMS.md #91 |
 
 **Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
 - ~~C61-nested~~ — parse-time reject for `for i { for i { } }` (`tests/parse_errors.rs::c61_nested_same_name_loop_rejected`)
