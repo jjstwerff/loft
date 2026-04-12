@@ -273,7 +273,11 @@ impl State {
     ///
     /// Reads the definition number stored in the fn-ref variable at `fn_var` bytes below the
     /// current stack top, looks up its bytecode position, then delegates to `fn_call`.
-    #[allow(clippy::missing_panics_doc)]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `fn_var < 16` (the fn-ref slot is 16 bytes: `d_nr` + closure `DbRef`), or if
+    /// the slot holds a negative definition number (un-initialised / null sentinel).
     pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
         // A5.6: fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
         assert!(
