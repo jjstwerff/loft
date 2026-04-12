@@ -82,3 +82,48 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt -- --check
+
+  # Prevent browser-side "Failed to grow table" / "import mismatch"
+  # errors from reaching the deployed site by rebuilding BOTH browser
+  # artefacts — the wasm-pack-based gallery+playground bundle and the
+  # loft-native --html Brick Buster build — and probing every asset
+  # each imports on every PR.  Both pipelines produce a wasm/js pair
+  # that must agree; a partial rebuild silently breaks runtime loading.
+  # Keeping them in one job reuses the wasm target cache for speed.
+  gallery:
+    name: Browser build + probe
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        run: |
+          curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-gallery-${{ hashFiles('**/Cargo.lock') }}
+
+      # Rebuilds doc/pkg/ (wasm-pack bundle behind gallery.html +
+      # playground.html), verifies every asset HEAD-loads.
+      - name: make gallery
+        run: make gallery
+
+      # Rebuilds doc/brick-buster.html via `loft --html` against a
+      # freshly built wasm32-unknown-unknown libloft.rlib, sanity-checks
+      # the output.  Protects the "click-to-play" experience just like
+      # `make gallery` protects the demo grid.
+      - name: make game
+        run: make game
