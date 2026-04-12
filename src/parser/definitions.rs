@@ -447,7 +447,11 @@ impl Parser {
                 // P85b: detect a name collision before calling `add_def`,
                 // which would otherwise panic with `Dual definition of <name>`.
                 let existing = self.data.def_nr(&id);
-                if existing != u32::MAX {
+                if existing == u32::MAX {
+                    let c_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Constant);
+                    self.data.set_returned(c_nr, tp);
+                    self.data.definitions[c_nr as usize].code = val;
+                } else {
                     let prev_pos = self.data.def(existing).position.clone();
                     let prev_kind =
                         format!("{:?}", self.data.def(existing).def_type).to_lowercase();
@@ -457,10 +461,6 @@ impl Parser {
                         "constant '{id}' conflicts with a {prev_kind} of the same name \
                          already defined at {prev_pos} — pick a different name"
                     );
-                } else {
-                    let c_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Constant);
-                    self.data.set_returned(c_nr, tp);
-                    self.data.definitions[c_nr as usize].code = val;
                 }
             }
             self.lexer.token(";");

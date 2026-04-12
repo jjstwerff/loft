@@ -296,11 +296,10 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
                 continue;
             }
             let sym = &def.native;
-            if let Some(stubs) = stub_syms {
-                if !stubs.contains(sym) {
+            if let Some(stubs) = stub_syms
+                && !stubs.contains(sym) {
                     continue;
                 }
-            }
             let found = reg_guard.as_ref().is_some_and(|r| r.contains_key(sym));
             if !found {
                 to_resolve.push(sym.clone());
@@ -365,11 +364,10 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         let sym = &def.native;
 
         // Only replace stubs — skip hand-written glue from native::init().
-        if let Some(stubs) = stub_syms {
-            if !stubs.contains(sym) {
+        if let Some(stubs) = stub_syms
+            && !stubs.contains(sym) {
                 continue;
             }
-        }
 
         if !registry.contains_key(sym) {
             continue;
@@ -414,7 +412,7 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
     use crate::keys::Str;
 
     // Read the current library index from the thread-local.
-    let lib_idx = CURRENT_LIB_IDX.with(|c| c.get());
+    let lib_idx = CURRENT_LIB_IDX.with(std::cell::Cell::get);
 
     let guard = NATIVE_SIGS
         .lock()
@@ -529,7 +527,7 @@ unsafe extern "C" fn ffi_reload(ctx: LoftStoreCtx, out_ptr: *mut *mut u8, out_si
                 *out_ptr = store.base_ptr();
                 *out_size = store.capacity_words();
             }
-        })
+        });
     }));
 }
 

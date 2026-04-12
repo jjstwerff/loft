@@ -2,29 +2,26 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 #![warn(clippy::pedantic)]
 #![allow(
+    // Numeric casts: pervasive in the interpreter's hot paths; every
+    // stack push/pop goes through an i32/u16/usize conversion and
+    // annotating each one kills readability without adding safety.
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
+    // Style preferences we deliberately keep:
     clippy::match_same_arms,
-    clippy::collapsible_if,
-    clippy::redundant_closure,
     clippy::used_underscore_binding,
     clippy::doc_markdown,
     clippy::items_after_statements,
-    clippy::single_match_else,
-    clippy::if_not_else,
     clippy::implicit_hasher,
-    clippy::unnecessary_wraps,
-    clippy::semicolon_if_nothing_returned,
-    clippy::uninlined_format_args,
     clippy::let_underscore_untyped,
     clippy::must_use_candidate,
-    clippy::option_if_let_else,
     clippy::manual_let_else,
-    clippy::redundant_closure_for_method_calls,
     clippy::too_many_lines,
     clippy::type_complexity,
-    clippy::map_unwrap_or
+    // Re-emerges in src/fill.rs every time regen_fill_rs runs; the
+    // template format is easier to keep stable than a generator fix.
+    clippy::semicolon_if_nothing_returned
 )]
 
 // W1.1 HTML export: when loft's own lib is compiled for

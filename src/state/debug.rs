@@ -355,6 +355,7 @@ impl State {
     /// current `stack_pos` (not yet allocated) appear with
     /// [`VariableValue::OutOfFrame`].  Variables that fail bounds checks appear
     /// with [`VariableValue::Unreadable`].
+    #[must_use] 
     pub fn iter_frame_variables(&self, data: &Data) -> Vec<FrameVariable> {
         let fn_d_nr = State::fn_d_nr_for_pos(self.code_pos, data);
         if fn_d_nr == u32::MAX {
@@ -368,6 +369,7 @@ impl State {
     /// its `d_nr`, `args_base`, and the bytecode position to evaluate liveness
     /// against.  Used by stack-trace introspection to walk every frame in the
     /// active call chain — see `n_stack_trace`'s variables snapshot.
+    #[must_use] 
     pub fn iter_frame_variables_at(
         &self,
         data: &Data,
@@ -657,10 +659,10 @@ impl State {
                     }
                 }
                 VariableValue::Reference(r) => {
-                    writeln!(f, "ref  = ({},{},{})", r.store_nr, r.rec, r.pos)?
+                    writeln!(f, "ref  = ({},{},{})", r.store_nr, r.rec, r.pos)?;
                 }
                 VariableValue::Vector(r) => {
-                    writeln!(f, "vec  = ({},{},{})", r.store_nr, r.rec, r.pos)?
+                    writeln!(f, "vec  = ({},{},{})", r.store_nr, r.rec, r.pos)?;
                 }
                 VariableValue::OutOfFrame => writeln!(f, "<out-of-frame>")?,
                 VariableValue::Unreadable(why) => writeln!(f, "<unreadable: {why}>")?,

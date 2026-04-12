@@ -187,7 +187,7 @@ pub(super) fn find_conflict(
 
 /// Assert that no two variables with overlapping live intervals occupy the same stack slot.
 /// Only compiled in debug/test builds; the call site in `codegen.rs` is gated on
-/// `#[cfg(debug_assertions)]`.
+/// `#[cfg(any(debug_assertions, test))]`.
 /// On failure, logs the full variable table and IR code before panicking.
 #[cfg(any(debug_assertions, test))]
 pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {

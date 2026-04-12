@@ -742,10 +742,10 @@ extern crate loft;"
                 self.data.def(def.parent).known_type
             } else if let Type::Vector(ref c_type, _) = def.returned {
                 let c_dnr = self.data.type_def_nr(c_type);
-                if c_dnr != u32::MAX {
-                    self.data.def(c_dnr).known_type
-                } else {
+                if c_dnr == u32::MAX {
                     u16::MAX
+                } else {
+                    self.data.def(c_dnr).known_type
                 }
             } else {
                 u16::MAX

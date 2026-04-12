@@ -36,11 +36,10 @@ pub fn byte_code_with_cache(
     // Try loading from cache.
     if let Some(path) = cache_file {
         let key = crate::cache::cache_key(sources);
-        if let Some(cached) = crate::cache::read_cache(path, &key) {
-            if load_from_cache(state, data, &cached) {
+        if let Some(cached) = crate::cache::read_cache(path, &key)
+            && load_from_cache(state, data, &cached) {
                 return;
             }
-        }
     }
 
     // Full compilation.
