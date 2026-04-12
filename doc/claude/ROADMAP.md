@@ -172,7 +172,7 @@ makes the "fully working language" label dishonest.
 | C60    | **Hash iteration** via `for (k, v) in hash` → `(K, V)` tuples, unspecified order. Ordered traversal stays the parallel-vector pattern | M | CAVEATS.md |
 | C61.local | **Liveness-aware outer-local shadow reject.** Unconditional variant was attempted and reverted — required renames exposed a latent slot-allocator crash, and the stdlib docs' dead-local idiom reads worse after forced renames. Add a post-parse last-read pass in `src/variables/intervals.rs`; fire only when the outer has a live read after the loop. Infrastructure (`was_loop_var`) already landed | M | CAVEATS.md |
 | SLOT-VEC3 | **`_vector_3` slot-allocator crash.** `src/state/codegen.rs:922` panics with `slot=N but TOS=N-1` when a specific internal-variable count is reached (reproducer: rename two loop variables in `05-enums.loft`). Latent today because existing code happens to avoid the layout; blocks C61.local's doc-cleanup sweep | MH | discovered 2026-04-12 |
-| C7/P22 | **Improve `spacial<T>` diagnostic wording.** Keep the keyword + bespoke error (it's more helpful than a generic unknown-type); one-line text update to reference 1.1+ timing | XS | PROBLEMS.md #22 |
+| ~~C7/P22~~ | ~~Improve `spacial<T>` diagnostic wording~~ | XS | **Done** — diagnostic surfaces 1.1+ timeline and substitute types. Tests: `spacial_not_implemented`, `spacial_not_implemented_in_local` |
 | P54    | **Typed `JsonBody` newtype** + `.is_object/array/null`. Full `JsonValue` enum stays 1.1+ until dynamic-shape use case lands | M | PROBLEMS.md #54 |
 | P91    | **Function-prologue default expressions** referencing earlier args. Parser + call-site supplied-bitmap + codegen prologue emission. Three moving parts | M | PROBLEMS.md #91 |
 

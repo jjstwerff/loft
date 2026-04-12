@@ -394,9 +394,19 @@ fn test() { assert(compute(5) == 5, \"ok\"); }"
 
 #[test]
 fn spacial_not_implemented() {
-    // spacial<T> is a reserved keyword; all uses must produce a compile error.
+    // C7/P22: spacial<T> is a reserved keyword; its diagnostic now
+    // surfaces the 1.1+ timeline so a user who typed it knows when
+    // the feature ships and which substitute to reach for.
     code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point, x, y> }\nfn test() {}")
-        .error("spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+}
+
+/// C7/P22 regression guard: the diagnostic also fires for a local
+/// variable (not just a struct field) and carries the same hint.
+#[test]
+fn spacial_not_implemented_in_local() {
+    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point, x, y> = []; }")
+        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented_in_local:2:39");
 }
 
 /// F57: write_file on a struct with a collection-type field must produce a compile error.

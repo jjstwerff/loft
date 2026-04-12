@@ -128,16 +128,15 @@ Dynamic shape-unknown access (`v["users"][0]["name"]`) is deferred to
 1.1+ when someone asks for it with a concrete use case.  80% of the
 type-safety gain for 20% of the design surface.
 
-### C7 / P22 — `spacial<T>` keyword
-**Decision (revised):** keep the keyword.  Today's bespoke error
-("`spacial<T>` is not yet implemented; use `sorted<T>` or `index<T>`
-for ordered lookups") is *more* helpful than a generic "unknown type"
-would be — the user wrote `spacial` because they want spatial
-indexing, and loft knows the answer for 1.1+ timing and the current
-substitute.  **Action:** one-line update to the diagnostic text —
-include the milestone ("planned for 1.1+") so users know when to
-check back.  Close P22 as "already handled correctly; improve
-wording only".
+### ~~C7 / P22~~ — `spacial<T>` diagnostic — DONE
+Diagnostic updated to surface the 1.1+ timeline: *"spacial<T> is
+planned for 1.1+; until then use sorted<T> or index<T> for ordered
+lookups"*.  A user who typed `spacial` now knows when the feature
+ships and which substitute to reach for.  Keyword retained (more
+helpful than a generic "unknown type" would be).  **Tests:**
+`tests/parse_errors.rs::spacial_not_implemented`,
+`spacial_not_implemented_in_local` (new regression guard for the
+local-variable path).
 
 ---
 
@@ -148,7 +147,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | Caveat | Milestone | Decision |
 |--------|-----------|----------|
 | C3     | 1.1+      | Accepted — WASM threading deferred (Web Worker pool cost > benefit today) |
-| C7/P22 | 0.9.0     | Keep keyword + bespoke error; update message to reference 1.1+ timeline |
+| ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
 | C38    | —         | Accepted — value-semantic capture by design (like Rust `move`) |
 | C54    | 0.9.0     | **Switch `integer` from i32 to i64.** `long` becomes historical alias. Breaking change, pre-1.0 window |
 | C58/P135 | 0.8.5   | Canonical `(0, 0) = screen-top-left`; lock in LOFT.md; re-bake brick-buster atlas |

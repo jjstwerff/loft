@@ -23,7 +23,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 22 | `spacial<T>` keyword reserved but unimplemented | Low | **0.9.0:** keep keyword; one-line diagnostic update to reference 1.1+ timing |
+| ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** typed `JsonBody` newtype — 80% of safety for 20% of design surface; full `JsonValue` deferred to 1.1+ |
 | 91 | Default-from-earlier-parameter | Medium | **0.9.0:** evaluate at function entry via codegen prologue + supplied-args bitmap |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |

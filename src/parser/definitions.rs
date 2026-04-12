@@ -1075,10 +1075,13 @@ impl Parser {
                             self.lexer.has_token(",");
                             self.lexer.has_identifier();
                         }
+                        // C7/P22: keep the bespoke diagnostic (more helpful
+                        // than a generic "unknown type"); surface the
+                        // milestone so users know when to check back.
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups"
+                            "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups"
                         );
                         Type::Unknown(0)
                     }
