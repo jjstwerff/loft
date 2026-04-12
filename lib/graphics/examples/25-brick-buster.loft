@@ -1668,23 +1668,38 @@ fn main() {
       br_dh = BALL_SIZE;
       if br_sqt > 0.0 {
         br_phase = 1.0 - br_sqt / BALL_SQUASH_DURATION;  // 0..1
+        // Bounces in this game are rarely axis-aligned — the paddle
+        // kicks the ball out at any angle — so the squash should
+        // stretch in the ball's actual motion direction, not a fixed
+        // horizontal or vertical axis.  Normalise |vx| / |vy| to
+        // 0..1 fractions, then scale the sprite so the long axis
+        // points along motion and the short axis is perpendicular.
+        br_dvx = abs(br_ball_dx[br_bd]);
+        br_dvy = abs(br_ball_dy[br_bd]);
+        br_vmag = br_dvx + br_dvy;
+        if br_vmag < 1.0 { br_vmag = 1.0; }
+        br_vxf = br_dvx / br_vmag;  // 0=vertical motion, 1=horizontal
+        br_vyf = br_dvy / br_vmag;
+        // Strength triangle: 0 at phase 0/1, peaks at phase 0.5.
+        br_str = br_phase * 2.0;
+        if br_phase > 0.5 { br_str = (1.0 - br_phase) * 2.0; }
+        // Pick the sprite frame for the cel-shaded "flavour" — we
+        // still want SQUASH1/2/RELEASE to read differently — but the
+        // dimensions come from the velocity direction below, not from
+        // fixed wide-flat offsets.
         if br_phase < 0.33 {
           br_sprite = S_BALL_SQUASH1;
-          br_dw = BALL_SIZE + 3.0;
-          br_dh = BALL_SIZE - 2.0;
         } else if br_phase < 0.66 {
           br_sprite = S_BALL_SQUASH2;
-          br_dw = BALL_SIZE + 5.0;
-          br_dh = BALL_SIZE - 4.0;
         } else {
           br_sprite = S_BALL_RELEASE;
-          br_dw = BALL_SIZE + 1.0;
-          br_dh = BALL_SIZE - 1.0;
         }
-        // Horizontal-axis bounce — flip 90 degrees.
-        if br_ball_sq_axis[br_bd] == 1 {
-          br_tmp = br_dw; br_dw = br_dh; br_dh = br_tmp;
-        }
+        // Stretch along motion, compress perpendicular.  The 0.35
+        // factor is tuned so the elongation reads without ghosting.
+        br_stretch = 1.0 + br_str * 0.35;
+        br_squeeze = 1.0 - br_str * 0.25;
+        br_dw = BALL_SIZE * (br_vxf * br_stretch + (1.0 - br_vxf) * br_squeeze);
+        br_dh = BALL_SIZE * (br_vyf * br_stretch + (1.0 - br_vyf) * br_squeeze);
       }
       // Centre the (possibly scaled) sprite on the ball's hitbox so
       // the squash expands outward instead of shifting the visual.
