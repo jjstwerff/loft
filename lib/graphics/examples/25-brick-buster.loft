@@ -122,61 +122,61 @@ fn build_atlas() -> graphics::Canvas {
 
   // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
   // S_IC_EXTEND (0) — white ↔
-  at.fill_rect(11, 13, 10,  5, ol);
-  at.fill_rect( 9, 11,  5,  9, ol);
-  at.fill_rect(18, 11,  5,  9, ol);
-  at.fill_rect(12, 14,  8,  3, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(10, 12,  3,  7, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(19, 12,  3,  7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(11, 141, 10,  5, ol);
+  at.fill_rect( 9, 139,  5,  9, ol);
+  at.fill_rect(18, 139,  5,  9, ol);
+  at.fill_rect(12, 142,  8,  3, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(10, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(19, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
   // S_IC_EXPLODE (1) — white skull
-  at.fill_circle(32 + 16, 14, 6, ol);
-  at.fill_circle(32 + 16, 14, 5, graphics::rgba(255, 230, 200, 240));
-  at.fill_rect(32 + 13, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 17, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 14, 18, 4, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_circle(32 + 16, 142, 6, ol);
+  at.fill_circle(32 + 16, 142, 5, graphics::rgba(255, 230, 200, 240));
+  at.fill_rect(32 + 13, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 17, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 14, 146, 4, 2, graphics::rgba(40, 40, 40, 255));
   // S_IC_BALLOON (2) — red balloon
-  at.fill_circle(64 + 16, 12, 6, ol);
-  at.fill_circle(64 + 16, 12, 5, graphics::rgba(255, 70, 70, 240));
-  at.fill_circle(64 + 14, 10, 2, graphics::rgba(255, 150, 150, 130));
-  at.vline(64 + 16, 17, 20, graphics::rgba(200, 200, 200, 200));
+  at.fill_circle(64 + 16, 140, 6, ol);
+  at.fill_circle(64 + 16, 140, 5, graphics::rgba(255, 70, 70, 240));
+  at.fill_circle(64 + 14, 138, 2, graphics::rgba(255, 150, 150, 130));
+  at.vline(64 + 16, 145, 148, graphics::rgba(200, 200, 200, 200));
   // S_IC_NEWROW (3) — blue ⬇
-  at.fill_rect(96 + 13,  7,  6, 10, ol);
-  at.fill_rect(96 +  9, 13, 14,  5, ol);
-  at.fill_rect(96 + 12, 16,  8,  4, ol);
-  at.fill_rect(96 + 14,  8,  4,  8, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 10, 14, 12,  3, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 13, 17,  6,  2, graphics::rgba(130, 180, 255, 200));
+  at.fill_rect(96 + 13, 135,  6, 10, ol);
+  at.fill_rect(96 +  9, 141, 14,  5, ol);
+  at.fill_rect(96 + 12, 144,  8,  4, ol);
+  at.fill_rect(96 + 14, 136,  4,  8, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 10, 142, 12,  3, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 13, 145,  6,  2, graphics::rgba(130, 180, 255, 200));
   // S_IC_MULTI (4) — white circles
-  at.fill_circle( 8, 32 + 14, 5, ol);
-  at.fill_circle(18, 32 + 10, 4, ol);
-  at.fill_circle(20, 32 + 17, 4, ol);
-  at.fill_circle( 8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
-  at.fill_circle(18, 32 + 10, 3, graphics::rgba(230, 230, 255, 200));
-  at.fill_circle(20, 32 + 17, 3, graphics::rgba(210, 210, 255, 180));
+  at.fill_circle( 8, 96 + 14, 5, ol);
+  at.fill_circle(18, 96 + 10, 4, ol);
+  at.fill_circle(20, 96 + 17, 4, ol);
+  at.fill_circle( 8, 96 + 14, 4, graphics::rgba(255, 255, 255, 230));
+  at.fill_circle(18, 96 + 10, 3, graphics::rgba(230, 230, 255, 200));
+  at.fill_circle(20, 96 + 17, 3, graphics::rgba(210, 210, 255, 180));
   // S_IC_FIRE (5) — orange flame
-  at.fill_rect(32 + 13, 32 +  5,  6, 14, ol);
-  at.fill_rect(32 + 11, 32 +  9, 10, 10, ol);
-  at.fill_rect(32 + 14, 32 +  3,  4,  6, ol);
-  at.fill_rect(32 + 14, 32 +  6,  4, 12, graphics::rgba(255, 150, 0, 240));
-  at.fill_rect(32 + 12, 32 + 10,  8,  8, graphics::rgba(255,  90, 0, 220));
-  at.fill_rect(32 + 15, 32 +  4,  2,  4, graphics::rgba(255, 220, 50, 200));
+  at.fill_rect(32 + 13, 96 + 5,  6, 14, ol);
+  at.fill_rect(32 + 11, 96 + 9, 10, 10, ol);
+  at.fill_rect(32 + 14, 96 + 3,  4,  6, ol);
+  at.fill_rect(32 + 14, 96 + 6,  4, 12, graphics::rgba(255, 150, 0, 240));
+  at.fill_rect(32 + 12, 96 + 10,  8,  8, graphics::rgba(255,  90, 0, 220));
+  at.fill_rect(32 + 15, 96 + 4,  2,  4, graphics::rgba(255, 220, 50, 200));
   // S_IC_SHIELD (6) — blue shield
-  at.fill_rect(64 +  8, 32 +  7, 16,  8, ol);
-  at.fill_rect(64 + 10, 32 + 13, 12,  5, ol);
-  at.fill_rect(64 + 12, 32 + 16,  8,  4, ol);
-  at.fill_rect(64 +  9, 32 +  8, 14,  6, graphics::rgba(80, 160, 255, 240));
-  at.fill_rect(64 + 11, 32 + 14, 10,  3, graphics::rgba(80, 140, 230, 220));
-  at.fill_rect(64 + 13, 32 + 17,  6,  2, graphics::rgba(80, 120, 210, 200));
-  at.hline(64 + 10, 64 + 22, 32 + 9, graphics::rgba(200, 230, 255, 120));
+  at.fill_rect(64 +  8, 96 + 7, 16,  8, ol);
+  at.fill_rect(64 + 10, 96 + 13, 12,  5, ol);
+  at.fill_rect(64 + 12, 96 + 16,  8,  4, ol);
+  at.fill_rect(64 +  9, 96 + 8, 14,  6, graphics::rgba(80, 160, 255, 240));
+  at.fill_rect(64 + 11, 96 + 14, 10,  3, graphics::rgba(80, 140, 230, 220));
+  at.fill_rect(64 + 13, 96 + 17,  6,  2, graphics::rgba(80, 120, 210, 200));
+  at.hline(64 + 10, 64 + 22, 96 + 9, graphics::rgba(200, 230, 255, 120));
 
   // Large pickup icons — fill most of 32x32 cell
   // S_PK_EXTEND (7) at (96, 32) — large green ↔
-  at.fill_rect(96 +  3, 32 + 11, 26, 10, ol);
-  at.fill_rect(96 +  1, 32 +  7,  8, 18, ol);
-  at.fill_rect(96 + 23, 32 +  7,  8, 18, ol);
-  at.fill_rect(96 +  4, 32 + 12, 24,  8, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 +  2, 32 +  8,  6, 16, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 24, 32 +  8,  6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  3, 96 + 11, 26, 10, ol);
+  at.fill_rect(96 +  1, 96 + 7,  8, 18, ol);
+  at.fill_rect(96 + 23, 96 + 7,  8, 18, ol);
+  at.fill_rect(96 +  4, 96 + 12, 24,  8, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  2, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 24, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
   // S_PK_EXPLODE (8) at (0, 64) — large red skull
   at.fill_circle(16, 64 + 14, 13, ol);
   at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
@@ -186,14 +186,14 @@ fn build_atlas() -> graphics::Canvas {
   // S_PK_BALLOON (9) at (32, 64) — large red balloon
   at.fill_circle(32 + 16, 64 + 12, 11, ol);
   at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(32 + 12, 64 +  8,  4, graphics::rgba(255, 130, 130, 130));
+  at.fill_circle(32 + 12, 64 + 8,  4, graphics::rgba(255, 130, 130, 130));
   at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
   // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
-  at.fill_rect(64 + 11, 64 +  1, 10, 18, ol);
+  at.fill_rect(64 + 11, 64 + 1, 10, 18, ol);
   at.fill_rect(64 +  5, 64 + 13, 22,  8, ol);
   at.fill_rect(64 +  9, 64 + 19, 14,  7, ol);
   at.fill_rect(64 + 12, 64 + 24,  8,  6, ol);
-  at.fill_rect(64 + 12, 64 +  2,  8, 16, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 12, 64 + 2,  8, 16, graphics::rgba(60, 110, 240, 255));
   at.fill_rect(64 +  6, 64 + 14, 20,  6, graphics::rgba(60, 110, 240, 255));
   at.fill_rect(64 + 10, 64 + 20, 12,  5, graphics::rgba(60, 110, 240, 230));
   at.fill_rect(64 + 13, 64 + 25,  6,  4, graphics::rgba(60, 110, 240, 200));
@@ -205,39 +205,39 @@ fn build_atlas() -> graphics::Canvas {
   at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
   at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
   // S_PK_FIRE (12) at (0, 96) — large flame
-  at.fill_rect(11, 96 +  5, 10, 24, ol);
-  at.fill_rect( 7, 96 + 11, 18, 18, ol);
-  at.fill_rect(12, 96 +  1,  8, 10, ol);
-  at.fill_rect(13, 96 -  1,  6,  6, ol);
-  at.fill_rect(12, 96 +  6,  8, 22, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect( 8, 96 + 12, 16, 16, graphics::rgba(255,  80, 0, 240));
-  at.fill_rect(13, 96 +  2,  6,  8, graphics::rgba(255, 210, 20, 230));
-  at.fill_rect(14, 96 +  0,  4,  4, graphics::rgba(255, 240, 80, 180));
+  at.fill_rect(11, 32 + 5, 10, 24, ol);
+  at.fill_rect( 7, 32 + 11, 18, 18, ol);
+  at.fill_rect(12, 32 + 1,  8, 10, ol);
+  at.fill_rect(13, 32 - 1,  6,  6, ol);
+  at.fill_rect(12, 32 + 6,  8, 22, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect( 8, 32 + 12, 16, 16, graphics::rgba(255,  80, 0, 240));
+  at.fill_rect(13, 32 + 2,  6,  8, graphics::rgba(255, 210, 20, 230));
+  at.fill_rect(14, 32 + 0,  4,  4, graphics::rgba(255, 240, 80, 180));
   // S_PK_SHIELD (13) at (32, 96) — large blue shield
-  at.fill_rect(32 +  5, 96 +  3, 22, 14, ol);
-  at.fill_rect(32 +  8, 96 + 15, 16,  8, ol);
-  at.fill_rect(32 + 11, 96 + 21, 10,  6, ol);
-  at.fill_rect(32 +  6, 96 +  4, 20, 12, graphics::rgba(60, 150, 255, 255));
-  at.fill_rect(32 +  9, 96 + 16, 14,  6, graphics::rgba(60, 130, 240, 240));
-  at.fill_rect(32 + 12, 96 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
-  at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
+  at.fill_rect(32 +  5, 32 + 3, 22, 14, ol);
+  at.fill_rect(32 +  8, 32 + 15, 16,  8, ol);
+  at.fill_rect(32 + 11, 32 + 21, 10,  6, ol);
+  at.fill_rect(32 +  6, 32 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
+  at.fill_rect(32 +  9, 32 + 16, 14,  6, graphics::rgba(60, 130, 240, 240));
+  at.fill_rect(32 + 12, 32 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
+  at.hline(32 + 8, 32 + 24, 32 + 5, graphics::rgba(180, 220, 255, 120));
 
   // S_HEART (14) at (64, 96) — lives icon, cel-shaded red heart.
   // Two lobes + downward-pointing triangular body, drawn at full cell
   // size so it still reads clearly at the 14-px HUD size.
-  at.fill_circle(64 +  9, 96 + 12, 8, ol);
-  at.fill_circle(64 + 23, 96 + 12, 8, ol);
-  at.fill_circle(64 +  9, 96 + 12, 7, graphics::rgba(230, 60, 70, 255));
-  at.fill_circle(64 + 23, 96 + 12, 7, graphics::rgba(230, 60, 70, 255));
+  at.fill_circle(64 +  9, 32 + 12, 8, ol);
+  at.fill_circle(64 + 23, 32 + 12, 8, ol);
+  at.fill_circle(64 +  9, 32 + 12, 7, graphics::rgba(230, 60, 70, 255));
+  at.fill_circle(64 + 23, 32 + 12, 7, graphics::rgba(230, 60, 70, 255));
   // Triangular body: shrinking rows from y=17 down to the tip at y=26.
   for ht_i in 0..10 {
     ht_w = 14 - ht_i;
     ht_x = 64 + 16 - ht_w;
-    at.fill_rect(ht_x - 1, 96 + 17 + ht_i, 2 * ht_w + 2, 1, ol);
-    at.fill_rect(ht_x,     96 + 17 + ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
+    at.fill_rect(ht_x - 1, 32 + 17 + ht_i, 2 * ht_w + 2, 1, ol);
+    at.fill_rect(ht_x, 32 + 17 + ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
   }
   // Highlight — small white glint on the upper-left lobe.
-  at.fill_circle(64 +  6, 96 +  9, 2, graphics::rgba(255, 210, 215, 200));
+  at.fill_circle(64 +  6, 32 + 9, 2, graphics::rgba(255, 210, 215, 200));
 
   // Ball frames — row 4, y=128.  Each sprite fills most of its 32x32
   // cell so that when rendered at BALL_SIZE (22 px) the visible ball
@@ -249,37 +249,37 @@ fn build_atlas() -> graphics::Canvas {
   // cel-shaded 3D cue.
 
   // S_BALL_NORMAL (16) at (0, 128) — perfect round ball, d=28
-  at.fill_circle( 0 + 16, 128 + 16, 14, ol);
-  at.fill_circle( 0 + 16, 128 + 16, 13, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle( 0 + 12, 128 + 12,  4, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle( 0 + 16, 16, 14, ol);
+  at.fill_circle( 0 + 16, 16, 13, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle( 0 + 12, 12,  4, graphics::rgba(255, 255, 255, 255));
 
   // S_BALL_SQUASH1 (17) at (32, 128) — first contact: ~28 wide x 22 tall
   // Stadium = rect + two end caps.
-  at.fill_circle(32 +  9, 128 + 16, 11, ol);
-  at.fill_circle(32 + 23, 128 + 16, 11, ol);
-  at.fill_rect  (32 +  9, 128 +  5, 14, 22, ol);
-  at.fill_circle(32 +  9, 128 + 16, 10, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(32 + 23, 128 + 16, 10, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (32 +  9, 128 +  6, 14, 20, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(32 + 12, 128 + 12,  3, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(32 +  9, 16, 11, ol);
+  at.fill_circle(32 + 23, 16, 11, ol);
+  at.fill_rect  (32 +  9, 5, 14, 22, ol);
+  at.fill_circle(32 +  9, 16, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 23, 16, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (32 +  9, 6, 14, 20, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 12, 12,  3, graphics::rgba(255, 255, 255, 255));
 
   // S_BALL_SQUASH2 (18) at (64, 128) — peak squash: ~30 wide x 14 tall
-  at.fill_circle(64 +  8, 128 + 16, 7, ol);
-  at.fill_circle(64 + 24, 128 + 16, 7, ol);
-  at.fill_rect  (64 +  8, 128 +  9, 16, 14, ol);
-  at.fill_circle(64 +  8, 128 + 16, 6, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(64 + 24, 128 + 16, 6, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (64 +  8, 128 + 10, 16, 12, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (64 + 11, 128 + 12,  4,  2, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(64 +  8, 16, 7, ol);
+  at.fill_circle(64 + 24, 16, 7, ol);
+  at.fill_rect  (64 +  8, 9, 16, 14, ol);
+  at.fill_circle(64 +  8, 16, 6, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(64 + 24, 16, 6, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (64 +  8, 10, 16, 12, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (64 + 11, 12,  4,  2, graphics::rgba(255, 255, 255, 255));
 
   // S_BALL_RELEASE (19) at (96, 128) — mid-recovery: ~26 wide x 24 tall
-  at.fill_circle(96 + 11, 128 + 16, 12, ol);
-  at.fill_circle(96 + 21, 128 + 16, 12, ol);
-  at.fill_rect  (96 + 11, 128 +  4, 10, 24, ol);
-  at.fill_circle(96 + 11, 128 + 16, 11, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(96 + 21, 128 + 16, 11, graphics::rgba(245, 245, 245, 255));
-  at.fill_rect  (96 + 11, 128 +  5, 10, 22, graphics::rgba(245, 245, 245, 255));
-  at.fill_circle(96 + 13, 128 + 12,  3, graphics::rgba(255, 255, 255, 255));
+  at.fill_circle(96 + 11, 16, 12, ol);
+  at.fill_circle(96 + 21, 16, 12, ol);
+  at.fill_rect  (96 + 11, 4, 10, 24, ol);
+  at.fill_circle(96 + 11, 16, 11, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 21, 16, 11, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (96 + 11, 5, 10, 22, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 13, 12,  3, graphics::rgba(255, 255, 255, 255));
 
   at
 }
