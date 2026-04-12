@@ -518,3 +518,41 @@ fn count_frames(r: const Num) -> integer { frames = stack_trace(); len(frames) +
         );
     }
 }
+
+/// Fix #92 (P92): stack_trace() inside a parallel worker must resolve the
+/// worker's function name and source file.  Before this fix, frame.d_nr was
+/// u32::MAX (worker State had empty fn_positions) so the snapshot fell back
+/// to the placeholder `<worker>` with empty file.  WorkerProgram now
+/// propagates data_ptr, fn_positions, and line_numbers from the spawning
+/// State so the snapshot resolves real frames.
+///
+/// Verified via the full `for ... par(...)` execution path through
+/// `State::execute_argv` — that's where the parent's `data_ptr` and
+/// `fn_positions` are set, mirroring how user programs run.
+#[test]
+fn parallel_stack_trace_resolves_worker_name() {
+    let code = r#"
+struct StFrameNum { v: integer }
+
+fn st_named_worker(r: StFrameNum) -> integer {
+  fr = stack_trace();
+  base = r.v - r.v;
+  if len(fr) >= 1 && fr[0].function == "st_named_worker" { base + 1 } else { base }
+}
+
+fn main() {
+  st_data: vector<StFrameNum> = [];
+  for st_n in 0..4 { st_data += [StFrameNum { v: st_n }]; }
+  st_total = 0;
+  for st_e in st_data par(st_x = st_named_worker(st_e), 2) {
+    st_total += st_x;
+  }
+  assert(st_total == 4, "P92: all 4 workers must resolve frame name; got {st_total}");
+}
+"#;
+    let (mut state, mut data) = compile(code);
+    state.execute_argv("main", &data, &[]);
+    // Compile-side sanity: the test relies on data and the stack_trace lib
+    // function being present; silence "data unused" by referencing it.
+    let _ = data.def_nr("n_st_named_worker");
+}

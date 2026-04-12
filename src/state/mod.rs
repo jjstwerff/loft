@@ -328,7 +328,8 @@ impl State {
             self.database.call_stack_snapshot = self
                 .call_stack
                 .iter()
-                .map(|f| {
+                .enumerate()
+                .map(|(idx, f)| {
                     if let Some(data) = data_opt
                         && f.d_nr != u32::MAX
                         && (f.d_nr as usize) < data.definitions.len()
@@ -340,7 +341,23 @@ impl State {
                             def.name.clone()
                         };
                         let file = def.position.file.clone();
-                        (name, file, f.line)
+                        // Fix #92: line resolution for parallel-worker frames.
+                        // The CallFrame.line is only updated by `fn_call`, which
+                        // never runs for the worker's entry frame.  Fall back to
+                        // looking up the current bytecode position in
+                        // `line_numbers` so workers report the actual source
+                        // line they're executing rather than 0.
+                        let line = if f.line != 0 {
+                            f.line
+                        } else {
+                            let cp = if idx + 1 == self.call_stack.len() {
+                                self.code_pos
+                            } else {
+                                self.call_stack[idx + 1].call_pos
+                            };
+                            self.line_numbers.get(&cp).copied().unwrap_or(0)
+                        };
+                        (name, file, line)
                     } else {
                         // Worker frame without Data context — use placeholder.
                         ("<worker>".to_string(), String::new(), f.line)
@@ -1287,6 +1304,9 @@ impl State {
             bytecode: Arc::clone(&self.bytecode),
             library: Arc::clone(&self.library),
             stack_trace_lib_nr: self.stack_trace_lib_nr,
+            data_ptr: self.data_ptr,
+            fn_positions: Arc::new(self.fn_positions.clone()),
+            line_numbers: Arc::new(self.line_numbers.clone()),
         };
         crate::parallel::run_parallel_block(&self.database, program, &positions);
     }
@@ -1523,6 +1543,9 @@ impl State {
             bytecode: Arc::clone(&self.bytecode),
             library: Arc::clone(&self.library),
             stack_trace_lib_nr,
+            data_ptr: self.data_ptr,
+            fn_positions: Arc::new(self.fn_positions.clone()),
+            line_numbers: Arc::new(self.line_numbers.clone()),
         }
     }
 

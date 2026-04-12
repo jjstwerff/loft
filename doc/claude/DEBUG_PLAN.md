@@ -18,8 +18,8 @@ Created: 2026-04-10.
 
 | #    | Title                                              | Category     | Severity | Status           |
 |------|----------------------------------------------------|-------------|----------|------------------|
-| P120 | Store leak on struct field overwrite in loop        | Safety/Leak | **High** | **Open** — confirmed: debug-mode `Database N not correctly freed` |
-| P127 | File-scope vector constant corrupts caller slots   | Data loss   | Medium   | Open — `#[ignore]`d reproducer |
+| P120 | ~~Store leak on struct field overwrite in loop~~    | ~~Safety/Leak~~ | ~~**High**~~ | **Fixed** — high-bit on CopyRecord type in `copy_ref()`; isolation + GL tests pass in debug |
+| P127 | ~~File-scope vector constant corrupts caller slots~~ | ~~Data loss~~ | ~~Medium~~ | **Fixed** — pre-built in CONST_STORE via `OpConstRef`; both reproducers un-ignored |
 | P117 | ~~Struct-text-param store leak~~                   | ~~Leak~~    | ~~Medium~~ | **Fixed** (2026-04-11) — GL-pattern tests pass in debug |
 | P121 | ~~Float tuple heap corruption (interpreter)~~      | ~~Safety~~  | ~~**High**~~ | **Fixed** (2026-04-11) — sustained-loop tests pass in debug |
 | P122 | ~~Store leak: struct/vector in tight game loops~~  | ~~Leak~~    | ~~**High**~~ | **Fixed** (2026-04-11) — mat4 + collision GL tests pass in debug |
@@ -293,7 +293,8 @@ fn test() {
 ```
 
 **Phase B — Already a unit test:**
-`tests/issues.rs::p127_file_scope_vector_constant_in_call` (`#[ignore]`d).
+`tests/issues.rs::p127_file_scope_vector_constant_in_call` (now passing,
+`#[ignore]` removed).
 
 **Phase C — Root cause (confirmed):**
 
@@ -317,7 +318,7 @@ numbers, bypassing the clone entirely.
 **Phase E — Verification:**
 
 ```bash
-cargo test --release --test issues p127        # un-#[ignore] both tests
+cargo test --release --test issues p127        # both tests run unconditionally
 make ci
 ```
 

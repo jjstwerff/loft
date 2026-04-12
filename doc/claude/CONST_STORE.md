@@ -256,7 +256,7 @@ internal `Var(0)`/`Var(1)` are never inlined.
 
 **Files:** `tests/issues.rs`, `doc/claude/PROBLEMS.md`
 
-- Remove `#[ignore]` from both P127 tests
+- Both P127 tests are no longer `#[ignore]`d (un-ignored when the const store landed)
 - Verify: `cargo test -p loft --test issues p127` passes in debug mode
 - Verify: `cargo test -p loft --test issues` full suite passes
 - Verify: `cargo test --release` full suite passes

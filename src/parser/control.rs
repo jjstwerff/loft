@@ -89,6 +89,63 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
+            // P85c: detect file-scope-only declarations inside a block and
+            // emit a single clean diagnostic instead of cascading parse
+            // errors like "Expect token =" + "Expect constants to be in
+            // upper case".  `fn` is special-cased because `fn(args) {...}`
+            // is also a lambda expression — only reject `fn <name>(...)`.
+            let bad_kw: Option<&'static str> = if self.lexer.peek_token("struct") {
+                Some("struct")
+            } else if self.lexer.peek_token("enum") {
+                Some("enum")
+            } else if self.lexer.peek_token("type") {
+                Some("type")
+            } else if self.lexer.peek_token("interface") {
+                Some("interface")
+            } else if self.lexer.peek_token("use") {
+                Some("use")
+            } else if self.lexer.peek_token("pub") {
+                Some("pub")
+            } else if self.lexer.peek_token("fn") {
+                // distinguish `fn(args)` (lambda) from `fn name(args)`.
+                let link = self.lexer.link();
+                self.lexer.token("fn");
+                let is_named_fn = self.lexer.peek().has != crate::lexer::LexItem::Token("(".to_string());
+                self.lexer.revert(link);
+                if is_named_fn { Some("fn") } else { None }
+            } else {
+                None
+            };
+            if let Some(kw) = bad_kw {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{kw}' definitions must be at file scope, not inside a function or block"
+                    );
+                }
+                // Consume the offending declaration: skip until the matching
+                // top-level `}` or the outer block's `}`/`;`.
+                self.lexer.token(kw);
+                let mut depth: i32 = 0;
+                while depth >= 0 {
+                    if self.lexer.has_token("{") {
+                        depth += 1;
+                    } else if self.lexer.peek_token("}") {
+                        if depth == 0 {
+                            break;
+                        }
+                        self.lexer.token("}");
+                        depth -= 1;
+                    } else if self.lexer.peek().has == crate::lexer::LexItem::None {
+                        break;
+                    } else {
+                        self.lexer.cont();
+                    }
+                }
+                self.lexer.has_token(";");
+                continue;
+            }
             // Warn about unreachable code after an unconditional terminator.
             if let Some(kind) = terminated {
                 if !self.first_pass {
@@ -425,7 +482,7 @@ impl Parser {
             if self.lexer.peek_token("}") {
                 break;
             }
-            let Some(pattern_name) = self.lexer.has_identifier() else {
+            let Some(first_ident) = self.lexer.has_identifier() else {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -434,6 +491,24 @@ impl Parser {
                     );
                 }
                 break;
+            };
+
+            // C53: accept `Library::Variant` or `EnumName::Variant` qualified patterns.
+            // The `::` resolves the right-hand identifier in the named scope.
+            let pattern_name = if self.lexer.has_token("::") {
+                let Some(vname) = self.lexer.has_identifier() else {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "expect variant name after '::'"
+                        );
+                    }
+                    break;
+                };
+                vname
+            } else {
+                first_ident.clone()
             };
 
             if pattern_name == "_" {
@@ -447,8 +522,24 @@ impl Parser {
                 break;
             }
 
-            // Look up the variant definition.
-            let variant_def_nr = self.data.def_nr(&pattern_name);
+            // Look up the variant definition. C53: when the bare name is not
+            // visible in the current source (e.g. a library enum variant that
+            // was not wildcard-imported), fall back to searching the enum's
+            // children by name.
+            let mut variant_def_nr = self.data.def_nr(&pattern_name);
+            if (variant_def_nr == u32::MAX
+                || self.data.def_type(variant_def_nr) != DefType::EnumValue
+                || self.data.def(variant_def_nr).parent != e_nr)
+                && e_nr != u32::MAX
+            {
+                if let Some(child) = self
+                    .data
+                    .children_of(e_nr)
+                    .find(|&c| self.data.def(c).name == pattern_name)
+                {
+                    variant_def_nr = child;
+                }
+            }
 
             // for plain struct match, the pattern name must match the struct type.
             // There is no discriminant — the arm always matches.
@@ -531,13 +622,42 @@ impl Parser {
             // Only for plain enum arms without field bindings.
             let mut all_discs = vec![disc];
             while self.lexer.has_token("|") {
-                let Some(next_name) = self.lexer.has_identifier() else {
+                let Some(first_or) = self.lexer.has_identifier() else {
                     if !self.first_pass {
                         diagnostic!(self.lexer, Level::Error, "expect variant name after '|'");
                     }
                     break;
                 };
-                let next_def_nr = self.data.def_nr(&next_name);
+                // C53: accept Lib::Variant in or-patterns as well.
+                let next_name = if self.lexer.has_token("::") {
+                    let Some(vname) = self.lexer.has_identifier() else {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expect variant name after '::'"
+                            );
+                        }
+                        break;
+                    };
+                    vname
+                } else {
+                    first_or.clone()
+                };
+                let mut next_def_nr = self.data.def_nr(&next_name);
+                if (next_def_nr == u32::MAX
+                    || self.data.def_type(next_def_nr) != DefType::EnumValue
+                    || self.data.def(next_def_nr).parent != e_nr)
+                    && e_nr != u32::MAX
+                {
+                    if let Some(child) = self
+                        .data
+                        .children_of(e_nr)
+                        .find(|&c| self.data.def(c).name == next_name)
+                    {
+                        next_def_nr = child;
+                    }
+                }
                 if !self.first_pass
                     && (next_def_nr == u32::MAX
                         || self.data.def_type(next_def_nr) != DefType::EnumValue

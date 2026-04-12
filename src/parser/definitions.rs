@@ -318,6 +318,7 @@ impl Parser {
             );
         }
         let mut d_nr = self.data.def_nr(&type_name);
+        let mut conflict = false;
         if d_nr == u32::MAX {
             let pos = self.lexer.pos();
             d_nr = self.data.add_def(&type_name, pos, DefType::Enum);
@@ -325,9 +326,21 @@ impl Parser {
             self.data.definitions[d_nr as usize].def_type = DefType::Enum;
             self.data.definitions[d_nr as usize].position = self.lexer.pos().clone();
         } else if self.first_pass {
-            diagnostic!(self.lexer, Level::Error, "Cannot redefine {type_name}");
+            // P85b: a name that already exists must not be reused — that
+            // would overwrite the existing definition's type and crash in
+            // `set_returned` below.  Emit a clear diagnostic naming the
+            // existing definition's location.
+            let prev_pos = self.data.def(d_nr).position.clone();
+            let prev_kind = format!("{:?}", self.data.def(d_nr).def_type).to_lowercase();
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "enum '{type_name}' conflicts with a {prev_kind} of the same name \
+                 already defined at {prev_pos} — pick a different name"
+            );
+            conflict = true;
         }
-        if self.first_pass {
+        if self.first_pass && !conflict {
             self.data
                 .set_returned(d_nr, Type::Enum(d_nr, false, Vec::new()));
         }
@@ -361,7 +374,25 @@ impl Parser {
                 "Expect type definitions to be in camel case style"
             );
         }
-        let d_nr = if self.first_pass {
+        // P85b: detect a name collision before calling `add_def`, which
+        // would otherwise panic with `Dual definition of <name>`.  Emit a
+        // clear diagnostic citing the prior definition's location.
+        let mut conflict = false;
+        if self.first_pass {
+            let existing = self.data.def_nr(&type_name);
+            if existing != u32::MAX {
+                let prev_pos = self.data.def(existing).position.clone();
+                let prev_kind = format!("{:?}", self.data.def(existing).def_type).to_lowercase();
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "type '{type_name}' conflicts with a {prev_kind} of the same name \
+                     already defined at {prev_pos} — pick a different name"
+                );
+                conflict = true;
+            }
+        }
+        let d_nr = if self.first_pass && !conflict {
             self.data
                 .add_def(&type_name, self.lexer.pos(), DefType::Type)
         } else {
@@ -369,7 +400,7 @@ impl Parser {
         };
         if self.lexer.has_token("=") {
             if let Some(tp) = self.parse_type_full(d_nr, false) {
-                if self.first_pass {
+                if self.first_pass && !conflict && d_nr != u32::MAX {
                     self.data.set_returned(d_nr, tp);
                 }
             } else if !self.first_pass {
@@ -413,9 +444,24 @@ impl Parser {
             let mut val = Value::Null;
             let tp = self.expression(&mut val);
             if self.first_pass {
-                let c_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Constant);
-                self.data.set_returned(c_nr, tp);
-                self.data.definitions[c_nr as usize].code = val;
+                // P85b: detect a name collision before calling `add_def`,
+                // which would otherwise panic with `Dual definition of <name>`.
+                let existing = self.data.def_nr(&id);
+                if existing != u32::MAX {
+                    let prev_pos = self.data.def(existing).position.clone();
+                    let prev_kind =
+                        format!("{:?}", self.data.def(existing).def_type).to_lowercase();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "constant '{id}' conflicts with a {prev_kind} of the same name \
+                         already defined at {prev_pos} — pick a different name"
+                    );
+                } else {
+                    let c_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Constant);
+                    self.data.set_returned(c_nr, tp);
+                    self.data.definitions[c_nr as usize].code = val;
+                }
             }
             self.lexer.token(";");
             true
@@ -1185,7 +1231,14 @@ impl Parser {
                 self.data.definitions[d_nr as usize].def_type = DefType::Struct;
                 self.data.definitions[d_nr as usize].returned = Type::Reference(d_nr, Vec::new());
             } else {
-                diagnostic!(self.lexer, Level::Error, "Cannot redefine struct '{id}'");
+                let prev_pos = self.data.def(d_nr).position.clone();
+                let prev_kind = format!("{:?}", self.data.def(d_nr).def_type).to_lowercase();
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "struct '{id}' conflicts with a {prev_kind} of the same name \
+                     already defined at {prev_pos} — pick a different name"
+                );
             }
         }
         let context = self.context;

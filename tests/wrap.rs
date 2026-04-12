@@ -365,6 +365,51 @@ script_test!(auto_convert, "tests/scripts/54-auto-convert.loft");
 // stack_trace() introspection returns frames from nested calls.
 script_test!(stack_trace_script, "tests/scripts/55-stack-trace.loft");
 
+/// P89 regression: every field name `n_stack_trace` looks up at runtime
+/// must exist in the loaded schema.  If `default/04_stacktrace.loft` is
+/// edited to rename or remove a field, this test fails immediately
+/// instead of silently producing garbage stack-trace records.
+#[test]
+fn p89_stacktrace_schema_fields_exist() {
+    let (_data, db) = cached_default();
+    let db = &db;
+    let sf_fields = [
+        ("StackFrame", "function"),
+        ("StackFrame", "file"),
+        ("StackFrame", "line"),
+        ("StackFrame", "arguments"),
+        ("StackFrame", "variables"),
+        ("VarInfo", "name"),
+        ("VarInfo", "type_name"),
+        ("VarInfo", "value"),
+        ("BoolVal", "b"),
+        ("IntVal", "n"),
+        ("LongVal", "n"),
+        ("FloatVal", "f"),
+        ("SingleVal", "f"),
+        ("CharVal", "c"),
+        ("TextVal", "t"),
+        ("RefVal", "store"),
+        ("RefVal", "rec"),
+        ("RefVal", "pos"),
+        ("OtherVal", "description"),
+    ];
+    for (ty, field) in sf_fields {
+        let tp = db.name(ty);
+        assert_ne!(
+            tp,
+            u16::MAX,
+            "schema is missing type {ty} (default/04_stacktrace.loft drift)"
+        );
+        let pos = db.position(tp, field);
+        assert_ne!(
+            pos,
+            u16::MAX,
+            "schema is missing {ty}.{field} (default/04_stacktrace.loft drift)"
+        );
+    }
+}
+
 /// Quick iteration test: run only the final suite file (`16-parser.loft`) without
 /// regenerating documentation.  Use this during active development on the parser
 /// to get a fast feedback cycle.

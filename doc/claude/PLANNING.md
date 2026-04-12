@@ -1679,8 +1679,8 @@ for (pos, r, init) in insertions { ls.insert(pos, v_set(r, init)); }
 requires resolving Issues 69 and 70 and moving OpFreeText to after each variable's last
 use.
 
-**Tests:** `assign_slots_sequential_text_reuse` in `src/variables/` (currently
-`#[ignore]` — pending Issue 69 fix).
+**Tests:** `assign_slots_sequential_text_reuse` in `src/variables/` runs
+unconditionally (Issue 69 fix landed).
 **Effort:** Medium (three inter-related blockers; Issues 68–70)
 **Target:** 0.8.2
 
@@ -2152,96 +2152,21 @@ text arguments in monomorphized calls.  Remove `"48-generics.loft"` from
 
 ---
 
-### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`)
+### S32  Fix slot conflict in `20-binary.loft` (`rv` / `_read_34`) — **Done**
 **Sources:** CAVEATS.md C28
-**Severity:** Medium — a binary file I/O test is excluded from both interpreter and native CI.
-**Description:** The two-zone slot allocator assigns overlapping slots `[820, 832)` to both `rv` (live `[1016, 1110]`) and `_read_34` (live `[1008, 1109]`) in `n_main` of `tests/scripts/20-binary.loft`.  The live ranges overlap, so the slot validator panics in debug builds.  `20-binary.loft` is in `ignored_scripts()` (wrap), `SCRIPTS_NATIVE_SKIP` (native scripts), and the `binary` test is `#[ignore]`.
-
-**Fix path:**
-1. Run `LOFT_LOG=variables cargo test --test wrap binary 2>&1` to dump the full variable table for `n_main`.
-2. Identify why `rv` and `_read_34` are assigned the same slot despite overlapping live ranges.  Likely cause: one is a short-lived `_read_*` temp in an inner scope that the zone-2 allocator reuses too aggressively when another variable with a long live range occupies the same zone-2 slot.
-3. Apply the minimal fix to the zone-2 reuse logic in `src/variables/slots.rs` to prevent the overlap.
-4. Remove `"20-binary.loft"` from `ignored_scripts()` and `SCRIPTS_NATIVE_SKIP`; remove the manual `#[ignore]` from the `binary` test; re-enable.
-5. Run `make ci` to confirm no regressions.
+**Status:** Fixed — `20-binary.loft` runs unconditionally in `tests/wrap.rs::binary` and `tests/native.rs`; no longer in `ignored_scripts()` or `SCRIPTS_NATIVE_SKIP`, no `#[ignore]`.
 
 **Tests:** `binary` and `loft_suite` (wrap) pass; `20-binary.loft` passes in native mode.
-**Effort:** Medium
-**Target:** 0.8.3
 
 ---
 
-### S34  Interpreter: `20-binary.loft` `pos >= TOS` assertion at codegen.rs:751
-**Sources:** `tests/scripts/20-binary.loft`, `wrap::binary` `#[ignore]`, `src/state/codegen.rs:751`
-**Severity:** Medium — the interpreter test for `20-binary.loft` has been excluded since S32 only fixed the native path.
-**Description:** `generate_set` (codegen.rs) has two branches for first variable allocation:
-- `pos == stack.position` → slot is at TOS; place directly.
-- `else` → slot is below TOS; reuse dead slot via `OpPutX`. The `debug_assert!(pos < stack.position)` guards this path.
-
-S32 added `has_sibling_overlap` to `adjust_first_assignment_slot`: when a same-scope sibling overlaps the range `[stack.position, stack.position + v_size)`, the downward adjustment is skipped and `pos` retains its pre-assigned value (which is **above** TOS, i.e. `pos > stack.position`). When `generate_set` then evaluates `pos == stack.position` → false, it falls into the `else` branch and the `debug_assert!(pos < stack.position)` fires because `pos > stack.position`.
-
-**Root cause:** The `has_sibling_overlap` check in `adjust_first_assignment_slot` is too conservative for the `pos > stack.position` case. Siblings detected at `[stack.position, ...)` are at TOS or above TOS — exactly where the new variable should go. Blocking the assignment leaves `pos` in an invalid state (`pos > stack.position`) that no branch in `generate_set` handles.
-
-**Fix path:**
-
-*Option A — Short-term: handle `pos > stack.position` in `generate_set`.*
-
-Add a third case between the two existing branches:
-```rust
-if pos == stack.position {
-    // ... existing at-TOS path ...
-} else if pos > stack.position {
-    // Slot was pre-assigned above TOS but adjust_first_assignment_slot
-    // could not move it down due to sibling overlap.
-    // Treat as at-TOS: reset the slot to current TOS and place directly.
-    stack.function.set_stack_pos(v, stack.position);
-    // fall through to at-TOS placement
-    self.gen_set_first_at_tos(stack, v, value);
-} else {
-    debug_assert!(pos < stack.position);
-    // ... existing below-TOS reuse path ...
-}
-```
-
-*Option B — Proper fix: correct `adjust_first_assignment_slot`.*
-
-In the `pos > stack.position` branch of `adjust_first_assignment_slot`, the sibling overlap check should only block the move when siblings occupy slots **below** current TOS (i.e. `js < stack.position`). Siblings at or above TOS do not have existing data to protect. Revise the predicate:
-```rust
-let has_sibling_overlap = (0..stack.function.count()).any(|j| {
-    // Only block if sibling is already allocated BELOW current TOS.
-    // Siblings at TOS or above also need space; don't block on them.
-    let js = stack.function.stack(j);
-    js < stack.position   // sibling is below TOS — real data exists there
-    && js + size(...) > stack.position  // its range overlaps TOS
-    && /* live range overlap check */ ...
-});
-if !has_sibling_overlap {
-    stack.function.set_stack_pos(v, stack.position);
-}
-// If has_sibling_overlap: both the new variable and the sibling need TOS;
-// assign new variable to TOS + sibling_size (bump past the sibling).
-else {
-    let next_free = /* find first slot >= stack.position not occupied by a sibling */;
-    stack.function.set_stack_pos(v, next_free);
-}
-```
-
-**Status:** *(completed 0.8.3)* — `skip_free` mechanism added to `src/state/codegen.rs`
-and `src/variables/validate.rs`.  During `generate_set` Option A (pos > TOS → alias to TOS
-slot), the inner variable `_read_34` is marked `skip_free`.  `generate_call` suppresses
-`OpFreeRef` emission for `skip_free` variables, eliminating the double-free.
-`validate_slots` skips conflict checks where either variable is `skip_free`.  The
-`skip_free` flags are propagated from the codegen-time `stack.function` into
-`data.definitions[def_nr].variables` after all `Data` mutations complete.
-
-`wrap::binary` now passes.  `"20-binary.loft"` removed from `ignored_scripts()`.
-
-**Side effect:** Fixing S34's interpreter panic exposed a pre-existing native codegen
-bug for the same IR pattern (tracked as S35).  `"20-binary.loft"` added to
-`SCRIPTS_NATIVE_SKIP` as a result.
-
-**Tests:** `cargo test --test wrap binary` — passes.
-**Effort:** Medium
-**Target:** 0.8.3
+### S34  Interpreter: `20-binary.loft` `pos >= TOS` assertion at codegen.rs:751 — **Done**
+**Sources:** `tests/scripts/20-binary.loft`, `src/state/codegen.rs:751`
+**Status:** Fixed (0.8.3) — `skip_free` mechanism in `src/state/codegen.rs` and
+`src/variables/validate.rs` aliases the inner `_read_*` variable to its TOS slot,
+suppresses the double-free, and skips the conflict check.  `wrap::binary` passes
+unconditionally; `20-binary.loft` removed from `ignored_scripts()`.
+Side effect: exposed a pre-existing native codegen bug (S35) for the same pattern.
 
 ---
 
@@ -2348,7 +2273,7 @@ if any field's type isn't fully resolved, iteration over it hits this crash.
 4. **Extend LOFT_ITERATE_TRACE:** Add trace output for the sorted branch (currently only
    the index branch is traced).
 
-**Tests:** Remove `#[ignore]` from `last` in `tests/wrap.rs` once fixed.
+**Tests:** `last` in `tests/wrap.rs` runs unconditionally.
 **Effort:** Small (guard) + Medium (root-cause fix in type resolution)
 **Target:** 0.8.3
 
@@ -2384,7 +2309,7 @@ at the end prevents cleanup, compounding the issue.
 3. **Debugging:** Log at `load_one` entry/exit gated by `LOFT_LOG`:
    `eprintln!("[extensions] loading {path}")`.
 
-**Tests:** Remove `#[ignore]` from `load_one_registers_native_functions` once fixed.
+**Tests:** `load_one_registers_native_functions` runs unconditionally.
 **Effort:** Small
 **Target:** 0.8.3
 
@@ -3152,15 +3077,9 @@ from "zone2-reuse" (reused slot).
 
 ---
 
-### C43.3 — Enable `assign_slots_sequential_text_reuse` test
+### C43.3 — Enable `assign_slots_sequential_text_reuse` test — **Done**
 
-**Goal:** Remove `#[ignore]` from the existing test.
-
-**File:** `src/variables/slots.rs`, line ~915
-
-**Change:** Remove `#[ignore = "A12: can_reuse not yet extended to Text (assign_slots)"]`.
-
-**Verification:** `cargo test --lib assign_slots_sequential_text_reuse` passes.
+`#[ignore]` removed; test runs unconditionally in `src/variables/slots.rs`.
 
 ---
 
