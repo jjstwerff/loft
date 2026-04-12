@@ -934,3 +934,24 @@ fn p85c_lambda_inside_fn_still_works() {
          assert(f(5) == 10, \"lambda\");\n}"
     );
 }
+
+// ── L1: error recovery after token failures ─────────────────────────────────
+//
+// Missing `;` at end of a statement used to produce a cascade of four+
+// errors ("Expect token ;", "Expect token }", "Expect constants to be in
+// upper case style", "Syntax error: unexpected ..."). The parser now calls
+// `Lexer::recover_to(&[";", "}"])` after a failed `token(";")` inside
+// `parse_block`, resynchronising to the next statement boundary.
+#[test]
+fn l1_missing_semicolon_single_diagnostic() {
+    // Missing `;` between `x = 1` and `y = 2;`. Should produce exactly one
+    // error, not a cascade.
+    code!("fn test() {\n  x = 1\n  y = 2;\n  assert(x + y == 3, \"\");\n}")
+        .error("Expect token ; at l1_missing_semicolon_single_diagnostic:3:4");
+}
+
+#[test]
+fn l1_missing_semicolon_in_body_single_diagnostic() {
+    code!("fn foo(x: integer) -> integer {\n  y = x + 1\n  y * 2\n}\nfn test() {}")
+        .error("Expect token ; at l1_missing_semicolon_in_body_single_diagnostic:3:4");
+}
