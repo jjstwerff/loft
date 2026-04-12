@@ -1372,6 +1372,9 @@ fn main() {
         br_level += 1;
         br_rows = START_ROWS + br_level - 1;
         if br_rows > MAX_ROWS { br_rows = MAX_ROWS; }
+        // Reward a fresh life for clearing the board.  Soft-capped
+        // so the HUD strip can't grow past 7 hearts.
+        if br_lives < 7 { br_lives += 1; }
         br_alive = 0;
         for br_lr in 0..br_rows {
           for br_lc in 0..BRICK_COLS {
