@@ -1127,6 +1127,46 @@ impl Lexer {
         }
     }
 
+    /// L1: skip tokens until one of `targets` is reached (or end-of-input).
+    /// Nested `{...}`, `(...)`, `[...]` are matched and skipped as units so
+    /// that a target inside a nested group does not incorrectly terminate
+    /// recovery.  The target token itself is NOT consumed — the caller may
+    /// decide whether to consume it or treat it as the recovered boundary.
+    ///
+    /// Use after a failed `token()` call in contexts where the parser would
+    /// otherwise produce a cascade of confusing diagnostics.  Returns `true`
+    /// if a target was found, `false` on EOF.
+    ///
+    /// Example: after `Expect token )` in a function-argument list, call
+    /// `recover_to(&[")", "{", ";"])` to jump to the nearest plausible
+    /// resynchronisation point.
+    pub fn recover_to(&mut self, targets: &[&str]) -> bool {
+        let mut depth: i32 = 0;
+        loop {
+            if matches!(self.peek.has, LexItem::None) {
+                return false;
+            }
+            if depth == 0 {
+                for t in targets {
+                    if self.peek_token(t) {
+                        return true;
+                    }
+                }
+            }
+            if self.peek_token("{") || self.peek_token("(") || self.peek_token("[") {
+                depth += 1;
+            } else if self.peek_token("}") || self.peek_token(")") || self.peek_token("]") {
+                if depth == 0 {
+                    // An unmatched closer at the outer level is also a
+                    // valid resynchronisation point — do not consume it.
+                    return false;
+                }
+                depth -= 1;
+            }
+            self.cont();
+        }
+    }
+
     /// Shorthand test if the current element is a specific token and skip it if found.
     pub fn has_token(&mut self, token: &'static str) -> bool {
         if self.peek_token(token) {

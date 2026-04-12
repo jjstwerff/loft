@@ -28,7 +28,6 @@ Completed fixes are removed — history lives in git and CHANGELOG.md.
 | 86 | Lambda capture: misleading self-reference error | Low | Mitigated — clear error message |
 | 90 | `fn_call` HashMap lookup per call | Low | Negligible overhead |
 | 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
-| 133 | RGB/BGR channel swap in GL output | Low | Pre-swap channels at call sites |
 
 ---
 

@@ -184,8 +184,15 @@ fn main() {
   assert(parts[0] == "a", "split [0]={parts[0]}");
   assert(parts[1] == "b", "split [1]={parts[1]}");
   assert(parts[2] == "c", "split [2]={parts[2]}");
+  // No separator found → returns the whole string as a single segment
+  // (was previously buggy and returned [] — fixed: stdlib `split` now appends
+  // the trailing segment whenever the input is non-empty).
   nosep = "hello".split(',');
-  assert(len(nosep) == 0, "split no separator: len={len(nosep)}");
+  assert(len(nosep) == 1, "split no separator: len={len(nosep)}");
+  assert(nosep[0] == "hello", "split no separator [0]={nosep[0]}");
+  // Empty input → returns [] (no segments).
+  empty = "".split(',');
+  assert(len(empty) == 0, "split empty input: len={len(empty)}");
   words = "one two three".split(' ');
   assert(len(words) == 3, "split by space: len={len(words)}");
   assert(words[0] == "one", "split by space [0]={words[0]}");
