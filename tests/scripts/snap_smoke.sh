@@ -90,6 +90,17 @@ fi
 import -window "$WIN_ID" "$OUTPUT" 2>/tmp/loft_import.log
 RC=$?
 
+# P133: Xvfb/Mesa-swrast framebuffer + ImageMagick `import` reads pixels with
+# R and B channels swapped.  gl_clear(rgba(20, 25, 35, 255)) renders
+# correctly on-screen but the captured PNG stores (35, 25, 20).  Swap the
+# channels back so the golden PNG has the colours the user actually asked
+# for.  On a real display this step would be a no-op; it is a pure
+# transformation of the Xvfb-captured buffer.
+if [ $RC -eq 0 ]; then
+  convert "$OUTPUT" -separate -swap 0,2 -combine "$OUTPUT" 2>>/tmp/loft_import.log
+  RC=$?
+fi
+
 kill $LOFT_PID 2>/dev/null || true
 wait $LOFT_PID 2>/dev/null || true
 rm -f /tmp/loft_smoke_long.loft

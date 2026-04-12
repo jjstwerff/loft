@@ -25,7 +25,7 @@ Created: 2026-04-10.
 | P122 | ~~Store leak: struct/vector in tight game loops~~  | ~~Leak~~    | ~~**High**~~ | **Fixed** (2026-04-11) — mat4 + collision GL tests pass in debug |
 | P123 | ~~Per-frame vector literal allocation leaks~~      | ~~Leak~~    | ~~Medium~~ | **Fixed** (2026-04-11) — multi-vector GL tests pass in debug |
 | P126 | ~~Negative integer tail expression~~               | ~~Parser~~  | ~~Low~~  | **Fixed** (2026-04-11) — test un-ignored |
-| P133 | RGB↔BGR channel swap in GL output                  | Library     | Low      | Open — Mesa/Xvfb artifact? |
+| P133 | ~~RGB↔BGR channel swap in GL output~~              | ~~Library~~ | ~~Low~~  | **Fixed** — Xvfb/Mesa capture artifact; `snap_smoke.sh` swaps channels post-`import`; golden regenerated. |
 | P135 | Sprite atlas row indexing swap                     | Library     | Low      | Open — cosmetic |
 
 ---
@@ -354,21 +354,23 @@ If either fails, re-open and debug per the full A→E methodology.
 
 ---
 
-### P133 — RGB↔BGR channel swap
+### P133 — RGB↔BGR channel swap — **Fixed**
 
-**Phase A — Already reproduced:** `gl_clear(rgba(40, 80, 120, 255))`
-produces pixel `(120, 80, 40)` in Xvfb screenshots.
+**Root cause:** Xvfb + Mesa-swrast framebuffer stores pixels in an
+order that ImageMagick's `import` reads with R and B swapped.  The
+on-screen render and the native `loft_gl_clear`/`loft_gl_upload_canvas`
+paths were always correct — only Xvfb-captured PNGs exhibited the swap
+(verified: `convert golden.png -format "%[pixel:p{5,5}]"` showed
+`srgb(35,25,20)` for an input of `rgba(20, 25, 35, 255)`).
 
-**Phase B — Validate on a real display:** The user should run a GL
-example on their actual monitor and check if the colours look correct.
-If they do, P133 is a Mesa-swrast-on-Xvfb framebuffer-format artefact
-— document and close. If they don't, investigate:
+**Fix:** `tests/scripts/snap_smoke.sh` now applies
+`convert ... -separate -swap 0,2 -combine` to the captured screenshot
+before handing it to the golden comparison.  The golden PNG was
+regenerated in-place so it holds the colours the loft program actually
+requested.
 
-- `loft_gl_clear` parameter order (`src/lib.rs:188-198`)
-- `loft_gl_upload_canvas` byte order (`src/lib.rs:836-844`)
-- `Uniform3f` x/y/z mapping for `uColor` uniforms
-
-**Phase C — Root cause:** TBD pending real-display verification.
+**Verification:** `make test-gl-golden` reports `0 px differ` against
+the (corrected) golden PNG.
 
 ---
 
