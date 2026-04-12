@@ -108,11 +108,11 @@ impl Parser {
                 Some("pub")
             } else if self.lexer.peek_token("fn") {
                 // distinguish `fn(args)` (lambda) from `fn name(args)`.
-                let link = self.lexer.link();
+                let lexer_link = self.lexer.link();
                 self.lexer.token("fn");
                 let is_named_fn =
                     self.lexer.peek().has != crate::lexer::LexItem::Token("(".to_string());
-                self.lexer.revert(link);
+                self.lexer.revert(lexer_link);
                 if is_named_fn { Some("fn") } else { None }
             } else {
                 None

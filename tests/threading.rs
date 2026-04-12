@@ -550,7 +550,7 @@ fn main() {
   assert(st_total == 4, "P92: all 4 workers must resolve frame name; got {st_total}");
 }
 "#;
-    let (mut state, mut data) = compile(code);
+    let (mut state, data) = compile(code);
     state.execute_argv("main", &data, &[]);
     // Compile-side sanity: the test relies on data and the stack_trace lib
     // function being present; silence "data unused" by referencing it.
