@@ -81,3 +81,51 @@ fn test_direct_return_no_leak() {
   sl_q = sl_direct_wrap(sl_p);
   assert(sl_q.sl_v[0] == 3.0, "sl_q.sl_v[0]={sl_q.sl_v[0]}");
 }
+
+// Shifted var_nr variant: two unrelated locals before the `result = ...; result`
+// return change the variable numbering and previously caused an off-by-one
+// in the free-set calculation.
+fn sl_sh_inner(sl_sha: const SlSf, sl_shb: const SlSf) -> SlSf {
+  sl_shr = SlSf { sl_v: [sl_sha.sl_v[0] + sl_shb.sl_v[0]] };
+  sl_shr
+}
+
+fn sl_sh_wrap(sl_shx: const SlSf) -> SlSf {
+  sl_sh_dummy1 = 42;
+  sl_sh_dummy2 = 99;
+  sl_shy = SlSf { sl_v: [1.0] };
+  sl_sh_result = sl_sh_inner(sl_shx, sl_shy);
+  assert(sl_sh_dummy1 == 42, "sl_sh_dummy1");
+  assert(sl_sh_dummy2 == 99, "sl_sh_dummy2");
+  sl_sh_result
+}
+
+fn test_shifted_var_nr_return() {
+  sl_sh_p = SlSf { sl_v: [2.0] };
+  sl_sh_q = sl_sh_wrap(sl_sh_p);
+  assert(sl_sh_q.sl_v[0] == 3.0, "sl_sh_q.sl_v[0]={sl_sh_q.sl_v[0]}");
+}
+
+// Deep chain: 3-level call stack where every intermediate creates its
+// own ref-holding local.  Each level's store must be freed as control
+// returns up the chain.
+fn sl_dc_inner(sl_dca: const SlSf, sl_dcb: const SlSf) -> SlSf {
+  sl_dcr = SlSf { sl_v: [sl_dca.sl_v[0] + sl_dcb.sl_v[0]] };
+  sl_dcr
+}
+
+fn sl_dc_middle(sl_dcx: const SlSf) -> SlSf {
+  sl_dcy = SlSf { sl_v: [10.0] };
+  sl_dc_inner(sl_dcx, sl_dcy)
+}
+
+fn sl_dc_outer(sl_dcox: const SlSf) -> SlSf {
+  sl_dcz = SlSf { sl_v: [sl_dcox.sl_v[0] + 100.0] };
+  sl_dc_middle(sl_dcz)
+}
+
+fn test_deep_chain_return() {
+  sl_dc_p = SlSf { sl_v: [1.0] };
+  sl_dc_q = sl_dc_outer(sl_dc_p);
+  assert(sl_dc_q.sl_v[0] == 111.0, "sl_dc_q.sl_v[0]={sl_dc_q.sl_v[0]}");
+}
