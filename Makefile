@@ -295,14 +295,28 @@ play:
 	    echo "    note: pkg-config not found; trusting rustc to link GL"; \
 	fi
 	@echo "  [3/5] building native graphics cdylib ..."
+	@# Try once; on E0460 (stale incremental rmeta) auto-clean and retry
+	@# once before surfacing the failure.  This is a pure cargo caching
+	@# artefact that otherwise presents as "can't find crate / found
+	@# possibly newer version of crate X" and blocks the first-time run
+	@# on any checkout where the subcrate was built against different
+	@# deps than the current workspace.
 	@cd lib/graphics/native && cargo build --release -q 2>/tmp/loft_play_graphics.log || { \
-	    echo "    FAIL: lib/graphics/native build — see /tmp/loft_play_graphics.log"; \
-	    tail -30 /tmp/loft_play_graphics.log; \
-	    echo ""; \
-	    echo "    Common causes:"; \
-	    echo "      - missing X11 / Wayland dev headers (libx11-dev, libwayland-dev)"; \
-	    echo "      - missing GLFW system dependency"; \
-	    exit 1; }
+	    if grep -qE 'E0460|E0463' /tmp/loft_play_graphics.log; then \
+	        echo "    stale incremental build detected, running cargo clean + retry ..."; \
+	        cd lib/graphics/native && cargo clean -q >/dev/null 2>&1; \
+	        cd lib/graphics/native && cargo build --release -q 2>>/tmp/loft_play_graphics.log || { \
+	            echo "    FAIL: lib/graphics/native build after clean — see /tmp/loft_play_graphics.log"; \
+	            tail -30 /tmp/loft_play_graphics.log; exit 1; }; \
+	    else \
+	        echo "    FAIL: lib/graphics/native build — see /tmp/loft_play_graphics.log"; \
+	        tail -30 /tmp/loft_play_graphics.log; \
+	        echo ""; \
+	        echo "    Common causes:"; \
+	        echo "      - missing X11 / Wayland dev headers (libx11-dev, libwayland-dev)"; \
+	        echo "      - missing GLFW system dependency"; \
+	        exit 1; \
+	    fi; }
 	@test -f lib/graphics/native/target/release/libloft_graphics_native.so \
 	    -o -f lib/graphics/native/target/release/libloft_graphics_native.dylib \
 	    -o -f lib/graphics/native/target/release/loft_graphics_native.dll || { \
