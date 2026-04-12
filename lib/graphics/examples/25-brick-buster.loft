@@ -505,6 +505,15 @@ fn main() {
   br_flash_r = 0.0;
   br_flash_g = 0.0;
   br_flash_b = 0.0;
+  // Screen shake — non-zero timer kicks `br_shake_x/y` into small
+  // pseudo-random offsets that gameplay draws add to their world
+  // coordinates.  HUD-space draws are shake-free so the UI stays
+  // readable.  Magnitude decays linearly to zero over the duration.
+  br_shake_t   = 0.0;
+  br_shake_d   = 1.0;
+  br_shake_mag = 0.0;
+  br_shake_x   = 0.0;
+  br_shake_y   = 0.0;
 
   // Level transition
   br_level_timer = 0.0;
@@ -1112,11 +1121,32 @@ fn main() {
       }
     }
 
-    // ── Flash timer ────────────────────────────────────────────
+    // ── Flash + shake timers ──────────────────────────────────
     if br_flash_timer > 0.0 { br_flash_timer -= br_dt; }
+    br_shake_x = 0.0;
+    br_shake_y = 0.0;
+    if br_shake_t > 0.0 {
+      br_shake_t -= br_dt;
+      if br_shake_t < 0.0 { br_shake_t = 0.0; }
+      // Linear decay of magnitude — strongest at trigger, zero at end.
+      br_shake_amp = br_shake_mag * (br_shake_t / br_shake_d);
+      // Pseudo-random offsets keyed off br_now so neighbouring
+      // frames get different values without the overhead of a real
+      // RNG.  The modulus keeps the magnitude bounded.
+      br_sh_seed = br_now % 997l;
+      br_shake_x = ((br_sh_seed as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
+      br_sh_seed2 = (br_now / 31l) % 997l;
+      br_shake_y = ((br_sh_seed2 as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
+    }
 
     // ── Render ───────────────────────────────────────────────────
     graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
+
+    // Push the shake offset into the painter's orthographic
+    // projection so every world-space draw inherits it automatically.
+    // Restored to identity before HUD / overlay draws below.
+    br_painter.p2_proj[12] = -1.0 + br_shake_x * 2.0 / SCREEN_W;
+    br_painter.p2_proj[13] =  1.0 - br_shake_y * 2.0 / SCREEN_H;
 
     // Bricks — flat color + sprite icon overlay for specials
     for br_dr in 0..br_rows {
@@ -1328,6 +1358,11 @@ fn main() {
           br_pt_r[br_pd], br_pt_g[br_pd], br_pt_b[br_pd], br_pa);
       }
     }
+
+    // Restore identity projection so HUD elements stay glued to the
+    // screen regardless of the current shake offset.
+    br_painter.p2_proj[12] = -1.0;
+    br_painter.p2_proj[13] =  1.0;
 
     // HUD: lives (cel-shaded hearts, top-right).
     for br_lh in 0..br_lives {
