@@ -661,6 +661,8 @@ fn main() {
   br_cheat_k_was_down = false;
   br_cheat_x_was_down = false;
   br_cheat_u_was_down = false;
+  br_cheat_i_was_down = false;
+  br_diag_on          = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
   graphics::gl_enable(graphics::GL_BLEND);
@@ -715,6 +717,15 @@ fn main() {
     br_cheat_u_down = graphics::gl_key_pressed(117);
     br_cheat_u_pressed = br_cheat_u_down && !br_cheat_u_was_down;
     br_cheat_u_was_down = br_cheat_u_down;
+    // I (105) — toggle the atlas diagnostic overlay.  Purely a read-
+    // only development aid: shows every sprite in the atlas (indices
+    // 0..19) on a grid, labelled with its index, so a mapping bug
+    // between intended sprite (`S_BALL_NORMAL = 16`) and the actual
+    // atlas cell is visible at a glance.  Does not pause gameplay.
+    br_cheat_i_down    = graphics::gl_key_pressed(105);
+    br_cheat_i_pressed = br_cheat_i_down && !br_cheat_i_was_down;
+    br_cheat_i_was_down = br_cheat_i_down;
+    if br_cheat_i_pressed { br_diag_on = !br_diag_on; }
 
     // BK.5/BK.6: State transitions
     if br_game_state == GS_TITLE {
@@ -1730,6 +1741,41 @@ fn main() {
       if br_lv < 10 {
         graphics::draw_rect_at(br_painter,
           370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5, 1.0);
+      }
+    }
+
+    // Atlas diagnostic overlay (toggled by the I cheat key).  Draws
+    // all 20 sprite indices on a 4x5 grid at fixed screen positions
+    // with a visible two-digit index label beside each cell.  A
+    // mis-mapped sprite (e.g. S_BALL_NORMAL drawing the S_IC_EXTEND
+    // art) is immediately visible because the art at label "16"
+    // would clearly not be the ball.
+    if br_diag_on {
+      // Translucent backdrop so gameplay stays partially visible.
+      graphics::draw_rect_at(br_painter, 0.0, 0.0, SCREEN_W, SCREEN_H,
+        0.0, 0.0, 0.0, 0.6);
+      for br_diag_i in 0..20 {
+        br_dg_col = br_diag_i % 4;
+        br_dg_row = br_diag_i / 4;
+        // Spread the grid across the centre of the screen.
+        br_dg_x = 80.0 + (br_dg_col as float) * 160.0;
+        br_dg_y = 60.0  + (br_dg_row as float) * 100.0;
+        // Thin outline so the cell's extent is visible.
+        graphics::draw_rect_at(br_painter, br_dg_x - 2.0, br_dg_y - 2.0,
+          68.0, 68.0, 0.2, 0.2, 0.3, 0.9);
+        // The sprite itself at 64x64 (bigger than in-game so pixels
+        // read).
+        graphics::draw_sprite_at(br_sheet, br_painter, br_dg_x, br_dg_y,
+          64.0, 64.0, br_diag_i);
+        // Two-digit label.
+        br_dg_t = br_diag_i / 10;
+        br_dg_u = br_diag_i % 10;
+        if br_dg_t > 0 {
+          graphics::draw_texture_at(br_painter, br_dig_tex[br_dg_t],
+            br_dg_x + 68.0, br_dg_y, 12.0, 18.0);
+        }
+        graphics::draw_texture_at(br_painter, br_dig_tex[br_dg_u],
+          br_dg_x + 82.0, br_dg_y, 12.0, 18.0);
       }
     }
 
