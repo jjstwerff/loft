@@ -16,9 +16,16 @@ SCREEN_H = 600.0;
 PADDLE_W_DEFAULT = 100.0;
 PADDLE_H = 15.0;
 PADDLE_Y = 560.0;
-PADDLE_SPEED = 500.0;
-BALL_SIZE = 10.0;
-BALL_SPEED_BASE = 300.0;
+PADDLE_SPEED = 620.0;
+// Visual draw size of the ball.  The in-flight sprite is a circle
+// inscribed in the 32x32 atlas cell, so BALL_SIZE is also the
+// visible diameter on screen.
+BALL_SIZE = 30.0;
+// Hit radius for circle-based collision.  A hair smaller than
+// BALL_SIZE/2 so the outline can visually touch a surface a frame
+// before the rebound fires — feels punchier than pixel-perfect.
+BALL_RADIUS = 13.0;
+BALL_SPEED_BASE = 420.0;
 SPEED_RAMP = 0.04;
 MAX_ROWS = 20;
 BRICK_COLS = 10;
@@ -30,10 +37,23 @@ PICKUP_W = 20.0;
 PICKUP_H = 12.0;
 PICKUP_SPEED = 180.0;
 EXTEND_DURATION = 8.0;
-BALLOON_DELAY = 2.0;
+// Balloon pickup — a rising projectile rather than the original 2-s
+// delayed grid blast.  Speeds and hitbox dimensions are tuned so a
+// moderately-reflected ball can nudge the balloon sideways.
+BALLOON_W        = 32.0;
+BALLOON_H        = 40.0;
+BALLOON_RISE     = -140.0;  // negative = upward
+BALLOON_DRIFT    =   20.0;  // ± random horizontal drift
+BALLOON_BOUNCE_DV =  60.0;  // pushback velocity when the ball hits
 EXTEND_EXTRA = 60.0;
-START_ROWS = 5;
+// Starting board height.  Lower number → fewer bricks for the first
+// few (sparse-powerup) levels; the existing per-level row bump keeps
+// the later levels filling the playfield.
+START_ROWS = 3;
 MAX_BALLS = 3;
+// Fire-ball after-image trail length (frames).  Larger looks smoother
+// but draws more rects per frame; 10 gives a ~0.17 s tail at 60 fps.
+MAX_TRAIL = 10;
 MAX_PARTICLES = 48;
 PARTICLE_LIFE = 0.6;
 FLASH_DURATION = 0.3;
@@ -45,8 +65,13 @@ GS_PLAYING = 1;
 GS_PAUSED = 2;
 GS_GAME_OVER = 3;
 
-// Sprite indices (4x4 atlas = icons only)
-// Small icons overlaid on special bricks
+// Sprite indices.  Icons are packed into the top of the atlas in a
+// 4-column layout so their indices match the original 4x4 game.  The
+// ball animation then lives in its own dedicated BOTTOM row — see
+// build_atlas for the exact canvas y-range.  Atlas grows from 128x128
+// to 128x192: extra 64 px of height for two ball sub-rows (16 frames
+// × 32 px tall would be overkill; 4 frames need 32 px but a whole
+// ball row gives each 32x32 cell).
 S_IC_EXTEND = 0;
 S_IC_EXPLODE = 1;
 S_IC_BALLOON = 2;
@@ -54,7 +79,6 @@ S_IC_NEWROW = 3;
 S_IC_MULTI = 4;
 S_IC_FIRE = 5;
 S_IC_SHIELD = 6;
-// Large pickup icons (falling)
 S_PK_EXTEND = 7;
 S_PK_EXPLODE = 8;
 S_PK_BALLOON = 9;
@@ -62,6 +86,16 @@ S_PK_NEWROW = 10;
 S_PK_MULTI = 11;
 S_PK_FIRE = 12;
 S_PK_SHIELD = 13;
+// Lives HUD icon in the spare cell of row 3.
+S_HEART = 14;  // Row 3, col 2 — red heart, drawn in the top-right HUD
+// Ball animation frames live in the last row of a 4x5 atlas.  Each
+// frame occupies a whole 32x32 cell so the round body has plenty of
+// pixels to read through the 30-px on-screen draw size.
+S_BALL_NORMAL  = 16;  // Perfect circle
+S_BALL_SQUASH1 = 17;  // First contact — mild squash
+S_BALL_SQUASH2 = 18;  // Peak squash — flat oval
+S_BALL_RELEASE = 19;  // Mid-recovery — slight stretch
+BALL_SQUASH_DURATION = 0.09;
 
 // Special types
 SP_NONE = 0;
@@ -76,87 +110,292 @@ SP_SHIELD = 7;
 // ── Sprite atlas ─────────────────────────────────────────────────────
 
 fn build_atlas() -> graphics::Canvas {
-  // 4x4 grid, 32x32 per cell = 128x128
+  // 4x5 grid, 32x32 per cell = 128x160
   // Row 0: small icons for brick overlay
   // Row 1: (continued)
-  // Row 2-3: large pickup icons with text labels
-  at = graphics::canvas(128, 128, 0);
+  // Row 2-3: large pickup icons
+  // Row 4: ball animation (normal + 3 squash frames)
+  at = graphics::canvas(128, 160, 0);
+
+  // Cel-shaded look: draw every filled shape as a dark outline (1 px
+  // wider on each side) first, then the coloured body on top.  The
+  // outline colour is a near-black with full alpha so it reads well
+  // against both the bricks and the canvas background.
+  ol = graphics::rgba(20, 20, 24, 240);
 
   // Small brick-corner icons (8x8, drawn at center of each 32x32 cell)
   // S_IC_EXTEND (0) — white ↔
-  at.fill_rect(12, 14, 8, 3, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(10, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
-  at.fill_rect(19, 12, 3, 7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(11, 141, 10,  5, ol);
+  at.fill_rect( 9, 139,  5,  9, ol);
+  at.fill_rect(18, 139,  5,  9, ol);
+  at.fill_rect(12, 142,  8,  3, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(10, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
+  at.fill_rect(19, 140,  3,  7, graphics::rgba(255, 255, 255, 230));
   // S_IC_EXPLODE (1) — white skull
-  at.fill_circle(32 + 16, 14, 5, graphics::rgba(255, 230, 200, 240));
-  at.fill_rect(32 + 13, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 17, 12, 2, 2, graphics::rgba(40, 40, 40, 255));
-  at.fill_rect(32 + 14, 18, 4, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_circle(32 + 16, 142, 6, ol);
+  at.fill_circle(32 + 16, 142, 5, graphics::rgba(255, 230, 200, 240));
+  at.fill_rect(32 + 13, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 17, 140, 2, 2, graphics::rgba(40, 40, 40, 255));
+  at.fill_rect(32 + 14, 146, 4, 2, graphics::rgba(40, 40, 40, 255));
   // S_IC_BALLOON (2) — red balloon
-  at.fill_circle(64 + 16, 12, 5, graphics::rgba(255, 70, 70, 240));
-  at.fill_circle(64 + 14, 10, 2, graphics::rgba(255, 150, 150, 130));
-  at.vline(64 + 16, 17, 20, graphics::rgba(200, 200, 200, 200));
+  at.fill_circle(64 + 16, 140, 6, ol);
+  at.fill_circle(64 + 16, 140, 5, graphics::rgba(255, 70, 70, 240));
+  at.fill_circle(64 + 14, 138, 2, graphics::rgba(255, 150, 150, 130));
+  at.vline(64 + 16, 145, 148, graphics::rgba(200, 200, 200, 200));
   // S_IC_NEWROW (3) — blue ⬇
-  at.fill_rect(96 + 14, 8, 4, 8, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 10, 14, 12, 3, graphics::rgba(130, 180, 255, 240));
-  at.fill_rect(96 + 13, 17, 6, 2, graphics::rgba(130, 180, 255, 200));
+  at.fill_rect(96 + 13, 135,  6, 10, ol);
+  at.fill_rect(96 +  9, 141, 14,  5, ol);
+  at.fill_rect(96 + 12, 144,  8,  4, ol);
+  at.fill_rect(96 + 14, 136,  4,  8, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 10, 142, 12,  3, graphics::rgba(130, 180, 255, 240));
+  at.fill_rect(96 + 13, 145,  6,  2, graphics::rgba(130, 180, 255, 200));
   // S_IC_MULTI (4) — white circles
-  at.fill_circle(8, 32 + 14, 4, graphics::rgba(255, 255, 255, 230));
-  at.fill_circle(18, 32 + 10, 3, graphics::rgba(230, 230, 255, 200));
-  at.fill_circle(20, 32 + 17, 3, graphics::rgba(210, 210, 255, 180));
+  at.fill_circle( 8, 96 + 14, 5, ol);
+  at.fill_circle(18, 96 + 10, 4, ol);
+  at.fill_circle(20, 96 + 17, 4, ol);
+  at.fill_circle( 8, 96 + 14, 4, graphics::rgba(255, 255, 255, 230));
+  at.fill_circle(18, 96 + 10, 3, graphics::rgba(230, 230, 255, 200));
+  at.fill_circle(20, 96 + 17, 3, graphics::rgba(210, 210, 255, 180));
   // S_IC_FIRE (5) — orange flame
-  at.fill_rect(32 + 14, 32 + 6, 4, 12, graphics::rgba(255, 150, 0, 240));
-  at.fill_rect(32 + 12, 32 + 10, 8, 8, graphics::rgba(255, 90, 0, 220));
-  at.fill_rect(32 + 15, 32 + 4, 2, 4, graphics::rgba(255, 220, 50, 200));
+  at.fill_rect(32 + 13, 96 + 5,  6, 14, ol);
+  at.fill_rect(32 + 11, 96 + 9, 10, 10, ol);
+  at.fill_rect(32 + 14, 96 + 3,  4,  6, ol);
+  at.fill_rect(32 + 14, 96 + 6,  4, 12, graphics::rgba(255, 150, 0, 240));
+  at.fill_rect(32 + 12, 96 + 10,  8,  8, graphics::rgba(255,  90, 0, 220));
+  at.fill_rect(32 + 15, 96 + 4,  2,  4, graphics::rgba(255, 220, 50, 200));
   // S_IC_SHIELD (6) — blue shield
-  at.fill_rect(64 + 9, 32 + 8, 14, 6, graphics::rgba(80, 160, 255, 240));
-  at.fill_rect(64 + 11, 32 + 14, 10, 3, graphics::rgba(80, 140, 230, 220));
-  at.fill_rect(64 + 13, 32 + 17, 6, 2, graphics::rgba(80, 120, 210, 200));
-  at.hline(64 + 10, 64 + 22, 32 + 9, graphics::rgba(200, 230, 255, 120));
+  at.fill_rect(64 +  8, 96 + 7, 16,  8, ol);
+  at.fill_rect(64 + 10, 96 + 13, 12,  5, ol);
+  at.fill_rect(64 + 12, 96 + 16,  8,  4, ol);
+  at.fill_rect(64 +  9, 96 + 8, 14,  6, graphics::rgba(80, 160, 255, 240));
+  at.fill_rect(64 + 11, 96 + 14, 10,  3, graphics::rgba(80, 140, 230, 220));
+  at.fill_rect(64 + 13, 96 + 17,  6,  2, graphics::rgba(80, 120, 210, 200));
+  at.hline(64 + 10, 64 + 22, 96 + 9, graphics::rgba(200, 230, 255, 120));
 
   // Large pickup icons — fill most of 32x32 cell
   // S_PK_EXTEND (7) at (96, 32) — large green ↔
-  at.fill_rect(96 + 4, 32 + 12, 24, 8, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 2, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
-  at.fill_rect(96 + 24, 32 + 8, 6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  3, 96 + 11, 26, 10, ol);
+  at.fill_rect(96 +  1, 96 + 7,  8, 18, ol);
+  at.fill_rect(96 + 23, 96 + 7,  8, 18, ol);
+  at.fill_rect(96 +  4, 96 + 12, 24,  8, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 +  2, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
+  at.fill_rect(96 + 24, 96 + 8,  6, 16, graphics::rgba(60, 230, 80, 255));
   // S_PK_EXPLODE (8) at (0, 64) — large red skull
+  at.fill_circle(16, 64 + 14, 13, ol);
   at.fill_circle(16, 64 + 14, 12, graphics::rgba(230, 50, 50, 255));
   at.fill_rect(10, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(18, 64 + 10, 4, 4, graphics::rgba(40, 40, 40, 255));
   at.fill_rect(11, 64 + 20, 10, 4, graphics::rgba(40, 40, 40, 255));
   // S_PK_BALLOON (9) at (32, 64) — large red balloon
+  at.fill_circle(32 + 16, 64 + 12, 11, ol);
   at.fill_circle(32 + 16, 64 + 12, 10, graphics::rgba(240, 60, 60, 255));
-  at.fill_circle(32 + 12, 64 + 8, 4, graphics::rgba(255, 130, 130, 130));
+  at.fill_circle(32 + 12, 64 + 8,  4, graphics::rgba(255, 130, 130, 130));
   at.vline(32 + 16, 64 + 22, 64 + 30, graphics::rgba(200, 200, 200, 255));
   // S_PK_NEWROW (10) at (64, 64) — large blue ⬇
-  at.fill_rect(64 + 12, 64 + 2, 8, 16, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 + 6, 64 + 14, 20, 6, graphics::rgba(60, 110, 240, 255));
-  at.fill_rect(64 + 10, 64 + 20, 12, 5, graphics::rgba(60, 110, 240, 230));
-  at.fill_rect(64 + 13, 64 + 25, 6, 4, graphics::rgba(60, 110, 240, 200));
+  at.fill_rect(64 + 11, 64 + 1, 10, 18, ol);
+  at.fill_rect(64 +  5, 64 + 13, 22,  8, ol);
+  at.fill_rect(64 +  9, 64 + 19, 14,  7, ol);
+  at.fill_rect(64 + 12, 64 + 24,  8,  6, ol);
+  at.fill_rect(64 + 12, 64 + 2,  8, 16, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 +  6, 64 + 14, 20,  6, graphics::rgba(60, 110, 240, 255));
+  at.fill_rect(64 + 10, 64 + 20, 12,  5, graphics::rgba(60, 110, 240, 230));
+  at.fill_rect(64 + 13, 64 + 25,  6,  4, graphics::rgba(60, 110, 240, 200));
   // S_PK_MULTI (11) at (96, 64) — large white balls
+  at.fill_circle(96 + 10, 64 + 16, 8, ol);
+  at.fill_circle(96 + 22, 64 + 10, 7, ol);
+  at.fill_circle(96 + 24, 64 + 22, 6, ol);
   at.fill_circle(96 + 10, 64 + 16, 7, graphics::rgba(255, 255, 255, 255));
   at.fill_circle(96 + 22, 64 + 10, 6, graphics::rgba(230, 230, 255, 230));
   at.fill_circle(96 + 24, 64 + 22, 5, graphics::rgba(210, 210, 255, 210));
   // S_PK_FIRE (12) at (0, 96) — large flame
-  at.fill_rect(12, 96 + 6, 8, 22, graphics::rgba(255, 140, 0, 255));
-  at.fill_rect(8, 96 + 12, 16, 16, graphics::rgba(255, 80, 0, 240));
-  at.fill_rect(13, 96 + 2, 6, 8, graphics::rgba(255, 210, 20, 230));
-  at.fill_rect(14, 96 + 0, 4, 4, graphics::rgba(255, 240, 80, 180));
+  at.fill_rect(11, 32 + 5, 10, 24, ol);
+  at.fill_rect( 7, 32 + 11, 18, 18, ol);
+  at.fill_rect(12, 32 + 1,  8, 10, ol);
+  at.fill_rect(13, 32 - 1,  6,  6, ol);
+  at.fill_rect(12, 32 + 6,  8, 22, graphics::rgba(255, 140, 0, 255));
+  at.fill_rect( 8, 32 + 12, 16, 16, graphics::rgba(255,  80, 0, 240));
+  at.fill_rect(13, 32 + 2,  6,  8, graphics::rgba(255, 210, 20, 230));
+  at.fill_rect(14, 32 + 0,  4,  4, graphics::rgba(255, 240, 80, 180));
   // S_PK_SHIELD (13) at (32, 96) — large blue shield
-  at.fill_rect(32 + 6, 96 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
-  at.fill_rect(32 + 9, 96 + 16, 14, 6, graphics::rgba(60, 130, 240, 240));
-  at.fill_rect(32 + 12, 96 + 22, 8, 4, graphics::rgba(60, 110, 220, 220));
-  at.hline(32 + 8, 32 + 24, 96 + 5, graphics::rgba(180, 220, 255, 120));
+  at.fill_rect(32 +  5, 32 + 3, 22, 14, ol);
+  at.fill_rect(32 +  8, 32 + 15, 16,  8, ol);
+  at.fill_rect(32 + 11, 32 + 21, 10,  6, ol);
+  at.fill_rect(32 +  6, 32 + 4, 20, 12, graphics::rgba(60, 150, 255, 255));
+  at.fill_rect(32 +  9, 32 + 16, 14,  6, graphics::rgba(60, 130, 240, 240));
+  at.fill_rect(32 + 12, 32 + 22,  8,  4, graphics::rgba(60, 110, 220, 220));
+  at.hline(32 + 8, 32 + 24, 32 + 5, graphics::rgba(180, 220, 255, 120));
+
+  // S_HEART (14) — lives icon, cel-shaded red heart oriented with
+  // the point facing DOWN (standard heart).  Within-cell Y is
+  // mirrored because the canvas upload flips texture rows — so a
+  // sprite drawn with lobes at canvas-top would render with lobes at
+  // screen-bottom.  Here we put the lobes at canvas-bottom of the
+  // cell so they land at screen-top, giving a point-down heart.
+  at.fill_circle(64 +  9, 32 + 19, 8, ol);
+  at.fill_circle(64 + 23, 32 + 19, 8, ol);
+  at.fill_circle(64 +  9, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
+  at.fill_circle(64 + 23, 32 + 19, 7, graphics::rgba(230, 60, 70, 255));
+  // Triangular body: rows above the lobes, shrinking toward the tip
+  // (at canvas-top of cell = screen-bottom of the rendered sprite).
+  for ht_i in 0..10 {
+    ht_w = 14 - ht_i;
+    ht_x = 64 + 16 - ht_w;
+    at.fill_rect(ht_x - 1, 32 + 14 - ht_i, 2 * ht_w + 2, 1, ol);
+    at.fill_rect(ht_x,     32 + 14 - ht_i, 2 * ht_w,     1, graphics::rgba(230, 60, 70, 255));
+  }
+  // Highlight — small white glint on the upper-left lobe (screen
+  // orientation), which is canvas-bottom-left after the Y-flip.
+  at.fill_circle(64 +  6, 32 + 22, 2, graphics::rgba(255, 210, 215, 200));
+
+  // Ball frames — row 4, y=128.  Each sprite fills most of its 32x32
+  // cell so that when rendered at BALL_SIZE (22 px) the visible ball
+  // is almost the full draw size, not a tiny dot centred in a cell.
+  // All drawn "squashed vertically" (wide-flat) so the runtime can
+  // render a horizontal-axis bounce by swapping draw width <-> height.
+  //
+  // Art pattern: dark outline, white body, small highlight for a
+  // cel-shaded 3D cue.
+
+  // S_BALL_NORMAL (16) at (0, 128) — perfect round ball, d=28
+  at.fill_circle( 0 + 16, 16, 14, ol);
+  at.fill_circle( 0 + 16, 16, 13, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle( 0 + 12, 12,  4, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_SQUASH1 (17) at (32, 128) — first contact: ~28 wide x 22 tall
+  // Stadium = rect + two end caps.
+  at.fill_circle(32 +  9, 16, 11, ol);
+  at.fill_circle(32 + 23, 16, 11, ol);
+  at.fill_rect  (32 +  9, 5, 14, 22, ol);
+  at.fill_circle(32 +  9, 16, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 23, 16, 10, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (32 +  9, 6, 14, 20, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(32 + 12, 12,  3, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_SQUASH2 (18) at (64, 128) — peak squash: ~30 wide x 14 tall
+  at.fill_circle(64 +  8, 16, 7, ol);
+  at.fill_circle(64 + 24, 16, 7, ol);
+  at.fill_rect  (64 +  8, 9, 16, 14, ol);
+  at.fill_circle(64 +  8, 16, 6, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(64 + 24, 16, 6, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (64 +  8, 10, 16, 12, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (64 + 11, 12,  4,  2, graphics::rgba(255, 255, 255, 255));
+
+  // S_BALL_RELEASE (19) at (96, 128) — mid-recovery: ~26 wide x 24 tall
+  at.fill_circle(96 + 11, 16, 12, ol);
+  at.fill_circle(96 + 21, 16, 12, ol);
+  at.fill_rect  (96 + 11, 4, 10, 24, ol);
+  at.fill_circle(96 + 11, 16, 11, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 21, 16, 11, graphics::rgba(245, 245, 245, 255));
+  at.fill_rect  (96 + 11, 5, 10, 22, graphics::rgba(245, 245, 245, 255));
+  at.fill_circle(96 + 13, 12,  3, graphics::rgba(255, 255, 255, 255));
 
   at
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+// Map 1..20 to their Roman-numeral text — the level progression is
+// capped at MAX_ROWS=20, so that's all we ever render.  Anything
+// beyond that falls back to the Arabic form so a future bump in
+// MAX_ROWS fails gracefully rather than silently.
+fn roman(rn_n: integer) -> text {
+  if rn_n == 1  { return "I"; }
+  if rn_n == 2  { return "II"; }
+  if rn_n == 3  { return "III"; }
+  if rn_n == 4  { return "IV"; }
+  if rn_n == 5  { return "V"; }
+  if rn_n == 6  { return "VI"; }
+  if rn_n == 7  { return "VII"; }
+  if rn_n == 8  { return "VIII"; }
+  if rn_n == 9  { return "IX"; }
+  if rn_n == 10 { return "X"; }
+  if rn_n == 11 { return "XI"; }
+  if rn_n == 12 { return "XII"; }
+  if rn_n == 13 { return "XIII"; }
+  if rn_n == 14 { return "XIV"; }
+  if rn_n == 15 { return "XV"; }
+  if rn_n == 16 { return "XVI"; }
+  if rn_n == 17 { return "XVII"; }
+  if rn_n == 18 { return "XVIII"; }
+  if rn_n == 19 { return "XIX"; }
+  if rn_n == 20 { return "XX"; }
+  "{rn_n}"
+}
+
 fn bk_x(col: integer) -> float { (col as float) * (BRICK_W + BRICK_PAD) + 12.0 }
 fn bk_y(row: integer) -> float { (row as float) * (BRICK_H + BRICK_PAD) + BRICK_TOP }
 
-fn assign_special(seed: integer) -> integer {
+// Hand-designed levels — returns the brick type at (r, c) for level
+// `lv`.  Return codes:
+//    -1  empty slot (no brick)
+//     0  normal brick (no special)
+//  1..7  brick carrying that SP_* special, matching the existing
+//        special-type constants.
+// Levels beyond the hand-designed set fall back to the procedural
+// `assign_special` generator so the game stays playable indefinitely.
+fn level_brick(dl_lv: integer, dl_r: integer, dl_c: integer) -> integer {
+  // ── Level 1 — gentle intro: solid 4 rows, no specials at all. ──
+  if dl_lv == 1 { return 0; }
+
+  // ── Level 2 — one SP_EXTEND to teach the powerup system. ──
+  if dl_lv == 2 {
+    if dl_r == 1 && dl_c == 4 { return SP_EXTEND; }
+    if dl_r == 1 && dl_c == 5 { return SP_MULTI; }
+    return 0;
+  }
+
+  // ── Level 3 — top row has shoulder gaps, one fire in the centre. ──
+  if dl_lv == 3 {
+    if dl_r == 0 && (dl_c < 2 || dl_c >= 8) { return -1; }
+    if dl_r == 1 && (dl_c < 1 || dl_c >= 9) { return -1; }
+    if dl_r == 0 && dl_c == 5 { return SP_FIRE; }
+    if dl_r == 2 && dl_c == 2 { return SP_SHIELD; }
+    if dl_r == 2 && dl_c == 7 { return SP_SHIELD; }
+    return 0;
+  }
+
+  // ── Level 4 — downward arrow with an SP_EXPLODE at the point. ──
+  if dl_lv == 4 {
+    dl_half = BRICK_COLS / 2;
+    if dl_r < 3 {
+      // top 3 rows form the arrow shaft: narrow central band.
+      if dl_c < dl_half - 1 || dl_c > dl_half { return -1; }
+      if dl_r == 2 && dl_c == dl_half - 1 { return SP_EXPLODE; }
+      return 0;
+    }
+    if dl_r == 3 {
+      // shoulders where the arrow wings spread out.
+      if dl_c == 0 || dl_c == BRICK_COLS - 1 { return SP_BALLOON; }
+      return 0;
+    }
+    return 0;
+  }
+
+  // ── Level 5 — "smile" pattern of specials inside a solid wall. ──
+  if dl_lv == 5 {
+    if dl_r == 2 && dl_c == 2 { return SP_BALLOON; }
+    if dl_r == 2 && dl_c == 7 { return SP_BALLOON; }
+    if dl_r == 4 && dl_c == 1 { return SP_FIRE; }
+    if dl_r == 4 && dl_c == 8 { return SP_FIRE; }
+    if dl_r == 5 && (dl_c == 3 || dl_c == 4 || dl_c == 5 || dl_c == 6) { return SP_MULTI; }
+    return 0;
+  }
+
+  // ── Levels 6+ — fallback to procedural randomness. ──
+  -2
+}
+
+// Special-brick allocator for procedural levels (6+).  `lvl` controls
+// overall density: baseline is ~8/50 specials (16 %), growing by
+// 1/50 per extra level above 5, capped at 20/50 so the board never
+// turns into a powerup soup.  The seed is still hashed the same way
+// so existing per-level layouts are stable.
+fn assign_special(seed: integer, lvl: integer) -> integer {
+  as_density = 8;
+  if lvl > 5 {
+    as_density = 8 + (lvl - 5);
+    if as_density > 20 { as_density = 20; }
+  }
   as_v = (seed * 7 + 13) % 50;
   if as_v < 2 { return SP_EXTEND; }
   if as_v < 3 { return SP_EXPLODE; }
@@ -164,7 +403,7 @@ fn assign_special(seed: integer) -> integer {
   if as_v < 5 { return SP_NEWROW; }
   if as_v < 6 { return SP_MULTI; }
   if as_v < 7 { return SP_FIRE; }
-  if as_v < 8 { return SP_SHIELD; }
+  if as_v < as_density { return SP_SHIELD; }
   SP_NONE
 }
 
@@ -201,7 +440,7 @@ fn main() {
 
   br_atlas = build_atlas();
   br_painter = graphics::create_painter_2d(SCREEN_W, SCREEN_H);
-  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 4, graphics::painter_vao(br_painter));
+  br_sheet = graphics::create_sprite_sheet(br_atlas, 4, 5, graphics::painter_vao(br_painter));
 
   // Font — try local first, then absolute path
   br_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
@@ -230,15 +469,27 @@ fn main() {
   // Intro text
   br_intro_tex = graphics::create_text_texture(br_font, "A / D  or  Arrow Keys to move", 28.0, br_white);
 
-  // "LEVEL N" textures — one per level.
-  br_lvl_tex = [for _ in 0..20 { 0 }];
+  // "LEVEL N" textures — one per level.  Two flavours:
+  //   br_lvl_tex      — full "LEVEL III" text used on the big
+  //                     level-transition fade.
+  //   br_lvl_num_tex  — just "III" at a smaller size, used in the
+  //                     top-middle HUD so the numeral is visible
+  //                     at a glance while playing.
+  br_lvl_tex     = [for _ in 0..20 { 0 }];
+  br_lvl_num_tex = [for _ in 0..20 { 0 }];
   for br_tl in 0..20 {
     br_ln = br_tl + 1;
-    br_lvl_tex[br_tl] = graphics::create_text_texture(br_font, "LEVEL {br_ln}", 48.0, br_white);
+    br_rn = roman(br_ln);
+    br_lvl_tex[br_tl]     = graphics::create_text_texture(br_font, "LEVEL {br_rn}", 48.0, br_white);
+    // Bake the HUD numeral at 28pt so single-character strings ("I",
+    // "V", "X") still have a chunky on-screen presence at the 28-px
+    // draw height below.
+    br_lvl_num_tex[br_tl] = graphics::create_text_texture(br_font, br_rn,           28.0, br_white);
   }
 
   // "SCORE" label
   br_score_label_tex = graphics::create_text_texture(br_font, "SCORE", 14.0, br_gray);
+  br_hi_label_tex    = graphics::create_text_texture(br_font, "HI",    10.0, br_gray);
 
   // BK.5/BK.6: Title, pause, and game-over screen textures.
   br_title_tex = graphics::create_text_texture(br_font, "BRICK BUSTER", 64.0, br_white);
@@ -254,6 +505,18 @@ fn main() {
   br_pw = PADDLE_W_DEFAULT;
   br_extend_timer = 0.0;
   br_fire_timer = 0.0;
+  // Fire-ball trail — ring buffer of the ball's last MAX_TRAIL positions
+  // (one entry per frame a fire-ball was active).  Drawn behind the
+  // ball, shrinking and desaturating with age so the tail fades from
+  // hot orange to mid-grey and dissolves.
+  //   br_ft_x/y — captured top-left position
+  //   br_ft_age — 0 for the newest entry, incrementing toward MAX_TRAIL;
+  //               MAX_TRAIL (or above) means the slot is empty.
+  //   br_ft_head — next ring index to overwrite.
+  br_ft_x    = [for _ in 0..MAX_TRAIL { 0.0 }];
+  br_ft_y    = [for _ in 0..MAX_TRAIL { 0.0 }];
+  br_ft_age  = [for _ in 0..MAX_TRAIL { MAX_TRAIL }];
+  br_ft_head = 0;
   br_shield_on = false;
 
   // Paddle break-and-respawn state.
@@ -263,13 +526,22 @@ fn main() {
   br_paddle_state = 0;
   br_explode_timer = 0.0;
   // Per-piece state — 3 pieces, each with position, velocity, rotation.
-  br_pp_x  = [0.0, 0.0, 0.0];
-  br_pp_y  = [0.0, 0.0, 0.0];
-  br_pp_w  = [0.0, 0.0, 0.0];
-  br_pp_vx = [0.0, 0.0, 0.0];
-  br_pp_vy = [0.0, 0.0, 0.0];
-  br_pp_rot = [0.0, 0.0, 0.0];     // visual jitter / "rotation"
-  br_pp_drot = [0.0, 0.0, 0.0];    // angular velocity
+  // Paddle breaks into 12 slots — drawn with a 1-px horizontal
+  // overlap between neighbours so gaps don't flash through pixel
+  // rounding errors when pieces move together.  br_pp_on gates
+  // visibility: the "fall" path enables all 12, the "explode" path
+  // hides 5 (in pairs plus a singleton) so some sections look like
+  // they held together.
+  MAX_PIECES = 12;
+  br_pp_x    = [for _ in 0..12 { 0.0 }];
+  br_pp_y    = [for _ in 0..12 { 0.0 }];
+  br_pp_w    = [for _ in 0..12 { 0.0 }];
+  br_pp_vx   = [for _ in 0..12 { 0.0 }];
+  br_pp_vy   = [for _ in 0..12 { 0.0 }];
+  br_pp_rot  = [for _ in 0..12 { 0.0 }];   // visual jitter
+  br_pp_drot = [for _ in 0..12 { 0.0 }];   // angular velocity
+  br_pp_on   = [for _ in 0..12 { 0 }];     // 1 = visible piece
+  br_pp_cut  = [for _ in 0..12 { 0 }];     // 0..3 jag offset on the break line
   EXPLODE_DURATION = 1.4;          // seconds before next paddle+ball
 
   // Multi-ball: up to 3 balls
@@ -278,6 +550,14 @@ fn main() {
   br_ball_dx = [BALL_SPEED_BASE * 0.7, 0.0, 0.0];
   br_ball_dy = [0.0 - BALL_SPEED_BASE, 0.0, 0.0];
   br_ball_on = [1, 0, 0];
+  // Squash animation state per ball.
+  //   br_ball_sq_t[i]    — seconds remaining in the squash (0 = none)
+  //   br_ball_sq_axis[i] — 0 for vertical-axis bounce (top/bottom of a
+  //                        brick, paddle, top wall), 1 for horizontal
+  //                        (side walls, side of a brick).  Drives the
+  //                        90-degree flip when rendering.
+  br_ball_sq_t    = [0.0, 0.0, 0.0];
+  br_ball_sq_axis = [0, 0, 0];
 
   br_max = MAX_ROWS * BRICK_COLS;
   br_bricks = [for _ in 0..br_max { 0 }];
@@ -290,10 +570,17 @@ fn main() {
   for br_ir in 0..START_ROWS {
     for br_ic in 0..BRICK_COLS {
       br_ii = br_ir * BRICK_COLS + br_ic;
-      br_bricks[br_ii] = 1;
-      br_specials[br_ii] = assign_special(br_ii);
-      br_hp[br_ii] = 1;
-      br_alive += 1;
+      br_it = level_brick(br_level, br_ir, br_ic);
+      if br_it == -1 {
+        br_bricks[br_ii] = 0;
+        br_specials[br_ii] = SP_NONE;
+        br_hp[br_ii] = 0;
+      } else {
+        br_bricks[br_ii] = 1;
+        br_specials[br_ii] = if br_it == -2 { assign_special(br_ii, br_level) } else { br_it };
+        br_hp[br_ii] = 1;
+        br_alive += 1;
+      }
     }
   }
 
@@ -319,10 +606,13 @@ fn main() {
   br_pt_b  = [for _ in 0..MAX_PARTICLES { 0.0 }];
 
   // Balloon
-  br_bl_timer = 0.0;
-  br_bl_row = 0;
-  br_bl_col = 0;
+  // Balloon projectile state — one active at a time.  br_bl_on is
+  // the gate; x/y is the sprite top-left, vx/vy the live velocity.
   br_bl_on = false;
+  br_bl_x  = 0.0;
+  br_bl_y  = 0.0;
+  br_bl_vx = 0.0;
+  br_bl_vy = 0.0;
   br_nr_seed = 100;
 
   // Screen flash
@@ -330,6 +620,15 @@ fn main() {
   br_flash_r = 0.0;
   br_flash_g = 0.0;
   br_flash_b = 0.0;
+  // Screen shake — non-zero timer kicks `br_shake_x/y` into small
+  // pseudo-random offsets that gameplay draws add to their world
+  // coordinates.  HUD-space draws are shake-free so the UI stays
+  // readable.  Magnitude decays linearly to zero over the duration.
+  br_shake_t   = 0.0;
+  br_shake_d   = 1.0;
+  br_shake_mag = 0.0;
+  br_shake_x   = 0.0;
+  br_shake_y   = 0.0;
 
   // Level transition
   br_level_timer = 0.0;
@@ -345,6 +644,57 @@ fn main() {
   br_last = ticks();
   br_lives = 3;
   br_score = 0;
+  // ── Background music (G6 / BK.2) ────────────────────────────────
+  // Three original 24-note tracks, early-Capcom style: bouncy major
+  // arpeggios with occasional minor pivots, one voice through the
+  // existing sfx_beep synth (no layered channels — by design, so the
+  // music stays in the background instead of drowning sfx).
+  //   A — "Heroic" (C major, ~4.3s loop)
+  //   B — "Determined" (A minor walking arpeggios, ~3.6s loop)
+  //   C — "Calm Bridge" (F major, slower, ~5.8s loop)
+  // Tracks rotate in order with a 4-second silence between them so
+  // the soundscape breathes — the brief lulls make the game-sfx
+  // (bounces, pops, ball-hit) pop instead of competing.
+  // `0` in a pattern = rest for one tick.
+  MUSIC_VOL = 0.05f;  // headroom — sfx peaks are 3-6x louder
+  MUSIC_TRACK_LEN = 24;
+  MUSIC_TRACKS = 3;
+  // Frequencies (Hz): A4=440 B4=494 C5=523 D5=587 E5=659 F5=698
+  // G5=784 A5=880 B5=988 C6=1047  F4=349 G4=392
+  TRACK_A_NOTES = [523, 659, 784, 1047, 988, 784, 659, 523,
+                   587, 698, 880, 698, 659, 523, 392, 523,
+                   659, 784, 1047, 784, 659, 523, 392, 0];
+  TRACK_A_DUR   = 0.18f;
+  TRACK_B_NOTES = [440, 523, 659, 880, 659, 523, 440, 0,
+                   494, 587, 698, 880, 698, 587, 494, 0,
+                   523, 659, 880, 1047, 880, 659, 523, 0];
+  TRACK_B_DUR   = 0.15f;
+  TRACK_C_NOTES = [349, 440, 523, 698, 880, 698, 523, 440,
+                   392, 494, 587, 784, 587, 494, 392, 0,
+                   440, 523, 698, 880, 698, 523, 440, 349];
+  TRACK_C_DUR   = 0.24f;
+  // Per-level playlist: the three tracks each play once, in a random
+  // rotation, at random moments during the level.  Once all three
+  // have played the music stays silent until the next level change
+  // (tracked via br_mus_lvl so br_level advancing triggers a reset).
+  br_mus_t      = 4.0f;         // initial delay before the first track
+  br_mus_idx    = 0;
+  br_mus_song   = 0;            // current track index (0..2)
+  br_mus_resting = true;         // true while counting down a silence
+  br_mus_played = 0;            // tracks finished this level (0..3)
+  br_mus_lvl    = 0;            // last observed br_level; mismatch → reset
+  // High-score persistence — load at boot, save on game-over or win
+  // when the current run beat the stored value.  Kept beside the
+  // other hidden state in `.loft/` next to the script so it doesn't
+  // clutter the user's working directory.
+  HIGHSCORE_PATH = ".loft/brickbuster_score.txt";
+  br_highscore = 0;
+  br_hs_file = file(HIGHSCORE_PATH);
+  if br_hs_file.exists() {
+    br_hs_txt = br_hs_file.content();
+    br_highscore = br_hs_txt as integer;
+    if !br_highscore { br_highscore = 0; }
+  }
   br_won = false;
   br_lost = false;
   br_game_state = GS_TITLE;
@@ -360,6 +710,8 @@ fn main() {
   br_cheat_k_was_down = false;
   br_cheat_x_was_down = false;
   br_cheat_u_was_down = false;
+  br_cheat_i_was_down = false;
+  br_diag_on          = false;
 
   graphics::gl_disable(graphics::GL_DEPTH_TEST);
   graphics::gl_enable(graphics::GL_BLEND);
@@ -414,6 +766,15 @@ fn main() {
     br_cheat_u_down = graphics::gl_key_pressed(117);
     br_cheat_u_pressed = br_cheat_u_down && !br_cheat_u_was_down;
     br_cheat_u_was_down = br_cheat_u_down;
+    // I (105) — toggle the atlas diagnostic overlay.  Purely a read-
+    // only development aid: shows every sprite in the atlas (indices
+    // 0..19) on a grid, labelled with its index, so a mapping bug
+    // between intended sprite (`S_BALL_NORMAL = 16`) and the actual
+    // atlas cell is visible at a glance.  Does not pause gameplay.
+    br_cheat_i_down    = graphics::gl_key_pressed(105);
+    br_cheat_i_pressed = br_cheat_i_down && !br_cheat_i_was_down;
+    br_cheat_i_was_down = br_cheat_i_down;
+    if br_cheat_i_pressed { br_diag_on = !br_diag_on; }
 
     // BK.5/BK.6: State transitions
     if br_game_state == GS_TITLE {
@@ -447,7 +808,16 @@ fn main() {
         br_watchdog_expect = 3;        // expect br_pk_on[0] == 1
         br_watchdog_deadline = br_now + 2000000l;
       }
-      if br_lost { br_game_state = GS_GAME_OVER; }
+      if br_lost {
+        br_game_state = GS_GAME_OVER;
+        // Persist the high score on loss.  Same logic runs on
+        // win — see the win transition further down.
+        if br_score > br_highscore {
+          br_highscore = br_score;
+          br_hs_out = file(HIGHSCORE_PATH);
+          br_hs_out.write("{br_highscore}");
+        }
+      }
     }
     if br_game_state == GS_PAUSED {
       if br_space_pressed { br_game_state = GS_PLAYING; }
@@ -475,10 +845,17 @@ fn main() {
         for br_rr in 0..START_ROWS {
           for br_rc in 0..BRICK_COLS {
             br_ri = br_rr * BRICK_COLS + br_rc;
-            br_bricks[br_ri] = 1;
-            br_specials[br_ri] = assign_special(br_ri);
-            br_hp[br_ri] = 1;
-            br_alive += 1;
+            br_rt = level_brick(1, br_rr, br_rc);
+            if br_rt == -1 {
+              br_bricks[br_ri] = 0;
+              br_specials[br_ri] = SP_NONE;
+              br_hp[br_ri] = 0;
+            } else {
+              br_bricks[br_ri] = 1;
+              br_specials[br_ri] = if br_rt == -2 { assign_special(br_ri, br_level) } else { br_rt };
+              br_hp[br_ri] = 1;
+              br_alive += 1;
+            }
           }
         }
         for br_rp in 0..8 { br_pk_on[br_rp] = 0; }
@@ -504,6 +881,64 @@ fn main() {
       br_level_timer -= br_dt;
     }
 
+    // Background-music sequencer.  Each level plays the three tracks
+    // once, in a random rotation, spaced by random-ish 3-8 s
+    // silences — so a level feels quieter than the old non-stop
+    // loop.  When the level counter advances, the playlist resets.
+    if br_game_state == GS_PLAYING && !br_lost && br_level_timer <= 0.0 {
+      // Reset queue on level change (also covers GS_TITLE → L1 first
+      // start, since br_mus_lvl starts at 0 and br_level at 1).
+      if br_mus_lvl != br_level {
+        br_mus_lvl    = br_level;
+        br_mus_played = 0;
+        br_mus_song   = ((br_now / 11l) as integer) % MUSIC_TRACKS;
+        br_mus_idx    = 0;
+        br_mus_resting = true;
+        // Random 2-6 s silence before the first song.
+        br_mus_t = 2.0f + (((br_now / 17l) as integer) % 4) as single;
+      }
+      br_mus_t -= br_dt as single;
+      if br_mus_t <= 0.0f {
+        if br_mus_played >= MUSIC_TRACKS {
+          // Playlist exhausted for this level — stay silent.
+          br_mus_t = 9999.0f;
+        } else if br_mus_resting {
+          // Silence ended; start playing the next track.
+          br_mus_resting = false;
+          br_mus_idx = 0;
+        }
+        if !br_mus_resting && br_mus_played < MUSIC_TRACKS {
+          if br_mus_song == 0 {
+            br_mnote = TRACK_A_NOTES[br_mus_idx];
+            br_mus_step = TRACK_A_DUR;
+          } else if br_mus_song == 1 {
+            br_mnote = TRACK_B_NOTES[br_mus_idx];
+            br_mus_step = TRACK_B_DUR;
+          } else {
+            br_mnote = TRACK_C_NOTES[br_mus_idx];
+            br_mus_step = TRACK_C_DUR;
+          }
+          if br_mnote > 0 {
+            graphics::sfx_beep(br_mnote as single, br_mus_step, MUSIC_VOL);
+          }
+          br_mus_t = br_mus_step;
+          br_mus_idx += 1;
+          if br_mus_idx >= MUSIC_TRACK_LEN {
+            // End of track — advance the queue and schedule a random
+            // silence before the next song (or forever if done).
+            br_mus_played += 1;
+            br_mus_song = (br_mus_song + 1) % MUSIC_TRACKS;
+            br_mus_resting = true;
+            if br_mus_played >= MUSIC_TRACKS {
+              br_mus_t = 9999.0f;
+            } else {
+              br_mus_t = 3.0f + (((br_now / 23l) as integer) % 5) as single;
+            }
+          }
+        }
+      }
+    }
+
     if br_game_state == GS_PLAYING && !br_won && !br_lost && br_level_timer <= 0.0 {
       // ── Input ────────────────────────────────────────────────
       // Paddle movement is disabled during the explosion respawn pause
@@ -524,6 +959,13 @@ fn main() {
         if br_extend_timer <= 0.0 { br_pw = PADDLE_W_DEFAULT; }
       }
       if br_fire_timer > 0.0 { br_fire_timer -= br_dt; }
+      // Advance per-ball squash timers so the animation plays out.
+      for br_sqi in 0..MAX_BALLS {
+        if br_ball_sq_t[br_sqi] > 0.0 {
+          br_ball_sq_t[br_sqi] -= br_dt;
+          if br_ball_sq_t[br_sqi] < 0.0 { br_ball_sq_t[br_sqi] = 0.0; }
+        }
+      }
 
       // ── Update all balls ─────────────────────────────────────
       br_any_ball = false;
@@ -534,55 +976,113 @@ fn main() {
         br_ball_x[br_bi] += br_ball_dx[br_bi] * br_dt;
         br_ball_y[br_bi] += br_ball_dy[br_bi] * br_dt;
 
+        // Circle hitbox derived from the top-left position + visible
+        // size.  All collision checks below use (cx, cy, BALL_RADIUS)
+        // so the rebound only fires when the ball's drawn circle
+        // actually touches a surface — corners of the sprite no longer
+        // trigger false hits.
+        br_cx = br_ball_x[br_bi] + BALL_SIZE / 2.0;
+        br_cy = br_ball_y[br_bi] + BALL_SIZE / 2.0;
+
         // Walls
         br_wall_hit = false;
-        if br_ball_x[br_bi] < 0.0 { br_ball_x[br_bi] = 0.0; br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]); br_wall_hit = true; }
-        if br_ball_x[br_bi] > SCREEN_W - BALL_SIZE { br_ball_x[br_bi] = SCREEN_W - BALL_SIZE; br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]); br_wall_hit = true; }
-        if br_ball_y[br_bi] < 0.0 { br_ball_y[br_bi] = 0.0; br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]); br_wall_hit = true; }
+        if br_cx < BALL_RADIUS {
+          br_cx = BALL_RADIUS;
+          br_ball_x[br_bi] = br_cx - BALL_SIZE / 2.0;
+          br_ball_dx[br_bi] = abs(br_ball_dx[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 1;  // horizontal bounce
+          br_wall_hit = true;
+        }
+        if br_cx > SCREEN_W - BALL_RADIUS {
+          br_cx = SCREEN_W - BALL_RADIUS;
+          br_ball_x[br_bi] = br_cx - BALL_SIZE / 2.0;
+          br_ball_dx[br_bi] = 0.0 - abs(br_ball_dx[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 1;
+          br_wall_hit = true;
+        }
+        if br_cy < BALL_RADIUS {
+          br_cy = BALL_RADIUS;
+          br_ball_y[br_bi] = br_cy - BALL_SIZE / 2.0;
+          br_ball_dy[br_bi] = abs(br_ball_dy[br_bi]);
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 0;  // vertical bounce
+          br_wall_hit = true;
+        }
         if br_wall_hit { graphics::sfx_beep(600.0f, 0.03f, 0.1f); }
 
-        // Paddle (skipped during the explosion respawn pause)
-        if br_paddle_state == 0 && br_ball_dy[br_bi] > 0.0 && shapes::aabb_overlap(
-            br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
-            br_px, PADDLE_Y, br_pw, PADDLE_H) {
-          br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
-          br_bh = (br_ball_x[br_bi] + BALL_SIZE / 2.0 - br_px) / br_pw;
-          br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
-          br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
-          br_combo = 0;  // reset combo on paddle hit
-          graphics::sfx_bounce(180.0f, 0.3f);
+        // Paddle (skipped during the explosion respawn pause).
+        // Circle vs AABB: clamp the paddle's closest point to the ball
+        // centre, then test squared distance against BALL_RADIUS^2.
+        if br_paddle_state == 0 && br_ball_dy[br_bi] > 0.0 {
+          br_pclx = shapes::clamp(br_cx, br_px, br_px + br_pw);
+          br_pcly = shapes::clamp(br_cy, PADDLE_Y, PADDLE_Y + PADDLE_H);
+          br_pdx = br_cx - br_pclx;
+          br_pdy = br_cy - br_pcly;
+          if br_pdx * br_pdx + br_pdy * br_pdy < BALL_RADIUS * BALL_RADIUS {
+            br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
+            br_bh = (br_cx - br_px) / br_pw;
+            br_ball_dx[br_bi] = br_ball_speed * (br_bh - 0.5) * 1.8;
+            br_ball_y[br_bi] = PADDLE_Y - BALL_SIZE;
+            br_cy = br_ball_y[br_bi] + BALL_SIZE / 2.0;
+            br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+            br_ball_sq_axis[br_bi] = 0;
+            br_combo = 0;  // reset combo on paddle hit
+            graphics::sfx_bounce(180.0f, 0.3f);
+          }
         }
 
-        // Shield
-        if br_ball_y[br_bi] > SCREEN_H - 4.0 && br_shield_on {
+        // Shield — bottom of the play field.  Only triggers on the
+        // downward leg of the arc.
+        if br_cy > SCREEN_H - 4.0 - BALL_RADIUS && br_shield_on {
           br_ball_dy[br_bi] = 0.0 - abs(br_ball_dy[br_bi]);
-          br_ball_y[br_bi] = SCREEN_H - 4.0;
+          br_ball_y[br_bi] = SCREEN_H - 4.0 - BALL_SIZE;
+          br_cy = br_ball_y[br_bi] + BALL_SIZE / 2.0;
+          br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
+          br_ball_sq_axis[br_bi] = 0;
           br_shield_on = false;
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 0.3; br_flash_g = 0.6; br_flash_b = 1.0;
         }
 
-        // Ball lost
-        if br_ball_y[br_bi] > SCREEN_H {
+        // Ball lost — fully off the bottom of the screen.
+        if br_cy > SCREEN_H + BALL_RADIUS {
           br_ball_on[br_bi] = 0;
         }
 
-        // ── Brick collision for this ball ───────────────────────
+        // ── Brick collision for this ball (circle vs AABB) ──────
         for br_cr in 0..br_rows {
           for br_cc in 0..BRICK_COLS {
             br_ci = br_cr * BRICK_COLS + br_cc;
             if br_bricks[br_ci] == 0 { continue; }
-            br_cdx = shapes::aabb_depth_x(
-              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
-              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
-            br_cdy = shapes::aabb_depth_y(
-              br_ball_x[br_bi], br_ball_y[br_bi], BALL_SIZE, BALL_SIZE,
-              bk_x(br_cc), bk_y(br_cr), BRICK_W, BRICK_H);
-            if br_cdx > 0.0 || br_cdy > 0.0 {
-              // Fireball passes through without bouncing
+            br_bxl = bk_x(br_cc);
+            br_byt = bk_y(br_cr);
+            br_bxr = br_bxl + BRICK_W;
+            br_byb = br_byt + BRICK_H;
+            // Closest point on the brick to the ball centre.
+            br_clx = shapes::clamp(br_cx, br_bxl, br_bxr);
+            br_cly = shapes::clamp(br_cy, br_byt, br_byb);
+            br_ddx = br_cx - br_clx;
+            br_ddy = br_cy - br_cly;
+            if br_ddx * br_ddx + br_ddy * br_ddy < BALL_RADIUS * BALL_RADIUS {
+              // Fireball passes through without bouncing.
               if br_fire_timer <= 0.0 {
-                if br_cdx < br_cdy { br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi]; }
-                else { br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi]; }
+                // Axis with the larger distance-to-closest-point wins
+                // — hits near a vertical face rebound horizontally,
+                // hits near a horizontal face rebound vertically.  An
+                // exact corner clip (|ddx| == |ddy|) is resolved as a
+                // horizontal bounce to match the old AABB behaviour.
+                br_abs_ddx = br_ddx; if br_abs_ddx < 0.0 { br_abs_ddx = 0.0 - br_abs_ddx; }
+                br_abs_ddy = br_ddy; if br_abs_ddy < 0.0 { br_abs_ddy = 0.0 - br_abs_ddy; }
+                if br_abs_ddx >= br_abs_ddy {
+                  br_ball_dx[br_bi] = 0.0 - br_ball_dx[br_bi];
+                  br_ball_sq_axis[br_bi] = 1;  // hit side of brick
+                } else {
+                  br_ball_dy[br_bi] = 0.0 - br_ball_dy[br_bi];
+                  br_ball_sq_axis[br_bi] = 0;  // hit top/bottom of brick
+                }
+                br_ball_sq_t[br_bi] = BALL_SQUASH_DURATION;
               }
               br_hp[br_ci] -= 1;
               if br_hp[br_ci] <= 0 {
@@ -656,45 +1156,47 @@ fn main() {
         } else {
           br_paddle_state = 1;
           br_explode_timer = EXPLODE_DURATION;
-          // Slightly asymmetric piece widths for a "ragged" cut feel.
-          br_pp_total = br_pw;
-          br_pp_w[0] = br_pp_total * 0.32;
-          br_pp_w[1] = br_pp_total * 0.34;
-          br_pp_w[2] = br_pp_total * 0.30;
-          br_pp_x[0] = br_px;
-          br_pp_x[1] = br_px + br_pp_w[0] + 2.0;
-          br_pp_x[2] = br_px + br_pp_w[0] + br_pp_w[1] + 4.0;
-          br_pp_y[0] = PADDLE_Y;
-          br_pp_y[1] = PADDLE_Y;
-          br_pp_y[2] = PADDLE_Y;
-          // Outer pieces fly outward + slightly up; middle piece falls
-          // mostly down with a small horizontal kick.
-          br_pp_vx[0] = -260.0;
-          br_pp_vx[1] = (br_lives as float * 7.0) - 15.0;  // tiny pseudo-random jitter
-          br_pp_vx[2] = 260.0;
-          br_pp_vy[0] = -180.0;
-          br_pp_vy[1] = -60.0;
-          br_pp_vy[2] = -180.0;
-          br_pp_rot[0] = 0.0;
-          br_pp_rot[1] = 0.0;
-          br_pp_rot[2] = 0.0;
-          br_pp_drot[0] = -3.5;
-          br_pp_drot[1] = 1.2;
-          br_pp_drot[2] = 4.0;
-          // Splinter particles at the two break points.
+          // Fall-case break: 12 pieces, all active, split into three
+          // 4-piece groups that share a common vx so each group flies
+          // away as a single visually-connected plank — the 1-px
+          // overlap between neighbours keeps the seams invisible while
+          // the group moves together.
+          br_pp_step = br_pw / 12.0;
+          for br_fi in 0..12 {
+            br_pp_x[br_fi]    = br_px + (br_fi as float) * br_pp_step;
+            br_pp_y[br_fi]    = PADDLE_Y;
+            br_pp_w[br_fi]    = br_pp_step + 1.0;  // +1 px hides seams
+            br_pp_on[br_fi]   = 1;
+            br_pp_cut[br_fi]  = (((br_now / 29l + br_fi as long * 7l) % 4l) as integer);
+            br_pp_rot[br_fi]  = 0.0;
+            br_pp_drot[br_fi] = ((br_fi as float) - 5.5) * 0.7;
+            // Group velocities — left plank flies left+up, middle
+            // falls mostly straight, right plank flies right+up.
+            if br_fi < 4 {
+              br_pp_vx[br_fi] = -220.0;
+              br_pp_vy[br_fi] = -170.0 + (br_fi as float) * 8.0;
+            } else if br_fi < 8 {
+              br_pp_vx[br_fi] = ((br_fi as float) - 5.5) * 10.0;
+              br_pp_vy[br_fi] = -60.0 + ((br_fi as float) - 5.5) * 5.0;
+            } else {
+              br_pp_vx[br_fi] = 220.0;
+              br_pp_vy[br_fi] = -170.0 + ((br_fi as float) - 9.5) * 8.0;
+            }
+          }
+          // Splinter particles at the two group-boundary break points.
           for br_sp_b in 0..2 {
-            br_sp_bx = br_px + br_pp_w[0] + br_sp_b as float * br_pp_w[1];
+            br_sp_bx = br_px + (4.0 + (br_sp_b as float) * 4.0) * br_pp_step;
             for br_sp_i in 0..6 {
               for br_sp_j in 0..MAX_PARTICLES {
                 if br_pt_t[br_sp_j] <= 0.0 {
-                  br_pt_x[br_sp_j] = br_sp_bx + (br_sp_i as float - 3.0) * 1.5;
-                  br_pt_y[br_sp_j] = PADDLE_Y + br_sp_i as float;
-                  br_pt_vx[br_sp_j] = (br_sp_i as float - 2.5) * 80.0;
-                  br_pt_vy[br_sp_j] = -150.0 - br_sp_i as float * 12.0;
-                  br_pt_t[br_sp_j] = PARTICLE_LIFE;
-                  br_pt_r[br_sp_j] = 0.85;
-                  br_pt_g[br_sp_j] = 0.85;
-                  br_pt_b[br_sp_j] = 0.95;
+                  br_pt_x[br_sp_j]  = br_sp_bx + ((br_sp_i as float) - 3.0) * 1.5;
+                  br_pt_y[br_sp_j]  = PADDLE_Y + (br_sp_i as float);
+                  br_pt_vx[br_sp_j] = ((br_sp_i as float) - 2.5) * 80.0;
+                  br_pt_vy[br_sp_j] = -150.0 - (br_sp_i as float) * 12.0;
+                  br_pt_t[br_sp_j]  = PARTICLE_LIFE;
+                  br_pt_r[br_sp_j]  = 0.85;
+                  br_pt_g[br_sp_j]  = 0.85;
+                  br_pt_b[br_sp_j]  = 0.95;
                   break;
                 }
               }
@@ -708,11 +1210,12 @@ fn main() {
       // ── Update paddle explosion phase ─────────────────────────
       if br_paddle_state == 1 {
         br_explode_timer -= br_dt;
-        for br_pp_i in 0..3 {
-          br_pp_x[br_pp_i] += br_pp_vx[br_pp_i] * br_dt;
-          br_pp_y[br_pp_i] += br_pp_vy[br_pp_i] * br_dt;
-          br_pp_vy[br_pp_i] += 600.0 * br_dt;  // gravity
-          br_pp_rot[br_pp_i] += br_pp_drot[br_pp_i] * br_dt;
+        for br_pp_i in 0..MAX_PIECES {
+          if br_pp_on[br_pp_i] == 0 { continue; }
+          br_pp_x[br_pp_i]    += br_pp_vx[br_pp_i] * br_dt;
+          br_pp_y[br_pp_i]    += br_pp_vy[br_pp_i] * br_dt;
+          br_pp_vy[br_pp_i]   += 600.0 * br_dt;   // gravity
+          br_pp_rot[br_pp_i]  += br_pp_drot[br_pp_i] * br_dt;
         }
         if br_explode_timer <= 0.0 {
           // Respawn paddle and ball at the centre.
@@ -749,12 +1252,61 @@ fn main() {
           if br_lives <= 0 { br_lost = true; }
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 1.0; br_flash_g = 0.0; br_flash_b = 0.0;
+          // Paddle breaks into 7 of 12 slots — each pair (0-1, 2-3,
+          // ...) has a fair coin flip based on br_now bits; roughly
+          // half the pairs vanish, varying per hit.  Also kick a
+          // chunkier shake than the balloon pop.
+          if br_lives > 0 && br_paddle_state == 0 {
+            br_paddle_state   = 1;
+            br_explode_timer  = EXPLODE_DURATION;
+            br_ex_step = br_pw / 12.0;
+            br_ex_seed = (br_now / 41l) % 64l;
+            for br_ei in 0..12 {
+              br_pp_x[br_ei]    = br_px + (br_ei as float) * br_ex_step;
+              br_pp_y[br_ei]    = PADDLE_Y;
+              br_pp_w[br_ei]    = br_ex_step + 1.0;
+              br_pp_cut[br_ei]  = (((br_now / 37l + br_ei as long * 11l) % 4l) as integer);
+              br_pp_rot[br_ei]  = 0.0;
+              br_pp_drot[br_ei] = ((br_ei as float) - 5.5) * 1.3;
+              // Explode: larger outward vx, stronger upward kick.
+              br_pp_vx[br_ei] = ((br_ei as float) - 5.5) * 50.0;
+              br_pp_vy[br_ei] = -240.0 + (((br_ei as float) - 5.5) * ((br_ei as float) - 5.5)) * 4.0;
+              // Hide pieces in pairs: each of 6 pairs flips a bit.
+              // Two pairs (bits 0,1) always hide to guarantee the
+              // "7 visible" look; the remaining bit decides whether
+              // a third pair hides.  Regardless, at least 5 are on.
+              br_ep_bit = (br_ex_seed >> (br_ei / 2)) & 1l;
+              if br_ep_bit == 1l { br_pp_on[br_ei] = 0; }
+              else               { br_pp_on[br_ei] = 1; }
+            }
+            // Count-correct: force at least 7 visible by unhiding
+            // pairs until count reaches 7.
+            br_ex_visible = 0;
+            for br_ec in 0..12 { if br_pp_on[br_ec] == 1 { br_ex_visible += 1; } }
+            for br_ep in 0..6 {
+              if br_ex_visible >= 7 { break; }
+              br_ea = br_ep * 2;
+              br_eb = br_ep * 2 + 1;
+              if br_pp_on[br_ea] == 0 {
+                br_pp_on[br_ea] = 1; br_pp_on[br_eb] = 1;
+                br_ex_visible += 2;
+              }
+            }
+            // Screen shake for BK.4 parity — bigger than balloon.
+            br_shake_t   = 0.4;
+            br_shake_d   = 0.4;
+            br_shake_mag = 6.0;
+          }
         }
         if br_pkt == SP_BALLOON {
+          // Launch a balloon from the paddle centre.  Drift sign
+          // varies per pickup via the br_now µs low bit.
           br_bl_on = true;
-          br_bl_timer = BALLOON_DELAY;
-          br_bl_row = ((br_now / 7) as integer) % br_rows;
-          br_bl_col = ((br_now / 13) as integer) % BRICK_COLS;
+          br_bl_x  = br_px + br_pw / 2.0 - BALLOON_W / 2.0;
+          br_bl_y  = PADDLE_Y - BALLOON_H;
+          br_bl_vy = BALLOON_RISE;
+          br_bl_seed = (br_now / 17l) % 200l;
+          br_bl_vx = ((br_bl_seed as float) / 100.0 - 1.0) * BALLOON_DRIFT;
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 1.0; br_flash_g = 0.9; br_flash_b = 0.1;
         }
@@ -770,7 +1322,7 @@ fn main() {
           }
           for br_nc in 0..BRICK_COLS {
             br_bricks[br_nc] = 1;
-            br_specials[br_nc] = assign_special(br_nr_seed + br_nc);
+            br_specials[br_nc] = assign_special(br_nr_seed + br_nc, br_level);
             br_hp[br_nc] = 1;
             br_alive += 1;
           }
@@ -804,26 +1356,102 @@ fn main() {
         }
       }
 
-      // ── Balloon explosion ────────────────────────────────────
+      // ── Balloon projectile ───────────────────────────────────
       if br_bl_on {
-        br_bl_timer -= br_dt;
-        if br_bl_timer <= 0.0 {
-          br_bl_on = false;
-          for br_er in br_bl_row - 1..br_bl_row + 2 {
-            for br_ec in br_bl_col - 1..br_bl_col + 2 {
-              if br_er >= 0 && br_er < br_rows && br_ec >= 0 && br_ec < BRICK_COLS {
-                br_ei = br_er * BRICK_COLS + br_ec;
-                if br_bricks[br_ei] == 1 {
-                  br_bricks[br_ei] = 0;
-                  br_alive -= 1;
-                  br_score += 1;
+        // Advance + side-wall clamp.  We never clamp Y because the
+        // balloon should naturally exit through the top once it
+        // passes the brick field without triggering an explosion.
+        br_bl_x += br_bl_vx * br_dt;
+        br_bl_y += br_bl_vy * br_dt;
+        if br_bl_x < 0.0 { br_bl_x = 0.0; br_bl_vx = abs(br_bl_vx); }
+        if br_bl_x > SCREEN_W - BALLOON_W {
+          br_bl_x = SCREEN_W - BALLOON_W; br_bl_vx = 0.0 - abs(br_bl_vx);
+        }
+
+        // Complex hitbox: split the balloon rectangle into a top
+        // half and bottom half.  Each ball's circle is tested
+        // against both.  Top-half hits send the ball upward and
+        // push the balloon downward; bottom-half hits do the
+        // mirror.  The ball's dx direction nudges the balloon's vx
+        // so the player can herd a loose balloon into (or out of)
+        // the brick wall they want hit.
+        br_bl_hw = BALLOON_W;
+        br_bl_hh = BALLOON_H / 2.0;
+        for br_bli in 0..MAX_BALLS {
+          if br_ball_on[br_bli] == 0 { continue; }
+          br_bcx = br_ball_x[br_bli] + BALL_SIZE / 2.0;
+          br_bcy = br_ball_y[br_bli] + BALL_SIZE / 2.0;
+          // Top half (x, y, w, h).
+          br_cl_tx = shapes::clamp(br_bcx, br_bl_x, br_bl_x + br_bl_hw);
+          br_cl_ty = shapes::clamp(br_bcy, br_bl_y, br_bl_y + br_bl_hh);
+          br_t_dx = br_bcx - br_cl_tx;
+          br_t_dy = br_bcy - br_cl_ty;
+          if br_t_dx * br_t_dx + br_t_dy * br_t_dy < BALL_RADIUS * BALL_RADIUS {
+            br_ball_dy[br_bli] = 0.0 - abs(br_ball_dy[br_bli]);
+            br_bl_vy += BALLOON_BOUNCE_DV;
+            br_dir_sign = 1.0; if br_ball_dx[br_bli] < 0.0 { br_dir_sign = 0.0 - 1.0; }
+            br_bl_vx += br_dir_sign * BALLOON_BOUNCE_DV * 0.5;
+            br_ball_sq_t[br_bli] = BALL_SQUASH_DURATION;
+            br_ball_sq_axis[br_bli] = 0;
+            continue;
+          }
+          // Bottom half.
+          br_cl_bx = shapes::clamp(br_bcx, br_bl_x, br_bl_x + br_bl_hw);
+          br_cl_by = shapes::clamp(br_bcy, br_bl_y + br_bl_hh, br_bl_y + BALLOON_H);
+          br_b_dx = br_bcx - br_cl_bx;
+          br_b_dy = br_bcy - br_cl_by;
+          if br_b_dx * br_b_dx + br_b_dy * br_b_dy < BALL_RADIUS * BALL_RADIUS {
+            br_ball_dy[br_bli] = abs(br_ball_dy[br_bli]);
+            br_bl_vy -= BALLOON_BOUNCE_DV;
+            br_dir_sign2 = 1.0; if br_ball_dx[br_bli] < 0.0 { br_dir_sign2 = 0.0 - 1.0; }
+            br_bl_vx += br_dir_sign2 * BALLOON_BOUNCE_DV * 0.5;
+            br_ball_sq_t[br_bli] = BALL_SQUASH_DURATION;
+            br_ball_sq_axis[br_bli] = 0;
+          }
+        }
+
+        // Brick-collision: balloon explodes as soon as its bounding
+        // rect overlaps any live brick.  Destroy a 3-cell cluster
+        // centred on that brick, bump score, flash, and shake.
+        if br_bl_y < BRICK_TOP + (br_rows as float) * (BRICK_H + BRICK_PAD) {
+          br_bl_popped = false;
+          for br_br_r in 0..br_rows {
+            if br_bl_popped { break; }
+            for br_br_c in 0..BRICK_COLS {
+              br_br_i = br_br_r * BRICK_COLS + br_br_c;
+              if br_bricks[br_br_i] == 0 { continue; }
+              if shapes::aabb_overlap(
+                   br_bl_x, br_bl_y, BALLOON_W, BALLOON_H,
+                   bk_x(br_br_c), bk_y(br_br_r), BRICK_W, BRICK_H) {
+                // Destroy 3x3 cluster centred on (br_br_r, br_br_c).
+                for br_er in br_br_r - 1..br_br_r + 2 {
+                  for br_ec in br_br_c - 1..br_br_c + 2 {
+                    if br_er >= 0 && br_er < br_rows && br_ec >= 0 && br_ec < BRICK_COLS {
+                      br_ei = br_er * BRICK_COLS + br_ec;
+                      if br_bricks[br_ei] == 1 {
+                        br_bricks[br_ei] = 0;
+                        br_alive -= 1;
+                        br_score += 1;
+                      }
+                    }
+                  }
                 }
+                br_flash_timer = FLASH_DURATION;
+                br_flash_r = 1.0; br_flash_g = 1.0; br_flash_b = 0.3;
+                // BK.4: screen shake on balloon pop.
+                br_shake_t   = 0.3;
+                br_shake_d   = 0.3;
+                br_shake_mag = 4.0;
+                br_bl_on = false;
+                br_bl_popped = true;
+                break;
               }
             }
           }
-          br_flash_timer = FLASH_DURATION;
-          br_flash_r = 1.0; br_flash_g = 1.0; br_flash_b = 0.3;
         }
+
+        // Above the brick field without popping — balloon floats off.
+        if br_bl_y + BALLOON_H < 0.0 { br_bl_on = false; }
       }
 
       // ── Level progression ────────────────────────────────────
@@ -831,21 +1459,31 @@ fn main() {
         br_level += 1;
         br_rows = START_ROWS + br_level - 1;
         if br_rows > MAX_ROWS { br_rows = MAX_ROWS; }
+        // Reward a fresh life for clearing the board.  Soft-capped
+        // so the HUD strip can't grow past 7 hearts.
+        if br_lives < 7 { br_lives += 1; }
         br_alive = 0;
         for br_lr in 0..br_rows {
           for br_lc in 0..BRICK_COLS {
             br_li = br_lr * BRICK_COLS + br_lc;
-            br_bricks[br_li] = 1;
-            br_specials[br_li] = assign_special(br_li + br_level * 100);
-            // Boss row: top row gets extra HP every 3 levels
-            if br_lr == 0 && br_level % 3 == 0 {
-              br_hp[br_li] = 3;
-            } else if br_lr < 2 && br_level > 3 {
-              br_hp[br_li] = 2;
+            br_lt = level_brick(br_level, br_lr, br_lc);
+            if br_lt == -1 {
+              br_bricks[br_li] = 0;
+              br_specials[br_li] = SP_NONE;
+              br_hp[br_li] = 0;
             } else {
-              br_hp[br_li] = 1;
+              br_bricks[br_li] = 1;
+              br_specials[br_li] = if br_lt == -2 { assign_special(br_li + br_level * 100, br_level) } else { br_lt };
+              // Boss row: top row gets extra HP every 3 levels
+              if br_lr == 0 && br_level % 3 == 0 {
+                br_hp[br_li] = 3;
+              } else if br_lr < 2 && br_level > 3 {
+                br_hp[br_li] = 2;
+              } else {
+                br_hp[br_li] = 1;
+              }
+              br_alive += 1;
             }
-            br_alive += 1;
           }
         }
         // Reset ball
@@ -872,11 +1510,32 @@ fn main() {
       }
     }
 
-    // ── Flash timer ────────────────────────────────────────────
+    // ── Flash + shake timers ──────────────────────────────────
     if br_flash_timer > 0.0 { br_flash_timer -= br_dt; }
+    br_shake_x = 0.0;
+    br_shake_y = 0.0;
+    if br_shake_t > 0.0 {
+      br_shake_t -= br_dt;
+      if br_shake_t < 0.0 { br_shake_t = 0.0; }
+      // Linear decay of magnitude — strongest at trigger, zero at end.
+      br_shake_amp = br_shake_mag * (br_shake_t / br_shake_d);
+      // Pseudo-random offsets keyed off br_now so neighbouring
+      // frames get different values without the overhead of a real
+      // RNG.  The modulus keeps the magnitude bounded.
+      br_sh_seed = br_now % 997l;
+      br_shake_x = ((br_sh_seed as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
+      br_sh_seed2 = (br_now / 31l) % 997l;
+      br_shake_y = ((br_sh_seed2 as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
+    }
 
     // ── Render ───────────────────────────────────────────────────
     graphics::gl_clear(graphics::rgba(20, 20, 30, 255));
+
+    // Push the shake offset into the painter's orthographic
+    // projection so every world-space draw inherits it automatically.
+    // Restored to identity before HUD / overlay draws below.
+    br_painter.p2_proj[12] = -1.0 + br_shake_x * 2.0 / SCREEN_W;
+    br_painter.p2_proj[13] =  1.0 - br_shake_y * 2.0 / SCREEN_H;
 
     // Bricks — flat color + sprite icon overlay for specials
     for br_dr in 0..br_rows {
@@ -913,21 +1572,20 @@ fn main() {
       }
     }
 
-    // Balloon countdown outline
+    // Rising balloon — the red-balloon pickup sprite plus a small
+    // orange flame drawn on top as an "about to pop" hint.
     if br_bl_on {
-      br_bfl = ((br_now / 200000) as integer) % 2;
-      if br_bfl == 0 {
-        for br_fr in br_bl_row - 1..br_bl_row + 2 {
-          for br_fc in br_bl_col - 1..br_bl_col + 2 {
-            if br_fr >= 0 && br_fr < br_rows && br_fc >= 0 && br_fc < BRICK_COLS {
-              graphics::draw_rect_at(br_painter,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
-              graphics::draw_rect_at(br_painter,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
-            }
-          }
-        }
-      }
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        br_bl_x, br_bl_y, BALLOON_W, BALLOON_H, S_PK_BALLOON);
+      // Flame on top of the balloon (roughly over the knot/fuse).
+      br_fl_x = br_bl_x + BALLOON_W / 2.0 - 3.0;
+      br_fl_y = br_bl_y - 4.0;
+      graphics::draw_rect_at(br_painter, br_fl_x - 1.0, br_fl_y - 1.0, 8.0, 8.0,
+        0.08, 0.08, 0.10, 1.0);
+      graphics::draw_rect_at(br_painter, br_fl_x,       br_fl_y,       6.0, 6.0,
+        1.0, 0.55, 0.0, 1.0);
+      graphics::draw_rect_at(br_painter, br_fl_x + 1.0, br_fl_y - 2.0, 4.0, 3.0,
+        1.0, 0.85, 0.1, 1.0);
     }
 
     // Pickups — large sprite icons, no block background
@@ -954,45 +1612,142 @@ fn main() {
         graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
       }
     } else {
-      // Exploding — draw the 3 pieces with their current positions and a
-      // small "rotation jitter" simulated by horizontal/vertical wobble
-      // (Painter2D draws axis-aligned rects, so we fake the rotation by
-      // offsetting the y position slightly based on rot). Each piece has
-      // a slightly different shade so the break is visually obvious.
-      for br_pp_d in 0..3 {
+      // Exploding — draw up to 12 pieces.  Each visible piece gets a
+      // small jitter (sin/cos on the rot accumulator) for a "tumbling"
+      // feel, a slight per-piece shade variation, and a splinter
+      // highlight down its right edge offset by br_pp_cut so the
+      // break line reads as ragged wood rather than a machine cut.
+      for br_pp_d in 0..MAX_PIECES {
+        if br_pp_on[br_pp_d] == 0 { continue; }
         br_pp_jx = sin(br_pp_rot[br_pp_d]) * 1.5;
         br_pp_jy = cos(br_pp_rot[br_pp_d]) * 1.5;
-        br_pp_shade = 0.85 - br_pp_d as float * 0.08;
+        br_pp_shade = 0.82 + (((br_pp_d as float) * 0.03) % 0.15);
         graphics::draw_rect_at(br_painter,
           br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
           br_pp_w[br_pp_d], PADDLE_H,
           br_pp_shade, br_pp_shade, br_pp_shade + 0.05, 1.0);
-        // Splinter highlight on the break edges
-        if br_pp_d > 0 {
+        // Jag-offset splinter highlight on the right edge of each
+        // piece (not the rightmost to avoid a halo at the paddle end).
+        if br_pp_d < MAX_PIECES - 1 && br_pp_on[br_pp_d + 1] == 1 {
+          br_pp_cx = (br_pp_cut[br_pp_d] as float);
           graphics::draw_rect_at(br_painter,
-            br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
-            2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
-        }
-        if br_pp_d < 2 {
-          graphics::draw_rect_at(br_painter,
-            br_pp_x[br_pp_d] + br_pp_jx + br_pp_w[br_pp_d] - 2.0,
+            br_pp_x[br_pp_d] + br_pp_jx + br_pp_w[br_pp_d] - 2.0 - br_pp_cx,
             br_pp_y[br_pp_d] + br_pp_jy,
             2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
         }
       }
     }
 
-    // Balls — flat color
-    for br_bd in 0..MAX_BALLS {
-      if br_ball_on[br_bd] == 1 {
-        if br_fire_timer > 0.0 {
-          graphics::draw_rect_at(br_painter,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 0.5, 0.0, 1.0);
-        } else {
-          graphics::draw_rect_at(br_painter,
-            br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE, 1.0, 1.0, 1.0, 1.0);
+    // Fire-ball trail maintenance: age existing entries each frame,
+    // and while a fire-ball is active capture the first live ball's
+    // current position into the ring buffer head.
+    for br_fti in 0..MAX_TRAIL {
+      if br_ft_age[br_fti] < MAX_TRAIL { br_ft_age[br_fti] += 1; }
+    }
+    if br_fire_timer > 0.0 {
+      for br_ftb in 0..MAX_BALLS {
+        if br_ball_on[br_ftb] == 1 {
+          br_ft_x[br_ft_head]   = br_ball_x[br_ftb];
+          br_ft_y[br_ft_head]   = br_ball_y[br_ftb];
+          br_ft_age[br_ft_head] = 0;
+          br_ft_head = (br_ft_head + 1) % MAX_TRAIL;
+          break;
         }
       }
+    }
+    // Draw the fire trail FIRST so the live ball renders on top.
+    // Oldest entries (age nearing MAX_TRAIL) shrink, desaturate and
+    // fade — no blur primitive so the "dissolve" is alpha × scale.
+    for br_ftd in 0..MAX_TRAIL {
+      br_fta = br_ft_age[br_ftd];
+      if br_fta >= MAX_TRAIL { continue; }
+      br_trp = (br_fta as float) / (MAX_TRAIL as float);  // 0..1
+      // Orange → grey by lerping channels toward (0.3, 0.3, 0.3).
+      br_trr = 1.0 - br_trp * 0.7;
+      br_trg = 0.5 - br_trp * 0.2;
+      br_trb = 0.0 + br_trp * 0.3;
+      br_tra = 0.85 - br_trp * 0.7;
+      br_trsc = 1.0 - br_trp * 0.6;   // 1.0 newest → 0.4 oldest
+      br_trw = BALL_SIZE * br_trsc;
+      br_trox = br_ft_x[br_ftd] + (BALL_SIZE - br_trw) / 2.0;
+      br_troy = br_ft_y[br_ftd] + (BALL_SIZE - br_trw) / 2.0;
+      graphics::draw_rect_at(br_painter, br_trox, br_troy, br_trw, br_trw,
+        br_trr, br_trg, br_trb, br_tra);
+    }
+
+    // Balls — round sprite with a 4-frame squash animation.
+    //   t=0                     → S_BALL_NORMAL (idle).
+    //   0 < t < 0.33*DUR        → S_BALL_RELEASE   (recovery tail).
+    //   0.33*DUR <= t < 0.66*DUR → S_BALL_SQUASH2  (peak squash).
+    //   0.66*DUR <= t <= DUR    → S_BALL_SQUASH1  (first contact).
+    // Timer counts DOWN from BALL_SQUASH_DURATION, so the newest
+    // bounce is at the top of the range.
+    //
+    // Axis 0 (vertical bounce: paddle, top wall, top/bottom of brick)
+    // draws the sprite in its natural "wide and flat" orientation.
+    // Axis 1 (horizontal bounce: side walls, side of brick) swaps
+    // width <-> height to rotate the sprite 90 degrees.
+    //
+    // Fireball mode still draws a flat orange rect so it reads as a
+    // distinct power-up (no fire sprite in the atlas).
+    for br_bd in 0..MAX_BALLS {
+      if br_ball_on[br_bd] == 0 { continue; }
+      if br_fire_timer > 0.0 {
+        // Fire: cel-shaded orange square, no squash animation.
+        graphics::draw_rect_at(br_painter,
+          br_ball_x[br_bd] - 1.0, br_ball_y[br_bd] - 1.0,
+          BALL_SIZE + 2.0, BALL_SIZE + 2.0,
+          0.08, 0.08, 0.10, 1.0);
+        graphics::draw_rect_at(br_painter,
+          br_ball_x[br_bd], br_ball_y[br_bd], BALL_SIZE, BALL_SIZE,
+          1.0, 0.5, 0.0, 1.0);
+        continue;
+      }
+      br_sqt = br_ball_sq_t[br_bd];
+      br_sprite = S_BALL_NORMAL;
+      br_dw = BALL_SIZE;
+      br_dh = BALL_SIZE;
+      if br_sqt > 0.0 {
+        br_phase = 1.0 - br_sqt / BALL_SQUASH_DURATION;  // 0..1
+        // Bounces in this game are rarely axis-aligned — the paddle
+        // kicks the ball out at any angle — so the squash should
+        // stretch in the ball's actual motion direction, not a fixed
+        // horizontal or vertical axis.  Normalise |vx| / |vy| to
+        // 0..1 fractions, then scale the sprite so the long axis
+        // points along motion and the short axis is perpendicular.
+        br_dvx = abs(br_ball_dx[br_bd]);
+        br_dvy = abs(br_ball_dy[br_bd]);
+        br_vmag = br_dvx + br_dvy;
+        if br_vmag < 1.0 { br_vmag = 1.0; }
+        br_vxf = br_dvx / br_vmag;  // 0=vertical motion, 1=horizontal
+        br_vyf = br_dvy / br_vmag;
+        // Strength triangle: 0 at phase 0/1, peaks at phase 0.5.
+        br_str = br_phase * 2.0;
+        if br_phase > 0.5 { br_str = (1.0 - br_phase) * 2.0; }
+        // Pick the sprite frame for the cel-shaded "flavour" — we
+        // still want SQUASH1/2/RELEASE to read differently — but the
+        // dimensions come from the velocity direction below, not from
+        // fixed wide-flat offsets.
+        if br_phase < 0.33 {
+          br_sprite = S_BALL_SQUASH1;
+        } else if br_phase < 0.66 {
+          br_sprite = S_BALL_SQUASH2;
+        } else {
+          br_sprite = S_BALL_RELEASE;
+        }
+        // Stretch along motion, compress perpendicular.  The 0.35
+        // factor is tuned so the elongation reads without ghosting.
+        br_stretch = 1.0 + br_str * 0.35;
+        br_squeeze = 1.0 - br_str * 0.25;
+        br_dw = BALL_SIZE * (br_vxf * br_stretch + (1.0 - br_vxf) * br_squeeze);
+        br_dh = BALL_SIZE * (br_vyf * br_stretch + (1.0 - br_vyf) * br_squeeze);
+      }
+      // Centre the (possibly scaled) sprite on the ball's hitbox so
+      // the squash expands outward instead of shifting the visual.
+      br_ox = br_ball_x[br_bd] + (BALL_SIZE - br_dw) / 2.0;
+      br_oy = br_ball_y[br_bd] + (BALL_SIZE - br_dh) / 2.0;
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        br_ox, br_oy, br_dw, br_dh, br_sprite);
     }
 
     // Particles — alpha fades with remaining life
@@ -1005,10 +1760,16 @@ fn main() {
       }
     }
 
-    // HUD: lives (red squares, top-right)
+    // Restore identity projection so HUD elements stay glued to the
+    // screen regardless of the current shake offset.
+    br_painter.p2_proj[12] = -1.0;
+    br_painter.p2_proj[13] =  1.0;
+
+    // HUD: lives (cel-shaded hearts, top-right).
     for br_lh in 0..br_lives {
-      graphics::draw_rect_at(br_painter,
-        SCREEN_W - 20.0 - (br_lh as float) * 18.0, 10.0, 12.0, 12.0, 1.0, 0.3, 0.3, 1.0);
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        SCREEN_W - 24.0 - (br_lh as float) * 22.0, 6.0,
+        20.0, 20.0, S_HEART);
     }
 
     // HUD: numeric score (top-left, digit textures)
@@ -1035,6 +1796,30 @@ fn main() {
       }
     }
 
+    // HUD: high score (below current score, slightly smaller digits
+    // in grey so it reads as "previous best" rather than the live
+    // total).  Hidden when 0 so a fresh install stays clean.
+    if br_highscore > 0 {
+      graphics::draw_texture_at(br_painter, br_hi_label_tex, 10.0, 26.0, 20.0, 10.0);
+      br_hsc = br_highscore;
+      br_hx = 34.0;
+      br_hs_digits = 0;
+      br_hsc_tmp = br_hsc;
+      for _br_hsd in 0..6 {
+        if br_hsc_tmp > 0 { br_hs_digits += 1; br_hsc_tmp = br_hsc_tmp / 10; }
+      }
+      if br_hs_digits > 0 {
+        br_hx = 34.0 + (br_hs_digits - 1) as float * 9.0;
+        br_hsc_tmp = br_hsc;
+        for _br_hsd2 in 0..br_hs_digits {
+          br_hsd_d = br_hsc_tmp % 10;
+          graphics::draw_texture_at(br_painter, br_dig_tex[br_hsd_d], br_hx, 26.0, 9.0, 12.0);
+          br_hx -= 9.0;
+          br_hsc_tmp = br_hsc_tmp / 10;
+        }
+      }
+    }
+
     // HUD: combo bar (under score)
     if br_combo > 1 {
       br_cbar = shapes::clamp((br_combo as float) * 15.0, 0.0, 200.0);
@@ -1042,11 +1827,51 @@ fn main() {
       graphics::draw_rect_at(br_painter, 10.0, 24.0, br_cbar, 3.0, 1.0, br_cg_val, 0.0, 1.0);
     }
 
-    // HUD: level dots (top-center)
-    for br_lv in 0..br_level {
-      if br_lv < 10 {
-        graphics::draw_rect_at(br_painter,
-          370.0 + (br_lv as float) * 8.0, 10.0, 6.0, 6.0, 0.5, 1.0, 0.5, 1.0);
+    // HUD: level — Roman numeral in the top middle.  The full
+    // pre-baked "LEVEL <n>" texture is used during the level-pause
+    // fade below; here we use a separate tighter texture that holds
+    // just the numeral so the centred HUD element stays compact.
+    // Drawn at 28 px to match the baked font size so single-character
+    // numerals ("I", "V", "X") have readable width; wider numerals
+    // like "VIII" still fit inside the 72-px-wide box.
+    br_lvli = br_level - 1;
+    if br_lvli >= 0 && br_lvli < 20 && br_lvl_num_tex[br_lvli] != 0 {
+      graphics::draw_texture_at(br_painter, br_lvl_num_tex[br_lvli],
+        SCREEN_W / 2.0 - 36.0, 4.0, 72.0, 28.0);
+    }
+
+    // Atlas diagnostic overlay (toggled by the I cheat key).  Draws
+    // all 20 sprite indices on a 4x5 grid at fixed screen positions
+    // with a visible two-digit index label beside each cell.  A
+    // mis-mapped sprite (e.g. S_BALL_NORMAL drawing the S_IC_EXTEND
+    // art) is immediately visible because the art at label "16"
+    // would clearly not be the ball.
+    if br_diag_on {
+      // Translucent backdrop so gameplay stays partially visible.
+      graphics::draw_rect_at(br_painter, 0.0, 0.0, SCREEN_W, SCREEN_H,
+        0.0, 0.0, 0.0, 0.6);
+      for br_diag_i in 0..20 {
+        br_dg_col = br_diag_i % 4;
+        br_dg_row = br_diag_i / 4;
+        // Spread the grid across the centre of the screen.
+        br_dg_x = 80.0 + (br_dg_col as float) * 160.0;
+        br_dg_y = 60.0  + (br_dg_row as float) * 100.0;
+        // Thin outline so the cell's extent is visible.
+        graphics::draw_rect_at(br_painter, br_dg_x - 2.0, br_dg_y - 2.0,
+          68.0, 68.0, 0.2, 0.2, 0.3, 0.9);
+        // The sprite itself at 64x64 (bigger than in-game so pixels
+        // read).
+        graphics::draw_sprite_at(br_sheet, br_painter, br_dg_x, br_dg_y,
+          64.0, 64.0, br_diag_i);
+        // Two-digit label.
+        br_dg_t = br_diag_i / 10;
+        br_dg_u = br_diag_i % 10;
+        if br_dg_t > 0 {
+          graphics::draw_texture_at(br_painter, br_dig_tex[br_dg_t],
+            br_dg_x + 68.0, br_dg_y, 12.0, 18.0);
+        }
+        graphics::draw_texture_at(br_painter, br_dig_tex[br_dg_u],
+          br_dg_x + 82.0, br_dg_y, 12.0, 18.0);
       }
     }
 

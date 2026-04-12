@@ -15,9 +15,18 @@
   </a>
 </p>
 
-**A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
+**A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups (including a rising balloon bomb you can knock sideways with the ball), pause, game-over, chiptune music that rotates between three original tracks, sound effects, hand-designed levels, and an animated 12-piece paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
 
 And it's one file: [`25-brick-buster.loft`](lib/graphics/examples/25-brick-buster.loft).
+
+### What's new in 0.8.4
+
+- **Hand-designed levels 1–5** introduce the powerups gradually (gentle 3-row opener, shoulder-gap pyramid, down-arrow with explode tip, smile-face layout) before the procedural generator takes over at level 6+ with progressively denser specials.
+- **Cel-shaded sprite pass** — every icon and the ball have dark outlines; the ball is an actual round sprite with a four-frame squash animation that stretches along its velocity direction (bounces look like bounces, not axis-aligned flips).
+- **Heart-shaped lives** replace the red squares in the HUD, the level is shown as a Roman numeral in the top middle, a persistent high score is stored in `.loft/brickbuster_score.txt` and shown below the score.
+- **Balloon powerup** is now an actual projectile: launches from the paddle, can be knocked sideways with the ball (top half bounces it up, bottom half bounces it down), explodes on brick contact with screen shake.
+- **Fireball after-images** fade from orange to grey behind a burning ball.
+- **Three-track chiptune playlist** plays once per level in a random rotation with 3–8 s silences between songs.
 
 ## Three ways to see loft
 

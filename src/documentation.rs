@@ -260,7 +260,7 @@ fn write_index(
       <div class=\"showcase-caption\">\n\
         <span class=\"showcase-tag\">Built with loft</span>\n\
         <h2>Brick Buster</h2>\n\
-        <p>A complete arcade game \u{2014} sprites, collision, audio, powerups, pause, game over. Written in loft, runs in your browser.</p>\n\
+        <p>A complete arcade game \u{2014} hand-designed levels, cel-shaded sprites, heart lives, round ball with a velocity-directional squash, rising balloon bombs, fireball after-images, chiptune music. Written in loft, runs in your browser.</p>\n\
       </div>\n\
     </a>\n\
     <div class=\"showcase-side\">\n\

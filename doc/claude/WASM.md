@@ -22,17 +22,14 @@
 
 ## Overview
 
-When the loft interpreter runs as a WASM module (via the `wasm` Cargo feature), it
-cannot access the real filesystem, system clock, or OS random source. Instead, it calls
-out to the JavaScript host through `wasm-bindgen` extern functions grouped under a
-`loftHost` namespace. The host provides concrete implementations — browser APIs in
-production, in-memory fakes in tests.
+When loft runs as a WASM module (`wasm` Cargo feature), it cannot access
+the real filesystem, system clock, or OS random source.  It calls out to
+the JavaScript host through `wasm-bindgen` externs grouped under a
+`loftHost` namespace: browser APIs in production, in-memory fakes in tests.
 
-This document covers three things:
-1. A **JSON virtual filesystem** that gives loft programs realistic file/directory
-   behaviour without touching disk.
-2. The **host bridge API** for random, time, environment, and storage.
-3. A **Node.js test harness** that wires everything together for automated testing.
+Three layers: a **JSON virtual filesystem** for file/directory behaviour
+without disk, the **host bridge API** for random/time/env/storage, and a
+**Node.js test harness** tying them together for automated testing.
 
 ---
 

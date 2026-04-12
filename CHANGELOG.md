@@ -9,6 +9,81 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Brick Buster 0.8.4 polish pass
+
+Gameplay feel:
+
+- **Cel-shaded sprites** — every icon and the ball have dark outlines
+  over flat-shaded bodies; the ball is a real round sprite with a
+  four-frame squash animation that stretches along its velocity
+  direction, so diagonal bounces look like bounces instead of flat
+  horizontal/vertical squishes.
+- **Paddle break** split from 3 rigid pieces to a **12-slot system**.
+  On ball-lost the pieces fly out as three 4-piece planks held together
+  by 1-pixel overlaps; on `SP_EXPLODE` powerup only 7 of 12 slots are
+  active (pairs hidden pseudo-randomly) so some sections look like they
+  held together.
+- **Balloon powerup** is a rising on-screen projectile with a two-part
+  hitbox.  Top half bounces the ball up and shoves the balloon down;
+  bottom half mirrors.  The ball's horizontal velocity nudges the
+  balloon sideways so the player can herd a loose balloon, pops on
+  brick contact and triggers screen shake.
+- **Screen shake** implemented as projection-matrix translation so one
+  offset shakes the whole world — HUD stays fixed.  Used by balloon
+  pops and the `SP_EXPLODE` paddle break.
+- **Fire-ball after-images** — ring buffer of past ball positions
+  renders a desaturating orange→grey trail that shrinks and fades as
+  each entry ages.
+
+Content:
+
+- **Hand-designed levels 1–5** via a `level_brick(lv, r, c)` dispatcher:
+  solid 3-row intro → first powerups in row 1 → shoulder-gap pyramid →
+  downward-arrow shaft with an explode tip → smile-face pattern of
+  specials.  Levels 6+ fall back to the procedural generator with
+  progressively denser specials (8/50 at level 5 → +1/50 per level,
+  capped at 20/50).
+- **Start-row count reduced** from 5 to 3 so early sparse-powerup
+  boards aren't a wall of single-colour bricks.
+- **Ball and paddle both ~40 % faster** (`BALL_SPEED_BASE` 300→420 px/s,
+  `PADDLE_SPEED` 500→620 px/s) — the earlier pace felt sluggish.
+
+HUD & UX:
+
+- **Heart-shaped lives** replace the red squares, rendered from a new
+  `S_HEART` atlas cell (point-down after the canvas Y-flip).
+- **Roman-numeral level caption** in the top middle (compact 28-pt
+  texture per level).
+- **High-score persistence** — `.loft/brickbuster_score.txt` loaded at
+  boot, written on game-over when beaten, shown below the live score
+  as a grey "HI <n>" line.
+- **+1 heart on level clear** (soft-capped at 7).
+- **Atlas diagnostic overlay** — press **I** during play to toggle a
+  labelled 4×5 grid of every sprite index, useful for debugging any
+  future atlas remapping.
+
+Audio:
+
+- **Three original chiptune tracks** (C-major "Heroic", A-minor
+  "Determined", F-major "Calm Bridge") rotate through each level in
+  a random order with 3–8 s silences between.  Queue resets on level
+  change; once the three songs have played the sequencer is silent
+  until the next level.
+
+Infrastructure:
+
+- `make play` target — prerequisite-checking launcher for the native
+  OpenGL build with auto-recovery from stale incremental `rand_core`
+  mismatches.
+- `loft --html` switched to `wasm-opt -O1` — `-Oz --asyncify` was
+  stripping all host imports.  Brick Buster now actually runs on
+  Pages.
+- Sibling-package `loft.toml` registration and `pub use audio::*` so
+  `--native` resolves every `#native` symbol without stubs.
+- `tests/scripts/test_gl_snapshots.sh --update` documented in
+  `doc/claude/GAME_TESTING.md` as the canonical way to regenerate
+  golden PNGs after a visual change.
+
 ### WebGL graphics gallery
 
 - **GL6.1** — Graphics library .loft files embedded in WASM binary; `use graphics;`

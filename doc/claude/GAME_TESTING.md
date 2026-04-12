@@ -29,6 +29,16 @@ tests/scripts/test_gl_snapshots.sh
 tests/scripts/test_gl_snapshots.sh --update
 ```
 
+The `--update` run:
+1. Builds `target/release/loft` (small incremental if already built).
+2. For every row in `tests/scripts/gl_snapshots.tsv`, launches the
+   example under `xvfb-run` with the specified geometry, waits
+   `wait_s` seconds plus any scripted key-presses (`space@800;u@400`
+   = press space at t=800 ms, `u` at t=400 ms), then captures the
+   matching window via `import` and overwrites the golden PNG.
+3. Inspect each updated `tests/golden/<name>.png` visually; if it
+   looks right, commit the PNGs alongside the source change.
+
 Both targets are safe to run from a CI job: they skip cleanly if
 `xvfb-run`, `xdotool`, `import`, `compare`, or `convert` are missing.
 
