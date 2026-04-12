@@ -437,13 +437,22 @@ fn main() {
   br_paddle_state = 0;
   br_explode_timer = 0.0;
   // Per-piece state — 3 pieces, each with position, velocity, rotation.
-  br_pp_x  = [0.0, 0.0, 0.0];
-  br_pp_y  = [0.0, 0.0, 0.0];
-  br_pp_w  = [0.0, 0.0, 0.0];
-  br_pp_vx = [0.0, 0.0, 0.0];
-  br_pp_vy = [0.0, 0.0, 0.0];
-  br_pp_rot = [0.0, 0.0, 0.0];     // visual jitter / "rotation"
-  br_pp_drot = [0.0, 0.0, 0.0];    // angular velocity
+  // Paddle breaks into 12 slots — drawn with a 1-px horizontal
+  // overlap between neighbours so gaps don't flash through pixel
+  // rounding errors when pieces move together.  br_pp_on gates
+  // visibility: the "fall" path enables all 12, the "explode" path
+  // hides 5 (in pairs plus a singleton) so some sections look like
+  // they held together.
+  MAX_PIECES = 12;
+  br_pp_x    = [for _ in 0..12 { 0.0 }];
+  br_pp_y    = [for _ in 0..12 { 0.0 }];
+  br_pp_w    = [for _ in 0..12 { 0.0 }];
+  br_pp_vx   = [for _ in 0..12 { 0.0 }];
+  br_pp_vy   = [for _ in 0..12 { 0.0 }];
+  br_pp_rot  = [for _ in 0..12 { 0.0 }];   // visual jitter
+  br_pp_drot = [for _ in 0..12 { 0.0 }];   // angular velocity
+  br_pp_on   = [for _ in 0..12 { 0 }];     // 1 = visible piece
+  br_pp_cut  = [for _ in 0..12 { 0 }];     // 0..3 jag offset on the break line
   EXPLODE_DURATION = 1.4;          // seconds before next paddle+ball
 
   // Multi-ball: up to 3 balls
@@ -915,45 +924,47 @@ fn main() {
         } else {
           br_paddle_state = 1;
           br_explode_timer = EXPLODE_DURATION;
-          // Slightly asymmetric piece widths for a "ragged" cut feel.
-          br_pp_total = br_pw;
-          br_pp_w[0] = br_pp_total * 0.32;
-          br_pp_w[1] = br_pp_total * 0.34;
-          br_pp_w[2] = br_pp_total * 0.30;
-          br_pp_x[0] = br_px;
-          br_pp_x[1] = br_px + br_pp_w[0] + 2.0;
-          br_pp_x[2] = br_px + br_pp_w[0] + br_pp_w[1] + 4.0;
-          br_pp_y[0] = PADDLE_Y;
-          br_pp_y[1] = PADDLE_Y;
-          br_pp_y[2] = PADDLE_Y;
-          // Outer pieces fly outward + slightly up; middle piece falls
-          // mostly down with a small horizontal kick.
-          br_pp_vx[0] = -260.0;
-          br_pp_vx[1] = (br_lives as float * 7.0) - 15.0;  // tiny pseudo-random jitter
-          br_pp_vx[2] = 260.0;
-          br_pp_vy[0] = -180.0;
-          br_pp_vy[1] = -60.0;
-          br_pp_vy[2] = -180.0;
-          br_pp_rot[0] = 0.0;
-          br_pp_rot[1] = 0.0;
-          br_pp_rot[2] = 0.0;
-          br_pp_drot[0] = -3.5;
-          br_pp_drot[1] = 1.2;
-          br_pp_drot[2] = 4.0;
-          // Splinter particles at the two break points.
+          // Fall-case break: 12 pieces, all active, split into three
+          // 4-piece groups that share a common vx so each group flies
+          // away as a single visually-connected plank — the 1-px
+          // overlap between neighbours keeps the seams invisible while
+          // the group moves together.
+          br_pp_step = br_pw / 12.0;
+          for br_fi in 0..12 {
+            br_pp_x[br_fi]    = br_px + (br_fi as float) * br_pp_step;
+            br_pp_y[br_fi]    = PADDLE_Y;
+            br_pp_w[br_fi]    = br_pp_step + 1.0;  // +1 px hides seams
+            br_pp_on[br_fi]   = 1;
+            br_pp_cut[br_fi]  = (((br_now / 29l + br_fi as long * 7l) % 4l) as integer);
+            br_pp_rot[br_fi]  = 0.0;
+            br_pp_drot[br_fi] = ((br_fi as float) - 5.5) * 0.7;
+            // Group velocities — left plank flies left+up, middle
+            // falls mostly straight, right plank flies right+up.
+            if br_fi < 4 {
+              br_pp_vx[br_fi] = -220.0;
+              br_pp_vy[br_fi] = -170.0 + (br_fi as float) * 8.0;
+            } else if br_fi < 8 {
+              br_pp_vx[br_fi] = ((br_fi as float) - 5.5) * 10.0;
+              br_pp_vy[br_fi] = -60.0 + ((br_fi as float) - 5.5) * 5.0;
+            } else {
+              br_pp_vx[br_fi] = 220.0;
+              br_pp_vy[br_fi] = -170.0 + ((br_fi as float) - 9.5) * 8.0;
+            }
+          }
+          // Splinter particles at the two group-boundary break points.
           for br_sp_b in 0..2 {
-            br_sp_bx = br_px + br_pp_w[0] + br_sp_b as float * br_pp_w[1];
+            br_sp_bx = br_px + (4.0 + (br_sp_b as float) * 4.0) * br_pp_step;
             for br_sp_i in 0..6 {
               for br_sp_j in 0..MAX_PARTICLES {
                 if br_pt_t[br_sp_j] <= 0.0 {
-                  br_pt_x[br_sp_j] = br_sp_bx + (br_sp_i as float - 3.0) * 1.5;
-                  br_pt_y[br_sp_j] = PADDLE_Y + br_sp_i as float;
-                  br_pt_vx[br_sp_j] = (br_sp_i as float - 2.5) * 80.0;
-                  br_pt_vy[br_sp_j] = -150.0 - br_sp_i as float * 12.0;
-                  br_pt_t[br_sp_j] = PARTICLE_LIFE;
-                  br_pt_r[br_sp_j] = 0.85;
-                  br_pt_g[br_sp_j] = 0.85;
-                  br_pt_b[br_sp_j] = 0.95;
+                  br_pt_x[br_sp_j]  = br_sp_bx + ((br_sp_i as float) - 3.0) * 1.5;
+                  br_pt_y[br_sp_j]  = PADDLE_Y + (br_sp_i as float);
+                  br_pt_vx[br_sp_j] = ((br_sp_i as float) - 2.5) * 80.0;
+                  br_pt_vy[br_sp_j] = -150.0 - (br_sp_i as float) * 12.0;
+                  br_pt_t[br_sp_j]  = PARTICLE_LIFE;
+                  br_pt_r[br_sp_j]  = 0.85;
+                  br_pt_g[br_sp_j]  = 0.85;
+                  br_pt_b[br_sp_j]  = 0.95;
                   break;
                 }
               }
@@ -967,11 +978,12 @@ fn main() {
       // ── Update paddle explosion phase ─────────────────────────
       if br_paddle_state == 1 {
         br_explode_timer -= br_dt;
-        for br_pp_i in 0..3 {
-          br_pp_x[br_pp_i] += br_pp_vx[br_pp_i] * br_dt;
-          br_pp_y[br_pp_i] += br_pp_vy[br_pp_i] * br_dt;
-          br_pp_vy[br_pp_i] += 600.0 * br_dt;  // gravity
-          br_pp_rot[br_pp_i] += br_pp_drot[br_pp_i] * br_dt;
+        for br_pp_i in 0..MAX_PIECES {
+          if br_pp_on[br_pp_i] == 0 { continue; }
+          br_pp_x[br_pp_i]    += br_pp_vx[br_pp_i] * br_dt;
+          br_pp_y[br_pp_i]    += br_pp_vy[br_pp_i] * br_dt;
+          br_pp_vy[br_pp_i]   += 600.0 * br_dt;   // gravity
+          br_pp_rot[br_pp_i]  += br_pp_drot[br_pp_i] * br_dt;
         }
         if br_explode_timer <= 0.0 {
           // Respawn paddle and ball at the centre.
@@ -1008,6 +1020,51 @@ fn main() {
           if br_lives <= 0 { br_lost = true; }
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 1.0; br_flash_g = 0.0; br_flash_b = 0.0;
+          // Paddle breaks into 7 of 12 slots — each pair (0-1, 2-3,
+          // ...) has a fair coin flip based on br_now bits; roughly
+          // half the pairs vanish, varying per hit.  Also kick a
+          // chunkier shake than the balloon pop.
+          if br_lives > 0 && br_paddle_state == 0 {
+            br_paddle_state   = 1;
+            br_explode_timer  = EXPLODE_DURATION;
+            br_ex_step = br_pw / 12.0;
+            br_ex_seed = (br_now / 41l) % 64l;
+            for br_ei in 0..12 {
+              br_pp_x[br_ei]    = br_px + (br_ei as float) * br_ex_step;
+              br_pp_y[br_ei]    = PADDLE_Y;
+              br_pp_w[br_ei]    = br_ex_step + 1.0;
+              br_pp_cut[br_ei]  = (((br_now / 37l + br_ei as long * 11l) % 4l) as integer);
+              br_pp_rot[br_ei]  = 0.0;
+              br_pp_drot[br_ei] = ((br_ei as float) - 5.5) * 1.3;
+              // Explode: larger outward vx, stronger upward kick.
+              br_pp_vx[br_ei] = ((br_ei as float) - 5.5) * 50.0;
+              br_pp_vy[br_ei] = -240.0 + (((br_ei as float) - 5.5) * ((br_ei as float) - 5.5)) * 4.0;
+              // Hide pieces in pairs: each of 6 pairs flips a bit.
+              // Two pairs (bits 0,1) always hide to guarantee the
+              // "7 visible" look; the remaining bit decides whether
+              // a third pair hides.  Regardless, at least 5 are on.
+              br_ep_bit = (br_ex_seed >> (br_ei / 2)) & 1l;
+              if br_ep_bit == 1l { br_pp_on[br_ei] = 0; }
+              else               { br_pp_on[br_ei] = 1; }
+            }
+            // Count-correct: force at least 7 visible by unhiding
+            // pairs until count reaches 7.
+            br_ex_visible = 0;
+            for br_ec in 0..12 { if br_pp_on[br_ec] == 1 { br_ex_visible += 1; } }
+            for br_ep in 0..6 {
+              if br_ex_visible >= 7 { break; }
+              br_ea = br_ep * 2;
+              br_eb = br_ep * 2 + 1;
+              if br_pp_on[br_ea] == 0 {
+                br_pp_on[br_ea] = 1; br_pp_on[br_eb] = 1;
+                br_ex_visible += 2;
+              }
+            }
+            // Screen shake for BK.4 parity — bigger than balloon.
+            br_shake_t   = 0.4;
+            br_shake_d   = 0.4;
+            br_shake_mag = 6.0;
+          }
         }
         if br_pkt == SP_BALLOON {
           // Launch a balloon from the paddle centre.  Drift sign
@@ -1313,28 +1370,26 @@ fn main() {
         graphics::draw_rect_at(br_painter, br_px, PADDLE_Y, br_pw, PADDLE_H, 0.8, 0.8, 0.9, 1.0);
       }
     } else {
-      // Exploding — draw the 3 pieces with their current positions and a
-      // small "rotation jitter" simulated by horizontal/vertical wobble
-      // (Painter2D draws axis-aligned rects, so we fake the rotation by
-      // offsetting the y position slightly based on rot). Each piece has
-      // a slightly different shade so the break is visually obvious.
-      for br_pp_d in 0..3 {
+      // Exploding — draw up to 12 pieces.  Each visible piece gets a
+      // small jitter (sin/cos on the rot accumulator) for a "tumbling"
+      // feel, a slight per-piece shade variation, and a splinter
+      // highlight down its right edge offset by br_pp_cut so the
+      // break line reads as ragged wood rather than a machine cut.
+      for br_pp_d in 0..MAX_PIECES {
+        if br_pp_on[br_pp_d] == 0 { continue; }
         br_pp_jx = sin(br_pp_rot[br_pp_d]) * 1.5;
         br_pp_jy = cos(br_pp_rot[br_pp_d]) * 1.5;
-        br_pp_shade = 0.85 - br_pp_d as float * 0.08;
+        br_pp_shade = 0.82 + (((br_pp_d as float) * 0.03) % 0.15);
         graphics::draw_rect_at(br_painter,
           br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
           br_pp_w[br_pp_d], PADDLE_H,
           br_pp_shade, br_pp_shade, br_pp_shade + 0.05, 1.0);
-        // Splinter highlight on the break edges
-        if br_pp_d > 0 {
+        // Jag-offset splinter highlight on the right edge of each
+        // piece (not the rightmost to avoid a halo at the paddle end).
+        if br_pp_d < MAX_PIECES - 1 && br_pp_on[br_pp_d + 1] == 1 {
+          br_pp_cx = (br_pp_cut[br_pp_d] as float);
           graphics::draw_rect_at(br_painter,
-            br_pp_x[br_pp_d] + br_pp_jx, br_pp_y[br_pp_d] + br_pp_jy,
-            2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
-        }
-        if br_pp_d < 2 {
-          graphics::draw_rect_at(br_painter,
-            br_pp_x[br_pp_d] + br_pp_jx + br_pp_w[br_pp_d] - 2.0,
+            br_pp_x[br_pp_d] + br_pp_jx + br_pp_w[br_pp_d] - 2.0 - br_pp_cx,
             br_pp_y[br_pp_d] + br_pp_jy,
             2.0, PADDLE_H, 1.0, 0.9, 0.6, 1.0);
         }
