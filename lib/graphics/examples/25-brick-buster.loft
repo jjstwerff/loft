@@ -37,7 +37,14 @@ PICKUP_W = 20.0;
 PICKUP_H = 12.0;
 PICKUP_SPEED = 180.0;
 EXTEND_DURATION = 8.0;
-BALLOON_DELAY = 2.0;
+// Balloon pickup — a rising projectile rather than the original 2-s
+// delayed grid blast.  Speeds and hitbox dimensions are tuned so a
+// moderately-reflected ball can nudge the balloon sideways.
+BALLOON_W        = 32.0;
+BALLOON_H        = 40.0;
+BALLOON_RISE     = -140.0;  // negative = upward
+BALLOON_DRIFT    =   20.0;  // ± random horizontal drift
+BALLOON_BOUNCE_DV =  60.0;  // pushback velocity when the ball hits
 EXTEND_EXTRA = 60.0;
 START_ROWS = 5;
 MAX_BALLS = 3;
@@ -494,10 +501,13 @@ fn main() {
   br_pt_b  = [for _ in 0..MAX_PARTICLES { 0.0 }];
 
   // Balloon
-  br_bl_timer = 0.0;
-  br_bl_row = 0;
-  br_bl_col = 0;
+  // Balloon projectile state — one active at a time.  br_bl_on is
+  // the gate; x/y is the sprite top-left, vx/vy the live velocity.
   br_bl_on = false;
+  br_bl_x  = 0.0;
+  br_bl_y  = 0.0;
+  br_bl_vx = 0.0;
+  br_bl_vy = 0.0;
   br_nr_seed = 100;
 
   // Screen flash
@@ -1000,10 +1010,14 @@ fn main() {
           br_flash_r = 1.0; br_flash_g = 0.0; br_flash_b = 0.0;
         }
         if br_pkt == SP_BALLOON {
+          // Launch a balloon from the paddle centre.  Drift sign
+          // varies per pickup via the br_now µs low bit.
           br_bl_on = true;
-          br_bl_timer = BALLOON_DELAY;
-          br_bl_row = ((br_now / 7) as integer) % br_rows;
-          br_bl_col = ((br_now / 13) as integer) % BRICK_COLS;
+          br_bl_x  = br_px + br_pw / 2.0 - BALLOON_W / 2.0;
+          br_bl_y  = PADDLE_Y - BALLOON_H;
+          br_bl_vy = BALLOON_RISE;
+          br_bl_seed = (br_now / 17l) % 200l;
+          br_bl_vx = ((br_bl_seed as float) / 100.0 - 1.0) * BALLOON_DRIFT;
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 1.0; br_flash_g = 0.9; br_flash_b = 0.1;
         }
@@ -1053,26 +1067,102 @@ fn main() {
         }
       }
 
-      // ── Balloon explosion ────────────────────────────────────
+      // ── Balloon projectile ───────────────────────────────────
       if br_bl_on {
-        br_bl_timer -= br_dt;
-        if br_bl_timer <= 0.0 {
-          br_bl_on = false;
-          for br_er in br_bl_row - 1..br_bl_row + 2 {
-            for br_ec in br_bl_col - 1..br_bl_col + 2 {
-              if br_er >= 0 && br_er < br_rows && br_ec >= 0 && br_ec < BRICK_COLS {
-                br_ei = br_er * BRICK_COLS + br_ec;
-                if br_bricks[br_ei] == 1 {
-                  br_bricks[br_ei] = 0;
-                  br_alive -= 1;
-                  br_score += 1;
+        // Advance + side-wall clamp.  We never clamp Y because the
+        // balloon should naturally exit through the top once it
+        // passes the brick field without triggering an explosion.
+        br_bl_x += br_bl_vx * br_dt;
+        br_bl_y += br_bl_vy * br_dt;
+        if br_bl_x < 0.0 { br_bl_x = 0.0; br_bl_vx = abs(br_bl_vx); }
+        if br_bl_x > SCREEN_W - BALLOON_W {
+          br_bl_x = SCREEN_W - BALLOON_W; br_bl_vx = 0.0 - abs(br_bl_vx);
+        }
+
+        // Complex hitbox: split the balloon rectangle into a top
+        // half and bottom half.  Each ball's circle is tested
+        // against both.  Top-half hits send the ball upward and
+        // push the balloon downward; bottom-half hits do the
+        // mirror.  The ball's dx direction nudges the balloon's vx
+        // so the player can herd a loose balloon into (or out of)
+        // the brick wall they want hit.
+        br_bl_hw = BALLOON_W;
+        br_bl_hh = BALLOON_H / 2.0;
+        for br_bli in 0..MAX_BALLS {
+          if br_ball_on[br_bli] == 0 { continue; }
+          br_bcx = br_ball_x[br_bli] + BALL_SIZE / 2.0;
+          br_bcy = br_ball_y[br_bli] + BALL_SIZE / 2.0;
+          // Top half (x, y, w, h).
+          br_cl_tx = shapes::clamp(br_bcx, br_bl_x, br_bl_x + br_bl_hw);
+          br_cl_ty = shapes::clamp(br_bcy, br_bl_y, br_bl_y + br_bl_hh);
+          br_t_dx = br_bcx - br_cl_tx;
+          br_t_dy = br_bcy - br_cl_ty;
+          if br_t_dx * br_t_dx + br_t_dy * br_t_dy < BALL_RADIUS * BALL_RADIUS {
+            br_ball_dy[br_bli] = 0.0 - abs(br_ball_dy[br_bli]);
+            br_bl_vy += BALLOON_BOUNCE_DV;
+            br_dir_sign = 1.0; if br_ball_dx[br_bli] < 0.0 { br_dir_sign = 0.0 - 1.0; }
+            br_bl_vx += br_dir_sign * BALLOON_BOUNCE_DV * 0.5;
+            br_ball_sq_t[br_bli] = BALL_SQUASH_DURATION;
+            br_ball_sq_axis[br_bli] = 0;
+            continue;
+          }
+          // Bottom half.
+          br_cl_bx = shapes::clamp(br_bcx, br_bl_x, br_bl_x + br_bl_hw);
+          br_cl_by = shapes::clamp(br_bcy, br_bl_y + br_bl_hh, br_bl_y + BALLOON_H);
+          br_b_dx = br_bcx - br_cl_bx;
+          br_b_dy = br_bcy - br_cl_by;
+          if br_b_dx * br_b_dx + br_b_dy * br_b_dy < BALL_RADIUS * BALL_RADIUS {
+            br_ball_dy[br_bli] = abs(br_ball_dy[br_bli]);
+            br_bl_vy -= BALLOON_BOUNCE_DV;
+            br_dir_sign2 = 1.0; if br_ball_dx[br_bli] < 0.0 { br_dir_sign2 = 0.0 - 1.0; }
+            br_bl_vx += br_dir_sign2 * BALLOON_BOUNCE_DV * 0.5;
+            br_ball_sq_t[br_bli] = BALL_SQUASH_DURATION;
+            br_ball_sq_axis[br_bli] = 0;
+          }
+        }
+
+        // Brick-collision: balloon explodes as soon as its bounding
+        // rect overlaps any live brick.  Destroy a 3-cell cluster
+        // centred on that brick, bump score, flash, and shake.
+        if br_bl_y < BRICK_TOP + (br_rows as float) * (BRICK_H + BRICK_PAD) {
+          br_bl_popped = false;
+          for br_br_r in 0..br_rows {
+            if br_bl_popped { break; }
+            for br_br_c in 0..BRICK_COLS {
+              br_br_i = br_br_r * BRICK_COLS + br_br_c;
+              if br_bricks[br_br_i] == 0 { continue; }
+              if shapes::aabb_overlap(
+                   br_bl_x, br_bl_y, BALLOON_W, BALLOON_H,
+                   bk_x(br_br_c), bk_y(br_br_r), BRICK_W, BRICK_H) {
+                // Destroy 3x3 cluster centred on (br_br_r, br_br_c).
+                for br_er in br_br_r - 1..br_br_r + 2 {
+                  for br_ec in br_br_c - 1..br_br_c + 2 {
+                    if br_er >= 0 && br_er < br_rows && br_ec >= 0 && br_ec < BRICK_COLS {
+                      br_ei = br_er * BRICK_COLS + br_ec;
+                      if br_bricks[br_ei] == 1 {
+                        br_bricks[br_ei] = 0;
+                        br_alive -= 1;
+                        br_score += 1;
+                      }
+                    }
+                  }
                 }
+                br_flash_timer = FLASH_DURATION;
+                br_flash_r = 1.0; br_flash_g = 1.0; br_flash_b = 0.3;
+                // BK.4: screen shake on balloon pop.
+                br_shake_t   = 0.3;
+                br_shake_d   = 0.3;
+                br_shake_mag = 4.0;
+                br_bl_on = false;
+                br_bl_popped = true;
+                break;
               }
             }
           }
-          br_flash_timer = FLASH_DURATION;
-          br_flash_r = 1.0; br_flash_g = 1.0; br_flash_b = 0.3;
         }
+
+        // Above the brick field without popping — balloon floats off.
+        if br_bl_y + BALLOON_H < 0.0 { br_bl_on = false; }
       }
 
       // ── Level progression ────────────────────────────────────
@@ -1183,21 +1273,20 @@ fn main() {
       }
     }
 
-    // Balloon countdown outline
+    // Rising balloon — the red-balloon pickup sprite plus a small
+    // orange flame drawn on top as an "about to pop" hint.
     if br_bl_on {
-      br_bfl = ((br_now / 200000) as integer) % 2;
-      if br_bfl == 0 {
-        for br_fr in br_bl_row - 1..br_bl_row + 2 {
-          for br_fc in br_bl_col - 1..br_bl_col + 2 {
-            if br_fr >= 0 && br_fr < br_rows && br_fc >= 0 && br_fc < BRICK_COLS {
-              graphics::draw_rect_at(br_painter,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) - 2.0, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
-              graphics::draw_rect_at(br_painter,
-                bk_x(br_fc) - 2.0, bk_y(br_fr) + BRICK_H, BRICK_W + 4.0, 2.0, 1.0, 1.0, 0.0, 1.0);
-            }
-          }
-        }
-      }
+      graphics::draw_sprite_at(br_sheet, br_painter,
+        br_bl_x, br_bl_y, BALLOON_W, BALLOON_H, S_PK_BALLOON);
+      // Flame on top of the balloon (roughly over the knot/fuse).
+      br_fl_x = br_bl_x + BALLOON_W / 2.0 - 3.0;
+      br_fl_y = br_bl_y - 4.0;
+      graphics::draw_rect_at(br_painter, br_fl_x - 1.0, br_fl_y - 1.0, 8.0, 8.0,
+        0.08, 0.08, 0.10, 1.0);
+      graphics::draw_rect_at(br_painter, br_fl_x,       br_fl_y,       6.0, 6.0,
+        1.0, 0.55, 0.0, 1.0);
+      graphics::draw_rect_at(br_painter, br_fl_x + 1.0, br_fl_y - 2.0, 4.0, 3.0,
+        1.0, 0.85, 0.1, 1.0);
     }
 
     // Pickups — large sprite icons, no block background
