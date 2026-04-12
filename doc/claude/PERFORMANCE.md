@@ -1010,15 +1010,11 @@ Add `PeepholeCtx` to `src/compile.rs` that:
 
 ### Known issue: default library corruption
 
-Running the peephole on default library functions causes `issue_84` tests
-(recursive merge sort) to fail with "Unknown record" errors.  Root cause:
-the default library uses patterns where the VarInt operands interact with
-store-relative addressing in ways the simple b-4 adjustment doesn't cover
-(possibly involving RefVar parameters or OpCreateStack pushes between the
-matched instructions).
-
-**Mitigation:** skip default library functions.  They're already fast
-(hand-optimised `#rust` templates).  Only user functions benefit from
+Default-library functions (`default/*.loft`) use VarInt operand patterns
+that interact with store-relative addressing in ways the simple `b-4`
+adjustment doesn't cover, producing "Unknown record" errors on merge-sort
+tests.  **Mitigation:** skip default library functions — they're already
+fast (hand-optimised `#rust` templates); only user code benefits from
 superinstructions.
 
 ### Adjustments per pattern
@@ -1130,22 +1126,13 @@ and `text_return()` in `control.rs`.
 
 ---
 
-## Current efficiency assessment
+## Current efficiency
 
-The design is already quite efficient:
-
-1. **Arguments**: Zero-copy Str references — best possible.
-2. **Work texts**: Allocated once per function, reused across
-   statements.  `.clear()` preserves capacity.
-3. **Destination passing**: Text-returning functions avoid
-   intermediate buffers entirely.
-4. **Reassignment**: `.clear()` + append reuses the heap buffer.
-5. **String::new()**: Zero-cost until first content — no
-   speculative allocation.
-
-The remaining overhead is **one heap allocation per mutable text
-variable** on first content assignment.  This is inherent to the
-owned-buffer design.
+Zero-copy Str references for arguments, destination-passing for
+text-returning functions, and `.clear()` + reappend reuse of heap
+buffers across reassignments.  The remaining overhead is one heap
+allocation per mutable text variable on first content write —
+inherent to the owned-buffer design.
 
 ---
 
