@@ -855,38 +855,42 @@ fn p128_constant_with_type_annotation_parses() {
 // diagnostic naming the conflicting definition's location.
 #[test]
 fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
-    code!("enum E { Foo, Bar }\nfn test() {}").error(
+    let s = loft::platform::sep_str();
+    code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default/01_code.loft:383:24 — pick a different name \
-         at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9",
-    );
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
+    ));
 }
 
 #[test]
 fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
-    code!("struct E { n: integer }\nfn test() {}").error(
+    let s = loft::platform::sep_str();
+    code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default/01_code.loft:383:24 — pick a different name \
-         at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11",
-    );
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
+    ));
 }
 
 #[test]
 fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
-    code!("type E = integer;\nfn test() {}").error(
+    let s = loft::platform::sep_str();
+    code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default/01_code.loft:383:24 — pick a different name \
-         at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9",
-    );
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
+    ));
 }
 
 #[test]
 fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
-    code!("E = 42;\nfn test() {}").error(
+    let s = loft::platform::sep_str();
+    code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default/01_code.loft:383:24 — pick a different name \
-         at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8",
-    );
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
+    ));
 }
 
 // ── P85c: file-scope-only declarations rejected with a clean diagnostic ─────
