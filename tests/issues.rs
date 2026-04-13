@@ -4390,3 +4390,80 @@ fn run_c() -> integer {
     )
     .error("Expect token ; at inc30_typo_comma_without_colon_is_rejected:5:22");
 }
+
+// ── INC#31: open-ended range patterns in match arms ────────────────────
+//
+// The parser previously accepted `10..` (open-end) and `..10`
+// (open-start) in match arms.  Under the interpreter these
+// silently never matched (the absent endpoint encoded as null);
+// under the native compiler they crashed rustc with an E0308
+// `()` vs i32 type error.  Either failure mode is worse than
+// "unsupported syntax".
+//
+// The fix emits a useful compile-time diagnostic pointing at
+// the two-sided forms or a guard clause.  These tests lock
+// three shapes:
+//   - two-sided exclusive `lo..hi`  — works
+//   - two-sided inclusive `lo..=hi` — works
+//   - open-end `lo..` and open-start `..hi` — rejected
+#[test]
+fn inc31_two_sided_exclusive_range_matches() {
+    code!(
+        "fn bucket_a(n_a: integer) -> text {
+    match n_a {
+        10..20 => \"teens\",
+        _      => \"other\"
+    }
+}"
+    )
+    .expr("bucket_a(15)")
+    .result(Value::str("teens"));
+}
+
+#[test]
+fn inc31_two_sided_inclusive_range_matches() {
+    code!(
+        "fn bucket_b(n_b: integer) -> text {
+    match n_b {
+        10..=20 => \"teens\",
+        _       => \"other\"
+    }
+}"
+    )
+    .expr("bucket_b(20)")
+    .result(Value::str("teens"));
+}
+
+#[test]
+fn inc31_open_end_range_is_rejected() {
+    code!(
+        "fn bucket_c(n_c: integer) -> text {
+    match n_c {
+        10.. => \"ten-plus\",
+        _    => \"other\"
+    }
+}"
+    )
+    .error(
+        "open-ended range pattern `lo..` is not supported in match arms — \
+write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+or use a guard like `n if n >= lo` at inc31_open_end_range_is_rejected:3:16",
+    );
+}
+
+#[test]
+fn inc31_open_start_range_is_rejected() {
+    code!(
+        "fn bucket_d(n_d: integer) -> text {
+    match n_d {
+        ..10 => \"below-ten\",
+        _    => \"other\"
+    }
+}"
+    )
+    .error(
+        "open-ended range pattern `..hi` is not supported in match arms — \
+write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+or use a guard like `n if n < hi` at inc31_open_start_range_is_rejected:3:11",
+    );
+}

@@ -1261,6 +1261,26 @@ impl Parser {
     /// Parse a match pattern literal (integer, float, text, boolean) and optionally
     /// a range suffix `..` or `..=`. Returns the pattern Value and its type.
     fn parse_match_pattern(&mut self, subject_type: &Type, subject_var: u16) -> (Value, Type) {
+        // INC#31: reject open-start ranges (`..hi =>`) in match arms with a
+        // useful diagnostic.  The range-pattern codegen further down assumes
+        // both `lo` and `hi` are real values — an absent `lo` would be
+        // silently encoded as Value::Null and either never match
+        // (interpreter) or crash native codegen (E0308: `()` vs i32).
+        if self.lexer.peek_token("..") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "open-ended range pattern `..hi` is not supported in match arms — \
+                 write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+                 or use a guard like `n if n < hi`"
+            );
+            // Consume the `..` so the rest of the arm parses cleanly.
+            self.lexer.token("..");
+            self.lexer.has_token("=");
+            let mut hi = Value::Null;
+            self.expression(&mut hi);
+            return (Value::Boolean(false), Type::Boolean);
+        }
         let mut lit = Value::Null;
         let negate = self.lexer.has_token("-");
         let lit_type = if let Some(n) = self.lexer.has_integer() {
@@ -1295,6 +1315,21 @@ impl Parser {
         // check for range pattern `lo..hi` or `lo..=hi`.
         if self.lexer.has_token("..") {
             let inclusive = self.lexer.has_token("=");
+            // INC#31: reject open-end range `lo..` in match arms — same
+            // silent-never-matches / native-codegen-crash trap as open-start.
+            if self.lexer.peek_token("=>")
+                || self.lexer.peek_token("|")
+                || self.lexer.peek_token("if")
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "open-ended range pattern `lo..` is not supported in match arms — \
+                     write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+                     or use a guard like `n if n >= lo`"
+                );
+                return (Value::Boolean(false), Type::Boolean);
+            }
             let mut hi = Value::Null;
             self.expression(&mut hi);
             let mut lo_cond = Value::Null;
