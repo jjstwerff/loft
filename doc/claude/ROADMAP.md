@@ -1,6 +1,7 @@
-
-// Copyright (c) 2026 Jurjen Stellingwerff
-// SPDX-License-Identifier: LGPL-3.0-or-later
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
 
 # Roadmap
 
@@ -94,13 +95,12 @@ Design: `../moros/doc/claude/`
 
 ### Must-fix blockers (share the Moros editor's code paths)
 
-Concrete step plans for both entries live in [BITING_PLAN.md](BITING_PLAN.md).
+Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
 
-
-| ID    | Title                                                  | E  | Source         |
-|-------|--------------------------------------------------------|----|----------------|
-| P137  | `loft --html` Brick Buster runtime `unreachable` panic — browser WASM wedges on first `loft_start` call. Blocks every WASM-shipped loft program, Moros editor included. **Step plan:** [BITING_PLAN.md § P137](BITING_PLAN.md) — import-stub bisect harness → audit `output_native_direct_call` marshalling → add `make wasm-repro` smoke | M | PROBLEMS.md #137 |
-| P135  | Canvas Y-flip is a three-way compensation — off-by-ones 2×N sprite atlases. **Decision:** normalise to screen-top-left `(0,0)` throughout, remove upload-side row reversal, re-bake the one atlas (Brick Buster) that depended on the previous convention. **Step plan:** [BITING_PLAN.md § C58](BITING_PLAN.md) — 7 commits, starts with 2×2 atlas snap test | S | PROBLEMS.md #135, CAVEATS.md C58, BITING_PLAN.md |
+| ID    | Title                                                           | E  | Source                       |
+|-------|-----------------------------------------------------------------|----|------------------------------|
+| P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, BITING_PLAN.md |
+| P135  | Canvas Y-flip three-way compensation — off-by-ones on 2×N sprite atlases; normalise to screen-top-left `(0,0)` | S  | PROBLEMS.md #135, CAVEATS.md C58, BITING_PLAN.md |
 
 ### Sprint A–C: Data model + editor + loft backend
 
@@ -169,11 +169,12 @@ highlighting, decent error messages, and a REPL for experimentation.
 Each of these is a commitment, not a maybe.  Deferring any of them
 makes the "fully working language" label dishonest.
 
-| ID     | Title                                                  | E  | Source |
-|--------|--------------------------------------------------------|----|--------|
-| C54    | **Switch `integer` from i32 to i64.** Eliminates the `i32::MIN` null-sentinel trap entirely. `long` keeps working as a historical alias. Breaking change, pre-1.0 window. **Step plan:** [BITING_PLAN.md § C54](BITING_PLAN.md) — 9 commits; bump `size(Type::Integer)`, `.loftc` cache version, add `loft --migrate-i64` for persisted databases, sweep ~30 layout tests | L | CAVEATS.md, BITING_PLAN.md |
-| ~~C60~~ | ~~Hash iteration in ascending key order~~ | MH | **Done** — shipped on `quality` branch: 3 parser edits + native codegen + `#remove` diagnostic + docs. Tests: `tests/issues.rs::c60_hash_iter_*` (6 acceptance tests green) |
-| P54    | **Typed `JsonBody` newtype** + `.is_object/array/null`. Full `JsonValue` enum stays 1.1+ until dynamic-shape use case lands. **Step plan:** [BITING_PLAN.md § P54](BITING_PLAN.md) — 6 commits, 4 `#[ignore]`'d tests first, keeps `for body in json_items(raw) { X.parse(body) }` chain working | M | PROBLEMS.md #54, BITING_PLAN.md |
+Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
+
+| ID   | Title                                                                     | E  | Source                      |
+|------|---------------------------------------------------------------------------|----|-----------------------------|
+| C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, BITING_PLAN.md  |
+| P54  | Typed `JsonBody` newtype + `.is_object` / `.is_array` / `.is_null`; full `JsonValue` enum deferred to 1.1+ | M  | PROBLEMS.md #54, BITING_PLAN.md |
 
 **Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
 - ~~C7/P22~~ — `spacial<T>` diagnostic references 1.1+ timeline
