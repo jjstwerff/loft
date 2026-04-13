@@ -28,7 +28,6 @@ Decisions to *not* fix something live in
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Designed, not landed** — see § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **Designed, not landed** — see § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | Medium | **Designed, not landed** — see § Q4 below |
-| INC#12 | Index range-query second-key boundary depends on undeclared sort direction | Medium | Doc-only fix pending |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
 | B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — see § Compiler blockers |
 | B3 | Struct-enum tail-expression return crashes | Medium | Compiler — see § Compiler blockers |

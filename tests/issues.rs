@@ -4292,3 +4292,53 @@ fn run() -> text { describe(Red, false) }"
     .expr("run()")
     .result(Value::str("dim red"));
 }
+
+// ── INC#12: sort direction in the struct drives iteration direction ─────
+//
+// A `-` prefix on a key field in `sorted<T[-key]>` or
+// `index<T[-key]>` flips the iteration direction of every query on
+// that collection.  Reading the query site alone does not reveal
+// the direction — the user must check the struct declaration,
+// which may be far away.  This is the core of INC#12.
+//
+// These tests lock the direction-driven behaviour on two
+// otherwise-identical sorted collections so a future uniformity
+// refactor cannot silently flip either path without updating
+// LOFT.md's Gotcha callout.
+#[test]
+fn inc12_sorted_ascending_iterates_forward() {
+    code!(
+        "struct ElmA { key: text, value: integer }
+struct DbA { map: sorted<ElmA[key]> }
+fn run_asc() -> text {
+    db_a = DbA { map: [] };
+    db_a.map += [ElmA { key: \"Alpha\", value: 1 }];
+    db_a.map += [ElmA { key: \"Mid\",   value: 2 }];
+    db_a.map += [ElmA { key: \"Omega\", value: 3 }];
+    out_a = \"\";
+    for v in db_a.map { out_a += \"{v.key},\"; }
+    out_a
+}"
+    )
+    .expr("run_asc()")
+    .result(Value::str("Alpha,Mid,Omega,"));
+}
+
+#[test]
+fn inc12_sorted_descending_iterates_backward() {
+    code!(
+        "struct ElmB { key: text, value: integer }
+struct DbB { map: sorted<ElmB[-key]> }
+fn run_desc() -> text {
+    db_b = DbB { map: [] };
+    db_b.map += [ElmB { key: \"Alpha\", value: 1 }];
+    db_b.map += [ElmB { key: \"Mid\",   value: 2 }];
+    db_b.map += [ElmB { key: \"Omega\", value: 3 }];
+    out_b = \"\";
+    for v in db_b.map { out_b += \"{v.key},\"; }
+    out_b
+}"
+    )
+    .expr("run_desc()")
+    .result(Value::str("Omega,Mid,Alpha,"));
+}

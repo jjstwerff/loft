@@ -17,7 +17,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
-- [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
@@ -93,26 +92,6 @@ type) would be cleaner.
 
 ---
 
-## 12. Index Range-Query Second-Key Semantics Depend on Sort Direction
-
-**Severity: Medium**
-
-```loft
-struct Elm { nr: integer, key: text, value: integer }
-struct Db { map: index<Elm[nr, -key]> }   // key is DESCENDING
-
-for v in db.map[83..92, "Two"] { }
-// Means: nr ∈ [83, 92) AND key from "Two" going DOWNWARD
-// because the key field is declared descending
-```
-
-The second position in a range query is not a range — it is a boundary in the sort
-direction of that field. If the field is ascending, `"Two"` means "from Two upward"; if
-descending it means "from Two downward". The sort direction is declared at the struct
-definition, which may be far from the query. This makes range queries hard to reason about
-without constantly checking the index declaration.
-
----
 
 ## 17. Implicit Type Coercion Rules Are Not Uniform
 
@@ -291,7 +270,6 @@ _All fixed — see CHANGELOG.md._
 ### Medium (surprising but safe)
 | # | Issue |
 |---|---|
-| 12 | Index range-query second-key boundary depends on undeclared sort direction |
 | 27 | `break` keyword and `x#break` attribute are two mechanisms for the same action; no `x#continue` |
 
 ### Low (cosmetic or minor)
@@ -316,6 +294,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | # | Issue | Doc + Tests |
 |---|---|---|
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
+| 12 | Sort direction declared on struct drives iteration direction of every query | LOFT.md § Collection types (Gotcha block); `inc12_sorted_ascending_*` / `inc12_sorted_descending_*` regression tests |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 

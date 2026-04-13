@@ -139,6 +139,18 @@ index<Elm[nr, -key]>        // two keys: nr ascending, key descending
 hash<Count[c, t]>           // compound hash key
 ```
 
+**Gotcha — iteration direction is declared on the struct, not on the query.**
+A `-` prefix on a key field in `sorted<T[-key]>` or `index<T[-key]>` flips
+the iteration direction of *every* query against that collection — plain
+`for v in db.map`, range queries, and partial-key lookups all walk
+descending instead of ascending.  Reading the query site alone never
+reveals the direction: the `-` lives in the struct declaration, possibly
+hundreds of lines away.  When reviewing a query, cross-check the index
+declaration before reasoning about what "starts at X" means.
+Regression guards in `tests/issues.rs` (`inc12_sorted_ascending_iterates_forward`,
+`inc12_sorted_descending_iterates_backward`) lock the two directions on
+otherwise-identical structs.
+
 ### Enum types
 
 Simple enums (value types):
