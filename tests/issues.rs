@@ -4467,3 +4467,90 @@ write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
 or use a guard like `n if n < hi` at inc31_open_start_range_is_rejected:3:11",
     );
 }
+
+// ── INC#28: slice grammar + supported forms ────────────────────────────
+//
+// The grammar summary previously listed `v[2..-1]` as "negative
+// indices count from end", but that claim was aspirational —
+// the form produces an empty iterator (the range `2..-1` is
+// literally empty).  `v[start..=end]` (inclusive) also worked
+// in the parser but was undocumented.
+//
+// These tests lock the actually-supported shapes so a future
+// implementation of negative indexing must update both the doc
+// claim and these tests together, rather than silently flipping
+// the semantics.
+#[test]
+fn inc28_slice_exclusive_range() {
+    code!(
+        "fn run_se() -> integer {
+    v_se = [10, 20, 30, 40, 50];
+    s_se = 0;
+    for x_se in v_se[1..3] { s_se += x_se; }
+    s_se
+}"
+    )
+    .expr("run_se()")
+    .result(Value::Int(50)); // 20 + 30
+}
+
+#[test]
+fn inc28_slice_inclusive_range() {
+    code!(
+        "fn run_si() -> integer {
+    v_si = [10, 20, 30, 40, 50];
+    s_si = 0;
+    for x_si in v_si[1..=3] { s_si += x_si; }
+    s_si
+}"
+    )
+    .expr("run_si()")
+    .result(Value::Int(90)); // 20 + 30 + 40
+}
+
+#[test]
+fn inc28_slice_open_end() {
+    code!(
+        "fn run_oe() -> integer {
+    v_oe = [10, 20, 30, 40, 50];
+    s_oe = 0;
+    for x_oe in v_oe[2..] { s_oe += x_oe; }
+    s_oe
+}"
+    )
+    .expr("run_oe()")
+    .result(Value::Int(120)); // 30 + 40 + 50
+}
+
+#[test]
+fn inc28_slice_open_start() {
+    code!(
+        "fn run_os() -> integer {
+    v_os = [10, 20, 30, 40, 50];
+    s_os = 0;
+    for x_os in v_os[..3] { s_os += x_os; }
+    s_os
+}"
+    )
+    .expr("run_os()")
+    .result(Value::Int(60)); // 10 + 20 + 30
+}
+
+// INC#28: the doc claim that negative indices count from the end
+// is aspirational.  Today `v[2..-1]` is the range `2..-1`, which
+// is empty.  Locks the current behaviour so a future implementor
+// of negative indexing can't silently change what programs do
+// when they hit this form.
+#[test]
+fn inc28_negative_index_in_slice_yields_empty() {
+    code!(
+        "fn run_neg() -> integer {
+    v_neg = [10, 20, 30, 40, 50];
+    count_neg = 0;
+    for x_neg in v_neg[2..-1] { count_neg += x_neg - x_neg + 1; }
+    count_neg
+}"
+    )
+    .expr("run_neg()")
+    .result(Value::Int(0));
+}

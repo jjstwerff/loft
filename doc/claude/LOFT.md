@@ -771,14 +771,27 @@ v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
 v[i]                        // index (null if out of bounds)
-v[2..-1]                    // slice (negative indices count from end)
 v[start..end]               // slice range (end exclusive)
+v[start..=end]              // slice range (end inclusive)
 v[start..]                  // open-ended slice to end
 v[..end]                    // open-start slice from 0 to end (exclusive)
 [elem; 16]                  // repeat initializer: 16 copies of elem
 [for n in 1..7 { n * 2 }]  // vector comprehension (builds [2, 4, 6, 8, 10, 12])
 [for n in 1..10 if n % 2 == 0 { n }]  // comprehension with filter
 ```
+
+**Slices return iterators, not vectors.**  `v[lo..hi]` can be used in
+`for x in v[lo..hi] { … }` and wherever an iterator is accepted, but it
+cannot be assigned to a `vector<T>` local or passed where a `vector<T>`
+argument is expected.  To materialise a slice into a fresh vector, pair
+it with a comprehension: `sub = [for x in v[lo..hi] { x }]`.
+
+**Negative indices are not supported.**  `v[2..-1]` yields an empty
+iterator today (the range `2..-1` is empty), not "all but the last
+element."  To get "everything except the last", write
+`v[0..len(v) - 1]`.  Early drafts of this doc claimed negative indices
+counted from the end; the claim was aspirational and the form was
+never implemented.
 
 **Empty vectors** require a type annotation so the compiler knows the element type.
 Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.

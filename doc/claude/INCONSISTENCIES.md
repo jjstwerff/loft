@@ -20,7 +20,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
-- [28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax](#28-vector-slice-syntax-has-no-grammar-entry-and-diverges-from-range-syntax)
 - [Summary by Severity](#summary-by-severity)
 
 ---
@@ -190,27 +189,6 @@ are genuine attribute reads.
 
 ---
 
-## 28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax
-
-**Severity: Low**
-
-```loft
-v[start..end]   // slice — end exclusive (matches for-loop range)
-v[start..]      // open end  (also valid in for-loop)
-v[..end]        // open start — NO for-loop counterpart
-v[2..-1]        // negative index — NO for-loop counterpart
-v[1..=3]        // inclusive end — valid in for-loop and match; undocumented for slices
-```
-
-The grammar summary defines `range_expr` for `for` loops and `match` arms but does not
-include the slice forms `[..end]` and `[n..-1]`. Users cannot tell from the grammar
-whether `v[1..=3]` (inclusive slice) is supported.
-
-**Advice:** Add a `slice_expr` production to the grammar summary that enumerates all
-valid slice forms and documents which are shared with `range_expr`. Clarify whether
-`..=` is supported in slices.
-
----
 
 
 
@@ -232,7 +210,6 @@ _All fixed — see CHANGELOG.md._
 | 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
-| 28 | Vector slice forms `[..end]` and `[n..-1]` absent from grammar; `..=` undocumented for slices |
 
 ### Resolved as design point (documented + regression-guarded)
 
@@ -248,6 +225,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 | 30 | `{...}` double-duty (struct init vs. block) — claimed silent-typo case is not reproducible on current loft; the `{ x, y }` typo parses as a struct-init attempt and fails on the missing colon | `inc30_struct_init_with_colons_works`, `inc30_block_expression_returns_last_value`, `inc30_typo_comma_without_colon_is_rejected` |
+| 28 | Vector slice grammar — inclusive form `v[start..=end]` works but was undocumented; `v[2..-1]` was documented as "negative-index from end" but the form has always produced an empty iterator, never "all but the last element".  LOFT.md § Vectors now documents the four supported forms + an explicit note that negative indexing isn't implemented | `inc28_slice_exclusive_range`, `inc28_slice_inclusive_range`, `inc28_slice_open_end`, `inc28_slice_open_start`, `inc28_negative_index_in_slice_yields_empty` |
 | 31 | Open-ended range patterns (`10..`, `..10`) in match arms were silently broken (interpreter: never matches; native: rustc crash).  Parser now emits a compile-time diagnostic pointing at the two-sided form or a guard idiom | `inc31_two_sided_exclusive_range_matches`, `inc31_two_sided_inclusive_range_matches`, `inc31_open_end_range_is_rejected`, `inc31_open_start_range_is_rejected` |
 
 ---
