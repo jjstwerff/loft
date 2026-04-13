@@ -1145,6 +1145,141 @@ fn run() -> integer { add3(1) }"
     .result(loft::data::Value::Int(22));
 }
 
+// ── C60 Step 3+ integration tests (ignored until parser acceptance lands) ───
+// These pin the end-to-end behaviour for hash iteration in loft source.
+// The Rust primitives landed in Step 1a + 2; the parser + stdlib wiring
+// that routes `for e in h { … }` through `hash::records_sorted` is the
+// next step.  Tests are marked `#[ignore]` per DEVELOPMENT.md so CI stays
+// green until the feature ships.
+
+/// C60 Step 4 (MVP acceptance test): `for e in h { … }` parses and
+/// iterates a hash in ascending key order under the interpreter.
+#[test]
+#[ignore = "C60 Step 3: parser needs to accept `for e in hash` and desugar through hash_sorted"]
+fn c60_hash_iter_single_field_asc() {
+    code!(
+        "struct Entry { name: text, count: integer }
+struct Bag { data: hash<Entry[name]> }
+fn run() -> text {
+    b = Bag { data: [
+        Entry{name:\"zebra\",count:1},
+        Entry{name:\"apple\",count:5},
+        Entry{name:\"mango\",count:3},
+    ] };
+    out = \"\";
+    for e in b.data { out += e.name; out += \",\"; }
+    out
+}"
+    )
+    .expr("run()")
+    .result(loft::data::Value::str("apple,mango,zebra,"));
+}
+
+/// C60 Step 5: `#index` / `#count` / `#first` work "for free" through
+/// the vector-iteration path Step 3 desugars into.
+#[test]
+#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
+fn c60_hash_iter_loop_attributes() {
+    code!(
+        "struct E { k: text, v: integer }
+struct B { data: hash<E[k]> }
+fn run() -> integer {
+    b = B { data: [E{k:\"c\",v:3}, E{k:\"a\",v:1}, E{k:\"b\",v:2}] };
+    total = 0;
+    for e in b.data { total += e.v * (e#index + 1); }
+    total
+}"
+    )
+    .expr("run()")
+    // a=1 at idx=0, b=2 at idx=1, c=3 at idx=2
+    // sum = 1*1 + 2*2 + 3*3 = 14
+    .result(loft::data::Value::Int(14));
+}
+
+/// C60 Step 6: multi-field key — lexicographic order.
+#[test]
+#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
+fn c60_hash_iter_multi_field_lex() {
+    code!(
+        "struct R { region: text, score: integer }
+struct B { data: hash<R[region, score]> }
+fn run() -> text {
+    b = B { data: [
+        R{region:\"east\",score:10},
+        R{region:\"west\",score:30},
+        R{region:\"east\",score:50},
+        R{region:\"west\",score:20},
+    ] };
+    out = \"\";
+    for r in b.data { out += \"{r.region}:{r.score},\"; }
+    out
+}"
+    )
+    .expr("run()")
+    .result(loft::data::Value::str("east:10,east:50,west:20,west:30,"));
+}
+
+/// C60 Step 8: filter clause on hash iteration works through the
+/// vector-iteration path.
+#[test]
+#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
+fn c60_hash_iter_filter_clause() {
+    code!(
+        "struct E { k: text, v: integer }
+struct B { data: hash<E[k]> }
+fn run() -> integer {
+    b = B { data: [E{k:\"a\",v:1}, E{k:\"b\",v:20}, E{k:\"c\",v:3}, E{k:\"d\",v:40}] };
+    total = 0;
+    for e in b.data if e.v > 10 { total += e.v; }
+    total
+}"
+    )
+    .expr("run()")
+    // Only v=20 and v=40 pass the filter.
+    .result(loft::data::Value::Int(60));
+}
+
+/// C60 Step 4: empty hash iterates zero times.
+#[test]
+#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
+fn c60_hash_iter_empty() {
+    code!(
+        "struct E { k: text, v: integer }
+struct B { data: hash<E[k]> }
+fn run() -> integer {
+    b = B { data: [] };
+    count = 0;
+    for _ in b.data { count += 1; }
+    count
+}"
+    )
+    .expr("run()")
+    .result(loft::data::Value::Int(0));
+}
+
+/// C60 Step 9: `#remove` must be rejected on hash iteration — the
+/// iteration walks a pre-sorted snapshot, and `#remove` would not
+/// actually remove from the underlying hash.  Users should
+/// `h[key] = null` to remove.
+#[test]
+#[ignore = "C60 Step 9: #remove-on-hash diagnostic not yet wired"]
+fn c60_hash_iter_remove_rejected() {
+    // Parse error expected; format matches other parse-error tests.
+    code!(
+        "struct E { k: text, v: integer }
+struct B { data: hash<E[k]> }
+fn test() {
+    b = B { data: [E{k:\"a\",v:1}] };
+    for e in b.data { e#remove; }
+}"
+    )
+    .error(
+        "#remove is not supported on hash iteration — the iterated \
+         vector is a sorted snapshot; use `b.data[key] = null` to \
+         remove from the hash at c60_hash_iter_remove_rejected:5:25",
+    );
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
