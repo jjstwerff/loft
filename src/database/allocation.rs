@@ -274,6 +274,50 @@ impl Stores {
         s
     }
 
+    /// C60 Step 3a: build a fresh `vector<reference<T>>` containing the
+    /// hash's records sorted by key (ascending, lexicographic for
+    /// multi-field).  Called from `n_hash_sorted` (src/native.rs) and
+    /// from future parser-desugared hash-iteration paths.
+    ///
+    /// The vector layout matches `n_parallel_for_int`'s output
+    /// (src/native.rs:494): header record (size 1 word) at offset 4
+    /// points to a data record whose offset 4 holds the element count
+    /// and whose offset 8 starts the DbRef array at 12-byte stride.
+    /// Each element is `DbRef{store_nr, rec, pos:8}`, matching the
+    /// convention `hash::validate` uses internally.
+    #[allow(dead_code)]
+    pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
+        let n = recs.len();
+        let result_db = self.null();
+        let vec_words = ((n as u32) * 12 + 8).div_ceil(8);
+        let vec_words = vec_words.max(1);
+        let vec_cr = self.claim(&result_db, vec_words);
+        let vec_rec = vec_cr.rec;
+        let header_cr = self.claim(&result_db, 1);
+        let header_rec = header_cr.rec;
+        let elem_store = hash_ref.store_nr;
+        {
+            let store = self.store_mut(&result_db);
+            store.set_int(vec_rec, 4, n as i32);
+            for (i, &rec_nr) in recs.iter().enumerate() {
+                let base = 8 + (i as u32) * 12;
+                *store.addr_mut::<DbRef>(vec_rec, base) = DbRef {
+                    store_nr: elem_store,
+                    rec: rec_nr,
+                    pos: 8,
+                };
+            }
+            store.set_int(header_rec, 4, vec_rec as i32);
+        }
+        DbRef {
+            store_nr: result_db.store_nr,
+            rec: header_rec,
+            pos: 4,
+        }
+    }
+
     pub fn store_mut(&mut self, r: &DbRef) -> &mut Store {
         #[cfg(debug_assertions)]
         if self.allocations[r.store_nr as usize].free {

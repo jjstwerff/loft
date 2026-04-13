@@ -76,6 +76,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_path_sep", n_path_sep),
     ("i_parse_error_push", i_parse_error_push),
     ("i_parse_errors", i_parse_errors),
+    ("n_hash_sorted", n_hash_sorted),
     ("n_sha256", n_sha256),
     ("n_hmac_sha256", n_hmac_sha256),
     ("n_base64_encode", n_base64_encode),
@@ -1178,6 +1179,28 @@ fn hex_encode(data: &[u8]) -> String {
         let _ = write!(out, "{b:02x}");
     }
     out
+}
+
+/// C60 Step 3a-part2: iterate a hash in ascending key order.
+/// Wraps `Stores::build_hash_sorted_vec` (src/database/allocation.rs).
+///
+/// Call shape in loft:
+///
+/// ```loft
+/// pub fn hash_sorted(h: reference, tp: integer) -> reference;
+/// ```
+///
+/// Returns a fresh `vector<reference<T>>` whose elements are refs
+/// into the hash's original store, one per live record, sorted
+/// ascending by the hash's key field(s).  Callers pass the hash's
+/// type id (`tp`) explicitly — the parser-desugared `for e in h`
+/// path emits it as a compile-time constant; direct callers must
+/// use `sizeof(hash<T[…]>)`-style type introspection to obtain it.
+fn n_hash_sorted(stores: &mut Stores, stack: &mut DbRef) {
+    let v_tp = *stores.get::<i32>(stack);
+    let v_h = *stores.get::<DbRef>(stack);
+    let result = stores.build_hash_sorted_vec(&v_h, v_tp as u16);
+    stores.put(stack, result);
 }
 
 fn n_sha256(stores: &mut Stores, stack: &mut DbRef) {
