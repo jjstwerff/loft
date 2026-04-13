@@ -3496,13 +3496,13 @@ fn run() -> integer {
 }
 
 /// Open (sharpened): the intermediate-variable pattern `n = A { … };
-/// return n` still crashes with free() / invalid pointer for certain
-/// variant payload types (float not null triggers it reliably).
-/// Direct return (`fn mk() -> JV { A { … } }`) works — see above.
-/// Workaround: avoid assigning the struct-enum to a local before
-/// returning.
+/// n` (tail expression, no `return`) crashes.  Sharpened in
+/// `p54_b3_int_via_intermediate` to narrow the bug: the
+/// tail-expression path frees the local's store while the returned
+/// value still references it.  `return n;` works — see
+/// `p54_struct_enum_explicit_return_of_local`.
 #[test]
-#[ignore = "P54: struct-enum via intermediate variable then return crashes"]
+#[ignore = "P54: struct-enum tail-expression return crashes (float not null)"]
 fn p54_b3_float_via_intermediate() {
     code!(
         "pub enum JV { A { v: float not null } }
@@ -3911,17 +3911,71 @@ fn run() -> integer {
     .result(Value::Int(4));
 }
 
-/// B3 (open): intermediate-variable pattern crashes for integer
-/// variant too — widens B3 beyond just `float not null`.  Document
-/// the single shared symptom.
+/// B3 narrowed: the bug is the TAIL-EXPRESSION path, not the
+/// intermediate variable itself.  `n = A { … }; n` (no `return`)
+/// crashes because the function's scope exit frees `n`'s store
+/// while the returned value still references it.  `return n;`
+/// works fine — see `p54_struct_enum_explicit_return_of_local`.
+/// Fix requires teaching the tail-expression-as-return codegen to
+/// suppress the free of any local whose store is being returned,
+/// or to materialize a copy.
 #[test]
-#[ignore = "P54: struct-enum intermediate-variable return crashes for all variant types"]
+#[ignore = "P54: struct-enum tail-expression return crashes (free vs ref collision)"]
 fn p54_b3_int_via_intermediate() {
     code!(
         "pub enum JV { A { v: integer } }
 fn mk() -> JV {
     n = A { v: 42 };
     n
+}
+fn run() -> integer {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// Struct-enum intermediate-variable return — WORKS with explicit
+/// `return n;` statement.  Pairs with `p54_b3_int_via_intermediate`
+/// which fails on the tail-expression form `n = A { … }; n` (no
+/// `return` keyword).  The tail-expression path has an ownership
+/// bug: the local `n` gets freed on function exit while the returned
+/// value still references the same store — explicit `return n`
+/// avoids it.  Workaround today: always write `return n;`.
+#[test]
+fn p54_struct_enum_explicit_return_of_local() {
+    code!(
+        "pub enum JV { A { v: integer } }
+fn mk() -> JV {
+    n = A { v: 42 };
+    return n;
+}
+fn run() -> integer {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// Reassignment before return — also works with explicit return.
+/// Documents that the bug is specifically the *tail-expression*
+/// path, not the assignment path.
+#[test]
+fn p54_struct_enum_reassign_explicit_return() {
+    code!(
+        "pub enum JV { A { v: integer } }
+fn mk() -> JV {
+    n = A { v: 1 };
+    n = A { v: 42 };
+    return n;
 }
 fn run() -> integer {
     x = mk();
