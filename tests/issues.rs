@@ -3732,3 +3732,46 @@ fn run() -> text {
     .expr("run()")
     .result(Value::str("idle"));
 }
+
+/// P54 — positive baseline: a plain enum (all unit variants) round-trips
+/// through a bare identifier literal.  Only the *mixed* struct-enum
+/// case is broken (B2-runtime), not plain enums.  This test guards
+/// that distinction.
+#[test]
+fn p54_plain_enum_bare_variant_works() {
+    code!(
+        "pub enum Sig { Off, Idle, On }
+fn run() -> text {
+    s = Idle;
+    match s {
+        Off => \"off\",
+        Idle => \"idle\",
+        On => \"on\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("idle"));
+}
+
+/// B2-runtime (qualified form): `Sig.Idle` as an expression in a
+/// mixed struct-enum also fails to construct a matchable record,
+/// though it at least doesn't panic — the match silently exits.
+/// Same root cause as `p54_b2_unit_variant_literal_construction`.
+#[test]
+#[ignore = "P54 B2-runtime: qualified Sig.Idle in mixed enum doesn't construct a matchable value"]
+fn p54_b2_qualified_unit_variant_mixed_enum() {
+    code!(
+        "pub enum Sig { Off, Idle, On { level: integer } }
+fn run() -> text {
+    s = Sig.Idle;
+    match s {
+        Off => \"off\",
+        Idle => \"idle\",
+        On { level } => \"on\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("idle"));
+}
