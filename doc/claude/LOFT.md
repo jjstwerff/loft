@@ -327,6 +327,37 @@ Used for explicit type casts and conversions:
 "json-text" as Program   // deserialize text as a struct
 ```
 
+### Type-conversion rules — when does loft convert automatically?
+
+Loft applies conversions in three modes: **implicit** (no annotation),
+**format-only** (implicit, but only inside `"{…}"` interpolation), and
+**explicit** (`as` required).  The mode depends on the types involved,
+not on the context — which means you can predict what a conversion will
+do by looking up the pair in this table:
+
+| From → To                          | Mode          | Notes |
+|------------------------------------|---------------|-------|
+| Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table |
+| `integer` ↔ `long`                 | Implicit      | Widens or narrows automatically; narrowing may null-trap at `i32::MIN` |
+| Integer ↔ `float` in arithmetic    | Implicit      | `3 + 1.5` is `4.5` — the integer widens to the float operand's width |
+| `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
+| `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
+| Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |
+| `character` → `integer` (codepoint)| Explicit `as` | `'a' as integer` yields 97 |
+| `character` ↔ `text`               | See § String literals | Indexing vs. slicing asymmetry; concatenation via interpolation |
+| `text` (of form `"VariantName"`) → plain enum | Explicit `as` | `"West" as Direction` — the name must match a declared variant |
+| Struct-enum variant → parent enum  | Implicit on assignment | `p: Shape = Circle { r: 1.0 }` works without `as` |
+| Struct-enum variant ← parent enum  | `match` only  | Recover the concrete variant via pattern matching; there is no direct downcast |
+| `text` → struct / vector<T>        | Explicit `as` or `.parse` | `raw as Program` or `Program.parse(raw)` |
+
+**Rule of thumb:** conversions that cannot fail (widening numeric,
+struct-enum up-cast, rendering for display) are implicit.  Conversions
+that can fail (narrowing, parsing) require `as` or `.parse` so the
+failure point is visible at the call site.  The one special case is
+"integer/float → text" — implicit only inside format strings, explicit
+elsewhere — because loft treats format interpolation as a dedicated
+rendering operation, not a general coercion.
+
 ### Parsing (JSON / loft text → struct)
 
 `Type.parse(text)` parses JSON or loft-native text into a struct record.

@@ -4631,3 +4631,94 @@ fn inc9_character_plus_is_arithmetic_not_concat() {
     .expr("run_plus()")
     .result(Value::Int(1));
 }
+
+// ── INC#17: type-conversion rules are mode-stratified, not uniform ──────
+//
+// Loft applies conversions in three modes: implicit (no
+// annotation), format-only (implicit but only inside "{…}"),
+// and explicit (`as` required).  The mode depends on the type
+// pair, not on the context.  Users unable to predict this from
+// first principles found themselves alternately typing too many
+// `as` casts or hitting compile errors on missing ones.  The
+// LOFT.md conversion table is the single reference; these tests
+// lock the six most-common shapes so a future unification
+// refactor cannot silently flip any mode.
+#[test]
+fn inc17_any_to_boolean_is_implicit() {
+    // Non-zero integer is truthy in `if` without a cast.
+    code!(
+        "fn run_bool() -> integer {
+    x_bool = 5;
+    if x_bool { 1 } else { 0 }
+}"
+    )
+    .expr("run_bool()")
+    .result(Value::Int(1));
+}
+
+#[test]
+fn inc17_integer_widens_to_float_in_arithmetic() {
+    // 3 + 1.5 produces 4.5 without an explicit cast.
+    code!(
+        "fn run_widen() -> float {
+    n_w = 3;
+    f_w = 1.5;
+    n_w + f_w
+}"
+    )
+    .expr("run_widen()")
+    .result(Value::Float(4.5));
+}
+
+#[test]
+fn inc17_float_to_integer_requires_as() {
+    // Truncates toward zero.
+    code!(
+        "fn run_trunc() -> integer {
+    pi_t = 3.14;
+    pi_t as integer
+}"
+    )
+    .expr("run_trunc()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn inc17_text_to_integer_requires_as() {
+    code!(
+        "fn run_parse() -> integer {
+    s_p = \"42\";
+    s_p as integer
+}"
+    )
+    .expr("run_parse()")
+    .result(Value::Int(42));
+}
+
+#[test]
+fn inc17_integer_to_text_is_format_only() {
+    // Interpolation converts silently; the rendered text is
+    // observable via format.  Probes the format-only path.
+    code!(
+        "fn run_fmt() -> integer {
+    m_f = 7;
+    t_f = \"n={m_f}\";
+    len(t_f)
+}"
+    )
+    .expr("run_fmt()")
+    .result(Value::Int(3)); // "n=7"
+}
+
+#[test]
+fn inc17_plain_enum_name_to_enum_requires_as() {
+    code!(
+        "enum Direction { North, South, East, West }
+fn run_enum() -> integer {
+    d_e = \"West\" as Direction;
+    d_e as integer
+}"
+    )
+    .expr("run_enum()")
+    .result(Value::Int(4)); // plain-enum integer values are 1-indexed
+}

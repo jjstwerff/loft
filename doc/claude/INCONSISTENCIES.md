@@ -16,7 +16,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
-- [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
 - [Summary by Severity](#summary-by-severity)
@@ -69,25 +68,6 @@ inconsistency is in the standard-library naming choices.
 
 
 
-## 17. Implicit Type Coercion Rules Are Not Uniform
-
-**Severity: Low**
-
-| Conversion | Form required |
-|---|---|
-| Any type → boolean (`if v`, `!v`, `assert`) | Implicit |
-| Integer ↔ float in arithmetic | Implicit widening |
-| Float → integer (truncate) | Explicit: `f as integer` |
-| Text → integer/float | Explicit: `"5" as integer` |
-| Integer → text | Implicit inside `"{v}"` only |
-| Plain-enum name → enum | Explicit: `"West" as Direction` |
-| Struct-enum variant → parent enum | Implicit on assignment |
-
-There is no single rule. Boolean coercion is always implicit; most numeric conversions
-require `as`; format-string interpolation converts silently. A user cannot predict from
-first principles whether a given conversion is automatic or requires an explicit cast.
-
----
 
 ## 18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement
 
@@ -186,7 +166,6 @@ _All fixed — see CHANGELOG.md._
 |---|---|
 | 2 | `#first`/`#index`/`#remove` availability varies by collection type |
 | 8 | Method vs. free function assignment is arbitrary in the standard library |
-| 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
 
 ### Resolved as design point (documented + regression-guarded)
@@ -201,6 +180,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
 | 9 | `txt[i]` returns `character`, `txt[i..j]` returns `text` — deliberate asymmetry (character is a distinct scalar, not a length-1 text); LOFT.md § String literals carries a Gotcha callout with concat rules + the B7-family SIGSEGV caveat | `inc9_text_index_returns_character`, `inc9_text_slice_returns_text`, `inc9_text_slices_concatenate_with_plus`, `inc9_character_plus_is_arithmetic_not_concat` |
 | 12 | Sort direction declared on struct drives iteration direction of every query | LOFT.md § Collection types (Gotcha block); `inc12_sorted_ascending_*` / `inc12_sorted_descending_*` regression tests |
+| 17 | Type-conversion rules stratified into implicit / format-only / explicit modes, mode driven by type pair not context.  LOFT.md § The `as` operator now carries a "Type-conversion rules" table covering 11 pairs with a rule-of-thumb: fallible conversions explicit, infallible implicit, format-interpolation is its own mode | `inc17_any_to_boolean_is_implicit`, `inc17_integer_widens_to_float_in_arithmetic`, `inc17_float_to_integer_requires_as`, `inc17_text_to_integer_requires_as`, `inc17_integer_to_text_is_format_only`, `inc17_plain_enum_name_to_enum_requires_as` |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 | 30 | `{...}` double-duty (struct init vs. block) — claimed silent-typo case is not reproducible on current loft; the `{ x, y }` typo parses as a struct-init attempt and fails on the missing colon | `inc30_struct_init_with_colons_works`, `inc30_block_expression_returns_last_value`, `inc30_typo_comma_without_colon_is_rejected` |
