@@ -756,15 +756,25 @@ arena indirection (P54 step 0).  Test: `p54_b5_recursive_struct_enum`
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
-**B7 — Native-returned struct-enum lifecycle.**  Scope analysis
+**B7 — Native-returned temporary lifecycle.**  Scope analysis
 (`src/scopes.rs`) doesn't emit `OpFreeRef` for native-call return
-values when the owning variable is a locally-declared struct-enum.
-Symptoms: `n_json_parse` returning a string variant + `as_text()` →
-caller's text-return path frees the JsonValue store before the text
-copy completes (`free(): invalid next size` at exit).  Chained
-access (`v.field("a").item(0).field("b")`) leaks intermediate
-stores.  **One fix unblocks 5 of the 13 ignored P54 tests.**
-Highest-leverage compiler bite remaining.
+values when the owning variable is a locally-declared struct-enum
+or a text built by interpolating a character.  Symptoms:
+- `n_json_parse` returning a string variant + `as_text()` →
+  caller's text-return path frees the JsonValue store before the
+  text copy completes (`free(): invalid next size` at exit).
+- Chained JSON access (`v.field("a").item(0).field("b")`) leaks
+  intermediate stores.
+- `fn f() -> text { c = txt[0]; "{c}" }` SIGSEGVs (discovered
+  while writing INC#9 regression tests) — same family:
+  native-returned temporary (the interpolated text built via
+  `n_format_text` on a character) isn't tracked for free on the
+  outer function's return path.
+
+**One fix unblocks 5 of the 13 ignored P54 tests** and closes
+the inc9-character-interpolation-return crash documented in
+LOFT.md § String literals as a caveat.  Highest-leverage
+compiler bite remaining.
 
 ---
 

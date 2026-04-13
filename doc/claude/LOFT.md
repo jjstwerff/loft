@@ -493,6 +493,36 @@ msg = `Hello, {name}!
 
 Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
 
+**Gotcha — indexing a text yields `character`, slicing yields `text`.**  The two
+operations on the same subject return different types:
+
+```
+txt = "hello";
+c = txt[0];       // character ('h') — a single Unicode scalar value
+s = txt[0..1];    // text ("h") — a one-character string
+```
+
+Practical consequences:
+- `text + text` concatenates (`txt[0..1] + txt[1..2]` is `"he"`).
+- `character + character` does **not** concatenate — `+` on characters is
+  the arithmetic operator.  Build text from characters via interpolation:
+  `"{c1}{c2}"` or `t = ""; t += "{c}"` in a loop.
+  **B7-family caveat (open issue):** returning a text built by
+  interpolating a character from a `-> text` function SIGSEGVs today
+  (`fn f() -> text { c = txt[0]; "{c}" }` crashes).  Same native-returned
+  temporary lifecycle that gates 5 ignored P54 tests.  Work around by
+  assigning the interpolated text to a local, then passing it explicitly
+  to the output sink instead of returning it.
+- `character == text` is a compile error today; format the character
+  first: `"{c}" == some_text`.
+- Vectors are consistent (`vec[0]` element, `vec[0..1]` `vector<T>`) —
+  the text/character asymmetry is deliberate because `character` is a
+  distinct scalar type, not a length-1 text.
+
+When your code manipulates text character-by-character, prefer `txt[i..j]`
+slicing (iterator-aware, stays in the text domain) over `txt[i]`
+(produces a character you then have to convert back).
+
 ## String formatting
 
 Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:

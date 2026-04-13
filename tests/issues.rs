@@ -4554,3 +4554,80 @@ fn inc28_negative_index_in_slice_yields_empty() {
     .expr("run_neg()")
     .result(Value::Int(0));
 }
+
+// ── INC#9: text indexing vs. slicing return different types ────────────
+//
+// `txt[i]` yields `character` (a scalar); `txt[i..j]` yields
+// `text` (a string).  Vectors don't have this split (`vec[0]`
+// is element T; `vec[0..1]` is `vector<T>`).  The asymmetry is
+// deliberate — character is a distinct scalar, not a length-1
+// text — but it's a real ergonomic trap: users assume the same
+// operation family returns the same type domain.
+//
+// These tests lock both type paths + the practical concat
+// consequences so a future "unify text indexing" refactor must
+// update LOFT.md's Gotcha callout first.
+// Probes `txt[i]` returns a `character` via its numeric value —
+// avoids the B7-family text-return lifecycle crash hit when a
+// function returns a text built by interpolating a character
+// (`"{c}"` at tail of a `-> text` function SIGSEGVs today).
+#[test]
+fn inc9_text_index_returns_character() {
+    code!(
+        "fn run_ti() -> integer {
+    txt_ti = \"hello\";
+    c_ti = txt_ti[0];
+    c_ti as integer
+}"
+    )
+    .expr("run_ti()")
+    .result(Value::Int(b'h' as i32));
+}
+
+#[test]
+fn inc9_text_slice_returns_text() {
+    code!(
+        "fn run_ts() -> text {
+    txt_ts = \"hello\";
+    s_ts = txt_ts[0..1];
+    s_ts
+}"
+    )
+    .expr("run_ts()")
+    .result(Value::str("h"));
+}
+
+#[test]
+fn inc9_text_slices_concatenate_with_plus() {
+    code!(
+        "fn run_concat() -> text {
+    txt_c = \"hello\";
+    r_c = txt_c[0..1] + txt_c[1..2];
+    r_c
+}"
+    )
+    .expr("run_concat()")
+    .result(Value::str("he"));
+}
+
+// Probes that `+` on `character` is arithmetic, not concatenation.
+// 'b' - 'a' = 1 verifies the arithmetic path.  The "build text
+// from characters via interpolation" consequence from the LOFT.md
+// Gotcha callout is blocked today by a B7-family text-return
+// SIGSEGV (`"{c}"` returned from `fn -> text` crashes); the
+// workaround is to concatenate inside the function and not make
+// the returned text the build target — but that crashes too.
+// This test locks just the arithmetic-not-concat portion.
+#[test]
+fn inc9_character_plus_is_arithmetic_not_concat() {
+    code!(
+        "fn run_plus() -> integer {
+    txt_p = \"abcd\";
+    c1_p = txt_p[1];
+    c2_p = txt_p[0];
+    (c1_p as integer) - (c2_p as integer)
+}"
+    )
+    .expr("run_plus()")
+    .result(Value::Int(1));
+}

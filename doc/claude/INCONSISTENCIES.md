@@ -16,7 +16,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
-- [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
@@ -68,26 +67,6 @@ inconsistency is in the standard-library naming choices.
 
 ---
 
-## 9. Text/Character Split: Indexing and Slicing Return Different Types
-
-**Severity: Low**
-
-```loft
-txt = "hello"
-txt[0]      // character — a single Unicode scalar value
-txt[0..1]   // text — a one-character string
-
-vec = [1, 2, 3]
-vec[0]      // integer
-vec[0..1]   // vector<integer> — consistent: element type vs. collection type
-```
-
-`txt[i]` and `txt[i..i+1]` are different types (`character` vs. `text`), making string
-manipulation awkward: building a text from characters requires `"{c}"` interpolation, not
-direct concatenation with `+`. The vector pattern (element vs. slice of same collection
-type) would be cleaner.
-
----
 
 
 ## 17. Implicit Type Coercion Rules Are Not Uniform
@@ -207,7 +186,6 @@ _All fixed — see CHANGELOG.md._
 |---|---|
 | 2 | `#first`/`#index`/`#remove` availability varies by collection type |
 | 8 | Method vs. free function assignment is arbitrary in the standard library |
-| 9 | `txt[i]` is `character`; `txt[i..i+1]` is `text` — different types |
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
 
@@ -221,6 +199,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | # | Issue | Doc + Tests |
 |---|---|---|
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
+| 9 | `txt[i]` returns `character`, `txt[i..j]` returns `text` — deliberate asymmetry (character is a distinct scalar, not a length-1 text); LOFT.md § String literals carries a Gotcha callout with concat rules + the B7-family SIGSEGV caveat | `inc9_text_index_returns_character`, `inc9_text_slice_returns_text`, `inc9_text_slices_concatenate_with_plus`, `inc9_character_plus_is_arithmetic_not_concat` |
 | 12 | Sort direction declared on struct drives iteration direction of every query | LOFT.md § Collection types (Gotcha block); `inc12_sorted_ascending_*` / `inc12_sorted_descending_*` regression tests |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
