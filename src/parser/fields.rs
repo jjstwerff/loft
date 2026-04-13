@@ -597,14 +597,12 @@ impl Parser {
                 arg = 4;
             }
             Parts::Hash(_, _) => {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Cannot iterate a hash directly — a hash has no stable element order, \
-so #index and #remove are not supported; \
-pair the hash with a vector to iterate in insertion order"
-                );
-                return;
+                // C60 piece 3 edit C: route hash iteration through
+                // Ordered's on=3 code.  Parser has substituted the
+                // iterated expression with a `hash_scratch` ref to a
+                // u32-stride rec-nr vector in the hash's store (B+A).
+                on = 3;
+                arg = 4;
             }
             _ => {
                 diagnostic!(

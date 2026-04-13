@@ -1155,7 +1155,6 @@ fn run() -> integer { add3(1) }"
 /// C60 Step 4 (MVP acceptance test): `for e in h { … }` parses and
 /// iterates a hash in ascending key order under the interpreter.
 #[test]
-#[ignore = "C60 Step 3: parser needs to accept `for e in hash` and desugar through hash_sorted"]
 fn c60_hash_iter_single_field_asc() {
     code!(
         "struct Entry { name: text, count: integer }
@@ -1178,13 +1177,12 @@ fn run() -> text {
 /// C60 Step 5: `#index` / `#count` / `#first` work "for free" through
 /// the vector-iteration path Step 3 desugars into.
 #[test]
-#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
 fn c60_hash_iter_loop_attributes() {
     code!(
-        "struct E { k: text, v: integer }
-struct B { data: hash<E[k]> }
+        "struct Ent { k: text, v: integer }
+struct Bag { data: hash<Ent[k]> }
 fn run() -> integer {
-    b = B { data: [E{k:\"c\",v:3}, E{k:\"a\",v:1}, E{k:\"b\",v:2}] };
+    b = Bag { data: [Ent{k:\"c\",v:3}, Ent{k:\"a\",v:1}, Ent{k:\"b\",v:2}] };
     total = 0;
     for e in b.data { total += e.v * (e#index + 1); }
     total
@@ -1198,13 +1196,12 @@ fn run() -> integer {
 
 /// C60 Step 6: multi-field key — lexicographic order.
 #[test]
-#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
 fn c60_hash_iter_multi_field_lex() {
     code!(
         "struct R { region: text, score: integer }
-struct B { data: hash<R[region, score]> }
+struct Bag { data: hash<R[region, score]> }
 fn run() -> text {
-    b = B { data: [
+    b = Bag { data: [
         R{region:\"east\",score:10},
         R{region:\"west\",score:30},
         R{region:\"east\",score:50},
@@ -1222,13 +1219,12 @@ fn run() -> text {
 /// C60 Step 8: filter clause on hash iteration works through the
 /// vector-iteration path.
 #[test]
-#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
 fn c60_hash_iter_filter_clause() {
     code!(
-        "struct E { k: text, v: integer }
-struct B { data: hash<E[k]> }
+        "struct Ent { k: text, v: integer }
+struct Bag { data: hash<Ent[k]> }
 fn run() -> integer {
-    b = B { data: [E{k:\"a\",v:1}, E{k:\"b\",v:20}, E{k:\"c\",v:3}, E{k:\"d\",v:40}] };
+    b = Bag { data: [Ent{k:\"a\",v:1}, Ent{k:\"b\",v:20}, Ent{k:\"c\",v:3}, Ent{k:\"d\",v:40}] };
     total = 0;
     for e in b.data if e.v > 10 { total += e.v; }
     total
@@ -1241,13 +1237,12 @@ fn run() -> integer {
 
 /// C60 Step 4: empty hash iterates zero times.
 #[test]
-#[ignore = "C60 Step 3: parser needs to accept `for e in hash`"]
 fn c60_hash_iter_empty() {
     code!(
-        "struct E { k: text, v: integer }
-struct B { data: hash<E[k]> }
+        "struct Ent { k: text, v: integer }
+struct Bag { data: hash<Ent[k]> }
 fn run() -> integer {
-    b = B { data: [] };
+    b = Bag { data: [] };
     count = 0;
     for _ in b.data { count += 1; }
     count

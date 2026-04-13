@@ -156,6 +156,7 @@ impl Parser {
                     let elem_type = match is_type {
                         Type::Sorted(dnr, _, dep)
                         | Type::Index(dnr, _, dep)
+                        | Type::Hash(dnr, _, dep)
                         | Type::Spacial(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
                         _ => Type::Null,
                     };
@@ -926,6 +927,40 @@ use #count instead"
             // Save the original collection expression before the vector temp-copy substitution
             // so that is_iterated_value() can match field-access patterns like `db.items`.
             let orig_coll_expr = expr.clone();
+            // C60 piece 3 edit B (re-attempt with typed scratch): when
+            // iterating a hash, substitute the collection expression
+            // with a call to `hash_sorted(h, tp_id)` that builds a
+            // u32-stride rec-nr scratch in the hash's own store
+            // (edit A).  `in_type` stays Type::Hash so fill_iter hits
+            // the Hash arm and emits on=3 (edit C); the empty-bounds
+            // guard in iterate on=3 (edit E) handles unbounded.
+            //
+            // Key fix from prior segfault attempt: type the scratch
+            // variable with the hash's actual content def-nr
+            // (`Type::Reference(content, dep)`), not `Reference(0)`.
+            // Downstream type-size + free-cleanup machinery reads
+            // `self.data.def(content)`; passing 0 gave whatever
+            // definition happens to sit at index 0 and corrupted
+            // stack layout.
+            if let Type::Hash(content, _, dep) = in_type.clone() {
+                let scratch_tp = Type::Reference(content, dep.clone());
+                let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
+                let hash_tp_id = self.get_type(&in_type);
+                let tp_arg = if hash_tp_id == u16::MAX {
+                    0
+                } else {
+                    i32::from(hash_tp_id)
+                };
+                let hash_sorted_fn = self.data.def_nr("n_hash_sorted");
+                if hash_sorted_fn != u32::MAX {
+                    let call = Value::Call(hash_sorted_fn, vec![expr.clone(), Value::Int(tp_arg)]);
+                    fill = v_set(scratch_var, call);
+                    expr = Value::Var(scratch_var);
+                    if !self.first_pass {
+                        self.vars.set_type(scratch_var, scratch_tp);
+                    }
+                }
+            }
             if matches!(in_type, Type::Vector(_, _)) {
                 let vec_var = self.create_unique("vector", &in_type);
                 // On the second pass in_type may carry __vdb_N dependencies that

@@ -669,14 +669,15 @@ impl State {
                     // C60 piece 3 edit E: unbounded iteration (`for e
                     // in h { … }` with no range).  ordered_find with an
                     // empty key returns (0, true) which collapses
-                    // start=0 and finish=0, so the step protocol never
-                    // fires even once.  Set start to the u32::MAX
-                    // sentinel so vector_next's first call resets pos
-                    // to 8 (first element); finish is unused for on=3
-                    // (termination is via vector_next returning MAX
-                    // when past the last element).  This mirrors the
-                    // explicit is_empty() guard Sorted (on=2) has.
-                    start = u32::MAX;
+                    // start=0/finish=0, so the step protocol never
+                    // fires even once.  Set start to the "not started"
+                    // sentinel that `vector_next` recognises at
+                    // src/vector.rs:455 — it checks `*pos == i32::MAX`
+                    // (the i32 positive max, 0x7FFF_FFFF), *not*
+                    // u32::MAX.  Passing u32::MAX here casts to i32 as
+                    // -1 and falls into the "advance" branch, reading
+                    // garbage at pos=-1+size.
+                    start = i32::MAX as u32;
                     finish = 0;
                 } else if reverse {
                     start = vector::ordered_find(&data, true, all, &keys, &from).0 + u32::from(!ex);
