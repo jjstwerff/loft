@@ -238,6 +238,46 @@ match json_parse(raw) {
   declared default; missing → default; an explicit `.parse` return
   of null signals "root wasn't a JObject".
 
+### Prerequisite discovered mid-session: struct-enum literal construction
+
+Loft today has **no syntax for constructing a struct-enum variant
+value in loft code**.  Every existing struct-enum in the stdlib
+(`ArgValue`, `FieldValue`) is populated exclusively from Rust via
+`populate_frame_variables`-style native code.  Both
+`JsonValue.JBool { value: true }` (prefixed) and `JBool { value: true }`
+(bare variant name) fail to parse:
+
+```
+Error: Expect token ; at … 06_json.loft:56:29
+```
+
+This means step 3 of P54 can take one of two paths:
+
+**3a — Native allocation** (the PROBLEMS.md plan).  Implement
+`n_json_parse` in `src/native.rs` that calls `crate::json::parse`,
+then materialises the result into a freshly-allocated `JsonValue`
+record using `stores.database()` + discriminant-byte + variant field
+writes (mirroring `populate_frame_variables` in
+`src/native.rs:1017`).  First attempt in-session hit double-free
+corruption — likely the store's reference counting conflicts with
+the generated `OpFreeRef` at the caller's scope exit when the
+allocated store is a standalone (not vector-hosted) record.  Needs
+the same lifecycle treatment `File` gets, plus care with the
+`ref_count` bookkeeping.
+
+**3b — Add loft-level variant-construction syntax** (a language
+feature, not a P54 local change).  Accept `EnumName.Variant { field:
+expr }` and `Variant { field: expr }` as value expressions;
+codegen lowers to a fresh record + discriminant write + field
+writes.  Pure loft JSON parsing becomes trivial (text peek +
+dispatch over literal construction + `text as float` for numbers),
+and the native path reduces to the standalone `src/json.rs` parser
+already landed.  Also unblocks any future stdlib struct-enum
+(`Result<T, E>`, `Option<T>`, etc.).
+
+3b is the cleaner long-term fix and probably lands first; 3a
+becomes the fallback if the variant-construction work balloons.
+
 ### Steps (sprint branch `p54-json-value`)
 
 1. **Tests first, all `#[ignore]`'d.**
