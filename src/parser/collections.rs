@@ -493,6 +493,25 @@ use #count instead"
                 *t = Type::Void;
                 return;
             }
+            // C60 Step 9: reject #remove on hash iteration.  The parser
+            // substitutes hash iteration with a scratch rec-nr vector
+            // (see parse_for, the `{id}#hash_scratch` variable), so
+            // #remove would remove from the snapshot, not the hash —
+            // silently diverging from the user's intent.
+            if !self.first_pass {
+                let coll = self.vars.loop_coll_var(index_var);
+                if coll != u16::MAX && self.vars.name(coll).contains("hash_scratch") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "#remove is not supported on hash iteration — the \
+                         iterated vector is a sorted snapshot; use \
+                         `hash[key] = null` to remove from the hash"
+                    );
+                    *t = Type::Void;
+                    return;
+                }
+            }
             let on = self.vars.loop_on(index_var);
             let state_name = if on & 63 >= 1 && on & 63 <= 3 {
                 let state_key = format!("{name}#iter_state");

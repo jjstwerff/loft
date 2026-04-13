@@ -441,6 +441,22 @@ impl Function {
         u16::MAX
     }
 
+    /// Return the iterated-collection variable for the loop whose index
+    /// variable is `var_nr`, or `u16::MAX` when the loop iterates an
+    /// expression that isn't a plain variable.  Used by `#remove` to
+    /// detect the C60 hash-iteration scratch variable.
+    #[must_use]
+    pub fn loop_coll_var(&self, var_nr: u16) -> u16 {
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == var_nr {
+                return self.loops[c as usize].coll_var;
+            }
+            c = self.loops[c as usize].inside;
+        }
+        u16::MAX
+    }
+
     /// Number of variables declared in this function (arguments + locals).
     #[must_use]
     pub fn count(&self) -> u16 {

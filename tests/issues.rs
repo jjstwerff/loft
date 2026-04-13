@@ -1257,21 +1257,20 @@ fn run() -> integer {
 /// actually remove from the underlying hash.  Users should
 /// `h[key] = null` to remove.
 #[test]
-#[ignore = "C60 Step 9: #remove-on-hash diagnostic not yet wired"]
 fn c60_hash_iter_remove_rejected() {
     // Parse error expected; format matches other parse-error tests.
     code!(
-        "struct E { k: text, v: integer }
-struct B { data: hash<E[k]> }
+        "struct Ent { k: text, v: integer }
+struct Bag { data: hash<Ent[k]> }
 fn test() {
-    b = B { data: [E{k:\"a\",v:1}] };
+    b = Bag { data: [Ent{k:\"a\",v:1}] };
     for e in b.data { e#remove; }
 }"
     )
     .error(
         "#remove is not supported on hash iteration — the iterated \
-         vector is a sorted snapshot; use `b.data[key] = null` to \
-         remove from the hash at c60_hash_iter_remove_rejected:5:25",
+         vector is a sorted snapshot; use `hash[key] = null` to \
+         remove from the hash at c60_hash_iter_remove_rejected:5:32",
     );
 }
 
