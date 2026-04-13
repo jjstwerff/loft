@@ -46,6 +46,7 @@ mod calc;
 pub mod data;
 pub mod database;
 pub mod hash;
+pub mod json;
 pub mod keys;
 mod lexer;
 pub mod native;
