@@ -203,6 +203,49 @@ pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
     out
 }
 
+/// C60 Step 2: collect every live record sorted by the hash's key.
+///
+/// Ascending on each key field, with `-` prefix flipping the direction
+/// per-field — the existing `keys::compare` helper handles multi-field
+/// lexicographic order and the descending bit for us, so one call
+/// covers Steps 2 / 6 / 7 of the plan in CAVEATS.md C60.
+///
+/// Inefficient by design: walks the whole bucket array (Step 1) then
+/// sorts the collected references in O(n log n).  Suitable for the
+/// small hashes that scripting code typically iterates; users with a
+/// tight loop over a large hash should pair the hash with a `vector`
+/// or `sorted` for amortised traversal.
+///
+/// # Panics
+///
+/// Panics if `keys::compare` encounters a key field type it cannot
+/// compare — same invariant as the existing `hash::find` path and
+/// not reachable from valid loft source.
+#[must_use]
+#[allow(dead_code)]
+pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<u32> {
+    let mut recs = records(hash_ref, stores);
+    // Build DbRefs once so the comparator doesn't re-materialise them.
+    // Records in a hash all live in the same store and share the same
+    // schema offset (pos=8 is the record body, matching what
+    // `validate` uses internally).
+    let store_nr = hash_ref.store_nr;
+    recs.sort_by(|a, b| {
+        let ra = DbRef {
+            store_nr,
+            rec: *a,
+            pos: 8,
+        };
+        let rb = DbRef {
+            store_nr,
+            rec: *b,
+            pos: 8,
+        };
+        keys::compare(&ra, &rb, stores, keys)
+    });
+    recs
+}
+
 /// Validate the bucket structure of a hash — each live slot's record
 /// must `find` back to the same rec-nr, and the stored length must
 /// match the number of nonzero slots.

@@ -293,6 +293,110 @@ pub fn hash_records_empty() {
     );
 }
 
+/// C60 Step 2: `hash::records_sorted` returns records in ascending
+/// key order — single-field key case.
+#[test]
+pub fn hash_records_sorted_single_field() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {name:\"zebra\",value:1},
+        {name:\"apple\",value:5},
+        {name:\"mango\",value:3}
+    ]";
+    stores.parse(data, v, &into);
+    let keys = stores.keys(v).to_vec();
+    let recs = hash::records_sorted(&into, &stores.allocations, &keys);
+    // Resolve each rec-nr to its `name` field for an observable order.
+    let names: Vec<String> = recs
+        .iter()
+        .map(|&r| {
+            let rec = DbRef {
+                store_nr: into.store_nr,
+                rec: r,
+                pos: 8,
+            };
+            let name_pos = stores.allocations[rec.store_nr as usize].get_int(rec.rec, rec.pos);
+            stores.allocations[rec.store_nr as usize]
+                .get_str(name_pos as u32)
+                .to_string()
+        })
+        .collect();
+    assert_eq!(names, vec!["apple", "mango", "zebra"]);
+}
+
+/// C60 Step 6: multi-field key, lexicographic order.  Hash keys are
+/// ascending-only at the schema level (the `-` descending prefix is a
+/// `sorted` / `index` feature that the parser rejects on hash with
+/// "Structure doesn't support descending fields" — see
+/// `src/parser/definitions.rs:1198`), so the whole key space is
+/// lexicographic ascending.
+#[test]
+pub fn hash_records_sorted_multi_field() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "region", stores.name("text"));
+    stores.field(s, "score", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["region".to_string(), "score".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {region:\"east\",score:10},
+        {region:\"west\",score:30},
+        {region:\"east\",score:50},
+        {region:\"west\",score:20}
+    ]";
+    stores.parse(data, v, &into);
+    let keys = stores.keys(v).to_vec();
+    let recs = hash::records_sorted(&into, &stores.allocations, &keys);
+    let pairs: Vec<(String, i32)> = recs
+        .iter()
+        .map(|&r| {
+            let rec = DbRef {
+                store_nr: into.store_nr,
+                rec: r,
+                pos: 8,
+            };
+            let store = &stores.allocations[rec.store_nr as usize];
+            let region_pos = store.get_int(rec.rec, rec.pos);
+            let region = store.get_str(region_pos as u32).to_string();
+            let score = store.get_int(rec.rec, rec.pos + 4);
+            (region, score)
+        })
+        .collect();
+    // Expected: lexicographic (region ASC, score ASC within region).
+    assert_eq!(
+        pairs,
+        vec![
+            ("east".to_string(), 10),
+            ("east".to_string(), 50),
+            ("west".to_string(), 20),
+            ("west".to_string(), 30),
+        ]
+    );
+}
+
 #[test]
 pub fn array_record() {
     let mut stores = Stores::new();
