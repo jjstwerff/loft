@@ -163,6 +163,195 @@ fn ci_target_runs_no_default_features_clippy() {
     );
 }
 
+/// QUALITY Tier 1 #3 — `p122_long_running_struct_loop` was ignored
+/// only because it takes ~10 min in debug and ~0.05 s in release,
+/// not because the test itself was broken.  Closed 2026-04-14 by
+/// switching the attribute to `#[cfg_attr(debug_assertions, ignore)]`
+/// so release builds (CI's default) run it automatically.  This
+/// guard locks the debug-only ignore form in place: a future edit
+/// that reverts to plain `#[ignore]` would silently re-remove the
+/// stress regression from CI.
+#[test]
+fn p122_long_running_struct_loop_is_cfg_attr_ignored_in_debug_only() {
+    let src = fs::read_to_string("tests/issues.rs").expect("cannot read tests/issues.rs");
+    let idx = src
+        .find("fn p122_long_running_struct_loop")
+        .expect("tests/issues.rs must define p122_long_running_struct_loop");
+    // Look backwards ~30 lines to capture the attribute stack above the fn.
+    let preamble_start = src[..idx]
+        .rfind("#[test]")
+        .unwrap_or(idx.saturating_sub(30 * 120));
+    let preamble = &src[preamble_start..idx];
+    assert!(
+        preamble.contains("cfg_attr(")
+            && preamble.contains("debug_assertions")
+            && preamble.contains("ignore"),
+        "p122_long_running_struct_loop must be gated with \
+         `#[cfg_attr(debug_assertions, ignore = …)]` so CI (release) \
+         runs it.  See QUALITY.md Tier 1 #3.  Preamble found:\n{preamble}"
+    );
+}
+
+/// QUALITY Tier 3 #8 — the const-store mmap path is intentionally
+/// deferred per [CONST_STORE.md § Phase B] (cache files are 5-10 KB;
+/// mmap overhead exceeds memcpy savings at this size).  QUALITY.md
+/// must reflect that decision, not ask for a benchmark the design
+/// has ruled out.  This guard locks the two docs together: if
+/// CONST_STORE.md stops saying "Deferred" next to Phase B, QUALITY.md
+/// Tier 3 #8 should be re-opened at the same time; if QUALITY.md
+/// loses the closure marker, CONST_STORE.md probably did too.
+#[test]
+fn quality_const_store_mmap_matches_const_store_md() {
+    let cs = fs::read_to_string("doc/claude/CONST_STORE.md")
+        .expect("cannot read doc/claude/CONST_STORE.md");
+    assert!(
+        cs.contains("**Phase B** (mmap): **Deferred.**"),
+        "CONST_STORE.md must document Phase B (mmap) as **Deferred.** — if the design position has changed, re-open QUALITY.md Tier 3 #8 and update this guard."
+    );
+
+    let q = read_quality();
+    // Locate the Tier 3 #8 block heading.  Items are numbered
+    // `8. **...` at column 0; find the one that mentions const-store
+    // mmap (not the P54-section "8." which is deeper-indented).
+    let heading_start = q
+        .find("\n8. **")
+        .map(|i| i + 1)
+        .expect("QUALITY.md must contain a top-level Tier 3 item `8. **...`");
+    let block_end = q[heading_start..]
+        .find("\n9. ")
+        .map_or(q.len() - heading_start, |e| e)
+        + heading_start;
+    let block = &q[heading_start..block_end];
+    assert!(
+        block.contains("Const store mmap"),
+        "QUALITY.md Tier 3 #8 should be about the const-store mmap path.  Heading found:\n{}",
+        &block[..block.find('\n').unwrap_or(block.len())]
+    );
+    assert!(
+        block.starts_with("8. **~~") || block.contains("**~~Const store mmap"),
+        "QUALITY.md Tier 3 #8 must be struck-through (`~~Const store mmap…~~`) because CONST_STORE.md § Phase B is deferred-by-design.  Block:\n{block}"
+    );
+    assert!(
+        block.contains("CONST_STORE.md"),
+        "QUALITY.md Tier 3 #8 must reference CONST_STORE.md § Phase B as the source of the deferral decision.  Block:\n{block}"
+    );
+}
+
+/// QUALITY Tier 3 #9 — `wasm32-unknown-unknown` without the `wasm`
+/// host-bridge feature has no reachable filesystem.  `file().content()`
+/// and `file().exists()` must return safe defaults (empty string /
+/// NotExists) rather than depend on `std::fs` behaviour, which varies
+/// by browser embedding.  This guard asserts both native implementations
+/// carry an explicit `cfg(target_arch = "wasm32")` branch so a refactor
+/// that collapses the feature-flag arms can't silently regress the
+/// `--html` build target.
+#[test]
+fn wasm32_file_operations_have_explicit_stubs() {
+    for (path, needle) in [
+        ("src/state/io.rs", "target_arch = \"wasm32\""),
+        ("src/database/io.rs", "target_arch = \"wasm32\""),
+    ] {
+        let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("cannot read {path}"));
+        assert!(
+            src.contains(needle),
+            "{path} must contain an explicit `{needle}` cfg branch that stubs filesystem operations on browser WASM.  See QUALITY.md Tier 3 #9."
+        );
+    }
+}
+
+/// QUALITY Tier 4 #11 — DESIGN_DECISIONS.md is the closed-by-decision
+/// register.  Without a prominent cross-ref at the top of the docs
+/// where new items naturally land (PLANNING.md for future work,
+/// PROBLEMS.md for bug reports), the same declined proposals keep
+/// coming back every quarter.  This guard asserts both files link
+/// to DESIGN_DECISIONS.md near their top — inside the first ~80
+/// lines where the header / intro lives, not buried in a
+/// cross-references section at the bottom where nobody sees it.
+#[test]
+fn planning_and_problems_link_to_design_decisions() {
+    for (path, label) in [
+        ("doc/claude/PLANNING.md", "PLANNING.md"),
+        ("doc/claude/PROBLEMS.md", "PROBLEMS.md"),
+    ] {
+        let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("cannot read {path}"));
+        let head: String = src.lines().take(80).collect::<Vec<_>>().join("\n");
+        assert!(
+            head.contains("DESIGN_DECISIONS.md"),
+            "{label} must link to DESIGN_DECISIONS.md in its opening ~80 lines so contributors see the closed-by-decision register before adding a new entry.  See QUALITY.md Tier 4 #11."
+        );
+    }
+}
+
+/// QUALITY Tier 4 #12 — `make ship` is the canonical pre-push gate.
+/// Four invariants must all be present in the recipe so users who
+/// `make ship && git push` get the same guarantee the remote CI
+/// applies.  If any step is dropped the ratchet silently weakens
+/// (the exact scenario that produced this sprint's hygiene commits
+/// when `cargo clippy --no-default-features` started failing
+/// unnoticed).
+///
+/// Required command fragments, in order:
+///   1. `cargo fmt --all -- --check`                             (formatting)
+///   2. `cargo clippy --release --all-targets -- -D warnings`    (default features)
+///   3. `cargo clippy --no-default-features --all-targets -- -D warnings` (ndf)
+///   4. `cargo test --release`                                   (release tests)
+///
+/// This guard checks the `ship:` recipe contains all four fragments
+/// and that they appear in chained order (`&&`) so a failure in step
+/// N prevents the later steps (and a subsequent `git push`) from
+/// running.
+#[test]
+fn ship_target_chains_all_required_gates() {
+    let makefile = fs::read_to_string("Makefile").expect("cannot read Makefile");
+    let ship_recipe = extract_recipe(&makefile, "ship:")
+        .expect("Makefile must define a `ship:` target — see QUALITY.md Tier 4 #12");
+    let required: &[&str] = &[
+        "cargo fmt --all -- --check",
+        "cargo clippy --release --all-targets -- -D warnings",
+        "cargo clippy --no-default-features --all-targets -- -D warnings",
+        "cargo test --release",
+    ];
+    let mut cursor = 0usize;
+    for frag in required {
+        let found = ship_recipe[cursor..].find(frag).unwrap_or_else(|| {
+            panic!(
+                "`make ship` recipe is missing or mis-orders `{frag}`.  Full recipe:\n{ship_recipe}"
+            )
+        });
+        cursor += found + frag.len();
+    }
+    assert!(
+        ship_recipe.contains("&&"),
+        "`make ship` recipe must chain its gates with `&&` so the first failure aborts the chain (and any subsequent `git push` via `make ship && git push`).  Full recipe:\n{ship_recipe}"
+    );
+}
+
+/// Read the recipe lines of a Makefile target by name.  Returns the
+/// concatenated recipe body (the lines starting with TAB after the
+/// target header) up to the next blank line or next target.
+fn extract_recipe(makefile: &str, target_header: &str) -> Option<String> {
+    let mut lines = makefile.lines();
+    for line in lines.by_ref() {
+        if line.starts_with(target_header) {
+            break;
+        }
+    }
+    let mut out = String::new();
+    for line in lines {
+        // Recipe lines begin with a tab; a non-tab, non-empty line
+        // ends the target.
+        if line.is_empty() {
+            continue;
+        }
+        if !line.starts_with('\t') {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
 fn read_problems() -> String {
     fs::read_to_string(PROBLEMS).unwrap_or_else(|_| panic!("cannot read {PROBLEMS}"))
 }

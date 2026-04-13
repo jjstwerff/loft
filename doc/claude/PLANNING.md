@@ -30,6 +30,11 @@ release gate criteria, project structure changes, and release artifact checklist
 **Completed items are removed entirely** — history lives in git and `CHANGELOG.md`.
 Cross-document links are at the end; this doc is for future work.
 
+**Before proposing a new item here, check [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** —
+that file holds the closed-by-decision register (features evaluated and explicitly
+declined).  If the idea is already there, surface new evidence on the existing entry
+instead of re-proposing it.
+
 ---
 
 ## Contents

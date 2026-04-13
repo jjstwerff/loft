@@ -37,7 +37,19 @@ impl State {
             }
             return;
         }
-        #[cfg(not(feature = "wasm"))]
+        // QUALITY Tier 3 #9: explicit stub for `wasm32-unknown-unknown` without
+        // the `wasm` host-bridge feature (the `--html` browser build target).
+        // `std::fs::File::open` compiles there but fails at runtime in a way
+        // that depends on the embedding's panic-hook configuration.  The stub
+        // always leaves `buf` untouched — same observable semantics as a file
+        // that doesn't exist on native — so a `--html` program calling
+        // `file("x").content()` reliably gets an empty String instead of
+        // racing against an unpredictable runtime error.
+        #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+        {
+            let _ = (file, r);
+        }
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
         {
             let store = self.database.store(&file);
             let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);

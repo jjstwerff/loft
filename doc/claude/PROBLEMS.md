@@ -10,6 +10,13 @@ recommended fix path.
 
 Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
+**Before opening a new issue here, check
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** — the closed-by-decision
+register holds items explicitly evaluated and declined (C3 / C38 /
+C54.D / …).  If your symptom maps onto one of those, the fix is to
+produce new evidence (reproducer, incident, measurement) on the
+existing entry, not re-open it as a bug.
+
 ## Contents
 - [Open Issues — Quick Reference](#open-issues--quick-reference)
 - [Unimplemented Features](#unimplemented-features)

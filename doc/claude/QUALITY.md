@@ -1215,9 +1215,18 @@ session-of-the-week background bite.
    that has spawned three documented gotchas.  Multi-session,
    sub-tickets land independently (see § C54).
 
-3. **Drive `#[ignore]`'d tests to zero.**  23+ in `tests/issues.rs`
-   are the most honest backlog the project has.  Sustainable cadence:
-   1–3 per session.
+3. **Drive `#[ignore]`'d tests to zero.**  Baseline tracked in
+   `tests/ignored_tests.baseline` (currently 8 entries, down from 9
+   after p122 2026-04-14).  Sustainable cadence: 1–3 per session.
+
+   **Closed 2026-04-14:** `p122_long_running_struct_loop` — ignored
+   only because the 10 000-frame × 10-brick struct-alloc loop takes
+   ~10 min in debug mode; passes in ~0.05 s in release.  Converted
+   the attribute from `#[ignore]` to
+   `#[cfg_attr(debug_assertions, ignore = "…")]` so the test now
+   runs automatically in `cargo test --release` (CI's default) and
+   continues to skip in debug for day-to-day iteration.  Debug-only
+   manual run still works via `cargo test --ignored`.
 
 ### Tier 2 — preventive, low-risk, high-readability
 
@@ -1348,16 +1357,47 @@ session-of-the-week background bite.
    - `missing_loftc_is_recreated` — deleting the cache file between
      runs forces regeneration on the next run.
 
-8. **Const store mmap path on Linux.**  Designed in CONST_STORE.md,
-   partially shipped.  Measure startup wins on a real loft program
-   (Brick Buster, Moros editor); lock as a benchmark to prevent
-   regressions and surface value to users.
+8. **~~Const store mmap path on Linux.~~**  Closed as
+   deferred-by-design 2026-04-14.  [CONST_STORE.md § Phase B
+   (mmap)](CONST_STORE.md#memory-mapped-constant-store) reaches the
+   opposite conclusion: at today's cache-file sizes (5-10 KB) mmap
+   overhead (syscall + page tables) exceeds the memcpy savings, so
+   the implementation path is intentionally not taken.  A benchmark
+   here would lock in a micro-regression that the design has already
+   ruled out.  If Phase C ever ships a large stdlib cache the
+   tradeoff flips, at which point the benchmark becomes a useful
+   companion to the mmap rollout — re-open then.
 
-9. **WASM FS bridge.**  `tests/issues.rs` SIGSEGV-on-missing-file is
-   blocked on the WASM virtual-FS work in WASM.md.  Single-session
-   bites: stub `file().exists()` and `file().content()` to safe
-   defaults under `wasm32`, ship a regression test.  Each loft web
-   demo wanting file I/O depends on this.
+   In the meantime, the cache *load* path (not mmap-specific) is
+   exercised end-to-end by the Tier 3 #7 bytecode-cache integration
+   tests, so cache hit/miss correctness is locked even without a
+   timing benchmark.  Regression guard —
+   `tests/doc_hygiene.rs::quality_const_store_mmap_matches_const_store_md`
+   asserts the two docs don't silently drift back out of sync.
+
+9. **~~WASM FS bridge.~~**  Landed 2026-04-14.  `src/state/io.rs::get_file_text`
+   and `src/database/io.rs::get_file` now carry explicit
+   `#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]`
+   branches that short-circuit to the "file not found" path instead
+   of calling `std::fs`.  On the `--html` browser build target
+   `std::fs` operations compile but fail at runtime in ways that
+   depend on the JS embedding's panic hook; the stubs make
+   `file("x").content()` return a reliable empty String and
+   `file("x").exists()` return false no matter the host.  Tests:
+   - `tests/html_wasm.rs::q9_html_file_content_returns_empty_on_wasm`
+     — end-to-end: builds a `--html` bundle that calls
+     `file("/missing").content()`, runs it under the Node repro
+     harness, asserts `len=0` output and no trap.
+   - `tests/doc_hygiene.rs::wasm32_file_operations_have_explicit_stubs`
+     — static guard: both `src/state/io.rs` and `src/database/io.rs`
+     must contain a `target_arch = "wasm32"` cfg, so a refactor
+     that collapses the feature-flag arms can't silently revert
+     the ratchet.
+   Separately, the native-only `file_content_nonexistent_trace`
+   SIGSEGV under `execute_log` (called out in the test's own
+   comment) is a misaligned-slot codegen issue in the stack
+   allocator — unrelated to the WASM bridge and tracked
+   independently.  The ignored test stays ignored.
 
 ### Tier 4 — process / hygiene
 
@@ -1382,21 +1422,38 @@ session-of-the-week background bite.
       in the same commits.  Item 10's scope is now closed; future
       drift gets caught in CI instead of sprint-hygiene commits.
 
-11. **Memory of recent decisions.**  DESIGN_DECISIONS.md exists for
-    the closed-by-decision register but isn't yet referenced from
-    PLANNING.md or PROBLEMS.md headers.  A one-line "Before
-    proposing a feature, check DESIGN_DECISIONS.md" at the top of
-    each would prevent the same five proposals returning every
-    quarter.
+11. **~~Memory of recent decisions.~~**  Landed 2026-04-13.  Both
+    PLANNING.md and PROBLEMS.md now open with a "Before
+    proposing/opening …, check [DESIGN_DECISIONS.md]" paragraph in
+    their intro — visible above the fold, not buried in the
+    cross-references list at the bottom.  PLANNING.md's version
+    targets feature proposals; PROBLEMS.md's version targets new
+    bug reports (with pointers to C3 / C38 / C54.D as the classic
+    re-opens).  Regression guard —
+    `tests/doc_hygiene.rs::planning_and_problems_link_to_design_decisions`
+    asserts both files mention `DESIGN_DECISIONS.md` in their first
+    80 lines, so a future cleanup that strips the intro can't
+    silently re-hide the register.
 
-12. **A `make ship` target.**  Today's release gate is
-    `cargo fmt && cargo clippy --release --all-targets -- -D warnings
-    && cargo test --release`.  The `--no-default-features` clippy
-    run is easy to forget; the full suite gets skipped when only one
-    test changed.  A single make target that runs all four (and
-    refuses to push if any fails) prevents the stale-doc /
-    forgotten-test scenarios that produced this sprint's hygiene
-    commits.
+12. **~~A `make ship` target.~~**  Landed 2026-04-13.  `Makefile`
+    now defines `ship:` as the canonical pre-push gate.  Four
+    invariants chained with `&&` so the first failure aborts and a
+    subsequent `git push` never runs:
+    1. `cargo fmt --all -- --check` — formatting.
+    2. `cargo clippy --release --all-targets -- -D warnings` — default
+       features clippy.
+    3. `cargo clippy --no-default-features --all-targets -- -D warnings`
+       — the `--no-default-features` ratchet from #4 (previously easy
+       to forget).
+    4. `cargo test --release` — full suite.
+
+    Distinct from `ci:` which optimises for the remote pipeline
+    (logs to `result.txt`, runs GL + packages suites).  `ship` streams
+    to the terminal and is the intended `make ship && git push`
+    workflow.  Regression guard —
+    `tests/doc_hygiene.rs::ship_target_chains_all_required_gates`
+    reads the Makefile and asserts all four fragments appear in
+    order, chained with `&&`.
 
 ---
 

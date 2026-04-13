@@ -337,7 +337,7 @@ impl Stores {
         }
     }
 
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
     pub fn get_file(&mut self, file: &DbRef) -> bool {
         if file.rec == 0 {
             return false;
@@ -346,6 +346,26 @@ impl Stores {
         let filename = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
         let path = std::path::Path::new(filename);
         fill_file(path, store, file)
+    }
+
+    /// QUALITY Tier 3 #9: `wasm32-unknown-unknown` without the `wasm`
+    /// host-bridge feature has no reachable filesystem.  Stub
+    /// `get_file` so `file().exists()` returns a reliable
+    /// `Format::NotExists` instead of depending on whatever
+    /// `std::fs` does in a browser (implementations vary: some
+    /// panic, some return Err, some hang).  Matches the stub in
+    /// `State::get_file_text` for the content-read path.
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+    pub fn get_file(&mut self, file: &DbRef) -> bool {
+        if file.rec == 0 {
+            return false;
+        }
+        let store = self.store_mut(file);
+        store.set_long(file.rec, file.pos, i64::MIN);
+        store.set_long(file.rec, file.pos + 8, i64::MIN);
+        store.set_long(file.rec, file.pos + 16, i64::MIN);
+        store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
+        false
     }
 
     #[cfg(feature = "wasm")]

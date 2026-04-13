@@ -26,7 +26,12 @@
 #   make all        Format source + build the native binary.
 #   make test       Full test suite (fmt + clippy + tests). ~1-2 minutes.
 #   make quick      Same tests without the clippy/fmt gate. Faster iteration.
-#   make ci         What gets run before every push.
+#   make ci         Full automated pipeline (logs to result.txt; runs GL
+#                   + packages suites). What the remote runner does.
+#   make ship       Fast local pre-push gate: fmt + both clippy variants
+#                   + release tests, streamed to the terminal, chained
+#                   with && so `make ship && git push` stops on first
+#                   failure.
 #   make clean      Nuke build artifacts.
 #
 # More specialised:
@@ -42,7 +47,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
+.PHONY: all check-targets install uninstall debug test quick profile clean fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -552,6 +557,26 @@ ci:
 	$(MAKE) test-packages >> result.txt 2>&1 && \
 	$(MAKE) test-gl-smoke >> result.txt 2>&1 && \
 	$(MAKE) test-gl-golden >> result.txt 2>&1
+
+# QUALITY Tier 4 #12 — the single pre-push gate.
+#
+# `ci` optimises for the full automated pipeline: it logs to result.txt,
+# runs the GL + packages suites, and only prints on failure.  That's
+# great for a remote runner but awkward at the terminal — if you forget
+# one of fmt / clippy-default / clippy-ndf / release tests before `git
+# push`, the remote CI surfaces it minutes later and the branch sits in
+# a partial state.
+#
+# `ship` is the fast local equivalent: the same four invariants that
+# block any push, streamed to the terminal, chained with `&&` so the
+# first failure stops the chain and exits non-zero.  The intended
+# workflow is `make ship && git push` — if `ship` fails the push
+# doesn't happen.
+ship:
+	cargo fmt --all -- --check && \
+	cargo clippy --release --all-targets -- -D warnings && \
+	cargo clippy --no-default-features --all-targets -- -D warnings && \
+	cargo test --release
 
 run-tests:
 	cargo test --release > result.txt 2>&1

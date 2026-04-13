@@ -8,7 +8,6 @@
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
 b7_character_interpolation_return_crashes	B7 family — text-return of `"{c}"` (character interpolation) SIGSEGVs
 file_content_nonexistent_trace	SIGSEGV in execute_log: File.content() on non-existent file corrupts caller's String
-p122_long_running_struct_loop	P122 stress test — 100k struct allocations, ~10min in debug. Passes in 0.05s release.
 p54_b5_recursive_struct_enum	P54 B5: recursive struct-enum — OpDatabase(db_tp=u16::MAX) panics in Store::claim
 p54_parse_array_item_access	P54 step 4: parse_array + item() indexed access
 p54_parse_object_field_access	P54 step 4: parse_object + field() chained access

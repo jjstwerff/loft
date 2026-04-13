@@ -2682,11 +2682,20 @@ fn test() {
 
 // P122e: very long loop (simulating game frames) — exhaustion stress test.
 //
-// Marked #[ignore] because it takes ~10 minutes in debug mode. In release
-// mode it completes in ~0.05s (verified 2026-04-11, no store exhaustion).
-// Run on demand with `cargo test --release --ignored p122_long_running_struct_loop`.
+// In release mode the 100 000 struct allocations complete in ~0.05s and
+// the test is a real store-exhaustion regression guard that rides along
+// with `cargo test --release` (CI's default).  In debug mode the same
+// body takes ~10 minutes because the loft bytecode interpreter is
+// dominated by debug Rust overhead — so we cfg-gate the `#[ignore]`
+// attribute to debug_assertions only, not the whole test.  That keeps
+// `cargo test` (debug) fast for day-to-day iteration while CI continues
+// to exercise the real stress path.  Run manually in debug with
+// `cargo test --ignored p122_long_running_struct_loop` when needed.
 #[test]
-#[ignore = "P122 stress test — 100k struct allocations, ~10min in debug. Passes in 0.05s release."]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "P122 stress test — ~10min in debug mode; runs in release automatically (passes in ~0.05s)."
+)]
 fn p122_long_running_struct_loop() {
     code!(
         "struct Overlap { ox: float not null, oy: float not null }
