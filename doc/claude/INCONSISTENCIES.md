@@ -15,7 +15,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 ## Contents
 
 - [2. Vector Has a Much Richer API Than Sorted / Index / Hash](#2-vector-has-a-much-richer-api-than-sorted--index--hash)
-- [3. Loop Attribute `#index` Has Different Semantics on Text vs. Vector](#3-loop-attribute-index-has-different-semantics-on-text-vs-vector)
 - [8. Method vs. Free Function Is an Arbitrary Standard-Library Choice](#8-method-vs-free-function-is-an-arbitrary-standard-library-choice)
 - [9. Text/Character Split: Indexing and Slicing Return Different Types](#9-textcharacter-split-indexing-and-slicing-return-different-types)
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
@@ -24,7 +23,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
 - [28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax](#28-vector-slice-syntax-has-no-grammar-entry-and-diverges-from-range-syntax)
-- [29. `!value` Means "Null or False" for Boolean but "Null Only" for Integer](#29-value-means-null-or-false-for-boolean-but-null-only-for-integer)
 - [30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression](#30--is-both-anonymous-struct-initialisation-and-a-block-expression)
 - [31. Open-Ended Range Syntax in `for` Has No Documented Counterpart in `match`](#31-open-ended-range-syntax-in-for-has-no-documented-counterpart-in-match)
 - [Summary by Severity](#summary-by-severity)
@@ -48,44 +46,6 @@ All four collection types use the same `+=` and `for` syntax.  The iteration too
 | Filtered `for x in c if cond` | ✓ | ✓ | ✓ | N/A |
 
 Remaining API gaps (slicing, comprehension) are structural and not planned.
-
----
-
-## 3. Loop Attribute `#index` Has Different Semantics on Text vs. Vector
-
-**Severity: Medium** (also [PROBLEMS.md](PROBLEMS.md) #23)
-
-```loft
-txt = "12😊🙃45"
-for c in txt {
-    c#index   // UTF-8 byte offset of the START of this character (pre-advance)
-    c#next    // byte offset AFTER this character — where the next character begins
-    c#count   // 0-based character position (counts whole characters)
-}
-
-for v in vec {
-    v#index   // 0-based element position (counts whole elements)
-    v#count   // same as v#index for vectors
-    // no v#next
-}
-```
-
-Both use `#index` but the semantics differ: on text it is a **UTF-8 byte offset**
-(useful for slicing `txt[c#index..c#next]`), on vectors it is an **element position**.
-Use `c#count` for a 0-based character count that matches vector `v#index` semantics.
-
-Note: the text `c#index` value equals `c#count` only for ASCII text (one byte per
-character). For multi-byte characters (emoji, CJK, accented letters), the byte offset
-advances by 2–4 per character.
-
-**Status (2026-04-13):** The naming asymmetry is preserved (renaming would be a
-breaking change) but the gotcha is now called out as a "Gotcha" callout block
-directly under the loop-attribute table in
-[LOFT.md § Loop attributes](LOFT.md), not buried in a per-row footnote.  Three
-regression guards in `tests/issues.rs` lock the byte-offset-vs-element-position
-divergence on a multi-byte string: `inc3_text_index_is_byte_offset_on_multibyte`,
-`inc3_text_count_is_character_position`, `inc3_vector_index_is_element_position`.
-A future unification refactor must update both the doc callout and these tests.
 
 ---
 
@@ -265,42 +225,6 @@ valid slice forms and documents which are shared with `range_expr`. Clarify whet
 
 ---
 
-## 29. `!value` Means "Null or False" for Boolean but "Null Only" for Integer
-
-**Severity: Low**
-
-```loft
-b: boolean = false
-if !b { }       // true — false IS the null sentinel for boolean
-
-n: integer = 0
-if !n { }       // false — 0 is not null; only i32::MIN triggers this
-```
-
-For `boolean`, the null sentinel is `false`, so `!b` is true for both absent and
-`false` values — there is no way to distinguish them. For `integer`, zero is a valid
-non-null value and `!n` only fires for `i32::MIN`. A programmer writing `if !count`
-expecting "zero or null" gets only the null check; `if !flag` expecting "false or null"
-gets both.
-
-The underlying cause is the in-band sentinel design, which is intentional. However the
-asymmetry is not documented and can produce silent logic errors when code is ported
-from a boolean guard to an integer guard (or vice versa).
-
-**Advice:** Add a note to the null sentinel table in LOFT.md and the Best Practices
-section explicitly stating that `!b` on boolean catches false and null, while `!n` on
-integer catches null only. Document `n == 0 or !n` as the idiomatic "zero or null"
-integer check.
-
-**Status (2026-04-13):** Documented in LOFT.md (the null-sentinel table now carries
-a "`!value` asymmetry" subsection with the boolean/integer split and the
-`count == 0 or !count` idiom).  Three regression guards in `tests/issues.rs` lock
-the behaviour: `inc29_bang_boolean_catches_false`,
-`inc29_bang_integer_zero_is_not_null`, `inc29_bang_integer_null_is_caught`.  The
-asymmetry is now an *acknowledged* design point rather than a silent surprise.
-
----
-
 ## 30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression
 
 **Severity: Low**
@@ -357,7 +281,6 @@ _All fixed — see CHANGELOG.md._
 ### Medium (surprising but safe)
 | # | Issue |
 |---|---|
-| 3 | `#index` is byte-offset on text, element-position on vector |
 | 12 | Index range-query second-key boundary depends on undeclared sort direction |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required |
 | 27 | `break` keyword and `x#break` attribute are two mechanisms for the same action; no `x#continue` |
@@ -371,9 +294,20 @@ _All fixed — see CHANGELOG.md._
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
 | 28 | Vector slice forms `[..end]` and `[n..-1]` absent from grammar; `..=` undocumented for slices |
-| 29 | `!b` on boolean catches false and null; `!n` on integer catches null only |
 | 30 | `{...}` is both anonymous struct init and block expression; typos silently become blocks |
 | 31 | Open-ended range `10..` is valid in `for`; not documented for `match` arms |
+
+### Resolved as design point (documented + regression-guarded)
+
+These were inconsistencies whose semantics are now (a) explicitly documented in
+LOFT.md as a "Gotcha" or asymmetry callout and (b) locked by regression tests
+in `tests/issues.rs`.  They remain inconsistencies — but they're acknowledged
+ones, not silent surprises.  Removed from the severity tables above.
+
+| # | Issue | Doc + Tests |
+|---|---|---|
+| 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
+| 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 
 ---
 

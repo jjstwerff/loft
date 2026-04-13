@@ -164,7 +164,7 @@ The old `json_items` / `json_nested` / `json_long` / `json_float` /
 withdrawn.  All JSON work routes through `json_parse` → `JsonValue`
 from 0.9.0 onward.
 
-Full landing plan in [BITING_PLAN.md § P54](BITING_PLAN.md).
+Full landing plan in [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
 
 ---
 

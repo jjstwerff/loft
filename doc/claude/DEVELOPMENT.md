@@ -768,7 +768,7 @@ same questions don't resurface every session.
 **Rules**:
 - Closed items are **not** backlog.  They don't belong in
   ROADMAP.md's milestones, PLANNING.md's priorities, or
-  BITING_PLAN.md's active tables.  A short cross-reference to
+  QUALITY.md's active tables.  A short cross-reference to
   DESIGN_DECISIONS.md in an "Out of scope" section is enough.
 - **Re-opening** requires new evidence (a concrete use case,
   incident report, or measurement) that wasn't available at the

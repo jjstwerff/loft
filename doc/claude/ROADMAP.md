@@ -95,11 +95,11 @@ Design: `../moros/doc/claude/`
 
 ### Must-fix blockers (share the Moros editor's code paths)
 
-Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
+Step plans for both entries: [QUALITY.md](QUALITY.md).
 
 | ID    | Title                                                           | E  | Source                       |
 |-------|-----------------------------------------------------------------|----|------------------------------|
-| P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, BITING_PLAN.md |
+| P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, QUALITY.md |
 | ~~P135~~ | ~~Canvas Y-flip three-way compensation~~ | S | **Done** — upload flip removed + TEX_VERT_2D samples identity V; 2×2 atlas corner guard in `snap_smoke.sh`. Canonical convention locked in OPENGL.md |
 
 ### Sprint A–C: Data model + editor + loft backend
@@ -169,12 +169,12 @@ highlighting, decent error messages, and a REPL for experimentation.
 Each of these is a commitment, not a maybe.  Deferring any of them
 makes the "fully working language" label dishonest.
 
-Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
+Step plans for both entries: [QUALITY.md](QUALITY.md).
 
 | ID   | Title                                                                     | E  | Source                      |
 |------|---------------------------------------------------------------------------|----|-----------------------------|
-| C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, BITING_PLAN.md  |
-| P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, BITING_PLAN.md |
+| C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, QUALITY.md  |
+| P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, QUALITY.md |
 
 **Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
 - ~~C7/P22~~ — `spacial<T>` diagnostic references 1.1+ timeline

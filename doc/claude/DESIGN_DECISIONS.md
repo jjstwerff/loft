@@ -16,7 +16,7 @@ register](DEVELOPMENT.md#closed-by-decision-register)):
 
 - Closed-by-decision items are not "backlog" and should not appear
   in ROADMAP.md's scheduled milestones, PLANNING.md's priorities,
-  or BITING_PLAN.md's active tables.  A short reference in the
+  or QUALITY.md's active tables.  A short reference in the
   "Out of scope" sections of those docs is sufficient.
 - Re-opening requires **new evidence**: a concrete use case,
   incident report, or performance measurement that wasn't available
@@ -115,7 +115,7 @@ Adding suffix syntax would:
 - Solve a 1 % problem that `as` already covers.
 
 **Decision.** **Closed — declined.**  Dated 2026-04-13.  See
-[BITING_PLAN.md § C54.D](BITING_PLAN.md).
+[QUALITY.md § C54](QUALITY.md#active-design--c54-integer-i64) — `C54.D` listed under sub-tickets.
 
 **Revisit when.** A real loft program needs a literal-size
 distinction that cannot be expressed as `as <T>` in reasonable

@@ -207,7 +207,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
-| [BITING_PLAN.md](doc/claude/BITING_PLAN.md) | Concrete step-by-step designs for remaining programmer-biting issues (C54/C58/P54/P137) |
+| [QUALITY.md](doc/claude/QUALITY.md) | Open programmer-biting issues, active sprint (P54), active design (C54), compiler blockers, enhancement tiers |
 | [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |

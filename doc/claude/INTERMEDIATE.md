@@ -398,7 +398,7 @@ automatically.  Only 2 slots sit unused today (0xFE, 0xFF).
 
 Docs in `ROADMAP.md`, `PLANNING.md`, and `PERFORMANCE.md` cite this
 as "254/256 used".  Superinstruction peephole work (O1) is parked
-on this count — see `BITING_PLAN.md § C54.E` for a plan to reclaim
+on this count — see `QUALITY.md § C54` (sub-ticket C54.E) for a plan to reclaim
 ~26 slots by unifying the `Op*Int` / `Op*Long` families post-C54.
 
 Categories:

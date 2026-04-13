@@ -429,7 +429,7 @@ replace the text-based JSON surface (`json_items`, `json_nested`,
 `JBool` / `JNull`.  `json_parse(text) -> JsonValue` is the one entry
 point; `MyStruct.parse` accepts only `JsonValue` and rejects bare
 text at compile time with a fix-it hint.  Full design in
-[BITING_PLAN.md § P54](BITING_PLAN.md).  The earlier `JsonBody`
+[QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).  The earlier `JsonBody`
 newtype half-measure is withdrawn — doing the parse once into a
 typed tree is simpler, faster, and covers the dynamic-shape case
 that a newtype-over-text cannot.
