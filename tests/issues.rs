@@ -3987,3 +3987,82 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(42));
 }
+
+/// Struct-enum as the value in `hash<Entry[name]>` — JsonValue's
+/// eventual shape for JObject.  Works end-to-end: construction,
+/// hash lookup, match on the retrieved value's enum field.  Pairs
+/// with `p54_struct_enum_as_struct_field` to show struct-enum
+/// embedding in containers is fully viable.
+#[test]
+fn p54_struct_enum_in_hash_value() {
+    code!(
+        "pub enum Val { IntV { v: integer }, StrV { v: text } }
+pub struct Entry { name: text, value: Val }
+pub struct Holder { h: hash<Entry[name]> }
+fn run() -> text {
+    m = Holder { h: [Entry { name: \"a\", value: IntV { v: 7 } }] };
+    e = m.h[\"a\"];
+    if e == null { return \"miss\"; }
+    match e.value {
+        IntV { v } => \"int-{v}\",
+        StrV { v } => \"str-{v}\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("int-7"));
+}
+
+/// Nested struct-enum — outer variant carries an inner struct-enum
+/// as a field.  Full match-and-destructure chain works.  Critical
+/// for JsonValue's JArray-of-JObjects / JObject-of-JArrays cases.
+#[test]
+fn p54_nested_struct_enum() {
+    code!(
+        "pub enum Inner { Leaf { v: integer } }
+pub enum Outer { Wrap { inner: Inner }, Plain }
+fn run() -> integer {
+    o = Wrap { inner: Leaf { v: 42 } };
+    match o {
+        Plain => -1,
+        Wrap { inner } => {
+            match inner {
+                Leaf { v } => v
+            }
+        }
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// Struct-enum flowing through multiple function calls — parameter
+/// into one fn, return from another, construct a fresh variant in
+/// one arm, pass through in another.  Exercises the full Reference
+/// / return / assignment path.
+#[test]
+fn p54_struct_enum_multi_call_flow() {
+    code!(
+        "pub enum V { A { v: integer }, B { v: text } }
+fn double_a(x: const V) -> V {
+    match x {
+        A { v } => A { v: v * 2 },
+        B { v } => B { v: v }
+    }
+}
+fn describe(x: const V) -> text {
+    match x {
+        A { v } => \"a-{v}\",
+        B { v } => \"b-{v}\"
+    }
+}
+fn run() -> text {
+    a = A { v: 5 };
+    d = double_a(a);
+    describe(d)
+}"
+    )
+    .expr("run()")
+    .result(Value::str("a-10"));
+}
