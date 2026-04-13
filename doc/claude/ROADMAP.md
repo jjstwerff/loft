@@ -169,7 +169,7 @@ makes the "fully working language" label dishonest.
 | ID     | Title                                                  | E  | Source |
 |--------|--------------------------------------------------------|----|--------|
 | C54    | **Switch `integer` from i32 to i64.** Eliminates the `i32::MIN` null-sentinel trap entirely. `long` keeps working as a historical alias. Breaking change, pre-1.0 window. Revisit `size(Type::Integer)` + schema layout tests | MH | CAVEATS.md |
-| C60    | **Hash iteration** via `for (k, v) in hash` → `(K, V)` tuples, unspecified order. Ordered traversal stays the parallel-vector pattern | M | CAVEATS.md |
+| C60    | **Hash iteration in ascending key order.** `for e in hash { … }` — loop variable is the record (same shape as vector/sorted/index), not a tuple. Sort at loop setup via a pre-lift scratch vector; inefficient (O(n log n) per loop) but deterministic. Multi-field keys use lexicographic order; `-` prefix flips per-field. Full design in CAVEATS.md C60 | MH | CAVEATS.md |
 | ~~C61.local~~ | ~~Outer-local shadow reject~~ | S | **Done** — pass-1 reject via `was_loop_var`; stdlib rename sweep unblocked by #139. Tests: `tests/parse_errors.rs::c61_local_*` |
 | ~~SLOT-VEC3 / #139~~ | ~~`_vector_N` slot-allocator TOS mismatch~~ | MH | **Done** — `OpReserveFrame` now fires when the allocator's slot sits above TOS. Unblocks the C61.local rename sweep. Tests: `tests/issues.rs::p139_*` |
 | ~~C7/P22~~ | ~~Improve `spacial<T>` diagnostic wording~~ | XS | **Done** — diagnostic surfaces 1.1+ timeline and substitute types. Tests: `spacial_not_implemented`, `spacial_not_implemented_in_local` |

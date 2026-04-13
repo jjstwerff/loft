@@ -121,6 +121,26 @@ still to do.
 
 ## Web Services
 
+### 60. Hash iteration — designed 2026-04-13
+
+Full design in CAVEATS.md C60.  Summary: `for e in hash { … }`
+iterates in ascending key order, loop variable is the record (no
+tuple destructuring).  Implementation is a pre-loop lift that walks
+all records of the struct type into a scratch `vector<reference<T>>`,
+sorts by extracting key fields, and iterates the sorted vector.
+Inefficient by design (O(n log n) per loop); determinism beats
+unspecified-order for a scripting language.
+
+Scope: parser routing at `src/parser/fields.rs:599`, a new
+`parse_iter_hash` in `src/parser/collections.rs`, a record-walk
+helper in `src/database/search.rs` (or reuse the `validate` walk at
+line 327), and one new opcode (`OpHashCollect` or `OpHashIterSetup`).
+
+Scope honestly M–MH.  Two days of focused work; the design is
+concrete and the scope is bounded.
+
+---
+
 ### 54. `json_items` returns opaque `vector<text>` — 0.9.0
 
 **Symptom:** `json_items(body)` returns `vector<text>` where each

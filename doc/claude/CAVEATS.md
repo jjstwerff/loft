@@ -66,14 +66,113 @@ so 0.9.0 is the right window (pre-1.0 stability contract).
 Bumping struct field sizes requires revisiting `size(Type::Integer)`
 in `src/database/mod.rs` and every schema layout test.
 
-### C60 — Hash iteration
+### C60 — Hash iteration in key order (designed 2026-04-13)
+
 A collection type you can't iterate breaks the "vector, hash, sorted,
-index" promise.  **Decision:** `for (k, v) in hash` returns `(K, V)`
-tuples in **unspecified order**.  Insertion-order iteration (Python)
-would cost an extra vector per hash — wrong trade for a "fast lookup"
-collection.  Users who need ordered iteration pair the hash with a
-`vector<K>` (the current workaround, now explicit and documented).
-Tuples shipped already, so the API shape is natural.
+index" promise.  **Decision (revised):** `for e in hash` iterates in
+**ascending key order**.  Determinism wins over efficiency — the lift
+costs O(n log n) per loop, and users who care about that use `sorted`
+or pair the hash with a `vector<K>`.  This is *not* the earlier
+"unspecified order" decision; deterministic order is worth paying for.
+
+#### Syntax
+
+Mirror the other collection types — the loop variable is the
+**record**, not a tuple:
+
+```loft
+struct Entry { name: text, count: integer }
+struct Bag   { data: hash<Entry[name]> }
+
+b = Bag { data: [
+    Entry{name:"zebra", count:1},
+    Entry{name:"apple", count:5},
+    Entry{name:"mango", count:3},
+] };
+
+for e in b.data {              // visits apple, mango, zebra (ascending name)
+    println("{e.name}={e.count}");
+}
+```
+
+No new tuple-destructuring syntax is required (keeps the for-loop
+head simple and consistent with `for e in vector`, `for e in sorted`,
+`for e in index`).  Users read the "key" via plain field access on
+the iterated record.
+
+#### Multi-field and descending keys
+
+- `hash<T[a, b]>` iterates in lexicographic order of `(a, b)`.
+- `hash<T[-score]>` iterates descending — the `-` prefix matches the
+  existing `sorted`/`index` convention.
+- `hash<T[region, -date]>` combines both.
+
+#### Iteration invariants (documented)
+
+- **Order**: ascending on each key field, `-` flips per-field.
+- **Mutations during iteration**: adding/removing entries is unspecified
+  (may miss, may double-visit); modifying a key field on an iterated
+  record is unspecified (order invariants break).  Loft does not
+  guarantee snapshot iteration — the sorted scratch references the
+  original records.
+- **Empty hash**: zero iterations.
+- **Loop attributes**: `#index` (0-based position in the sorted
+  iteration), `#count` (iterations so far), `#first` (true on first).
+  `#remove` is **not** supported (invalidates the sort order).
+- **Filter clause**: `for e in h if e.count > 10 { … }` works — same
+  as other collection filters.
+
+#### Implementation sketch
+
+**Parser** (`src/parser/fields.rs:599`): replace the current
+`"Cannot iterate a hash directly"` error with a new iteration code
+(`on = 4` alongside Vector=1, Sorted=2, Index=3).  Route it to a new
+helper `parse_iter_hash` in `src/parser/collections.rs`.
+
+**Lift at loop setup**: before the loop body, codegen emits a
+pre-loop block that:
+
+1. Allocates a scratch `vector<reference<T>>`.
+2. Walks the hash's record-store for the struct type and collects a
+   reference to each live record into the scratch.  The walk uses the
+   existing `Stores::walk_records(db_tp, callback)` pattern already in
+   `src/database/search.rs` — new helper needed if none matches
+   exactly, otherwise the "validate" walk at `search.rs:327` is the
+   right shape.
+3. Sorts the scratch by extracting key fields from each reference.
+   The sort comparator is generated from the hash's `Vec<u16>` key
+   field indices (stored in `Type::Hash(content, key_fields, _)`).
+4. Iterates the scratch as a normal `vector<reference<T>>` loop —
+   reusing the existing vector-iteration codegen path.
+
+**Native codegen**: same sequence in emitted Rust.  Each key-field
+access becomes a direct field read; the sort uses Rust's
+`slice::sort_by` with a generated comparator.
+
+**Interpreter**: new opcode `OpHashCollect(hash_ref) -> DbRef` that
+walks the hash's records into a fresh vector and returns it.  The
+sort is a separate pass using existing vector-sort machinery.
+Alternative: a single `OpHashIterSetup(hash_ref) -> DbRef` that
+produces a sorted vector in one step — saves a bytecode op at the
+cost of less composability.
+
+**Scope honestly**: **M–MH**.  New opcode + database walk + sort
+integration + parser route.  Two days of work if nothing else bites,
+up from the "medium" rough estimate — but the design is concrete and
+the scope is bounded (no tuple-destructuring, no new iterator
+protocol, no bucket-walk in `src/hash.rs`).
+
+#### Tests (to land with implementation)
+
+- `for e in h` over 3 records in mixed insertion order — visits in
+  ascending key order, all records exactly once.
+- Empty hash — zero iterations.
+- Multi-field key `hash<T[a,b]>` — lexicographic order.
+- Descending `hash<T[-score]>` — reverse order.
+- `for e in h if e.count > N { … }` — filter works.
+- `#index`, `#count`, `#first` loop attributes.
+- Regression: `hash` with struct field named `key` (reserved per
+  `src/typedef.rs:154`) continues to error at parse time.
 
 ### ~~C61.local~~ — Outer-local shadow — DONE
 `x = 5; for x in …` now rejected on pass 1 via the `was_loop_var`
