@@ -6,9 +6,10 @@
 // value that the caller materialises into a loft `JsonValue`
 // struct-enum record.
 //
-// Step 3 scope (this commit): RFC 8259 primitives — null, true,
-// false, number, string (incl. standard escapes).  Step 4 will
-// extend this to object and array parsing.
+// Step 4 scope: full RFC 8259 — null, true, false, number, string
+// (incl. standard escapes), array, object.  The `Parsed` tree is
+// fully recursive here; `native::n_json_parse` flattens it into
+// the arena-indexed loft JsonValue form at materialisation time.
 
 /// Intermediate tree produced by [`parse`].  The loft-level
 /// `JsonValue` variants are built from these values inside
@@ -20,7 +21,8 @@ pub enum Parsed {
     Bool(bool),
     Number(f64),
     Str(String),
-    // Object / Array landing in step 4.
+    Array(Vec<Parsed>),
+    Object(Vec<(String, Parsed)>),
 }
 
 /// Result of a parse: either the parsed tree plus the byte index
@@ -61,13 +63,8 @@ fn parse_value(bytes: &[u8], i: usize) -> ParseResult {
         b'f' => parse_literal(bytes, i, b"false", Parsed::Bool(false)),
         b'"' => parse_string(bytes, i),
         b'-' | b'0'..=b'9' => parse_number(bytes, i),
-        // Step 4 lands { and [; for now reject cleanly so malformed
-        // inputs and object/array inputs both route through the
-        // caller's JNull-on-error fallback.
-        b'{' | b'[' => Err((
-            format!("object/array parsing not yet implemented (byte {i})"),
-            i,
-        )),
+        b'[' => parse_array(bytes, i),
+        b'{' => parse_object(bytes, i),
         b => Err((format!("unexpected byte {b:#x} at offset {i}"), i)),
     }
 }
@@ -189,6 +186,64 @@ fn parse_number(bytes: &[u8], start: usize) -> ParseResult {
     Ok((Parsed::Number(n), i))
 }
 
+fn parse_array(bytes: &[u8], start: usize) -> ParseResult {
+    debug_assert_eq!(bytes[start], b'[');
+    let mut i = skip_ws(bytes, start + 1);
+    let mut items: Vec<Parsed> = Vec::new();
+    if i < bytes.len() && bytes[i] == b']' {
+        return Ok((Parsed::Array(items), i + 1));
+    }
+    loop {
+        let (v, j) = parse_value(bytes, i)?;
+        items.push(v);
+        i = skip_ws(bytes, j);
+        if i >= bytes.len() {
+            return Err(("unterminated array".to_string(), start));
+        }
+        match bytes[i] {
+            b',' => i = skip_ws(bytes, i + 1),
+            b']' => return Ok((Parsed::Array(items), i + 1)),
+            b => return Err((format!("expected `,` or `]` in array, got {b:#x}"), i)),
+        }
+    }
+}
+
+#[allow(clippy::many_single_char_names)]
+fn parse_object(bytes: &[u8], start: usize) -> ParseResult {
+    debug_assert_eq!(bytes[start], b'{');
+    let mut i = skip_ws(bytes, start + 1);
+    let mut fields: Vec<(String, Parsed)> = Vec::new();
+    if i < bytes.len() && bytes[i] == b'}' {
+        return Ok((Parsed::Object(fields), i + 1));
+    }
+    loop {
+        if i >= bytes.len() || bytes[i] != b'"' {
+            return Err(("expected string key in object".to_string(), i));
+        }
+        let (key, j) = parse_string(bytes, i)?;
+        let name = match key {
+            Parsed::Str(s) => s,
+            _ => unreachable!("parse_string always returns Parsed::Str"),
+        };
+        i = skip_ws(bytes, j);
+        if i >= bytes.len() || bytes[i] != b':' {
+            return Err(("expected `:` after object key".to_string(), i));
+        }
+        i = skip_ws(bytes, i + 1);
+        let (v, k) = parse_value(bytes, i)?;
+        fields.push((name, v));
+        i = skip_ws(bytes, k);
+        if i >= bytes.len() {
+            return Err(("unterminated object".to_string(), start));
+        }
+        match bytes[i] {
+            b',' => i = skip_ws(bytes, i + 1),
+            b'}' => return Ok((Parsed::Object(fields), i + 1)),
+            b => return Err((format!("expected `,` or `}}` in object, got {b:#x}"), i)),
+        }
+    }
+}
+
 fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
     while i < bytes.len() {
         match bytes[i] {
@@ -237,6 +292,64 @@ mod tests {
     #[test]
     fn whitespace_tolerated() {
         assert!(matches!(parse("  null  ").unwrap(), Parsed::Null));
+    }
+
+    #[test]
+    fn arrays() {
+        assert!(matches!(parse("[]").unwrap(), Parsed::Array(ref v) if v.is_empty()));
+        let got = parse("[1, 2, 3]").unwrap();
+        let Parsed::Array(v) = got else {
+            panic!("expected array");
+        };
+        assert_eq!(v.len(), 3);
+        assert!(matches!(v[0], Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        let nested = parse("[[1], [2, 3]]").unwrap();
+        let Parsed::Array(outer) = nested else {
+            panic!("expected array");
+        };
+        assert_eq!(outer.len(), 2);
+    }
+
+    #[test]
+    fn objects() {
+        assert!(matches!(parse("{}").unwrap(), Parsed::Object(ref v) if v.is_empty()));
+        let got = parse(r#"{"a": 1, "b": "hi"}"#).unwrap();
+        let Parsed::Object(fields) = got else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].0, "a");
+        assert!(matches!(fields[0].1, Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert_eq!(fields[1].0, "b");
+        assert!(matches!(fields[1].1, Parsed::Str(ref s) if s == "hi"));
+    }
+
+    #[test]
+    fn nested_mixed() {
+        let got = parse(r#"{"items": [1, {"x": true}], "n": null}"#).unwrap();
+        let Parsed::Object(fields) = got else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 2);
+        let Parsed::Array(items) = &fields[0].1 else {
+            panic!("expected array");
+        };
+        assert_eq!(items.len(), 2);
+        let Parsed::Object(inner) = &items[1] else {
+            panic!("expected inner object");
+        };
+        assert_eq!(inner[0].0, "x");
+        assert!(matches!(inner[0].1, Parsed::Bool(true)));
+    }
+
+    #[test]
+    fn malformed_collections() {
+        assert!(parse("[").is_err());
+        assert!(parse("[1,]").is_err());
+        assert!(parse("{").is_err());
+        assert!(parse(r#"{"a"}"#).is_err());
+        assert!(parse(r#"{"a": 1,}"#).is_err());
+        assert!(parse(r"{a: 1}").is_err());
     }
 
     #[test]

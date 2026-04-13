@@ -1346,6 +1346,25 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             store_mut.set_int(result.rec, value_pos, s_rec as i32);
             stores.last_json_errors.clear();
         }
+        Ok(other) => {
+            // Step 4 of P54 lands the Rust parser for arrays/objects; the
+            // loft-side JArray/JObject variants + arena materialisation
+            // follow in a subsequent commit.  Until then fall through to
+            // JNull with a pointer-to-work diagnostic so callers see what
+            // changed rather than getting a silent "not implemented".
+            let kind = match other {
+                crate::json::Parsed::Array(v) => format!("array ({} items)", v.len()),
+                crate::json::Parsed::Object(v) => format!("object ({} fields)", v.len()),
+                _ => unreachable!("primitives handled above"),
+            };
+            stores
+                .store_mut(&result)
+                .set_byte(result.rec, pos, 0, JV_DISCR_NULL);
+            stores.last_json_errors.clear();
+            stores
+                .last_json_errors
+                .push(format!("{kind} materialisation pending (P54 step 4)"));
+        }
         Err((msg, at)) => {
             stores
                 .store_mut(&result)
