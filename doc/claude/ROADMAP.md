@@ -174,7 +174,7 @@ makes the "fully working language" label dishonest.
 | ~~SLOT-VEC3 / #139~~ | ~~`_vector_N` slot-allocator TOS mismatch~~ | MH | **Done** — `OpReserveFrame` now fires when the allocator's slot sits above TOS. Unblocks the C61.local rename sweep. Tests: `tests/issues.rs::p139_*` |
 | ~~C7/P22~~ | ~~Improve `spacial<T>` diagnostic wording~~ | XS | **Done** — diagnostic surfaces 1.1+ timeline and substitute types. Tests: `spacial_not_implemented`, `spacial_not_implemented_in_local` |
 | P54    | **Typed `JsonBody` newtype** + `.is_object/array/null`. Full `JsonValue` enum stays 1.1+ until dynamic-shape use case lands | M | PROBLEMS.md #54 |
-| P91    | **Function-prologue default expressions** referencing earlier args. Parser + call-site supplied-bitmap + codegen prologue emission. Three moving parts | M | PROBLEMS.md #91 |
+| ~~P91~~ | ~~Default-from-earlier-parameter~~ | S | **Done** — simpler than planned: parse-time var injection + call-site `substitute_param_refs` rewrites `Var(N)` with the caller's actual arg. Tests: `tests/issues.rs::p91_*` |
 
 **Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
 - ~~C61-nested~~ — parse-time reject for `for i { for i { } }` (`tests/parse_errors.rs::c61_nested_same_name_loop_rejected`)

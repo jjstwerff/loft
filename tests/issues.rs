@@ -1089,6 +1089,62 @@ fn p1_1_lambda_void_body() {
     .result(loft::data::Value::Null);
 }
 
+// ── P91 regression guards ───────────────────────────────────────────────────
+// Earlier-parameter-reference in default expressions.  Before this fix,
+// `fn f(a: integer, b: integer = a * 2)` produced "Unknown variable 'a'"
+// because earlier arguments weren't visible to later default expressions.
+// The fix in parse_arguments (src/parser/definitions.rs) injects earlier
+// args into self.vars before parsing each default, rewrites internal slot
+// numbers to argument indices, and then cleans up the temporary bindings.
+// The call-site substitution (Self::substitute_param_refs in parser/mod.rs)
+// replaces Var(N) in the default tree with the caller's actual arg[N].
+
+#[test]
+fn p91_default_references_earlier_param() {
+    code!(
+        "fn dbl(a: integer, b: integer = a * 2) -> integer { a + b }
+fn run() -> integer { dbl(5) }"
+    )
+    .expr("run()")
+    .result(loft::data::Value::Int(15));
+}
+
+#[test]
+fn p91_default_identity_of_earlier_param() {
+    // `fn rect(w, h = w)` is the idiomatic "square by default" shape.
+    code!(
+        "fn rect(w: integer, h: integer = w) -> integer { w * h }
+fn run() -> integer { rect(4) }"
+    )
+    .expr("run()")
+    .result(loft::data::Value::Int(16));
+}
+
+#[test]
+fn p91_default_overridden_by_caller() {
+    // Regression guard: supplying the argument skips the default entirely.
+    code!(
+        "fn dbl(a: integer, b: integer = a * 2) -> integer { a + b }
+fn run() -> integer { dbl(3, 7) }"
+    )
+    .expr("run()")
+    .result(loft::data::Value::Int(10));
+}
+
+#[test]
+fn p91_chained_defaults_reference_earlier_args() {
+    // Three-argument chain: c's default references both a and b, where
+    // b itself has a literal default.  Verifies that substitute_param_refs
+    // uses already-substituted earlier args, not the raw default tree.
+    code!(
+        "fn add3(a: integer, b: integer = 10, c: integer = a + b) -> integer { a + b + c }
+fn run() -> integer { add3(1) }"
+    )
+    .expr("run()")
+    // a=1, b=10 (default), c=a+b=11 → 1+10+11 = 22
+    .result(loft::data::Value::Int(22));
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte

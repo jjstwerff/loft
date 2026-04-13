@@ -25,7 +25,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 |---|-------|----------|------------|
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** typed `JsonBody` newtype — 80% of safety for 20% of design surface; full `JsonValue` deferred to 1.1+ |
-| 91 | Default-from-earlier-parameter | Medium | **0.9.0:** evaluate at function entry via codegen prologue + supplied-args bitmap |
+| ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
@@ -90,7 +90,7 @@ the next 0.9.0 maintenance sweep.
 
 ---
 
-### 91. Default-from-earlier-parameter — 0.9.0
+### ~~91~~. Default-from-earlier-parameter — DONE
 
 **Symptom:** `fn make_rect(w: integer, h: integer = w)` fails with
 *"Unknown variable 'w'"*; the default expression cannot reference

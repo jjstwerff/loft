@@ -873,13 +873,49 @@ impl Parser {
             } else {
                 Type::Unknown(0)
             };
+            // P91: if this parameter has `= expr`, the expression may
+            // reference earlier parameters of the same function.  Inject
+            // those earlier params into `self.vars` before parsing the
+            // default, track which var_nr each maps to, then rewrite the
+            // parsed Value tree so references use the *argument index*
+            // (0, 1, …) rather than the parser's internal var_nr.
+            // `fill_defaults` in src/parser/mod.rs::substitute_param_refs
+            // replaces `Var(argument_index)` with the caller's actual arg.
+            let injected: Vec<(String, u16, u16)> = if self.lexer.peek_token("=") {
+                let mut mapping = Vec::new();
+                for (i, a) in arguments.iter().enumerate() {
+                    if a.typedef.is_unknown() {
+                        continue;
+                    }
+                    if self.vars.var(&a.name) != u16::MAX {
+                        continue;
+                    }
+                    let v = self.vars.add_variable(&a.name, &a.typedef, &mut self.lexer);
+                    if v != u16::MAX {
+                        self.vars.become_argument(v);
+                        self.vars.defined(v);
+                        mapping.push((a.name.clone(), v, i as u16));
+                    }
+                }
+                mapping
+            } else {
+                Vec::new()
+            };
             let val = if self.lexer.has_token("=") {
                 let mut t = Value::Var(arguments.len() as u16);
                 self.expression(&mut t);
+                // Rewrite Var(injected_slot) → Var(arg_index) so the stored
+                // default is portable across call sites.
+                for (_name, slot, arg_idx) in &injected {
+                    t = Self::remap_var_nr(t, *slot, *arg_idx);
+                }
                 t
             } else {
                 Value::Null
             };
+            for (name, _, _) in &injected {
+                self.vars.remove_name(name);
+            }
             if !self.first_pass
                 && typedef.is_unknown()
                 && val == Value::Null

@@ -99,16 +99,20 @@ the flipped-to-reject `shadow_same_type_ok`.
 once-permissive test), `lib/graphics/examples/25-brick-buster.loft`
 (renamed `br_rt` → `br_pti`).
 
-### P91 — Default-from-earlier-parameter
-`fn make_rect(w: integer, h: integer = w)` is an idiomatic default.
-**Semantics decision:** the default expression is evaluated at
-*function entry*, after earlier arguments are bound, using their
-actual call-site values.  That is different from struct-field
-`init(expr)`, which evaluates once at construction.  Required shape:
-parse default as a `Value` tree (already stored in `Attribute.value`);
-codegen emits a prologue guarded by "was this argument supplied?"
-using a per-call supplied-args bitmap.  **Scope honestly: M.**
-Three moving parts (parser, call site, prologue) all need updates.
+### ~~P91~~ — Default-from-earlier-parameter — DONE
+Implemented via **call-site substitution** rather than function
+prologue (the simpler approach worked).  `parse_arguments` injects
+earlier arguments into `self.vars` before parsing each default, then
+rewrites the parsed `Value` tree so `Var(slot)` references become
+`Var(arg_index)` — a stable, portable form.  At call sites,
+`Parser::substitute_param_refs` walks the default tree and replaces
+each `Var(N)` with the caller's actual `list[N]` (already substituted
+if earlier args also had defaults).
+
+**Tests:** `tests/issues.rs::p91_default_references_earlier_param`,
+`p91_default_identity_of_earlier_param`,
+`p91_default_overridden_by_caller`,
+`p91_chained_defaults_reference_earlier_args`.
 
 ### P54 — `json_items` returns opaque `vector<text>`
 The typeless API contradicts loft's type-system promise, but the full
@@ -148,7 +152,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | C60    | 0.9.0     | `for (k, v) in hash` returning `(K, V)` tuples in unspecified order |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | P54    | 0.9.0     | `JsonBody` newtype + `.is_object/array/null()`; full `JsonValue` deferred to 1.1+ |
-| P91    | 0.9.0     | Default evaluated at function entry via prologue; call-site supplied-args bitmap. Scope M |
+| ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
 | P137   | 0.8.5     | Browser WASM `unreachable` panic fix |
 
 ---
