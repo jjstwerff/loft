@@ -92,14 +92,14 @@
 <h2 id="iteration">Iteration</h2>
 <p><code>for x in a..b</code> loops over the integers starting at a and stopping before b (exclusive upper bound). Use <code>..=</code> to include the upper bound. Here we sum 1 + 2 + 3 + 4 + 5 = 15.</p>
 <pre><code>  t = <span class="nm">0</span>;
-  <span class="kw">for</span> a <span class="kw">in</span> <span class="nm">1..6</span> {
-    t += a;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">1..6</span> {
+    t += i;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">15</span>, <span class="st">"Total was {t} instead of 15"</span>);</code></pre>
 <p><code>rev(range)</code> reverses the direction of any range. <code>1..=5</code> is inclusive, so it visits 5, 4, 3, 2, 1 in that order. Multiplying each digit into a running total builds the number 54321.</p>
 <pre><code>  t = <span class="nm">0</span>;
-  <span class="kw">for</span> a <span class="kw">in</span> <span class="bi">rev</span>(<span class="nm">1..</span>=<span class="nm">5</span>) {
-    t = t * <span class="nm">10</span> + a;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="bi">rev</span>(<span class="nm">1..</span>=<span class="nm">5</span>) {
+    t = t * <span class="nm">10</span> + i;
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(t == <span class="nm">54321</span>, <span class="st">"Result was {t} instead of 54321"</span>);</code></pre>
 <h2 id="nested-loops-and-break">Nested loops and break</h2>
@@ -1013,9 +1013,14 @@ fn try_push(v: vector&lt;integer&gt;, x: integer) { v += [x]; }   // caller does
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.h[<span class="st">"one"</span>], <span class="st">"one still present"</span>);
   d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
 <p>no-op; does not panic</p>
-<h2 id="why-you-cannot-iterate-a-hash-directly">Why you cannot iterate a hash directly</h2>
-<p>A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. <code>for item in c.lookup</code> is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
-<pre><code>}</code></pre>
+<h2 id="iterating-a-hash">Iterating a Hash</h2>
+<p><code>for e in h { ... }</code> walks the hash in ascending key order.  The loop variable has the same shape as a <code>sorted&lt;T&gt;</code> iteration — a <code>reference&lt;T&gt;</code> with <code>#index</code>, <code>#count</code>, and <code>#first</code> available.  Multi-field keys sort lexicographically.</p>
+<p>Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per <code>for</code>, not amortised across calls.  For a hot loop, pair the hash with a <code>vector&lt;T&gt;</code> or <code>sorted&lt;T[k]&gt;</code> on the same record type and iterate the companion collection.</p>
+<p><code>e#remove</code> is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use <code>h[key] = null</code> to remove an entry.</p>
+<pre><code>  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> e <span class="kw">in</span> c.lookup { sum += e.v; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">10</span>, <span class="st">"Sum via hash iteration: {sum}"</span>);
+}</code></pre>
 </section>
 <section class="print-section" id="13-file">
 <h1>File</h1>
@@ -2822,6 +2827,10 @@ for e in data#errors { log_warn(e) }
 <div class="item">
 <pre><code>pub fn clear(both: vector)</code></pre>
 <p>Remove all elements from the vector, setting its length to 0.</p>
+</div>
+<div class="item">
+<pre><code>pub fn hash_sorted(h: reference, tp: integer) -&gt; reference</code></pre>
+<p>C60 Step 3a-part2: iterate a hash in ascending key order. Returns a fresh vector&lt;reference&lt;T&gt;&gt; with the hash's records sorted by key field(s).  The parser desugars `for e in h { … }` into a call with the hash's type id; direct user calls need to supply the id via `sizeof`-style introspection (not yet exposed).  Inefficient by design — walks + sorts all records per call.  See CAVEATS.md C60.</p>
 </div>
 <h2 id="stdlib-output-and-diagnostics">Output and Diagnostics</h2>
 <div class="item">

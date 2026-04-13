@@ -69,9 +69,22 @@ fn main() {
   assert(d.h["one"], "one still present");
   d.h["missing"] = null;
   // no-op; does not panic
-  // ## Why you cannot iterate a hash directly
-  // A hash has no stable element order — internally, each record is placed in a slot
-  // chosen by a number computed from the key, so iteration order is unpredictable.
-  // 'for item in c.lookup' is therefore a compile error.
-  // Always pair a hash with a vector when you need both fast lookup and ordered iteration.
+  // ## Iterating a Hash
+  // `for e in h { ... }` walks the hash in ascending key order.  The loop
+  // variable has the same shape as a `sorted<T>` iteration — a `reference<T>`
+  // with `#index`, `#count`, and `#first` available.  Multi-field keys sort
+  // lexicographically.
+  //
+  // Under the hood the compiler builds a one-shot sorted snapshot of the
+  // hash's record-numbers and walks it, so iteration cost is
+  // O(n) + O(n log n) per `for`, not amortised across calls.  For a hot
+  // loop, pair the hash with a `vector<T>` or `sorted<T[k]>` on the same
+  // record type and iterate the companion collection.
+  //
+  // `e#remove` is rejected at compile time — the snapshot is detached from
+  // the hash, so removing from it would not actually remove from the hash.
+  // Use `h[key] = null` to remove an entry.
+  sum = 0;
+  for e in c.lookup { sum += e.v; }
+  assert(sum == 10, "Sum via hash iteration: {sum}");
 }

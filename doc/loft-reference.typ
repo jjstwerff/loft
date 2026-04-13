@@ -1037,8 +1037,8 @@ Every block in Loft produces a value — the last expression inside it. That mea
 
 ```rust
   t = 0;
-  for a in 1..6 {
-    t += a;
+  for i in 1..6 {
+    t += i;
   }
   assert(t == 15, "Total was {t} instead of 15");
 ```
@@ -1047,8 +1047,8 @@ Every block in Loft produces a value — the last expression inside it. That mea
 
 ```rust
   t = 0;
-  for a in rev(1..=5) {
-    t = t * 10 + a;
+  for i in rev(1..=5) {
+    t = t * 10 + i;
   }
   assert(t == 54321, "Result was {t} instead of 54321");
 ```
@@ -2818,11 +2818,18 @@ Assigning null to a hash subscript removes that element. Removing a key that is 
 
 no-op; does not panic
 
-=== Why you cannot iterate a hash directly
+=== Iterating a Hash
 
-A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. 'for item in c.lookup' is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.
+`for e in h { ... }` walks the hash in ascending key order.  The loop variable has the same shape as a `sorted\<T\>` iteration — a `reference\<T\>` with `\#index`, `\#count`, and `\#first` available.  Multi-field keys sort lexicographically.
+
+Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per `for`, not amortised across calls.  For a hot loop, pair the hash with a `vector\<T\>` or `sorted\<T\[k\]\>` on the same record type and iterate the companion collection.
+
+`e\#remove` is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use `h\[key\] = null` to remove an entry.
 
 ```rust
+  sum = 0;
+  for e in c.lookup { sum += e.v; }
+  assert(sum == 10, "Sum via hash iteration: {sum}");
 }
 ```
 
@@ -5645,6 +5652,12 @@ pub fn clear(both: vector)
 ```
 
 Remove all elements from the vector, setting its length to 0.
+
+```rust
+pub fn hash_sorted(h: reference, tp: integer) -> reference
+```
+
+C60 Step 3a-part2: iterate a hash in ascending key order. Returns a fresh vector\<reference\<T\>\> with the hash's records sorted by key field(s).  The parser desugars `for e in h { … }` into a call with the hash's type id; direct user calls need to supply the id via `sizeof`-style introspection (not yet exposed).  Inefficient by design — walks + sorts all records per call.  See CAVEATS.md C60.
 
 == Output and Diagnostics
 
