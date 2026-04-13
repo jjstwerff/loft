@@ -85,6 +85,25 @@ returns `null` (`i32::MIN`). If a program needs the full 32-bit signed range, us
 `long` instead. For struct fields, `not null` reclaims the sentinel value for
 storage, allowing the full range.
 
+**`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
+or default?" but the answer differs by type because the null sentinel is in-band.
+For `boolean`, `false` *is* the null sentinel — `!b` is true for **both** `null`
+and `false`, and the two cases are indistinguishable.  For `integer`, `0` is a
+valid non-null value — `!n` fires **only** for `i32::MIN`, not for `0`.  Code
+ported from a boolean guard to an integer guard (or vice versa) silently changes
+meaning:
+
+```loft
+flag: boolean = false;
+if !flag { /* runs */ }     // catches both null and false
+
+count: integer = 0;
+if !count { /* skipped */ } // catches only null; zero passes through
+```
+
+The idiomatic "zero or null" check on an integer is `count == 0 or !count`,
+or simply `count == 0` if the sentinel and zero should be treated the same.
+
 Integer ranges can be constrained with `limit`:
 ```
 integer limit(-128, 127)   // fits in a byte

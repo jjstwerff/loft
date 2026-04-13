@@ -283,6 +283,13 @@ section explicitly stating that `!b` on boolean catches false and null, while `!
 integer catches null only. Document `n == 0 or !n` as the idiomatic "zero or null"
 integer check.
 
+**Status (2026-04-13):** Documented in LOFT.md (the null-sentinel table now carries
+a "`!value` asymmetry" subsection with the boolean/integer split and the
+`count == 0 or !count` idiom).  Three regression guards in `tests/issues.rs` lock
+the behaviour: `inc29_bang_boolean_catches_false`,
+`inc29_bang_integer_zero_is_not_null`, `inc29_bang_integer_null_is_caught`.  The
+asymmetry is now an *acknowledged* design point rather than a silent surprise.
+
 ---
 
 ## 30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression

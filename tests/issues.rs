@@ -4125,3 +4125,51 @@ fn test() {
 at p22_spacial_diagnostic_names_milestone_and_substitute:2:39",
     );
 }
+
+// ── INC#29: !value asymmetry between boolean and integer ───────────────
+//
+// The unary `!` operator catches different things on different
+// scalar types because the null sentinel is in-band:
+//
+//   boolean: false IS the null sentinel — `!b` catches both
+//   integer: 0 is a real value — `!n` catches only i32::MIN
+//
+// This asymmetry silently changes meaning when code is ported
+// between the two types.  These tests lock both shapes so a future
+// uniformity refactor cannot regress without a doc update.
+#[test]
+fn inc29_bang_boolean_catches_false() {
+    code!(
+        "fn run() -> boolean {
+    flag = false;
+    !flag
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn inc29_bang_integer_zero_is_not_null() {
+    code!(
+        "fn run() -> boolean {
+    count = 0;
+    !count
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(false));
+}
+
+#[test]
+fn inc29_bang_integer_null_is_caught() {
+    code!(
+        "fn divide(a: integer, b: integer) -> integer { a / b }
+fn run() -> boolean {
+    n = divide(1, 0);
+    !n
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
