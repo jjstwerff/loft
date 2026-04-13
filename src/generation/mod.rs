@@ -932,6 +932,7 @@ extern crate loft;"
             "n_parallel_get_ref",
             "n_path_sep",
             "n_stack_trace",
+            "n_hash_sorted",
         ];
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
