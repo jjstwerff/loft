@@ -78,6 +78,15 @@ Note: the text `c#index` value equals `c#count` only for ASCII text (one byte pe
 character). For multi-byte characters (emoji, CJK, accented letters), the byte offset
 advances by 2–4 per character.
 
+**Status (2026-04-13):** The naming asymmetry is preserved (renaming would be a
+breaking change) but the gotcha is now called out as a "Gotcha" callout block
+directly under the loop-attribute table in
+[LOFT.md § Loop attributes](LOFT.md), not buried in a per-row footnote.  Three
+regression guards in `tests/issues.rs` lock the byte-offset-vs-element-position
+divergence on a multi-byte string: `inc3_text_index_is_byte_offset_on_multibyte`,
+`inc3_text_count_is_character_position`, `inc3_vector_index_is_element_position`.
+A future unification refactor must update both the doc callout and these tests.
+
 ---
 
 ## 8. Method vs. Free Function Is an Arbitrary Standard-Library Choice

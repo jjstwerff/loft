@@ -4173,3 +4173,55 @@ fn run() -> boolean {
     .expr("run()")
     .result(Value::Boolean(true));
 }
+
+// ── INC#3: #index semantics on text vs vector ──────────────────────────
+//
+// Text loops:    c#index == byte offset of current char (UTF-8)
+// Vector loops:  v#index == 0-based element position
+//
+// On ASCII text the two coincide; on multi-byte text they diverge.
+// Code that uses c#index as a counter passes its tests on ASCII and
+// silently breaks on the first emoji.  These guards lock the
+// divergence so a future "make these uniform" refactor cannot land
+// without first updating LOFT.md.
+#[test]
+fn inc3_text_index_is_byte_offset_on_multibyte() {
+    code!(
+        "fn run() -> integer {
+    last = 0;
+    for c in \"a😊b\" { last = c#index; }
+    last
+}"
+    )
+    .expr("run()")
+    // 'a' at 0, '😊' at 1 (4 bytes), 'b' at 5
+    .result(Value::Int(5));
+}
+
+#[test]
+fn inc3_text_count_is_character_position() {
+    code!(
+        "fn run() -> integer {
+    last = 0;
+    for c in \"a😊b\" { last = c#count; }
+    last
+}"
+    )
+    .expr("run()")
+    // count is iterations completed so far; on the 'b' iteration that's 2
+    .result(Value::Int(2));
+}
+
+#[test]
+fn inc3_vector_index_is_element_position() {
+    code!(
+        "fn run() -> integer {
+    items = [10, 20, 30];
+    last = 0;
+    for v in items { last = v#index; }
+    last
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}

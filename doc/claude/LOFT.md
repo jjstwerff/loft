@@ -580,6 +580,15 @@ Inside a loop, the iteration variable supports several attributes using `#`:
 | `#index`  | ✓ (0-based) | ✓ (0-based array position) | ✗ compile error | N/A |
 | `#remove` | ✓ (filtered) | ✓ (filtered) | ✓ (filtered) | use `h[key] = null` |
 
+**Gotcha — `#index` does not mean the same thing on text and vector.** On a text
+loop `c#index` is a **byte offset** into the underlying UTF-8 (so it advances by
+2–4 per non-ASCII character); on a vector or sorted loop `v#index` is a 0-based
+**element position**.  Code that relies on `#index` being a counter — say
+`if c#index == 5 { … }` — works on ASCII, then quietly stops working when an
+emoji or accented letter is added.  When you want a 0-based character count
+that matches vector semantics, use `c#count`; when you want byte offsets for
+slicing (e.g. `txt[c#index..c#next]`), use `c#index`.
+
 Text iteration example — `#index` and `#next` are always consistent: `c#next == c#index + len(c)`:
 ```
 // "Hi 😊!": H@0..1, i@1..2, ' '@2..3, '😊'@3..7, '!'@7..8
