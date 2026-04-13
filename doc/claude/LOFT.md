@@ -700,6 +700,33 @@ continue
 
 Only valid inside a loop.
 
+**Labelled break — `loop_var#break`.** To exit an *outer* loop from inside an inner
+one, write `outerVar#break` using the loop variable's name.  This reuses the
+`#attribute` syntax (see § Loop attributes — `#first`, `#count`, `#index`,
+`#remove`) as a control-flow statement: `x#break` is not a property read but a
+jump to just past the loop whose iterator is `x`.  A bare `break` always exits
+the nearest enclosing loop.
+
+```
+for x in 1..5 {
+    for y in 1..5 {
+        if y > x       { break; }        // exits the inner y loop only
+        if x * y >= 16 { x#break; }      // exits BOTH loops (jumps past x loop)
+    }
+}
+```
+
+**Gotcha (INC#18).** `x#break` looks like an attribute access but is a jump
+instruction — it produces no value and cannot appear on the right of `=`.
+
+**Labelled continue — `loop_var#continue`.** Symmetric to `x#break`: use
+`x#continue` from inside an inner loop to skip the remainder of the current
+*outer* iteration (named by `x`).  Semantics: jump back to the top of the
+`x` loop and advance it by one step, abandoning any remaining inner-loop
+iterations and any code between the inner loop's closing `}` and the end
+of the outer body.  A bare `continue` still targets only the innermost
+loop.
+
 ### Return
 
 ```
@@ -885,6 +912,18 @@ if h[key] { /* found */ }
 elem = idx[42, "foo"]    // null if not present
 ```
 
+**Gotcha (INC#2) — vector has a richer literal/build API than the keyed
+collections.** All four collection types share `+=`, `for` iteration
+(hash iterates via its internal ordered index), and subscript removal
+(`h[key] = null`), but **comprehensions** (`[for x in c if p { … }]`)
+produce only a `vector<T>`; there is no `sorted<T>` / `index<T>` / `hash<T>`
+comprehension form — instead, build a vector literal and assign it to a
+keyed-collection field, which does implicit conversion.  Inside a `for`
+loop, `#index` is valid on vector and sorted but a compile error on index
+collections.  When porting code between collection types, treat these gaps
+as structural differences rather than bugs — they are intentional and not
+planned to close.
+
 ---
 
 ## Structs and record initialization
@@ -955,6 +994,17 @@ Otherwise they are called as free functions:
 len(collection)
 round(PI * 1000.0)
 ```
+
+**Gotcha (INC#8) — method vs. free function is the stdlib author's choice.** The
+language has no rule about which operations *should* be methods vs. free
+functions; it depends entirely on whether the definition's first parameter is
+`self` (method-only), `both` (both forms), or neither (free-only).  The
+standard library makes this call per-function: `text.starts_with(s)` and
+`text.find(s)` are method-only (`self: text`); `len(v)`, `abs(n)`, `round(x)`
+are both-forms (`both: …`); `sum_of(v)` and `print(s)` are free-only.  A user
+cannot predict the call form without looking it up.  When in doubt, try
+free-function form first — the compiler's "Unknown field" vs. "method not
+found" error makes the available form obvious.
 
 ### The `both` parameter name
 

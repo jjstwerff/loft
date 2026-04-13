@@ -32,6 +32,11 @@ pub fn calculate_positions(
         pos = 8;
         positions.insert(0, 0);
         gaps.insert(1, 7);
+        // B2-runtime (2026-04-13): a unit variant in a mixed struct-enum
+        // has only the enum discriminant field.  Without this, `size`
+        // stays 0 and `Store::claim(0)` panics "Incomplete record".
+        // Ensure at least 1 byte (the discriminant) is accounted for.
+        *size = 1;
     }
     for al in [8, 4, 2, 1] {
         for (nr, (field_size, align)) in fields.iter().enumerate() {

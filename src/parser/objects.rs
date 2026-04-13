@@ -481,6 +481,47 @@ impl Parser {
             if let Type::Enum(en, _, _) = t {
                 for a_nr in 0..self.data.attributes(en) {
                     if self.data.attr_name(en, a_nr) == name {
+                        // B2-runtime (2026-04-13): in a mixed struct-enum,
+                        // a bare-identifier unit-variant literal (`s = Idle`)
+                        // must produce a DbRef to a freshly allocated record
+                        // with the discriminant set at offset 0, not a bare
+                        // `Value::Enum(u8)`.  Without this, the receiving
+                        // slot is typed DbRef but holds a u8 — native emit
+                        // produces `let var_s: DbRef = 2_u8;` (rustc E0308)
+                        // and the interpreter double-frees at exit.  Emit
+                        // the same `OpDatabase` + field-init sequence that
+                        // `parse_object` would for the struct-variant form.
+                        let parent_is_mixed =
+                            matches!(self.data.def(en).returned, Type::Enum(_, true, _));
+                        if parent_is_mixed && !self.first_pass {
+                            let e_nr = self.data.def_nr(name);
+                            if e_nr != u32::MAX && self.data.def(e_nr).known_type != u16::MAX {
+                                let ret = self.data.def(en).returned.clone();
+                                let w = self.vars.work_refs(&ret, &mut self.lexer);
+                                let known_type = i32::from(self.data.def(e_nr).known_type);
+                                let mut list = Vec::new();
+                                list.push(v_set(w, Value::Null));
+                                list.push(
+                                    self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]),
+                                );
+                                self.object_init(
+                                    &mut list,
+                                    e_nr,
+                                    0,
+                                    &Value::Var(w),
+                                    &HashSet::new(),
+                                );
+                                list.push(Value::Var(w));
+                                // The work-ref's DbRef is copied into the
+                                // receiving slot (the LHS of assignment or
+                                // the surrounding expression), so its store
+                                // is owned downstream — don't double-free
+                                // the __ref_N too.
+                                self.vars.set_skip_free(w);
+                                *code = v_block(list, Type::Enum(en, true, vec![w]), "EnumUnitLit");
+                                return t;
+                            }
+                        }
                         *code = self.data.attr_value(en, a_nr);
                         return t;
                     }

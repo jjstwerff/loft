@@ -1,0 +1,17 @@
+# Baseline for tests/issues.rs #[ignore = "..."] entries.
+# One `<test_name>\t<reason>` pair per line, sorted by test_name.
+# Updated by tests/doc_hygiene.rs::ignored_tests_baseline_is_current
+# whenever the set drifts.  A drift typically means one of:
+#   - an ignored test just got its fix landed (un-ignore it + delete its line here)
+#   - a new ignored spec landed for a new QUALITY.md item (add its line here)
+#   - the reason message changed (update the line here)
+# Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+b7_character_interpolation_return_crashes	B7 family — text-return of `"{c}"` (character interpolation) SIGSEGVs
+file_content_nonexistent_trace	SIGSEGV in execute_log: File.content() on non-existent file corrupts caller's String
+p122_long_running_struct_loop	P122 stress test — 100k struct allocations, ~10min in debug. Passes in 0.05s release.
+p54_b5_recursive_struct_enum	P54 B5: recursive struct-enum — OpDatabase(db_tp=u16::MAX) panics in Store::claim
+p54_parse_array_item_access	P54 step 4: parse_array + item() indexed access
+p54_parse_object_field_access	P54 step 4: parse_object + field() chained access
+p54_struct_parse_accepts_jsonvalue	P54 step 6-7: .parse(JsonValue) accepts typed tree
+p54_struct_parse_rejects_plain_text	P54 step 6: .parse(text) rejected — must use json_parse first
+regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

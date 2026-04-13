@@ -92,6 +92,19 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_field", n_field),
     ("n_item", n_item),
     ("n_len", n_len),
+    // B7 (2026-04-13): when called with method syntax (`v.len()`),
+    // the dispatcher resolves to `t_9JsonValue_<method>`.  Register
+    // these aliases pointing at the same Rust impls so the call goes
+    // through `OpStaticCall` instead of falling back to the empty-body
+    // bytecode stub (which, prior to the def_code fix, double-freed
+    // the JsonValue store via incorrect frame-unwind on return).
+    ("t_9JsonValue_as_text", n_as_text),
+    ("t_9JsonValue_as_number", n_as_number),
+    ("t_9JsonValue_as_long", n_as_long),
+    ("t_9JsonValue_as_bool", n_as_bool),
+    ("t_9JsonValue_field", n_field),
+    ("t_9JsonValue_item", n_item),
+    ("t_9JsonValue_len", n_len),
 ];
 
 pub fn init(state: &mut State) {

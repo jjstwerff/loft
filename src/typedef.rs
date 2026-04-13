@@ -174,6 +174,44 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     // Start from 0 (not start_def) so struct-enum variants defined in earlier
     // default library files are processed when later files trigger fill_all.
     // The has_type guard prevents double-processing.  Fixes S14 (PROBLEMS #80).
+    // B2-runtime (2026-04-13): Before laying out records, retroactively
+    // add a discriminant "enum" field to every unit variant of a mixed
+    // struct-enum.  `parse_enum_values` only adds this field inside the
+    // `has_token("{")` branch (struct variants), so sibling unit variants
+    // have 0 attributes and would produce a size-0 structure — runtime
+    // `OpDatabase(db_tp=…)` then panics `Incomplete record` in
+    // `Store::claim(size=0)`.  Check the parent's `returned` (set to
+    // `Type::Enum(_, true, _)` when ANY variant has braces) rather than
+    // the unit-variant child's (which stays `Type::Enum(_, false, _)`).
+    let enumerate_d_nr = data.def_nr("enumerate");
+    if enumerate_d_nr != u32::MAX {
+        for d_nr in 0..data.definitions() {
+            if matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) == 0 {
+                let parent = data.def(d_nr).parent;
+                if parent != u32::MAX && matches!(data.def(parent).returned, Type::Enum(_, true, _))
+                {
+                    let discriminant = {
+                        let mut v: u8 = 0;
+                        for (a_nr, a) in data.def(parent).attributes.iter().enumerate() {
+                            if a.name == data.def(d_nr).name {
+                                v = a_nr as u8 + 1;
+                                break;
+                            }
+                        }
+                        v
+                    };
+                    data.add_attribute(
+                        lexer,
+                        d_nr,
+                        "enum",
+                        Type::Enum(enumerate_d_nr, false, Vec::new()),
+                    );
+                    let attr_nr = data.def(d_nr).attr_names["enum"];
+                    data.set_attr_value(d_nr, attr_nr, Value::Enum(discriminant, u16::MAX));
+                }
+            }
+        }
+    }
     for d_nr in 0..data.definitions() {
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))

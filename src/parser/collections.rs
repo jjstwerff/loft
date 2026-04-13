@@ -1770,6 +1770,32 @@ use #count instead"
     /// Compute the in-store byte size of a vector element type.
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
+        // B5 (2026-04-13): for a mixed struct-enum element type
+        // (`Type::Enum(_, true, _)`), the parent enum's `known_type` is
+        // a byte-sized enumerate (size 1) — wrong for vector storage,
+        // since instances are records.  Use the size of the largest
+        // variant's structure type instead.  Without this, recursive
+        // struct-enums (`vector<Tree>` inside Tree's own variant) trip
+        // `OpDatabase(db_tp=u16::MAX)` panics in `Store::claim`.
+        if let Type::Enum(parent_d_nr, true, _) = elm
+            && elm_td != u32::MAX
+        {
+            let mut max_size = 0i32;
+            for a_nr in 0..self.data.attributes(*parent_d_nr) {
+                let variant_name = self.data.attr_name(*parent_d_nr, a_nr);
+                let variant_d_nr = self.data.def_nr(&variant_name);
+                if variant_d_nr != u32::MAX {
+                    let variant_known = self.data.def(variant_d_nr).known_type;
+                    let s = i32::from(self.database.size(variant_known));
+                    if s > max_size {
+                        max_size = s;
+                    }
+                }
+            }
+            if max_size > 0 {
+                return max_size;
+            }
+        }
         if elm_td != u32::MAX {
             let known = self.data.def(elm_td).known_type;
             let db_size = i32::from(self.database.size(known));

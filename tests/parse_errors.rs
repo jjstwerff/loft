@@ -168,7 +168,7 @@ fn unknown_sizeof() {
 
 #[test]
 fn index_non_indexable() {
-    code!("fn test() { v = 5; v[1]; }").error("Indexing a non vector at index_non_indexable:1:23");
+    code!("fn test() { v = 5; v[1]; }").error("Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db { h: hash<Row[id]> }; db = Db { h: [Row { id: 1 }] }` at index_non_indexable:1:23");
 }
 
 #[test]

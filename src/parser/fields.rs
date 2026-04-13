@@ -89,12 +89,32 @@ impl Parser {
                         "generic type {tv_name}: field access requires a concrete type",
                     );
                 } else {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "Unknown field {}.{field}",
-                        self.data.def(dnr).name
-                    );
+                    // INC#8 / QUALITY 6c: if a free function `n_<field>` exists
+                    // whose first parameter is compatible with the receiver
+                    // type, tell the user to call it as a free function
+                    // instead of as a method.  The stdlib chooses per
+                    // function whether it's `self:` / `both:` / free-only;
+                    // readers who don't know that land on "Unknown field
+                    // vector.sum_of" without a hint.
+                    let free_nr = self.data.def_nr(&format!("n_{field}"));
+                    let has_free_hint = free_nr != u32::MAX
+                        && !self.data.def(free_nr).attributes.is_empty()
+                        && self.data.attr_type(free_nr, 0).is_equal(&t);
+                    if has_free_hint {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? (stdlib declared `{field}` as free-only; see LOFT.md § Methods and function calls)",
+                            self.data.def(dnr).name
+                        );
+                    } else {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown field {}.{field}",
+                            self.data.def(dnr).name
+                        );
+                    }
                 }
                 // Consume a trailing `(…)` to avoid cascading parse errors.
                 if self.lexer.has_token("(") {
@@ -117,6 +137,38 @@ impl Parser {
             }
         } else if self.data.def(dnr).attributes[fnr].constant {
             let expr = self.data.attr_value(dnr, fnr);
+            // B2-runtime (2026-04-13): `Sig.Idle` on a mixed struct-enum
+            // parent resolves `expr` to a bare `Value::Enum(disc, _)` —
+            // same type mismatch as the unqualified `Idle` form.  Wrap in
+            // the `OpDatabase` + `object_init` record-allocation sequence
+            // used by `parse_constant_value` so `var_s: DbRef = …` gets a
+            // proper DbRef, not a u8 byte.
+            let parent_is_mixed = matches!(self.data.def(dnr).returned, Type::Enum(_, true, _));
+            if parent_is_mixed && !self.first_pass && matches!(expr, Value::Enum(_, _)) {
+                let variant_name = self.data.attr_name(dnr, fnr);
+                let variant_d_nr = self.data.def_nr(&variant_name);
+                if variant_d_nr != u32::MAX && self.data.def(variant_d_nr).known_type != u16::MAX {
+                    let ret = self.data.def(dnr).returned.clone();
+                    let w = self.vars.work_refs(&ret, &mut self.lexer);
+                    let known_type = i32::from(self.data.def(variant_d_nr).known_type);
+                    let mut list = Vec::new();
+                    list.push(crate::data::v_set(w, Value::Null));
+                    list.push(self.cl("OpDatabase", &[Value::Var(w), Value::Int(known_type)]));
+                    self.object_init(
+                        &mut list,
+                        variant_d_nr,
+                        0,
+                        &Value::Var(w),
+                        &std::collections::HashSet::new(),
+                    );
+                    list.push(Value::Var(w));
+                    self.vars.set_skip_free(w);
+                    *code =
+                        crate::data::v_block(list, Type::Enum(dnr, true, vec![w]), "EnumUnitLit");
+                    self.data.attr_used(dnr, fnr);
+                    return Type::Enum(dnr, true, vec![w]);
+                }
+            }
             *code = Self::replace_record_ref(expr, &code.clone());
             let dep = t.depend();
             t = self.data.attr_type(dnr, fnr);
@@ -308,7 +360,17 @@ impl Parser {
             // First pass: type not yet resolved; suppress error until second pass.
             Type::Unknown(0)
         } else {
-            diagnostic!(self.lexer, Level::Error, "Indexing a non vector");
+            // QUALITY 6d: the "Indexing a non vector" message fires for two
+            // very different user intents — real misuse of `[..]` on a
+            // scalar, and an attempted generic-constructor
+            // (`hash<Row[id]>()`, `sorted<Elm[k]>()`) that the language
+            // doesn't support.  The second case leaves readers stuck; add
+            // a pointer to the struct-literal idiom that *does* work.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db {{ h: hash<Row[id]> }}; db = Db {{ h: [Row {{ id: 1 }}] }}`"
+            );
             Type::Unknown(0)
         }
     }

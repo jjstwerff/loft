@@ -456,12 +456,12 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
 | C38    | —         | Accepted — value-semantic capture by design (like Rust `move`) |
 | C54    | 0.9.0     | **Switch `integer` from i32 to i64.** `long` becomes historical alias. Breaking change, pre-1.0 window |
-| C58/P135 | 0.8.5   | Canonical `(0, 0) = screen-top-left`; lock in LOFT.md; re-bake brick-buster atlas |
-| C60    | 0.9.0     | `for (k, v) in hash` returning `(K, V)` tuples in unspecified order |
+| ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in OPENGL.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
+| ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | P54    | 0.9.0     | First-class `JsonValue` enum + `json_parse`; old text-based JSON surface withdrawn |
 | ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
-| P137   | 0.8.5     | Browser WASM `unreachable` panic fix |
+| ~~P137~~ | — | **Done** — `Instant::now()` / `n_ticks` gated on `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature.  Regression: 4 guards in `tests/html_wasm.rs` behind a serial mutex |
 
 ---
 

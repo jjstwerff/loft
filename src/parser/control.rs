@@ -2131,7 +2131,15 @@ impl Parser {
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) = &ret {
+        // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
+        // (Type::Enum with struct-enum discriminator `true`) live as
+        // heap-allocated records just like Reference and Vector do, so
+        // their return-slot must also be promoted to a hidden caller
+        // argument.  Without this arm the callee allocates its own
+        // DbRef locally; the caller never reserves matching stack space;
+        // OpReturn's value-width mismatches the reserved slot and the
+        // interpreter loops on Return(ret=0, value=16) at PC=0.
+        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
             let mut dep = cur.clone();
             for v in ls {
                 let n = self.vars.name(*v);
@@ -2154,6 +2162,7 @@ impl Parser {
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
                 Type::Reference(td, _) => Type::Reference(td, dep),
+                Type::Enum(td, true, _) => Type::Enum(td, true, dep),
                 _ => {
                     diagnostic!(
                         self.lexer,

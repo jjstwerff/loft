@@ -40,6 +40,17 @@ All four collection types use the same `+=` and `for` syntax.  The iteration too
 
 Remaining API gaps (slicing, comprehension) are structural and not planned.
 
+**Status (2026-04-13):** Documented in
+[LOFT.md § Key-based collections](LOFT.md) under a "Gotcha (INC#2)"
+paragraph covering the comprehension gap, the `#index`-on-index compile
+error, and the shared `for` / `+=` / subscript-removal contract that
+*does* cross collection types.  Two regression guards in
+`tests/issues.rs` lock the positive baseline for both halves:
+`inc02_vector_comprehension_works` (vector comprehension with an `if`
+filter) and `inc02_sorted_is_iterable` (sorted shares the `for` API, so
+ports from vector keep working).  The remaining API gaps are an
+acknowledged structural choice, not a silent surprise.
+
 ---
 
 ## 8. Method vs. Free Function Is an Arbitrary Standard-Library Choice
@@ -63,6 +74,18 @@ A user cannot predict whether an operation is a method or a free function withou
 it up. Some text operations are methods (`starts_with`, `find`, `trim`) while the most
 basic one (`length`) is a free function. The language allows both forms equally; the
 inconsistency is in the standard-library naming choices.
+
+**Status (2026-04-13):** Documented in
+[LOFT.md § Methods and function calls](LOFT.md) under a "Gotcha (INC#8)"
+paragraph with current stdlib examples covering all three call-form classes
+(method-only `self:`, dual `both:`, free-only).  Three regression guards in
+`tests/issues.rs` lock the behaviour across the classes:
+`inc08_starts_with_is_method_not_free_function` (method-only works via dot
+syntax), `inc08_sum_of_is_free_function_only` (method syntax on a free-only
+function produces an "Unknown field" compile error), and
+`inc08_len_with_both_works_either_way` (a `both:` first-parameter registers
+both forms — the escape hatch for authors who want the asymmetry to vanish).
+The asymmetry is an acknowledged stdlib naming choice, not a language bug.
 
 ---
 
@@ -88,6 +111,17 @@ The `#` suffix notation is used for two completely different purposes:
 
 Making `x#attr` sometimes an expression and sometimes a jump instruction complicates the
 mental model for the `#` notation.
+
+**Status (2026-04-13):** Documented in
+[LOFT.md § Break and continue](LOFT.md) under a "Labelled break — `loop_var#break`"
+paragraph with a worked nested-loop example and an explicit gotcha callout
+(no `x#continue` counterpart, not a value expression).  Two regression guards
+in `tests/issues.rs` lock the behaviour:
+`inc18_labelled_break_exits_outer_loop` (confirms `x#break` from the inner loop
+terminates the outer `x` loop, not just the innermost), and
+`inc18_bare_break_exits_innermost_only` (pairs as the control — a bare `break`
+only exits the enclosing inner loop).  The two-mechanism design is an
+acknowledged ergonomics asymmetry rather than a silent surprise.
 
 ---
 
@@ -137,14 +171,25 @@ the `#attribute` syntax on a loop variable to jump out of a named loop. The two 
 look unrelated: a reader encountering `x#break` would guess it reads a property named
 `break` from `x`, not that it is a control-flow jump.
 
-There is also an asymmetry: `x#break` has no `x#continue` counterpart, so skipping the
-remainder of a named outer loop requires code restructuring.
+(Correction 2026-04-13: `x#continue` **does** exist and works as a
+labelled-continue — initial writeup was based on a test that couldn't
+distinguish bare- from labelled-continue semantics.)
 
 **Advice:** Consider replacing `x#break` and introducing `break x` / `continue x` as
 labelled-break forms, consistent with how other languages handle named loop exits
 (`break 'label` in Rust, `break label` in Java). The existing `#` notation could be
 kept for read-only loop metadata (`#first`, `#count`, `#index`) and `#remove`, which
 are genuine attribute reads.
+
+**Status (2026-04-13):** Documented in
+[LOFT.md § Break and continue](LOFT.md) — the feature is implemented:
+`x#continue` is a true labelled-continue symmetric to `x#break`.
+Regression guard `inc27_x_continue_is_labelled_continue` uses an
+outer-body operation (inner-vs-outer counter pair) that distinguishes
+bare- from labelled-continue and pins the labelled result (106).
+Earlier writeup here claimed silent-miscompile behaviour; that was a
+misreading from a reproducer whose sum happened to be the same under
+both semantics.
 
 ---
 
@@ -157,16 +202,10 @@ are genuine attribute reads.
 _All fixed — see CHANGELOG.md._
 
 ### Medium (surprising but safe)
-| # | Issue |
-|---|---|
-| 27 | `break` keyword and `x#break` attribute are two mechanisms for the same action; no `x#continue` |
+_All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Low (cosmetic or minor)
-| # | Issue |
-|---|---|
-| 2 | `#first`/`#index`/`#remove` availability varies by collection type |
-| 8 | Method vs. free function assignment is arbitrary in the standard library |
-| 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
+_All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Resolved as design point (documented + regression-guarded)
 
@@ -177,11 +216,15 @@ ones, not silent surprises.  Removed from the severity tables above.
 
 | # | Issue | Doc + Tests |
 |---|---|---|
+| 2 | Vector has comprehensions; sorted / index / hash do not, and `#index` is invalid on index collections | LOFT.md § Key-based collections (Gotcha block); `inc02_vector_comprehension_works`, `inc02_sorted_is_iterable` |
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
+| 8 | Method vs. free function is the stdlib author's per-function choice (`self:` / `both:` / free-only) | LOFT.md § Methods and function calls (Gotcha block); `inc08_starts_with_is_method_not_free_function`, `inc08_sum_of_is_free_function_only`, `inc08_len_with_both_works_either_way` |
 | 9 | `txt[i]` returns `character`, `txt[i..j]` returns `text` — deliberate asymmetry (character is a distinct scalar, not a length-1 text); LOFT.md § String literals carries a Gotcha callout with concat rules + the B7-family SIGSEGV caveat | `inc9_text_index_returns_character`, `inc9_text_slice_returns_text`, `inc9_text_slices_concatenate_with_plus`, `inc9_character_plus_is_arithmetic_not_concat` |
 | 12 | Sort direction declared on struct drives iteration direction of every query | LOFT.md § Collection types (Gotcha block); `inc12_sorted_ascending_*` / `inc12_sorted_descending_*` regression tests |
+| 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax | LOFT.md § Break and continue (Labelled break + Gotcha block); `inc18_labelled_break_exits_outer_loop`, `inc18_bare_break_exits_innermost_only` |
 | 17 | Type-conversion rules stratified into implicit / format-only / explicit modes, mode driven by type pair not context.  LOFT.md § The `as` operator now carries a "Type-conversion rules" table covering 11 pairs with a rule-of-thumb: fallible conversions explicit, infallible implicit, format-interpolation is its own mode | `inc17_any_to_boolean_is_implicit`, `inc17_integer_widens_to_float_in_arithmetic`, `inc17_float_to_integer_requires_as`, `inc17_text_to_integer_requires_as`, `inc17_integer_to_text_is_format_only`, `inc17_plain_enum_name_to_enum_requires_as` |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
+| 27 | No `x#continue` counterpart to `x#break`; `x#continue` silently parses as a bare inner `continue` | LOFT.md § Break and continue (Gotcha block paired with INC#18); `inc27_x_continue_behaves_as_bare_continue` |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 | 30 | `{...}` double-duty (struct init vs. block) — claimed silent-typo case is not reproducible on current loft; the `{ x, y }` typo parses as a struct-init attempt and fails on the missing colon | `inc30_struct_init_with_colons_works`, `inc30_block_expression_returns_last_value`, `inc30_typo_comma_without_colon_is_rejected` |
 | 28 | Vector slice grammar — inclusive form `v[start..=end]` works but was undocumented; `v[2..-1]` was documented as "negative-index from end" but the form has always produced an empty iterator, never "all but the last element".  LOFT.md § Vectors now documents the four supported forms + an explicit note that negative indexing isn't implemented | `inc28_slice_exclusive_range`, `inc28_slice_inclusive_range`, `inc28_slice_open_end`, `inc28_slice_open_start`, `inc28_negative_index_in_slice_yields_empty` |

@@ -211,18 +211,21 @@ impl Drop for Test {
             let size = p.database.size(p.data.def(p.data.def_nr(d)).known_type);
             assert_eq!(u32::from(size), *s, "Size of {}", *d);
         }
+        // Validate that we found the correct warnings and errors. Halt when
+        // differences are found.  Running this BEFORE scopes::check matches
+        // `src/main.rs` order and prevents malformed-IR scope-analysis
+        // panics from masking the real parse-time diagnostic (P140 class).
+        self.assert_diagnostics(&p);
+        // Do not run scope analysis / codegen when parsing did not succeed.
+        if p.diagnostics.level() >= Level::Error {
+            return;
+        }
         scopes::check(&mut p.data);
         // P132: also generate per-test native code in release builds so the
         // n2..n10/o7 codegen-inspection tests can read tests/generated/<name>.rs
         // when the suite is run via `cargo test --release` (the new default
         // since make ci switched to release for ~1800x speedup).
         self.generate_code(&p, start).unwrap();
-        // Validate that we found the correct warnings and errors. Halt when differences are found.
-        self.assert_diagnostics(&p);
-        // Do not interpret anything when parsing did not succeed.
-        if p.diagnostics.level() >= Level::Error {
-            return;
-        }
         // generate_code (fill.rs) and generate_lib (text.rs) are now done
         // via dedicated staleness-check tests to avoid file-write races
         // during parallel test execution.  Per-test native codegen output
