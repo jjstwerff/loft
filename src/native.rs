@@ -89,6 +89,9 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_as_number", n_as_number),
     ("n_as_long", n_as_long),
     ("n_as_bool", n_as_bool),
+    ("n_field", n_field),
+    ("n_item", n_item),
+    ("n_len", n_len),
 ];
 
 pub fn init(state: &mut State) {
@@ -1414,4 +1417,38 @@ fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
     } else {
         stores.put(stack, false);
     }
+}
+
+/// JObject indexer.  Step 3 stub: object/array parsing isn't yet
+/// wired (json_parse errors on `{` and `[`, returning JNull), so
+/// `field()` is reached only on non-object variants and always
+/// returns JNull.  When step 4 lands real object parsing, replace
+/// this body with a walk of the object's fields vector.
+fn n_field(stores: &mut Stores, stack: &mut DbRef) {
+    let _name = *stores.get::<Str>(stack);
+    let _self_ref = *stores.get::<DbRef>(stack);
+    let result = jv_alloc(stores);
+    stores
+        .store_mut(&result)
+        .set_byte(result.rec, result.pos, 0, JV_DISCR_NULL);
+    stores.put(stack, result);
+}
+
+/// JArray indexer.  Step 3 stub: see `n_field` rationale.
+fn n_item(stores: &mut Stores, stack: &mut DbRef) {
+    let _index = *stores.get::<i32>(stack);
+    let _self_ref = *stores.get::<DbRef>(stack);
+    let result = jv_alloc(stores);
+    stores
+        .store_mut(&result)
+        .set_byte(result.rec, result.pos, 0, JV_DISCR_NULL);
+    stores.put(stack, result);
+}
+
+/// JArray / JObject length.  Step 3 stub: not-array, not-object →
+/// integer null sentinel.  Real array/object parsing in step 4
+/// will return the actual length.
+fn n_len(stores: &mut Stores, stack: &mut DbRef) {
+    let _self_ref = *stores.get::<DbRef>(stack);
+    stores.put(stack, i32::MIN);
 }

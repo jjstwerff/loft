@@ -3228,7 +3228,6 @@ fn test() {
 // `default/06_json.loft`, `src/json.rs`, and the parser's .parse() gate.
 // Unignore each case as its layer comes online.
 
-#[test]
 /// String-variant parsing: the value is correctly stored, but
 /// returning it through a function boundary trips a JsonValue-store
 /// lifecycle issue — the store is freed during scope-exit cleanup
@@ -3317,7 +3316,6 @@ fn p54_malformed_returns_jnull() {
     .result(Value::Boolean(true));
 }
 
-#[test]
 /// `as_text` returns a `Str` into `Stores::scratch`; calling it
 /// inline + assigning into a local works (`println("{v.as_text()}")`
 /// is fine), but returning the resulting text through a function
@@ -3380,13 +3378,29 @@ fn p54_parse_array_item_access() {
     .result(Value::Long(20));
 }
 
+/// Chain access on a non-object value never traps — every
+/// intermediate `field()` / `item()` returns `JNull`.  Step 3 stub:
+/// since object/array parsing isn't wired yet, json_parse on any
+/// object-shaped input returns JNull anyway, and the chain is
+/// JNull all the way down.  Step 4 will exercise the same chain
+/// against a real object where one intermediate is missing.
+///
+/// Currently #[ignore]'d because the chained calls each allocate a
+/// fresh JsonValue store and the intermediate (un-named-local) stores
+/// leak — same B7 lifecycle issue as the text-return-through-fn
+/// tests.  When n_field/n_item return a JsonValue into a temporary,
+/// loft's scope analysis doesn't emit OpFreeRef for the temp, so
+/// the chain leaks 3 stores per call site.
 #[test]
-#[ignore = "P54 step 4: missing intermediate in chain returns JNull, not a trap"]
+#[ignore = "P54 B7-chain: native-returned JsonValue temporaries don't get OpFreeRef"]
 fn p54_missing_chain_returns_jnull() {
+    // `{` in a loft text literal triggers format-string interpolation;
+    // use a primitive that json_parse handles to produce a non-object
+    // root.  The chain still lands at JNull because field/item on a
+    // non-object always returns JNull.
     code!(
         "fn run() -> boolean {
-    v = json_parse(\"{\\\"a\\\": {\\\"b\\\": 1}}\");
-    // Chain through a missing intermediate; must not panic.
+    v = json_parse(\"42\");
     result = v.field(\"missing\").item(5).field(\"b\");
     match result {
         JNull => true,

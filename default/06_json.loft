@@ -59,6 +59,20 @@ pub fn json_parse(raw: text) -> JsonValue;
 /// then this returns an empty string.
 pub fn json_errors() -> text;
 
+/// JObject indexer — returns the value at `name`, or `JNull` when
+/// `self` isn't a JObject or the key is missing.  Chained access
+/// like `root.field("a").field("b")` is safe — every intermediate
+/// missing produces `JNull`, never a trap.
+pub fn field(self: JsonValue, name: text) -> JsonValue;
+
+/// JArray indexer — returns the element at `index`, or `JNull` when
+/// `self` isn't a JArray or the index is out of bounds.
+pub fn item(self: JsonValue, index: integer) -> JsonValue;
+
+/// Length of a JArray's items vector or a JObject's fields vector.
+/// Returns `null` (i32::MIN) for any other variant.
+pub fn len(self: JsonValue) -> integer;
+
 /// Typed extractor — returns `null` (empty text) on kind mismatch.
 pub fn as_text(self: JsonValue) -> text;
 
