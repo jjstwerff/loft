@@ -169,34 +169,39 @@ depend on an earlier one, but nothing requires "land it all at once".
 A session that runs out of time mid-way leaves the codebase in a
 working state with partial feature coverage.
 
-**Step 1 — Record-walk primitive.** Add a native stdlib function
-`hash_records(h: hash<T[…]>) -> vector<reference<T>>` that returns
-every live record in the hash, in internal bucket order (unsorted,
-but stable for a given hash state).  Reuses the walk pattern at
-`src/database/search.rs:327` (the `validate` loop).  No parser or
-codegen changes — callable from loft as a plain function.
+**Step 1a (DONE 2026-04-13)** — `hash::records` Rust primitive in
+`src/hash.rs` walks the bucket array in internal order.  `#[allow(dead_code)]`
+until a loft-level caller lands in Step 3.  Tests:
+`tests/data_structures.rs::hash_records_walk`, `hash_records_empty`.
 
-*Test:* construct a hash with 3 distinct-keyed entries; call
-`hash_records`; verify `len(result) == 3` and each record's key
-appears exactly once.
+**Step 2 (DONE 2026-04-13)** — `hash::records_sorted` sorts the
+Step 1 output by the hash's key fields using the existing
+`keys::compare`.  Covers multi-field lexicographic order for free
+(Step 6 merged here).  Ascending-only; the `-` descending prefix
+(original Step 7) turns out to be out-of-scope — hash keys are
+ascending-only at the schema level per
+`src/parser/definitions.rs:1198`.  Tests:
+`hash_records_sorted_single_field`, `hash_records_sorted_multi_field`.
 
-**Step 2 — Sort-by-hash-key helper.** Add a native function
-`hash_sorted(h: hash<T[…]>) -> vector<reference<T>>` that collects
-via Step 1 and sorts by extracting the hash's key fields (reading
-them from each record via the schema's field offsets).  Ascending,
-single-field; no `-` prefix yet; single-field only.
+**Step 3 — Parser accepts `for e in hash`.**  Replace the
+"Cannot iterate a hash directly" error at `src/parser/fields.rs:599`.
+Two implementation paths, pick one:
 
-*Test:* same 3-entry hash; verify the returned vector is in
-ascending key order.
+- **3a (stdlib wrapper).** Expose `hash::records_sorted` as a loft
+  native function `hash_sorted<T>(h: hash<T[…]>) -> vector<reference<T>>`
+  in `default/01_code.loft`.  Parser desugars `for e in h { body }`
+  to `for e in hash_sorted(h) { body }` at parse time.  Clean,
+  reuses the vector iteration path entirely.  Needs generic-type
+  inference + native registration in `src/fill.rs`.
 
-**Step 3 — Parser accepts `for e in hash`.** Replace the
-"Cannot iterate a hash directly" error at `src/parser/fields.rs:599`
-with a route that desugars `for e in h { body }` into
-`for e in hash_sorted(h) { body }` at parse time.  Trivial codegen —
-the rewrite is a pre-parse transformation on the IR.
+- **3b (opcode).** Add an `OpHashIterSetup(hash_ref) -> DbRef(vec)`
+  opcode that calls `hash::records_sorted` and returns a fresh vector
+  DbRef.  Parser emits this in a pre-loop block; the rest is vector
+  iteration.  Fewer moving parts than 3a but spends an opcode slot.
 
-*Test:* source `for e in h { println("{e.name}"); }` parses and
-runs; output matches the sorted key order.
+*Test:* integration — `for e in h { println("{e.name}"); }`
+over a 3-element hash, verify output matches ascending key order
+in both interpreter and `--native`.
 
 **Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
 Nothing new to implement; just land the combined behaviour, update
@@ -213,22 +218,15 @@ the existing vector-iteration path.  Confirm and test.
 *Test:* `for e in h { total += e.count * (e#index + 1); }`
 produces the expected weighted sum.
 
-**Step 6 — Multi-field keys.** Extend Step 2's sort comparator to
-compare key fields in declaration order (lexicographic).  Needs the
-hash-type's `Vec<u16>` key-field-index list, which is already on
-`Type::Hash(content, key, _)`.
+**Step 6 (DONE 2026-04-13, merged into Step 2).** `keys::compare`
+already supports multi-field lexicographic order.
 
-*Test:* `hash<T[region, date]>` — entries with the same `region`
-iterate in `date` order; across regions, grouped by `region`.
-
-**Step 7 — Descending (`-`) prefix per field.** The `-` prefix lives
-in the type's key spec (same representation as `sorted` / `index`).
-Extend the comparator to read the sign bit per field and reverse
-individual comparisons.
-
-*Test:* `hash<T[-score]>` iterates highest-score first;
-`hash<T[region, -date]>` iterates by region ascending then date
-descending within region.
+**~~Step 7~~ — Out of scope.** Hash keys are ascending-only at the
+schema level today (`src/parser/definitions.rs:1198` rejects
+`hash<T[-k]>` with "Structure doesn't support descending fields").
+Supporting descending on hash would be a separate schema change,
+not part of C60.  Users who need descending iteration can pair the
+hash with a `sorted<T[-k]>` field, which does support `-`.
 
 **Step 8 — Filter clause.** `for e in h if e.count > 10 { … }`.
 Because Step 3 desugars to vector iteration, the filter clause on
