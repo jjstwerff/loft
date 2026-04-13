@@ -500,67 +500,227 @@ use).  Negation of `i64::MIN` still returns null (two's complement
 invariant).  Both are documented edge cases, not silent traps in
 ordinary arithmetic.
 
-### Steps (sprint branch `c54-integer-i64`, 0.9.0)
+### Advisory — surface cleanup alongside the widening (2026-04-13)
 
-1. **Tests first, all `#[ignore]`'d.**
-   - `c54_i32_min_round_trip` — `-2_147_483_648 * 1` returns
-     `-2_147_483_648`, not null.
-   - `c54_arithmetic_at_boundary` — add / sub / mul / div crossings
-     at ±i32::MAX give the mathematically-correct i64 result.
-   - `c54_bounded_storage_preserved` — `struct S { b: u8, c:
-     integer limit(0, 1000) }` has the same field offsets as
-     before; only unbounded integers change.
-   - `c54_unbounded_storage_widens` — `struct T { x: integer }`
-     stores `x` in 8 bytes, not 4.
-   - `c54_u8_times_u8_no_overflow` — `u8_a * u8_b` both 200 → 40 000.
-   - `c54_loftc_cache_invalidated` — running a program built with
-     a pre-C54 cache triggers auto-rebuild.
-2. **Replumb arithmetic opcodes** — `OpAddInt` / `OpSubInt` /
-   `OpMulInt` / `OpDivInt` operate on i64 registers.  Keep the names
-   (they still apply to `Type::Integer`), but the backing stack
-   slot widens.  Existing `OpAddLong` etc. stay for explicit `long`
-   use; can be unified later.
-3. **Update `Type::size()` default arm** in `src/data.rs:366` —
-   `4` → `8` when neither `limit` nor explicit `size()` narrows it.
-   Every bounded integer keeps its current size via the earlier
-   branches.
-4. **Update `get_int` / `set_int` call sites** to widen on load and
-   narrow on store, dispatching on the field's storage size tag.
-   Narrow-store range checks use the existing `limit` machinery.
-5. **Update native codegen** — unbounded `integer` emits as `i64`
-   in Rust; bounded widths emit as `i32` / `i16` / `i8` / `u8` /
-   `u16` as today.  `format_int` / `format_long` dispatch on the
-   register type (now always i64 for runtime values), so format
-   strings just work.
-6. **Bump `.loftc` cache version** (`src/state/bytecode_cache.rs`)
-   so old caches auto-rebuild.
-7. **Persisted DB migration** — `loft --migrate-i64 <dbfile>`:
-   1. Read the schema header.
-   2. For each struct field whose stored `limit` is the unbounded
-      i32 default, expand the column from 4 to 8 bytes.  All other
-      columns stay put.
-   3. Write a new file; don't mutate in place.
-   4. Test: round-trip a 0.8.x DB with one unbounded-integer column
-      and one `u8` column; verify only the unbounded column widened.
-8. **Deprecate `long`** as a separate type — keep as alias for
-   unbounded `integer`.  Deprecation warning waits for 1.1+.
-9. **Sweep tests** — only the field-offset assertions on *unbounded*
-   integer fields change; bounded-integer tests stay put
-   (~10 files).
-10. **Enable the C54 tests** commit-by-commit as the layout work
-    settles.
-11. **Document** in LOFT.md (integer / long section), CHANGELOG.md,
-    and BITING_PLAN close-out.  Call out the migration tool.
+Widening `integer` to i64 is the core fix.  Three adjacent surface
+cleanups drop out naturally and should land as **separate, ordered
+sub-tickets** inside the C54 sprint so each has its own test churn
+and review footprint.  Deprecation is 0.9.0; **tests in the repo
+move to the new convention immediately**, not at removal — this
+avoids a second sweep later and keeps the stdlib self-consistent
+through the transition.
+
+Literal-suffix notation (`34u8`, `4948u32`) explicitly **out of
+scope**.  Loft's context-driven type inference scales fine
+post-C54; adding suffix syntax would crosscut the parser for a 1 %
+ergonomics win that `as u32` already covers.
+
+### Sub-tickets
+
+#### C54.A — Widen `integer` to i64 arithmetic + range-packed storage
+
+The core C54 plan.  Runtime + codegen + schema work.  Must land first;
+every other sub-ticket depends on it.
+
+- Replumb `Op*Int` opcodes on i64 registers.
+- Flip `Type::size()` default arm 4 → 8 for unbounded integers;
+  bounded integers keep their current byte layout.
+- `get_int` / `set_int` call sites widen-on-load, narrow-on-store
+  via the existing `limit` range check.
+- Native codegen: unbounded `integer` emits as `i64`; bounded
+  aliases emit as today.
+- Bump `.loftc` cache version so old caches auto-rebuild.
+- `loft --migrate-i64 <dbfile>` tool for persisted databases.
+
+**Tests** (all `#[ignore]`'d initially; enable as layers settle):
+- `c54_i32_min_round_trip` — `-2_147_483_648 * 1` returns
+  `-2_147_483_648`, not null.
+- `c54_arithmetic_at_boundary` — ±i32::MAX crossings give i64.
+- `c54_bounded_storage_preserved` — `u8` + `limit(0, 1000)`
+  offsets unchanged.
+- `c54_unbounded_storage_widens` — unbounded integer field now
+  takes 8 bytes.
+- `c54_u8_times_u8_no_overflow` — 200 * 200 → 40 000, not wrapped.
+- `c54_loftc_cache_invalidated` — pre-C54 cache triggers rebuild.
+- `c54_migration_tool_roundtrip` — `--migrate-i64` widens only
+  unbounded columns.
+
+#### C54.B — Remove `long` type + `l` literal suffix (deprecate in 0.9.0, remove in 1.0.0)
+
+Once `integer` is i64, `long` is a redundant alias and `10l` is a
+meaningless suffix.  Keep both compiling in 0.9.0 with a
+deprecation warning; remove in 1.0.0.
+
+**Repo migration is immediate**: every `long` field, every `l`
+literal in `default/*.loft`, `lib/**/*.loft`, `tests/**/*.loft`,
+and generated test fixtures gets swept to `integer` / plain decimal
+on the C54.B branch.  The stdlib ships without deprecation warnings
+from day one.
+
+- Parser adds a deprecation warning for `long` in type positions
+  and `l` in literal positions.  Points at the `--migrate-long`
+  tool for user code.
+- `loft --migrate-long <path>` — tool that walks a tree of
+  `.loft` files and rewrites `long` → `integer` + strips `l`
+  suffixes.  Safe (no semantic change post-C54.A).  Idempotent.
+- Sweep the repo: `default/`, `lib/`, `tests/scripts/`,
+  `tests/docs/`, `tests/generated/`, `lib/graphics/examples/`
+  all use `integer` / plain literals.
+- Documentation sweep: LOFT.md, STDLIB.md, skill file, tutorial
+  snippets.  `long` and `l` appear only in the 1.0.0 removal
+  note.
+
+**Tests**:
+- `c54b_long_type_deprecated` — `x: long` compiles with a warning
+  in 0.9.0.  Warning text matches the `--migrate-long` hint.
+- `c54b_l_literal_deprecated` — `x = 10l;` compiles with a warning.
+- `c54b_long_migration_tool` — round-trip a 3-file tree through
+  `--migrate-long`, verify output compiles and matches the
+  normalised expectation.
+- `c54b_stdlib_no_long` — grep over `default/`, `lib/` confirms
+  no `long` type or `l` suffix remains at the end of the branch.
+  Fails the sprint if the sweep missed anything.
+
+#### C54.C — Add `u32` as a stdlib type
+
+Post-C54.A, a real u32 is trivially expressible: 4-byte storage,
+i64 arithmetic headroom.  Closes the "RGBA pixels wrap negative"
+trap users hit today.
+
+Add in `default/01_code.loft`:
+
+```loft
+/// 32-bit unsigned integer.  4-byte storage; i64 arithmetic.
+/// The value `0xFFFF_FFFF` is reserved as the null sentinel —
+/// declare `u32 not null` to reclaim the full u32 range.
+pub type u32 = integer limit(0, 4_294_967_294) size(4);
+```
+
+The sentinel reservation (one value short of 2^32) matches how
+`u8 = integer limit(0, 255) size(1)` reserves 256 as null via the
+`not null`/`null` convention.  Users who need the exact top value
+declare `u32 not null` — identical pattern to `integer not null`
+reclaiming `i64::MIN`.
+
+**Tests**:
+- `c54c_u32_rgba_round_trip` — `0xAABBCCDD as u32` round-trips
+  cleanly, stores in 4 bytes, reads back as `0xAABBCCDD` not a
+  negative i32.
+- `c54c_u32_arithmetic_promotes` — `a: u32 = 0xFFFF_FFFE; b = a
+  + 1;` gives `4_294_967_295` in the i64 register and nulls on
+  narrow-store back to u32 (because 4_294_967_295 is the
+  sentinel).
+- `c54c_u32_not_null_full_range` — `struct S { x: u32 not null }`
+  accepts `0xFFFF_FFFF`.
+- `c54c_u32_size_is_4` — field-offset assertion.
+
+#### C54.E — Free the 32-bit-arithmetic opcodes
+
+Today's stdlib declares two parallel opcode families:
+
+- ~27 `Op*Int` opcodes operating on i32 stack slots
+  (`OpAddInt`, `OpMulInt`, `OpEqInt`, `OpVarInt`, `OpPutInt`,
+  `OpConstInt`, …).
+- ~26 `Op*Long` opcodes operating on i64 stack slots
+  (`OpAddLong`, `OpMulLong`, `OpEqLong`, `OpVarLong`, `OpPutLong`,
+  `OpConstLong`, …).
+
+After C54.A lands, every `integer` stack slot IS i64.  The two
+families collapse into one at the stack-slot level, freeing ~26
+opcode slots out of the current **254/254 full** budget
+(`doc/claude/ROADMAP.md` § "Deferred indefinitely" calls this out
+as the reason O1 superinstruction peephole rewriting is parked).
+Freeing a quarter of the saturated table is a meaningful reopening
+of the design space.
+
+**Plan**:
+1. Keep the `Op*Int` family as the canonical name (shorter,
+   matches `Type::Integer`).  Redirect their i64-widened
+   semantics into those opcodes' existing slots.
+2. Delete the `Op*Long` family from `default/01_code.loft` and
+   `src/native.rs`'s opcode registry.  Their consumers (stdlib
+   and user code) already go through `integer` at the loft source
+   level; the `Long` names were implementation-detail aliases
+   for the i64 arithmetic path.
+3. Narrow-store opcodes (`OpPutByte`, `OpPutShort`, …) stay —
+   they handle field-width narrowing for bounded integer storage,
+   orthogonal to stack-slot width.
+4. `.loftc` cache version bumps (same bump as C54.A); pre-C54
+   bytecode referencing `Op*Long` slots rebuilds.
+
+**Consider before deleting**: `OpAddLong` / `OpConvLongFromInt` /
+`OpCastIntFromLong` and friends — some of these encode
+conversion between registers of different widths, which post-C54
+is a no-op (all registers are i64).  Delete the pure-conversion
+ops; keep any that cross into float/single/text (those are real
+type conversions, just named "Long" for historical reasons).
+
+**Tests**:
+- `c54e_opcode_budget_reclaimed` — grep `src/native.rs`'s
+  `FUNCTIONS` registry and `default/01_code.loft`'s opcode list;
+  assert the `Op*Long` family count is 0 at the end of the
+  sprint.
+- `c54e_long_arithmetic_still_works` — `a = 10; b = a + 5` used
+  to compile to `OpAddLong` if `a` were declared `long`; now
+  compiles to `OpAddInt` and produces 15.  Regression guard
+  that the arithmetic path didn't silently break.
+- `c54e_loftc_pre_c54_invalidated` — running a `.loftc` built
+  pre-C54 (referencing removed Long opcodes) triggers auto-rebuild
+  rather than executing garbage.
+
+**Ordering note**: C54.E lands *after* C54.B's repo sweep removes
+every direct reference to `long` from stdlib / tests.  Deleting
+the Long opcodes while they're still referenced from source code
+would cascade errors across the build.
+
+#### ~~C54.D — Rust-style literal suffixes~~ — Out of scope
+
+`34u8`, `4848i32`, `4948u32` notation considered and declined.
+Loft's context-driven type inference already handles every case
+naturally:
+
+- `x: u8 = 255;` — range-check at the binding site.
+- `f(a: u8)` called as `f(34)` — literal constrained by the
+  parameter type.
+- Ambiguous cases — use `34 as u8` (one existing operator, no new
+  syntax).
+
+Adding suffix syntax would cost a parser sweep and conflict with
+loft's "prefer the type annotation over the literal annotation"
+ethos.  If a concrete pain point emerges, reopen then.
+
+### Ordering
+
+Sub-tickets land in a single sprint branch `c54-integer-i64`:
+
+1. **C54.A** (runtime/schema widening) — must land first.
+2. **C54.C** (u32 stdlib type) — lands right after; depends on A's
+   narrow-store machinery.
+3. **C54.B** (remove `long` + `l` from stdlib/tests, deprecate for
+   users) — sweeps the repo to the post-C54 convention in one
+   commit per file group.  Deprecation warnings stay for 0.9.0;
+   hard removal in 1.0.0.
+4. **C54.E** (free the 32-bit arithmetic opcodes) — last.
+   Requires C54.B to have removed every direct `long` / `l`
+   reference from the stdlib / tests first, otherwise deleting
+   the `Op*Long` family cascades build errors.  Reclaims ~26
+   slots of the 254/254 opcode budget.
+
+Each sub-ticket has its own commit-series per DEVELOPMENT.md
+(tests first with `#[ignore]`, code, enable).
 
 ### Migration cheat-sheet for users
 
 | Old code                          | After C54                             | Action                       |
 |-----------------------------------|---------------------------------------|------------------------------|
 | `x: integer`                      | 8-byte storage, i64 arithmetic        | Add `limit(...)` if compact storage matters |
-| `x: long`                         | alias for unbounded `integer`         | None                         |
+| `x: long`                         | deprecated; alias for `integer`       | Run `loft --migrate-long`    |
+| `x = 10l;`                        | deprecated; use `x = 10;`             | Run `loft --migrate-long`    |
 | `x: u8`, `u16`, `i8`, `i16`       | unchanged                             | None                         |
-| `x: i32`                          | alias for `integer size(4)` — opts *into* the classic 32-bit range | None; but now the MIN trap is opt-in, not the default |
+| `x: u32`                          | **new** — 4-byte storage, full u32 range minus sentinel | Opt in where applicable |
+| `x: i32`                          | alias for `integer size(4)` — opts *into* classic 32-bit range | None; MIN trap is opt-in |
 | `x: integer limit(-1000, 1000)`   | unchanged                             | None                         |
+| `0xAABBCCDD` stored as integer    | silently a negative i32               | Declare as `u32` — stores clean |
 
 For users who genuinely need the i32::MIN sentinel behaviour (e.g.
 interop with a 4-byte wire format), `i32` stays available and keeps
@@ -574,14 +734,30 @@ the old semantics — it's just no longer the default shape.
   astronomically unlikely.
 - Not a schema rewrite for bounded fields — the compact packing
   users already rely on stays identical to the byte.
+- Not Rust-style literal suffixes — see C54.D (declined).
 
 ### Acceptance
 
-All C54 tests green; `size(S)` unchanged for structs with bounded
-integer fields; `size(T)` bumped from 4 to 8 for structs with
-unbounded integer fields; full suite rebuilds; Brick Buster runs
-under both `--interpret` and native; one loft program that hit the
-old sentinel collision now returns a mathematically-correct value.
+**C54.A**: all C54 tests green; `size(S)` unchanged for structs
+with bounded integer fields; `size(T)` bumped from 4 to 8 for
+structs with unbounded integer fields; full suite rebuilds; Brick
+Buster runs under both `--interpret` and native; one loft program
+that hit the old sentinel collision now returns a
+mathematically-correct value.
+
+**C54.B**: `default/`, `lib/`, and `tests/` are `long`-free and
+`l`-suffix-free.  User-code grep shows zero hits.  Deprecation
+warnings fire for any external file that still uses them.
+
+**C54.C**: `c54c_u32_*` tests green; RGBA examples in graphics
+stdlib / Brick Buster use `u32` with no `as integer` casts.
+
+**C54.E**: `Op*Long` family removed from `default/01_code.loft`
+and `src/native.rs`; grep-based assertion counts 0 hits.
+~26 opcode slots reclaimed out of the prior 254/254 saturation —
+unblocks O1 superinstruction work (see ROADMAP.md § "Deferred
+indefinitely") and gives future C-ticket work a fresh budget to
+spend.
 
 ---
 
