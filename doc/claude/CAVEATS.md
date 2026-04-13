@@ -66,7 +66,25 @@ so 0.9.0 is the right window (pre-1.0 stability contract).
 Bumping struct field sizes requires revisiting `size(Type::Integer)`
 in `src/database/mod.rs` and every schema layout test.
 
-### C60 — Hash iteration in key order (designed 2026-04-13)
+### ~~C60~~ — Hash iteration in key order — DONE 2026-04-13
+
+Shipped on branch `quality`.  `for e in h { ... }` walks the hash in
+ascending key order, yielding `reference<T>` — same shape as
+`sorted`/`index`.  Implementation: the parser substitutes the iterated
+expression with a `hash_sorted(h, tp)` call that builds a u32-stride
+rec-nr scratch in the hash's own store (allocation co-location lets
+the yielded `DbRef{store, rec, pos=8}` resolve directly to live hash
+records).  Iteration routes through the existing `Ordered` (`on=3`)
+bytecode — no new opcodes, no new runtime mode.
+
+Commits: pieces 1 (`e50fffe`), 2 (`8d4d573`), edit A (`2e20ba2`),
+edit E (`63226b8`), piece 3 (`2145a8d`), native (`0b85cd2`), Step 9
+`#remove` diagnostic (`705338e`), docs Step 4 (`363ed12`).  Six
+acceptance tests green in `tests/issues.rs::c60_hash_iter_*`.
+
+Original design archived below for reference.
+
+### C60 (original design) — Hash iteration in key order (designed 2026-04-13)
 
 A collection type you can't iterate breaks the "vector, hash, sorted,
 index" promise.  **Decision (revised):** `for e in hash` iterates in
