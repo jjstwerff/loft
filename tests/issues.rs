@@ -4751,3 +4751,71 @@ fn b7_method_on_jsonvalue_returning_integer_crashes() {
     // this becomes a real assertion.
     .result(Value::Int(i32::MIN));
 }
+
+// ── Q1: parser-side rich diagnostics through json_errors() ─────────────
+//
+// json_errors() now returns the full diagnostic shape:
+//   parse error at line N col M (byte B):
+//     path: /a/b/c
+//     <message>
+//     <context snippet with ^ caret>
+//
+// The loft testing harness has no substring matcher, so each test
+// asserts the salient piece via a `text.contains(...)` check inside
+// loft and returns a boolean.  Tolerant of future spacing /
+// line-numbering tweaks.
+#[test]
+fn q1_json_errors_path_for_object_field() {
+    code!(
+        "fn run_q1a() -> boolean {
+    v_q1a = json_parse(\"{{\\\"x\\\": 1.}}\");
+    if v_q1a == v_q1a {}
+    e_q1a = json_errors();
+    e_q1a.contains(\"/x\")
+}"
+    )
+    .expr("run_q1a()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn q1_json_errors_path_for_array_index() {
+    code!(
+        "fn run_q1b() -> boolean {
+    v_q1b = json_parse(\"[1, 2, 1.]\");
+    if v_q1b == v_q1b {}
+    e_q1b = json_errors();
+    e_q1b.contains(\"/2\")
+}"
+    )
+    .expr("run_q1b()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn q1_json_errors_includes_caret_marker() {
+    code!(
+        "fn run_q1c() -> boolean {
+    v_q1c = json_parse(\"{{\\\"x\\\": 1.}}\");
+    if v_q1c == v_q1c {}
+    e_q1c = json_errors();
+    e_q1c.contains(\"^\")
+}"
+    )
+    .expr("run_q1c()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn q1_json_errors_includes_line_and_byte() {
+    code!(
+        "fn run_q1d() -> boolean {
+    v_q1d = json_parse(\"{{\\\"x\\\": 1.}}\");
+    if v_q1d == v_q1d {}
+    e_q1d = json_errors();
+    e_q1d.contains(\"line\") && e_q1d.contains(\"byte\")
+}"
+    )
+    .expr("run_q1d()")
+    .result(Value::Boolean(true));
+}

@@ -1365,12 +1365,14 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
                 .last_json_errors
                 .push(format!("{kind} materialisation pending (P54 step 4)"));
         }
-        Err((msg, at)) => {
+        Err(err) => {
             stores
                 .store_mut(&result)
                 .set_byte(result.rec, pos, 0, JV_DISCR_NULL);
             stores.last_json_errors.clear();
-            stores.last_json_errors.push(format!("{msg} (byte {at})"));
+            stores
+                .last_json_errors
+                .push(crate::json::format_error(v_raw.str(), &err, 2, 1));
         }
     }
     stores.put(stack, result);

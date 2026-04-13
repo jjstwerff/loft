@@ -24,7 +24,7 @@ Decisions to *not* fix something live in
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Active sprint** — see § P54 below |
-| Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Designed, not landed** — see § Q1 below |
+| Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Parser side shipped** — RFC 6901 path + line:column + context snippet now in `json_errors()`.  Schema-side reuse (P54 step 5) still pending |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Designed, not landed** — see § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **Designed, not landed** — see § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | Medium | **Designed, not landed** — see § Q4 below |
@@ -318,11 +318,33 @@ P54 pitch is "typed tree catches what `Struct.parse(text)` used to
 silently swallow" — that win is half-delivered if the diagnostic on
 failure is `byte 12847`.
 
-**Status (2026-04-13).**  `src/json.rs::parse` currently returns
-`Result<Parsed, (String, usize)>`.  `n_json_parse` formats the tuple
-verbatim into `stores.last_json_errors`.  The parser stops at the
-first failure (the `Vec<String>` field can hold many but only one is
-ever written).
+**Status (2026-04-13).**  Parser side **shipped**.
+`src/json.rs::parse` returns `Result<Parsed, ParseError>` carrying
+`message`, `byte_offset`, and an RFC 6901 `path`.  Path-stack is
+threaded through `parse_object` / `parse_array`.  `format_error`
+builds the line:column + context snippet on demand.  `n_json_parse`
+calls it; `json_errors()` returns the rich text.
+
+```
+err: parse error at line 1 col 9 (byte 8):
+  path: /x
+  expected digit after `.`
+    1 │ {"x": 1.}
+      │         ^
+```
+
+8 unit tests in `src/json::tests` (path for root / array index /
+object field / nested / RFC 6901 escapes; line:col conversion;
+format_error covering path / line / col / caret) plus 4
+acceptance tests in `tests/issues.rs::q1_*` (path for object
+field, path for array index, caret marker present, line+byte
+markers present).
+
+**Schema-side still pending**: `Type::parse(JsonValue)` failures
+will reuse the same path + format_error infrastructure when P54
+step 5 lands.  Recovering parser (continue past first error,
+return list of failures) remains a follow-up with its own
+trade-offs.
 
 ### Target diagnostic
 
