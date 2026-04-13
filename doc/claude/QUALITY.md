@@ -24,6 +24,7 @@ Decisions to *not* fix something live in
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
 | P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Active sprint** — see § P54 below |
+| Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Designed, not landed** — see § Q1 below |
 | INC#12 | Index range-query second-key boundary depends on undeclared sort direction | Medium | Doc-only fix pending |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
 | B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — see § Compiler blockers |
@@ -252,6 +253,147 @@ optimisations, not register-width specific.  Tests:
   null; reaching it by accident becomes astronomically unlikely.
 - Not a schema rewrite for bounded fields.
 - Not Rust-style literal suffixes.
+
+---
+
+## Active design — Q1 (JSON parse-error diagnostics)
+
+**Bite.** `json_errors()` today returns `"{msg} (byte {at})"` — a
+human-readable message plus the raw byte offset into the source.  For
+a 50 KB configuration file or an API response, this is effectively
+unusable: users can't tell *which field* failed, what line:column to
+open the file at, or what the surrounding JSON looks like.  The whole
+P54 pitch is "typed tree catches what `Struct.parse(text)` used to
+silently swallow" — that win is half-delivered if the diagnostic on
+failure is `byte 12847`.
+
+**Status (2026-04-13).**  `src/json.rs::parse` currently returns
+`Result<Parsed, (String, usize)>`.  `n_json_parse` formats the tuple
+verbatim into `stores.last_json_errors`.  The parser stops at the
+first failure (the `Vec<String>` field can hold many but only one is
+ever written).
+
+### Target diagnostic
+
+```
+parse error at line 423 col 17 (byte 12847):
+  path: /users/3/address/zip
+  expected digit after `.`
+    421 │       {
+    422 │         "address": {
+    423 │           "zip": 1.}
+                          ^
+    424 │         }
+```
+
+Three pieces, each independently useful:
+
+1. **JSON Pointer path (RFC 6901).**  `/users/3/address/zip` — names
+   the field.  Accumulated during descent: push `/users` entering
+   that object's field, push `/3` entering the array element, …  On
+   error, the current path is the location.  Storage: `Vec<String>`
+   in the parser; push on descent, pop on ascent.
+
+2. **Line:column.**  One pass over `bytes[0..offset]` counting `\n`
+   converts the byte offset at error time.  O(n) but only executed
+   on failure, not per token.
+
+3. **Context snippet.**  Two lines before, the error line with a
+   caret under the offending byte, one line after.  Trivial once
+   line:column is known.
+
+### Surface changes
+
+**`src/json.rs`:**
+
+```rust
+pub struct ParseError {
+    pub message: String,
+    pub byte_offset: usize,
+    pub path: String,        // RFC 6901 pointer; "" for root
+}
+
+pub fn parse(input: &str) -> Result<Parsed, ParseError>;
+```
+
+Internal parser functions gain a `&mut Vec<String>` path stack.
+`parse_object` pushes `/escape(name)` before recursing on each
+field's value, pops after.  `parse_array` pushes `/{index}` and
+pops the same way.  Push/pop is O(1); no extra allocation per
+token.
+
+RFC 6901 escaping: `~` → `~0`, `/` → `~1`.  Five-line helper.
+
+**`src/native.rs::n_json_parse`:**
+
+```rust
+Err(ParseError { message, byte_offset, path }) => {
+    let (line, col) = line_col_of(raw.as_bytes(), byte_offset);
+    let snippet = context_snippet(raw, byte_offset, 2, 1);  // 2 before, 1 after
+    stores.last_json_errors.clear();
+    stores.last_json_errors.push(format!(
+        "parse error at line {line} col {col} (byte {byte_offset}):\n\
+         \x20 path: {path}\n\
+         \x20 {message}\n\
+         {snippet}"
+    ));
+}
+```
+
+Multiple errors: keep `Vec<String>` shape; future step (not this
+landing) can teach the parser to continue past recoverable errors
+— `json_errors()` would then return one line per failure.  For
+today's single-error-at-first-fail parser, the Vec holds one well-
+formatted entry.
+
+**`default/06_json.loft`:**
+No change — `json_errors()` signature (`-> text`) is already the
+right shape.  What callers *see* in that text becomes useful.
+
+### Implementation cost
+
+~60 lines in `src/json.rs` (`ParseError` struct, path-stack plumbing
+in 6 parse functions, RFC 6901 escape helper, line:column converter,
+context-window formatter).  ~20 lines in `n_json_parse` to replace
+the tuple-destructure with the rich format.
+
+### Tests
+
+All additions to `tests/issues.rs::p54_*` — already the right file:
+
+- `p54_err_reports_path_into_nested_object` — parse a malformed
+  `{"a": {"b": 1.}}` and assert `json_errors()` contains `/a/b`.
+- `p54_err_reports_path_into_array_element` — `[1, 2, 1.]` contains
+  `/2`.
+- `p54_err_reports_line_and_column` — `"{\n  \"x\": 1.\n}"` reports
+  line 2.
+- `p54_err_context_snippet_includes_caret` — the snippet block has
+  a `^` under the offending column.
+- `p54_err_path_escapes_slash_and_tilde` — a field named `a/b~c`
+  renders as `/a~1b~0c`.
+- `src/json.rs` unit tests gain a `path_in_error` case so the
+  parser-side guarantee is covered even without the native wrapper.
+
+### Why Tier 2 (not Tier 1)
+
+This doesn't unblock any ignored test and doesn't close a crash.
+It's an *ergonomics* win that substantially improves the P54 value
+proposition.  Landing it inside the P54 sprint — between step 5
+(`Type::parse(JsonValue)`) and step 6 (`.parse(text)` rejection
+diagnostic) — is natural: step 6 will want to print a useful
+diagnostic when users pass text, and that diagnostic can reuse the
+line:column + context-snippet helper.
+
+### What this design is not
+
+- Not a JSON Schema validator — the diagnostic reports *where* the
+  parser gave up, not *what* a struct expected.
+- Not a recovering parser — first error still stops parsing.  A
+  recovering mode is a follow-up with its own design trade-offs
+  (how much to skip, how to avoid cascading false errors).
+- Not per-struct-field diagnostics for `Type::parse(JsonValue)` —
+  those land in step 5 of P54 and use the same path-building
+  machinery.
 
 ---
 
