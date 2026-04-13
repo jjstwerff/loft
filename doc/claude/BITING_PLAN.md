@@ -532,6 +532,44 @@ every other sub-ticket depends on it.
 - Bump `.loftc` cache version so old caches auto-rebuild.
 - `loft --migrate-i64 <dbfile>` tool for persisted databases.
 
+**Bytecode constant encoding — width-graded, not i64-everywhere**:
+
+Although the runtime register is always i64 after C54.A, the
+bytecode **literal constants** stay width-graded by magnitude.
+Today's family at `default/01_code.loft` lines 109–113:
+
+| Opcode | Stream bytes | Range |
+|---|---|---|
+| `OpConstTiny` | 1 | −128 ..= 127 |
+| `OpConstShort` | 2 | −32 768 ..= 32 767 |
+| `OpConstInt` | 4 | −2³¹ ..= 2³¹ − 1 |
+| `OpConstLong` | 8 | full i64 |
+
+**All four stay.**  The common case (`x = 0`, `x = 1`, `x = 42`,
+loop bounds, array indices) stores a single byte after the opcode
+instead of eight — a ~50 % bytecode-size saving on integer-heavy
+code paths.  Each opcode sign-extends its payload into the i64
+register on load; the handler is one line
+(`*s.stack_mut::<i64>() = i64::from(val);`) per variant.
+
+Codegen in `src/state/codegen.rs::gen_constant` already picks the
+narrowest opcode that fits; post-C54.A that logic stays identical,
+just with i64 as the register type instead of i32.  `OpConstLong`
+becomes the fallback for magnitudes that don't fit in 4 bytes,
+rather than "the only opcode for long type literals".
+
+Similarly `OpVarInt` / `OpPutInt` (stack read/write, stream-encoded
+stack position as u16) remain — only the register they touch
+widens to i64.  Narrow-store opcodes for field-width truncation
+(`set_byte` / `set_short` into packed struct fields) are untouched
+by C54.A; they're orthogonal to stack-slot width.
+
+**Regression guard**:
+- `c54a_const_tiny_used_for_small_literals` — compile `x = 42;`;
+  assert the emitted bytecode starts with the `OpConstTiny` opcode
+  byte + 1 payload byte, not `OpConstLong` + 8.  Prevents a
+  well-meaning cleanup from flattening the family.
+
 **Tests** (all `#[ignore]`'d initially; enable as layers settle):
 - `c54_i32_min_round_trip` — `-2_147_483_648 * 1` returns
   `-2_147_483_648`, not null.
@@ -650,16 +688,26 @@ reason superinstruction peephole rewriting is parked.  Freeing
 1. Keep the `Op*Int` family as the canonical name (shorter,
    matches `Type::Integer`).  Redirect their i64-widened
    semantics into those opcodes' existing slots.
-2. Delete the `Op*Long` family from `default/01_code.loft` and
-   `src/native.rs`'s opcode registry.  Their consumers (stdlib
-   and user code) already go through `integer` at the loft source
-   level; the `Long` names were implementation-detail aliases
-   for the i64 arithmetic path.
-3. Narrow-store opcodes (`OpPutByte`, `OpPutShort`, …) stay —
+2. Delete the `Op*Long` arithmetic family (`OpAddLong`,
+   `OpMulLong`, `OpEqLong`, `OpLtLong`, etc.) from
+   `default/01_code.loft` and `src/native.rs`'s opcode registry.
+   Their consumers (stdlib and user code) already go through
+   `integer` at the loft source level; the `Long` names were
+   implementation-detail aliases for the i64 arithmetic path.
+3. **Keep the bytecode-width constant family** — `OpConstTiny`
+   (1-byte payload), `OpConstShort` (2), `OpConstInt` (4),
+   `OpConstLong` (8).  These are not type-specific; they're
+   bytecode-size optimizations for literal constants (see C54.A
+   "Bytecode constant encoding" for rationale).  Each writes to
+   an i64 register via sign-extension.  The common case of
+   single-byte constants saves ~7 bytes per literal in the
+   `.loftc` stream — meaningful on integer-heavy code.
+4. Narrow-store opcodes (`OpPutByte`, `OpPutShort`, …) stay —
    they handle field-width narrowing for bounded integer storage,
    orthogonal to stack-slot width.
-4. `.loftc` cache version bumps (same bump as C54.A); pre-C54
-   bytecode referencing `Op*Long` slots rebuilds.
+5. `.loftc` cache version bumps (same bump as C54.A); pre-C54
+   bytecode referencing deleted `Op*Long` arithmetic slots
+   rebuilds.
 
 **Consider before deleting**: `OpAddLong` / `OpConvLongFromInt` /
 `OpCastIntFromLong` and friends — some of these encode
@@ -667,6 +715,14 @@ conversion between registers of different widths, which post-C54
 is a no-op (all registers are i64).  Delete the pure-conversion
 ops; keep any that cross into float/single/text (those are real
 type conversions, just named "Long" for historical reasons).
+
+**Not deleted** — the bytecode-constant opcodes `OpConstTiny` /
+`OpConstShort` / `OpConstInt` / `OpConstLong`.  Their distinction
+is **stream-payload width**, not register width, and they save a
+material fraction of bytecode size on integer-heavy programs.
+Removing them would force every literal to a full 8-byte payload
+— losing the width-graded encoding is measurable bloat, not just
+a stylistic change.
 
 **Tests**:
 - `c54e_opcode_budget_reclaimed` — grep `src/native.rs`'s
