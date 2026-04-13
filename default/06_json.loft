@@ -1,0 +1,73 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P54: First-class JSON as a typed tree.
+//
+// `json_parse(text)` returns a `JsonValue` enum whose variants cover
+// every JSON kind.  Callers match on the variant to access the payload,
+// chain `field()` / `item()` for dynamic-shape navigation, and use the
+// typed extractors (`as_text`, `as_number`, `as_long`, `as_bool`) for
+// leaf values.  Malformed input returns `JNull` rather than panicking;
+// the last parse error is retrievable via `json_errors()`.
+//
+// Design: doc/claude/BITING_PLAN.md § P54, doc/claude/PROBLEMS.md #54.
+
+/// Typed union of JSON values.  The discriminant (1..6) picks the
+/// active variant; variant data lives in the variant's fields.
+/// Matches the six RFC 8259 kinds.
+pub enum JsonValue {
+  JNull,
+  JBool   { value: boolean },
+  JNumber { value: float not null },
+  JString { value: text },
+  JArray  { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> }
+}
+
+/// One field of a `JObject`.  Stored as a `vector<JsonField>` rather
+/// than a `hash<JsonField[name]>` in step 2 — the hash form is a 0.9.0
+/// follow-up once hash iteration and nested struct-enum-in-hash layouts
+/// are exercised end-to-end.  Linear scan is fine for the object sizes
+/// typical in configuration / API responses.
+pub struct JsonField {
+  name:  text,
+  value: JsonValue
+}
+
+/// Parse JSON text into a `JsonValue` tree.  Malformed input returns
+/// `JNull`; the error trail is accessible via `json_errors()`.
+///
+/// ```loft
+/// match json_parse(raw) {
+///   JObject { fields } => for f in fields { handle(f) },
+///   JArray  { items }  => for v in items  { handle(v) },
+///   JNull              => println("parse error: {json_errors()}"),
+///   _                  => println("unexpected root kind"),
+/// }
+/// ```
+///
+/// Step 3 (landing next commit) wires the native parser in
+/// `src/json.rs` to populate real variants.  The loft-level signature
+/// is declared here so callers can write `match json_parse(raw) { … }`
+/// today and get `JNull` back from the stub.
+pub fn json_parse(raw: text) -> JsonValue;
+
+/// Return a pipe-separated trail of JSON parse errors from the most
+/// recent `json_parse` call.  Empty when the parse succeeded.
+///
+/// Step 3 (landing next commit) will emit real diagnostics.  Until
+/// then this returns an empty string.
+pub fn json_errors() -> text;
+
+/// Typed extractor — returns `null` (empty text) on kind mismatch.
+pub fn as_text(self: JsonValue) -> text;
+
+/// Typed extractor — returns `null` on kind mismatch.
+pub fn as_number(self: JsonValue) -> float;
+
+/// Typed extractor — returns `null` on kind mismatch.  Truncates the
+/// underlying `float` toward zero before converting.
+pub fn as_long(self: JsonValue) -> long;
+
+/// Typed extractor — returns `null` on kind mismatch.
+pub fn as_bool(self: JsonValue) -> boolean;
