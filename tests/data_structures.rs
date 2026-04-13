@@ -397,6 +397,61 @@ pub fn hash_records_sorted_multi_field() {
     );
 }
 
+/// C60 Step 3 (path 2c, piece 1): `Stores::build_hash_sorted_vec`
+/// emits a u32 rec-nr vector at 4-byte stride — the layout that the
+/// on=4 iterate/step arm will walk.  The returned DbRef points at a
+/// header whose offset-4 word is the data record; offset 4 of the
+/// data record is the element count; offset 8..+4*n holds u32 rec-nrs.
+#[test]
+pub fn hash_sorted_vec_u32_layout() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {name:\"zebra\",value:1},
+        {name:\"apple\",value:5},
+        {name:\"mango\",value:3}
+    ]";
+    stores.parse(data, v, &into);
+    let result = stores.build_hash_sorted_vec(&into, v);
+    // Header: offset 4 holds the data-record number.
+    let data_rec = stores.allocations[result.store_nr as usize].get_int(result.rec, 4) as u32;
+    assert_ne!(data_rec, 0, "header must point at a nonzero data record");
+    // Data record: offset 4 = count.
+    let count = stores.allocations[result.store_nr as usize].get_int(data_rec, 4);
+    assert_eq!(count, 3, "expected 3 elements, got {count}");
+    // Data record offset 8..8+12 holds 3 u32 rec-nrs at 4-byte stride.
+    // Read each, resolve its `name` field, verify ascending order.
+    let mut names = Vec::new();
+    for i in 0..3u32 {
+        let base = 8 + i * 4;
+        let rec_nr = stores.allocations[result.store_nr as usize].get_int(data_rec, base) as u32;
+        assert_ne!(rec_nr, 0, "element {i} rec-nr should be nonzero");
+        let rec = DbRef {
+            store_nr: into.store_nr,
+            rec: rec_nr,
+            pos: 8,
+        };
+        // name field is at offset 0 of the record body (pos 8 + 0).
+        let store = &stores.allocations[rec.store_nr as usize];
+        let name_off = store.get_int(rec.rec, rec.pos);
+        names.push(store.get_str(name_off as u32).to_string());
+    }
+    assert_eq!(names, vec!["apple", "mango", "zebra"]);
+}
+
 #[test]
 pub fn array_record() {
     let mut stores = Stores::new();

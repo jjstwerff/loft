@@ -274,40 +274,44 @@ impl Stores {
         s
     }
 
-    /// C60 Step 3a: build a fresh `vector<reference<T>>` containing the
-    /// hash's records sorted by key (ascending, lexicographic for
-    /// multi-field).  Called from `n_hash_sorted` (src/native.rs) and
-    /// from future parser-desugared hash-iteration paths.
+    /// C60 Step 3 (path 2c, piece 1): build a fresh vector of u32
+    /// rec-nrs from the hash's records, sorted ascending by key.
     ///
-    /// The vector layout matches `n_parallel_for_int`'s output
-    /// (src/native.rs:494): header record (size 1 word) at offset 4
-    /// points to a data record whose offset 4 holds the element count
-    /// and whose offset 8 starts the DbRef array at 12-byte stride.
-    /// Each element is `DbRef{store_nr, rec, pos:8}`, matching the
-    /// convention `hash::validate` uses internally.
+    /// Called by the `on=4` hash-iteration arm in `OpIterate` at
+    /// runtime.  The returned DbRef points at a header record whose
+    /// offset-4 word is the data-record number; the data record's
+    /// offset-4 word is the element count (n), and offset 8 onwards
+    /// holds n `u32` rec-nrs at 4-byte stride.
+    ///
+    /// **Layout matches `Ordered`-style vectors** (see
+    /// `src/state/io.rs:777` and `src/vector.rs:448`) — that's why the
+    /// `step` handler for on=4 can walk this vector with the same
+    /// u32-stride logic Ordered uses, yielding
+    /// `DbRef{store=hash_store, rec=<u32>, pos=8}` per iteration.
+    ///
+    /// Note: `elem_store` is NOT encoded in the scratch; the runtime
+    /// retains the original hash's `store_nr` via the companion
+    /// iterator-local allocated by `parse_for_iter_setup`.
     #[allow(dead_code)]
     pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
         let keys = self.types[tp as usize].keys.clone();
         let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
         let n = recs.len();
         let result_db = self.null();
-        let vec_words = ((n as u32) * 12 + 8).div_ceil(8);
+        // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to
+        // 8-byte words (store claim granularity).
+        let vec_words = ((n as u32) * 4 + 8).div_ceil(8);
         let vec_words = vec_words.max(1);
         let vec_cr = self.claim(&result_db, vec_words);
         let vec_rec = vec_cr.rec;
         let header_cr = self.claim(&result_db, 1);
         let header_rec = header_cr.rec;
-        let elem_store = hash_ref.store_nr;
         {
             let store = self.store_mut(&result_db);
             store.set_int(vec_rec, 4, n as i32);
             for (i, &rec_nr) in recs.iter().enumerate() {
-                let base = 8 + (i as u32) * 12;
-                *store.addr_mut::<DbRef>(vec_rec, base) = DbRef {
-                    store_nr: elem_store,
-                    rec: rec_nr,
-                    pos: 8,
-                };
+                let base = 8 + (i as u32) * 4;
+                store.set_int(vec_rec, base, rec_nr as i32);
             }
             store.set_int(header_rec, 4, vec_rec as i32);
         }
