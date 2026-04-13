@@ -29,14 +29,20 @@ Decisions to *not* fix something live in
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **Designed, not landed** — see § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | Medium | **Designed, not landed** — see § Q4 below |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
-| B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — **fix designed** (zero-fill payload at `src/parser/objects.rs::parse_enum_field`); 1 session |
-| B3 | Struct-enum tail-expression return crashes | Medium | Compiler — **fix designed** (4-layer codegen surgery); 2-3 sessions |
-| B5 | Recursive struct-enum trips codegen recursion guard | Medium | Compiler — **fix designed** (memoise `fill_database` in `src/typedef.rs`); 1 session |
-| B7 | Native-returned struct-enum temporaries leak intermediate stores | Medium | Compiler — single-line fix tried 2026-04-13 and **did NOT close the bug**; revised estimate 2-3 sessions; design + investigation candidates in § B7 below |
+| B5 | Recursive struct-enum — `vector<Tree>` field allocates with `db_tp=u16::MAX` | Medium | Compiler — **further-narrowed 2026-04-13** (post-B7 fix): interpreter-only.  Inside `n_count`, an `OpDatabase(var=12, db_tp=0xFFFF)` fires.  Trace shows `var_t: Tree` parameter is fine; the failing op is for an internal slot allocated for the iteration — likely the for-loop's `__vector_N` work-ref or `kids` binding.  Native-codegen schema does NOT register `main_vector<Tree>` (it isn't in the structures list), so when `gen_set_first_vector_null` looks up `name_type("main_vector<Tree>")`, it returns `u16::MAX` — emitted into bytecode and causes the runtime panic.  **Fix path:** ensure `main_vector<Tree>` (and main_vector for any struct-enum element type) is registered during `fill_database` of the parent struct/enum that contains it, OR detect the missing registration in `gen_set_first_vector_null` and either auto-register or emit a parser-level diagnostic.  The non-recursive case `vector<JV>` works because the field is inside a struct (Box.items) where field-type resolution uses a different path that doesn't need `main_vector<JV>` |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
-INC#3, INC#29.  See CHANGELOG.md.
+INC#3, INC#29, P140 (test-harness reordering 2026-04-13), P141 (false
+positive — `x#continue` already works), B3 (ref_return Enum arm
+2026-04-13 — struct-enum return types now get hidden caller
+pre-alloc args just like Reference/Vector), B2-runtime (2026-04-13
+— 4-part fix: fill_all enum-field retrofit, parse_constant_value
+v_block wrap, fields.rs Sig.Idle wrap, calc.rs sub-struct size=1),
+B7 (2026-04-13 — `def_code` null-code path now sets `self.arguments`
+and `stack.position` from def attributes for native fns + native
+registry aliases `t_9JsonValue_<method>` → `n_<method>` impls).
+See CHANGELOG.md.
 
 ---
 
@@ -776,13 +782,60 @@ runtime in a mixed enum doesn't produce a matchable value.
 Workaround: build via the constructor path the parser uses; user
 code avoids unit variants.  Test: `p54_b2_runtime_*` (`#[ignore]`).
 
-**Fix design (added 2026-04-13 from explore-agent investigation).**
+**Fix design (original — stale; see revised note below).**
 Unit variants in **mixed** enums (where some variants have fields
 and some are unit) leave the payload buffer uninitialised when
 constructed at runtime.  The variant tag byte is set correctly,
 but the residual bytes beyond the tag carry whatever was on the
 stack — match dispatch then reads garbage and either fails to
 match or matches the wrong arm.
+
+**Re-diagnosis 2026-04-13** (via `LOFT_LOG=full` on the same
+`Sig { Off, Idle, On { level } }` reproducer): the observed
+runtime symptom is **not** the predicted garbage-tag mismatch.
+Instead, the test loops returning `value=16` thousands of times
+until the harness's "Too many operations" guard fires at
+`src/state/debug.rs:974`.  The match expression seems to
+re-enter the function rather than exit it, which suggests a
+codegen issue at the match-dispatch / return-slot layer, not
+(only) the parse-time zero-fill.  Before attempting surgery,
+capture a narrower trace with `LOFT_LOG=fn:run` and read
+`parse_enum_field` → `parse_object` → match-arm return path
+together.  Zero-filling the payload is likely necessary but
+not sufficient.
+
+**Partial fix landed 2026-04-13.**  Two root causes identified:
+
+1. **Type-layout (LANDED):** `parse_enum_values` only added the
+   "enum" discriminant attribute to struct variants (those with
+   braces), leaving sibling unit variants with 0 attributes.
+   `fill_database` then produced size-0 structures for them, and
+   `Store::claim(size=0)` panicked "Incomplete record".  Fix in
+   `src/typedef.rs::fill_all`: retroactively add the "enum" field
+   to every unit variant whose parent's `returned` is a mixed
+   `Type::Enum(_, true, _)`.  Off/Idle/On now all have the
+   discriminant field in the native-schema emit.
+2. **Bare-identifier construction (LANDED 2026-04-13):** extended
+   `parse_constant_value` at `src/parser/objects.rs:481` to emit an
+   inline `v_block` when the resolved variant's parent enum is
+   mixed.  The block allocates a work-ref DbRef, calls
+   `object_init` (which writes the discriminant via the "enum"
+   field's default value), and returns the work-ref.  Work-ref is
+   marked `skip_free` so only the receiving slot (var_s) frees the
+   store at scope exit.  Native-emit verified: `let var_s: DbRef =
+   { OpDatabase(__ref_1, 61); set_byte(0)=2; __ref_1 };` with
+   single `OpFreeRef(var_s)`.
+
+3. **Interpreter codegen (NOT landed):** `state::execute` still
+   panics `Incomplete record` on the same reproducer, meaning the
+   bytecode generation in `src/state/codegen.rs` doesn't observe
+   the new `v_block` form the same way native-emit does.  Layer 1+2
+   pass at the IR + native-Rust output level; the interpreter's
+   bytecode emitter needs paired handling for
+   `Type::Enum(_, true, _)` destination slots receiving a
+   v_block containing an `OpDatabase` + field-init sequence.
+   Follow `gen_set_first_ref_*` sites for the struct-Reference
+   path and mirror for struct-enums.  Est. 1 session.
 
 **Site:** `src/parser/objects.rs::parse_enum_field` (lines 1286-1314)
 constructs the variant struct via `parse_object(e_nr, &mut cd)`.
@@ -827,7 +880,27 @@ instead of `n` at function tail.  Tests: `p54_b3_*` (`#[ignore]`).
 Estimated 8-12 source-line ranges across 2 files when attempted as
 one focused refactor.
 
-**Fix design (added 2026-04-13 from explore-agent investigation).**
+**Re-diagnosis 2026-04-13** (via `LOFT_LOG=crash_tail:30` on
+`p54_b3_float_via_intermediate`).  The observed failure is not a
+deep-copy / free-collision; it is `n_mk` **calling itself
+infinitely** from its own tail position.  The tail expression `n`
+(a local of struct-enum type) compiles to an `OpCall(fn=n_mk, …)`
+each time — a fresh store is allocated (`ConvRefFromNull` →
+`Database`) and the body re-executes before any return.  The heap
+grows by one store per iteration until `free(): invalid next
+size` aborts.
+
+This sharpens the original 4-layer design: layer 1
+(caller-side hidden-slot pre-alloc when the callee returns
+`Type::Enum(_, true, _)`) is the site that currently mis-routes
+the tail `n` load as a recursive call.  Without a reserved
+return-slot the codegen falls back to the "call expression" path
+for the tail local, and the return slot never materialises.
+Landing layer 1 first, rerunning the trace, and only then adding
+layers 2-4 is now the recommended order (instead of landing all
+four together as the original design required).
+
+**Fix design (original 4-layer, still applicable).**
 Four coordinated layers must change.  Concrete file:line targets:
 
 | Layer | File | Line(s) | Change |
@@ -863,28 +936,82 @@ independent codegen surgeries with no overlap, and B7 unblocks
 ergonomics gap; the `return n;` workaround stays good for any
 user who needs it.
 
-**B5 — Recursive struct-enum infinite codegen loop.**  Declaring
-`JArray { items: vector<JsonValue> }` trips the
-`Recursion depth limit exceeded (500)` guard.  Workaround:
-arena indirection (P54 step 0).  Test: `p54_b5_recursive_struct_enum`
-(`#[ignore]`).
+**B5 — Recursive struct-enum runtime crash** (re-diagnosed further
+2026-04-13).  The failure is now known to be a **test-harness divergence**,
+not a general interpreter bug.  The same loft source:
 
-**Fix design (added 2026-04-13 from explore-agent investigation).**
-The 500-limit guard at `src/state/mod.rs:197` is a downstream
-runtime call-depth guard, **not** the cause.  The actual recursion
-is in compile-time type layout: `src/typedef.rs::fill_database`
-walks struct/enum field types to compute storage sizes, and a
-field whose type is the parent enum (e.g.
-`JArray { items: vector<JsonValue> }`) re-enters `fill_database`
-for `JsonValue` 500+ times before the runtime guard catches the
-symptom.
+```loft
+pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
+fn count(t: const Tree) -> integer {
+    match t {
+        Leaf { v } => v,
+        Node { kids } => { c = 0; for k in kids { c += count(k); }; c }
+    }
+}
+fn run() -> integer {
+    root = Node { kids: [Leaf { v: 3 }, Leaf { v: 4 }] };
+    count(root)
+}
+fn main() { println("{run()}"); }
+```
 
-**Fix:** memoise visited type definitions in `fill_database`.
-Pass an `&mut HashSet<u32>` of in-progress `d_nr`s; on re-entry
-for an already-in-progress type, return the partially-computed
-size (or a sentinel "self-referential, defer") and continue.
-Reference-typed fields are already fixed-size (12 bytes for
-`DbRef`) so the cycle terminates trivially once memoised.
+* `cargo run --release --bin loft -- rec.loft` → prints `7` ✓
+* `cargo test --release --test issues p54_b5 -- --ignored` → panics
+  `assertion failed: size >= 1: "Incomplete record"` at
+  `src/store.rs:221`, under an `OpDatabase` op whose `db_tp` is `0xFFFF`.
+
+Further reductions pin down the difference:
+
+* `build() -> Tree` alone (construct + match, no recursion) — both paths ok.
+* `count(t)` with `return match ... v, x`, called non-recursively — both ok.
+* `count(t)` recursive on `[Leaf, Leaf]` siblings — standalone ok, harness fails.
+
+So the harness-only divergence lives in `tests/testing.rs`.  Candidates:
+`cached_default()` (shared state across tests — may retain stores
+populated by an earlier test); the parse path via `parse_str` vs
+`main.rs`'s primary entrypoint; the always-called `generate_code`
+native-codegen side effect on line 219.  Workaround: arena indirection
+(P54 step 0).  Test: `p54_b5_recursive_struct_enum` (`#[ignore]`).
+
+**Fix approach (revised 2026-04-13).**  Skip the typedef surgery the
+earlier design targeted — the live-binary path shows `fill_database` /
+`known_type` propagation is correct in the general case.  Instead:
+
+1. Re-run the harness with `LOFT_LOG=variables` and `LOFT_LOG=fn:count`
+   on the failing case and diff against the passing live-binary trace to
+   locate the exact op where `db_tp` diverges.
+2. If the divergence is in `cached_default()`: give each test a fresh
+   `Stores` rather than a clone of the cached one for struct-enum
+   scenarios.
+3. If it's the always-on `generate_code` call at `tests/testing.rs:219`:
+   hoist it behind the same `log_active` gate the other instrumentation
+   uses, so it doesn't mutate state before `state.execute` runs.
+
+**Estimated scope:** one session once the divergence op is located.
+
+**Fix design (revised 2026-04-13 after runtime trace).**  The original
+"memoise `fill_database`" surgery appears to be in-tree already
+(compile now succeeds on the same `Tree` reproducer that tripped
+the 500-depth guard in earlier writeups).  What remains is the
+**known_type handshake** for recursively-defined cells.
+`fill_database` has branches (lines 249-253 for `Type::Vector`,
+similar for Hash/Sorted/Index/Spacial) that read
+`data.def(c_nr).known_type` and, when it's `u16::MAX`, recurse via
+`fill_database(data, database, c_nr)`.  For a self-referential
+content type (`vector<Tree>` where the cell type is Tree itself,
+still in progress), the recursion is skipped by the memoisation
+but `c_tp` stays at `u16::MAX` — and that MAX propagates into the
+enclosing def's known_type entry, then into runtime `OpDatabase`
+ops, then into `Store::claim(size=0)` → panic.
+
+**Fix:** when `fill_database` detects re-entry for a type already
+in progress, **don't return the unresolved `u16::MAX`** — either
+(a) return a sentinel struct type sized to fit `DbRef` (12 bytes)
+for the recursive cell, since recursive content is always
+heap-allocated through a DbRef anyway, or (b) add a second pass
+after all defs' top-level structures are allocated, which walks
+the vector/hash/etc. cells that were deferred and fills them in
+then.  Option (a) is the smaller change.
 
 **File:** `src/typedef.rs:209-311` (`fill_database`).
 **Estimated scope:** one session.
@@ -919,6 +1046,23 @@ correctly.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
 **B7 — Native-returned temporary lifecycle (broader than initially scoped).**
+
+**Unification finding 2026-04-13.**  B7's signature — `~500 iterations of
+Return(ret=0, value=16, discard=0) at PC=0` followed by legitimate code
+resuming, followed by store-leak warning + double-free — **matches B2-runtime
+and B3 trace-for-trace**.  All three fire `OpReturn` / `OpCall` in a loop at a
+function boundary involving a struct-enum value.  Specifically:
+
+* B2-runtime: `s = Idle; match s { ... }` — OpReturn loops after the match.
+* B3: `fn mk() -> JV { n = A{..}; n }` — OpCall loops (function calls itself).
+* B7: `len(v_b7m)` where `v_b7m: JsonValue` — OpReturn loops after len.
+
+The common thread: the **caller's reserved return slot** is wrong-sized or
+wrong-addressed for a `Type::Enum(_, true, _)` value.  OpReturn pops `value=16`
+bytes (the DbRef size) but the stack pointer advances because the caller
+reserved the slot incorrectly; eventually the stack unwinds to a non-zero PC
+and normal code resumes.  A **single fix** to the return-slot reservation /
+OpReturn accounting for struct-enums likely closes all three items together.
 
 Scope analysis (`src/scopes.rs`) doesn't emit `OpFreeRef` correctly
 for the JsonValue store returned by `json_parse`.  The store leaks
@@ -1077,30 +1221,132 @@ session-of-the-week background bite.
 
 ### Tier 2 — preventive, low-risk, high-readability
 
-4. **`cargo clippy --no-default-features --all-targets -- -D warnings`
-   cleanup.**  Currently fails on 12 issues in `parallel.rs`
-   (single-char names, raw-pointer/safety, indexing patterns).
-   Real lints, not false positives.  Hides future regressions
-   because no one runs the gate clean today.  Ship as a permanent CI
-   guard after.
+4. **~~`cargo clippy --no-default-features --all-targets -- -D warnings`
+   cleanup.~~**  Landed 2026-04-13.  Full `--no-default-features`
+   build now goes clean through clippy on both lib and bin targets
+   and both feature combinations still compile identically.  Fix set:
+   - **`src/parallel.rs`** — 12 original lints: 7× `needless_pass_by_value`
+     and 2× `not_unsafe_ptr_arg_deref` suppressed via
+     `#[cfg_attr(not(feature = "threading"), allow(…))]` (the value is
+     consumed by `Arc::new(program)` in the threading branch, borrowed
+     in the non-threading branch; making the public fn `unsafe` would
+     cascade across every `par(...)` site).  3× `needless_range_loop`
+     in the non-threading fallbacks refactored to
+     `for (row_idx, r) in results.iter_mut().enumerate()`.
+   - **`src/parallel.rs`** — cascaded `dead_code` on 5
+     `run_parallel_*` fns + `WorkerPool::new`: same cfg-gated allow,
+     the binary-crate view compiled by `main.rs` sees no callers
+     under `--no-default-features`.
+   - **`src/main.rs`** — `extract_toml_version`, `chrono_date`,
+     `days_to_ymd` moved under `#[cfg(feature = "registry")]`; the
+     `registry_sync()` tail-body (formerly reached only when
+     `registry` is enabled) wrapped in `#[cfg(feature = "registry")]`
+     to resolve the `unreachable_code` warning that fired after the
+     cfg'd-out branch's unconditional `exit(1)`.
+   - **`tests/data_structures.rs`** — the lone `index_deletions` test
+     that uses `rand_pcg::Pcg64Mcg` gated behind
+     `#[cfg(feature = "random")]`; its imports the same.
+   - **CI** — `Makefile` `ci:` target now invokes
+     `cargo clippy --no-default-features --all-targets -- -D warnings`
+     alongside the default-features gate, so the ratchet stays
+     green on every push.
+   - **Regression guard** —
+     `tests/doc_hygiene.rs::ci_target_runs_no_default_features_clippy`
+     reads the Makefile and fails if the gate is ever removed.
 
 5. **Migrate `Struct.parse(text)` → `json_parse(text) → match`** in
    `tests/scripts/57-json.loft` and `tests/docs/24-json.loft` once
    P54 step 5 lands.  Unblocks step 6 (the rejection diagnostic)
    and turns the tests into examples of the modern API.
 
-6. **Document one inconsistency per session.**  INC#12 and INC#26
-   are pure-doc bites following the INC#3 / INC#29 pattern — write
-   the gotcha into LOFT.md, lock the behaviour with 2-3 regression
-   tests.
+6a. **~~Drop `code!()`'s duplicate-test emission.~~**  Landed
+    (investigation) 2026-04-13 — turned out to be a false positive: the
+    `duplicate_macro_attributes` warning and "same test name printed
+    twice" output both traced to a single orphan `#[test]`
+    attribute in `tests/issues.rs` left over from a test-block
+    move.  The `code!()` macro is clean.  Removed the orphan; added
+    `tests/doc_hygiene.rs::no_orphan_test_attributes_in_tests_issues_rs`
+    so the next orphan is caught at test time, not via a
+    misattributed warning.  No further action.
+
+6b. **~~Drift guard for `#[ignore]`'d tests.~~**  Landed 2026-04-13:
+    `tests/doc_hygiene.rs::ignored_tests_baseline_is_current` loads
+    `tests/ignored_tests.baseline` (name + reason per ignored test,
+    20 rows today) and fails with a +/- diff when the set drifts.
+    Regenerator at `tests/dump_ignored_tests.py`.  Catches
+    un-ignored-without-baseline-update, silently-added new
+    `#[ignore]`, and reason-string edits.  Does *not* yet run the
+    ignored tests themselves and diff pass/fail/panic-message —
+    that heavier nightly `--ignored` diff is the remaining gap.
+
+6c. **~~Surface method-vs-free suggestions in diagnostics (both
+    directions).~~**  Landed 2026-04-13 in `src/parser/fields.rs` and
+    `src/parser/mod.rs`:
+    - **method→free** (original): when field access fails and a free
+      function `n_<field>` exists whose first parameter is compatible
+      with the receiver type, the diagnostic now reads
+      `"Unknown field vector.sum_of — did you mean the free function
+      `sum_of(…)` ? (stdlib declared `sum_of` as free-only; see
+      LOFT.md § Methods and function calls)"`.  Tests:
+      `inc08_sum_of_is_free_function_only` locks the hint wording;
+      `quality_6c_unknown_field_without_free_fn_has_no_hint` locks
+      specificity (a genuinely-misspelled field still gets the plain
+      message).
+    - **free→method** (follow-on, landed same day): when a free call
+      `name(…)` fails and a method `t_<LEN><Type>_<name>` exists on
+      some other type (typically the user passed a wrong-type
+      receiver to a `self:` method via free syntax), the diagnostic
+      now reads `"Unknown function starts_with — did you mean the
+      method `x.starts_with(…)` on text? (stdlib declared
+      `starts_with` as a method; see LOFT.md § Methods and function
+      calls)"`.  Methods declared on multiple receivers (e.g.
+      `is_numeric` on both `text` and `character`) are enumerated
+      with `/`.  Site: `src/parser/mod.rs::call` uses
+      `find_method_receivers` to scan definitions for the
+      `t_<LEN><Type>_<name>` pattern.  Tests:
+      `quality_6c_free_call_on_wrong_type_suggests_method`,
+      `quality_6c_free_call_lists_all_method_receivers`,
+      `quality_6c_free_call_unknown_fn_has_no_method_hint` (negative
+      — a genuinely-unknown name still prints the plain message).
+
+6d. **~~Better errors for keyed-collection construction.~~**  Landed
+    2026-04-13 in `src/parser/fields.rs::index_type`: the
+    `"Indexing a non vector"` diagnostic now spells out both the
+    missing feature (no generic-constructor expression) and the
+    idiom that works (struct-field declaration + vector-literal
+    initialisation).  Tests: `quality_6d_keyed_collection_constructor_hint`
+    locks the new wording on the `hash<Row[id]>()` reproducer;
+    `tests/parse_errors.rs::index_non_indexable` updated to the
+    new text on its `v = 5; v[1]` baseline.  Implementing the
+    generic constructor itself is a separate, larger task — not
+    this diagnostic fix.
+
+6. **Document one inconsistency per session.**  Following the
+   INC#3 / INC#12 / INC#26 / INC#29 pattern — write the gotcha into
+   LOFT.md, lock the behaviour with 2-3 regression tests.  INC#2
+   (vector-vs-keyed-collection API gap), INC#8 (method-vs-free-function
+   stdlib choice), INC#18 (`x#break` labelled-break syntax), and INC#27
+   (no `x#continue` counterpart — silent bare-continue) all landed
+   2026-04-13.  No further INC doc-bite candidates remain; future
+   sessions should draw from Tier 1 or Tier 3 backlog items.
 
 ### Tier 3 — structural, larger payoff
 
-7. **Bytecode cache verification.**  `.loftc` shipped in commit
-   `4039490`; no test exercises hit / miss / invalidation today.
-   Single integration test: compile, cache, mutate source,
-   recompile, assert re-codegen.  Catches staleness bugs before
-   users do.
+7. **~~Bytecode cache verification.~~**  Landed 2026-04-13 in
+   `tests/bytecode_cache.rs`.  `.loftc` shipped in commit `4039490`;
+   the hit / miss / invalidation cycle is now locked with four
+   process-level tests that drive the real `loft --interpret` binary
+   end-to-end:
+   - `first_run_writes_loftc_with_magic_header` — fresh compile
+     creates `.loftc` next to the source, beginning with the `"LFC1"`
+     magic bytes.
+   - `second_run_reuses_cache_bytes_unchanged` — two consecutive runs
+     on the same source leave `.loftc` byte-identical (hit path).
+   - `source_change_invalidates_and_rewrites_cache` — editing the
+     source changes the SHA-256 key; `.loftc` is rewritten and the
+     new stdout reflects the new source (not a stale cached image).
+   - `missing_loftc_is_recreated` — deleting the cache file between
+     runs forces regeneration on the next run.
 
 8. **Const store mmap path on Linux.**  Designed in CONST_STORE.md,
    partially shipped.  Measure startup wins on a real loft program
@@ -1122,6 +1368,19 @@ session-of-the-week background bite.
     have the others link, or add a `make docs-check` script that
     greps for FIXED markers in the long form and complains when the
     Quick-Reference still says open.
+    - **Landed 2026-04-13:** `tests/doc_hygiene.rs` now guards all
+      four sources — INCONSISTENCIES.md (Status blocks ↔ Resolved
+      table), PROBLEMS.md (Quick-Reference ↔ long-form
+      `### ~~N~~ FIXED` headings), CAVEATS.md (long-form
+      `### ~~CX~~ DONE` ↔ Verification-log table), and QUALITY.md
+      itself (main open-issues table must contain no crossed-out
+      rows; Tier-2 strikethrough items must carry a `Landed
+      YYYY-MM-DD` marker in their body).  Caught five existing
+      drifts on first runs: #135 (PROBLEMS Quick-Reference), P137,
+      C58/P135, and C60 (CAVEATS Verification-log), plus 6a's
+      missing landing marker (QUALITY self-guard) — all corrected
+      in the same commits.  Item 10's scope is now closed; future
+      drift gets caught in CI instead of sprint-hygiene commits.
 
 11. **Memory of recent decisions.**  DESIGN_DECISIONS.md exists for
     the closed-by-decision register but isn't yet referenced from

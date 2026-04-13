@@ -3237,7 +3237,6 @@ fn test() {
 /// println("str={value}") }`) works fine inline; only the
 /// fn-return path is broken.
 #[test]
-#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_parse_primitive_string() {
     code!(
         "fn run() -> text {
@@ -3322,7 +3321,6 @@ fn p54_malformed_returns_jnull() {
 /// boundary trips the same store-free-before-copy lifecycle as
 /// `p54_parse_primitive_string`.  Both unblock together.
 #[test]
-#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_extractor_as_text() {
     code!(
         "fn run() -> text {
@@ -3339,7 +3337,6 @@ fn p54_extractor_as_text() {
 /// Same store-free-before-copy lifecycle as the matching extractor
 /// test above.  Unblocks once that lands.
 #[test]
-#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_extractor_as_text_wrong_kind_returns_null() {
     code!(
         "fn run() -> text {
@@ -3392,7 +3389,6 @@ fn p54_parse_array_item_access() {
 /// loft's scope analysis doesn't emit OpFreeRef for the temp, so
 /// the chain leaks 3 stores per call site.
 #[test]
-#[ignore = "P54 B7-chain: native-returned JsonValue temporaries don't get OpFreeRef"]
 fn p54_missing_chain_returns_jnull() {
     // `{` in a loft text literal triggers format-string interpolation;
     // use a primitive that json_parse handles to produce a non-object
@@ -3535,7 +3531,6 @@ fn run() -> integer {
 /// value still references it.  `return n;` works — see
 /// `p54_struct_enum_explicit_return_of_local`.
 #[test]
-#[ignore = "P54: struct-enum tail-expression return crashes (float not null)"]
 fn p54_b3_float_via_intermediate() {
     code!(
         "pub enum JV { A { v: float not null } }
@@ -3555,10 +3550,14 @@ fn run() -> float {
 }
 
 /// B5 (open): self-referential struct-enum (`vector<Self>` in a variant)
-/// trips the Recursion-depth-500 codegen guard.  Spec: declaration
-/// compiles, pattern match dispatches correctly.
+/// used to trip the 500-depth `fill_database` recursion guard; after
+/// the memoisation landed, it now reaches runtime and panics in
+/// `Store::claim` under an `OpDatabase` whose `db_tp` is `u16::MAX`
+/// (recursive content cell's `known_type` never got filled in).
+/// Spec: declaration compiles, pattern match dispatches correctly.
+/// See QUALITY.md § B5 for the revised fix design.
 #[test]
-#[ignore = "P54 B5: recursive struct-enum trips codegen recursion guard"]
+#[ignore = "P54 B5: recursive struct-enum — OpDatabase(db_tp=u16::MAX) panics in Store::claim"]
 fn p54_b5_recursive_struct_enum() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -3769,7 +3768,6 @@ fn run() -> text {
 /// producing a valid struct-enum record from a bare unit-variant name
 /// is still broken.  When that's fixed, this test goes green.
 #[test]
-#[ignore = "P54 B2-runtime: unit-variant literal construction in struct-enum crashes"]
 fn p54_b2_unit_variant_literal_construction() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }
@@ -3812,7 +3810,6 @@ fn run() -> text {
 /// though it at least doesn't panic — the match silently exits.
 /// Same root cause as `p54_b2_unit_variant_literal_construction`.
 #[test]
-#[ignore = "P54 B2-runtime: qualified Sig.Idle in mixed enum doesn't construct a matchable value"]
 fn p54_b2_qualified_unit_variant_mixed_enum() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }
@@ -3953,7 +3950,6 @@ fn run() -> integer {
 /// suppress the free of any local whose store is being returned,
 /// or to materialize a copy.
 #[test]
-#[ignore = "P54: struct-enum tail-expression return crashes (free vs ref collision)"]
 fn p54_b3_int_via_intermediate() {
     code!(
         "pub enum JV { A { v: integer } }
@@ -4745,7 +4741,6 @@ fn run_enum() -> integer {
 // behaviour once B7 lands (`len(v)` on JNull returns null;
 // `!null` is true).
 #[test]
-#[ignore = "B7 family — `(JsonValue) -> integer` method call corrupts store lifecycle"]
 fn b7_method_on_jsonvalue_returning_integer_crashes() {
     code!(
         "fn run_b7m() -> boolean {
@@ -4869,4 +4864,276 @@ fn b7_multiple_json_parse_via_match_works() {
     )
     .expr("run_b7p()")
     .result(Value::Boolean(true));
+}
+
+// INC#18 — `x#break` is a labelled-break statement that reuses the
+// `#attribute` syntax.  Documented in LOFT.md § Break and continue;
+// these tests lock the behaviour so the two-mechanism design cannot
+// silently regress.
+
+/// INC#27 — corrected 2026-04-13: `x#continue` **is** implemented
+/// correctly as labelled-continue, symmetric to `x#break`.  The
+/// earlier writeup declaring it a silent miscompile was wrong — it
+/// relied on a nested-loop reproducer where bare-continue and
+/// labelled-continue happened to produce the same numeric sum (320).
+/// This test uses an outer-body operation that runs BETWEEN x
+/// iterations: a bare `continue` would let it run each time, a
+/// labelled `x#continue` skips it when we jump past it.  The
+/// observed result outer_count=1, inner_count=6 → 106 confirms the
+/// labelled-continue semantics.  Manual walk:
+///   x=1: y=1 inner=1; y=2 x#continue → skip rest of x=1 body
+///   x=2: y=1 inner=2; y=2 inner=3; y=3 x#continue → skip rest
+///   x=3: y=1,2,3 all pass; inner=4,5,6; outer_body runs → outer=1
+#[test]
+fn inc27_x_continue_is_labelled_continue() {
+    code!(
+        "fn run() -> integer {
+    outer_count = 0;
+    inner_count = 0;
+    for x in 1..4 {
+        for y in 1..4 {
+            if y > x { x#continue; }
+            inner_count += 1;
+        }
+        outer_count += 1;
+    }
+    outer_count * 100 + inner_count
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(106));
+}
+
+/// `x#break` from an inner loop exits the outer loop whose variable
+/// is `x` — not just the innermost loop.  Without the labelled break,
+/// the outer loop would continue and overwrite `first`.
+#[test]
+fn inc18_labelled_break_exits_outer_loop() {
+    code!(
+        "fn run() -> integer {
+    first = 0;
+    for x in 1..5 {
+        for y in 1..5 {
+            if x * y >= 6 {
+                first = x * 100 + y;
+                x#break;
+            }
+        }
+    }
+    first
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(203));
+}
+
+// P140 — vector range-slice `v[a..b]` used to produce a bare Rust
+// panic at `src/scopes.rs:250` via the test harness.  Root cause:
+// tests/testing.rs ran `scopes::check` BEFORE `assert_diagnostics` +
+// the `Level::Error` return, contrary to `src/main.rs` order — a
+// parser-level type error (iterator vs vector<integer>) produced a
+// malformed IR that scope analysis panicked on.  Fixed 2026-04-13 by
+// aligning harness order with the binary's.  The diagnostic the
+// parser always emitted (type mismatch on sum_of) is now the
+// user-facing error, with a proper source location.
+#[test]
+fn p140_vector_range_slice_reports_type_mismatch() {
+    code!(
+        "fn run() -> integer {
+    v = [10, 20, 30, 40, 50];
+    s = v[1..4];
+    sum_of(s)
+}"
+    )
+    .expr("run()")
+    .error("iterator(integer(-2147483647, 2147483647, false), null) should be vector<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+}
+
+// INC#2 — vector has comprehensions; sorted/index do not.  Documented
+// in LOFT.md § Key-based collections (gotcha block).  These tests
+// lock the vector-vs-keyed-collection asymmetry so a future uniformity
+// refactor cannot silently flip either half without updating the doc.
+
+/// Vector comprehension `[for x in v if p { … }]` compiles and runs.
+/// The positive baseline for the comprehension half of INC#2.
+#[test]
+fn inc02_vector_comprehension_works() {
+    code!(
+        "fn run() -> integer {
+    v = [1, 2, 3, 4, 5, 6];
+    sum_of([for x in v if x > 3 { x }])
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(15));
+}
+
+/// Sorted collections ARE iterable — the keyed-collection half that
+/// *does* share the `for` API with vector.
+#[test]
+fn inc02_sorted_is_iterable() {
+    code!(
+        "struct Elm { k: integer, v: integer }
+struct Db { s: sorted<Elm[k]> }
+fn run() -> integer {
+    db = Db { s: [Elm { k: 1, v: 10 }, Elm { k: 2, v: 20 }, Elm { k: 3, v: 30 }] };
+    total = 0;
+    for e in db.s { total += e.v; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(60));
+}
+
+// INC#8 — method-vs-free-function is the stdlib author's choice per
+// function.  Documented in LOFT.md § Methods and function calls
+// (gotcha block).  These tests lock concrete examples so the
+// stdlib's declared call-forms cannot silently drift.
+
+/// `sum_of(v)` is a free-function-only stdlib definition (no `self` /
+/// `both` on its first parameter).  Method syntax `v.sum_of()` must
+/// not resolve — locks the "free-only" half of the INC#8 asymmetry.
+#[test]
+fn inc08_sum_of_is_free_function_only() {
+    code!(
+        "fn run() -> integer {
+    v = [10, 20, 30];
+    v.sum_of()
+}"
+    )
+    .expr("run()")
+    .error("Unknown field vector.sum_of — did you mean the free function `sum_of(…)` ? (stdlib declared `sum_of` as free-only; see LOFT.md § Methods and function calls) at inc08_sum_of_is_free_function_only:3:14");
+}
+
+/// `text.starts_with(s)` is declared with `self: text` — method syntax
+/// works, free-function syntax doesn't.  Pairs with
+/// `inc08_sum_of_is_free_function_only` to show the asymmetry runs in
+/// both directions per the stdlib declaration.
+/// QUALITY 6d — writing a bare `hash<Row[id]>()` constructor
+/// expression used to produce the cryptic `"Indexing a non vector"`
+/// error with no pointer to the struct-literal idiom that actually
+/// works.  The diagnostic now spells out both halves (the missing
+/// feature and the idiom users should reach for).
+#[test]
+fn quality_6d_keyed_collection_constructor_hint() {
+    code!(
+        "struct Row { id: integer, v: integer }
+fn run() -> integer {
+    h = hash<Row[id]>();
+    0
+}"
+    )
+    .error(
+        "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db { h: hash<Row[id]> }; db = Db { h: [Row { id: 1 }] }` at quality_6d_keyed_collection_constructor_hint:3:20",
+    )
+    .error(
+        "No matching operator '<' on 'unknown(0)' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
+    );
+}
+
+/// QUALITY 6c — the free-function hint must NOT fire when there is
+/// no `n_<field>` function compatible with the receiver.  Locks the
+/// specificity of the hint: a genuinely-misspelled field produces
+/// the plain "Unknown field" message without a misleading
+/// "did you mean …" tail.
+#[test]
+fn quality_6c_unknown_field_without_free_fn_has_no_hint() {
+    code!(
+        "struct Point { x: integer, y: integer }
+fn run() -> integer {
+    p = Point { x: 1, y: 2 };
+    p.z
+}"
+    )
+    .error("Unknown field Point.z at quality_6c_unknown_field_without_free_fn_has_no_hint:5:2");
+}
+
+#[test]
+fn inc08_starts_with_is_method_not_free_function() {
+    code!(
+        "fn run() -> boolean {
+    s = \"hello\";
+    s.starts_with(\"he\")
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+/// QUALITY 6c follow-on — the free→method direction.  `starts_with`
+/// is declared `self: text`; calling it as a free function with a
+/// wrong-type receiver (`starts_with(5, "he")`) used to produce the
+/// cryptic `"Unknown function starts_with"` — the function *does*
+/// exist, just not with `integer` as the receiver.  Hint now names
+/// the receiver type the method is declared on.
+#[test]
+fn quality_6c_free_call_on_wrong_type_suggests_method() {
+    code!(
+        "fn run() -> boolean {
+    starts_with(5, \"he\")
+}"
+    )
+    .error("Unknown function starts_with — did you mean the method `x.starts_with(…)` on text? (stdlib declared `starts_with` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_on_wrong_type_suggests_method:3:2");
+}
+
+/// QUALITY 6c follow-on — methods declared on several receiver types
+/// (`is_numeric` lives on both `text` and `character`) enumerate all
+/// candidates so the user can pick the right one.
+#[test]
+fn quality_6c_free_call_lists_all_method_receivers() {
+    code!(
+        "fn run() -> boolean {
+    is_numeric(5)
+}"
+    )
+    .error("Unknown function is_numeric — did you mean the method `x.is_numeric(…)` on text / character? (stdlib declared `is_numeric` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_lists_all_method_receivers:3:2");
+}
+
+/// QUALITY 6c follow-on — the hint must stay silent when no method
+/// by that name exists anywhere.  A genuinely-misspelled free
+/// function name still produces the plain "Unknown function …"
+/// message, without a misleading "did you mean …" tail.
+#[test]
+fn quality_6c_free_call_unknown_fn_has_no_method_hint() {
+    code!(
+        "fn run() -> integer {
+    xyzzy_never_defined(5)
+}"
+    )
+    .error("Unknown function xyzzy_never_defined at quality_6c_free_call_unknown_fn_has_no_method_hint:3:2");
+}
+
+/// `len` is declared `both: vector` — it works equally as method
+/// (`v.len()`) and as free function (`len(v)`).  Guards the `both`
+/// half of the INC#8 story: when an author picks `both`, the
+/// asymmetry disappears.
+#[test]
+fn inc08_len_with_both_works_either_way() {
+    code!(
+        "fn run() -> integer {
+    v = [1, 2, 3, 4];
+    v.len() + len(v)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(8));
+}
+
+#[test]
+fn inc18_bare_break_exits_innermost_only() {
+    code!(
+        "fn run() -> integer {
+    count = 0;
+    for x in 1..4 {
+        for y in 1..4 {
+            if y >= 2 { break; }
+            count += x;
+        }
+    }
+    count
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(6));
 }

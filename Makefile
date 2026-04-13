@@ -546,6 +546,7 @@ ci:
 	# bytecode interpreter is dominated by debug Rust overhead.
 	cargo fmt -- --check > result.txt 2>&1 && \
 	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
+	cargo clippy --no-default-features --all-targets -- -D warnings >> result.txt 2>&1 && \
 	cargo check --no-default-features >> result.txt 2>&1 && \
 	cargo test --release >> result.txt 2>&1 && \
 	$(MAKE) test-packages >> result.txt 2>&1 && \

@@ -814,10 +814,61 @@ impl Parser {
                     "generic type {tv_name}: method call requires a concrete type",
                 );
             } else {
-                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                // QUALITY 6c (follow-on): when a free call fails but a method
+                // `t_<LEN><Type>_<name>` exists on some other type, tell the
+                // user to call it as a method.  Mirror image of the
+                // field-access hint that covers the method→free direction.
+                let method_types = self.find_method_receivers(name);
+                if method_types.is_empty() {
+                    diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                } else {
+                    let receivers = method_types.join(" / ");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
+                    );
+                }
             }
             Type::Unknown(0)
         }
+    }
+
+    /// Scan all definitions for methods named `name` (encoded as
+    /// `t_<LEN><TypeName>_<name>`) and return the list of receiver type
+    /// names in definition order, de-duplicated.  Powers the 6c
+    /// free→method hint in `call`.
+    fn find_method_receivers(&self, name: &str) -> Vec<String> {
+        let suffix = format!("_{name}");
+        let mut receivers: Vec<String> = Vec::new();
+        for d_nr in 0..self.data.definitions() {
+            let def_name = &self.data.def(d_nr).name;
+            let Some(rest) = def_name.strip_prefix("t_") else {
+                continue;
+            };
+            if !rest.ends_with(&suffix) {
+                continue;
+            }
+            let digit_end = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digit_end == 0 {
+                continue;
+            }
+            let Ok(type_len) = rest[..digit_end].parse::<usize>() else {
+                continue;
+            };
+            let type_start = digit_end;
+            let Some(type_end) = type_start.checked_add(type_len) else {
+                continue;
+            };
+            if rest.len() != type_end + suffix.len() || !rest.is_char_boundary(type_end) {
+                continue;
+            }
+            let type_name = &rest[type_start..type_end];
+            if !type_name.is_empty() && !receivers.iter().any(|t| t == type_name) {
+                receivers.push(type_name.to_string());
+            }
+        }
+        receivers
     }
 
     /// Try to instantiate a generic function template for the given call-site types.

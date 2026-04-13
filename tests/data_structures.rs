@@ -4,10 +4,14 @@
 extern crate loft;
 
 use loft::database::Stores;
+use loft::hash;
+#[cfg(feature = "random")]
+use loft::keys;
 use loft::keys::{Content, DbRef, Str};
-use loft::{hash, keys};
 use loft::{tree, vector};
+#[cfg(feature = "random")]
 use rand_core::{RngCore, SeedableRng};
+#[cfg(feature = "random")]
 use rand_pcg::Pcg64Mcg;
 
 #[test]
@@ -594,6 +598,7 @@ pub fn index() {
     assert_eq!(check, "{n:\"five\",c:5}");
 }
 
+#[cfg(feature = "random")]
 #[test]
 pub fn index_deletions() {
     let mut stores = Stores::new();
