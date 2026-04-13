@@ -32,32 +32,6 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
 ---
 
-## Unimplemented Features
-
-### 22. `spacial<T>` diagnostic wording — 0.9.0
-
-Today's message:
-
-```
-spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups
-```
-
-is *more helpful* than a generic "unknown type" would be.  A user who
-typed `spacial` is asking a real question — loft knows the answer
-(substitute + timeline).  **Decision (revised):** keep the keyword
-and the bespoke error; update the one-line message to reference the
-milestone:
-
-```
-spacial<T> is planned for 1.1+; until then use sorted<T> or
-index<T> for ordered lookups
-```
-
-**Fix path:** one-line string edit in `src/parser/definitions.rs`
-at the existing `"spacial"` match arm.  Test unchanged.
-
----
-
 ## Interpreter Robustness
 
 ### ~~86~~. Lambda capture — FULLY RESOLVED (closures shipped)

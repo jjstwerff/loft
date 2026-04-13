@@ -4099,3 +4099,29 @@ fn run() -> text {
     .expr("run()")
     .result(Value::str("a-10"));
 }
+
+// ── P22: spacial<T> diagnostic wording (FIXED) ─────────────────────────
+//
+// `spacial<T>` is reserved for the planned 1.1+ ordered-spatial
+// collection.  Today it's not implemented; the parser has a bespoke
+// diagnostic that names the feature, the milestone, and the
+// substitute (`sorted<T>` / `index<T>`) so users who guess the
+// keyword get a useful answer rather than "unknown type".
+//
+// This test guards the wording — the diagnostic must mention BOTH
+// the milestone (so users know when to retry) AND the substitute
+// (so they know what to use today).
+#[test]
+fn p22_spacial_diagnostic_names_milestone_and_substitute() {
+    code!(
+        "struct Point { x: float not null, y: float not null }
+struct World { items: spacial<Point> }
+fn test() {
+    w = World { items: [] };
+}"
+    )
+    .error(
+        "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups \
+at p22_spacial_diagnostic_names_milestone_and_substitute:2:39",
+    );
+}
