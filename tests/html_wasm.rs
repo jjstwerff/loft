@@ -22,6 +22,15 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+/// All `--html` invocations write the generated Rust to a fixed
+/// `/tmp/loft_html.rs` path, so concurrent tests step on each other.
+/// Serialise the build path with a process-wide mutex.
+fn build_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn which(cmd: &str) -> Option<PathBuf> {
     let out = Command::new("sh")
@@ -53,36 +62,36 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// P137: build a `println`-only `.loft` program via `--html`, extract
-/// the WASM, and run it via the Node repro harness with stub imports.
-/// Exit code 0 means `loft_start` returned without trapping.
-#[test]
-fn p137_html_hello_world_does_not_trap() {
+/// Build a loft program via `--html`, extract the WASM, run it via the
+/// Node repro harness with stub imports, and return (stdout, stderr,
+/// exit_status).  Returns None when prerequisites are missing.
+fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
-        return;
+        return None;
     }
     if !wasm32_target_installed() {
         eprintln!("SKIP: rustup target wasm32-unknown-unknown not installed");
-        return;
+        return None;
     }
 
-    let tmp = std::env::temp_dir();
-    let src = tmp.join("p137_hello.loft");
-    let html = tmp.join("p137_hello.html");
-    let wasm = tmp.join("p137_hello.wasm");
-
-    std::fs::write(&src, "fn main() { println(\"hello from loft\"); }\n").expect("write source");
-
-    // Build the --html bundle.  Use the release binary at
-    // $CARGO_MANIFEST_DIR/target/release/loft — cargo test builds
-    // tests against that binary by convention.
     let loft_bin = repo_root().join("target/release/loft");
     if !loft_bin.exists() {
         eprintln!("SKIP: target/release/loft not built (run `cargo build --release` first)");
-        return;
+        return None;
     }
 
+    let tmp = std::env::temp_dir();
+    let src = tmp.join(format!("{name}.loft"));
+    let html = tmp.join(format!("{name}.html"));
+    let wasm = tmp.join(format!("{name}.wasm"));
+
+    std::fs::write(&src, source).expect("write source");
+
+    // Serialise: the loft `--html` driver writes to a fixed
+    // `/tmp/loft_html.rs` path, so parallel test invocations would
+    // overwrite each other's emitted Rust mid-build.
+    let _guard = build_lock().lock().unwrap();
     let status = Command::new(&loft_bin)
         .args([
             "--html",
@@ -93,9 +102,9 @@ fn p137_html_hello_world_does_not_trap() {
         ])
         .status()
         .expect("invoke loft --html");
-    assert!(status.success(), "loft --html failed");
+    assert!(status.success(), "loft --html failed for {name}");
+    drop(_guard);
 
-    // Extract the base64 wasm blob from the HTML.
     let html_content = std::fs::read_to_string(&html).expect("read html");
     let marker = "const wasmB64=\"";
     let start = html_content.find(marker).expect("wasmB64 marker present") + marker.len();
@@ -107,7 +116,6 @@ fn p137_html_hello_world_does_not_trap() {
     let bytes = base64_decode_standard(b64).expect("decode wasmB64");
     std::fs::write(&wasm, &bytes).expect("write extracted wasm");
 
-    // Run the Node harness.
     let harness = repo_root().join("tools/wasm_repro.mjs");
     assert!(harness.exists(), "tools/wasm_repro.mjs missing");
 
@@ -117,16 +125,92 @@ fn p137_html_hello_world_does_not_trap() {
         .output()
         .expect("invoke node harness");
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-
-    assert!(
+    Some((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
         out.status.success(),
+    ))
+}
+
+/// P137 root case: an empty `fn main() {}` traps before any user code
+/// runs.  This was the minimal reproducer that revealed
+/// `Stores::new()` → `Instant::now()` as the panic site.  If WASM init
+/// regresses (e.g. a future change calls another non-wasm32-safe
+/// std API in `Stores::new()`), this catches it.
+#[test]
+fn p137_html_empty_main_does_not_trap() {
+    let Some((_stdout, stderr, ok)) = run_html_wasm("p137_empty", "fn main() {}\n") else {
+        return;
+    };
+    assert!(
+        ok,
+        "empty main trapped — P137-shape init regression.\n{stderr}"
+    );
+}
+
+/// P137: build a `println`-only `.loft` program via `--html`, extract
+/// the WASM, and run it via the Node repro harness with stub imports.
+/// Exit code 0 means `loft_start` returned without trapping.
+#[test]
+fn p137_html_hello_world_does_not_trap() {
+    let Some((stdout, stderr, ok)) = run_html_wasm(
+        "p137_hello",
+        "fn main() { println(\"hello from loft\"); }\n",
+    ) else {
+        return;
+    };
+    assert!(
+        ok,
         "WASM trapped — P137 regression.\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         stdout.contains("hello from loft") || stderr.contains("loft_start: OK"),
         "expected 'hello from loft' in output.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+/// P137 follow-up: arithmetic + control flow exercise the bytecode
+/// dispatch path in the WASM build.  If a future change introduces a
+/// panic-able std call inside the dispatch loop (e.g. an unchecked
+/// indexing in a hot opcode), this catches it.
+#[test]
+fn p137_html_arithmetic_loop_runs() {
+    let src = "fn main() {
+    sum = 0;
+    for i in 0..10 { sum = sum + i; }
+    println(\"sum={sum}\");
+}
+";
+    let Some((stdout, stderr, ok)) = run_html_wasm("p137_arith", src) else {
+        return;
+    };
+    assert!(ok, "WASM trapped on arithmetic loop.\n{stderr}");
+    assert!(
+        stdout.contains("sum=45"),
+        "expected 'sum=45' in output.\nstdout: {stdout}"
+    );
+}
+
+/// P137 follow-up: vectors + iteration.  Exercises store allocation
+/// and per-iteration access in the WASM target — would catch a
+/// regression in `OpVarVector` or vector-element-access opcodes
+/// emitting a panic-able path under wasm32.
+#[test]
+fn p137_html_vector_iteration_runs() {
+    let src = "fn main() {
+    items = [10, 20, 30];
+    total = 0;
+    for x in items { total = total + x; }
+    println(\"total={total}\");
+}
+";
+    let Some((stdout, stderr, ok)) = run_html_wasm("p137_vec", src) else {
+        return;
+    };
+    assert!(ok, "WASM trapped on vector iteration.\n{stderr}");
+    assert!(
+        stdout.contains("total=60"),
+        "expected 'total=60' in output.\nstdout: {stdout}"
     );
 }
 
@@ -152,7 +236,7 @@ fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
         t
     };
     let s = s.as_bytes();
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
