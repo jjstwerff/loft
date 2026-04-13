@@ -44,6 +44,7 @@ mod fill;
 mod formatter;
 mod generation;
 mod hash;
+mod json;
 mod keys;
 mod lexer;
 mod log_config;

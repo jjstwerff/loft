@@ -3229,15 +3229,26 @@ fn test() {
 // Unignore each case as its layer comes online.
 
 #[test]
-#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
+/// String-variant parsing: the value is correctly stored, but
+/// returning it through a function boundary trips a JsonValue-store
+/// lifecycle issue — the store is freed during scope-exit cleanup
+/// before the caller's text-copy machinery completes.  Same root
+/// cause as `p54_extractor_as_text` below.  Standalone smoke
+/// (`/tmp/jp1.loft` style with `match v { JString { value } =>
+/// println("str={value}") }`) works fine inline; only the
+/// fn-return path is broken.
+#[test]
+#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_parse_primitive_string() {
     code!(
         "fn run() -> text {
     v = json_parse(\"\\\"hello\\\"\");
+    out = \"\";
     match v {
-        JString { value } => value,
-        _ => \"<wrong variant>\"
+        JString { value } => { out = value; },
+        _ => {}
     }
+    out
 }"
     )
     .expr("run()")
@@ -3245,7 +3256,6 @@ fn p54_parse_primitive_string() {
 }
 
 #[test]
-#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
 fn p54_parse_primitive_number() {
     code!(
         "fn run() -> float {
@@ -3261,7 +3271,6 @@ fn p54_parse_primitive_number() {
 }
 
 #[test]
-#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
 fn p54_parse_primitive_bool_true() {
     code!(
         "fn run() -> boolean {
@@ -3277,7 +3286,6 @@ fn p54_parse_primitive_bool_true() {
 }
 
 #[test]
-#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
 fn p54_parse_primitive_null() {
     code!(
         "fn run() -> boolean {
@@ -3293,11 +3301,12 @@ fn p54_parse_primitive_null() {
 }
 
 #[test]
-#[ignore = "P54 step 3: malformed JSON returns JNull, not a panic"]
 fn p54_malformed_returns_jnull() {
+    // Use a malformed input that doesn't trip loft's text-literal
+    // interpolation (curly braces in `"…"` would).
     code!(
         "fn run() -> boolean {
-    v = json_parse(\"{not valid}\");
+    v = json_parse(\"xyz\");
     match v {
         JNull => true,
         _ => false
@@ -3309,20 +3318,30 @@ fn p54_malformed_returns_jnull() {
 }
 
 #[test]
-#[ignore = "P54 step 5: extractors not yet implemented"]
+/// `as_text` returns a `Str` into `Stores::scratch`; calling it
+/// inline + assigning into a local works (`println("{v.as_text()}")`
+/// is fine), but returning the resulting text through a function
+/// boundary trips the same store-free-before-copy lifecycle as
+/// `p54_parse_primitive_string`.  Both unblock together.
+#[test]
+#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_extractor_as_text() {
     code!(
         "fn run() -> text {
     v = json_parse(\"\\\"abc\\\"\");
-    v.as_text()
+    out = \"\";
+    out += v.as_text();
+    out
 }"
     )
     .expr("run()")
     .result(Value::str("abc"));
 }
 
+/// Same store-free-before-copy lifecycle as the matching extractor
+/// test above.  Unblocks once that lands.
 #[test]
-#[ignore = "P54 step 5: extractors return null on kind mismatch"]
+#[ignore = "P54: JsonValue text-return through fn boundary trips store-free-before-copy lifecycle"]
 fn p54_extractor_as_text_wrong_kind_returns_null() {
     code!(
         "fn run() -> text {

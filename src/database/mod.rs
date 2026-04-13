@@ -159,6 +159,10 @@ pub struct Stores {
     pub scratch: Vec<String>,
     /// Errors from the last `Type.parse()` call, read via `s#errors`.
     pub last_parse_errors: Vec<String>,
+    /// P54: errors from the last `json_parse()` call, read via
+    /// `json_errors()`.  Cleared on every successful `json_parse`;
+    /// populated with `format!("{msg} (byte {pos})")` on parse failure.
+    pub last_json_errors: Vec<String>,
     /// Set by `State::execute()` to allow native functions to access the
     /// interpreter's bytecode, library, and compiled data during execution.
     pub parallel_ctx: Option<Box<ParallelCtx>>,
@@ -230,6 +234,7 @@ impl Clone for Stores {
             free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
+            last_json_errors: Vec::new(),
             parallel_ctx: None,
             logger: self.logger.clone(),
             had_fatal: false,
@@ -489,6 +494,7 @@ impl Stores {
             free_bits: Vec::new(),
             scratch: Vec::new(),
             last_parse_errors: Vec::new(),
+            last_json_errors: Vec::new(),
             parallel_ctx: None,
             logger: None,
             had_fatal: false,

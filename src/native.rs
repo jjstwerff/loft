@@ -83,6 +83,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_base64_decode", n_base64_decode),
     ("n_base64url_encode", n_base64url_encode),
     ("n_hmac_sha256_raw", n_hmac_sha256_raw),
+    ("n_json_parse", n_json_parse),
+    ("n_json_errors", n_json_errors),
+    ("n_as_text", n_as_text),
+    ("n_as_number", n_as_number),
+    ("n_as_long", n_as_long),
+    ("n_as_bool", n_as_bool),
 ];
 
 pub fn init(state: &mut State) {
@@ -1268,3 +1274,144 @@ fn n_base64url_encode(stores: &mut Stores, stack: &mut DbRef) {
 // ── WebSocket + TCP + OpenGL + random glue removed ─────────────────────
 // These functions are now auto-marshalled by extensions::wire_native_fns().
 // See EXTERNAL_LIBS.md Phase 5 for design.
+
+// ── P54: JsonValue native bindings (primitive-only, step 2) ─────────────
+//
+// `default/06_json.loft` declares the JsonValue struct-enum.  Variant
+// discriminants are 1-indexed in declaration order:
+//   1 = JNull, 2 = JBool, 3 = JNumber, 4 = JString,
+//   5 = JArray, 6 = JObject (5/6 not yet implemented; return JNull).
+//
+// Allocation pattern (matches `populate_frame_variables` at line 1017):
+//   stores.database(words) creates a fresh store + claims a record;
+//   the returned DbRef has rec=<claimed>, pos=8 (struct body start).
+//   When the loft variable holding the DbRef goes out of scope,
+//   OpFreeRef on it frees the entire store — single ownership, no
+//   ref-count puzzles.
+
+const JV_DISCR_NULL: i32 = 1;
+const JV_DISCR_BOOL: i32 = 2;
+const JV_DISCR_NUMBER: i32 = 3;
+const JV_DISCR_STRING: i32 = 4;
+
+/// Allocate a fresh `JsonValue` record in its own store and return
+/// the DbRef.  Caller writes the discriminant byte at pos+0 and any
+/// variant payload at pos + position(variant_tp, field_name).
+fn jv_alloc(stores: &mut Stores) -> DbRef {
+    let jv_tp = stores.name("JsonValue");
+    let size_bytes = u32::from(stores.size(jv_tp));
+    // database(n) → claim(n) which expects 8-byte words; round up
+    // and add 1 word for the record header.
+    let words = size_bytes.div_ceil(8) + 1;
+    stores.database(words.max(2))
+}
+
+fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
+    let v_raw = *stores.get::<Str>(stack);
+    let parsed = crate::json::parse(v_raw.str());
+    let result = jv_alloc(stores);
+    let pos = result.pos;
+    match parsed {
+        Ok(crate::json::Parsed::Null) => {
+            stores
+                .store_mut(&result)
+                .set_byte(result.rec, pos, 0, JV_DISCR_NULL);
+            stores.last_json_errors.clear();
+        }
+        Ok(crate::json::Parsed::Bool(b)) => {
+            let bool_tp = stores.name("JBool");
+            let value_pos = u32::from(stores.position(bool_tp, "value")) + pos;
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_BOOL);
+            store_mut.set_byte(result.rec, value_pos, 0, i32::from(b));
+            stores.last_json_errors.clear();
+        }
+        Ok(crate::json::Parsed::Number(n)) => {
+            let num_tp = stores.name("JNumber");
+            let value_pos = u32::from(stores.position(num_tp, "value")) + pos;
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_NUMBER);
+            store_mut.set_float(result.rec, value_pos, n);
+            stores.last_json_errors.clear();
+        }
+        Ok(crate::json::Parsed::Str(s)) => {
+            let str_tp = stores.name("JString");
+            let value_pos = u32::from(stores.position(str_tp, "value")) + pos;
+            let s_rec = stores.store_mut(&result).set_str(&s);
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_STRING);
+            store_mut.set_int(result.rec, value_pos, s_rec as i32);
+            stores.last_json_errors.clear();
+        }
+        Err((msg, at)) => {
+            stores
+                .store_mut(&result)
+                .set_byte(result.rec, pos, 0, JV_DISCR_NULL);
+            stores.last_json_errors.clear();
+            stores.last_json_errors.push(format!("{msg} (byte {at})"));
+        }
+    }
+    stores.put(stack, result);
+}
+
+fn n_json_errors(stores: &mut Stores, stack: &mut DbRef) {
+    let msg = stores.last_json_errors.join("|");
+    stores.scratch.clear();
+    stores.scratch.push(msg);
+    stores.put(stack, Str::new(&stores.scratch[0]));
+}
+
+fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == JV_DISCR_STRING {
+        let str_tp = stores.name("JString");
+        let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
+        let s_rec = stores.store(&v).get_int(v.rec, value_pos) as u32;
+        let s = stores.store(&v).get_str(s_rec).to_string();
+        stores.scratch.clear();
+        stores.scratch.push(s);
+        stores.put(stack, Str::new(&stores.scratch[0]));
+    } else {
+        stores.put(stack, Str::new(crate::state::STRING_NULL));
+    }
+}
+
+fn n_as_number(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == JV_DISCR_NUMBER {
+        let num_tp = stores.name("JNumber");
+        let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
+        let n = stores.store(&v).get_float(v.rec, value_pos);
+        stores.put(stack, n);
+    } else {
+        stores.put(stack, f64::NAN);
+    }
+}
+
+fn n_as_long(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == JV_DISCR_NUMBER {
+        let num_tp = stores.name("JNumber");
+        let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
+        let n = stores.store(&v).get_float(v.rec, value_pos);
+        stores.put(stack, n.trunc() as i64);
+    } else {
+        stores.put(stack, i64::MIN);
+    }
+}
+
+fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
+    let v = *stores.get::<DbRef>(stack);
+    let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    if discr == JV_DISCR_BOOL {
+        let bool_tp = stores.name("JBool");
+        let value_pos = u32::from(stores.position(bool_tp, "value")) + v.pos;
+        let b = stores.store(&v).get_byte(v.rec, value_pos, 0) != 0;
+        stores.put(stack, b);
+    } else {
+        stores.put(stack, false);
+    }
+}
