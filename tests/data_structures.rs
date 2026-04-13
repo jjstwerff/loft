@@ -220,6 +220,79 @@ pub fn hash() {
     assert_eq!(rec.rec, 0, "Null result");
 }
 
+/// C60 Step 1a: `hash::records` walks all live records in a hash and
+/// returns their record numbers.  Order is internal bucket order
+/// (unsorted, unspecified).  Callers that need sorted iteration wrap
+/// this via Step 2's `records_sorted`.
+#[test]
+pub fn hash_records_walk() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "cat", stores.name("integer"));
+    stores.field(s, "value", stores.name("float"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string(), "cat".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {cat:1, name:\"first\",value:1.23},
+        {cat:1, name:\"second\",value:1.34},
+        {cat:2, name:\"third\",value:1.78}
+    ]";
+    stores.parse(data, v, &into);
+    let recs = hash::records(&into, &stores.allocations);
+    assert_eq!(
+        recs.len(),
+        3,
+        "hash::records must return every live record: got {recs:?}"
+    );
+    // Each returned rec-nr must resolve to a non-zero record pointer.
+    for rec_nr in &recs {
+        assert_ne!(
+            *rec_nr, 0,
+            "record 0 is the null sentinel — should be skipped"
+        );
+    }
+    // The three record-numbers are distinct.
+    let mut sorted = recs.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), recs.len(), "duplicate rec-nr returned");
+}
+
+#[test]
+pub fn hash_records_empty() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    // Empty hash — no entries added.
+    let recs = hash::records(&into, &stores.allocations);
+    assert_eq!(
+        recs.len(),
+        0,
+        "empty hash must yield no records: got {recs:?}"
+    );
+}
+
 #[test]
 pub fn array_record() {
     let mut stores = Stores::new();
