@@ -29,10 +29,10 @@ Decisions to *not* fix something live in
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **Designed, not landed** — see § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | Medium | **Designed, not landed** — see § Q4 below |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
-| B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — see § Compiler blockers |
-| B3 | Struct-enum tail-expression return crashes | Medium | Compiler — see § Compiler blockers |
-| B5 | Recursive struct-enum trips codegen recursion guard | Medium | Compiler — workaround: arena indirection |
-| B7 | Native-returned struct-enum temporaries leak intermediate stores | Medium | Compiler — unblocks 5 P54 ignored tests |
+| B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — **fix designed** (zero-fill payload at `src/parser/objects.rs::parse_enum_field`); 1 session |
+| B3 | Struct-enum tail-expression return crashes | Medium | Compiler — **fix designed** (4-layer codegen surgery); 2-3 sessions |
+| B5 | Recursive struct-enum trips codegen recursion guard | Medium | Compiler — **fix designed** (memoise `fill_database` in `src/typedef.rs`); 1 session |
+| B7 | Native-returned struct-enum temporaries leak intermediate stores | Medium | Compiler — **single-line fix designed** at `src/scopes.rs:1031`; unblocks 8 things together (5 P54 tests + 2 B7 guards + INC#9 crash) |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
@@ -746,6 +746,14 @@ goal; Q4 is required for that, not an extra.
 
 ## Compiler blockers — struct-enum bugs
 
+**Status (2026-04-13):** Concrete fix designs documented for all
+four open compiler bugs (B2-runtime, B3, B5, B7) following an
+explore-agent investigation.  The headline finding: **B7 is a
+single-line fix**, not a multi-session sprint as previously
+estimated.  This collapses the dependency cone for nearly every
+JSON deliverable on the roadmap (Q2, Q3, Q4, P54 step 4-5, the
+INC#9 character-interpolation crash) into one session of work.
+
 These bugs each surface any time a user writes a `Result<T, E>`-style
 struct-enum, not just for JSON.  Fixing them unblocks the whole
 `Option<T>` / `Result<T, E>` / planned coroutine-yield surfaces.
@@ -759,6 +767,47 @@ runtime in a mixed enum doesn't produce a matchable value.
 Workaround: build via the constructor path the parser uses; user
 code avoids unit variants.  Test: `p54_b2_runtime_*` (`#[ignore]`).
 
+**Fix design (added 2026-04-13 from explore-agent investigation).**
+Unit variants in **mixed** enums (where some variants have fields
+and some are unit) leave the payload buffer uninitialised when
+constructed at runtime.  The variant tag byte is set correctly,
+but the residual bytes beyond the tag carry whatever was on the
+stack — match dispatch then reads garbage and either fails to
+match or matches the wrong arm.
+
+**Site:** `src/parser/objects.rs::parse_enum_field` (lines 1286-1314)
+constructs the variant struct via `parse_object(e_nr, &mut cd)`.
+For unit variants (0 attribute fields), the underlying
+`OpDatabase` allocates a record but no field-init writes follow,
+so the payload bytes stay garbage.
+
+**Fix:** in `parse_enum_field`, detect the unit-variant case
+(`def.attributes.is_empty()` for the variant struct) and emit a
+zero-fill of the payload region after the `OpDatabase` /
+`OpSetEnum` calls but before returning the value.  The payload
+region size is `size(parent_enum) - 1` (everything after the tag
+byte).  Reuse the existing bulk zero-fill op in `src/fill.rs` (or
+add a 5-line `op_zero_bytes` handler if no exact op exists).
+
+**Files:** `src/parser/objects.rs:1286-1314`; possibly a new op in
+`default/01_code.loft` and `src/fill.rs`.
+**Estimated scope:** one session.
+
+**Verification path:**
+1. `cargo test --release --test issues p54_b2_runtime_*` —
+   2 currently-`#[ignore]`'d tests flip to green
+   (`p54_b2_runtime_unit_variant_construction`,
+   `p54_b2_runtime_qualified_unit_variant_in_mixed_enum`).
+2. Full suite green.
+3. Smoke: `JsonValue.JNull { is_null: true }` constructed at
+   runtime in user code matches correctly via
+   `match v { JNull { is_null } => ... }`.
+
+**Side-effect risk:** low.  The fix narrows behaviour
+(garbage-payload → zero-payload), making previously-undefined
+match results well-defined.  Programs that accidentally relied on
+the garbage value were already broken.
+
 **B3 — Struct-enum tail-expression return crashes.**  Five
 investigation sessions narrowed the diagnosis: needs **at least
 4 coordinated codegen layers** changed (caller-side hidden-slot
@@ -769,11 +818,93 @@ instead of `n` at function tail.  Tests: `p54_b3_*` (`#[ignore]`).
 Estimated 8-12 source-line ranges across 2 files when attempted as
 one focused refactor.
 
+**Fix design (added 2026-04-13 from explore-agent investigation).**
+Four coordinated layers must change.  Concrete file:line targets:
+
+| Layer | File | Line(s) | Change |
+|---|---|---|---|
+| 1. Caller pre-alloc | `src/state/codegen.rs::generate_call` | 1410-1420 (before OpCall emission) | When callee's return type is `Type::Enum(_, true, _)`, emit `OpDatabase` for a 12-byte return slot, mirroring the Reference path |
+| 2. Hoist | `src/scopes.rs` | 311 | Extend the hoist-set match from `Type::Reference \| Type::Vector` to also include `Type::Enum(_, true, _)` |
+| 3. Deep-copy | `src/state/codegen.rs` | 827, 954-960, 975-1022, 1080, 1101, 1112-1130 | Every `Type::Reference` arm in OpCopyRecord-related match sites grows an `\| Type::Enum(_, true, _)` sibling |
+| 4. Type extract | `src/state/codegen.rs::known_type` | 1761-1763 | Match arm currently extracts `Type::Reference(c, _) → c`; extend to `Type::Reference(c, _) \| Type::Enum(c, true, _)` |
+
+**Estimated scope:** 2-3 sessions.  Each layer is independent and
+testable; if a session lands only layers 1-2, the symptom mutates
+but doesn't close — five investigation sessions confirmed all four
+must land together.
+
+**Verification path:**
+1. After all 4 layers land: `cargo test --release --test issues p54_b3_*`
+   — 4 currently-`#[ignore]`'d tests flip to green
+   (`p54_struct_enum_explicit_return_of_local` already passes via
+   the `return n;` workaround; the implicit tail-expression form is
+   what the fix covers).
+2. Full suite green.
+3. Manual smoke: write the original BITING_PLAN reproducer
+   (`fn mk() -> JV { A { v: 42 } }`) and confirm no crash.
+
+**Side-effect risk:** medium.  OpCopyRecord deep-copy paths are
+load-bearing for vector/struct passing; extending each match arm
+needs a matching test for the new Enum case to avoid regressing
+the existing Reference path.
+
+**Why B3 sits *after* B7 in the recommended order:** they're
+independent codegen surgeries with no overlap, and B7 unblocks
+5x more downstream work per line of code touched.  B3 closes an
+ergonomics gap; the `return n;` workaround stays good for any
+user who needs it.
+
 **B5 — Recursive struct-enum infinite codegen loop.**  Declaring
 `JArray { items: vector<JsonValue> }` trips the
 `Recursion depth limit exceeded (500)` guard.  Workaround:
 arena indirection (P54 step 0).  Test: `p54_b5_recursive_struct_enum`
 (`#[ignore]`).
+
+**Fix design (added 2026-04-13 from explore-agent investigation).**
+The 500-limit guard at `src/state/mod.rs:197` is a downstream
+runtime call-depth guard, **not** the cause.  The actual recursion
+is in compile-time type layout: `src/typedef.rs::fill_database`
+walks struct/enum field types to compute storage sizes, and a
+field whose type is the parent enum (e.g.
+`JArray { items: vector<JsonValue> }`) re-enters `fill_database`
+for `JsonValue` 500+ times before the runtime guard catches the
+symptom.
+
+**Fix:** memoise visited type definitions in `fill_database`.
+Pass an `&mut HashSet<u32>` of in-progress `d_nr`s; on re-entry
+for an already-in-progress type, return the partially-computed
+size (or a sentinel "self-referential, defer") and continue.
+Reference-typed fields are already fixed-size (12 bytes for
+`DbRef`) so the cycle terminates trivially once memoised.
+
+**File:** `src/typedef.rs:209-311` (`fill_database`).
+**Estimated scope:** one session.
+
+**Verification path:**
+1. With the fix applied, the recursive enum form
+   ```loft
+   pub enum JsonValue {
+       JArray  { items: vector<JsonValue> },
+       JObject { fields: vector<JsonField> },
+       ...
+   }
+   pub struct JsonField { name: text, value: JsonValue }
+   ```
+   compiles instead of tripping the 500-depth guard.
+2. `cargo test --release --test issues p54_b5_recursive_struct_enum`
+   flips from `#[ignore]` to green.
+3. Once B5 is fixed, **P54 step 4 simplifies** — the
+   arena-indirection workaround (`items_id: integer` + a separate
+   `vector<JsonValue>` arena) becomes optional rather than
+   compelled by codegen.  The arena workaround can stay for
+   performance reasons (one allocation vs. many) but the natural
+   `vector<JsonValue>` form also works.
+
+**Side-effect risk:** low.  Memoization in compile-time layout is
+a standard transform; no runtime behaviour change.  Test exposure:
+add a test compiling a self-referential enum with a non-recursive
+base case (e.g. a simple Tree<T>) to lock the memoization works
+correctly.
 
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
@@ -826,12 +957,63 @@ gated on this fix, not just text returns.  This means **Q2**
 `field`/`item`/`len`, and parts of step 5 (`Type::parse(JsonValue)`)
 all sit downstream.
 
-**One fix unblocks 5 of the 13 ignored P54 tests** plus the new
-`b7_method_*` guard, closes the INC#9 character-interpolation
-crash, and clears the runway for Q2/Q3/Q4 + P54 step 4-5 to
-land cleanly.  Highest-leverage compiler bite remaining — and
-the bottleneck for nearly every JSON deliverable on the
-roadmap.
+**Fix design (added 2026-04-13 from explore-agent investigation).**
+The bug is in `src/scopes.rs::inline_struct_return` at line **1031**:
+
+```rust
+if let Value::Call(fn_nr, _) = val {
+    let def = data.def(*fn_nr);
+    if def.name.starts_with("n_")
+        && def.code != Value::Null
+        && let Type::Reference(d_nr, _) = &def.returned   // ← only Reference
+    {
+        return Some(*d_nr);
+    }
+}
+None
+```
+
+The Set path at `scopes.rs:447-449` and `needs_pre_init` at line
+1043 already accept `Type::Enum(_, true, _)`.  Only this lifting
+site was missed — so native calls returning struct-enum (e.g.
+`json_parse(...) -> JsonValue`) bypass lifting, the JsonValue
+store is embedded in the argument frame, and the callee's exit
+frees the store before the caller's `OpFreeRef` would have fired.
+
+**Single-line fix:**
+
+```rust
+&& let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = &def.returned
+```
+
+**Estimated scope:** one session.  One file, one line, ~10 tests
+to flip from ignored to green, doc updates.  This was previously
+framed as "multi-session compiler sprint" — that estimate stands
+retracted.
+
+**Verification path:**
+1. Run the currently-`#[ignore]`'d B7-family tests with `--ignored`
+   and confirm they flip to passing:
+   - `b7_method_on_jsonvalue_returning_integer_crashes`
+   - `b7_character_interpolation_return_crashes`
+   - `p54_extractor_as_text` and 3 sibling text-return tests
+   - `p54_missing_chain_returns_jnull`
+2. Then unignore them.
+3. Confirm `b7_multiple_json_parse_via_match_works` (currently
+   passing) stays green — guards the working multi-parse path.
+4. Full suite green.
+
+**Side-effect risk:** low.  Lifting was proven safe for
+References in the P135 fix; extending to Enums preserves the
+invariant (native function allocates and owns the store, lifted
+temp takes ownership, OpFreeRef frees once at scope exit).  No
+ref-count machinery involved.
+
+**One fix turns 8 things green together**: 5 ignored P54 tests
+(the text-return-through-fn family + chained-access) + 2
+B7-prefixed guards + the INC#9 character-interpolation crash.
+Highest-leverage compiler bite remaining and the bottleneck for
+nearly every JSON deliverable on the roadmap.
 
 ---
 
@@ -923,29 +1105,48 @@ session-of-the-week background bite.
 
 ## Recommended landing order
 
-1. **B7** — unblocks 5 of the 13 P54 ignored tests.
-2. **P54 step 4** — array/object arena materialisation.  Q2, Q3,
-   Q4 all depend on this.
-3. **Q2** — `kind` / `keys` / `fields` / `has_field`.  Cheap; makes
-   free-form actually free-form.
-4. **Q1** — structured `ParseError` + path + line:column + context
-   snippet.  Parser side first; the helper functions then get
-   reused by step 5 and Q3.
-5. **P54 step 5** — `Type::parse(JsonValue)` with the field-type
-   matrix + strict / permissive policy.  Reuses Q1 infrastructure
-   for schema diagnostics.
-6. **Q4** — `json_null` / `json_bool` / … / `json_object`
-   constructors.  Bypasses B2-runtime by allocating in Rust.
-7. **Q3** — `to_json` / `to_json_pretty` + `T.to_json()` codegen.
+**Updated 2026-04-13** — B7 estimate collapsed from "multi-session
+sprint" to "single-line fix" after explore-agent investigation
+identified the exact site (`src/scopes.rs:1031`).  B5 reclassified
+from "needs arena workaround forever" to "one-session memoization
+fix in `fill_database`".  Order rebuilt around those findings.
+
+1. **B7 — single-line fix at `src/scopes.rs:1031`** (now Tier 1).
+   Unblocks 5 ignored P54 tests + 2 B7-prefixed guards + the INC#9
+   character-interpolation crash + every `(JsonValue) -> T` method
+   call.  One session.
+2. **Q2** — `kind` / `keys` / `fields` / `has_field` natives
+   become trivially shippable post-B7.  One session.
+3. **B5 — memoise `fill_database`** in `src/typedef.rs`.  Removes
+   the arena-indirection compulsion from P54 step 4 and unblocks
+   future stdlib enums with recursive variants (Tree<T>,
+   Result<T, E>, etc.).  One session.
+4. **P54 step 4** — array/object materialisation.  Simpler
+   post-B5 (natural `vector<JsonValue>` works); Q3 + Q4 unlock.
+5. **Q1 schema-side reuse** — when P54 step 5 lands,
+   `Type::parse(JsonValue)` reuses the already-shipped
+   `format_error` infrastructure for per-field path diagnostics.
+6. **P54 step 5** — `Type::parse(JsonValue)` codegen with the
+   field-type matrix + strict / permissive policy.
+7. **Q4** — `json_null` / `json_bool` / … / `json_object`
+   constructors.  Bypasses B2-runtime by allocating in Rust;
+   ships any time after step 4.
+8. **Q3** — `to_json` / `to_json_pretty` + `T.to_json()` codegen.
    Round-trip tests become possible.
-8. **P54 step 6** — migrate `tests/scripts/57-json.loft` +
-   `tests/docs/24-json.loft` off `Struct.parse(text)`; ship the
-   rejection diagnostic.
-9. **P54 steps 7-8** — unignore remaining P54 tests; doc sweep.
-10. **C54.A** — integer i64 widening.  Schedule last in 0.9.0 so
-    earlier bites are fixed on the existing layout before the
-    schema bump.
-11. **C54.C → B → E** — sub-tickets in order.
+9. **B2-runtime — zero-fill unit-variant payload** in
+   `src/parser/objects.rs::parse_enum_field`.  Quality-of-life for
+   any user constructing struct-enum literals at runtime; not a
+   P54 blocker (Q4 bypass already works).  One session.
+10. **B3 — four-layer codegen surgery** for struct-enum tail
+    returns.  2-3 sessions.  Closes the implicit-return ergonomics
+    gap; the `return n;` workaround stays good for any user who
+    needs it.  Lower priority than items 1-9.
+11. **P54 step 6** — sweep stdlib/tests off `Struct.parse(text)`,
+    ship rejection diagnostic.
+12. **P54 steps 7-8** — unignore remaining P54 tests; doc sweep.
+13. **C54.A → C → B → E** — integer i64 widening.  Schedule last
+    in 0.9.0 so earlier bites are fixed on the existing layout
+    before the schema bump.
 
 Tier 2 items run in parallel as session-of-the-week background
 bites.  Tier 3 / 4 — at most one per release window.
