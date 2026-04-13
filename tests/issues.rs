@@ -3799,14 +3799,15 @@ fn run() -> text {
     .result(Value::str("12"));
 }
 
-/// Open: struct-enum match inside a for-loop body fails to parse —
-/// 'Expect token }' on the first arm's `=>`.  Plain enum in the same
-/// shape works (see above), so the bug is struct-enum-specific in
-/// the for-body grammar.  Indexing the vector manually and matching
-/// outside the loop works — verifies this isn't a struct-enum match
-/// bug but a parser-context bug in for-body handling.
+/// FIXED: struct-enum match inside a for-loop body previously failed
+/// to parse with 'Expect token }' on the first arm's `=>`.  Root
+/// cause: `for_type` maps `vector<StructEnum>` to
+/// `Type::Reference(enum_def, …)` as the loop-variable type, but
+/// `parse_match` only accepted `Type::Enum` or
+/// `Type::Reference(EnumValue/Struct)` as a valid subject.  Added a
+/// `Reference(d_nr) if DefType::Enum` case; struct-enum for-body
+/// matches now compile and run.
 #[test]
-#[ignore = "P54: struct-enum match arm inside for-body fails to parse"]
 fn p54_struct_enum_match_inside_for() {
     code!(
         "pub enum Item { Empty, Filled { qty: integer } }

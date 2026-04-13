@@ -438,6 +438,16 @@ impl Parser {
                 let parent = self.data.def(*d_nr).parent;
                 (parent, true, true, false)
             }
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Enum => {
+                // P54: iterating a `vector<StructEnum>` yields loop variables
+                // typed `Type::Reference(enum_def, _)` (via `for_type` in this
+                // file, line 1952 — struct-enums degrade to a reference type
+                // when carried through generic collections).  Without this
+                // arm, matching a for-loop variable over a struct-enum vector
+                // dropped into the error branch and every arm produced
+                // 'Expect token }' cascades.
+                (*d_nr, true, true, false)
+            }
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
                 (*d_nr, true, true, true)
             }
