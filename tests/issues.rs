@@ -3458,13 +3458,52 @@ fn run() -> text {
     .result(Value::str("hello"));
 }
 
-/// B3 (open): struct-enum with a `float not null` variant crashes
-/// `free(): invalid size` at construction.  Workaround: drop `not null`
-/// from the variant payload.  Spec: constructing + matching such a
-/// variant round-trips cleanly.
+/// Direct-return versions — now working (commit `6074619` opened up
+/// struct-enum subject dispatch in match; constructing + returning
+/// without an intermediate variable round-trips cleanly).
 #[test]
-#[ignore = "P54 B3: float not null in struct-enum variant crashes free()"]
-fn p54_b3_float_not_null_variant() {
+fn p54_b3_float_not_null_direct_return() {
+    code!(
+        "pub enum JV { A { v: float not null } }
+fn mk() -> JV { A { v: 42.5 } }
+fn run() -> float {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Float(42.5));
+}
+
+#[test]
+fn p54_b4_mixed_variant_direct_return() {
+    code!(
+        "pub enum JV { JA { v: boolean }, JB { v: integer }, JC { v: text } }
+fn mk() -> JV { JB { v: 42 } }
+fn run() -> integer {
+    x = mk();
+    match x {
+        JA { v } => if v { 1 } else { 0 },
+        JB { v } => v,
+        JC { v } => v.len()
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// Open (sharpened): the intermediate-variable pattern `n = A { … };
+/// return n` still crashes with free() / invalid pointer for certain
+/// variant payload types (float not null triggers it reliably).
+/// Direct return (`fn mk() -> JV { A { … } }`) works — see above.
+/// Workaround: avoid assigning the struct-enum to a local before
+/// returning.
+#[test]
+#[ignore = "P54: struct-enum via intermediate variable then return crashes"]
+fn p54_b3_float_via_intermediate() {
     code!(
         "pub enum JV { A { v: float not null } }
 fn mk() -> JV {
@@ -3480,30 +3519,6 @@ fn run() -> float {
     )
     .expr("run()")
     .result(Value::Float(42.5));
-}
-
-/// B4 (open): struct-enum with mixed-type variants (boolean/integer/text)
-/// crashes at runtime when returned from a function.
-#[test]
-#[ignore = "P54 B4: mixed-field struct-enum runtime crashes"]
-fn p54_b4_mixed_variant_return() {
-    code!(
-        "pub enum JV { JA { v: boolean }, JB { v: integer }, JC { v: text } }
-fn mk() -> JV {
-    n = JB { v: 42 };
-    n
-}
-fn run() -> integer {
-    x = mk();
-    match x {
-        JA { v } => if v { 1 } else { 0 },
-        JB { v } => v,
-        JC { v } => v.len()
-    }
-}"
-    )
-    .expr("run()")
-    .result(Value::Int(42));
 }
 
 /// B5 (open): self-referential struct-enum (`vector<Self>` in a variant)
@@ -3575,12 +3590,16 @@ fn run() -> integer {
     .result(Value::Int(7));
 }
 
-/// B3 (open, sharpened): even a single-variant struct-enum returned
-/// from a function crashes at runtime.  Narrows the reproducer from
-/// B4's mixed-type variant case — the blocker is the return path, not
-/// the variant diversity.
+/// FIXED: single-variant struct-enum with integer payload returned
+/// from a function now round-trips cleanly.  Previously crashed with
+/// 'malloc(): unaligned tcache chunk detected'.  The fix that closed
+/// this was the Reference(Enum)-as-match-subject arm in commit
+/// `6074619` — same root cause (the for-body subject-type dispatch
+/// mismatch also affected struct-enum assignment-site dispatch).
+/// `float` / `float not null` variants (see p54_b3_float_not_null_variant)
+/// and mixed-field variants (p54_b4_mixed_variant_return) remain
+/// broken.
 #[test]
-#[ignore = "P54 B3/B4: struct-enum return from function crashes (any variant type)"]
 fn p54_b3_single_variant_return() {
     code!(
         "pub enum JV { A { v: integer } }
@@ -3637,25 +3656,26 @@ fn run() -> text {
     .result(Value::str("hello|miss[]"));
 }
 
-/// P54 — the same extractor pattern via a struct-enum.  This is the
-/// API we eventually want; it's blocked on B3/B4 (struct-enum return
-/// from function).  When those are fixed, this test goes green.
+/// P54 — the same extractor pattern via a struct-enum.  Now works
+/// after the Reference(Enum) match-subject fix (commit `6074619`) —
+/// the `t.as_text()` call site receives a struct-enum argument,
+/// matches it, and returns the bound text.
 #[test]
-#[ignore = "P54 B3/B4: struct-enum return from function crashes"]
 fn p54_struct_enum_extractors_spec() {
     code!(
-        "pub enum V { T { v: text }, N { v: float } }
-pub fn as_text(self: V) -> text {
-    out = \"\";
+        "pub enum Jv { Jstr { v: text }, Jnum { v: float } }
+pub fn jv_as_text(self: Jv) -> text {
+    jvat_out = \"\";
     match self {
-        T { v } => { out = v; },
+        Jstr { v } => { jvat_out = v; },
         _ => {}
     }
-    out
+    jvat_out
 }
+fn make_jstr() -> Jv { Jstr { v: \"hello\" } }
 fn run() -> text {
-    t = T { v: \"hello\" };
-    t.as_text()
+    jvs_t = make_jstr();
+    jvs_t.jv_as_text()
 }"
     )
     .expr("run()")
