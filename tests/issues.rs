@@ -3595,3 +3595,69 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(42));
 }
+
+/// P54 — JsonValue-style extractors via a plain tagged struct.  This
+/// is the workaround pattern callers use today while struct-enum
+/// return-direction (B3/B4) is broken: a discriminant field plus one
+/// slot per payload type.  Ugly but unblocks JSON work now.
+///
+/// Verifies that extractor-with-null-on-mismatch compiles cleanly
+/// (B6 fix) and returns the expected values for both matching and
+/// mismatching kind arms.
+#[test]
+fn p54_tagged_struct_extractors_work_today() {
+    code!(
+        "struct Tagged { kind: integer, text_val: text, num_val: float }
+pub fn as_text(self: const Tagged) -> text {
+    at_out = \"\";
+    match self.kind {
+        1 => { at_out = self.text_val; },
+        _ => {}
+    }
+    at_out
+}
+pub fn as_number(self: const Tagged) -> float {
+    match self.kind {
+        2 => self.num_val,
+        _ => 0.0
+    }
+}
+fn run() -> text {
+    r = \"\";
+    t = Tagged { kind: 1, text_val: \"hello\", num_val: 0.0 };
+    r += t.as_text();
+    r += \"|\";
+    n = Tagged { kind: 2, text_val: \"\", num_val: 3.14 };
+    nt = n.as_text();
+    r += \"miss[{nt}]\";
+    r
+}"
+    )
+    .expr("run()")
+    .result(Value::str("hello|miss[]"));
+}
+
+/// P54 — the same extractor pattern via a struct-enum.  This is the
+/// API we eventually want; it's blocked on B3/B4 (struct-enum return
+/// from function).  When those are fixed, this test goes green.
+#[test]
+#[ignore = "P54 B3/B4: struct-enum return from function crashes"]
+fn p54_struct_enum_extractors_spec() {
+    code!(
+        "pub enum V { T { v: text }, N { v: float } }
+pub fn as_text(self: V) -> text {
+    out = \"\";
+    match self {
+        T { v } => { out = v; },
+        _ => {}
+    }
+    out
+}
+fn run() -> text {
+    t = T { v: \"hello\" };
+    t.as_text()
+}"
+    )
+    .expr("run()")
+    .result(Value::str("hello"));
+}
