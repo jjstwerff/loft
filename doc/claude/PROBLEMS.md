@@ -28,7 +28,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | 91 | Default-from-earlier-parameter | Medium | **0.9.0:** evaluate at function entry via codegen prologue + supplied-args bitmap |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
-| 139 | `_vector_N` slot-allocator TOS mismatch (`slot=363 TOS=362`) | Medium | **0.9.0:** discovered during C61.local rename sweep; layout-sensitive codegen bug, reproducer in `tests/scripts/05-enums.loft` with two loop-var renames |
+| ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 
 ---
 
@@ -291,7 +291,44 @@ after modifying a dependency version) and run
 
 ---
 
-### 139. `_vector_N` slot-allocator TOS mismatch — 0.9.0
+### ~~139~~. `_vector_N` slot-allocator TOS mismatch — FIXED
+
+**Fix:** `src/state/codegen.rs::gen_set_first_at_tos` now handles
+`pos > TOS` by emitting `OpReserveFrame(pos - TOS)` and advancing
+codegen's TOS to match.  The runtime stack pointer moves through
+the zone-1 byte-sized variable's slot (plain enum or boolean, already
+written via `OpPutEnum` / `OpPutBool`), so the subsequent init
+opcode writes to the correct zone-2 slot.
+
+**Root cause** (confirmed by trace):
+- Slot allocator places byte-sized zone-1 vars (1-byte plain enum,
+  1-byte boolean) at fixed slots just below the zone-2 frontier.
+- Codegen's TOS counter advances by the op deltas of the per-statement
+  push/pop cycle.  `OpConstEnum` pushes 1, `OpPutEnum` pops 1, net
+  zero.  The 1-byte zone-1 slot stays "written but not counted in TOS".
+- When the next zone-2 `Set(v, …)` runs, slot = zone2_start but TOS =
+  zone2_start - 1.  The former `pos == TOS` assert fired.
+- Reproducer: plain enum + vector + same-type loop write
+  (5 lines — see `tests/issues.rs::p139_enum_vec_same_type_write_through_loop`).
+
+**Why `stack.position = pos` alone failed** (the earlier naive
+attempt): the runtime stack pointer wasn't bumped, so subsequent
+reads pulled from the zone-1 slot as if it were the zone-2 slot.
+`OpReserveFrame` bumps the runtime pointer to match the codegen
+pointer.
+
+**Tests:** `tests/issues.rs::p139_enum_vec_same_type_write_through_loop`,
+`p139_enum_vec_two_loops_same_function`,
+`p139_bool_vec_write_through_loop`.  `tests/wrap::enums` (pre-existing
+snapshot test that originally surfaced the bug) stays green.
+
+---
+
+### 139.  *(historical note — see entry above for the fix)*
+
+Discovered 2026-04-12 during C61.local unconditional-reject attempt;
+narrowed 2026-04-12 to a 5-line reproducer; fixed 2026-04-13 via
+instrumented trace + `OpReserveFrame` in the set-first path.
 
 **Symptom:** codegen panics from `src/state/codegen.rs:922`:
 

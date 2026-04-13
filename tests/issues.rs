@@ -1089,6 +1089,67 @@ fn p1_1_lambda_void_body() {
     .result(loft::data::Value::Null);
 }
 
+// ── P139 regression guards ──────────────────────────────────────────────────
+// The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
+// fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
+// below the next zone-2 slot.  `gen_set_first_at_tos` asserted `slot == TOS`
+// and fired.  The fix emits `OpReserveFrame(gap)` when `slot > TOS`, so the
+// runtime stack pointer advances to match and the init opcode writes to
+// the correct slot.  These tests pin the three most common triggering
+// shapes: plain-enum vector, two loops over an enum vector (the
+// original 05-enums.loft pattern), and boolean vector.
+
+#[test]
+fn p139_enum_vec_same_type_write_through_loop() {
+    code!(
+        "enum Dir { North, East, South, West }
+fn test() {
+    dirs = [North, East, South, West];
+    first_d = North;
+    for elem in dirs { first_d = elem; }
+    assert(first_d == West, \"last element wins, got {first_d}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+#[test]
+fn p139_enum_vec_two_loops_same_function() {
+    code!(
+        "enum D { A, B, C, W }
+fn test() {
+    dirs = [A, B, C, W];
+    count = 0;
+    for _ in dirs { count += 1; }
+    first = A;
+    last = A;
+    n = 0;
+    for elem in dirs {
+        if n == 0 { first = elem; }
+        last = elem;
+        n += 1;
+    }
+    assert(count == 4, \"count: {count}\");
+    assert(first == A, \"first: {first}\");
+    assert(last == W, \"last: {last}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+#[test]
+fn p139_bool_vec_write_through_loop() {
+    code!(
+        "fn test() {
+    flags = [true, false, true, true];
+    flag = false;
+    for f in flags { flag = f; }
+    assert(flag == true, \"last flag, got {flag}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── P86 regression guards ───────────────────────────────────────────────────
 // Pre-0.8.3 the parser's mitigation for P86 turned this source into a
 // compile error ("closure capture is not yet supported"), and before that

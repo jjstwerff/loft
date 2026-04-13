@@ -918,6 +918,20 @@ impl State {
         if pos < stack.position {
             stack.function.set_stack_pos(v, stack.position);
         }
+        // PROBLEMS.md #139: when the slot allocator reserved a slot above
+        // TOS (because a zone-1 byte-sized variable — plain enum or
+        // boolean — was placed at a fixed slot inside the zone-2 frontier
+        // without advancing codegen's TOS through it), bump the runtime
+        // stack pointer with an OpReserveFrame so slot == TOS for the
+        // init opcode below.  The reserved bytes cover the zone-1 var's
+        // slot; the zone-1 var was already written via OpPutEnum/etc. so
+        // the bytes contain live data, not garbage.
+        else if pos > stack.position {
+            let gap = pos - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(gap);
+            stack.position += gap;
+        }
         let pos = stack.function.stack(v);
         assert!(
             pos == stack.position,
