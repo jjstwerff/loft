@@ -214,6 +214,34 @@ a named native function — is the right vehicle:
 *Test:* `tests/issues.rs::c60_hash_iter_single_field_asc` (already
 `#[ignore]`, acceptance criterion for this step).
 
+**Step 3b parser desugar attempt (2026-04-13, reverted):** wrote the
+desugar at the right site (`parse_for` just before the vector-temp
+branch at `src/parser/collections.rs:929`), compiled, and ran — the
+iteration loop body fired the correct number of times but the loop
+variable's field reads returned garbage (`name=""` `count=8` for a
+single-entry hash holding `{name:"apple",count:5}`).
+
+Diagnostic: `Stores::build_hash_sorted_vec` writes each DbRef with
+`pos=8` (matching the `hash::find` / `hash::validate` convention
+for record bodies inside a hash), but vector-iteration field access
+treats the element as a `reference<T>` pointing at `pos=0` with the
+struct field offsets added on top.  The hash-record layout has 8
+bytes of internal header (hash_val + next-ptr) before the struct
+body, so field accesses land 8 bytes early.
+
+**Next-session fix path (not started):** either
+(a) make `build_hash_sorted_vec` write DbRefs with `pos=8` AND
+    the vector codegen treat `reference<T>` elements with the
+    correct pos offset — requires threading pos-awareness through
+    the field-access machinery, or
+(b) copy each hash-record's body bytes into a contiguous vector
+    of struct records (not references), avoiding the pos=8 issue
+    entirely but costing an extra copy per iteration.
+
+Path (b) is simpler and matches how users already think of "iterate
+a hash" — as iterating copies, not references.  Recommend (b) for
+the next attempt.
+
 **Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
 Nothing new to implement; just land the combined behaviour, update
 `doc/12-hash.html` source, delete the caveat-level documentation of

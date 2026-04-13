@@ -926,6 +926,13 @@ use #count instead"
             // Save the original collection expression before the vector temp-copy substitution
             // so that is_iterated_value() can match field-access patterns like `db.items`.
             let orig_coll_expr = expr.clone();
+            // C60 Step 3b: desugar hash iteration into a call to
+            // `n_hash_sorted(h, type_id)` that returns a fresh
+            // `vector<reference<T>>`.  The rewrite happens before the
+            // existing vector-handling branch below, so the rest of
+            // parse_for treats hash iteration identically to vector
+            // iteration.  Inefficient (O(n log n) per loop); see
+            // CAVEATS.md C60.
             if matches!(in_type, Type::Vector(_, _)) {
                 let vec_var = self.create_unique("vector", &in_type);
                 // On the second pass in_type may carry __vdb_N dependencies that
