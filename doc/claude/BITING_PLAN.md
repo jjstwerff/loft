@@ -321,6 +321,27 @@ it changes the symptom (different crash) but doesn't fix the
 underlying caller/callee mismatch.  Both layers must land
 together.
 
+**Fourth investigation, 2026-04-13**: paired both layers
+(`inline_struct_return` + hoist) to recognise `Type::Enum(_, true,
+_)`.  Crash mutates again to `Position 4432 + 1 outside generated
+code 204` — codegen now emits *some* OpReturn but to the wrong
+target.  A third layer is involved: likely the OpCopyRecord
+deep-copy machinery (`gen_set_first_ref_call_copy`,
+`gen_set_first_ref_var_copy`, …) currently only matches
+`Type::Reference`, so when a struct-enum is the return value AND
+the caller assigns it to a local, the deep-copy doesn't fire and
+the records collide with stale stack offsets.
+
+A complete fix needs:
+1. `inline_struct_return` (caller-side lift) — extend to Enum.
+2. `scopes.rs:307-318` hoist — extend to Enum.
+3. Every `Type::Reference` match in `src/state/codegen.rs` that
+   handles return-value copy: audit and extend to Enum.
+
+Estimated 8-12 source-line ranges across 2 files.  Treat as one
+focused refactor (not piecemeal).  Tests already in place
+(`p54_b3_*`); they unignore atomically when the refactor lands.
+
 Workaround today: `return n;` instead of `n` at function tail —
 the explicit Return path uses different codegen that already pre-
 allocates the return slot correctly.
