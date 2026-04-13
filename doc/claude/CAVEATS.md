@@ -31,11 +31,17 @@ tables.
 
 ## Scheduled — 0.8.5
 
-### P137 — `loft --html` Brick Buster: runtime `unreachable` panic
-The headline browser build wedges on the first call to `loft_start`;
-native mode works.  Blocks the "share a link, anyone plays" story and
-the Moros editor ships on the same WASM path.  Fix path: phase-C
-bisection of `#native` functions (detailed in PROBLEMS.md #137).
+### ~~P137~~ — `loft --html` Brick Buster: runtime `unreachable` panic — DONE
+
+Shipped on `quality`.  Root cause: `Instant::now()` in
+`Stores::new()` panics on `wasm32-unknown-unknown` (the `--html`
+target).  Fix: guard switched from `#[cfg(not(feature = "wasm"))]`
+to `#[cfg(not(target_arch = "wasm32"))]`; `host_time_now()` returns
+0 in that mode; `n_ticks` gated identically.  The headline browser
+demo and Moros editor share the same WASM path, both unblocked.
+Regression guards: `tests/html_wasm.rs` (4 tests behind a
+process-wide serial mutex covering hello-world, ticks, two
+allocator paths).  Detail in PROBLEMS.md #137.
 
 ### ~~P135 / C58~~ — Canvas Y direction — DONE
 

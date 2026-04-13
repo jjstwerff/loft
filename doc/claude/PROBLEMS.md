@@ -27,7 +27,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
-| 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
+| ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 
 ---
