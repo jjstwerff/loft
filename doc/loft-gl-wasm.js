@@ -225,10 +225,11 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       },
       loft_gl_load_texture(pp, pl) { return -1; /* TODO: async asset loading */ },
       loft_gl_upload_canvas(ptr, count, w, h) {
+        // C58: no upload-side Y flip; canvas-top = GL TC.y=0.
         const data = new Int32Array(getMem().buffer, ptr, count);
         const px = new Uint8Array(w * h * 4);
-        for (let y = 0; y < h; y++) { const sy = h - 1 - y;
-          for (let x = 0; x < w; x++) { const c = data[sy * w + x], di = (y * w + x) * 4;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) { const c = data[y * w + x], di = (y * w + x) * 4;
             px[di] = (c>>>16)&0xff; px[di+1] = (c>>>8)&0xff; px[di+2] = c&0xff; px[di+3] = (c>>>24)&0xff;
           }
         }

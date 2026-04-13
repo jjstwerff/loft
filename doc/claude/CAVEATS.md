@@ -40,7 +40,17 @@ native mode works.  Blocks the "share a link, anyone plays" story and
 the Moros editor ships on the same WASM path.  Fix path: phase-C
 bisection of `#native` functions (detailed in PROBLEMS.md #137).
 
-### P135 / C58 — Canvas Y direction is not locked in
+### ~~P135 / C58~~ — Canvas Y direction — DONE
+
+Shipped on `quality`.  The three-way flip cascade (upload row-reverse,
+TEX_VERT_2D `1 - aPos.y`, ortho `-2/H`) collapsed to one: the ortho
+is the only compensating flip, matching the GL convention.  Canvases
+and PNG textures now share the same orientation in GL.  Locked as a
+language-level invariant in [OPENGL.md § Canvas coordinate
+convention](OPENGL.md).  Regression guard: 2×2 atlas corner check in
+`tests/scripts/snap_smoke.sh`.
+
+### P135 / C58 (historical) — Canvas Y direction is not locked in
 Three compensating flips (upload row-reverse, UV, 2D projection) that
 don't cancel on non-square atlases.  **Decision:** canonical `(0, 0) =
 screen-top-left`, `y` grows down — matches HTML canvas, PNG files, and

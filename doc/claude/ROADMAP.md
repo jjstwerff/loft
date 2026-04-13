@@ -100,7 +100,7 @@ Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
 | ID    | Title                                                           | E  | Source                       |
 |-------|-----------------------------------------------------------------|----|------------------------------|
 | P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, BITING_PLAN.md |
-| P135  | Canvas Y-flip three-way compensation — off-by-ones on 2×N sprite atlases; normalise to screen-top-left `(0,0)` | S  | PROBLEMS.md #135, CAVEATS.md C58, BITING_PLAN.md |
+| ~~P135~~ | ~~Canvas Y-flip three-way compensation~~ | S | **Done** — upload flip removed + TEX_VERT_2D samples identity V; 2×2 atlas corner guard in `snap_smoke.sh`. Canonical convention locked in OPENGL.md |
 
 ### Sprint A–C: Data model + editor + loft backend
 

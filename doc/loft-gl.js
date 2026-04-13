@@ -379,12 +379,13 @@ export function initLoftGL(canvas) {
     },
 
     gl_upload_canvas(data, w, h) {
-      // Flip rows: canvas (0,0) is top-left, GL texture (0,0) is bottom-left.
+      // C58: canonical `(0, 0) = canvas top-left` — no upload-side Y flip.
+      // glTexImage2D stores the first buffer row at GL bottom, putting
+      // canvas-top at TC.y=0; the 2D ortho's `-2/H` maps that to screen-top.
       const pixels = new Uint8Array(w * h * 4);
       for (let y = 0; y < h; y++) {
-        const srcY = h - 1 - y;
         for (let x = 0; x < w; x++) {
-          const si = srcY * w + x;
+          const si = y * w + x;
           const di = (y * w + x) * 4;
           const c = data[si];
           pixels[di + 0] = (c >>> 16) & 0xff;

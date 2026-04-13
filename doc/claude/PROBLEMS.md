@@ -165,7 +165,24 @@ hasn't been concretely asked for.  See [WEB_SERVICES.md](WEB_SERVICES.md).
 
 ## Graphics / WebGL
 
-### 135. Sprite atlas row indexing swap
+### ~~135~~. Sprite atlas row indexing swap — FIXED
+
+Canvas upload no longer pre-flips rows; `TEX_VERT_2D` samples with
+identity V.  Canvas-top = GL TC.y = 0 on all three backends (native
+OpenGL, WebGL/wasm, `--html` export), and `lib/graphics/native/src/lib.rs`
++ `lib/graphics/js/loft-gl.js` + `doc/loft-gl-wasm.js` now agree on the
+same orientation.  Canonical convention locked in
+[OPENGL.md § Canvas coordinate convention](OPENGL.md).
+
+Regression guard: 2×2 atlas corner check added to
+`tests/scripts/snap_smoke.sh` — asserts sprite 0/1/2/3 render
+red/green/blue/white (matching the atlas's top-row / bottom-row
+layout).  `make test-gl-golden` fails if any future upload / shader /
+projection change reintroduces a row swap.
+
+Original issue kept below for context.
+
+### 135 (historical). Sprite atlas row indexing swap
 
 **Severity:** Low — cosmetic.
 

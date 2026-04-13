@@ -812,8 +812,11 @@ out vec4 FragColor;
 void main() {{ FragColor = vec4(uColor, uAlpha); }}
 `;
 
-// Textured quad vertex shader — samples the full texture with V flipped,
-// matching canvas origin (top-left) to GL sampler origin (bottom-left).
+// Textured quad vertex shader — samples the full texture with identity UV.
+// C58: canvas upload no longer pre-flips rows; GL's `glTexImage2D` stores
+// canvas-top at TC.y=0, and the 2D ortho projection maps user-supplied
+// top-left screen coords onto clip-space, so no per-shader V flip is
+// needed.  PNG-loaded textures sample the same way.
 TEX_VERT_2D = `
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -821,7 +824,7 @@ uniform mat4 uMVP;
 out vec2 vUV;
 void main() {{
     gl_Position = uMVP * vec4(aPos, 1.0);
-    vUV = vec2(aPos.x, 1.0 - aPos.y);
+    vUV = vec2(aPos.x, aPos.y);
 }}
 `;
 
