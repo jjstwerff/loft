@@ -1194,6 +1194,89 @@ Debug-build loft + valgrind + Mesa swrast is **very slow** — expect
 
 ---
 
+## Debugging `loft --html` WASM traps
+
+WASM compiled in release mode strips Rust panic strings — a
+runtime fault surfaces as a bare `RuntimeError: unreachable executed`
+with no message.  This can send diagnosis deep into the wrong place
+(we spent several sessions chasing "panic in bytecode dispatch" for
+P137 when the real cause was `Instant::now()` in init).
+
+### The technique
+
+1. **Write a minimal reproducer.** If `fn main() { }` or
+   `fn main() { println("hi"); }` traps, the bug is in WASM init
+   (Stores::new / stdlib load / host-import wiring), **not** in any
+   user-code path.  Don't bisect user code yet.
+
+2. **Rebuild the same generated Rust as a debug wasm** to preserve
+   panic symbols in the stack trace.  The `loft_html.rs` file is
+   written to `/tmp/loft_html.rs` by `loft --html` immediately before
+   the rustc invocation; grab a copy before the wrapper deletes it:
+
+   ```bash
+   ./target/release/loft --html /tmp/app.html --path $(pwd)/ app.loft &
+   sleep 0.3 && cp /tmp/loft_html.rs /tmp/loft_html_saved.rs
+   wait
+   ```
+
+3. **Compile the saved Rust without `-O`** so Rust's panic machinery
+   still emits symbols:
+
+   ```bash
+   rustc --edition=2024 --target wasm32-unknown-unknown \
+     --crate-type cdylib \
+     --extern loft=target/wasm32-unknown-unknown/release/libloft.rlib \
+     -L dependency=target/wasm32-unknown-unknown/release/deps \
+     -L dependency=target/release/deps \
+     /tmp/loft_html_saved.rs -o /tmp/debug.wasm
+   ```
+
+4. **Run in Node with `tools/wasm_repro.mjs`** and print the stack:
+
+   ```bash
+   node tools/wasm_repro.mjs /tmp/debug.wasm
+   ```
+
+   The debug build's stack shows `_ZN...` mangled Rust symbols.  The
+   first non-panic-machinery symbol is the function that panicked —
+   often `std::...::now`, `Vec::index`, `Option::unwrap`,
+   `core::panicking::panic_fmt`.
+
+### Repro harness — `tools/wasm_repro.mjs`
+
+Loads a WASM file with loose stub imports (loft_io and loft_gl via a
+Proxy that answers any method with a no-op) and runs `loft_start`.
+
+```bash
+node tools/wasm_repro.mjs <path/to/wasm> [--trace]
+```
+
+Exit code 0 = clean run; 1 = trap.  `--trace` records every host
+import call into a buffer printed on trap — revealing which loft
+function last reached the host boundary before the fault.
+
+Used by the **`tests/html_wasm.rs::p137_html_hello_world_does_not_trap`**
+regression test, which builds a hello-world `.loft` program through
+`--html`, extracts the WASM, and runs the harness.  Skipped in
+environments without node or the wasm32-unknown-unknown rustup target.
+
+### Why the release trap had no message
+
+Rust compiled for `wasm32-unknown-unknown` with `-O` uses
+`panic = "abort"` by default: any panic becomes a bare
+`(unreachable)` instruction with no format string, no location, no
+call to a panic handler.  On native + debug this is the opposite —
+panics carry a source location and a formatted message.  When the
+browser / Node engine hits the unreachable, it produces a generic
+`RuntimeError: unreachable executed` with only the WASM function
+index in the stack trace.
+
+The fix path is always: rebuild without `-O`, get a symbol-preserving
+stack, and the panic site appears.
+
+---
+
 ## See also
 - [PROBLEMS.md](PROBLEMS.md) — Known bugs, limitations, workarounds, and fix plans
 - [CLAUDE.md](../../CLAUDE.md) — Project orientation: execution path, key data structures, branch policy, documentation index
