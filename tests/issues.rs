@@ -3405,3 +3405,130 @@ fn test() {
     )
     .error("expects a JsonValue");
 }
+
+// ── P54 struct-enum blockers — runtime specs (BITING_PLAN § P54) ──────────
+//
+// Each struct-enum bug found while building JsonValue gets a regression
+// guard (for fixed bugs) or an #[ignore]'d spec (for open bugs).  The
+// #[ignore]'d tests document the expected behaviour; they'll go green
+// automatically when the corresponding blocker is resolved.
+
+/// B1 (FIXED `61c36d7`): `match v { UnitVariant => … }` no longer panics
+/// when `v` is produced somewhere other than a literal.  Exercise via
+/// a mixed-variant enum where the unit arm matches.
+#[test]
+fn p54_b1_unit_variant_match_from_binding() {
+    code!(
+        "pub enum Palette { Null, Shade { v: integer } }
+fn run() -> integer {
+    p = Shade { v: 7 };
+    match p {
+        Null => -1,
+        Shade { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+/// B6 (FIXED `5684df2`): match-arm type unification strips `RefVar`
+/// wrappers.  Binding a field-carrying struct variant's text field in one
+/// arm and returning a literal text (`""`) in another no longer errors
+/// with 'cannot unify: &text and text'.
+///
+/// Uses plain struct (not struct-enum) to dodge the still-open B4
+/// runtime bug.  Same type-system machinery — the field binding yields
+/// `&text`, the wildcard arm returns owned `text`.
+#[test]
+fn p54_b6_match_arm_text_unify_plain_struct() {
+    code!(
+        "struct Pair { a: text, b: integer }
+fn extract(p: const Pair) -> text {
+    match p.b {
+        0 => p.a,
+        _ => \"other\"
+    }
+}
+fn run() -> text {
+    extract(Pair { a: \"hello\", b: 0 })
+}"
+    )
+    .expr("run()")
+    .result(Value::str("hello"));
+}
+
+/// B3 (open): struct-enum with a `float not null` variant crashes
+/// `free(): invalid size` at construction.  Workaround: drop `not null`
+/// from the variant payload.  Spec: constructing + matching such a
+/// variant round-trips cleanly.
+#[test]
+#[ignore = "P54 B3: float not null in struct-enum variant crashes free()"]
+fn p54_b3_float_not_null_variant() {
+    code!(
+        "pub enum JV { A { v: float not null } }
+fn mk() -> JV {
+    n = A { v: 42.5 };
+    n
+}
+fn run() -> float {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Float(42.5));
+}
+
+/// B4 (open): struct-enum with mixed-type variants (boolean/integer/text)
+/// crashes at runtime when returned from a function.
+#[test]
+#[ignore = "P54 B4: mixed-field struct-enum runtime crashes"]
+fn p54_b4_mixed_variant_return() {
+    code!(
+        "pub enum JV { JA { v: boolean }, JB { v: integer }, JC { v: text } }
+fn mk() -> JV {
+    n = JB { v: 42 };
+    n
+}
+fn run() -> integer {
+    x = mk();
+    match x {
+        JA { v } => if v { 1 } else { 0 },
+        JB { v } => v,
+        JC { v } => v.len()
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// B5 (open): self-referential struct-enum (`vector<Self>` in a variant)
+/// trips the Recursion-depth-500 codegen guard.  Spec: declaration
+/// compiles, pattern match dispatches correctly.
+#[test]
+#[ignore = "P54 B5: recursive struct-enum trips codegen recursion guard"]
+fn p54_b5_recursive_struct_enum() {
+    code!(
+        "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
+fn count(t: const Tree) -> integer {
+    match t {
+        Leaf { v } => v,
+        Node { kids } => {
+            c = 0;
+            for k in kids { c += count(k); }
+            c
+        }
+    }
+}
+fn run() -> integer {
+    root = Node { kids: [Leaf { v: 3 }, Leaf { v: 4 }] };
+    count(root)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}

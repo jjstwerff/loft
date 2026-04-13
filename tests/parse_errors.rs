@@ -1081,3 +1081,29 @@ fn l1_missing_semicolon_in_body_single_diagnostic() {
     code!("fn foo(x: integer) -> integer {\n  y = x + 1\n  y * 2\n}\nfn test() {}")
         .error("Expect token ; at l1_missing_semicolon_in_body_single_diagnostic:3:4");
 }
+
+// ── P54 struct-enum blockers (BITING_PLAN § P54) ─────────────────────────
+//
+// Regression guards for the struct-enum compiler bugs surfaced while
+// building JsonValue.  Each bug is tracked as B1..B7 in BITING_PLAN.md.
+// Fixed bugs pin the diagnostic-or-success behaviour; open bugs land as
+// `#[ignore]`'d with the expected future state so the test goes green
+// automatically when the fix lands.
+
+/// B2 (partial fix): returning a bare unit variant from a function with
+/// declared struct-enum return type errors cleanly instead of panicking
+/// in `src/database/types.rs:620` with 'index out of bounds'.
+///
+/// This test pins the *diagnostic* — the full feature (unit variant
+/// round-trip) is still broken (B2 full fix wants the can_convert path).
+#[test]
+fn p54_b2_unit_variant_return_diagnostic() {
+    code!(
+        "pub enum Shade { N, V { v: integer } }
+fn mk() -> Shade { Shade.N }
+fn test() { _ = mk(); }"
+    )
+    .error(
+        "Shade should be Shade on return from block at p54_b2_unit_variant_return_diagnostic:3:1",
+    );
+}
