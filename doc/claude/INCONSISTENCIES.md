@@ -21,7 +21,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
 - [28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax](#28-vector-slice-syntax-has-no-grammar-entry-and-diverges-from-range-syntax)
-- [30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression](#30--is-both-anonymous-struct-initialisation-and-a-block-expression)
 - [31. Open-Ended Range Syntax in `for` Has No Documented Counterpart in `match`](#31-open-ended-range-syntax-in-for-has-no-documented-counterpart-in-match)
 - [Summary by Severity](#summary-by-severity)
 
@@ -214,26 +213,6 @@ valid slice forms and documents which are shared with `range_expr`. Clarify whet
 
 ---
 
-## 30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression
-
-**Severity: Low**
-
-```loft
-point = { x: 1.0, y: 2.0 }     // anonymous struct init (type inferred from context)
-result = { compute(); value }   // block expression returning last value
-```
-
-The opening `{` alone does not indicate which form is being used. The parser resolves
-the ambiguity by looking ahead for `ident ':'` (struct field assignment). A typo such
-as `{ x, y }` (missing colons) silently becomes a block expression that evaluates `x`
-and `y` as separate statements and returns `y`.
-
-**Advice:** Consider requiring an explicit type name for anonymous struct init in
-contexts where a block expression is also valid, e.g. `Point { x: 1.0, y: 2.0 }`.
-Alternatively, document the lookahead rule prominently in the grammar summary so users
-know what to expect when `{` is ambiguous.
-
----
 
 ## 31. Open-Ended Range Syntax in `for` Has No Documented Counterpart in `match`
 
@@ -281,7 +260,6 @@ _All fixed — see CHANGELOG.md._
 | 17 | Type coercion rules are not uniform (implicit / explicit / format-only) |
 | 18 | `x#break` is a jump statement, reusing the `#attribute` expression syntax |
 | 28 | Vector slice forms `[..end]` and `[n..-1]` absent from grammar; `..=` undocumented for slices |
-| 30 | `{...}` is both anonymous struct init and block expression; typos silently become blocks |
 | 31 | Open-ended range `10..` is valid in `for`; not documented for `match` arms |
 
 ### Resolved as design point (documented + regression-guarded)
@@ -297,6 +275,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | 12 | Sort direction declared on struct drives iteration direction of every query | LOFT.md § Collection types (Gotcha block); `inc12_sorted_ascending_*` / `inc12_sorted_descending_*` regression tests |
 | 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
+| 30 | `{...}` double-duty (struct init vs. block) — claimed silent-typo case is not reproducible on current loft; the `{ x, y }` typo parses as a struct-init attempt and fails on the missing colon | `inc30_struct_init_with_colons_works`, `inc30_block_expression_returns_last_value`, `inc30_typo_comma_without_colon_is_rejected` |
 
 ---
 

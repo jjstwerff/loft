@@ -4342,3 +4342,51 @@ fn run_desc() -> text {
     .expr("run_desc()")
     .result(Value::str("Omega,Mid,Alpha,"));
 }
+
+// ── INC#30: `{...}` double-duty (anonymous struct init vs. block) ───────
+//
+// The inconsistency writeup claimed that a typo like `{ x, y }`
+// (missing colons) would silently become a block expression,
+// evaluate `x` and `y` as statements, and return `y`.  Current
+// loft rejects that shape at parse time — the trap is not
+// reproducible.  These tests lock the three observable shapes so
+// a future relaxation cannot reintroduce the silent-typo bite
+// without updating LOFT.md and the INCONSISTENCIES.md entry.
+#[test]
+fn inc30_struct_init_with_colons_works() {
+    code!(
+        "struct Pt { x: integer, y: integer }
+fn run_a() -> integer {
+    p_a: Pt = Pt { x: 3, y: 4 };
+    p_a.x + p_a.y
+}"
+    )
+    .expr("run_a()")
+    .result(Value::Int(7));
+}
+
+#[test]
+fn inc30_block_expression_returns_last_value() {
+    code!(
+        "fn run_b() -> integer {
+    r_b = { n_b = 1; m_b = n_b + 1; m_b };
+    r_b
+}"
+    )
+    .expr("run_b()")
+    .result(Value::Int(2));
+}
+
+#[test]
+fn inc30_typo_comma_without_colon_is_rejected() {
+    code!(
+        "struct PtC { x: integer, y: integer }
+fn run_c() -> integer {
+    a_c = 1;
+    b_c = 2;
+    p_c: PtC = { a_c, b_c };
+    p_c.x + p_c.y
+}"
+    )
+    .error("Expect token ; at inc30_typo_comma_without_colon_is_rejected:5:22");
+}
