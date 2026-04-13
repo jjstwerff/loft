@@ -599,9 +599,22 @@ impl Parser {
 
             // Get the discriminant integer for this variant.
             let disc: i32 = if is_struct {
-                // Struct enum: discriminant is attributes[0].value of the EnumValue def.
-                if let Value::Enum(nr, _) = self.data.def(variant_def_nr).attributes[0].value {
+                // Struct enum: field-carrying variants store the discriminant
+                // in attributes[0] (the synthetic "enum" attr added by
+                // parse_enum_variants).  Unit variants (`pub enum E { Null,
+                // Some { … } }`) carry no attributes of their own — fall
+                // back to the parent enum's attribute for this variant name.
+                let variant_attrs = &self.data.def(variant_def_nr).attributes;
+                if let Some(first) = variant_attrs.first()
+                    && let Value::Enum(nr, _) = first.value
+                {
                     i32::from(nr)
+                } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&pattern_name) {
+                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                        i32::from(nr)
+                    } else {
+                        0
+                    }
                 } else {
                     0
                 }
