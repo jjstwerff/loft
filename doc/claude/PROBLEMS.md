@@ -241,7 +241,33 @@ a 2×2 atlas are placed correctly.
 
 ---
 
-### 137. `loft --html` Brick Buster: runtime `unreachable` panic
+### ~~137~~. `loft --html` runtime `unreachable` panic — FIXED
+
+Root cause: `Stores::new()` called `std::time::Instant::now()` on the
+`--html` build (wasm32-unknown-unknown without the `wasm` feature).
+`Instant::now()` panics on this target with no time source; the panic
+compiles to `(unreachable)` in release builds, producing the infamous
+trap on the very first `loft_start` call — before any user code or
+host import ran.
+
+Fix: switch the start-time guard from `#[cfg(feature = "wasm")]` to
+`#[cfg(target_arch = "wasm32")]`.  Any wasm32 target uses the
+`start_time_ms: i64` field; feature-gated path calls the host bridge,
+no-feature path uses 0 as a benign epoch stub.  `n_ticks` on wasm32
+without the feature returns 0 (no time bridge, same contract).
+
+Verified: `fn main() { println("hello"); }` compiled with
+`loft --html` and instantiated in Node with a `loft_host_print` stub
+prints "hello from loft" cleanly.
+
+Test strategy used to find it: debug-built WASM carries Rust panic
+string symbols in the stack trace — `noop_debug.wasm` stack showed
+`std::time::Instant::now → loft::database::Stores::new` as the panic
+origin.  Release builds strip the names and reduce the trap to a bare
+`unreachable`, which is why previous diagnostic attempts bottomed out
+at "panic in bytecode dispatch, not a host call".
+
+### 137 (historical). `loft --html` Brick Buster: runtime `unreachable` panic
 
 **Severity:** Medium — breaks the deployed `brick-buster.html` on
 GitHub Pages; the wasm instantiates but panics as soon as `loft_start`

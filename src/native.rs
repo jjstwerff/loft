@@ -923,17 +923,23 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
 
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let now_ms = crate::wasm::host_time_ticks();
     let elapsed_micros = (now_ms - stores.start_time_ms) * 1000;
     stores.put(stack, elapsed_micros);
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
+    // P137: no host time bridge on the --html build; return 0.
+    stores.put(stack, 0i64);
 }
 
 /// TR1.3: Build `vector<StackFrame>` from the call-stack snapshot in Stores.

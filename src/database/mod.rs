@@ -22,7 +22,16 @@ use crate::store::Store;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
 use std::sync::{Arc, Mutex};
-#[cfg(not(feature = "wasm"))]
+// P137: the `--html` build compiles for wasm32-unknown-unknown
+// WITHOUT the `wasm` feature (the feature carries wasm-bindgen
+// host bridges that `--html`'s hand-rolled JS runtime does not
+// provide).  That leaves `std::time::Instant` on a target with no
+// time source — calling `Instant::now()` panics, and the panic
+// compiles to `(unreachable)` which was the root of every
+// `--html loft_start` trap.  Use Instant only on non-wasm32
+// targets; wasm32 (with or without the feature) tracks time in
+// milliseconds through the host bridge.
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 /// Type alias for a native function callable from loft bytecode.
@@ -177,11 +186,15 @@ pub struct Stores {
     /// Monotonic timestamp captured at `Stores::new()`.  Used by `ticks()` to return
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub start_time: Instant,
-    /// Under WASM: milliseconds since Unix epoch at program start (from `host_time_now()`).
-    /// Used by `n_ticks` to compute elapsed time without `std::time::Instant`.
-    #[cfg(feature = "wasm")]
+    /// Under any wasm32 target (both the `wasm` feature's host-bridge
+    /// build and the `--html` no-feature build): milliseconds since
+    /// Unix epoch at program start.  `n_ticks` uses this plus the
+    /// host-imported `time_ticks` to compute elapsed time without
+    /// `std::time::Instant`.  See P137 for why we can't use Instant
+    /// on wasm32 even without the `wasm` feature.
+    #[cfg(target_arch = "wasm32")]
     pub start_time_ms: i64,
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
     /// Populated by `State::static_call` when `n_stack_trace` is invoked.
@@ -225,9 +238,9 @@ impl Clone for Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(target_arch = "wasm32"))]
             start_time: self.start_time,
-            #[cfg(feature = "wasm")]
+            #[cfg(target_arch = "wasm32")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
@@ -484,10 +497,18 @@ impl Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(target_arch = "wasm32"))]
             start_time: Instant::now(),
-            #[cfg(feature = "wasm")]
+            // P137: `Stores::new()` must not call `Instant::now()` or
+            // `SystemTime::now()` on wasm32-unknown-unknown — both
+            // trap as `(unreachable)` with no time source.  The
+            // `--html` build (wasm32, no `wasm` feature) uses 0 as
+            // the epoch stub; the full `wasm` feature build routes
+            // through the host bridge.
+            #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
             start_time_ms: crate::wasm::host_time_now(),
+            #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+            start_time_ms: 0,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
             closure_map: HashMap::new(),

@@ -1272,15 +1272,22 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     stores.start_time.elapsed().as_micros() as i64
 }
 
-/// Bytecode equivalent: `n_ticks` in `src/native.rs`.
-#[cfg(feature = "wasm")]
+/// Bytecode equivalent: `n_ticks` in `src/native.rs`.  P137: gated on
+/// target_arch, not the `wasm` feature — the `--html` build (wasm32,
+/// no `wasm` feature) returns 0 because no host time bridge exists.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+pub fn n_ticks(_stores: &mut Stores) -> i64 {
+    0
 }
 
 /// Return the platform path separator as a loft character (`i32`).

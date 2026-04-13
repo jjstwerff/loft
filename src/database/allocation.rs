@@ -469,9 +469,9 @@ impl Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(target_arch = "wasm32"))]
             start_time: self.start_time,
-            #[cfg(feature = "wasm")]
+            #[cfg(target_arch = "wasm32")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
@@ -536,9 +536,9 @@ impl Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(target_arch = "wasm32"))]
             start_time: self.start_time,
-            #[cfg(feature = "wasm")]
+            #[cfg(target_arch = "wasm32")]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
