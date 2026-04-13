@@ -192,7 +192,7 @@ zero struct.
 
 ---
 
-## C54 — `integer` widening to i64
+## C54 — `integer`: i64 arithmetic, range-packed storage
 
 **Bite:** any arithmetic that lands on `i32::MIN` silently returns
 `null` (and debug-aborts).  Integer division by zero also returns
@@ -200,67 +200,159 @@ zero struct.
 actively hostile — users hit it when multiplying microsecond
 timestamps, accumulating checksums, or building bitmasks.
 
-**Design:** switch `integer` from `i32` to `i64`.  At 8 bytes per
-field the overhead is rounding error on today's machines; `i64::MIN`
-is `-9.2e18`, so accidental sentinel collisions effectively vanish.
-`long` becomes a historical alias (already `i64`).  Future code
-writes `integer` and Just Works.
+### Design — decouple arithmetic width from storage width
 
-**Breaking-change budget:** schema layouts change (every `integer`
-field grows from 4 to 8 bytes).  All `.loftc` bytecode caches become
-invalid on first load — add a version bump that auto-rebuilds.  All
-native-code artefacts (`.loft/*.rs`, `*.wasm`) rebuild from source
-on first run.  Test suite field-offset expectations change in
-~30 places.
+Loft already separates two concerns — C54 keeps the split and only
+changes the default on the axis that bites:
 
-**Steps (sprint branch `c54-integer-i64`, lands on `main` in 0.9.0):**
+- **Storage width** — packed from `Type::Integer(min, max, _)` via
+  `Type::size()` (`src/data.rs:357`): range < 256 → 1 byte, < 65536
+  → 2 bytes, otherwise 4 bytes.  Users opt into narrow storage by
+  writing `integer limit(lo, hi)` (or the prebuilt aliases `u8`,
+  `u16`, `i8`, `i16` in `default/01_code.loft`).
+- **Arithmetic width** — today i32 for `integer`, i64 for `long`.
+  This is the axis that bites, because the default arithmetic width
+  sits right on top of the null sentinel.
 
-1. **Tests first.**
-   - `tests/issues.rs::c54_i32_min_round_trip` — `-2_147_483_648 * 1`
-     returns `-2_147_483_648`, not null.  `#[ignore]`.
-   - `c54_arithmetic_at_boundary` — add/sub/mul/div crossings at
-     ±i32::MAX produce the mathematically correct i64 result.
-   - `c54_schema_layout_8byte` — a struct `S { x: integer }` has
-     field size 8 (assert via `sizeof` or the existing schema test).
+**C54 decouples them:**
+
+1. **Arithmetic is always i64.**  `Op*Int` opcodes operate on i64
+   registers throughout the interpreter and native codegen.
+   `i64::MIN` is the null sentinel; reaching it by accident
+   (`−9.2 × 10^18`) is astronomically unlikely.
+2. **Storage width is unchanged when a `limit()` is present.**  A
+   `struct S { x: integer limit(0, 255) }` still takes 1 byte.  The
+   whole point of `limit` is compact storage; C54 preserves it
+   byte-for-byte.
+3. **Unbounded `integer` stores as i64 (8 bytes).**  That's the one
+   case where the field's range is "anything", and anything now
+   needs 8 bytes to cover without sentinel collisions.  Users who
+   want the old 4-byte default can write `integer limit(i32::MIN +
+   1, i32::MAX)` — or just `i32`, which is already the alias for
+   `integer size(4)` in the stdlib.
+4. **Load-widens, store-narrows.**  Reading any bounded integer
+   field widens to i64 in registers; arithmetic runs at i64;
+   writing back narrows with the existing `limit` range check (a
+   `null` result if the value is out of range — same as today).
+   The i32::MIN trap is gone because register width is always
+   64-bit and bounded storage types don't use MIN as a sentinel
+   (they either reserve `min − 1` via `not null` or disallow null
+   entirely).
+
+### Why this is smaller than "widen everything"
+
+- **Most struct schemas are unchanged.**  A struct full of `u8` or
+  `integer limit(0, 10000)` fields keeps its current byte layout.
+- **The `.loftc` cache format changes only for unbounded integers.**
+  A tiny fraction of field-size entries; the cache version bump
+  still triggers auto-rebuild.
+- **Persisted databases:** `loft --migrate-i64 <dbfile>` walks the
+  schema and only touches unbounded-integer columns.  Schemas
+  composed entirely of `u8` / `u16` / `i32` / `integer limit(...)`
+  need no migration.
+- **Test sweep is narrower.**  Field-offset assertions against
+  unbounded integers bump; bounded-integer assertions stay put —
+  estimated ~10 files instead of ~30.
+
+### Arithmetic semantics
+
+| expression                        | register type | behaviour                                        |
+|-----------------------------------|---------------|--------------------------------------------------|
+| `a * b * c` (all unbounded)       | i64           | no null unless the result is exactly `i64::MIN`  |
+| `u8_a * u8_b` both 200            | i64           | 40 000, not wrapped / null                       |
+| `x as i32` where `x: integer`     | i32           | range check; null if out of i32 range            |
+| `x: u8 = expr`                    | range-checked | null if expr ∉ [0, 255] — existing `limit` logic |
+| `a: integer = u8_val * 1000`      | i64           | widens `u8_val` first; no overflow               |
+| `-i32::MIN` (unbounded)           | i64           | `+2 147 483 648`; was MIN → null under i32       |
+| `i64::MIN / 1`                    | null          | only MIN collision remaining; unreachable in ordinary code |
+
+Division by zero still returns null (other intentional sentinel
+use).  Negation of `i64::MIN` still returns null (two's complement
+invariant).  Both are documented edge cases, not silent traps in
+ordinary arithmetic.
+
+### Steps (sprint branch `c54-integer-i64`, 0.9.0)
+
+1. **Tests first, all `#[ignore]`'d.**
+   - `c54_i32_min_round_trip` — `-2_147_483_648 * 1` returns
+     `-2_147_483_648`, not null.
+   - `c54_arithmetic_at_boundary` — add / sub / mul / div crossings
+     at ±i32::MAX give the mathematically-correct i64 result.
+   - `c54_bounded_storage_preserved` — `struct S { b: u8, c:
+     integer limit(0, 1000) }` has the same field offsets as
+     before; only unbounded integers change.
+   - `c54_unbounded_storage_widens` — `struct T { x: integer }`
+     stores `x` in 8 bytes, not 4.
+   - `c54_u8_times_u8_no_overflow` — `u8_a * u8_b` both 200 → 40 000.
    - `c54_loftc_cache_invalidated` — running a program built with
-     the old cache triggers an auto-rebuild, not a crash.  (May be
-     an integration test against a pre-canned pre-C54 `.loftc`.)
-2. **Bump `size(Type::Integer)`** in `src/database/mod.rs` from 4 to 8.
-   Walk every caller that assumes 4 bytes: grep for literal `4` near
-   `Type::Integer` or `Content::Long(i64::from(i32))` patterns.
-3. **Update `get_int`/`set_int` call sites** that read/write integer
-   fields to use the 64-bit variants (or introduce a single
-   `get_integer`/`set_integer` helper keyed off the type tag).
-4. **Update native codegen** (`src/generation/emit.rs`) — `integer`
-   emits as `i64` in Rust, not `i32`.  Format strings that used
-   `format_int` switch to `format_long`.  Sentinels change from
-   `i32::MIN` to `i64::MIN`.
-5. **Bump `.loftc` cache version** (`src/state/bytecode_cache.rs`)
-   so the old cache is invalidated automatically.  Caches built
-   before this commit lose their version match and trigger a
-   rebuild on first load.
-6. **Deprecate `long`.** Keep it as a type alias for `integer` (now
-   i64) so existing code keeps working.  A follow-up 1.1+ commit
-   can emit a deprecation warning; don't do that in 0.9.0.
-7. **Sweep tests** — update every field-offset expectation, every
-   `i32::MIN` sentinel check, every hex literal assumption.  This
-   is mechanical but touches ~30 files.
-8. **Enable the C54 tests** commit-by-commit as the layout work
-   settles.
-9. **Document in LOFT.md and CHANGELOG.md** — one short paragraph
-   explaining that `integer` is now i64 and pointing at the
-   migration note for 0.8.x code.
+     a pre-C54 cache triggers auto-rebuild.
+2. **Replumb arithmetic opcodes** — `OpAddInt` / `OpSubInt` /
+   `OpMulInt` / `OpDivInt` operate on i64 registers.  Keep the names
+   (they still apply to `Type::Integer`), but the backing stack
+   slot widens.  Existing `OpAddLong` etc. stay for explicit `long`
+   use; can be unified later.
+3. **Update `Type::size()` default arm** in `src/data.rs:366` —
+   `4` → `8` when neither `limit` nor explicit `size()` narrows it.
+   Every bounded integer keeps its current size via the earlier
+   branches.
+4. **Update `get_int` / `set_int` call sites** to widen on load and
+   narrow on store, dispatching on the field's storage size tag.
+   Narrow-store range checks use the existing `limit` machinery.
+5. **Update native codegen** — unbounded `integer` emits as `i64`
+   in Rust; bounded widths emit as `i32` / `i16` / `i8` / `u8` /
+   `u16` as today.  `format_int` / `format_long` dispatch on the
+   register type (now always i64 for runtime values), so format
+   strings just work.
+6. **Bump `.loftc` cache version** (`src/state/bytecode_cache.rs`)
+   so old caches auto-rebuild.
+7. **Persisted DB migration** — `loft --migrate-i64 <dbfile>`:
+   1. Read the schema header.
+   2. For each struct field whose stored `limit` is the unbounded
+      i32 default, expand the column from 4 to 8 bytes.  All other
+      columns stay put.
+   3. Write a new file; don't mutate in place.
+   4. Test: round-trip a 0.8.x DB with one unbounded-integer column
+      and one `u8` column; verify only the unbounded column widened.
+8. **Deprecate `long`** as a separate type — keep as alias for
+   unbounded `integer`.  Deprecation warning waits for 1.1+.
+9. **Sweep tests** — only the field-offset assertions on *unbounded*
+   integer fields change; bounded-integer tests stay put
+   (~10 files).
+10. **Enable the C54 tests** commit-by-commit as the layout work
+    settles.
+11. **Document** in LOFT.md (integer / long section), CHANGELOG.md,
+    and BITING_PLAN close-out.  Call out the migration tool.
 
-**Rollout risk:** schemas and `.loftc` caches change.  Users with
-persisted loft databases will need a migration pass — add a
-`loft --migrate-i64 <dbfile>` tool that walks the schema and
-expands each integer column from 4 to 8 bytes.  Design this before
-touching `size(Type::Integer)` so it lands in the same sprint.
+### Migration cheat-sheet for users
 
-**Acceptance:** C54 tests green; full suite rebuilds and passes;
-Brick Buster runs under both `--interpret` and native; one loft
-program that hit the old sentinel collision now returns a
-mathematically-correct i64 value.
+| Old code                          | After C54                             | Action                       |
+|-----------------------------------|---------------------------------------|------------------------------|
+| `x: integer`                      | 8-byte storage, i64 arithmetic        | Add `limit(...)` if compact storage matters |
+| `x: long`                         | alias for unbounded `integer`         | None                         |
+| `x: u8`, `u16`, `i8`, `i16`       | unchanged                             | None                         |
+| `x: i32`                          | alias for `integer size(4)` — opts *into* the classic 32-bit range | None; but now the MIN trap is opt-in, not the default |
+| `x: integer limit(-1000, 1000)`   | unchanged                             | None                         |
+
+For users who genuinely need the i32::MIN sentinel behaviour (e.g.
+interop with a 4-byte wire format), `i32` stays available and keeps
+the old semantics — it's just no longer the default shape.
+
+### What this design is not
+
+- Not arbitrary-precision — arithmetic is fixed-width i64.
+- Not a removal of the null sentinel — `i64::MIN` still represents
+  null; the point is that reaching it by accident becomes
+  astronomically unlikely.
+- Not a schema rewrite for bounded fields — the compact packing
+  users already rely on stays identical to the byte.
+
+### Acceptance
+
+All C54 tests green; `size(S)` unchanged for structs with bounded
+integer fields; `size(T)` bumped from 4 to 8 for structs with
+unbounded integer fields; full suite rebuilds; Brick Buster runs
+under both `--interpret` and native; one loft program that hit the
+old sentinel collision now returns a mathematically-correct value.
 
 ---
 
