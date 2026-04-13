@@ -1014,6 +1014,56 @@ impl State {
         }
     }
 
+    /// C60 Step 3a: build a fresh `vector<reference<T>>` containing the
+    /// hash's records sorted by key (ascending, lexicographic for
+    /// multi-field).  Not wired to a bytecode opcode yet; the next step
+    /// registers a named native function (`n_hash_sorted`) and routes
+    /// the parser's `for e in hash` to call this helper.
+    ///
+    /// The result is a freshly-allocated vector whose elements are
+    /// `DbRef{store_nr, rec, pos:8}` — one per live hash record.  Vector
+    /// layout mirrors `n_parallel_for_int`'s output (src/native.rs:494):
+    ///   * header record (size 1 word) at offset 4 points to the data rec
+    ///   * data record (size ceil((8 + n*12)/8) words) has count at
+    ///     offset 4 and elements packed from offset 8.
+    #[allow(dead_code)]
+    pub fn build_hash_sorted_vec(&mut self, hash_ref: &DbRef, tp: u16) -> DbRef {
+        let keys = self.database.types[tp as usize].keys.clone();
+        let recs = crate::hash::records_sorted(hash_ref, &self.database.allocations, &keys);
+        let n = recs.len();
+        let result_db = self.database.null();
+        // 12-byte DbRef per element, 8-byte header, rounded up to 8-byte words.
+        let vec_words = ((n as u32) * 12 + 8).div_ceil(8);
+        let vec_words = vec_words.max(1);
+        let vec_cr = self.database.claim(&result_db, vec_words);
+        let vec_rec = vec_cr.rec;
+        let header_cr = self.database.claim(&result_db, 1);
+        let header_rec = header_cr.rec;
+        let elem_store = hash_ref.store_nr;
+        {
+            let store = self.database.store_mut(&result_db);
+            store.set_int(vec_rec, 4, n as i32);
+            for (i, &rec_nr) in recs.iter().enumerate() {
+                let base = 8 + (i as u32) * 12;
+                // Write the 12-byte DbRef via addr_mut::<DbRef>() — same
+                // layout as the in-memory struct (u16, u32, u32), so
+                // runtime `*get_var::<DbRef>()` reads it back cleanly.
+                // Pos 8 matches the convention hash::validate uses.
+                *store.addr_mut::<DbRef>(vec_rec, base) = DbRef {
+                    store_nr: elem_store,
+                    rec: rec_nr,
+                    pos: 8,
+                };
+            }
+            store.set_int(header_rec, 4, vec_rec as i32);
+        }
+        DbRef {
+            store_nr: result_db.store_nr,
+            rec: header_rec,
+            pos: 4,
+        }
+    }
+
     pub(super) fn read_key(&mut self, full: bool) -> (u16, Vec<Content>) {
         let db_tp = *self.code::<u16>();
         let keys = self.database.get_keys(db_tp);
