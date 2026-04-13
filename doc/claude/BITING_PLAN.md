@@ -287,6 +287,44 @@ Tests in `tests/issues.rs`: `p54_struct_enum_as_parameter_ok` and
 cases; `p54_b3_single_variant_return` is the single narrowed
 reproducer (`#[ignore]`'d pending fix).
 
+**Diagnosis (third investigation, 2026-04-13)**: comparing the
+`LOFT_LOG=full` trace of a working `Reference` tail-return against
+the broken struct-enum tail-return reveals the gap:
+
+```
+# Reference tail return (works):
+Call(d_nr=524, args_size=12, fn=n_mk)   # caller passes a 12-byte
+                                         # pre-allocated return slot
+  Database(var[44], db_tp=57)            # function body alloc
+  …
+  Return(ret=4464, value=12, discard=28) # OpReturn copies into slot
+
+# Struct-enum tail return (broken):
+Call(d_nr=525, args_size=0, fn=n_make_jv)  # caller pre-allocates NOTHING
+  Database(var[36], db_tp=58)
+  …
+  VarRef(var[36]) -> ref(2,1,8)[48]        # n's DbRef pushed
+  # NO OpReturn — execution falls through into next function
+```
+
+Two layers need coordinated changes:
+
+1. **Caller-side**: when the call's return type is `Type::Enum(_,
+   true, _)`, pre-allocate a 12-byte hidden return slot and pass it
+   as args_size=12 (mirroring the Reference call site).
+2. **Callee-side hoist** (`src/scopes.rs:307-318`): extend the
+   hoist-set match to include `Enum(_, true, _)` so the function's
+   tail-expression slot is registered at the outer scope.
+
+A single-line scopes.rs hoist-extension was tried in isolation —
+it changes the symptom (different crash) but doesn't fix the
+underlying caller/callee mismatch.  Both layers must land
+together.
+
+Workaround today: `return n;` instead of `n` at function tail —
+the explicit Return path uses different codegen that already pre-
+allocates the return slot correctly.
+
 **B5 — Recursive struct-enum infinite codegen loop.**  Declaring
 `JsonValue` with `JArray { items: vector<JsonValue> }` trips loft's
 `Recursion depth limit exceeded (500)` guard during compilation.
