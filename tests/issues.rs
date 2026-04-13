@@ -4722,3 +4722,32 @@ fn run_enum() -> integer {
     .expr("run_enum()")
     .result(Value::Int(4)); // plain-enum integer values are 1-indexed
 }
+
+// ── B7 family — ANY method call on a JsonValue local crashes ──────────
+//
+// Investigation while attempting to ship Q2 (kind/keys/fields/has_field)
+// uncovered a wider B7 blast radius than previously documented:
+// a method call on a JsonValue that *just returns an integer*
+// (no text, no struct-enum) crashes with double-free at exit
+// even when its body only reads the discriminant byte and never
+// touches the store contents.
+//
+// This test documents the symptom against the existing `len()`
+// stub (shipped as a stub returning i32::MIN — pure integer
+// return, no text, no allocation).  It crashes today; goes green
+// when B7's lifecycle fix lands.
+#[test]
+#[ignore = "B7 family — `(JsonValue) -> integer` method call corrupts store lifecycle"]
+fn b7_method_on_jsonvalue_returning_integer_crashes() {
+    code!(
+        "fn run_b7m() -> integer {
+    v_b7m = json_parse(\"null\");
+    len(v_b7m)
+}"
+    )
+    .expr("run_b7m()")
+    // Stub returns i32::MIN today; the assertion isn't the point —
+    // surviving the call without a SIGSEGV is.  Once B7 lands,
+    // this becomes a real assertion.
+    .result(Value::Int(i32::MIN));
+}

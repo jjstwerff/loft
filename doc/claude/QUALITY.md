@@ -756,10 +756,14 @@ arena indirection (P54 step 0).  Test: `p54_b5_recursive_struct_enum`
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
-**B7 — Native-returned temporary lifecycle.**  Scope analysis
-(`src/scopes.rs`) doesn't emit `OpFreeRef` for native-call return
-values when the owning variable is a locally-declared struct-enum
-or a text built by interpolating a character.  Symptoms:
+**B7 — Native-returned temporary lifecycle (broader than initially scoped).**
+
+Scope analysis (`src/scopes.rs`) doesn't emit `OpFreeRef` correctly
+for the JsonValue store returned by `json_parse`.  The store leaks
+on a chain of method calls AND any subsequent method-call site
+trips a double-free at exit even when the method does no
+allocation of its own.  Confirmed symptoms:
+
 - `n_json_parse` returning a string variant + `as_text()` →
   caller's text-return path frees the JsonValue store before the
   text copy completes (`free(): invalid next size` at exit).
@@ -767,14 +771,34 @@ or a text built by interpolating a character.  Symptoms:
   intermediate stores.
 - `fn f() -> text { c = txt[0]; "{c}" }` SIGSEGVs (discovered
   while writing INC#9 regression tests) — same family:
-  native-returned temporary (the interpolated text built via
-  `n_format_text` on a character) isn't tracked for free on the
-  outer function's return path.
+  native-returned text temporary built via `n_format_text` on a
+  character isn't tracked for free on the outer function's
+  return path.
+- **(new, found 2026-04-13)** ANY method call on a JsonValue
+  local crashes — even a method that just reads the discriminant
+  byte and returns an integer (`len(v)`).  The crash is exit-time
+  double-free, but the test harness sees it as SIGSEGV before
+  reporting the function's return value.  Discovered while
+  attempting to ship Q2's `kind(v) -> integer` peek; reverted
+  the ship and parked the regression guard at
+  `b7_method_on_jsonvalue_returning_integer_crashes` (`#[ignore]`).
+- A second `json_parse` call in the same function silently
+  corrupts memory, even when the first result is assigned to a
+  different local — the lifecycle bug compounds across calls.
 
-**One fix unblocks 5 of the 13 ignored P54 tests** and closes
-the inc9-character-interpolation-return crash documented in
-LOFT.md § String literals as a caveat.  Highest-leverage
-compiler bite remaining.
+**Blast radius**: the entire `(JsonValue) -> T` method surface is
+gated on this fix, not just text returns.  This means **Q2**
+(`kind`, `keys`, `fields`, `has_field`), **Q3** (`to_json`,
+`to_json_pretty`), the planned step-4 implementations of
+`field`/`item`/`len`, and parts of step 5 (`Type::parse(JsonValue)`)
+all sit downstream.
+
+**One fix unblocks 5 of the 13 ignored P54 tests** plus the new
+`b7_method_*` guard, closes the INC#9 character-interpolation
+crash, and clears the runway for Q2/Q3/Q4 + P54 step 4-5 to
+land cleanly.  Highest-leverage compiler bite remaining — and
+the bottleneck for nearly every JSON deliverable on the
+roadmap.
 
 ---
 
