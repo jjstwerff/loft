@@ -665,7 +665,20 @@ impl State {
             }
             3 => {
                 // ordered points to the position inside the vector of references
-                if reverse {
+                if from.is_empty() && till.is_empty() {
+                    // C60 piece 3 edit E: unbounded iteration (`for e
+                    // in h { … }` with no range).  ordered_find with an
+                    // empty key returns (0, true) which collapses
+                    // start=0 and finish=0, so the step protocol never
+                    // fires even once.  Set start to the u32::MAX
+                    // sentinel so vector_next's first call resets pos
+                    // to 8 (first element); finish is unused for on=3
+                    // (termination is via vector_next returning MAX
+                    // when past the last element).  This mirrors the
+                    // explicit is_empty() guard Sorted (on=2) has.
+                    start = u32::MAX;
+                    finish = 0;
+                } else if reverse {
                     start = vector::ordered_find(&data, true, all, &keys, &from).0 + u32::from(!ex);
                     finish = vector::ordered_find(&data, ex, all, &keys, &till).0 + 1;
                 } else {
