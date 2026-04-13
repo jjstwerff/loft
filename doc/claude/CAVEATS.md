@@ -183,64 +183,102 @@ ascending-only at the schema level per
 `src/parser/definitions.rs:1198`.  Tests:
 `hash_records_sorted_single_field`, `hash_records_sorted_multi_field`.
 
-**Step 3 — Parser accepts `for e in hash`.**  Replace the
-"Cannot iterate a hash directly" error at `src/parser/fields.rs:599`.
+**Step 3 — Parser accepts `for e in hash` (locked path 2c,
+2026-04-13).**  Replace the "Cannot iterate a hash directly" error at
+`src/parser/fields.rs:599` with a route that emits `on=4`, a new
+hash-iteration mode handled entirely by the runtime.
 
-**Budget constraint confirmed 2026-04-13:** `src/fill.rs::OPERATORS`
-is at 254/254 slots, so a dedicated opcode (original path 3b) is
-ruled out without first retiring an existing opcode.  Path 3a —
-a named native function — is the right vehicle:
+Three paths were evaluated after the session-2 parser desugar
+attempt (commit `f5d4272`, reverted) revealed the layout pitfall.
+Path 2c is chosen because it preserves the design mandate —
+**hashes behave like any other data structure** — most directly:
+the parser change is a two-line update to `fill_iter`, and
+everything else (loop attributes, filter clause, field access) is
+handled by existing Sorted/Ordered iteration code reused unchanged.
 
-- Register `n_hash_sorted` in `src/native.rs` beside
-  `n_parallel_for_int` (line 60 pattern).  The Rust impl:
-  1. Pop the hash's `DbRef` and type-id from the stack.
-  2. Call `hash::records_sorted` with `stores.keys(tp)`.
-  3. Allocate a fresh store via `stores.null()`, claim vector records
-     (`stores.claim`), fill with each rec-nr as a `DbRef{store_nr,
-     rec, pos:8}`, and write the count at offset 4 of the data
-     record.  Same shape as `n_parallel_for_int`'s vector-building
-     path at `src/native.rs:494-521`.
-  4. Push the resulting `DbRef` back on the stack.
-- Declare in `default/01_code.loft`:
-  `pub fn hash_sorted(h: reference) -> reference;`
-- Parser rewrite at `src/parser/fields.rs:599`: treat `for e in h`
-  (where `h`'s type is `Type::Hash(content, _, _)`) as if the source
-  had been `for e in hash_sorted(h)`, annotating the call result type
-  as `Type::Vector(content, …)` at the call site so subsequent
-  vector-iteration codegen proceeds unchanged.  The type annotation
-  is a purely parser-local bookkeeping step — the runtime treats the
-  returned reference as a vector regardless.
+**Rejected paths:**
 
-*Test:* `tests/issues.rs::c60_hash_iter_single_field_asc` (already
-`#[ignore]`, acceptance criterion for this step).
+- **2a (first-class `Type::Ordered`).** Correct but crosscuts type
+  inference, parse_type_full, serialisation, and the `get_type`
+  resolver.  Weeks of work; `Parts::Ordered` today is purely a
+  database-level degradation of `sorted<T[k]>` (`src/database/types.rs:261`)
+  with no user-facing type.  Overkill for "let me iterate a hash".
+- **2b (parser IR desugar).** Emits explicit low-level loop
+  (`Insert([Set(scratch, hash_sorted(h)), Loop(...)]))`) that reads
+  rec-nrs from a scratch vector and synthesises references at
+  pos=8.  Requires a new IR primitive — "construct `Reference<T>`
+  from `(store, rec, pos)`" — that loft doesn't have.  Adding it
+  opens questions about lifetime/dep tracking for synthetic refs.
+  Verbose and leaks the desugaring into every hash-iteration user's
+  IR dumps.
 
-**Step 3b parser desugar attempt (2026-04-13, reverted):** wrote the
-desugar at the right site (`parse_for` just before the vector-temp
-branch at `src/parser/collections.rs:929`), compiled, and ran — the
-iteration loop body fired the correct number of times but the loop
-variable's field reads returned garbage (`name=""` `count=8` for a
-single-entry hash holding `{name:"apple",count:5}`).
+**Chosen path 2c — runtime `on=4` mode.**
 
-Diagnostic: `Stores::build_hash_sorted_vec` writes each DbRef with
-`pos=8` (matching the `hash::find` / `hash::validate` convention
-for record bodies inside a hash), but vector-iteration field access
-treats the element as a `reference<T>` pointing at `pos=0` with the
-struct field offsets added on top.  The hash-record layout has 8
-bytes of internal header (hash_val + next-ptr) before the struct
-body, so field accesses land 8 bytes early.
+The parser treats `Type::Hash` identically to `Type::Sorted` in
+`fill_iter`: emit iterator setup with `on=4, arg=<hash type id>`.
+At runtime, the existing `OpIterate` / `OpStep` dispatch on `on`;
+adding `on=4` arms is a non-invasive extension (no new opcode slot
+— the dispatch is a `match on & 63 { 1=>…, 2=>…, 3=>…, _=>panic }`
+at `src/state/io.rs:575` and `:720`).
 
-**Next-session fix path (not started):** either
-(a) make `build_hash_sorted_vec` write DbRefs with `pos=8` AND
-    the vector codegen treat `reference<T>` elements with the
-    correct pos offset — requires threading pos-awareness through
-    the field-access machinery, or
-(b) copy each hash-record's body bytes into a contiguous vector
-    of struct records (not references), avoiding the pos=8 issue
-    entirely but costing an extra copy per iteration.
+**`iterate()` on=4 arm (src/state/io.rs:551):**
 
-Path (b) is simpler and matches how users already think of "iterate
-a hash" — as iterating copies, not references.  Recommend (b) for
-the next attempt.
+1. Read the hash `data: DbRef` from the stack (same as on=1/2/3).
+2. Call `stores.build_hash_sorted_vec(&data, arg as u16)` — the
+   existing helper at `src/database/allocation.rs` (commit
+   `deabb62`) builds a fresh `u32`-stride vector of rec-nrs sorted
+   by the hash's key fields.  **Rewrite** that helper to write
+   `u32` rec-nrs at 4-byte stride (not 12-byte DbRefs) — this is
+   the one runtime layout fix beyond the parser tweak.
+3. Stash the scratch vector's DbRef in a companion loop-local
+   allocated by `parse_for_iter_setup` (src/parser/collections.rs:806)
+   — named `{id}#hash_scratch`, 12 bytes, lifetime = the loop.
+4. Push `start=0` and `finish=len(scratch)` — same two-u32 protocol
+   as on=2/3.
+
+**`step()` on=4 arm (src/state/io.rs:708):**
+
+1. Read the scratch DbRef from the companion slot allocated in
+   iterate step 3.
+2. Advance `cur` to the next position (trivial: `cur+1` until
+   `finish`).
+3. Read the u32 rec-nr at `scratch.pos + 8 + cur*4`.
+4. Return `DbRef{store_nr = original hash's store, rec = <u32>,
+   pos = 8}`.  **Matches Ordered's yield shape identically** —
+   field accesses on the loop variable go through the standard
+   `reference<T>` field-offset path with pos=8.
+
+**Parser-side:**
+
+- `src/parser/fields.rs:599` (the current "Cannot iterate" error) —
+  replace with `Parts::Hash(_, _) => { on = 4; arg = known; }`.
+- `src/parser/collections.rs:806` (`parse_for_iter_setup`) — when
+  the iterated type is `Type::Hash`, allocate the
+  `{id}#hash_scratch` companion variable alongside `{id}#index`.
+  Pass its slot offset into `OpIterate`'s operand stream as a new
+  `u16` argument.  The existing on=1/2/3 arms ignore this extra
+  operand; on=4 consumes it.
+
+**Why this matches the "uniform with other collections" mandate:**
+
+| Aspect | Sorted/Index | Hash (on=4) |
+|---|---|---|
+| For-loop syntax | `for e in s` | `for e in h` |
+| Element type | `reference<T>` | `reference<T>` |
+| Yielded `pos` | `8` (+ stride for Sorted) | `8` |
+| Loop attributes | `#index`/`#count`/`#first` | same, same dispatch |
+| Filter clause | `for e in s if …` | same |
+| `#remove` | allowed / diagnosed per-collection | rejected with hint (Step 9) |
+| Parser work | `fill_iter` sets `on=1/2/3` | `fill_iter` sets `on=4` |
+
+There is no observable difference at the user level — hash is just
+another iterable collection.
+
+**Scope honestly: M.**  One helper rewrite (`build_hash_sorted_vec`
+to emit 4-byte rec-nrs), two runtime arms (iterate + step at
+on=4), two parser edits (`fill_iter` and `parse_for_iter_setup`
+companion variable).  Every piece is bounded; each goes into its
+own commit following DEVELOPMENT.md's test-first sequence.
 
 **Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
 Nothing new to implement; just land the combined behaviour, update
