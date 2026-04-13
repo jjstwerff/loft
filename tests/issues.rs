@@ -3213,3 +3213,195 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// ── P54: JsonValue enum — landing tests ────────────────────────────────────
+// Design in doc/claude/BITING_PLAN.md § P54.  These tests pin the public
+// surface of the new JSON subsystem:
+//
+//   enum JsonValue { JObject, JArray, JString, JNumber, JBool, JNull }
+//   fn json_parse(text) -> JsonValue
+//   fn to_json(self: JsonValue) -> text
+//   fn field / item / as_text / as_number / as_long / as_bool / len
+//   MyStruct.parse(v: JsonValue) — replaces .parse(text)
+//
+// `#[ignore]`'d while the implementation lands incrementally across
+// `default/06_json.loft`, `src/json.rs`, and the parser's .parse() gate.
+// Unignore each case as its layer comes online.
+
+#[test]
+#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
+fn p54_parse_primitive_string() {
+    code!(
+        "fn run() -> text {
+    v = json_parse(\"\\\"hello\\\"\");
+    match v {
+        JString { value } => value,
+        _ => \"<wrong variant>\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("hello"));
+}
+
+#[test]
+#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
+fn p54_parse_primitive_number() {
+    code!(
+        "fn run() -> float {
+    v = json_parse(\"42.5\");
+    match v {
+        JNumber { value } => value,
+        _ => 0.0
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Float(42.5));
+}
+
+#[test]
+#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
+fn p54_parse_primitive_bool_true() {
+    code!(
+        "fn run() -> boolean {
+    v = json_parse(\"true\");
+    match v {
+        JBool { value } => value,
+        _ => false
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "P54 step 3: json_parse for primitives not yet implemented"]
+fn p54_parse_primitive_null() {
+    code!(
+        "fn run() -> boolean {
+    v = json_parse(\"null\");
+    match v {
+        JNull => true,
+        _ => false
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "P54 step 3: malformed JSON returns JNull, not a panic"]
+fn p54_malformed_returns_jnull() {
+    code!(
+        "fn run() -> boolean {
+    v = json_parse(\"{not valid}\");
+    match v {
+        JNull => true,
+        _ => false
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "P54 step 5: extractors not yet implemented"]
+fn p54_extractor_as_text() {
+    code!(
+        "fn run() -> text {
+    v = json_parse(\"\\\"abc\\\"\");
+    v.as_text()
+}"
+    )
+    .expr("run()")
+    .result(Value::str("abc"));
+}
+
+#[test]
+#[ignore = "P54 step 5: extractors return null on kind mismatch"]
+fn p54_extractor_as_text_wrong_kind_returns_null() {
+    code!(
+        "fn run() -> text {
+    v = json_parse(\"42\");
+    t = v.as_text();
+    if t == null { \"is-null\" } else { \"not-null\" }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("is-null"));
+}
+
+#[test]
+#[ignore = "P54 step 4: parse_object + field() chained access"]
+fn p54_parse_object_field_access() {
+    code!(
+        "fn run() -> text {
+    v = json_parse(\"{\\\"name\\\":\\\"Alice\\\",\\\"age\\\":30}\");
+    v.field(\"name\").as_text()
+}"
+    )
+    .expr("run()")
+    .result(Value::str("Alice"));
+}
+
+#[test]
+#[ignore = "P54 step 4: parse_array + item() indexed access"]
+fn p54_parse_array_item_access() {
+    code!(
+        "fn run() -> long {
+    v = json_parse(\"[10, 20, 30]\");
+    v.item(1).as_long()
+}"
+    )
+    .expr("run()")
+    .result(Value::Long(20));
+}
+
+#[test]
+#[ignore = "P54 step 4: missing intermediate in chain returns JNull, not a trap"]
+fn p54_missing_chain_returns_jnull() {
+    code!(
+        "fn run() -> boolean {
+    v = json_parse(\"{\\\"a\\\": {\\\"b\\\": 1}}\");
+    // Chain through a missing intermediate; must not panic.
+    result = v.field(\"missing\").item(5).field(\"b\");
+    match result {
+        JNull => true,
+        _ => false
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "P54 step 6-7: .parse(JsonValue) accepts typed tree"]
+fn p54_struct_parse_accepts_jsonvalue() {
+    code!(
+        "struct User { name: text, age: integer }
+fn run() -> text {
+    v = json_parse(\"{\\\"name\\\":\\\"Bob\\\",\\\"age\\\":25}\");
+    u = User.parse(v);
+    u.name
+}"
+    )
+    .expr("run()")
+    .result(Value::str("Bob"));
+}
+
+#[test]
+#[ignore = "P54 step 6: .parse(text) rejected — must use json_parse first"]
+fn p54_struct_parse_rejects_plain_text() {
+    code!(
+        "struct User { name: text }
+fn test() {
+    u = User.parse(\"{\\\"name\\\":\\\"Bob\\\"}\");
+}"
+    )
+    .error("expects a JsonValue");
+}
