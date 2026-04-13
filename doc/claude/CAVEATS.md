@@ -185,23 +185,34 @@ ascending-only at the schema level per
 
 **Step 3 — Parser accepts `for e in hash`.**  Replace the
 "Cannot iterate a hash directly" error at `src/parser/fields.rs:599`.
-Two implementation paths, pick one:
 
-- **3a (stdlib wrapper).** Expose `hash::records_sorted` as a loft
-  native function `hash_sorted<T>(h: hash<T[…]>) -> vector<reference<T>>`
-  in `default/01_code.loft`.  Parser desugars `for e in h { body }`
-  to `for e in hash_sorted(h) { body }` at parse time.  Clean,
-  reuses the vector iteration path entirely.  Needs generic-type
-  inference + native registration in `src/fill.rs`.
+**Budget constraint confirmed 2026-04-13:** `src/fill.rs::OPERATORS`
+is at 254/254 slots, so a dedicated opcode (original path 3b) is
+ruled out without first retiring an existing opcode.  Path 3a —
+a named native function — is the right vehicle:
 
-- **3b (opcode).** Add an `OpHashIterSetup(hash_ref) -> DbRef(vec)`
-  opcode that calls `hash::records_sorted` and returns a fresh vector
-  DbRef.  Parser emits this in a pre-loop block; the rest is vector
-  iteration.  Fewer moving parts than 3a but spends an opcode slot.
+- Register `n_hash_sorted` in `src/native.rs` beside
+  `n_parallel_for_int` (line 60 pattern).  The Rust impl:
+  1. Pop the hash's `DbRef` and type-id from the stack.
+  2. Call `hash::records_sorted` with `stores.keys(tp)`.
+  3. Allocate a fresh store via `stores.null()`, claim vector records
+     (`stores.claim`), fill with each rec-nr as a `DbRef{store_nr,
+     rec, pos:8}`, and write the count at offset 4 of the data
+     record.  Same shape as `n_parallel_for_int`'s vector-building
+     path at `src/native.rs:494-521`.
+  4. Push the resulting `DbRef` back on the stack.
+- Declare in `default/01_code.loft`:
+  `pub fn hash_sorted(h: reference) -> reference;`
+- Parser rewrite at `src/parser/fields.rs:599`: treat `for e in h`
+  (where `h`'s type is `Type::Hash(content, _, _)`) as if the source
+  had been `for e in hash_sorted(h)`, annotating the call result type
+  as `Type::Vector(content, …)` at the call site so subsequent
+  vector-iteration codegen proceeds unchanged.  The type annotation
+  is a purely parser-local bookkeeping step — the runtime treats the
+  returned reference as a vector regardless.
 
-*Test:* integration — `for e in h { println("{e.name}"); }`
-over a 3-element hash, verify output matches ascending key order
-in both interpreter and `--native`.
+*Test:* `tests/issues.rs::c60_hash_iter_single_field_asc` (already
+`#[ignore]`, acceptance criterion for this step).
 
 **Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
 Nothing new to implement; just land the combined behaviour, update
