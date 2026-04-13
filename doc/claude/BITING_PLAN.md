@@ -627,11 +627,24 @@ Today's stdlib declares two parallel opcode families:
 
 After C54.A lands, every `integer` stack slot IS i64.  The two
 families collapse into one at the stack-slot level, freeing ~26
-opcode slots out of the current **254/254 full** budget
-(`doc/claude/ROADMAP.md` § "Deferred indefinitely" calls this out
-as the reason O1 superinstruction peephole rewriting is parked).
-Freeing a quarter of the saturated table is a meaningful reopening
-of the design space.
+opcode slots out of the current **254/256 used** budget.  The
+dispatch table lives in `src/fill.rs:10`:
+
+```rust
+pub const OPERATORS: &[fn(&mut State); 254] = &[ ... ];
+```
+
+The `254` literal is the **current count of defined operators**
+(the file is generated from the `#rust "..."` annotations in
+`default/*.loft`; `src/create.rs` emits `{count}` as the array
+length).  It is **not** a language limit — the opcode byte is a
+`u8`, so the true budget is **256** (0x00..=0xFF).  Only 2 slots
+sit unused today (0xFE, 0xFF).
+
+`doc/claude/ROADMAP.md` § "Deferred indefinitely" and
+`doc/claude/PLANNING.md` § O1 cite this 254/256 saturation as the
+reason superinstruction peephole rewriting is parked.  Freeing
+~26 duplicate width variants reopens ~10 % of the address space.
 
 **Plan**:
 1. Keep the `Op*Int` family as the canonical name (shorter,
@@ -704,7 +717,10 @@ Sub-tickets land in a single sprint branch `c54-integer-i64`:
    Requires C54.B to have removed every direct `long` / `l`
    reference from the stdlib / tests first, otherwise deleting
    the `Op*Long` family cascades build errors.  Reclaims ~26
-   slots of the 254/254 opcode budget.
+   slots of the 254/256 opcode budget (the `254` in
+   `src/fill.rs:10`'s const array length is the current count of
+   defined operators, not a language limit; the full `u8` opcode
+   range has 256 slots).
 
 Each sub-ticket has its own commit-series per DEVELOPMENT.md
 (tests first with `#[ignore]`, code, enable).
@@ -754,8 +770,10 @@ stdlib / Brick Buster use `u32` with no `as integer` casts.
 
 **C54.E**: `Op*Long` family removed from `default/01_code.loft`
 and `src/native.rs`; grep-based assertion counts 0 hits.
-~26 opcode slots reclaimed out of the prior 254/254 saturation —
-unblocks O1 superinstruction work (see ROADMAP.md § "Deferred
+~26 opcode slots reclaimed out of the prior 254/256 saturation
+(the `254` is the count of defined operators baked into
+`src/fill.rs:10`'s array; the true byte-range budget is 256).
+Unblocks O1 superinstruction work (see ROADMAP.md § "Deferred
 indefinitely") and gives future C-ticket work a fresh budget to
 spend.
 
