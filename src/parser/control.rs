@@ -49,6 +49,23 @@ pub(crate) fn definitely_returns(val: &Value) -> bool {
     }
 }
 
+/// Match-arm type unification — strip `Type::RefVar(…)` wrappers before
+/// delegating to `Type::is_same`.  Struct-enum pattern bindings yield a
+/// `&T` borrow (e.g. `JString { value } => value` has type `&text`), while
+/// sibling arms commonly return an owned `T` (`_ => ""`).  Requiring the
+/// owned/borrow distinction to match exactly makes the straightforward
+/// null-on-mismatch extractor pattern a compile error for no semantic
+/// gain — the caller reads the value regardless of ownership.  (P54 B6.)
+fn match_arm_types_unify(a: &Type, b: &Type) -> bool {
+    let strip = |t: &Type| -> Type {
+        match t {
+            Type::RefVar(inner) => (**inner).clone(),
+            _ => t.clone(),
+        }
+    };
+    strip(a).is_same(&strip(b))
+}
+
 impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
@@ -781,7 +798,9 @@ impl Parser {
             // Type unification across arms.
             if result_type == Type::Void {
                 result_type = arm_type.clone();
-            } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type)
+            } else if !self.first_pass
+                && arm_type != Type::Void
+                && !match_arm_types_unify(&result_type, &arm_type)
             {
                 diagnostic!(
                     self.lexer,
@@ -919,7 +938,10 @@ impl Parser {
         };
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
-        } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type) {
+        } else if !self.first_pass
+            && arm_type != Type::Void
+            && !match_arm_types_unify(result_type, &arm_type)
+        {
             diagnostic!(
                 self.lexer,
                 Level::Error,
