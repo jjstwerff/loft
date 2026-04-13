@@ -295,6 +295,29 @@ impl Parser {
             }
             nr += 1;
         }
+        // B2 fix: in a mixed-kind enum (some unit variants, some struct-
+        // field variants), the unit variants processed *before* the
+        // first struct variant got typed as Enum(d_nr, false, _) because
+        // the parent enum had not yet been upgraded to struct-enum.
+        // Sync both each variant's `returned` type and the parent's
+        // per-variant attribute types to the final parent.returned so
+        // pattern match / construction / return paths all see the same
+        // struct-enum discriminator width.
+        if self.first_pass {
+            let parent_returned = self.data.def(d_nr).returned.clone();
+            if matches!(parent_returned, Type::Enum(_, true, _)) {
+                let num_variants = self.data.def(d_nr).attributes.len();
+                for a_nr in 0..num_variants {
+                    let v_name = self.data.def(d_nr).attributes[a_nr].name.clone();
+                    let v_nr = self.data.def_nr(&v_name);
+                    if v_nr != u32::MAX {
+                        self.data.definitions[v_nr as usize].returned = parent_returned.clone();
+                    }
+                    self.data.definitions[d_nr as usize].attributes[a_nr].typedef =
+                        parent_returned.clone();
+                }
+            }
+        }
         true
     }
 

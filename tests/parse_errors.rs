@@ -1090,20 +1090,24 @@ fn l1_missing_semicolon_in_body_single_diagnostic() {
 // `#[ignore]`'d with the expected future state so the test goes green
 // automatically when the fix lands.
 
-/// B2 (partial fix): returning a bare unit variant from a function with
-/// declared struct-enum return type errors cleanly instead of panicking
-/// in `src/database/types.rs:620` with 'index out of bounds'.
+/// B2 was originally: `fn mk() -> Shade { Shade.N }` for a mixed-kind
+/// enum (unit + struct-field variants) errored with 'Shade should be
+/// Shade on return from block' because the unit variant's declared
+/// `Type::Enum(d, false, _)` didn't unify with the struct-enum-upgraded
+/// parent's `Type::Enum(d, true, _)`.
 ///
-/// This test pins the *diagnostic* — the full feature (unit variant
-/// round-trip) is still broken (B2 full fix wants the can_convert path).
+/// Full fix now lands (`parse_enum_values` post-pass syncs every
+/// variant's type to the final parent type), so the compile passes
+/// cleanly with no diagnostic.  Runtime use of the returned
+/// struct-enum is still blocked by B3/B4 — tracked separately in
+/// `tests/issues.rs::p54_b3_single_variant_return`.
 #[test]
-fn p54_b2_unit_variant_return_diagnostic() {
+fn p54_b2_unit_variant_return_compiles() {
+    // No .error() or .fatal() — the test passes when compilation
+    // produces no diagnostics.
     code!(
         "pub enum Shade { N, V { v: integer } }
 fn mk() -> Shade { Shade.N }
-fn test() { _ = mk(); }"
-    )
-    .error(
-        "Shade should be Shade on return from block at p54_b2_unit_variant_return_diagnostic:3:1",
+fn test() {}"
     );
 }
