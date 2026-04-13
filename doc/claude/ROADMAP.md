@@ -174,7 +174,7 @@ Step plans for both entries: [BITING_PLAN.md](BITING_PLAN.md).
 | ID   | Title                                                                     | E  | Source                      |
 |------|---------------------------------------------------------------------------|----|-----------------------------|
 | C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, BITING_PLAN.md  |
-| P54  | Typed `JsonBody` newtype + `.is_object` / `.is_array` / `.is_null`; full `JsonValue` enum deferred to 1.1+ | M  | PROBLEMS.md #54, BITING_PLAN.md |
+| P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, BITING_PLAN.md |
 
 **Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
 - ~~C7/P22~~ — `spacial<T>` diagnostic references 1.1+ timeline

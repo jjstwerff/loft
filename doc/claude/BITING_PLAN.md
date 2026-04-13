@@ -130,65 +130,204 @@ opcode executed before the trap.  This expands scope from S to M.
 
 ---
 
-## P54 — `JsonBody` newtype
+## P54 — `JsonValue` enum
 
 **Bite:** `json_items(body)` returns `vector<text>`.  Caller writes
 `MyStruct.parse(body)` and gets a silently-zeroed struct on
 malformed input — no type check, no runtime diagnostic.  The typeless
 API contradicts loft's "static types catch mistakes" promise.
 
-**Design:** introduce a `JsonBody` newtype wrapping `text`.  It's the
-*only* type `MyStruct.parse` accepts.  Callers who pass arbitrary
-`text` get a compile error pointing at `json_items`.  Add three shape
-predicates (`.is_object()`, `.is_array()`, `.is_null()`) so callers
-can branch before invoking a parser whose schema doesn't fit.  Full
-`JsonValue` enum (Object / Array / String / Number / Boolean / Null)
-is deferred to 1.1+ — 80% of the type-safety gain at 20% of the
-design surface.
+**Design decision:** replace the text-based JSON surface with a
+first-class `JsonValue` enum.  The earlier `JsonBody` newtype
+half-measure is **withdrawn** — it kept the text surface intact,
+pushed shape checks into runtime string-peek helpers, and still ran
+a separate parser over every element.  Parsing once into a typed
+tree and then indexing / matching that tree is simpler to reason
+about, faster, and naturally covers the dynamic-shape use case that
+a newtype-over-text cannot.
 
-**Steps (sprint branch `p54-json-body`):**
+### The enum
 
-1. **Test first, all `#[ignore]`'d.**
-   - `tests/issues.rs::p54_json_body_returned_from_json_items` —
-     `json_items` return type is `vector<JsonBody>`.
-   - `p54_parse_rejects_plain_text` — parse error when passing
-     bare `text` to `MyStruct.parse`.
-   - `p54_parse_accepts_json_body` — `JsonBody` → `MyStruct.parse`
-     works end-to-end.
-   - `p54_shape_predicates` — `.is_object()`, `.is_array()`,
-     `.is_null()` return the expected booleans for five crafted
-     inputs (object, array, null, number, malformed).
-2. **Add the type.** `default/03_text.loft` (or a new
-   `default/04_json.loft`) declares:
-   ```loft
-   pub struct JsonBody { body: text }
-   pub fn is_object(self: JsonBody) -> boolean;   #rust"..."
-   pub fn is_array(self: JsonBody) -> boolean;    #rust"..."
-   pub fn is_null(self: JsonBody) -> boolean;     #rust"..."
+```loft
+pub enum JsonValue {
+    JObject { fields: hash<JsonField[name]> },
+    JArray  { items:  vector<JsonValue> },
+    JString { value:  text },
+    JNumber { value:  float not null },   // IEEE-754 per RFC 8259
+    JBool   { value:  boolean },
+    JNull,
+}
+
+pub struct JsonField { name: text, value: JsonValue }
+```
+
+### Surface
+
+```loft
+// Parse JSON text into the typed tree.  Malformed input → JNull
+// plus a parse-error trail accessible via `json_errors()`.
+pub fn json_parse(raw: text) -> JsonValue;
+
+// Round-trip a JsonValue back to canonical JSON text.
+pub fn to_json(self: JsonValue) -> text;
+
+// Indexers — JObject / JArray; any other variant returns JNull
+// rather than panicking, so chained access like
+// `root.field("users").item(0).field("name").as_text()` never
+// traps on a missing intermediate.
+pub fn field(self: JsonValue, name: text)   -> JsonValue;
+pub fn item(self: JsonValue, index: integer) -> JsonValue;
+
+// Typed extractors — null on kind mismatch.
+pub fn as_text(self:   JsonValue) -> text;
+pub fn as_number(self: JsonValue) -> float;
+pub fn as_long(self:   JsonValue) -> long;
+pub fn as_bool(self:   JsonValue) -> boolean;
+pub fn len(self: JsonValue)       -> integer;   // array / object fields; null otherwise
+
+// Struct ingestion: `MyStruct.parse(v)` typechecks the JsonValue
+// shape against the target struct's schema and fills fields it
+// can map, returning null if the root isn't a JObject.
+pub fn parse(self: Type, v: JsonValue) -> Type;
+```
+
+Pattern-matching falls out of the existing struct-enum machinery:
+
+```loft
+match root.field("user") {
+    JObject { fields } => for f in fields { ... },
+    JNull              => println("no user"),
+    _                  => println("user field is not an object"),
+}
+```
+
+### What gets withdrawn
+
+The PLANNING.md family `json_items` / `json_nested` / `json_long` /
+`json_float` / `json_bool` is withdrawn in 0.9.0.  Every JSON call
+chain routes through `json_parse` → `JsonValue`.  `MyStruct.parse`
+accepts only `JsonValue`; passing bare `text` is a compile error
+with a fix-it hint pointing at `json_parse`.
+
+Users who had a `for body in json_items(raw)` loop migrate to:
+
+```loft
+match json_parse(raw) {
+    JArray { items } => for v in items { handle(v) },
+    _                => println("expected top-level array"),
+}
+```
+
+### Implementation surface
+
+- **Enum + struct in `default/04_json.loft`** (new file, reserves the
+  JSON chapter of the stdlib).  Struct-enum variants work with
+  existing match dispatch (see STDLIB.md § enums).
+- **`json_parse`** — a state-machine parser in `src/json.rs` (new)
+  that walks the UTF-8 text once, allocating `JsonValue` records in
+  a caller-provided store.  Records the last parse error position
+  and message in a per-store scratch for `json_errors()`.
+- **`to_json`** — recursive walk that writes into a text work-buffer
+  using the existing `format_text` infrastructure.
+- **Hash-keyed objects** — `JObject { fields: hash<JsonField[name]> }`
+  leverages C60's hash iteration, so
+  `for f in obj.fields { ... }` just works in key order.
+- **`.parse(JsonValue)` on a struct** — generated per-type at
+  parse time, walking the JObject's fields hash and fetching each
+  struct field by name.  Type mismatch → the field stays at its
+  declared default; missing → default; an explicit `.parse` return
+  of null signals "root wasn't a JObject".
+
+### Steps (sprint branch `p54-json-value`)
+
+1. **Tests first, all `#[ignore]`'d.**
+   - `p54_parse_round_trip_primitives` — `to_json(json_parse(x))` is
+     canonical for each primitive variant.
+   - `p54_parse_object_and_array` — nested object / array walk via
+     `field()` / `item()` returns the expected typed values.
+   - `p54_malformed_returns_jnull` — a parse failure returns `JNull`
+     (not garbage); `json_errors()` describes the position.
+   - `p54_missing_chain_returns_jnull` — `root.field("a").item(5).field("b")`
+     is `JNull` if any intermediate is missing, no trap.
+   - `p54_struct_parse_accepts_jsonvalue` — `MyStruct.parse(v)`
+     works end-to-end when `v` is a JObject of the right shape.
+   - `p54_struct_parse_rejects_plain_text` — compile error when the
+     caller passes bare `text`, with a fix-it pointing at `json_parse`.
+   - `p54_parse_returns_null_on_non_object_root` — `.parse` on a
+     `JArray` or `JString` returns `null`.
+   - `p54_match_on_variant` — an exhaustive match over all 6
+     variants compiles and dispatches correctly.
+2. **Add `default/04_json.loft`** declaring `JsonValue`,
+   `JsonField`, and the surface functions.  Re-export from
+   `default/01_code.loft`'s public surface via `use json;` (or add
+   to the auto-prelude — decide during implementation).
+3. **Implement `json_parse`** in `src/json.rs` — single-pass UTF-8
+   tokenizer + recursive-descent for objects / arrays.  Errors
+   captured per-store in `Stores::json_errors` (new field).
+4. **Implement `to_json`** — recursive walk writing into a text
+   work-buffer; canonical form (sorted keys, compact spacing).
+5. **Implement `field` / `item` / `as_text` / `as_number` / `as_long`
+   / `as_bool` / `len`** — trivial per-variant dispatch returning
+   null on mismatch.
+6. **Gate `MyStruct.parse`** in the parser — `.parse()` argument
+   type must be `JsonValue`.  Emit a diagnostic on bare `text`:
    ```
-3. **Update `json_items`** signature to `vector<JsonBody>` (currently
-   `vector<text>` in the same file).  Implement by wrapping each
-   extracted body text.
-4. **Gate `MyStruct.parse`** in the parser (`src/parser/control.rs`
-   where `.parse()` on a `Type::Name` is resolved).  The argument
-   type must be `JsonBody`; any other text-typed argument produces
-   a diagnostic pointing at `json_items`.
-5. **Unignore the tests** one commit per test, confirming each
-   shape.
-6. **Document** in LOFT.md and STDLIB.md — one short section in the
-   JSON chapter, before the existing `.parse()` examples.  Note the
-   1.1+ `JsonValue` plan at the bottom.
+   MyStruct.parse expects a JsonValue, got text
+   — call json_parse(text) first
+   ```
+7. **Implement `Type::parse(JsonValue)`** — walk the struct schema,
+   pull each field from the JObject's hash by name, convert
+   leaf values via the `as_*` extractors, recurse on nested structs.
+8. **Withdraw the old API** — delete `json_items`, `json_nested`,
+   `json_long`, `json_float`, `json_bool` from PLANNING.md and the
+   stdlib.  Update the two PLANNING.md examples that use them to
+   the new `json_parse`-based shape.
+9. **Unignore the tests** one commit per test as each layer lands.
+10. **Document** in LOFT.md (pattern-matching chapter gets a JSON
+    example), STDLIB.md (new JSON chapter), and PLANNING.md
+    (replaces the old json_* surface with the `JsonValue` design).
 
-**Migration:** this is a breaking change for existing `.parse(text)`
-callers.  Two-line fix per call site: `body: JsonBody { body: s }`
-at the call, or use `json_items` which now returns the right type.
-The common-case call chain (`for body in json_items(raw) { X.parse(body) }`)
-keeps working unchanged because `json_items`'s return type updates
-in lockstep.
+### Migration
 
-**Acceptance:** `p54_*` tests green; an intentionally-malformed
-input produces a compile or parse-time error instead of a silent
-zero struct.
+Breaking for every existing JSON caller — the old text-based surface
+is gone.  The common chain migrates cleanly:
+
+```loft
+// Before:
+for body in json_items(raw) {
+    rec = MyStruct.parse(body);
+    use(rec);
+}
+
+// After:
+match json_parse(raw) {
+    JArray { items } => for v in items {
+        rec = MyStruct.parse(v);
+        if rec != null { use(rec); }
+    },
+    _ => println("expected top-level array"),
+}
+```
+
+A tiny helper can recreate the one-liner shape for callers who don't
+need malformed-root diagnostics:
+
+```loft
+pub fn json_array(raw: text) -> vector<JsonValue> {
+    match json_parse(raw) {
+        JArray { items } => items,
+        _                => [],
+    }
+}
+```
+
+### Acceptance
+
+All `p54_*` tests green; every reference to the old `json_items` /
+`json_nested` / `json_long` / `json_float` / `json_bool` surface
+removed from the codebase and docs; malformed JSON surfaces via
+`JNull` + `json_errors()` instead of a silent zero struct;
+`MyStruct.parse(text)` is a compile error pointing at `json_parse`.
 
 ---
 

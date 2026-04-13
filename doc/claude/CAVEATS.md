@@ -419,16 +419,17 @@ if earlier args also had defaults).
 `p91_chained_defaults_reference_earlier_args`.
 
 ### P54 — `json_items` returns opaque `vector<text>`
-The typeless API contradicts loft's type-system promise, but the full
-`JsonValue` enum (Object / Array / String / Number / Boolean / Null)
-is a large design surface for a problem that's mostly "distinguish
-'valid JSON body' from 'garbage' at the type level".  **Decision
-(revised):** introduce a typed newtype `JsonBody` that wraps `text`,
-returned by `json_items` and accepted only by `MyStruct.parse`.  Adds
-`.is_object() / .is_array() / .is_null()` for cheap shape checks.
-Dynamic shape-unknown access (`v["users"][0]["name"]`) is deferred to
-1.1+ when someone asks for it with a concrete use case.  80% of the
-type-safety gain for 20% of the design surface.
+The typeless API contradicts loft's type-system promise.  **Decision:**
+replace the text-based JSON surface (`json_items`, `json_nested`,
+`json_long`, `json_float`, `json_bool`) with a first-class
+`JsonValue` enum — `JObject` / `JArray` / `JString` / `JNumber` /
+`JBool` / `JNull`.  `json_parse(text) -> JsonValue` is the one entry
+point; `MyStruct.parse` accepts only `JsonValue` and rejects bare
+text at compile time with a fix-it hint.  Full design in
+[BITING_PLAN.md § P54](BITING_PLAN.md).  The earlier `JsonBody`
+newtype half-measure is withdrawn — doing the parse once into a
+typed tree is simpler, faster, and covers the dynamic-shape case
+that a newtype-over-text cannot.
 
 ### ~~C7 / P22~~ — `spacial<T>` diagnostic — DONE
 Diagnostic updated to surface the 1.1+ timeline: *"spacial<T> is
@@ -455,7 +456,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | C58/P135 | 0.8.5   | Canonical `(0, 0) = screen-top-left`; lock in LOFT.md; re-bake brick-buster atlas |
 | C60    | 0.9.0     | `for (k, v) in hash` returning `(K, V)` tuples in unspecified order |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
-| P54    | 0.9.0     | `JsonBody` newtype + `.is_object/array/null()`; full `JsonValue` deferred to 1.1+ |
+| P54    | 0.9.0     | First-class `JsonValue` enum + `json_parse`; old text-based JSON surface withdrawn |
 | ~~P91~~ | — | **Done** — call-site substitution of `Var(arg_index)` in stored default tree; 4 regression tests |
 | P137   | 0.8.5     | Browser WASM `unreachable` panic fix |
 

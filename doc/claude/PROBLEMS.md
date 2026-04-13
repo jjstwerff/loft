@@ -24,7 +24,7 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
-| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** typed `JsonBody` newtype — 80% of safety for 20% of design surface; full `JsonValue` deferred to 1.1+ |
+| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | 135 | Canvas Y direction not locked in | Medium | **0.8.5:** canonical `(0,0) = screen-top-left`; lock in LOFT.md |
 | 137 | `loft --html` Brick Buster runtime `unreachable` panic | High | **0.8.5 blocker:** phase-C bisection of `#native` functions |
@@ -145,21 +145,52 @@ concrete and the scope is bounded.
 
 **Symptom:** `json_items(body)` returns `vector<text>` where each
 element is either a JSON object body or garbage.  The caller writes
-`MyStruct.parse(body)` and gets a partial zero-value struct on malformed
-input — no type checking, no diagnostic.
+`MyStruct.parse(body)` and gets a partial zero-value struct on
+malformed input — no type checking, no diagnostic.
 
-**Decision (revised):** introduce a typed newtype `JsonBody` that
-wraps `text` and is the *only* type `MyStruct.parse` accepts from
-`json_items`.  Expose `.is_object()`, `.is_array()`, `.is_null()` for
-cheap shape discrimination.  `json_items` returns `vector<JsonBody>`;
-the compiler catches any place a caller tries to pass arbitrary `text`
-to a struct parser.  80% of the type-safety gain at 20% of the design
-surface.
+**Decision:** replace the text-based JSON surface with a first-class
+`JsonValue` enum.  No newtype-around-text half-measure — the newtype
+would keep the text surface, its shape predicates would be runtime
+peeks into the string, and `.parse` would still run a separate parser
+over every element.  Doing the parse once into a typed tree and then
+indexing / matching that tree is simpler, faster, and covers the
+dynamic-shape use case too.
 
-The full `JsonValue` enum (Object / Array / String / Number / Boolean /
-Null) for dynamic shape-unknown access (`v["users"][0]["name"]`) stays
-deferred to 1.1+ — it's a large design surface for a use case that
-hasn't been concretely asked for.  See [WEB_SERVICES.md](WEB_SERVICES.md).
+```loft
+pub enum JsonValue {
+    JObject { fields: hash<JsonField[name]> },
+    JArray  { items:  vector<JsonValue> },
+    JString { value:  text },
+    JNumber { value:  float not null },   // IEEE-754 per RFC 8259
+    JBool   { value:  boolean },
+    JNull,
+}
+
+pub struct JsonField { name: text, value: JsonValue }
+
+pub fn json_parse(raw: text) -> JsonValue;         // replaces every json_* fn
+pub fn to_json(self: JsonValue) -> text;           // round-trip
+
+// JObject / JArray indexers return JNull on miss, never garbage:
+pub fn field(self: JsonValue, name: text)  -> JsonValue;   // object only
+pub fn item(self: JsonValue, index: integer) -> JsonValue; // array only
+
+// Typed extractors — null on kind mismatch:
+pub fn as_text(self:   JsonValue) -> text;
+pub fn as_number(self: JsonValue) -> float;
+pub fn as_long(self:   JsonValue) -> long;
+pub fn as_bool(self:   JsonValue) -> boolean;
+pub fn len(self: JsonValue)       -> integer;     // array or object fields
+
+pub fn parse(self: Type, v: JsonValue) -> Type;   // `MyStruct.parse(v)`
+```
+
+The old `json_items` / `json_nested` / `json_long` / `json_float` /
+`json_bool` surface documented in [PLANNING.md](PLANNING.md) is
+withdrawn.  All JSON work routes through `json_parse` → `JsonValue`
+from 0.9.0 onward.
+
+Full landing plan in [BITING_PLAN.md § P54](BITING_PLAN.md).
 
 ---
 
