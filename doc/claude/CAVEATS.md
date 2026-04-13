@@ -16,19 +16,16 @@ a design-accepted fact, move it to LOFT.md § Design decisions.
 
 ## Accepted trade-offs (not scheduled for change)
 
-### C3 — WASM backend: `par()` runs sequentially
-A Web Worker pool has real bundle-size and startup cost that most
-browser loft programs don't want.  Revisit only when a concrete game
-demands it (W1.18 / 1.1+).  **Workaround:** use native for CPU-bound
-parallel work.
+Closed-by-decision entries live in
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).  Short pointers kept
+here for cross-reference; don't re-argue these in active caveat
+tables.
 
-### C38 — Closure capture is copy-at-definition
-Captured values are copied into the closure at definition time, like
-Rust `move`.  Mutations to the outer variable after capture are not
-visible inside the lambda.  Reference capture would require either GC
-or borrow tracking, neither of which fits the "simple, fast, no
-lifetime annotations" ethos.  **Test:**
-`tests/scripts/56-closures.loft::test_capture_timing`.
+- **C3** — WASM `par()` runs sequentially.
+  See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
+- **C38** — Closure capture is copy-at-definition.
+  See [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition).
+  Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 
 ---
 

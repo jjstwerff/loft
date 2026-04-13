@@ -742,21 +742,10 @@ every direct reference to `long` from stdlib / tests.  Deleting
 the Long opcodes while they're still referenced from source code
 would cascade errors across the build.
 
-#### ~~C54.D — Rust-style literal suffixes~~ — Out of scope
+#### ~~C54.D — Rust-style literal suffixes~~
 
-`34u8`, `4848i32`, `4948u32` notation considered and declined.
-Loft's context-driven type inference already handles every case
-naturally:
-
-- `x: u8 = 255;` — range-check at the binding site.
-- `f(a: u8)` called as `f(34)` — literal constrained by the
-  parameter type.
-- Ambiguous cases — use `34 as u8` (one existing operator, no new
-  syntax).
-
-Adding suffix syntax would cost a parser sweep and conflict with
-loft's "prefer the type annotation over the literal annotation"
-ethos.  If a concrete pain point emerges, reopen then.
+Closed by decision — see
+[DESIGN_DECISIONS.md § C54.D](DESIGN_DECISIONS.md#c54d--rust-style-numeric-literal-suffixes).
 
 ### Ordering
 
@@ -837,15 +826,16 @@ spend.
 
 ## Out of scope (closed by decision)
 
-- **C3 — WASM `par()` runs sequentially.**  Web Worker pool cost
-  exceeds benefit today; revisit when a concrete browser game
-  demands CPU parallelism.  Documented in LOFT.md's parallel
-  section as an explicit limitation.
-- **C38 — Closure capture is copy-at-definition.**  Reference
-  capture needs GC or borrow tracking, neither of which fits the
-  "no lifetime annotations" ethos.  Test
-  `tests/scripts/56-closures.loft::test_capture_timing` pins the
-  current semantics.
+Full rationale and "revisit when" triggers in
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).  Pointers kept here so
+the active plan stays focused:
+
+- **C3** — WASM `par()` runs sequentially.
+  [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially)
+- **C38** — Closure capture is copy-at-definition.
+  [DESIGN_DECISIONS.md § C38](DESIGN_DECISIONS.md#c38--closure-capture-is-copy-at-definition)
+- **C54.D** — Rust-style numeric literal suffixes.
+  [DESIGN_DECISIONS.md § C54.D](DESIGN_DECISIONS.md#c54d--rust-style-numeric-literal-suffixes)
 
 ## Order of work
 
