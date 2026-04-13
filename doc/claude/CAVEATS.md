@@ -162,17 +162,98 @@ up from the "medium" rough estimate — but the design is concrete and
 the scope is bounded (no tuple-destructuring, no new iterator
 protocol, no bucket-walk in `src/hash.rs`).
 
-#### Tests (to land with implementation)
+#### Implementation: 9 independently-testable steps
 
-- `for e in h` over 3 records in mixed insertion order — visits in
-  ascending key order, all records exactly once.
-- Empty hash — zero iterations.
-- Multi-field key `hash<T[a,b]>` — lexicographic order.
-- Descending `hash<T[-score]>` — reverse order.
-- `for e in h if e.count > N { … }` — filter works.
-- `#index`, `#count`, `#first` loop attributes.
-- Regression: `hash` with struct field named `key` (reserved per
-  `src/typedef.rs:154`) continues to error at parse time.
+Each step lands as its own PR with its own test.  A later step may
+depend on an earlier one, but nothing requires "land it all at once".
+A session that runs out of time mid-way leaves the codebase in a
+working state with partial feature coverage.
+
+**Step 1 — Record-walk primitive.** Add a native stdlib function
+`hash_records(h: hash<T[…]>) -> vector<reference<T>>` that returns
+every live record in the hash, in internal bucket order (unsorted,
+but stable for a given hash state).  Reuses the walk pattern at
+`src/database/search.rs:327` (the `validate` loop).  No parser or
+codegen changes — callable from loft as a plain function.
+
+*Test:* construct a hash with 3 distinct-keyed entries; call
+`hash_records`; verify `len(result) == 3` and each record's key
+appears exactly once.
+
+**Step 2 — Sort-by-hash-key helper.** Add a native function
+`hash_sorted(h: hash<T[…]>) -> vector<reference<T>>` that collects
+via Step 1 and sorts by extracting the hash's key fields (reading
+them from each record via the schema's field offsets).  Ascending,
+single-field; no `-` prefix yet; single-field only.
+
+*Test:* same 3-entry hash; verify the returned vector is in
+ascending key order.
+
+**Step 3 — Parser accepts `for e in hash`.** Replace the
+"Cannot iterate a hash directly" error at `src/parser/fields.rs:599`
+with a route that desugars `for e in h { body }` into
+`for e in hash_sorted(h) { body }` at parse time.  Trivial codegen —
+the rewrite is a pre-parse transformation on the IR.
+
+*Test:* source `for e in h { println("{e.name}"); }` parses and
+runs; output matches the sorted key order.
+
+**Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
+Nothing new to implement; just land the combined behaviour, update
+`doc/12-hash.html` source, delete the caveat-level documentation of
+"cannot iterate".
+
+*Test:* integration — hash iteration used in a real loft program
+compiles and runs under both interpreter and `--native`.
+
+**Step 5 — Loop attributes (`#index`, `#count`, `#first`).** Because
+Steps 1–3 desugar to a vector iteration, these work "for free" via
+the existing vector-iteration path.  Confirm and test.
+
+*Test:* `for e in h { total += e.count * (e#index + 1); }`
+produces the expected weighted sum.
+
+**Step 6 — Multi-field keys.** Extend Step 2's sort comparator to
+compare key fields in declaration order (lexicographic).  Needs the
+hash-type's `Vec<u16>` key-field-index list, which is already on
+`Type::Hash(content, key, _)`.
+
+*Test:* `hash<T[region, date]>` — entries with the same `region`
+iterate in `date` order; across regions, grouped by `region`.
+
+**Step 7 — Descending (`-`) prefix per field.** The `-` prefix lives
+in the type's key spec (same representation as `sorted` / `index`).
+Extend the comparator to read the sign bit per field and reverse
+individual comparisons.
+
+*Test:* `hash<T[-score]>` iterates highest-score first;
+`hash<T[region, -date]>` iterates by region ascending then date
+descending within region.
+
+**Step 8 — Filter clause.** `for e in h if e.count > 10 { … }`.
+Because Step 3 desugars to vector iteration, the filter clause on
+`for` already works via the existing vector path.  Confirm and test.
+
+*Test:* verify filtering skips records whose condition fails.
+
+**Step 9 — Reject `#remove` with a clear diagnostic.** Hash
+iteration uses a pre-sorted snapshot; `#remove` would not remove
+from the hash.  Emit a parse-time error:
+*"#remove is not supported on hash iteration — the iterated vector
+is a sorted snapshot; use `h[key] = null` to remove from the hash"*.
+
+*Test:* parse-error test matching the diagnostic.
+
+Scope per step:
+- Steps 1, 2: **S** each (native function + one test).
+- Step 3: **S** (parser rewrite, one line of routing).
+- Step 4: **XS** (integration + docs).
+- Steps 5, 8: **XS** each (confirmation tests, no code).
+- Steps 6, 7: **M** together (comparator logic).
+- Step 9: **XS** (diagnostic + test).
+
+Total realistic: **one focused day**, down from the earlier "two days"
+estimate — the step decomposition removes the speculative overhead.
 
 ### ~~C61.local~~ — Outer-local shadow — DONE
 `x = 5; for x in …` now rejected on pass 1 via the `was_loop_var`
