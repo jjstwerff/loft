@@ -3661,3 +3661,74 @@ fn run() -> text {
     .expr("run()")
     .result(Value::str("hello"));
 }
+
+/// B1-style fix applied to or-patterns: `A | B => …` over unit variants
+/// in a mixed struct-enum previously panicked at
+/// parser/control.rs:699 (same index-OOB shape as B1).  Guard the
+/// attributes[0] access the same way.
+#[test]
+fn p54_or_pattern_mixed_struct_enum() {
+    code!(
+        "pub enum Sig { Off, Idle, On { level: integer } }
+fn classify(s: const Sig) -> text {
+    match s {
+        Off | Idle => \"inactive\",
+        On { level } => \"active\"
+    }
+}
+fn run() -> text {
+    classify(On { level: 80 })
+}"
+    )
+    .expr("run()")
+    .result(Value::str("active"));
+}
+
+/// Match guard on a struct-enum variant works today — regression
+/// guard so future parser work doesn't drop this.
+#[test]
+fn p54_match_guard_on_struct_enum() {
+    code!(
+        "pub enum Sig { Off, On { level: integer } }
+fn describe(s: const Sig) -> text {
+    match s {
+        Off => \"off\",
+        On { level } if level > 50 => \"hi\",
+        On { level } => \"lo\"
+    }
+}
+fn run() -> text {
+    r = \"\";
+    r += describe(On { level: 80 });
+    r += \",\";
+    r += describe(On { level: 10 });
+    r
+}"
+    )
+    .expr("run()")
+    .result(Value::str("hi,lo"));
+}
+
+/// B2-runtime (sub-bug of B3/B4): constructing a bare unit-variant
+/// literal (`s = Idle;`) for a mixed struct-enum crashes at runtime
+/// with `index out of bounds: the len is 2 but the index is <junk>`.
+/// B2-compile-fix let this test compile; the runtime codegen path for
+/// producing a valid struct-enum record from a bare unit-variant name
+/// is still broken.  When that's fixed, this test goes green.
+#[test]
+#[ignore = "P54 B2-runtime: unit-variant literal construction in struct-enum crashes"]
+fn p54_b2_unit_variant_literal_construction() {
+    code!(
+        "pub enum Sig { Off, Idle, On { level: integer } }
+fn run() -> text {
+    s = Idle;
+    match s {
+        Off => \"off\",
+        Idle => \"idle\",
+        On { level } => \"on\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("idle"));
+}

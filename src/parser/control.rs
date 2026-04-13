@@ -696,8 +696,21 @@ impl Parser {
                     );
                 } else {
                     let next_disc = if is_struct {
-                        if let Value::Enum(nr, _) = self.data.def(next_def_nr).attributes[0].value {
+                        // B1-style guard (same shape as line 603): unit
+                        // variants carry no attributes of their own; fall
+                        // back to the parent enum's attr list.
+                        let next_variant_attrs = &self.data.def(next_def_nr).attributes;
+                        if let Some(first) = next_variant_attrs.first()
+                            && let Value::Enum(nr, _) = first.value
+                        {
                             i32::from(nr)
+                        } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&next_name) {
+                            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value
+                            {
+                                i32::from(nr)
+                            } else {
+                                0
+                            }
                         } else {
                             0
                         }
