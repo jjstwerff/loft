@@ -3775,3 +3775,73 @@ fn run() -> text {
     .expr("run()")
     .result(Value::str("idle"));
 }
+
+/// P54 — positive baseline: plain enum match inside a for-loop body
+/// works.  Pairs with the `#[ignore]`'d struct-enum version below to
+/// isolate the struct-enum-specific breakage.
+#[test]
+fn p54_plain_enum_match_inside_for() {
+    code!(
+        "pub enum Item { One, Two }
+fn run() -> text {
+    v = [One, Two];
+    r = \"\";
+    for x in v {
+        match x {
+            One => { r += \"1\"; },
+            Two => { r += \"2\"; }
+        }
+    }
+    r
+}"
+    )
+    .expr("run()")
+    .result(Value::str("12"));
+}
+
+/// Open: struct-enum match inside a for-loop body fails to parse —
+/// 'Expect token }' on the first arm's `=>`.  Plain enum in the same
+/// shape works (see above), so the bug is struct-enum-specific in
+/// the for-body grammar.  Indexing the vector manually and matching
+/// outside the loop works — verifies this isn't a struct-enum match
+/// bug but a parser-context bug in for-body handling.
+#[test]
+#[ignore = "P54: struct-enum match arm inside for-body fails to parse"]
+fn p54_struct_enum_match_inside_for() {
+    code!(
+        "pub enum Item { Empty, Filled { qty: integer } }
+fn run() -> integer {
+    v = [Filled { qty: 3 }, Filled { qty: 7 }];
+    sum = 0;
+    for x in v {
+        match x {
+            Empty => {},
+            Filled { qty } => { sum += qty; }
+        }
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(10));
+}
+
+/// P54 — positive baseline: struct-enum match outside a for-loop (via
+/// direct indexing) works.  Confirms the struct-enum match machinery
+/// itself is fine — the above bug lives in for-body parsing.
+#[test]
+fn p54_struct_enum_match_via_index_works() {
+    code!(
+        "pub enum Item { Empty, Filled { qty: integer } }
+fn run() -> integer {
+    v = [Filled { qty: 3 }, Filled { qty: 7 }];
+    x = v[0];
+    match x {
+        Empty => 0,
+        Filled { qty } => qty
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+}
