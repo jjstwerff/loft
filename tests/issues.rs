@@ -4819,3 +4819,48 @@ fn q1_json_errors_includes_line_and_byte() {
     .expr("run_q1d()")
     .result(Value::Boolean(true));
 }
+
+// B7 family — character-interpolation-return SIGSEGV.
+//
+// Discovered while writing INC#9 regression tests:
+// `fn f() -> text { c = txt[0]; "{c}" }` SIGSEGVs.  The text
+// built via n_format_text on a character isn't tracked for free
+// on the outer function's text-return path.  Same B7 lifecycle
+// family as the JsonValue method crashes.
+//
+// Documented in LOFT.md § String literals as a caveat and in
+// QUALITY.md § B7.  Goes green when B7 lands.
+#[test]
+#[ignore = "B7 family — text-return of `\"{c}\"` (character interpolation) SIGSEGVs"]
+fn b7_character_interpolation_return_crashes() {
+    code!(
+        "fn build_b7c() -> text {
+    txt_b7c = \"hello\";
+    c_b7c = txt_b7c[0];
+    \"{c_b7c}\"
+}"
+    )
+    .expr("build_b7c()")
+    .result(Value::str("h"));
+}
+
+// Multiple json_parse() in the same function — currently OK
+// when each result is consumed via pattern matching.  Investigated
+// while writing B7 regression tests; the previous QUALITY.md claim
+// that "multiple json_parse() corrupts memory" was a misattribution
+// — the corruption observed in earlier smoke tests came from the
+// kind()/len() method calls, not from json_parse() itself.  This
+// guard pins the pattern-match-based shape so future B7 work
+// doesn't accidentally regress it.
+#[test]
+fn b7_multiple_json_parse_via_match_works() {
+    code!(
+        "fn run_b7p() -> boolean {
+    a_b7p = json_parse(\"null\");
+    b_b7p = json_parse(\"true\");
+    match a_b7p { JNull => match b_b7p { JBool { value } => value, _ => false }, _ => false }
+}"
+    )
+    .expr("run_b7p()")
+    .result(Value::Boolean(true));
+}

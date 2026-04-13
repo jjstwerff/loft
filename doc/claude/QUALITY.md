@@ -804,9 +804,20 @@ allocation of its own.  Confirmed symptoms:
   attempting to ship Q2's `kind(v) -> integer` peek; reverted
   the ship and parked the regression guard at
   `b7_method_on_jsonvalue_returning_integer_crashes` (`#[ignore]`).
-- A second `json_parse` call in the same function silently
-  corrupts memory, even when the first result is assigned to a
-  different local — the lifecycle bug compounds across calls.
+- **(new symptom — INC#9 caveat)** `fn f() -> text { c = txt[0]; "{c}" }`
+  SIGSEGVs.  The text built via `n_format_text` on a character
+  isn't tracked for free on the outer function's text-return
+  path.  Regression guard: `b7_character_interpolation_return_crashes`
+  (`#[ignore]`'d).
+
+**Retraction** (2026-04-13): an earlier note claimed "a second
+`json_parse` call in the same function corrupts memory."
+Investigation while writing B7 regression tests showed that
+multiple `json_parse` calls work fine when each result is
+consumed via pattern matching — the corruption observed in
+earlier smoke tests came from the subsequent `kind()` / `len()`
+method calls, not from `json_parse` itself.  Guard for the
+working multi-parse path: `b7_multiple_json_parse_via_match_works`.
 
 **Blast radius**: the entire `(JsonValue) -> T` method surface is
 gated on this fix, not just text returns.  This means **Q2**
