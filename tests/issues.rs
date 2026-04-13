@@ -4732,24 +4732,30 @@ fn run_enum() -> integer {
 // even when its body only reads the discriminant byte and never
 // touches the store contents.
 //
-// This test documents the symptom against the existing `len()`
-// stub (shipped as a stub returning i32::MIN — pure integer
-// return, no text, no allocation).  It crashes today; goes green
-// when B7's lifecycle fix lands.
+// 2026-04-13: a single-line fix at `inline_struct_return`
+// (extending the type match to `Type::Enum(_, true, _)`) was tried
+// per the QUALITY.md design and did NOT close the bug — the inline
+// form (`len(json_parse(...))`) and the assigned-to-local form
+// (`v = json_parse(...); len(v)`) both still hit "stores not freed"
+// + "double free or corruption" at exit.  The fix is necessary
+// (the type match was demonstrably wrong) but not sufficient;
+// deeper investigation needed.  See QUALITY.md § B7.
+//
+// Asserts the boolean return as a marker of the expected
+// behaviour once B7 lands (`len(v)` on JNull returns null;
+// `!null` is true).
 #[test]
 #[ignore = "B7 family — `(JsonValue) -> integer` method call corrupts store lifecycle"]
 fn b7_method_on_jsonvalue_returning_integer_crashes() {
     code!(
-        "fn run_b7m() -> integer {
+        "fn run_b7m() -> boolean {
     v_b7m = json_parse(\"null\");
-    len(v_b7m)
+    n_b7m = len(v_b7m);
+    !n_b7m
 }"
     )
     .expr("run_b7m()")
-    // Stub returns i32::MIN today; the assertion isn't the point —
-    // surviving the call without a SIGSEGV is.  Once B7 lands,
-    // this becomes a real assertion.
-    .result(Value::Int(i32::MIN));
+    .result(Value::Boolean(true));
 }
 
 // ── Q1: parser-side rich diagnostics through json_errors() ─────────────

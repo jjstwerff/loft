@@ -32,7 +32,7 @@ Decisions to *not* fix something live in
 | B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — **fix designed** (zero-fill payload at `src/parser/objects.rs::parse_enum_field`); 1 session |
 | B3 | Struct-enum tail-expression return crashes | Medium | Compiler — **fix designed** (4-layer codegen surgery); 2-3 sessions |
 | B5 | Recursive struct-enum trips codegen recursion guard | Medium | Compiler — **fix designed** (memoise `fill_database` in `src/typedef.rs`); 1 session |
-| B7 | Native-returned struct-enum temporaries leak intermediate stores | Medium | Compiler — **single-line fix designed** at `src/scopes.rs:1031`; unblocks 8 things together (5 P54 tests + 2 B7 guards + INC#9 crash) |
+| B7 | Native-returned struct-enum temporaries leak intermediate stores | Medium | Compiler — single-line fix tried 2026-04-13 and **did NOT close the bug**; revised estimate 2-3 sessions; design + investigation candidates in § B7 below |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
@@ -748,11 +748,20 @@ goal; Q4 is required for that, not an extra.
 
 **Status (2026-04-13):** Concrete fix designs documented for all
 four open compiler bugs (B2-runtime, B3, B5, B7) following an
-explore-agent investigation.  The headline finding: **B7 is a
-single-line fix**, not a multi-session sprint as previously
-estimated.  This collapses the dependency cone for nearly every
-JSON deliverable on the roadmap (Q2, Q3, Q4, P54 step 4-5, the
-INC#9 character-interpolation crash) into one session of work.
+explore-agent investigation.
+
+The B7 single-line-fix prediction was tested and **did NOT close
+the bug** — the type-match extension at `src/scopes.rs:1031` is
+necessary but not sufficient; at least one other site in the
+lifecycle machinery is also wrong.  Revised B7 estimate: **2-3
+sessions** with `LOFT_LOG=full` instrumentation to pinpoint the
+duplicate OpFreeRef emission.  Design + candidate sites listed in
+§ B7 below.
+
+The B5 / B2-runtime / B3 fix designs remain untested but
+file:line targets are concrete.  Recommended landing order
+restored to "B7 first, then B5, then …" because B7 still has the
+largest blast radius even at the higher cost.
 
 These bugs each surface any time a user writes a `Result<T, E>`-style
 struct-enum, not just for JSON.  Fixing them unblocks the whole
@@ -980,16 +989,45 @@ site was missed — so native calls returning struct-enum (e.g.
 store is embedded in the argument frame, and the callee's exit
 frees the store before the caller's `OpFreeRef` would have fired.
 
-**Single-line fix:**
+**Single-line fix (proposed by the design):**
 
 ```rust
 && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = &def.returned
 ```
 
-**Estimated scope:** one session.  One file, one line, ~10 tests
-to flip from ignored to green, doc updates.  This was previously
-framed as "multi-session compiler sprint" — that estimate stands
-retracted.
+**Update (2026-04-13, after attempted ship):** the single-line fix
+was applied and the test `b7_method_on_jsonvalue_returning_integer_*`
+*still crashed* with the same "stores not freed" + "double free or
+corruption" pattern, in both the inline form
+(`len(json_parse(...))`) and the assigned form
+(`v = json_parse(...); len(v)`).  The fix was reverted.
+
+The type-match was demonstrably incomplete (the Set path and
+`needs_pre_init` already accept `Type::Enum(_, true, _)` —
+`inline_struct_return` was the only outlier), but **necessary is
+not sufficient**.  At least one other site in the lifecycle
+machinery must also be wrong.  Candidates to investigate next:
+
+1. `n_json_parse` may be allocating with the wrong initial
+   ref-count — `stores.database()` returns a fresh store; if the
+   initial ref-count is 1 but the caller's `OpFreeRef` is also
+   wired to decrement, an unrelated path may also be issuing a
+   free.  The original P54 design plan (Step 1) called this out
+   as the B7 root cause: "allocate the arena store inside the
+   caller's variable's store, not via `stores.database()`".
+2. `get_free_vars` (lines 728-779) may be emitting OpFreeRef
+   *twice* for variables that received a struct-enum from a
+   native call — one path through the Set-from-call site at
+   line 447-449 and a second through the variables-cleanup loop.
+3. The interpreter codegen `state/codegen.rs:1043-1050`
+   (referenced in the line 445 comment as the sibling skip-free
+   logic) may need parallel treatment.
+
+**Estimated scope (revised):** 2-3 sessions.  Not the one-line
+fix the design predicted.  The first session's job: instrument
+the run with `LOFT_LOG=full` for `b7_method_on_jsonvalue_returning_integer_crashes`
+and identify which OpFreeRef site fires twice on the JsonValue
+store.  Then fix the duplicate emission.
 
 **Verification path:**
 1. Run the currently-`#[ignore]`'d B7-family tests with `--ignored`
@@ -1105,16 +1143,22 @@ session-of-the-week background bite.
 
 ## Recommended landing order
 
-**Updated 2026-04-13** — B7 estimate collapsed from "multi-session
-sprint" to "single-line fix" after explore-agent investigation
-identified the exact site (`src/scopes.rs:1031`).  B5 reclassified
-from "needs arena workaround forever" to "one-session memoization
-fix in `fill_database`".  Order rebuilt around those findings.
+**Updated 2026-04-13** — explore-agent investigation produced
+concrete file:line targets for all four compiler bugs.  The B7
+single-line-fix prediction was tested same day and did not close
+the bug; revised estimate **2-3 sessions** (the type-match
+extension is necessary but not sufficient — needs paired
+investigation of the duplicate-OpFreeRef site).  B5 reclassified
+from "needs arena workaround forever" to "one-session
+memoization fix in `fill_database`".  Order rebuilt around these
+findings.
 
-1. **B7 — single-line fix at `src/scopes.rs:1031`** (now Tier 1).
-   Unblocks 5 ignored P54 tests + 2 B7-prefixed guards + the INC#9
-   character-interpolation crash + every `(JsonValue) -> T` method
-   call.  One session.
+1. **B7 — 2-3 session lifecycle fix** starting at
+   `src/scopes.rs:1031` plus paired sites yet to be identified
+   via `LOFT_LOG=full` instrumentation.  Still highest-leverage
+   compiler bite — unblocks 5 ignored P54 tests + 2 B7-prefixed
+   guards + the INC#9 character-interpolation crash + every
+   `(JsonValue) -> T` method call.
 2. **Q2** — `kind` / `keys` / `fields` / `has_field` natives
    become trivially shippable post-B7.  One session.
 3. **B5 — memoise `fill_database`** in `src/typedef.rs`.  Removes
