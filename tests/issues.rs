@@ -3866,3 +3866,70 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(3));
 }
+
+/// Struct-enum as a field of a plain struct — construction, access
+/// through field chain, and match all work.  This is a pattern
+/// JsonValue callers use today (wrap the JsonValue in a holder
+/// struct).
+#[test]
+fn p54_struct_enum_as_struct_field() {
+    code!(
+        "pub enum Inner { A { v: integer }, B { v: text } }
+pub struct Holder { inner: Inner, count: integer }
+fn run() -> text {
+    h = Holder { inner: A { v: 7 }, count: 1 };
+    match h.inner {
+        A { v } => \"A-{v}-{h.count}\",
+        B { v } => \"B-{v}-{h.count}\"
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::str("A-7-1"));
+}
+
+/// Vector of struct-enums with mixed variants; iterate and dispatch
+/// by variant.  Exercises the Reference(Enum) match-subject fix
+/// (commit `6074619`) plus accumulator mutation inside match arms.
+#[test]
+fn p54_struct_enum_vector_accumulate() {
+    code!(
+        "pub enum Op { Add { v: integer }, Sub { v: integer } }
+fn run() -> integer {
+    ops = [Add { v: 5 }, Sub { v: 3 }, Add { v: 2 }];
+    sum = 0;
+    for op in ops {
+        match op {
+            Add { v } => { sum += v; },
+            Sub { v } => { sum -= v; }
+        }
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+/// B3 (open): intermediate-variable pattern crashes for integer
+/// variant too — widens B3 beyond just `float not null`.  Document
+/// the single shared symptom.
+#[test]
+#[ignore = "P54: struct-enum intermediate-variable return crashes for all variant types"]
+fn p54_b3_int_via_intermediate() {
+    code!(
+        "pub enum JV { A { v: integer } }
+fn mk() -> JV {
+    n = A { v: 42 };
+    n
+}
+fn run() -> integer {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
