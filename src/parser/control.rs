@@ -1908,7 +1908,16 @@ impl Parser {
                 t = t.depending(*d);
             }
             t
-        } else if let Type::Sorted(dnr, _, dep) | Type::Index(dnr, _, dep) = &in_type {
+        } else if let Type::Sorted(dnr, _, dep)
+        | Type::Index(dnr, _, dep)
+        | Type::Hash(dnr, _, dep) = &in_type
+        {
+            // C60 path 2c piece 2: hash iteration yields `reference<T>`,
+            // same shape as Sorted/Index.  This is the parser-side
+            // prerequisite before fill_iter (src/parser/fields.rs:599)
+            // can flip the hash arm to `on = 4`.  Without this, for-loop
+            // body parsing sees `e` as Type::Null and field access on
+            // `e.name` fails with "Unknown type null".
             Type::Reference(*dnr, dep.clone())
         } else if let Type::Iterator(i_tp, _) = &in_type {
             if **i_tp == Type::Null {

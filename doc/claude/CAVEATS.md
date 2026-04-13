@@ -280,6 +280,27 @@ on=4), two parser edits (`fill_iter` and `parse_for_iter_setup`
 companion variable).  Every piece is bounded; each goes into its
 own commit following DEVELOPMENT.md's test-first sequence.
 
+**Piece 1 landed 2026-04-13 (commit `e50fffe`).**
+`Stores::build_hash_sorted_vec` now emits u32 rec-nrs at 4-byte
+stride.  Unit test `tests/data_structures.rs::hash_sorted_vec_u32_layout`
+validates the layout.
+
+**Pieces 2–5 session-2 attempt (2026-04-13, not committed):** fill_iter
+hash arm flipped to `on = 4; arg = known;` and the codebase built
+clean.  But running `for e in h { println("{e.name}"); }` hit pass-1
+"Unknown type null" on the field access — because the type flow
+through `parse_for_iter_setup` is NOT just fill_iter.  That function
+determines the loop-variable type via `for_type(&in_type)` which for
+`Type::Hash` returns something that doesn't land on a struct
+reference.  So pieces 2–5 are more tangled than the pure fill_iter
+edit suggests.
+
+**Concrete next-session start:** check `for_type` (at
+`src/parser/control.rs:1901`) for the `Type::Hash` arm.  It needs to
+return `Type::Reference(content, dep)` when the hash is being
+iterated, same as Sorted/Index do.  That's the parser-side
+prerequisite before flipping fill_iter.  Runtime on=4 arms come after.
+
 **Step 4 — Ship Steps 1–3 as the minimum viable hash iteration.**
 Nothing new to implement; just land the combined behaviour, update
 `doc/12-hash.html` source, delete the caveat-level documentation of
