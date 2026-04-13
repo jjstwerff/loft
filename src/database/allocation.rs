@@ -297,17 +297,25 @@ impl Stores {
         let keys = self.types[tp as usize].keys.clone();
         let recs = crate::hash::records_sorted(hash_ref, &self.allocations, &keys);
         let n = recs.len();
-        let result_db = self.null();
+        // C60 piece 3 edit A: allocate IN THE HASH'S STORE, not a
+        // fresh one.  This makes the yielded scratch DbRef share
+        // `store_nr` with the hash records — so when Ordered
+        // iteration yields `DbRef{store=scratch.store_nr, rec=<u32
+        // rec-nr from vector>, pos=8}`, the rec-nr resolves to a
+        // valid hash record in the same store.  No new on=4 mode,
+        // no bytecode protocol change — hash iteration reuses the
+        // existing Ordered (on=3) path.
+        //
         // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to
         // 8-byte words (store claim granularity).
         let vec_words = ((n as u32) * 4 + 8).div_ceil(8);
         let vec_words = vec_words.max(1);
-        let vec_cr = self.claim(&result_db, vec_words);
+        let vec_cr = self.claim(hash_ref, vec_words);
         let vec_rec = vec_cr.rec;
-        let header_cr = self.claim(&result_db, 1);
+        let header_cr = self.claim(hash_ref, 1);
         let header_rec = header_cr.rec;
         {
-            let store = self.store_mut(&result_db);
+            let store = self.store_mut(hash_ref);
             store.set_int(vec_rec, 4, n as i32);
             for (i, &rec_nr) in recs.iter().enumerate() {
                 let base = 8 + (i as u32) * 4;
@@ -316,7 +324,7 @@ impl Stores {
             store.set_int(header_rec, 4, vec_rec as i32);
         }
         DbRef {
-            store_nr: result_db.store_nr,
+            store_nr: hash_ref.store_nr,
             rec: header_rec,
             pos: 4,
         }

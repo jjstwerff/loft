@@ -426,6 +426,14 @@ pub fn hash_sorted_vec_u32_layout() {
     ]";
     stores.parse(data, v, &into);
     let result = stores.build_hash_sorted_vec(&into, v);
+    // C60 piece 3 edit A: scratch shares `store_nr` with the hash.
+    // This is what lets Ordered (on=3) iteration yield valid hash
+    // record refs — the yielded DbRef's store_nr comes from the
+    // scratch's store, which is now the same as the hash's store.
+    assert_eq!(
+        result.store_nr, into.store_nr,
+        "scratch must be allocated in the hash's store"
+    );
     // Header: offset 4 holds the data-record number.
     let data_rec = stores.allocations[result.store_nr as usize].get_int(result.rec, 4) as u32;
     assert_ne!(data_rec, 0, "header must point at a nonzero data record");
