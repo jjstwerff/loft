@@ -238,45 +238,77 @@ match json_parse(raw) {
   declared default; missing → default; an explicit `.parse` return
   of null signals "root wasn't a JObject".
 
-### Prerequisite discovered mid-session: struct-enum literal construction
+### Blockers discovered across three sessions
 
-Loft today has **no syntax for constructing a struct-enum variant
-value in loft code**.  Every existing struct-enum in the stdlib
-(`ArgValue`, `FieldValue`) is populated exclusively from Rust via
-`populate_frame_variables`-style native code.  Both
-`JsonValue.JBool { value: true }` (prefixed) and `JBool { value: true }`
-(bare variant name) fail to parse:
+P54's loft-side implementation is gated on a cluster of language-level
+bugs in struct-enum handling.  Each is a programmer-biting bug in its
+own right; several would surface any time someone writes a
+`Result<T, E>`-style struct-enum, not just for JSON.
 
-```
-Error: Expect token ; at … 06_json.loft:56:29
-```
+**B1 — Unit-variant match index-OOB.**  `match v { UnitVariant => … }`
+panicked at `src/parser/control.rs:603` with `index out of bounds: the
+len is 0 but the index is 0` when `v` came from a function return.
+**FIXED** — commit `61c36d7` on `quality`.  Not P54-specific.
 
-This means step 3 of P54 can take one of two paths:
+**B2 — Unit variant round-trip through a function.**  `fn make() ->
+MyE { MyE.Null }` fails with `"MyE should be MyE on return from
+block"`, and `fn make() -> MyE { let n = Null; n }` with `"Variable 'n'
+cannot change type from MyE to MyE"`.  Both leave unit variants
+unusable as function returns.  Workaround: give every variant at
+least one field (`Null { is_null: boolean }` in the JsonValue draft).
 
-**3a — Native allocation** (the PROBLEMS.md plan).  Implement
-`n_json_parse` in `src/native.rs` that calls `crate::json::parse`,
-then materialises the result into a freshly-allocated `JsonValue`
-record using `stores.database()` + discriminant-byte + variant field
-writes (mirroring `populate_frame_variables` in
-`src/native.rs:1017`).  First attempt in-session hit double-free
-corruption — likely the store's reference counting conflicts with
-the generated `OpFreeRef` at the caller's scope exit when the
-allocated store is a standalone (not vector-hosted) record.  Needs
-the same lifecycle treatment `File` gets, plus care with the
-`ref_count` bookkeeping.
+**B3 — Struct-enum with a `float not null` variant.**  `pub enum E {
+A { v: float not null } }; fn m() -> E { A { v: 1.0 } }` crashes with
+`free(): invalid size`.  Removing `not null` helps with this crash but
+trips B4.
 
-**3b — Add loft-level variant-construction syntax** (a language
-feature, not a P54 local change).  Accept `EnumName.Variant { field:
-expr }` and `Variant { field: expr }` as value expressions;
-codegen lowers to a fresh record + discriminant write + field
-writes.  Pure loft JSON parsing becomes trivial (text peek +
-dispatch over literal construction + `text as float` for numbers),
-and the native path reduces to the standalone `src/json.rs` parser
-already landed.  Also unblocks any future stdlib struct-enum
-(`Result<T, E>`, `Option<T>`, etc.).
+**B4 — Mixed-field struct-enum returned from function.**  Even with
+all variants field-carrying (`pub enum JV { JA { v: boolean }, JB { v:
+integer }, JC { v: text } }; fn m() -> JV { JB { v: 42 } }`), the call
+site crashes with `called Option::unwrap() on None` in alloc internals
+— unaligned record sizes across variants.  This is the same class
+of bug as B3 but triggered by type variety rather than nullability.
 
-3b is the cleaner long-term fix and probably lands first; 3a
-becomes the fallback if the variant-construction work balloons.
+**B5 — Recursive struct-enum infinite codegen loop.**  Declaring
+`JsonValue` with `JArray { items: vector<JsonValue> }` trips loft's
+`Recursion depth limit exceeded (500)` guard during compilation.
+Self-referential variants are unusable today.  Workaround: omit the
+recursive variants from the public enum (what the current
+`default/06_json.loft` does by design).
+
+**B6 — Match-arm type unification.**  `JString { value } => value, _
+=> ""` fails with `cannot unify: &text and text`.  The binding
+returns a borrowed text; the `""` arm an owned text.  Workaround:
+assign to a local in each arm.
+
+**B7 — Struct-enum native allocation double-free.**  Attempted
+`n_json_parse` implementation via `stores.database()` + discriminant
+write hit `double free or corruption` at program exit.  Each call
+allocates a fresh store; the store's ref-count + `OpFreeRef`
+lifecycle conflict with standalone-record usage.  Needs the same
+ref-count treatment `File` gets, plus understanding of whether the
+caller's scope-exit `OpFreeRef` is expected to decrement or
+free-whole-store.
+
+### Two paths forward
+
+**3a — Native allocation** (was the PROBLEMS.md plan).  Resolve B7 so
+`n_json_parse` can materialise a real `JsonValue` record.  Skirts
+B2–B6 because the record is built in Rust, not via loft syntax.
+Scope: medium — needs reading of `File`'s ref-count handling +
+`stores.database` vs `stores.claim` lifecycle + an `OpFreeRef`
+interaction matrix.
+
+**3b — Fix the struct-enum language bugs first.**  Close B2–B6,
+which are blocking any future stdlib struct-enum (`Option<T>`,
+`Result<T, E>`, planned coroutine surfaces).  Pure loft
+`json_parse` then drops out cheaply: text peek + variant
+construction + `text as float` for numbers.  The `src/json.rs`
+parser landed in `2edc812` becomes reference documentation.
+
+3b is the higher-leverage investment; 3a is the narrower path.
+Either way P54 stays blocked on compiler surgery — not a
+documentation-only fix.
 
 ### Steps (sprint branch `p54-json-value`)
 
