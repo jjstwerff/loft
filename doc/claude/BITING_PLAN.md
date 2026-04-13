@@ -257,17 +257,35 @@ cannot change type from MyE to MyE"`.  Both leave unit variants
 unusable as function returns.  Workaround: give every variant at
 least one field (`Null { is_null: boolean }` in the JsonValue draft).
 
-**B3 — Struct-enum with a `float not null` variant.**  `pub enum E {
-A { v: float not null } }; fn m() -> E { A { v: 1.0 } }` crashes with
-`free(): invalid size`.  Removing `not null` helps with this crash but
-trips B4.
+**B3 / B4 — Struct-enum returned from a function crashes at runtime
+(any variant type, any number of variants).**  Narrowed to a single
+reproducer after the blocker-test sweep:
 
-**B4 — Mixed-field struct-enum returned from function.**  Even with
-all variants field-carrying (`pub enum JV { JA { v: boolean }, JB { v:
-integer }, JC { v: text } }; fn m() -> JV { JB { v: 42 } }`), the call
-site crashes with `called Option::unwrap() on None` in alloc internals
-— unaligned record sizes across variants.  This is the same class
-of bug as B3 but triggered by type variety rather than nullability.
+```loft
+pub enum JV { A { v: integer } }
+fn mk() -> JV { A { v: 42 } }
+fn main() {
+  x = mk();
+  match x { A { v } => println("{v}") }
+}
+```
+
+crashes with `malloc(): unaligned tcache chunk detected` or similar
+allocator corruption.  Passing a struct-enum **into** a function
+(`fn show(j: const JV)`) works; constructing and matching in the
+same scope works; *only* the return path is broken.
+
+Different backing types produce different crash signatures (`free():
+invalid size` for `float`, `Recursion depth exceeded` for mixed
+variants, `double free` for `float not null`), all symptoms of the
+same underlying codegen bug around struct-enum return value
+handling.  Plain struct return works fine, so the bug is
+struct-enum-specific.
+
+Tests in `tests/issues.rs`: `p54_struct_enum_as_parameter_ok` and
+`p54_struct_enum_literal_then_match_same_scope` pin the working
+cases; `p54_b3_single_variant_return` is the single narrowed
+reproducer (`#[ignore]`'d pending fix).
 
 **B5 — Recursive struct-enum infinite codegen loop.**  Declaring
 `JsonValue` with `JArray { items: vector<JsonValue> }` trips loft's

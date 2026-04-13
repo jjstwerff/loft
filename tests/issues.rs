@@ -3532,3 +3532,66 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(7));
 }
+
+/// P54 related — positive baseline for struct-enum parameter passing.
+/// Passing a struct-enum into a function and matching on it inside works
+/// today; this test guards against that regressing while the return-
+/// direction bugs (B3/B4) are being resolved.
+#[test]
+fn p54_struct_enum_as_parameter_ok() {
+    code!(
+        "pub enum JV { A { v: integer }, B { x: integer } }
+fn show(j: const JV) -> integer {
+    match j {
+        A { v } => v,
+        B { x } => x
+    }
+}
+fn run() -> integer {
+    n = A { v: 42 };
+    show(n)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// P54 related — positive baseline for struct-enum constructed in a
+/// function and immediately matched in the same scope (no return).
+/// Works today; guard against regression.
+#[test]
+fn p54_struct_enum_literal_then_match_same_scope() {
+    code!(
+        "pub enum JV { A { v: integer }, B { x: integer } }
+fn run() -> integer {
+    n = A { v: 7 };
+    match n {
+        A { v } => v,
+        B { x } => x
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+/// B3 (open, sharpened): even a single-variant struct-enum returned
+/// from a function crashes at runtime.  Narrows the reproducer from
+/// B4's mixed-type variant case — the blocker is the return path, not
+/// the variant diversity.
+#[test]
+#[ignore = "P54 B3/B4: struct-enum return from function crashes (any variant type)"]
+fn p54_b3_single_variant_return() {
+    code!(
+        "pub enum JV { A { v: integer } }
+fn mk() -> JV { A { v: 42 } }
+fn run() -> integer {
+    x = mk();
+    match x {
+        A { v } => v
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
