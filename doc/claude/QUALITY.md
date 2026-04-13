@@ -25,7 +25,6 @@ Decisions to *not* fix something live in
 |---|-------|----------|--------|
 | P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Active sprint** — see § P54 below |
 | INC#12 | Index range-query second-key boundary depends on undeclared sort direction | Medium | Doc-only fix pending |
-| INC#26 | Match exhaustiveness ignores guarded arms — wildcard still required | Medium | Doc-only fix pending |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
 | B2-runtime | Unit-variant literal construction in struct-enum crashes | Medium | Compiler — see § Compiler blockers |
 | B3 | Struct-enum tail-expression return crashes | Medium | Compiler — see § Compiler blockers |

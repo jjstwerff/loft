@@ -20,7 +20,6 @@ Fixed items have been removed from this file; their resolutions are in CHANGELOG
 - [12. Index Range-Query Second-Key Semantics Depend on Sort Direction](#12-index-range-query-second-key-semantics-depend-on-sort-direction)
 - [17. Implicit Type Coercion Rules Are Not Uniform](#17-implicit-type-coercion-rules-are-not-uniform)
 - [18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement](#18-break-reuses-the-attribute-syntax-for-a-control-flow-statement)
-- [26. Match Exhaustiveness Ignores Guarded Arms](#26-match-exhaustiveness-ignores-guarded-arms)
 - [27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action](#27-break-keyword-and-xbreak-attribute-are-two-mechanisms-for-the-same-action)
 - [28. Vector Slice Syntax Has No Grammar Entry and Diverges From Range Syntax](#28-vector-slice-syntax-has-no-grammar-entry-and-diverges-from-range-syntax)
 - [30. `{...}` Is Both Anonymous Struct Initialisation and a Block Expression](#30--is-both-anonymous-struct-initialisation-and-a-block-expression)
@@ -176,6 +175,17 @@ runtime — but it means a programmer who writes guards on every variant still n
 wildcard arm or will get a non-exhaustive error. The interaction between guards and
 exhaustiveness is not obvious from the syntax.
 
+**Status (2026-04-13):** Documented in
+[LOFT.md § Pattern matching](LOFT.md) under the "Guard clauses"
+paragraph with a worked example (Red-if-bright / Green-if-bright / Blue / `_`).
+Three regression guards in `tests/issues.rs` lock the behaviour:
+`inc26_guarded_arm_without_wildcard_is_rejected` (asserts the compile error
+wording, including the `'_ =>' wildcard` fix-it hint),
+`inc26_guarded_arm_with_wildcard_compiles` (compiles + runs when the wildcard
+is present), and `inc26_guarded_arm_falls_through_when_guard_false` (runtime
+fall-through to a subsequent unguarded arm).  The wildcard requirement is an
+acknowledged soundness property, not a silent surprise.
+
 ---
 
 ## 27. `break` Keyword and `x#break` Attribute Are Two Mechanisms for the Same Action
@@ -282,7 +292,6 @@ _All fixed — see CHANGELOG.md._
 | # | Issue |
 |---|---|
 | 12 | Index range-query second-key boundary depends on undeclared sort direction |
-| 26 | Match exhaustiveness ignores guarded arms — wildcard still required |
 | 27 | `break` keyword and `x#break` attribute are two mechanisms for the same action; no `x#continue` |
 
 ### Low (cosmetic or minor)
@@ -307,6 +316,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 | # | Issue | Doc + Tests |
 |---|---|---|
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |
+| 26 | Match exhaustiveness ignores guarded arms — wildcard still required | LOFT.md § Pattern matching (Guard clauses paragraph); `inc26_*` regression tests |
 | 29 | `!b` on boolean catches false and null; `!n` on integer catches null only | LOFT.md null-sentinel table (`!value` asymmetry subsection); `inc29_*` regression tests |
 
 ---

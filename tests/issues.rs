@@ -4225,3 +4225,70 @@ fn inc3_vector_index_is_element_position() {
     .expr("run()")
     .result(Value::Int(2));
 }
+
+// ── INC#26: match exhaustiveness ignores guarded arms ───────────────────
+//
+// A guarded arm (`pattern if guard => body`) does NOT count as
+// covering that variant for exhaustiveness — the guard may fail
+// at runtime.  Even if every variant has a guarded arm, a
+// wildcard `_ =>` or an unguarded arm is still required.
+//
+// This is intentional (soundness: the compiler cannot prove the
+// guard is always true), but surprising.  These tests lock the
+// behaviour so a future "smarter exhaustiveness" attempt cannot
+// silently drop the wildcard requirement without updating LOFT.md.
+#[test]
+fn inc26_guarded_arm_without_wildcard_is_rejected() {
+    code!(
+        "enum Color { Red, Green, Blue }
+fn describe(c: const Color, bright: boolean) -> text {
+    match c {
+        Red if bright => \"bright red\",
+        Green         => \"green\",
+        Blue          => \"blue\"
+    }
+}"
+    )
+    // The match is not exhaustive: the Red guard can fail, and there
+    // is no fallback for that case.  Parser must reject at compile time.
+    .error(
+        "match on Color is not exhaustive — missing: Red; add the missing variants or a '_ =>' wildcard \
+at inc26_guarded_arm_without_wildcard_is_rejected:3:12",
+    );
+}
+
+#[test]
+fn inc26_guarded_arm_with_wildcard_compiles() {
+    code!(
+        "enum Color { Red, Green, Blue }
+fn describe(c: const Color, bright: boolean) -> text {
+    match c {
+        Red if bright => \"bright red\",
+        Green         => \"green\",
+        Blue          => \"blue\",
+        _             => \"dim red\"
+    }
+}
+fn run() -> text { describe(Red, false) }"
+    )
+    .expr("run()")
+    .result(Value::str("dim red"));
+}
+
+#[test]
+fn inc26_guarded_arm_falls_through_when_guard_false() {
+    code!(
+        "enum Color { Red, Green, Blue }
+fn describe(c: const Color, bright: boolean) -> text {
+    match c {
+        Red if bright => \"bright red\",
+        Red           => \"dim red\",
+        Green         => \"green\",
+        Blue          => \"blue\"
+    }
+}
+fn run() -> text { describe(Red, false) }"
+    )
+    .expr("run()")
+    .result(Value::str("dim red"));
+}
