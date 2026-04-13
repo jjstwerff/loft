@@ -46,16 +46,16 @@ fn main() {
   // before b (exclusive upper bound). Use '..=' to include the upper bound.
   // Here we sum 1 + 2 + 3 + 4 + 5 = 15.
   t = 0;
-  for a in 1..6 {
-    t += a;
+  for i in 1..6 {
+    t += i;
   }
   assert(t == 15, "Total was {t} instead of 15");
   // 'rev(range)' reverses the direction of any range.
   // '1..=5' is inclusive, so it visits 5, 4, 3, 2, 1 in that order.
   // Multiplying each digit into a running total builds the number 54321.
   t = 0;
-  for a in rev(1..=5) {
-    t = t * 10 + a;
+  for i in rev(1..=5) {
+    t = t * 10 + i;
   }
   assert(t == 54321, "Result was {t} instead of 54321");
   // ## Nested loops and break

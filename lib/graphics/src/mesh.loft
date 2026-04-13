@@ -121,12 +121,10 @@ pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh {
   sm = mesh(sn);
   pi2 = 6.283185307179586;  // 2 * pi
   // Generate rings from top (+y) to bottom (-y).
-  row = 0;
   for row in 0..st+1 {
     v_phi = 3.141592653589793 * (row as float) / (st as float);  // 0..pi
     sy = sr * cos(v_phi);
     ring_r = sr * sin(v_phi);
-    col = 0;
     for col in 0..ss+1 {
       v_theta = pi2 * (col as float) / (ss as float);  // 0..2pi
       sx = ring_r * cos(v_theta);
@@ -139,9 +137,7 @@ pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh {
     }
   }
   // Wire triangles.
-  row = 0;
   for row in 0..st {
-    col = 0;
     for col in 0..ss {
       i00 = row * (ss + 1) + col;
       i01 = row * (ss + 1) + col + 1;

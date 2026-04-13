@@ -170,7 +170,7 @@ makes the "fully working language" label dishonest.
 |--------|--------------------------------------------------------|----|--------|
 | C54    | **Switch `integer` from i32 to i64.** Eliminates the `i32::MIN` null-sentinel trap entirely. `long` keeps working as a historical alias. Breaking change, pre-1.0 window. Revisit `size(Type::Integer)` + schema layout tests | MH | CAVEATS.md |
 | C60    | **Hash iteration** via `for (k, v) in hash` → `(K, V)` tuples, unspecified order. Ordered traversal stays the parallel-vector pattern | M | CAVEATS.md |
-| C61.local | **Liveness-aware outer-local shadow reject.** Unconditional variant was attempted and reverted — required renames exposed a latent slot-allocator crash, and the stdlib docs' dead-local idiom reads worse after forced renames. Add a post-parse last-read pass in `src/variables/intervals.rs`; fire only when the outer has a live read after the loop. Infrastructure (`was_loop_var`) already landed | M | CAVEATS.md |
+| ~~C61.local~~ | ~~Outer-local shadow reject~~ | S | **Done** — pass-1 reject via `was_loop_var`; stdlib rename sweep unblocked by #139. Tests: `tests/parse_errors.rs::c61_local_*` |
 | ~~SLOT-VEC3 / #139~~ | ~~`_vector_N` slot-allocator TOS mismatch~~ | MH | **Done** — `OpReserveFrame` now fires when the allocator's slot sits above TOS. Unblocks the C61.local rename sweep. Tests: `tests/issues.rs::p139_*` |
 | ~~C7/P22~~ | ~~Improve `spacial<T>` diagnostic wording~~ | XS | **Done** — diagnostic surfaces 1.1+ timeline and substitute types. Tests: `spacial_not_implemented`, `spacial_not_implemented_in_local` |
 | P54    | **Typed `JsonBody` newtype** + `.is_object/array/null`. Full `JsonValue` enum stays 1.1+ until dynamic-shape use case lands | M | PROBLEMS.md #54 |

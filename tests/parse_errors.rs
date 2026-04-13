@@ -515,7 +515,11 @@ fn shadow_different_type() {
 
 #[test]
 fn shadow_same_type_ok() {
-    // Same-type reuse (integer → integer loop var) is idiomatic; no error.
+    // C61.local: same-type shadow of an outer local is now rejected at
+    // parse time — renaming the loop variable or dropping the outer
+    // local are the two documented fixes.  Previously this test was
+    // named "_ok" because the reuse silently succeeded; it now pins the
+    // rejection to prevent regression.
     code!(
         "fn test() {
     x = 10;
@@ -523,6 +527,12 @@ fn shadow_same_type_ok() {
     for x in v { }
     println(\"{x}\");
 }"
+    )
+    .error(
+        "loop variable 'x' shadows a local named 'x' — rename the loop \
+         variable (e.g. loop_x) or drop the outer `x` if it was a dead \
+         placeholder; loft does not block-scope loop variables at \
+         shadow_same_type_ok:4:17",
     );
 }
 
@@ -958,24 +968,56 @@ fn c61_nested_same_name_loop_rejected() {
 }
 
 #[test]
-fn c61_local_shadow_still_silent_tracked_as_c61_local() {
-    // C61.local (tracked, not yet rejected): a for-loop variable that
-    // silently clobbers a same-named local still compiles today.  The
-    // naive reject-at-parse approach broke existing stdlib docs that
-    // rely on the reuse idiom (a dead initial `a = 12`, then
-    // `for a in 1..6 { … }`).  A future liveness-aware diagnostic will
-    // catch only cases where the outer value is actually live.  This
-    // test pins today's behaviour so the planned fix has something
-    // concrete to flip.
+fn c61_local_shadow_rejected() {
+    // C61.local: a for-loop variable that would silently clobber a
+    // same-named outer local is rejected at parse time with a rename
+    // hint.  Unblocked by PROBLEMS.md #139's OpReserveFrame fix, which
+    // made it possible to rename stdlib docs without tripping the
+    // slot-allocator TOS mismatch on layout changes.
     code!(
         "fn run() -> integer {\n  \
            x = 99;\n  \
-           for loop_x in 0..3 { loop_x; }\n  \
+           for x in 0..3 { }\n  \
+           x\n\
+         }"
+    )
+    .expr("run()")
+    .error(
+        "loop variable 'x' shadows a local named 'x' — rename the loop \
+         variable (e.g. loop_x) or drop the outer `x` if it was a dead \
+         placeholder; loft does not block-scope loop variables at \
+         c61_local_shadow_rejected:3:18",
+    );
+}
+
+#[test]
+fn c61_local_shadow_renamed_ok() {
+    // Regression guard: renaming the loop variable keeps the outer
+    // local intact.
+    code!(
+        "fn run() -> integer {\n  \
+           x = 99;\n  \
+           for loop_x in 0..3 { x + loop_x; }\n  \
            x\n\
          }"
     )
     .expr("run()")
     .result(Value::Int(99));
+}
+
+#[test]
+fn c61_local_dropped_outer_ok() {
+    // Regression guard: dropping the dead outer placeholder is the
+    // other documented fix.  `a` is live only inside the loop.
+    code!(
+        "fn run() -> integer {\n  \
+           t = 0;\n  \
+           for a in 1..6 { t += a; }\n  \
+           t\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(15));
 }
 
 #[test]

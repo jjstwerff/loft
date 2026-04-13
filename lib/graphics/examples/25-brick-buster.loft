@@ -859,7 +859,7 @@ fn main() {
           }
         }
         for br_rp in 0..8 { br_pk_on[br_rp] = 0; }
-        for br_rt in 0..MAX_PARTICLES { br_pt_t[br_rt] = 0.0; }
+        for br_pti in 0..MAX_PARTICLES { br_pt_t[br_pti] = 0.0; }
         br_bl_on = false;
         br_flash_timer = 0.0;
         br_level_timer = 0.0;

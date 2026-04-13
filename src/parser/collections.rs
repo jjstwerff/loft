@@ -847,36 +847,43 @@ use #count instead"
                 self.vars.var_type(existing_var).name(&self.data)
             );
         }
-        // C61: reject a `for <id>` that silently aliases an outer binding.
-        // Two variants are caught:
+        // C61: reject two classes of shadow that both produce silent wrong
+        // values today:
         //   * Nested same-name loops (`for i { for i { } }`) — the inner
-        //     iterator rewrites the outer's `#index` companion, so the
-        //     outer exits early.  Rename the inner variable.
-        //   * Loop variable shadows a plain local (`x = 5; for x in …`) —
-        //     the loop silently clobbers `x`.  Rename the loop variable.
-        // Sequential same-name loops (two `for i in …` in the same
-        // function, not nested) are still allowed: the prior `i` was a
-        // loop variable itself, reused by the next iteration.  `_` is
-        // exempt (conventional unused placeholder).
-        // C61: reject nested same-name loops (`for i { for i { } }`) on
-        // pass 2 — `is_active_loop_var` uses the current-loop chain which
-        // reflects live parser state.  The outer-local shadow case
-        // (`x = 5; for x in …`) is intentionally NOT rejected here:
-        // existing stdlib docs and examples rely on the reuse idiom
-        // (dead initial local, then loop variable).  Tracked as
-        // C61.local in CAVEATS.md for a future liveness-aware diagnostic.
-        if !self.first_pass
-            && id != "_"
-            && existing_var != u16::MAX
-            && self.vars.is_active_loop_var(existing_var)
-        {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "loop variable '{id}' shadows the enclosing loop's '{id}' — \
-                 rename the inner loop variable (e.g. inner_{id}); loft does \
-                 not support nested same-name loops"
-            );
+        //     iterator rewrites the outer's `#index` companion, detected
+        //     on pass 2 via the active-loop chain.
+        //   * Outer-local shadow (`x = 5; for x in …`) — the loop
+        //     silently clobbers `x`; detected on pass 1 via the
+        //     `was_loop_var` flag.  A plain local's slot has never served
+        //     as a loop variable, so the prior binding is unambiguously a
+        //     local.
+        // Sequential same-name loops stay legal because the prior slot
+        // carries `was_loop_var = true`.  `_` is exempt.
+        if id != "_" && existing_var != u16::MAX {
+            if !self.first_pass && self.vars.is_active_loop_var(existing_var) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "loop variable '{id}' shadows the enclosing loop's '{id}' — \
+                     rename the inner loop variable (e.g. inner_{id}); loft does \
+                     not support nested same-name loops"
+                );
+            } else if self.first_pass
+                && !self.vars.was_loop_var(existing_var)
+                && !self.vars.is_active_loop_var(existing_var)
+                && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
+                && (self.vars.var_type(existing_var).is_same(&var_tp)
+                    || self.vars.var_type(existing_var).is_unknown())
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "loop variable '{id}' shadows a local named '{id}' — \
+                     rename the loop variable (e.g. loop_{id}) or drop the \
+                     outer `{id}` if it was a dead placeholder; loft does \
+                     not block-scope loop variables"
+                );
+            }
         }
         let for_var = self.create_var(id, &var_tp);
         self.vars.defined(for_var);

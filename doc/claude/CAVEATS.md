@@ -75,35 +75,29 @@ collection.  Users who need ordered iteration pair the hash with a
 `vector<K>` (the current workaround, now explicit and documented).
 Tuples shipped already, so the API shape is natural.
 
-### C61.local — Outer-local silently clobbered by a for-loop
-`x = 5; for x in …` silently reassigns `x` to the loop's last value.
-**Decision (final, after failed unconditional-reject attempt):**
-liveness-aware reject — fires only when the outer `x` has a live read
-*after* the loop body.  The unconditional variant was tried
-(b716d1d, reverted) and hit two problems:
-  1. **Blast radius.** 6+ stdlib/example files rely on the
-     `a = 12; for a in 1..6` teaching idiom.  Renaming to `loop_a`
-     reads worse than the current permissive form.
-  2. **Latent slot-allocator crash.** The required renames in
-     `05-enums.loft` shift the internal unique-variable count and
-     trip a pre-existing codegen bug (`_vector_3 slot=363 TOS=362`
-     in `src/state/codegen.rs:922`).  The bug is *masked by current
-     variable layouts*, not caused by my changes, but it blocks any
-     rename-sweep today.
+### ~~C61.local~~ — Outer-local shadow — DONE
+`x = 5; for x in …` now rejected on pass 1 via the `was_loop_var`
+flag on `Variable` — a slot that exists in `names` but has never
+served as a loop variable is unambiguously a plain local, so the
+shadow is flagged with a rename-or-drop hint.  Same-typed shadow
+only (the existing type-mismatch check handles the different-typed
+class with a clearer message).  Sequential same-name loops stay
+legal because the prior slot carries `was_loop_var = true`.
 
-Liveness is the principled line: the language should catch
-*unambiguous* bugs (outer `x` read after the loop — the silent
-clobber is observable), not *plausible* ones (outer `x` dead after
-the loop — the rewrite is semantically equivalent).
+Unblocked by PROBLEMS.md #139's `OpReserveFrame` fix, which made the
+stdlib rename sweep possible without tripping the slot-allocator
+TOS assertion.
 
-Prerequisite: **fix the `_vector_3` slot bug** independently so the
-diagnostic's doc-cleanup sweep is possible.  Without that fix, even
-the liveness-aware version will trip on downstream tests.
-
-Infrastructure landed (`Variable::was_loop_var`); remaining work is
-~50 lines in `src/variables/intervals.rs` to produce per-variable
-last-read positions, then gate the diagnostic on "last read > for
-loop start".
+**Tests:** `tests/parse_errors.rs::c61_local_shadow_rejected`,
+`c61_local_shadow_renamed_ok`, `c61_local_dropped_outer_ok`, plus
+the flipped-to-reject `shadow_same_type_ok`.
+**Files cleaned up:** `lib/graphics/src/mesh.loft` (dropped dead
+`row = 0; col = 0` inits), `lib/parser.loft` (renamed `p` / `f` →
+`param` / `fld`), `tests/docs/01-keywords.loft` (renamed `for a`
+→ `for i`), `tests/scripts/05-enums.loft` (two loops renamed),
+`tests/scripts/39-diagnostics-passing.loft` (flipped the
+once-permissive test), `lib/graphics/examples/25-brick-buster.loft`
+(renamed `br_rt` → `br_pti`).
 
 ### P91 — Default-from-earlier-parameter
 `fn make_rect(w: integer, h: integer = w)` is an idiomatic default.
@@ -152,7 +146,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | C54    | 0.9.0     | **Switch `integer` from i32 to i64.** `long` becomes historical alias. Breaking change, pre-1.0 window |
 | C58/P135 | 0.8.5   | Canonical `(0, 0) = screen-top-left`; lock in LOFT.md; re-bake brick-buster atlas |
 | C60    | 0.9.0     | `for (k, v) in hash` returning `(K, V)` tuples in unspecified order |
-| C61.local | 0.9.0  | Liveness-aware reject (not unconditional); depends on slot-allocator bug fix first |
+| ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |
 | P54    | 0.9.0     | `JsonBody` newtype + `.is_object/array/null()`; full `JsonValue` deferred to 1.1+ |
 | P91    | 0.9.0     | Default evaluated at function entry via prologue; call-site supplied-args bitmap. Scope M |
 | P137   | 0.8.5     | Browser WASM `unreachable` panic fix |
