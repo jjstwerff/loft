@@ -37,6 +37,7 @@ existing entry, not re-open it as a bug.
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
+| 142 | `vector<T>` field panics when T is from imported file | High | Put all structs that reference each other via `vector<T>` in the same `.loft` file |
 
 ---
 
@@ -634,6 +635,66 @@ Reproduces at `d7ef549` (`origin/main` after PR #170 merge); was
 also reproducible at the pre-merge `d0d6932` commit.
 See `CHANGELOG.md` and `doc/claude/RELEASE.md` § "Crashes" for
 release-block ownership.
+
+---
+
+## Package / Multi-file
+
+### 142. `vector<T>` field panics when T is a struct from an imported file
+
+**Severity:** High — blocks multi-file library layout for any package that
+uses `vector<StructType>` fields where the struct is defined in a separate
+`.loft` file.
+
+**Symptom:** The parser panics with:
+
+```
+assertion `left != right` failed: Unknown vector unknown(N) content type on [M]Outer.field
+  left: 4294967295
+ right: 4294967295
+```
+
+at `src/typedef.rs:311` during the type-fill phase (`fill_all`).
+
+**Reproducer (minimal):**
+
+```
+# inner.loft
+pub struct Inner { val: integer not null }
+
+# outer.loft
+use inner
+pub struct Outer { items: vector<Inner> }
+fn test_it() {
+  o = Outer { items: [] };
+  assert(len(o.items) == 0, "empty");
+}
+```
+
+Run: `loft --lib <dir-containing-inner> outer.loft` → panic.
+
+The identical code in a single file works without issue:
+
+```
+struct Inner { val: integer not null }
+struct Outer { items: vector<Inner> }
+```
+
+**Root cause (likely):** `typedef.rs::fill_all` resolves `vector<T>` content
+types during the type registration loop.  When `T` is a struct loaded via
+`use` from a different file, the struct def-nr is not yet known at the point
+where the vector content type is resolved — the two-pass design fills types
+file-by-file, so cross-file struct references in vector generics see
+`u16::MAX` (4294967295) instead of the real def-nr.
+
+**Workaround:** Put all structs that reference each other via `vector<T>`,
+`hash<T>`, `index<T>`, or `sorted<T>` in the same `.loft` file.  This is
+sufficient for the Moros `moros_map` package (all types in one file).
+
+**Discovered:** 2026-04-14 while implementing MO.1a (Moros hex scene map
+data model).  The designed layout had `types.loft`, `palette.loft`, and
+`spawn.loft` as separate files with `Map` referencing all of them via
+`vector<T>` fields.
 
 ---
 

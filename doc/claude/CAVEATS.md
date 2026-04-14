@@ -67,6 +67,31 @@ Buster's atlas (the only loft program with a non-trivial layout).
 
 ## Scheduled — 0.9.0
 
+### P142 — `vector<T>` field panics when T is from an imported file
+
+A struct field of type `vector<T>` (or `hash<T>`, `index<T>`,
+`sorted<T>`) panics during type resolution when `T` is defined in a
+different `.loft` file loaded via `use`.  The panic is in
+`src/typedef.rs::fill_all` — the vector content type is resolved
+before the imported struct's def-nr is registered.
+
+**Reproducer:**
+```
+# inner.loft
+pub struct Inner { val: integer not null }
+
+# outer.loft
+use inner
+pub struct Outer { items: vector<Inner> }
+```
+
+Same-file definition works fine.  **Workaround:** keep all structs
+that reference each other via generic collection fields in the same
+`.loft` file.  Applied in the Moros `moros_map` package.
+
+**Regression guard:** none yet — needs a Rust-level test in
+`tests/package_layout.rs` with a two-file test package.
+
 ### C54 — `integer` representation
 Silently returning null when arithmetic lands on `i32::MIN` (and
 debug-aborting) is actively hostile in a language pitched as "reads
