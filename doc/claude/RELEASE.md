@@ -81,18 +81,45 @@ gate caught a P54 chained-call leak: every `json_*().method()`
 expression leaks the temporary JsonValue store at scope exit.
 Debug-build assertion (`Database X not correctly freed` in
 `src/state/debug.rs`) caught it on CI; release build silently
-leaks per call.  34 tests added to the ignore baseline as a
-workaround so quality-branch CI stays green for ongoing work,
-but the underlying leak blocks the tag.
+leaks per call.
 
-**Unblock plan** (task #46): parser-side `dep` declaration for
-JsonValue accessor methods (`field`, `item`, `kind`, `keys`,
-`fields`, `as_*`) so they are correctly typed as borrowing into
-self's arena.  Once accessors carry `dep=[0]`, extend scope
-analysis's `inline_struct_return` to lift `Type::Enum + native +
-code_null + dep.is_empty()` (the constructors with no self).
-Un-ignore the 34 baselined tests, verify the zero-leak gate
-passes in debug, then re-attempt the tag.
+**State as of 2026-04-14 PM (PR #170 merged, tag deferred):**
+
+- `main` tip: `d7ef549` — squash-merge of PR #170 (the
+  98-commit `quality` branch).  Brings P54 + P54-U + crash
+  reporter + test workflow + RELEASE.md rewrite + 70 baselined
+  ignores + dep-inference design into main.
+- 70 tests still ignored under the chained-json leak rationale
+  (34 p54_* + 36 q2/q3/q4 entries).  All 70 un-ignore cleanly
+  once the dep-fix sprint lands.
+- Local debug full suite: clean (no FAILED markers; runs
+  through to completion).  CI passing on the squash commit.
+- P136 (wrap-suite SIGSEGV on `79-null-early-exit.loft`):
+  crash reporter now isolates it to a `Store read out of
+  bounds: rec=1 fld=8005 size=4 store_size=8008` panic in the
+  test-harness path.  Read at offset 8005 of the 8008-byte
+  stack store — confirms the op_return infinite-loop diagnosis
+  (stack_pos climbs past the buffer).  Reproducer
+  `#[ignore] sigsegv_repro_79_alone` and `loft_suite` skip
+  remain in place.
+- 3 wrap-harness leaks (scripts 42 / 62 / 76) still open;
+  CLI runs of those scripts are clean (no leaks via `loft`
+  binary), but the test-harness path leaks per script.
+  Diagnosis pending.
+
+**Active branch for next round:** `dep-fix-sprint` (off
+`d7ef549`).  Targets task #46 — parser-side `dep` declaration
+for JsonValue accessor methods (`field`, `item`, `kind`,
+`keys`, `fields`, `as_*`) so they are correctly typed as
+borrowing into self's arena.  Once accessors carry `dep=[0]`,
+extend scope analysis's `inline_struct_return` to lift
+`Type::Enum + native + code_null + dep.is_empty()` (the
+constructors with no self).  Un-ignore the 70 baselined tests,
+verify the zero-leak gate passes in debug, then re-attempt the
+tag.
+
+Design + implementation cost in QUALITY.md § Active design —
+Dep-inference for native fn returns.
 
 Severity legend:
 - **H** — hard block.  Release cannot ship.

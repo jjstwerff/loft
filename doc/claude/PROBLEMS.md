@@ -502,7 +502,7 @@ after `git show HEAD:src/*` replaces every modified `src/` file
 with its committed HEAD content.  The bug is pre-existing at
 commit `d0d6932`.
 
-**Debugger fingerprints (valgrind):**
+**Debugger fingerprints (valgrind + crash reporter):**
 
 ```
 Invalid write of size 1
@@ -512,16 +512,32 @@ Invalid write of size 1
    by loft::state::State::new
 ```
 
+In a debug build the bounds check fires earlier:
+
+```
+thread 'sigsegv_repro_79_alone' panicked at src/store.rs:902:9:
+Store read out of bounds: rec=1 fld=8005 size=4 store_size=8008
+
+=== loft crash (wrap) SIGABRT caught ===
+  last op:  (opcode dispatch) (op=5)
+  pc:       0
+  fn:       (?) (d_nr=4294967295)
+===
+```
+
 The 8008-byte block is the stack store allocated in `State::new`
-(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` writes
-8 bytes past the end of that block — `stack_pos` climbs above
-8000.  Live instrumentation shows `fn_return` being called
-repeatedly at `code_pos=6`, reading `u32::MAX` but getting `6` or
-similar small bytecode offsets, turning the wrap-test binary into
-an infinite loop that grows the stack by 12 bytes per iteration
-until it overflows into adjacent heap and corrupts Rust's
-allocator metadata.  The `Data::drop` at end of `run_test` then
-finds corrupted `Value`/`String` entries and glibc aborts.
+(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` (op=5)
+writes 8 bytes past the end of that block — `stack_pos` climbs
+above 8000.  Live instrumentation shows `fn_return` being called
+repeatedly at `code_pos=6` (or 12 / 18), reading `u32::MAX` but
+getting `6` / `12` / similar small bytecode offsets, turning the
+wrap-test binary into an infinite loop that grows the stack by
+12 bytes per iteration until it overflows into adjacent heap and
+corrupts Rust's allocator metadata.  The `Data::drop` at end of
+`run_test` then finds corrupted `Value`/`String` entries and
+glibc aborts.  `call_stack` is empty by the time the loop runs
+(d_nr=u32::MAX in the crash report) — execution has already
+left main and is "returning past the bottom of the stack".
 
 **Runs fine via CLI:**
 
@@ -563,14 +579,19 @@ So the bug lives somewhere in the difference between
 cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
 ```
 
-**Debug aids in place:**
+**Debug aids already in place** (no setup needed for next session):
 
-- `src/crash_report.rs` — `install("wrap")` / `set_context(pc, op,
-  d_nr, fn_name)` lets the interpreter publish the last opcode per
-  thread; a SIGSEGV/SIGABRT/SIGBUS handler prints it to stderr
-  async-signal-safely before the default handler produces a core
-  dump.  Call `crash_report::install("loft")` at the top of
-  `main.rs` or `run_test` to enable.
+- `src/crash_report.rs` — `install("loft")` is called from
+  `src/main.rs` startup; `install("wrap")` is called from
+  `tests/wrap.rs::run_test`.  The interpreter's execute loop in
+  `src/state/mod.rs::execute_argv` calls `set_context(pc, op_code,
+  op_name, fn_d_nr, fn_name)` at every opcode dispatch.  On
+  SIGSEGV/SIGABRT/SIGBUS the handler async-signal-safely prints
+  the published context to stderr, then the default handler runs
+  to produce the core dump.
+- `tests/wrap.rs::sigsegv_repro_79_alone` (`#[ignore]`) is the
+  standalone reproducer; `tests/wrap.rs::ignored_scripts()`
+  skips `79-null-early-exit.loft` from `loft_suite`.
 - `ulimit -c unlimited` + `sysctl -w kernel.core_pattern=/tmp/core.%e.%p`
   — local core dumps, inspect with `gdb -c core target/release/deps/wrap-<hash>`.
 - `valgrind --error-exitcode=42 --track-origins=yes --num-callers=30
@@ -578,7 +599,10 @@ cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
   --nocapture` — points `op_return` at the out-of-bounds write.
 
 **Discovered:** 2026-04-14 during P54-U phase 2 test sweep.
-See `CHANGELOG.md` and `doc/claude/QUALITY.md` § P136 for ownership.
+Reproduces at `d7ef549` (`origin/main` after PR #170 merge); was
+also reproducible at the pre-merge `d0d6932` commit.
+See `CHANGELOG.md` and `doc/claude/RELEASE.md` § "Crashes" for
+release-block ownership.
 
 ---
 

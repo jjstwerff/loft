@@ -9,13 +9,26 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
-### P54 sprint — first-class `JsonValue` (in progress)
+### P54 sprint — first-class `JsonValue`
 
 `Type.parse(text)` silently zeroed structs on malformed JSON — the
 typeless surface contradicts loft's "static types catch mistakes"
-promise.  Replacing the text-based JSON API with a first-class
-`JsonValue` enum.  Steps 1–3 (signature + parser + extractors) and
-step 4 (arena materialisation) landed; steps 5–8 still in progress.
+promise.  Replaced the text-based JSON API with a first-class
+`JsonValue` enum.  Steps 1–6 + Q1–Q4 + P54-U phases 1+2 all
+shipped this sprint (see § Steps 5–6 + Q1–Q4 (shipped) and §
+P54-U (shipped) below).  Step 7 (delete legacy scanner) is the
+P54-U phase 3 follow-up tracked in QUALITY.md.
+
+**Known follow-up — chained-call leak.**  70 tests in the
+P54/Q2/Q3/Q4 families are `#[ignore]`'d in the baseline because
+every `json_*().method()` chain leaks the temporary JsonValue
+store at scope exit.  Debug-build assertion catches it on CI;
+release silently leaks per call.  Root cause: scope analysis's
+`inline_struct_return` doesn't lift native struct-enum
+constructors because the parser doesn't infer `dep` for native
+fn returns.  Unblock plan: dep-inference design in QUALITY.md §
+"Dep-inference for native fn returns" — must land before the
+0.8.4 tag attempt resumes.
 
 **`JsonValue` surface (shipped):**
 - `enum JsonValue { JNull, JBool, JNumber, JString, JArray, JObject }`
