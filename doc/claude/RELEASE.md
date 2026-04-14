@@ -74,57 +74,48 @@ releases alike.  It applies whether the target is 0.8.4 or 1.0.0.
 A "quick fix" tag that closes one bug but leaves another open is
 still a broken build and still gets blocked.
 
-### 0.8.4 deferred (2026-04-14)
+### 0.8.4 progress
 
-The 0.8.4 tag attempt this date was **deferred** when the safety
-gate caught a P54 chained-call leak: every `json_*().method()`
-expression leaks the temporary JsonValue store at scope exit.
-Debug-build assertion (`Database X not correctly freed` in
-`src/state/debug.rs`) caught it on CI; release build silently
-leaks per call.
+**2026-04-14:** tag deferred — safety gate caught P54
+chained-call leak (`json_*().method()` leaks temporary store).
 
-**State as of 2026-04-14 PM (PR #170 merged, tag deferred):**
+**2026-04-25 (dep-fix-sprint):** dep-inference fix landed.
+Two changes:
+1. Parser (`src/parser/definitions.rs`): native methods
+   returning same struct-enum as `self` now carry `dep=[0]`
+   (borrow from self).  Constructors (no self) keep `dep=[]`.
+2. Scope lift (`src/scopes.rs::inline_struct_return`): native
+   struct-enum constructors (empty dep) are lifted to
+   temporaries and freed at scope exit.
 
-- `main` tip: `d7ef549` — squash-merge of PR #170 (the
-  98-commit `quality` branch).  Brings P54 + P54-U + crash
-  reporter + test workflow + RELEASE.md rewrite + 70 baselined
-  ignores + dep-inference design into main.
-- 70 tests still ignored under the chained-json leak rationale
-  (34 p54_* + 36 q2/q3/q4 entries).  All 70 un-ignore cleanly
-  once the dep-fix sprint lands.
-- Local debug full suite: clean (no FAILED markers; runs
-  through to completion).  CI passing on the squash commit.
-- P136 (wrap-suite SIGSEGV on `79-null-early-exit.loft`):
-  crash reporter now isolates it to a `Store read out of
-  bounds: rec=1 fld=8005 size=4 store_size=8008` panic in the
-  test-harness path.  Read at offset 8005 of the 8008-byte
-  stack store — confirms the op_return infinite-loop diagnosis
-  (stack_pos climbs past the buffer).  Reproducer
-  `#[ignore] sigsegv_repro_79_alone` and `loft_suite` skip
-  remain in place.
-- 3 wrap-harness leaks (scripts 42 / 62 / 76) still open;
-  CLI runs of those scripts are clean (no leaks via `loft`
-  binary), but the test-harness path leaks per script.
-  Diagnosis pending.
+Result: **79 previously-ignored P54/Q4 leak tests un-ignored
+and passing**.  Ignored count in `issues.rs` dropped from 89
+to 6 (maintenance, B2/B3 match crash, B5 recursive, B7
+character-interpolation, P136 harness, step-6 by design).
 
-**Active branch for next round:** `dep-fix-sprint` (off
-`d7ef549`).  Targets task #46 — parser-side `dep` declaration
-for JsonValue accessor methods (`field`, `item`, `kind`,
-`keys`, `fields`, `as_*`) so they are correctly typed as
-borrowing into self's arena.  Once accessors carry `dep=[0]`,
-extend scope analysis's `inline_struct_return` to lift
-`Type::Enum + native + code_null + dep.is_empty()` (the
-constructors with no self).  Un-ignore the 70 baselined tests,
-verify the zero-leak gate passes in debug, then re-attempt the
-tag.
-
-Design + implementation cost in QUALITY.md § Active design —
-Dep-inference for native fn returns.
+**Remaining blockers for 0.8.4 tag:**
+- WASM-build + WASM-runtime gates (see above)
+- Crash bugs: B2-runtime, B3, B5 L3, B7, P136
+- Zero-leak gate (wrap-suite scripts 42/62/76)
+- Zero-ignore baseline approval
 
 Severity legend:
 - **H** — hard block.  Release cannot ship.
 - **M** — block unless the exact scenario is documented and the
   release notes call it out as a known issue.
+
+### WASM endpoint — our primary deliverable must work
+
+The browser WASM bundle (`doc/pkg/loft_bg.wasm` + `doc/pkg/loft.js`)
+is the primary way users encounter loft — the gallery, the playground,
+Brick Buster, and `loft --html` all depend on it.  A release where the
+WASM path is broken is a release that doesn't work for most users.
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **WASM-build gate** | H | `cargo build --release --lib --target wasm32-unknown-unknown --no-default-features --features wasm` must succeed with the current stable `rustc`.  The `doc/pkg/` bundle must be rebuilt from this output before tagging. | `Cargo.toml` features, `.github/workflows/ci.yml` |
+| **WASM-runtime gate** | H | `tests/html_wasm.rs` must pass: the 5 P137/Q9 tests compile a trivial `.loft` to `--html`, extract the embedded WASM, and run it under Node with stub host imports.  Any `unreachable` trap or instantiation failure blocks. | `tests/html_wasm.rs`, `tools/wasm_repro.mjs` |
+| **Gallery smoke** | M | `make gallery` must complete and `doc/gallery.html` must load all 24 examples in a browser without console errors.  Verified by CI (`make test-gl-headless`) where Xvfb is available. | `doc/gallery.html`, `.github/workflows/ci.yml` |
 
 ### Crashes — no release may crash on valid input
 

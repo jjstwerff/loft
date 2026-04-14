@@ -1032,6 +1032,15 @@ impl Scopes {
             {
                 return Some(*d_nr);
             }
+            // Native struct-enum constructors: no body (code == Null), return type
+            // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
+            // Accessors carry dep=[0] after parser dep-inference and are skipped here.
+            if def.code == Value::Null
+                && let Type::Enum(d_nr, true, dep) = &def.returned
+                && dep.is_empty()
+            {
+                return Some(*d_nr);
+            }
         }
         None
     }

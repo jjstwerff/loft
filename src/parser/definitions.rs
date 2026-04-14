@@ -747,6 +747,28 @@ impl Parser {
             self.data.set_returned(self.context, result);
             self.data.definitions[self.context as usize].returned_not_null = returned_not_null;
         }
+        // Dep inference for native methods: if a native fn (no body, `;`-terminated)
+        // has a `self` parameter and returns the same struct-enum type, the return
+        // borrows from self's store.  Mark dep=[0] (self attribute) so
+        // inline_struct_return can distinguish accessors (dep non-empty, borrow)
+        // from constructors (dep empty, own).
+        if self.first_pass && self.lexer.peek_token(";") {
+            let def = &self.data.definitions[self.context as usize];
+            if let Some(self_attr) = def.attributes.first() {
+                if self_attr.name == "self" {
+                    if let Type::Enum(ret_nr, true, dep) = &def.returned {
+                        if dep.is_empty() {
+                            if let Type::Enum(self_nr, true, _) = &self_attr.typedef {
+                                if ret_nr == self_nr {
+                                    self.data.definitions[self.context as usize].returned =
+                                        Type::Enum(*ret_nr, true, vec![0]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if !self.lexer.has_token(";") {
             for (a_nr, a) in arguments.iter().enumerate() {
                 if self.first_pass {
