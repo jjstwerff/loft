@@ -61,6 +61,9 @@ struct Scopes {
     /// `OpFreeRef(__lift_N)` at function exit reads a slot that was never
     /// allocated along every execution path (P54-B3-family crash).
     lift_vars: Vec<u16>,
+    /// Counter for `__ret_N` temporaries used by `free_vars` to hold a
+    /// non-trivial tail expression's value while free ops run (B5-L3 fix).
+    ret_temp_counter: u16,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -81,6 +84,7 @@ pub fn check(data: &mut Data) {
             scan_depth: 0,
             lift_counter: 0,
             lift_vars: Vec::new(),
+            ret_temp_counter: 0,
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -119,6 +123,14 @@ pub fn check(data: &mut Data) {
             &data.definitions[d_nr as usize].code,
             &data.definitions[d_nr as usize].variables,
             &data.definitions[d_nr as usize].name.clone(),
+        );
+        #[cfg(debug_assertions)]
+        check_text_return(
+            &data.definitions[d_nr as usize].code,
+            &data.definitions[d_nr as usize].variables,
+            &data.definitions[d_nr as usize].name.clone(),
+            &data.definitions[d_nr as usize].returned.clone(),
+            data,
         );
         for (v_nr, scope) in scopes.var_scope {
             data.definitions[d_nr as usize]
@@ -733,6 +745,26 @@ impl Scopes {
             }
         } else if let Value::Block(bl) = expr {
             return insert_free(bl, &ls, is_return);
+        } else if is_return && is_value_return_type(tp) {
+            // B5-L3: when a value-returning function's tail expression is a
+            // non-Block, non-Var, non-Null value (If/Match/Call etc.) and
+            // there are free ops to run before return, save the expression's
+            // value to a temp, run the free ops, then return the temp.  The
+            // old path inserted the expression as a discarded statement and
+            // emitted Return(Null) — interpreter bytecode got away with it by
+            // reading the expression's result from top-of-stack via Return's
+            // `value` bytes, but native codegen produced `let _ = expr; ...;
+            // return 0` and dropped the function's actual return value.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {
@@ -1018,13 +1050,11 @@ impl Scopes {
                     let final_val = it.next().unwrap();
                     // the remaining Call may also be struct-returning
                     // (e.g. normalize3(__lift_1) inside add_dir).  Lift it too.
-                    if let Some(struct_d_nr) =
-                        Self::inline_struct_return(&final_val, data, outer_call)
-                    {
+                    if let Some(tp) = Self::inline_struct_return(&final_val, data, outer_call) {
                         self.lift_counter += 1;
                         let name = format!("__lift_{}", self.lift_counter);
-                        let tp = Type::Reference(struct_d_nr, vec![]);
                         let tmp = function.add_temp_var(&name, &tp);
+                        function.mark_inline_ref(tmp);
                         self.var_scope.insert(tmp, self.scope);
                         self.var_order.push(tmp);
                         self.lift_vars.push(tmp);
@@ -1036,11 +1066,11 @@ impl Scopes {
                 } else {
                     ls.push(Value::Insert(ops));
                 }
-            } else if let Some(struct_d_nr) = Self::inline_struct_return(&scanned, data, outer_call)
-            {
-                // inline struct-returning call as argument — lift to
-                // a temporary variable so get_free_vars emits OpFreeRef at scope
-                // exit.  Without this, the callee's store leaks every call.
+            } else if let Some(tp) = Self::inline_struct_return(&scanned, data, outer_call) {
+                // inline struct-returning or vector-returning call as argument
+                // — lift to a temporary variable so get_free_vars emits
+                // OpFreeRef at scope exit.  Without this, the callee's store
+                // leaks every call.
                 //
                 // The argument becomes Set(tmp, call(...)) which the codegen
                 // handles via gen_set_first_at_tos on first encounter and
@@ -1049,8 +1079,8 @@ impl Scopes {
                 // the dep is empty (owned).
                 self.lift_counter += 1;
                 let name = format!("__lift_{}", self.lift_counter);
-                let tp = Type::Reference(struct_d_nr, vec![]); // owned
                 let tmp = function.add_temp_var(&name, &tp);
+                function.mark_inline_ref(tmp);
                 self.var_scope.insert(tmp, self.scope);
                 self.var_order.push(tmp);
                 self.lift_vars.push(tmp);
@@ -1071,14 +1101,14 @@ impl Scopes {
     /// Skips lifting when the outer call's return type depends on this argument
     /// (i.e. the result borrows from the argument's store).  Freeing the lifted
     /// temp at scope exit would be use-after-free in that case.
-    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<u32> {
+    fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<Type> {
         if let Value::Call(fn_nr, _) = val {
             let def = data.def(*fn_nr);
             if def.name.starts_with("n_")
                 && def.code != Value::Null
                 && let Type::Reference(d_nr, _) = &def.returned
             {
-                return Some(*d_nr);
+                return Some(Type::Reference(*d_nr, Vec::new()));
             }
             // Native struct-enum constructors: no body (code == Null), return type
             // is a struct-enum with empty dep (allocates a new store, doesn't borrow).
@@ -1087,7 +1117,17 @@ impl Scopes {
                 && let Type::Enum(d_nr, true, dep) = &def.returned
                 && dep.is_empty()
             {
-                return Some(*d_nr);
+                return Some(Type::Enum(*d_nr, true, Vec::new()));
+            }
+            // Native vector-returning fns (e.g. `keys()`, `fields()` on
+            // JsonValue) allocate a fresh vector store that the caller owns.
+            // Without lifting, the chained call `v.keys().len()` leaks the
+            // intermediate vector — same mechanism as the struct-return case.
+            if def.code == Value::Null
+                && let Type::Vector(elem, dep) = &def.returned
+                && dep.is_empty()
+            {
+                return Some(Type::Vector(elem.clone(), Vec::new()));
             }
         }
         None
@@ -1139,6 +1179,24 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
         var_size: 0,
     })));
     res
+}
+
+/// Whether a function's return type holds a plain value (no heap ownership).
+/// Used by the B5-L3 fix in `free_vars` to decide whether saving the tail
+/// expression into a `__ret_N` temp is safe.  Heap-owned types are excluded
+/// for now — their ownership transfer interacts with `OpFreeRef` emission
+/// and needs a separate design pass.
+fn is_value_return_type(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Integer(_, _, _)
+            | Type::Long
+            | Type::Float
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Enum(_, false, _)
+    )
 }
 
 fn returned_var(expr: &Value) -> u16 {
@@ -1206,6 +1264,57 @@ fn collect_freed_vars(ir: &Value, free_ref_nr: u32, result: &mut HashSet<u16>) {
 ///
 /// Only compiled in debug builds; the check panics rather than emitting a
 /// diagnostic so that the failure is visible immediately during development.
+/// Debug-only check: when a text-returning function's `Return` source Str
+/// is backed by a local text variable `v`, refuse to compile if any
+/// `OpFreeText(v)` appears before that `Return`.  The returned Str would
+/// dangle into freed `String` memory — the interpreter occasionally gets
+/// away with it (if the underlying allocator hasn't reused the slot), but
+/// native codegen materialises this as `let _v = String::new(); … free(_v);
+/// return &_v;` and trips Rust's UB check.
+///
+/// Companion to `check_ref_leaks` above — that check catches owned-ref leaks
+/// at compile time; this one catches use-after-free on return.
+#[cfg(debug_assertions)]
+fn check_text_return(ir: &Value, function: &Function, fn_name: &str, ret_type: &Type, data: &Data) {
+    if !matches!(ret_type, Type::Text(_)) {
+        return;
+    }
+    let free_text_nr = data.def_nr("OpFreeText");
+    if free_text_nr == u32::MAX {
+        return;
+    }
+
+    // Collect every text var freed anywhere in the body (order-agnostic —
+    // we only care whether the var *is* freed, not when).  If the var is
+    // both the Return source and freed locally, codegen emits the free
+    // before the return value lands at the caller, leaving a dangling
+    // Str.  False negatives are fine (later walker will be stricter);
+    // false positives would misfire on valid patterns, so keep the
+    // criteria narrow.
+    let mut freed: HashSet<u16> = HashSet::new();
+    collect_freed_vars(ir, free_text_nr, &mut freed);
+    if freed.is_empty() {
+        return;
+    }
+
+    let ret_var = returned_var(ir);
+    if ret_var == u16::MAX {
+        return;
+    }
+    if !matches!(function.tp(ret_var), Type::Text(_)) {
+        return;
+    }
+    assert!(
+        !freed.contains(&ret_var),
+        "[check_text_return] fn '{}' frees local text '{}' (var_nr={ret_var}) \
+         before its Return — the returned Str would dangle into freed \
+         String memory.  scopes.rs must leave '{}' for the caller to free.",
+        fn_name,
+        function.name(ret_var),
+        function.name(ret_var),
+    );
+}
+
 #[cfg(debug_assertions)]
 fn check_ref_leaks(
     ir: &Value,

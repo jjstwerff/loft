@@ -991,6 +991,12 @@ impl State {
                     }
                 }
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
+                    // Locked stores are program-lifetime constants (e.g. the
+                    // shared JsonValue::JNull sentinel allocated by
+                    // `jv_null_sentinel`) — exempt from the leak check.
+                    if s.is_locked() {
+                        continue;
+                    }
                     assert!(s.free, "Database {s_nr} not correctly freed");
                 }
                 writeln!(log, "Finished")?;

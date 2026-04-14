@@ -759,6 +759,14 @@ impl State {
             // subject — don't allocate a store, just push a null sentinel.
             if stack.function.is_skip_free(v) {
                 stack.add_op("OpNullRefSentinel", self);
+            } else if stack.function.is_inline_ref(v) {
+                // Lift temporaries (scopes.rs scan_args) are always assigned
+                // from a call result before first read; the null-init only
+                // needs to reserve the slot and leave a null DbRef so an
+                // OpFreeRef along an un-taken path is a no-op.  Skipping the
+                // full pre-alloc avoids a dangling vector store (P54-B/Q2
+                // chain-leak fix).
+                stack.add_op("OpNullRefSentinel", self);
             } else if dep.is_empty() {
                 // TODO move this convoluted implementation to a new operator.
                 stack.add_op("OpConvRefFromNull", self);

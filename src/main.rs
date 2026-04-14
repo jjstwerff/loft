@@ -2226,11 +2226,16 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
     let main_nr = p.data.def_nr("n_main");
-    if main_nr == u32::MAX {
+    if main_nr == u32::MAX && !dump_only {
         // No main() — wrap each zero-parameter user function in a synthetic
         // main() that calls it. This ensures proper scope cleanup: stores
         // allocated by struct-returning functions are freed when the caller's
         // variables go out of scope, before the leak check runs.
+        //
+        // `--dump` skips this wrap-and-execute path — it wants to see the
+        // bytecode of the user functions as parsed, not a synthetic caller
+        // (and the synthetic caller may itself panic on buggy user code,
+        // aborting before the dump is written).
         let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);

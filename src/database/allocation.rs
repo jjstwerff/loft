@@ -477,6 +477,7 @@ impl Stores {
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
             closure_map: std::collections::HashMap::new(),
+            jnull_sentinel: None,
         })
     }
 
@@ -545,6 +546,7 @@ impl Stores {
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
             closure_map: std::collections::HashMap::new(),
+            jnull_sentinel: None,
         })
     }
 
