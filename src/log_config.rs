@@ -125,6 +125,18 @@ pub struct LogConfig {
     /// Dump live variables after every traced opcode.  Replaces the
     /// `LOFT_DUMP_VARS` env-var check, which was unsafe in parallel tests.
     pub dump_vars: bool,
+    /// Annotate the execution trace with `[alloc #N at pc=…]` and
+    /// `[free  #N (allocated at pc=…)]` lines so a later `Database N
+    /// not correctly freed` panic can be traced back to the original
+    /// allocation site by grepping for `alloc #N`.  Enabled with
+    /// `LOFT_LOG=alloc_free`.
+    pub trace_alloc_free: bool,
+    /// Write a poison pattern into freed text/ref slots so subsequent
+    /// reads through `Str::str()` / `DbRef::valid()` panic loudly with
+    /// "read from poisoned slot" instead of the cryptic Rust UB
+    /// dispatch from `ptr::copy_nonoverlapping`.  Enabled with
+    /// `LOFT_LOG=poison_free`.
+    pub poison_free: bool,
 }
 
 impl LogConfig {
@@ -146,6 +158,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -165,6 +179,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -184,6 +200,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -204,6 +222,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -223,6 +243,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -242,6 +264,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -261,6 +285,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -283,6 +309,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -308,6 +336,8 @@ impl LogConfig {
             show_all_functions: false,
             scope_debug: true,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -332,6 +362,8 @@ impl LogConfig {
             show_all_functions: true,
             scope_debug: false,
             dump_vars: false,
+            trace_alloc_free: false,
+            poison_free: false,
         }
     }
 
@@ -363,6 +395,16 @@ impl LogConfig {
             Ok("bridging") => Self::bridging(),
             Ok("variables") => Self::variables(),
             Ok("scope_debug") => Self::scope_debug(),
+            Ok("alloc_free") => {
+                let mut c = Self::full();
+                c.trace_alloc_free = true;
+                c
+            }
+            Ok("poison_free") => {
+                let mut c = Self::full();
+                c.poison_free = true;
+                c
+            }
             Ok(s) if s.starts_with("crash_tail") => {
                 let n = s
                     .trim_start_matches("crash_tail")
