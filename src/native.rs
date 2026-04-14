@@ -1926,11 +1926,15 @@ fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
     let src = *stores.get::<DbRef>(stack);
     let struct_kt = struct_kt_arg as u16;
     // `stores.size` returns the struct's size in bytes; `database`
-    // wants words (8 bytes each).  Round up + min 2 words so the
-    // handle's i32 fields at offset 8 always have valid backing
-    // (the boolean allocator-corruption fix from stash@{0}).
+    // wants words (8 bytes each).  Round up + 1 word for the record
+    // header (matches `jv_alloc`); without the `+1`, struct fields at
+    // offset >= (words*8 - 8) would land past the record's tail —
+    // `populate_struct_from_jsonvalue` panicked at the second field
+    // of `WithPayload { name: text, info: JsonValue }` because name
+    // ended up at struct-relative offset 16 in a record whose data
+    // area was only 16 bytes.  See `p54_struct_parse_captures_jsonvalue_field_verbatim`.
     let bytes = u32::from(stores.size(struct_kt));
-    let words = bytes.div_ceil(8);
+    let words = bytes.div_ceil(8) + 1;
     let result = stores.database(words.max(2));
     populate_struct_from_jsonvalue(stores, &result, struct_kt, &src);
     stores.put(stack, result);

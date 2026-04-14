@@ -765,6 +765,26 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
+        } else if is_return && matches!(tp, Type::Text(_)) {
+            // B5-L3 extension for text returns: save the expression's text
+            // to a `__ret_N` temp, run free ops, then return the temp.  The
+            // temp's String holds an OWN copy (OpAppendText copies bytes),
+            // so subsequent OpFreeText on the original work-text doesn't
+            // dangle the returned Str.  Mark the temp `skip_free` so its
+            // OpFreeText isn't emitted at scope exit — the String leaks
+            // for the duration of the caller's read, which is fine because
+            // the caller copies bytes via AppendText immediately on return.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            function.set_skip_free(tmp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {
