@@ -23,12 +23,13 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Step 4 COMPLETE 2026-04-14** (arena materialiser shipped in 4 slices: empty containers, non-empty primitive arrays, non-empty primitive objects, nested containers).  `json_parse` now returns fully-materialised JsonValue trees.  Steps 5-8 remain (`Type::parse(JsonValue)` codegen, `.parse(text)` rejection, unignore acceptance tests, docs).  See § P54 below |
-| Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Parser side shipped** — RFC 6901 path + line:column + context snippet now in `json_errors()`.  Schema-side reuse (P54 step 5) still pending |
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / long / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **Native-codegen stubs for JSON natives still pending** (4 scripts in NATIVE_SKIP — the walker takes typed args so it's wireable in one new entry; the per-native typed-impl refactor for the user-facing surface remains follow-up work).  `p54_struct_parse_rejects_plain_text` stays `#[ignore]`'d by design. |
+| Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Q1 COMPLETE 2026-04-14** — parser side: RFC 6901 path + line:column + context snippet with caret, all 5 `p54_err_*` acceptance tests green; 8 unit tests in `src/json::tests`; 6 `q1_*` tests for state-clearing.  Schema side: kind checks live inline in the unified `n_struct_from_jsonvalue` walker — primitive fields receiving a wrong JSON variant (and not `JNull`, which signals "absent field" and stays silent) push a `"<Struct>.<field>: expected <KKind>, got <KKind>"` diagnostic to `json_errors()`.  Symmetric across direct fields and `vector<struct>` element fields (same walker code path).  6 `q1_schema_side_*` tests covering type-mismatch, missing-field-silent, clean-parse, vector-element mismatch, text-receiving-number, boolean-receiving-string. |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
-| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14**: `to_json` + `to_json_pretty` ship for primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
+| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14** (canonical + pretty both shipped): `to_json` walks all six variants — primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | — | **Q4 COMPLETE 2026-04-14**: all six constructors ship with real behaviour.  `json_null` / `json_bool` / `json_number` / `json_string` wire the primitives directly; `json_array` / `json_object` deep-copy caller-supplied items/fields into a fresh arena via a shared `dbref_to_parsed` + `materialise_primitive_into` helper, handling nested containers.  See § Q4 below |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
+| P54-U | Two JSON parsers (`src/json.rs::parse` for the new JsonValue path, `src/database/structures.rs::parsing` for legacy `text→struct` direct write) accept different dialects and have different diagnostic surfaces | Medium | **Phase 1 + 2 landed 2026-04-14.**  Phase 1: `Dialect::Strict` / `Dialect::Lenient` enum + `parse_with(input, dialect)` in `src/json.rs`.  `parse_object` accepts bare-key identifier keys under Lenient, `parse_value` now also accepts bare identifier values via a new `Parsed::Ident(String)` variant (loft enum tags like `{category: Hourly}`).  Phase 2: schema-driven `walk_parsed_into` + `walk_parsed_struct` + `walk_primitive_into` in `src/database/structures.rs`; `Stores::parse` and `Stores::parse_message` route through the unified parser first and fall back to the legacy scanner only for error-path position reporting.  **Instrumentation confirmed zero success-path fallback hits across the full test suite** (`issues`, `data_structures`, `wrap`, all `.loft` scripts and docs).  Phase 3 remaining: replace the legacy error-path fallback with walker-native `Diagnostic` shape, then delete ~540 lines of hand-rolled scanner in `structures.rs`.  10 new unit tests total in `src/json.rs`.  Design in § P54-U below |
 | B5 | Recursive struct-enum — recursive tail call returns to wrong PC | Medium | Compiler — **two layers shipped 2026-04-14, third layer open.**  Layer 1 (type registration, `src/typedef.rs::fill_all`): walks every struct/enum-variant attribute and calls `data.vector_def(...)` for every `vector<T>` content type before the `fill_database` loop, so `main_vector<Tree>` gets a real `known_type` and `OpDatabase(db_tp=…)` no longer receives `u16::MAX`.  Closes the original "Incomplete record" panic.  Layer 2 (match-arm bindings, `src/parser/control.rs:1103`): `create_unique` for `mv_<field>` now sets `skip_free` on the binding variable — the binding is a borrowed view into the subject's record, not an owned store, so the exit-time OpFreeRef would decrement a store the binding doesn't own (worse, the not-taken arm's slot is never assigned and the free reads garbage bytes as a DbRef, observed as out-of-bounds store_nr ≈ 4621).  Closes the garbage-FreeRef crash.  Positive guards: `p54_b5_recursive_struct_enum_construction` (construct + match + `kids.len()`); `p54_b5_not_taken_arm_with_vector_binding_ok` (layer 2 in isolation — not-taken arm with vector-bound field); `p54_b5_for_loop_over_enum_variant_vector` (layers 1+2 combined via match-arm for-loop over `vector<Tree>`, nested match per element, no recursion).  **Remaining (still-ignored) layer 3:** the recursive path — `count(Node{kids:[Leaf,...]})` → inside match's Node arm → `count(k)` for each leaf → inner `count(Leaf{...})` returns 3 — the inner `OpReturn` jumps to a bogus PC (OpCastIntFromText on a null text, then random ops).  Symptom matches B3-family (struct-enum tail-expression return).  Recursive `count` isn't a tail-expr case directly, but the call-stack may be mis-computed.  Regression guard: `p54_b5_recursive_struct_enum` stays `#[ignore]` with a narrower reason. |
 
 Items that look open in the historical sections of PROBLEMS.md /
@@ -104,7 +105,7 @@ match json_parse(raw) {
 | `n_field` (JObject lookup), `n_item` (JArray index), `n_len` | **Shipped** — real arena reads, not stubs |
 | `n_kind`, `n_has_field`, `n_to_json`, `n_to_json_pretty` | **Shipped** (Q2 / Q3) |
 | `n_json_null`, `n_json_bool`, `n_json_number`, `n_json_string` | **Shipped** (Q4 primitives) |
-| `n_keys`, `n_fields` (Q2 vector-returning) | **Pending** (need vector-build-from-native pattern) |
+| `n_keys`, `n_fields` (Q2 vector-returning) | **Shipped** — JObject walk allocates a result vector via `database()` + `vector_append`, deep-copies each name (`n_keys`) or each `JsonField` entry (`n_fields`, including container values via `dbref_to_parsed`) |
 | `n_json_array`, `n_json_object` (Q4 containers) | **Shipped** (full deep-copy via `dbref_to_parsed`) |
 | `T.parse(JsonValue)` codegen (step 5) | **Pending** |
 | `T.to_json()` codegen (Q3 struct serialiser) | **Pending** (mirror of step 5) |
@@ -628,22 +629,31 @@ in 6 parse functions, RFC 6901 escape helper, line:column converter,
 context-window formatter).  ~20 lines in `n_json_parse` to replace
 the tuple-destructure with the rich format.
 
-### Tests
+### Tests (landed 2026-04-14)
 
-All additions to `tests/issues.rs::p54_*` — already the right file:
+All five spec-named acceptance tests live in `tests/issues.rs`:
 
-- `p54_err_reports_path_into_nested_object` — parse a malformed
-  `{"a": {"b": 1.}}` and assert `json_errors()` contains `/a/b`.
-- `p54_err_reports_path_into_array_element` — `[1, 2, 1.]` contains
-  `/2`.
-- `p54_err_reports_line_and_column` — `"{\n  \"x\": 1.\n}"` reports
-  line 2.
-- `p54_err_context_snippet_includes_caret` — the snippet block has
-  a `^` under the offending column.
-- `p54_err_path_escapes_slash_and_tilde` — a field named `a/b~c`
-  renders as `/a~1b~0c`.
-- `src/json.rs` unit tests gain a `path_in_error` case so the
-  parser-side guarantee is covered even without the native wrapper.
+- `p54_err_reports_path_into_nested_object` — parse of
+  `{"a": {"b": 1.}}` reports `/a/b`. ✅
+- `p54_err_reports_path_into_array_element` — parse of
+  `[1, 2, 1.]` reports `/2`. ✅
+- `p54_err_reports_line_and_column` — 3-line input fails on
+  line 2, diagnostic contains `line 2`. ✅
+- `p54_err_context_snippet_includes_caret` — snippet carries
+  a `^` under the offending column. ✅
+- `p54_err_path_escapes_slash_and_tilde` — a field named
+  `a/b~c` renders as `/a~1b~0c` in the diagnostic (RFC 6901
+  escape round-trips through `n_json_parse`). ✅
+
+Supporting coverage:
+- `src/json::tests` — 8 unit tests covering `parse` path
+  threading (root / array / object / nested / RFC 6901),
+  `line_col_of` on simple + multi-line input, and
+  `format_error` shape (path / line / col / caret / message).
+- `tests/issues.rs::q1_*` — 6 acceptance tests covering
+  state-clearing (`cleared_after_successful_parse`,
+  `empty_after_clean_parse`), path substrings, and format
+  shape assertions.
 
 ### Why Tier 2 (not Tier 1)
 
@@ -818,19 +828,32 @@ match v {
 }
 ```
 
-### Tests
+### Tests (landed)
 
-- `q2_kind_reports_each_variant` — one assertion per variant.
-- `q2_keys_preserves_insertion_order` — `{"b":1, "a":2}` → `["b", "a"]`.
-- `q2_fields_iteration` — walk all entries of a three-field object.
-- `q2_has_field_distinguishes_absent_from_null` —
-  `{"a": null, "b": 1}` → `has_field("a")=true`, `has_field("c")=false`.
-- `q2_kind_of_nested_walk` — kind() works on intermediate
-  `field()` results.
+Coverage shipped under family-prefixed names rather than the
+spec names originally proposed; the originals are kept here as
+intent labels with a pointer to the actual test set:
+
+- `kind` — `q2_kind_of_jnull_free_form`, `…_jnull_method_form`,
+  `…_jbool`, `…_jnumber`, `…_jstring`, `…_parsed_primitive`
+  (six assertions across the primitive variants).
+- `keys` insertion order — `q2_keys_on_jobject_preserves_first_name`,
+  `…_collects_all_names`.
+- `fields` iteration — `q2_fields_on_jobject_collects_multiple_entries`,
+  `q2_fields_collects_all_names`,
+  `q2_fields_preserves_primitive_number_values`,
+  `q2_fields_preserves_container_values_array/object`.
+- `has_field` absent-vs-null — `q2_has_field_on_jnull/jbool/jnumber/jstring_is_false`,
+  `q2_has_field_free_form_on_parsed_primitive`,
+  `q2_has_field_gates_conditional_safely`.
+- `kind` on intermediate `field()` results —
+  `p54_step4_field_on_jstring_returns_jnull` exercises this
+  via `v.field("missing").kind()`.
+- Cross-surface: `q2_full_surface_smoke_on_jobject` sums to 4.
 
 ### Depends on
 
-P54 step 4 (arena materialisation).  Lands immediately after.
+P54 step 4 (arena materialisation).  Landed immediately after.
 
 ---
 
@@ -864,18 +887,18 @@ pub fn to_json(self: T) -> text;                  // one per type; codegen-gener
 pub fn to_json_pretty(self: T) -> text;
 ```
 
-**Primitive slice — 2026-04-14.**  Both `to_json(self: JsonValue)`
-and `to_json_pretty(self: JsonValue)` landed for the four
-primitive variants.  Implementation: `src/native.rs` factors the
-core rendering into a shared helper `json_to_text(stores, v,
-pretty: bool)` — today `pretty` is captured but unused because
-primitives produce byte-identical output in both forms (no
-nested structure to indent).  When P54 step 4's arena
-materialiser lands, the container arms (`JArray` / `JObject`)
-will branch on `pretty` for 2-space indent + one-element-per-line
-layout at the same call site.  `n_to_json` and
-`n_to_json_pretty` are registered as both free and
-method-alias forms so callers can use either syntax.
+**Canonical + pretty — full tree 2026-04-14.**  Both
+`to_json(self: JsonValue)` and `to_json_pretty(self: JsonValue)`
+ship for all six variants.  Implementation: `src/native.rs`
+factors the core rendering into a shared helper
+`json_to_text_at(stores, v, pretty, depth)` — `pretty` controls
+indent emission, `depth` tracks the recursion level.  Containers
+recurse into each child slot; pretty mode emits `\n  …` at depth+1
+for each element/field, dedents the closing bracket back to depth.
+Empty containers stay `[]` / `{}` (no newline padding either way).
+After object keys, pretty inserts a single space after the colon
+(`"k": v`).  `n_to_json` and `n_to_json_pretty` are registered as
+both free and method-alias forms.
 
 The canonical path dispatches on the discriminant byte, writes
 `"null"` / `"true"` / `"false"` for `JNull` / `JBool`, uses
@@ -898,12 +921,17 @@ Regression guards in `tests/issues.rs` (13 total):
   — directly asserts `to_json(v) == to_json_pretty(v)` so a
   future divergence on primitives is caught at the call site.
 
-**Container slice (JArray / JObject)** — the `n_to_json` stub
-currently returns the placeholder `"<pending step 4>"` for
-containers rather than panicking, so mixed-tree calls don't
-crash during the P54 sprint.  The full recursive formatter
-lands with P54 step 4's arena walk — the algorithm is the
-same primitive dispatch recursed, sharing the escape logic.
+**Container slice — LANDED 2026-04-14.**  The recursive walk
+ships in `json_to_text_at`; the algorithm matches the original
+plan (primitive dispatch recursed, escape logic shared between
+JString values and JObject keys via a `write_json_string`
+helper).  Six new pretty-mode regression guards lock the
+indent layout: `q3_to_json_pretty_empty_array`,
+`…_empty_object`, `…_array_indents_elements`,
+`…_object_indents_fields`, `…_nested_array_in_object`,
+`q3_to_json_and_pretty_differ_on_nonempty_container` (asserts
+the active divergence so a regression that loses pretty's
+indent gets caught).
 
 **Deferred — escape-sequence regressions in `code!()` tests.**
 Two additional guards for `"a\"b\\c"` and `"a\nb"` round-trips
@@ -1118,18 +1146,33 @@ helpers above let users build a new tree from parts; replacing a
 subtree in a parsed tree can be done by constructing the new
 object and handing it to the consumer.
 
-### Tests
+### Tests (landed)
 
-- `q4_build_primitives` — one test per constructor.
-- `q4_build_array_round_trip` — `to_json(json_array([…]))` matches
-  expected text.
-- `q4_build_object_round_trip` — same for objects.
-- `q4_nested_construction` — object containing an array of
-  objects.
-- `q4_fixture_for_parse` — build a tree, hand to
-  `User.parse(v)`, assert the resulting struct.
-- `q4_forward_captured_subtree` — parse → extract `JsonValue`
-  field → embed in a new object → serialise.
+Coverage shipped under family-prefixed names rather than the
+spec names originally proposed:
+
+- Primitive constructors — `q4_json_null_returns_jnull_variant`,
+  `q4_json_bool_round_trips_true/false`,
+  `q4_json_number_round_trips_finite`,
+  `q4_json_number_negative_finite`, `…_nan_becomes_jnull`,
+  `q4_json_string_round_trips`, `q4_json_string_empty`,
+  `q4_two_json_nulls_via_match_works`.
+- Array round-trip — `q4_json_array_empty_*`,
+  `q4_json_array_nonempty_input_returns_jarray`,
+  `q4_json_array_multi_element_round_trips`,
+  `q4_json_array_item_access_after_construction`.
+- Object round-trip — `q4_json_object_empty_*`,
+  `q4_json_object_single_field_round_trips`,
+  `q4_json_object_multi_field_length`,
+  `q4_json_object_serialisation`.
+- Nested construction — `q4_json_array_nested_construction`
+  (array of arrays).
+- Forward captured subtree — `q4_forward_captured_subtree_array`,
+  `…_object`, `…_round_trip` (parse → embed in fresh JObject →
+  serialise → re-parse — locks the deep-copy preserves arena-
+  origin container values too).
+- Pending: `q4_fixture_for_parse` (build tree → hand to
+  `User.parse(v)`) — gated on P54 step 5 codegen.
 
 ### Depends on
 
@@ -1145,6 +1188,401 @@ answering a request with JSON, a test that wants to mock a
 response body, or any system that composes JSON from loft values
 hits a wall.  "General-purpose JSON support" is the explicit P54
 goal; Q4 is required for that, not an extra.
+
+---
+
+## Active design — P54-U (unified JSON parser)
+
+**Bite.**  After P54 step 5 + 6 + Q1 schema-side landed, two JSON
+parsers coexist in the codebase, and they accept slightly
+different dialects:
+
+- **`src/json.rs::parse`** — schema-free, two-pass, RFC 8259
+  strict.  Produces a `Parsed` enum tree consumed by
+  `n_json_parse` (P54 arena materialiser) and `n_struct_from_jsonvalue`
+  (Q1-aware schema walker).  Rejects bare-key objects like
+  `{val: 7}` (only `{"val": 7}` accepted).
+- **`src/database/structures.rs::parsing`** — schema-driven,
+  single-pass.  Walks JSON text and writes directly into struct
+  records via the database's known-type schema.  Lives behind the
+  `OpCastVectorFromText` opcode used by `vector<T>.parse(text)`,
+  `text as Type` casts, and the fallback in `parse_type_parse`
+  for non-text non-JsonValue arguments.  Accepts BOTH standard
+  RFC 8259 JSON AND loft-native bare-key syntax (`{val: 7}`,
+  `{name: "x"}`).  Production-tested for years.
+
+The dialect drift is the user-visible symptom: the same loft
+program parsing the same text via `User.parse(text)` (auto-wrap →
+strict) versus `vector<User>.parse(text)` (legacy → lenient)
+applies different acceptance rules.  The doc comment in
+`tests/scripts/57-json.loft::test_json_parse_loft_native` already
+notes the lenient form was renamed to use standard JSON when the
+auto-wrap path was wired — but the legacy parser still accepts
+either form transparently.
+
+**Decision: one parser, two modes.**
+
+A unified parser exposes a `dialect: Dialect` parameter
+(`Dialect::Strict` / `Dialect::Lenient`).  Strict mode is RFC
+8259 verbatim — bare keys rejected.  Lenient mode also accepts
+loft-native unquoted identifier keys.  All other features (number
+syntax, string escapes, structural punctuation, depth handling,
+RFC 6901 path tracking, line:col tracking, context-snippet
+diagnostics) are identical between modes.
+
+**Critically: the current data-import path stays unchanged.**
+The lenient-mode acceptance set is a strict superset of the
+strict-mode set, AND a strict superset of what `structures.rs`
+accepts today.  No `.loft` file or `.txt` data file that parses
+today stops parsing under the unified parser — the lenient mode
+is the new default for legacy entry points.
+
+### Mode selection
+
+| Entry point | Default mode | Rationale |
+|---|---|---|
+| `json_parse(text) -> JsonValue` | Strict | RFC 8259 spec match; the typed JsonValue surface is for new code |
+| `Struct.parse(text)` (auto-wrapped via `json_parse`) | Strict | Inherits json_parse's mode |
+| `Struct.parse(json_parse(text))` | Strict | Same as above |
+| `vector<T>.parse(text)` | Lenient | Preserves the existing data-import path |
+| `text as Type` / `text as vector<T>` cast | Lenient | Preserves existing semantics |
+| `Struct.parse(text)` direct (non-auto-wrap fallback) | Lenient | Preserves existing semantics |
+
+A user who wants strict JSON for a vector parse explicitly opts
+in: `vector<T>.parse(json_parse(text))` (once `vector<T>.parse`
+accepts JsonValue alongside text — a small extension once the
+unified walker covers `vector<struct>` end-to-end, which it
+already does in P54 step 5).
+
+### Surface changes (`src/json.rs`)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialect {
+    /// RFC 8259 strict — bare-key objects rejected.
+    Strict,
+    /// Strict + loft-native bare keys (`{val: 7}` ≡ `{"val": 7}`).
+    Lenient,
+}
+
+impl Default for Dialect {
+    fn default() -> Self { Dialect::Strict }
+}
+
+pub fn parse(input: &str) -> Result<Parsed, ParseError>;            // existing — Strict
+pub fn parse_with(input: &str, dialect: Dialect) -> Result<Parsed, ParseError>;
+```
+
+The existing `parse(input)` keeps its signature (calls
+`parse_with(input, Dialect::Strict)`) so all current callers stay
+green.  New callers wanting lenient mode invoke `parse_with`.
+
+### Bridging `OpCastVectorFromText` to the unified parser
+
+The legacy `OpCastVectorFromText` body in `src/database/structures.rs`
+gets reimplemented as:
+
+```rust
+pub fn parsing(stores: &mut Stores, text: &str, target_kt: u16) -> DbRef {
+    // 1. Parse via unified parser, lenient by default to preserve
+    //    legacy data-import compat.
+    let parsed = match crate::json::parse_with(text, Dialect::Lenient) {
+        Ok(p) => p,
+        Err(e) => {
+            // Legacy behaviour: zero-fill struct, push s#errors.
+            stores.last_parse_errors.push(format_error(text, &e, 1, 1));
+            return zero_struct(stores, target_kt);
+        }
+    };
+    // 2. Walk the Parsed tree into the target struct/vector via a
+    //    new helper that mirrors the JsonValue walker but consumes
+    //    Parsed directly (no arena round-trip — Parsed lives only
+    //    on the Rust stack).
+    walk_parsed_into_target(stores, target_kt, &parsed)
+}
+```
+
+The walker `walk_parsed_into_target` handles both struct and
+vector targets (the latter for `vector<T>.parse(text)`'s wrapper-
+struct shape).  It reuses the per-field-type dispatch matrix
+already in `n_struct_from_jsonvalue` — extracted into a shared
+helper that operates on either a `Parsed` ref or a JsonValue
+DbRef.
+
+After this, `src/database/structures.rs::parsing` shrinks from
+~600 lines of hand-rolled scanner + dispatcher to ~50 lines of
+parse-then-walk.
+
+### Handling the dialect divergence carefully
+
+A `.loft` test or data file parsed lenient today might also be
+syntactically valid strict JSON (most are).  The migration
+strategy:
+
+1. **Add the Dialect enum + `parse_with` to `src/json.rs`** —
+   pure addition, no behaviour change.  ✅ **Landed 2026-04-14**
+   (`Dialect::Strict`, `Dialect::Lenient`, `parse_with(input,
+   dialect)`; existing `parse(input)` is a shim over
+   `parse_with(input, Dialect::Strict)`).
+2. **Implement bare-key acceptance in `parse_object`** behind a
+   dialect check.  Single conditional in the key-parsing
+   branch.  ✅ **Landed 2026-04-14** (extracted
+   `parse_object_key` helper; accepts `[A-Za-z_][A-Za-z0-9_]*`
+   under `Dialect::Lenient`, rejects under `Dialect::Strict`).
+3. **Reimplement `OpCastVectorFromText`'s `parsing`** to call
+   `parse_with(text, Lenient)` + `walk_parsed_into_target`.
+   ✅ **Landed 2026-04-14** — `Stores::walk_parsed_into` +
+   `walk_parsed_struct` + `walk_primitive_into` in
+   `src/database/structures.rs`.  Dispatches on every `Parts::*`
+   variant (Base, Struct, EnumValue, Enum, Vector/Sorted/Array/
+   Ordered/Hash/Spacial/Index, Byte, Short).  `Stores::parse`
+   and `parse_message` route unified-first with legacy fallback
+   gated for error-path position reporting.
+4. **Verify** via the existing test scripts (`57-json.loft`,
+   `58-constraints.loft`, `24-json.loft`) — every previously
+   passing parse still passes.  ✅ **Verified 2026-04-14** —
+   full `cargo test --release` pass (897/0 failed), plus
+   instrumented `LOFT_P54U_TRACE` run showing zero success-path
+   fallback hits across `issues` (437), `data_structures`
+   (16), `wrap` (45), docs, and scripts.
+5. **Delete** the now-unused scanner code in
+   `src/database/structures.rs` (only the entry point and the
+   Parsed-walker stay).  **Pending — needs walker-native
+   `Diagnostic` shape first** (see § Unified diagnostic shape
+   below).  Error-path fallback still uses legacy
+   `parse_key`/`show_key` for the `"line N:M path:X"` error
+   format that `tests/data_structures.rs::record` asserts
+   (`"line 1:7 path:blame"`).  Once the unified
+   `format_diagnostic` can produce the same shape, the ~540
+   lines of hand-rolled scanner delete cleanly.
+
+No public API changes.  No script-side migration required.  No
+diagnostic regressions — both modes produce the rich Q1 errors
+already shipped on the strict path.
+
+### Implementation cost
+
+- `src/json.rs`: ~30 lines (Dialect enum + parse_with + the
+  bare-key conditional in parse_object).
+- `src/database/structures.rs`: -540 lines (delete the hand-
+  rolled scanner) + ~50 lines (parse-then-walk shim).
+- New shared helper `walk_parsed_into_target`: ~120 lines
+  (mirrors `n_struct_from_jsonvalue` but consumes `Parsed`).
+- Tests: 3 new acceptance tests (bare-key accepted under
+  Lenient, rejected under Strict; dialect-difference one-liner;
+  legacy `text as Type` still works on a bare-key input).
+
+### Why this belongs as a follow-up rather than a P54 sub-step
+
+P54 already delivered the user-facing typed-JSON surface +
+struct-from-JsonValue codegen.  The two-parser drift is an
+internal cleanup — a user holding the typed `JsonValue` surface
+can already parse, navigate, build, serialise, and unwrap into
+structs.  The unification is about reducing maintenance surface
+(one scanner instead of two, one dialect knob instead of two
+divergent acceptance rules) and delivering Q1 diagnostics
+uniformly across every text→JSON entry point.
+
+### Unified diagnostic shape
+
+Today three error sources produce three different formats:
+
+| Source | Origin | Format example |
+|---|---|---|
+| Parser-side (`json.rs::format_error`) | Syntax error during `json_parse(text)` | `parse error at line N col M (byte B):\n  path: /a/b\n  <message>\n  <snippet with caret>` |
+| Schema-side (`n_struct_from_jsonvalue` walker) | Type mismatch unwrapping JsonValue → struct | `User.age: expected JNumber, got JString` |
+| Legacy (`s#errors` from `OpCastVectorFromText`) | Syntax or semantic error during `Type.parse(text)` | Free-form `format!()` strings — no consistent shape |
+
+The unification step ships a single `Diagnostic` representation
+that all three sources populate.  The text rendering degrades
+gracefully when fields are missing — no diagnostic is worse for
+the unification.
+
+```rust
+// src/json.rs (extends the existing ParseError into a richer
+// shape that also carries schema-side info).
+pub struct Diagnostic {
+    pub kind: DiagnosticKind,
+    /// RFC 6901 pointer accumulated through parser descent +
+    /// (for schema errors) struct-field path.  `""` = root.
+    pub path: String,
+    /// Human-readable message.
+    pub message: String,
+    /// Source location — present whenever the diagnostic can be
+    /// traced to original text bytes (parser-side always; schema-
+    /// side iff the JsonValue arena tracks per-element source
+    /// offsets, see Phase 2 below).
+    pub location: Option<SourceLocation>,
+    /// Type-mismatch detail (Schema kind only).
+    pub expected: Option<String>,
+    pub actual: Option<String>,
+}
+
+pub enum DiagnosticKind {
+    Syntax,    // parser couldn't read the input
+    Schema,    // walker found a kind/shape mismatch
+    Conversion, // numeric over/underflow during extraction
+}
+
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
+    pub byte_offset: usize,
+}
+
+pub fn format_diagnostic(input: Option<&str>, d: &Diagnostic) -> String;
+```
+
+### Rendered forms
+
+**Full info (parser-side syntax error):**
+```
+parse error at line 5 col 12 (byte 87):
+  path: /users/3/age
+  expected digit after `.`
+    4 │       {"name": "Carol",
+    5 │        "age": 1.}
+                       ^
+    6 │       },
+```
+
+**Schema mismatch with source location** (Phase 2, when arena
+tracks byte_offset):
+```
+schema error at line 3 col 9 (byte 26):
+  path: /users/1/age
+  expected JNumber, got JString
+    2 │   "users": [
+    3 │     {"age": "twenty"}
+                    ^
+    4 │   ]
+```
+
+**Schema mismatch without source location** (Phase 1, when only
+the JsonValue tree exists with no source-offset metadata):
+```
+schema error at /users/1/age:
+  expected JNumber, got JString
+```
+
+**Cast (`text as Type`) failure** — same shape as parser-side:
+```
+parse error at line 1 col 8 (byte 7):
+  path: /value
+  unexpected character `,` after object key
+    1 │ {value, 7}
+             ^
+```
+
+### Single access surface
+
+`json_errors()` returns the formatted diagnostic trail for ALL
+sources (parser, schema, cast).  Each diagnostic renders into
+the standard text shape above; the trail joins them with a
+blank line separator (one blank line between blocks, no
+trailing blank).
+
+`s#errors` — the legacy per-record accessor kept for backward
+compat — also resolves to the same trail, scoped to the record
+constructed by the failing call.  No behavioural change for
+existing callers; they get richer diagnostics for free.
+
+### Path accumulation
+
+The path is built incrementally through both parser and walker
+phases:
+
+- **Parser-side** (RFC 6901): pushed during `parse_object` /
+  `parse_array` descent, popped on ascent.  Already shipped.
+- **Schema-side** (struct walker): each recursion into a nested
+  struct pushes `/<field_name>`; vector-element walks push
+  `/<index>`.  When a diagnostic fires deep in the walker, the
+  path captures the full descent.
+
+Combined-path example: `Inbox.parse(text)` where `text` is
+`{"users":[{"name":"A"},{"name":"B","age":"x"}]}` and User has
+`age: integer`.  The schema diagnostic carries
+`/users/1/age` — same RFC 6901 form parser-side errors use.
+
+### Phase plan
+
+**Phase 1 (with the parser-unification ship):** Introduce
+`Diagnostic` + `format_diagnostic` + the trail accumulator.
+Migrate all three sources to populate `Diagnostic` instead of
+hand-rolling text strings.  Schema-side diagnostics initially
+have `location: None` (no source-offset tracking yet) and render
+as the "without source location" form.
+
+**Phase 2 (follow-up):** Extend the JsonValue arena materialiser
+to record the source byte offset for each element (one i32 slot
+per record, ~12% memory overhead).  The walker reads these
+offsets and populates `Diagnostic.location` so schema errors
+also get line:col + context snippet.  Once shipped, every
+diagnostic from every source has full location info.
+
+### Why this design
+
+- **No regression possible.**  The trail still gets populated
+  the same way callers expect (json_errors trail + s#errors per-
+  record).  The text gets richer.
+- **Single source of truth for formatting.**  Adding a context-
+  snippet style change happens in one function (format_diagnostic)
+  — currently it would need to be duplicated across the three
+  source paths.
+- **Forward-compatible to structured access.**  A future Q-ticket
+  could expose `JsonError` as a loft struct (`{ path: text, line:
+  integer, column: integer, message: text, ... }`) so loft code
+  can pattern-match on diagnostics rather than string-search.
+  Same `Diagnostic` shape; just a new public surface.
+- **Phase 1 is shippable independently** of arena-offset
+  tracking.  The schema-side gets a consistent shape immediately;
+  source location lands later when the arena tracks it.
+
+### Tests for the diagnostic unification
+
+- `p54_u_diagnostic_parser_format_unchanged` — the existing
+  parser-side `q1_*` and `p54_err_*` tests still pass with
+  the new `format_diagnostic` rendering the same text.
+- `p54_u_diagnostic_schema_includes_path_and_kinds` — schema
+  mismatch diagnostic includes the RFC 6901 path AND
+  expected/actual variant names.
+- `p54_u_diagnostic_cast_uses_same_shape_as_parse` — a `text as
+  Type` failure renders identically to a `json_parse(text)`
+  failure for the same input.
+- `p54_u_diagnostic_trail_separator_format` — multiple errors
+  render as separate blocks with a blank line between (not
+  pipe-separated).
+- `p54_u_diagnostic_path_combines_parser_and_walker_segments` —
+  a schema error inside a deeply nested parsed structure shows
+  the full `/<field>/<index>/<field>...` path.
+- (Phase 2) `p54_u_diagnostic_schema_includes_source_location` —
+  schema errors carry line:col + caret snippet once the arena
+  tracks per-element byte offsets.
+
+### Acceptance criteria
+
+- `cargo test --release` — all suites green.
+- `tests/scripts/57-json.loft::test_json_parse_loft_native` (the
+  bare-key test that was renamed when auto-wrap landed) restored
+  to bare-key form and passing under the Lenient default for
+  vector parses.
+- `src/database/structures.rs` line count down to ~250 lines
+  (parse-then-walk shim + the existing struct/field-write
+  helpers, which stay).
+- `json_errors()` populates with the same RFC 6901 path + line:col
+  + caret diagnostic for `text as Type` failures as for
+  `json_parse(text)` failures.
+
+### Tests
+
+- `p54_u_lenient_accepts_bare_keys` — parser produces correct
+  tree on `{val: 7}` under Lenient.
+- `p54_u_strict_rejects_bare_keys` — parser returns ParseError
+  on `{val: 7}` under Strict.
+- `p54_u_text_as_type_still_accepts_bare_keys` — locks the
+  data-import compat invariant.
+- `p54_u_unified_diagnostic_for_cast` — `text as Type` failure
+  produces the same Q1-format diagnostic as `json_parse` failure.
 
 ---
 
@@ -1657,8 +2095,19 @@ session-of-the-week background bite.
    sub-tickets land independently (see § C54).
 
 3. **Drive `#[ignore]`'d tests to zero.**  Baseline tracked in
-   `tests/ignored_tests.baseline` (currently 8 entries, down from 9
-   after p122 2026-04-14).  Sustainable cadence: 1–3 per session.
+   `tests/ignored_tests.baseline` (currently 5 entries, down from 9
+   via p122 → file_content_nonexistent_trace 2026-04-14).
+   Sustainable cadence: 1–3 per session.
+
+   **Closed 2026-04-14:** `file_content_nonexistent_trace` — the
+   un-ignored test now exercises the regular `execute` path's
+   "missing file → empty text" guarantee.  The historical
+   SIGSEGV applied only under `execute_log` (LOFT_LOG=full),
+   not the regular runtime; the test as written hits the
+   regular path and the empty-text contract is stable today.
+   The execute_log SIGSEGV (misaligned-slot codegen issue in
+   the stack allocator) is a separate, deeper bug that
+   doesn't gate this regression guard.
 
    **Closed 2026-04-14:** `p122_long_running_struct_loop` — ignored
    only because the 10 000-frame × 10-brick struct-alloc loop takes

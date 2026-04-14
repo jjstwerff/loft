@@ -89,7 +89,10 @@ pub enum VarValueSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: String,
-    pub(self) content: u16,
+    /// Known-type number of the field's value type — needed by
+    /// runtime struct-schema walkers (e.g. P54's
+    /// `n_struct_from_jsonvalue`) that iterate `Parts::Struct(_)`.
+    pub content: u16,
     pub position: u16,
     pub default: Content,
     pub(self) other_indexes: Vec<u16>, // For now only fields on the same record

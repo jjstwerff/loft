@@ -294,6 +294,167 @@ fn p54_json_natives_registered_for_every_declaration() {
     );
 }
 
+/// QUALITY P54 — `PROBLEMS.md § 54` documents the design contract
+/// for the JSON surface to readers who haven't seen QUALITY.md.
+/// Earlier drafts of `### 54.` carried `JObject { fields:
+/// hash<JsonField[name]> }` (the originally-designed key-indexed
+/// hash) but the implementation shipped with `vector<JsonField>`
+/// — easier to materialise + frees as one unit with the parent
+/// store.  The hash form is a 0.9.0 follow-up.
+///
+/// This guard pins the doc against the stdlib so a future spec
+/// edit can't silently revert to the un-shipped hash form.  The
+/// invariant: PROBLEMS.md's `### 54.` body must contain the
+/// `vector<JsonField>` storage form, not `hash<JsonField[name]>`.
+#[test]
+fn problems_p54_jobject_layout_matches_stdlib() {
+    let problems = fs::read_to_string("doc/claude/PROBLEMS.md").expect("cannot read PROBLEMS.md");
+    let stdlib =
+        fs::read_to_string("default/06_json.loft").expect("cannot read default/06_json.loft");
+
+    // The stdlib's actual JObject layout — the source of truth.
+    assert!(
+        stdlib.contains("JObject { fields: vector<JsonField> }"),
+        "default/06_json.loft no longer declares `JObject {{ fields: vector<JsonField> }}` — \
+         this guard is pinned to that layout; if the storage form changed, update the guard."
+    );
+
+    // PROBLEMS.md must agree.
+    assert!(
+        problems.contains("vector<JsonField>"),
+        "PROBLEMS.md § 54 must reference `vector<JsonField>` as the JObject storage form to \
+         match `default/06_json.loft`.  An earlier draft used `hash<JsonField[name]>` (the \
+         pre-shipping design).  Update PROBLEMS.md to match the actually-shipped layout, \
+         keeping a note that the hash form is a 0.9.0 follow-up."
+    );
+
+    // And must NOT carry the obsolete hash form (only mention as historical context).
+    let lines_with_hash: Vec<(usize, &str)> = problems
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("hash<JsonField[name]>"))
+        .collect();
+    // Allow exactly zero matches in a code-block context (the example).
+    // Allow plain-prose mentions only as part of a "0.9.0 follow-up" sentence.
+    for (i, line) in &lines_with_hash {
+        let trimmed = line.trim_start();
+        let in_code_block = trimmed.starts_with('|')
+            || trimmed.starts_with("pub fn")
+            || trimmed.starts_with("pub enum")
+            || trimmed.starts_with("pub struct")
+            || trimmed.starts_with("JObject")
+            || trimmed.starts_with("JArray")
+            || trimmed.starts_with("    ");
+        let is_followup_note = line.to_ascii_lowercase().contains("follow-up")
+            || line.to_ascii_lowercase().contains("0.9.0");
+        assert!(
+            !in_code_block || is_followup_note,
+            "PROBLEMS.md L{}: `hash<JsonField[name]>` appears in code-block / declaration \
+             context — should be `vector<JsonField>`.  Line: {}",
+            i + 1,
+            line
+        );
+    }
+}
+
+/// QUALITY P54 — the JSON stdlib + native doc-comments must not
+/// contain stale "step 4" / "stub" / "forward-compatible" /
+/// "lands when X" / "today returns JNull" language now that
+/// step 4 is complete.  Earlier drafts of `default/06_json.loft`
+/// and `src/native.rs` peppered the surface with forward-
+/// compatible-stub callouts so callers could write the API shape
+/// ahead of the implementation; once the implementations landed
+/// those notes turned into wrong claims about today's behaviour.
+///
+/// This guard catches those references so they get rewritten
+/// alongside the next big landing instead of misleading readers.
+/// Both files are scanned because the same staleness shape
+/// appeared on both sides of the loft/Rust boundary.
+///
+/// The check is intentionally narrow: only the strings that
+/// appeared in pre-step-4 stub language.  General "step N"
+/// references in module-level prose are still allowed (the
+/// active-sprint headline at the top of the file points at the
+/// roadmap legitimately).
+#[test]
+fn json_stdlib_has_no_stale_stub_language() {
+    let stdlib =
+        fs::read_to_string("default/06_json.loft").expect("cannot read default/06_json.loft");
+    let native = fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
+    let mut findings: Vec<(String, usize, String)> = Vec::new();
+    let stale_phrases = [
+        "forward-compatible stub",
+        "forward-compat stub",
+        "back from the stub",
+        "until p54 step 4",
+        "lands with p54 step 4",
+        "pending a q4 follow-up",
+        "step 3 (landing next commit)",
+        "today returns an empty",
+        "today this returns an empty",
+        "today returns `jnull`",
+        "non-empty input returns `jnull`",
+        // src/native.rs-side variants
+        "step 3 stub",
+        "still returns 0 (arena materialisation",
+        "stored on the call today but unused",
+        "ahead of p54 step 4's container materialisation",
+    ];
+    for (file, src) in [
+        ("default/06_json.loft", &stdlib),
+        ("src/native.rs", &native),
+    ] {
+        // For src/native.rs, restrict the scan to the JSON-related
+        // region so unrelated `///` comments aren't flagged.  The
+        // JSON natives live between the `n_json_parse` start marker
+        // and the trailing native-fns block.
+        let (start, end) = if file == "src/native.rs" {
+            let s = src.find("fn n_json_parse").unwrap_or(0);
+            let e = src[s..]
+                .find("// ===")
+                .map(|off| s + off)
+                .unwrap_or(src.len());
+            (s, e)
+        } else {
+            (0, src.len())
+        };
+        let region = &src[start..end];
+        // Map region byte offset back to absolute line numbers by
+        // counting lines in the prefix.
+        let line_offset = src[..start].lines().count();
+        for (i, line) in region.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // Both `///` (stdlib + Rust doc-comments) and `//!`
+            // (Rust module-level) count.
+            if !trimmed.starts_with("///") && !trimmed.starts_with("//!") {
+                continue;
+            }
+            let payload = trimmed
+                .trim_start_matches("///")
+                .trim_start_matches("//!")
+                .trim();
+            let lower = payload.to_ascii_lowercase();
+            for phrase in stale_phrases {
+                if lower.contains(phrase) {
+                    findings.push((file.to_string(), line_offset + i + 1, payload.to_string()));
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "JSON natives contain {} stale stub-language doc-comment line(s) (post-P54-step-4 — the implementations have landed, the comments need to flip to describe today's behaviour):\n  {}\n\
+         For each finding, rewrite the doc-comment to describe what the function does TODAY (post-step-4 arena materialisation, post-Q2/Q3/Q4 ships) and remove the forward-compatible-stub callouts.",
+        findings.len(),
+        findings
+            .iter()
+            .map(|(f, n, p)| format!("{f}:{n}: {p}"))
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
+
 /// QUALITY Tier 3 #9 — `wasm32-unknown-unknown` without the `wasm`
 /// host-bridge feature has no reachable filesystem.  `file().content()`
 /// and `file().exists()` must return safe defaults (empty string /

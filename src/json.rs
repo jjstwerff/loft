@@ -21,14 +21,40 @@
 /// `JsonValue` variants are built from these values inside
 /// `native::n_json_parse` so this module stays free of database
 /// concerns.
+///
+/// The `Ident` variant is produced only by `Dialect::Lenient`
+/// for a bare identifier in value position (e.g. `Daily` in
+/// `{category: Daily}`, where Daily is a loft enum tag).  The
+/// distinction is preserved so the walker can dispatch
+/// strictly: text fields accept `Str` only, enum fields accept
+/// either `Str` or `Ident`.  `Dialect::Strict` never emits
+/// `Ident`.
 #[derive(Debug, Clone)]
 pub enum Parsed {
     Null,
     Bool(bool),
     Number(f64),
     Str(String),
+    Ident(String),
     Array(Vec<Parsed>),
     Object(Vec<(String, Parsed)>),
+}
+
+/// Input dialect selector.
+///
+/// * `Strict` — RFC 8259 JSON.  Object keys must be quoted
+///   strings, no extensions.  This is what `json_parse(text)`
+///   uses and is the public surface for user-supplied JSON.
+/// * `Lenient` — accepts the same grammar as `Strict` *plus*
+///   loft's bare-identifier object keys (`{val: 7}`) that the
+///   legacy `vector<T>.parse(text)` path has supported since
+///   day one.  This keeps loft-authored data literals compiling
+///   through the unified parser (P54-U).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dialect {
+    #[default]
+    Strict,
+    Lenient,
 }
 
 /// Structured parse error.  `path` is an RFC 6901 JSON Pointer
@@ -50,7 +76,8 @@ pub struct ParseError {
 /// `&mut Vec<String>` path stack so most arms don't need to mention it.
 type ParseResult = Result<(Parsed, usize), (String, usize)>;
 
-/// Parse the entire `input` as a JSON value.
+/// Parse the entire `input` as a JSON value in strict RFC 8259
+/// mode.  Equivalent to `parse_with(input, Dialect::Strict)`.
 ///
 /// Leading and trailing whitespace is allowed.  Characters after
 /// the value (other than whitespace) are a syntax error — strict
@@ -62,10 +89,21 @@ type ParseResult = Result<(Parsed, usize), (String, usize)>;
 /// (RFC 6901 JSON Pointer); the `byte_offset` field locates it
 /// inside the raw text.
 pub fn parse(input: &str) -> Result<Parsed, ParseError> {
+    parse_with(input, Dialect::Strict)
+}
+
+/// Parse the entire `input` as a JSON value using the given
+/// [`Dialect`].  See [`Dialect`] for the differences between
+/// `Strict` (RFC 8259) and `Lenient` (loft data literals).
+///
+/// # Errors
+/// Returns a [`ParseError`] when the input is not valid in the
+/// chosen dialect.
+pub fn parse_with(input: &str, dialect: Dialect) -> Result<Parsed, ParseError> {
     let bytes = input.as_bytes();
     let start = skip_ws(bytes, 0);
     let mut path: Vec<String> = Vec::new();
-    let res = parse_value(bytes, start, &mut path);
+    let res = parse_value(bytes, start, &mut path, dialect);
     let (value, mut i) = match res {
         Ok(ok) => ok,
         Err((msg, at)) => {
@@ -168,20 +206,48 @@ fn context_snippet(input: &str, line: usize, col: usize, before: usize, after: u
     out
 }
 
-fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>) -> ParseResult {
+fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect) -> ParseResult {
     if i >= bytes.len() {
         return Err(("unexpected end of input".to_string(), i));
     }
     match bytes[i] {
+        b'"' => parse_string(bytes, i),
+        b'-' | b'0'..=b'9' => parse_number(bytes, i),
+        b'[' => parse_array(bytes, i, path, dialect),
+        b'{' => parse_object(bytes, i, path, dialect),
+        c if dialect == Dialect::Lenient && (c.is_ascii_alphabetic() || c == b'_') => {
+            Ok(parse_bare_identifier_value(bytes, i))
+        }
         b'n' => parse_literal(bytes, i, b"null", Parsed::Null),
         b't' => parse_literal(bytes, i, b"true", Parsed::Bool(true)),
         b'f' => parse_literal(bytes, i, b"false", Parsed::Bool(false)),
-        b'"' => parse_string(bytes, i),
-        b'-' | b'0'..=b'9' => parse_number(bytes, i),
-        b'[' => parse_array(bytes, i, path),
-        b'{' => parse_object(bytes, i, path),
         b => Err((format!("unexpected byte {b:#x} at offset {i}"), i)),
     }
+}
+
+/// Parse a bare identifier in value position under
+/// `Dialect::Lenient`.  Consumes `[A-Za-z_][A-Za-z0-9_]*`.
+/// Reserved words `null` / `true` / `false` produce the
+/// corresponding [`Parsed`] variant so callers don't have to
+/// special-case them; any other identifier becomes
+/// [`Parsed::Ident`].  Infallible because the caller only
+/// invokes it after verifying the leading byte is alphabetic
+/// or underscore.
+fn parse_bare_identifier_value(bytes: &[u8], i: usize) -> (Parsed, usize) {
+    let start = i;
+    let mut j = i + 1;
+    while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+        j += 1;
+    }
+    // Safe: all bytes accepted above are ASCII.
+    let name = std::str::from_utf8(&bytes[start..j]).expect("ASCII identifier slice");
+    let value = match name {
+        "null" => Parsed::Null,
+        "true" => Parsed::Bool(true),
+        "false" => Parsed::Bool(false),
+        _ => Parsed::Ident(name.to_string()),
+    };
+    (value, j)
 }
 
 fn parse_literal(bytes: &[u8], i: usize, word: &[u8], value: Parsed) -> ParseResult {
@@ -301,7 +367,12 @@ fn parse_number(bytes: &[u8], start: usize) -> ParseResult {
     Ok((Parsed::Number(n), i))
 }
 
-fn parse_array(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResult {
+fn parse_array(
+    bytes: &[u8],
+    start: usize,
+    path: &mut Vec<String>,
+    dialect: Dialect,
+) -> ParseResult {
     debug_assert_eq!(bytes[start], b'[');
     let mut i = skip_ws(bytes, start + 1);
     let mut items: Vec<Parsed> = Vec::new();
@@ -311,7 +382,7 @@ fn parse_array(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResul
     let mut idx: usize = 0;
     loop {
         path.push(idx.to_string());
-        let res = parse_value(bytes, i, path);
+        let res = parse_value(bytes, i, path, dialect);
         let (v, j) = match res {
             Ok(ok) => ok,
             Err(e) => {
@@ -338,7 +409,12 @@ fn parse_array(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResul
 }
 
 #[allow(clippy::many_single_char_names)]
-fn parse_object(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResult {
+fn parse_object(
+    bytes: &[u8],
+    start: usize,
+    path: &mut Vec<String>,
+    dialect: Dialect,
+) -> ParseResult {
     debug_assert_eq!(bytes[start], b'{');
     let mut i = skip_ws(bytes, start + 1);
     let mut fields: Vec<(String, Parsed)> = Vec::new();
@@ -346,21 +422,17 @@ fn parse_object(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResu
         return Ok((Parsed::Object(fields), i + 1));
     }
     loop {
-        if i >= bytes.len() || bytes[i] != b'"' {
-            return Err(("expected string key in object".to_string(), i));
+        if i >= bytes.len() {
+            return Err(("expected object key".to_string(), i));
         }
-        let (key, j) = parse_string(bytes, i)?;
-        let name = match key {
-            Parsed::Str(s) => s,
-            _ => unreachable!("parse_string always returns Parsed::Str"),
-        };
+        let (name, j) = parse_object_key(bytes, i, dialect)?;
         i = skip_ws(bytes, j);
         if i >= bytes.len() || bytes[i] != b':' {
             return Err(("expected `:` after object key".to_string(), i));
         }
         i = skip_ws(bytes, i + 1);
         path.push(name.clone());
-        let res = parse_value(bytes, i, path);
+        let res = parse_value(bytes, i, path, dialect);
         let (v, k) = res?;
         path.pop();
         fields.push((name, v));
@@ -373,6 +445,42 @@ fn parse_object(bytes: &[u8], start: usize, path: &mut Vec<String>) -> ParseResu
             b'}' => return Ok((Parsed::Object(fields), i + 1)),
             b => return Err((format!("expected `,` or `}}` in object, got {b:#x}"), i)),
         }
+    }
+}
+
+/// Parse an object key.  In `Dialect::Strict` the key must be a
+/// quoted JSON string.  In `Dialect::Lenient` a leading
+/// ASCII-letter or `_` additionally opens a bare identifier
+/// that continues while the next byte is alphanumeric or `_` —
+/// matching the loft identifier grammar used by the legacy
+/// `vector<T>.parse(text)` path.
+fn parse_object_key(
+    bytes: &[u8],
+    i: usize,
+    dialect: Dialect,
+) -> Result<(String, usize), (String, usize)> {
+    if i < bytes.len() && bytes[i] == b'"' {
+        let (key, j) = parse_string(bytes, i)?;
+        match key {
+            Parsed::Str(s) => Ok((s, j)),
+            _ => unreachable!("parse_string always returns Parsed::Str"),
+        }
+    } else if dialect == Dialect::Lenient
+        && i < bytes.len()
+        && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_')
+    {
+        let start = i;
+        let mut j = i + 1;
+        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+            j += 1;
+        }
+        // Safe: all bytes accepted above are ASCII.
+        let name = std::str::from_utf8(&bytes[start..j])
+            .expect("ASCII identifier slice")
+            .to_string();
+        Ok((name, j))
+    } else {
+        Err(("expected string key in object".to_string(), i))
     }
 }
 
@@ -561,5 +669,128 @@ mod tests {
         assert!(parse("1.").is_err());
         assert!(parse(r#""no-close"#).is_err());
         assert!(parse("null trailing").is_err());
+    }
+
+    // ── P54-U: Dialect::Lenient accepts loft bare-identifier keys ──────
+
+    #[test]
+    fn parse_with_strict_rejects_bare_key() {
+        assert!(parse_with(r"{a: 1}", Dialect::Strict).is_err());
+        assert!(parse_with(r"{x_1: null}", Dialect::Strict).is_err());
+    }
+
+    #[test]
+    fn parse_with_lenient_accepts_bare_key() {
+        let Parsed::Object(fields) = parse_with(r"{val: 7}", Dialect::Lenient).unwrap() else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "val");
+        assert!(matches!(fields[0].1, Parsed::Number(n) if (n - 7.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn parse_with_lenient_allows_mixed_quoted_and_bare() {
+        let Parsed::Object(fields) =
+            parse_with(r#"{a: 1, "b": 2, c_2: 3}"#, Dialect::Lenient).unwrap()
+        else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].0, "a");
+        assert_eq!(fields[1].0, "b");
+        assert_eq!(fields[2].0, "c_2");
+    }
+
+    #[test]
+    fn parse_with_lenient_rejects_non_identifier_keys() {
+        // Numeric object keys are not accepted even under Lenient —
+        // only `[A-Za-z_][A-Za-z0-9_]*` identifiers or quoted
+        // strings qualify as keys.  Bare-identifier *values* are
+        // accepted separately (see `parse_with_lenient_accepts_bare_ident_value`).
+        assert!(parse_with(r"{1: 2}", Dialect::Lenient).is_err());
+        assert!(parse_with(r"{-foo: 1}", Dialect::Lenient).is_err());
+    }
+
+    #[test]
+    fn parse_default_is_strict() {
+        // Default Dialect is Strict — behaviour identical to bare `parse`.
+        assert!(Dialect::default() == Dialect::Strict);
+    }
+
+    // ── P54-U prep: Dialect::Lenient also accepts bare identifier values ──
+
+    #[test]
+    fn parse_with_lenient_accepts_bare_ident_value() {
+        // `Daily` here represents a loft enum tag in value position.
+        let Parsed::Object(fields) = parse_with(r"{category: Daily}", Dialect::Lenient).unwrap()
+        else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "category");
+        assert!(
+            matches!(&fields[0].1, Parsed::Ident(s) if s == "Daily"),
+            "expected Ident(\"Daily\"), got {:?}",
+            fields[0].1
+        );
+    }
+
+    #[test]
+    fn parse_with_lenient_recognises_true_false_null_as_bare() {
+        let Parsed::Object(fields) =
+            parse_with(r"{a: true, b: false, c: null}", Dialect::Lenient).unwrap()
+        else {
+            panic!("expected object");
+        };
+        assert!(matches!(fields[0].1, Parsed::Bool(true)));
+        assert!(matches!(fields[1].1, Parsed::Bool(false)));
+        assert!(matches!(fields[2].1, Parsed::Null));
+    }
+
+    #[test]
+    fn parse_with_strict_still_rejects_bare_ident_value() {
+        assert!(parse_with(r"{category: Daily}", Dialect::Strict).is_err());
+        assert!(parse_with(r"{x: hello}", Dialect::Strict).is_err());
+    }
+
+    #[test]
+    fn parse_with_lenient_top_level_bare_ident() {
+        // Not only in object values — a bare identifier is a valid
+        // top-level loft literal (e.g. a single enum tag stored as
+        // the whole record).
+        let parsed = parse_with("Hourly", Dialect::Lenient).unwrap();
+        assert!(
+            matches!(&parsed, Parsed::Ident(s) if s == "Hourly"),
+            "expected Ident(\"Hourly\"), got {parsed:?}",
+        );
+    }
+
+    #[test]
+    fn parse_with_lenient_bare_ident_in_array() {
+        let Parsed::Array(items) =
+            parse_with(r"[Daily, Weekly, Hourly]", Dialect::Lenient).unwrap()
+        else {
+            panic!("expected array");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[0], Parsed::Ident(s) if s == "Daily"));
+        assert!(matches!(&items[1], Parsed::Ident(s) if s == "Weekly"));
+        assert!(matches!(&items[2], Parsed::Ident(s) if s == "Hourly"));
+    }
+
+    #[test]
+    fn parse_with_lenient_mixed_example_from_data_structures_test() {
+        // This input comes from tests/data_structures.rs::record —
+        // the legacy parser's canonical round-trip shape.
+        let input = r#"{ name: "Hello World!", category: Hourly, size: 12345, percentage: 0.15 }"#;
+        let Parsed::Object(fields) = parse_with(input, Dialect::Lenient).unwrap() else {
+            panic!("expected object");
+        };
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(&fields[0].1, Parsed::Str(s) if s == "Hello World!"));
+        assert!(matches!(&fields[1].1, Parsed::Ident(s) if s == "Hourly"));
+        assert!(matches!(fields[2].1, Parsed::Number(n) if (n - 12345.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[3].1, Parsed::Number(n) if (n - 0.15).abs() < 1e-9));
     }
 }

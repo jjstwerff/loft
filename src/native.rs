@@ -104,6 +104,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_field", n_field),
     ("n_item", n_item),
     ("n_len", n_len),
+    ("n_struct_from_jsonvalue", n_struct_from_jsonvalue),
     // B7 (2026-04-13): when called with method syntax (`v.len()`),
     // the dispatcher resolves to `t_9JsonValue_<method>`.  Register
     // these aliases pointing at the same Rust impls so the call goes
@@ -1455,7 +1456,13 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_NUMBER);
             sm.set_float(slot.rec, val_pos, *n);
         }
-        crate::json::Parsed::Str(s) => {
+        // Both `Str` and `Ident` materialise the same way — a
+        // `JString` JsonValue.  `Ident` only arises under
+        // `Dialect::Lenient`, which `n_json_parse` does not use
+        // today; handling it here keeps the dispatcher exhaustive
+        // without panicking if a future caller passes lenient
+        // output through.
+        crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => {
             let str_tp = stores.name("JString");
             let val_pos = u32::from(stores.position(str_tp, "value")) + slot.pos;
             let s_rec = stores.store_mut(slot).set_str(s);
@@ -1552,7 +1559,12 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             store_mut.set_float(result.rec, value_pos, n);
             stores.last_json_errors.clear();
         }
-        Ok(crate::json::Parsed::Str(s)) => {
+        // `Ident` is only emitted under `Dialect::Lenient`; the
+        // call above uses `parse` (Strict) so this arm is
+        // structurally unreachable today but kept for exhaustive
+        // coverage, rendering `Ident(x)` as the same JString as a
+        // quoted `"x"` would.
+        Ok(crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s)) => {
             let str_tp = stores.name("JString");
             let value_pos = u32::from(stores.position(str_tp, "value")) + pos;
             let s_rec = stores.store_mut(&result).set_str(&s);
@@ -1728,11 +1740,12 @@ fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
-/// JObject indexer.  Step 3 stub: object/array parsing isn't yet
-/// wired (json_parse errors on `{` and `[`, returning JNull), so
-/// `field()` is reached only on non-object variants and always
-/// returns JNull.  When step 4 lands real object parsing, replace
-/// this body with a walk of the object's fields vector.
+/// JObject indexer.  Dispatches on the discriminant: for a real
+/// JObject, linear-scans the arena `fields` vector by name and
+/// returns a borrowed DbRef into the matching value slot.  For
+/// any other variant or a missing key, returns a fresh `JNull`
+/// so chained access stays safe (every intermediate failure
+/// produces `JNull`, never a trap).
 fn n_field(stores: &mut Stores, stack: &mut DbRef) {
     let name = *stores.get::<Str>(stack);
     let self_ref = *stores.get::<DbRef>(stack);
@@ -1843,11 +1856,10 @@ fn n_item(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// JArray / JObject length.  Primitive variants return the integer
-/// null sentinel (`i32::MIN`) — "no length defined".  JArray reads
-/// the arena sub-vector's length at offset 4 of the vector record;
-/// empty arrays (no vector record allocated yet) return 0.  JObject
-/// still returns 0 (arena materialisation for objects lands with a
-/// later step 4 slice).
+/// null sentinel (`i32::MIN`) — "no length defined".  Both
+/// container variants read the arena sub-vector's length word at
+/// offset 4 of the vector record; empty containers (no record
+/// allocated) return 0.
 fn n_len(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
@@ -1875,6 +1887,446 @@ fn n_len(stores: &mut Stores, stack: &mut DbRef) {
         _ => i32::MIN,
     };
     stores.put(stack, len);
+}
+
+// ─────────────── P54 step 5 — single-walker `Struct.parse(JsonValue)` ──────
+//
+// `n_struct_from_jsonvalue` is the single source of truth for unwrapping
+// a `JsonValue` into a struct.  The compile-time `parse_type_parse`
+// emits exactly one call to this function regardless of struct shape.
+// The walker uses `stores.types[struct_kt].parts` to enumerate fields
+// at runtime and dispatches on each field's declared type:
+//
+//   primitive (text/long/integer/float/boolean) → unwrap with Q1 schema-
+//                                                 side type-mismatch check
+//   `Type::Reference(struct_d, _)`              → recurse on the embedded
+//                                                 sub-struct (no
+//                                                 separate alloc — the
+//                                                 nested struct's bytes
+//                                                 live inline at the
+//                                                 field's position)
+//   `Type::Enum(jv_d, true, _)` (JsonValue)     → byte-copy the field's
+//                                                 JsonValue bytes
+//   `Type::Vector(inner, _)`                    → iterate the JArray and
+//                                                 append per element via
+//                                                 `vector_append`,
+//                                                 recursing into the
+//                                                 walker for struct
+//                                                 elements
+
+/// Walker entry point — pops `(src: DbRef, struct_kt: i32)` from the
+/// stack, allocates a struct of `struct_kt`, populates its fields from
+/// `src`, and pushes the result DbRef.  The compile-time codegen calls
+/// this for every `Struct.parse(JsonValue)` invocation.
+fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
+    let struct_kt_arg = *stores.get::<i32>(stack);
+    let src = *stores.get::<DbRef>(stack);
+    let struct_kt = struct_kt_arg as u16;
+    // `stores.size` returns the struct's size in bytes; `database`
+    // wants words (8 bytes each).  Round up + min 2 words so the
+    // handle's i32 fields at offset 8 always have valid backing
+    // (the boolean allocator-corruption fix from stash@{0}).
+    let bytes = u32::from(stores.size(struct_kt));
+    let words = bytes.div_ceil(8);
+    let result = stores.database(words.max(2));
+    populate_struct_from_jsonvalue(stores, &result, struct_kt, &src);
+    stores.put(stack, result);
+}
+
+/// Internal helper: populate the struct at `dest` (already allocated,
+/// `dest.pos = 8`) from the JsonValue at `src`.  Walks every declared
+/// field via `Stores::types[struct_kt].parts`, looks up each field by
+/// name in `src` (which must be a `JObject` for any field lookup to
+/// succeed — wrong-kind sources leave every field at zero-init), and
+/// dispatches on the field's declared type.
+fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: u16, src: &DbRef) {
+    use crate::database::Parts;
+    // Cache the well-known type known_types so per-field dispatch is an
+    // integer compare, not a name compare.
+    let kt_long = stores.name("long");
+    let kt_int = stores.name("integer");
+    let kt_float = stores.name("float");
+    let kt_bool = stores.name("boolean");
+    let kt_text = stores.name("text");
+    // Parts::Struct(_) iteration: clone the field list because we need
+    // a long-lived borrow on `stores` for the writes below.
+    let fields = match &stores.types[struct_kt as usize].parts {
+        Parts::Struct(f) => f.clone(),
+        _ => return,
+    };
+    let struct_name = stores.types[struct_kt as usize].name.clone();
+    for field in &fields {
+        let content_kt = field.content;
+        let dest_field_pos = dest.pos + u32::from(field.position);
+        // Find the JSON sub-value by name.  Absent → synthesise a
+        // JNull discriminant so the unwrap functions write each
+        // field's null sentinel (matches the legacy
+        // `Type.parse(text)` behaviour where missing fields land
+        // as null, not zero-init bytes).
+        let sub_jv = lookup_jobject_field(stores, src, &field.name);
+        let item_discr = match &sub_jv {
+            Some(s) => stores.store(s).get_byte(s.rec, s.pos, 0),
+            None => JV_DISCR_NULL,
+        };
+        // Dummy ref for absent fields — the unwrap functions
+        // short-circuit on JNull/wrong-kind and never read from sub
+        // unless the discriminant matches.
+        let sub = sub_jv.unwrap_or(*dest);
+        // Dispatch on the field's declared content type.  For
+        // primitive types we cache-compare via known_type.  For
+        // nested struct, vector, and JsonValue passthrough we look
+        // at the content type's `Parts` variant.
+        if content_kt == kt_long {
+            let value = unwrap_long(stores, &sub, item_discr, &struct_name, &field.name);
+            stores
+                .store_mut(dest)
+                .set_long(dest.rec, dest_field_pos, value);
+        } else if content_kt == kt_int {
+            let value = unwrap_int(stores, &sub, item_discr, &struct_name, &field.name);
+            stores
+                .store_mut(dest)
+                .set_int(dest.rec, dest_field_pos, value);
+        } else if content_kt == kt_float {
+            let value = unwrap_float(stores, &sub, item_discr, &struct_name, &field.name);
+            stores
+                .store_mut(dest)
+                .set_float(dest.rec, dest_field_pos, value);
+        } else if content_kt == kt_bool {
+            let value = unwrap_bool(stores, &sub, item_discr, &struct_name, &field.name);
+            stores
+                .store_mut(dest)
+                .set_byte(dest.rec, dest_field_pos, 0, value);
+        } else if content_kt == kt_text {
+            // Text null sentinel is a 0 str_rec (read-back via
+            // `get_str(0)` returns `STRING_NULL = "\0"` which loft
+            // treats as null).  When the source is absent or the
+            // wrong kind, write 0 directly instead of allocating an
+            // empty string — empty `""` is a real (non-null) text
+            // and would break the legacy `!field` null check.
+            push_kind_mismatch(
+                stores,
+                item_discr,
+                JV_DISCR_STRING,
+                &struct_name,
+                &field.name,
+            );
+            if item_discr == JV_DISCR_STRING {
+                let str_tp = stores.name("JString");
+                let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
+                let s_rec = stores.store(&sub).get_int(sub.rec, value_pos) as u32;
+                let text_val = stores.store(&sub).get_str(s_rec).to_owned();
+                let new_s_rec = stores.store_mut(dest).set_str(&text_val);
+                stores
+                    .store_mut(dest)
+                    .set_int(dest.rec, dest_field_pos, new_s_rec as i32);
+            } else {
+                stores.store_mut(dest).set_int(dest.rec, dest_field_pos, 0);
+            }
+        } else {
+            // Look at the field type's Parts to decide what to do.
+            match stores.types[content_kt as usize].parts.clone() {
+                Parts::Struct(_) => {
+                    // Nested struct: the sub-struct's bytes live inline
+                    // at the field's position.  Recurse into the walker
+                    // with a DbRef pointing at the embedded slot.  A
+                    // wrong-kind / absent source still gets recursed —
+                    // the inner walker's `lookup_jobject_field` will
+                    // return None for every field and the inner
+                    // primitives all land at their null sentinels via
+                    // the same JNull-synthesis path used here.
+                    let nested_dest = DbRef {
+                        store_nr: dest.store_nr,
+                        rec: dest.rec,
+                        pos: dest_field_pos,
+                    };
+                    populate_struct_from_jsonvalue(stores, &nested_dest, content_kt, &sub);
+                }
+                Parts::EnumValue(_, _) | Parts::Enum(_) => {
+                    // Mixed struct-enum field — only `JsonValue`
+                    // passthrough is supported today.  Skip the copy
+                    // when the source is absent (sub is a dummy
+                    // pointing at the dest, copy would garble the
+                    // dest's own bytes).
+                    if sub_jv.is_some() {
+                        let inner_name = stores.types[content_kt as usize].name.clone();
+                        if inner_name == "JsonValue" {
+                            let jv_size = u32::from(stores.size(content_kt));
+                            copy_bytes(stores, &sub, dest, dest_field_pos, jv_size);
+                        }
+                    }
+                    // Other struct-enum types: leave at default.
+                }
+                Parts::Vector(elem_kt) => {
+                    // Vector field: handle is a 4-byte rec-nr at
+                    // `dest_field_pos`.  Iterate JArray items and
+                    // append per element via the existing
+                    // `vector_append` machinery.  Absent source →
+                    // skip (handle stays at zero = empty vector).
+                    if sub_jv.is_some() {
+                        let dest_handle = DbRef {
+                            store_nr: dest.store_nr,
+                            rec: dest.rec,
+                            pos: dest_field_pos,
+                        };
+                        populate_vector_from_jarray(stores, &dest_handle, elem_kt, &sub);
+                    }
+                }
+                _ => {
+                    // Other field types (Hash, Sorted, Index, Spacial,
+                    // Array, Base, Byte, Short) are not yet handled.
+                    // Leave at zero-init default.
+                }
+            }
+        }
+    }
+}
+
+/// Find a field by name in a JObject's fields vector.  Returns a DbRef
+/// pointing at the field's value slot (suitable for further dispatch)
+/// or None if the source isn't a JObject or the name isn't present.
+fn lookup_jobject_field(stores: &Stores, src: &DbRef, name: &str) -> Option<DbRef> {
+    let src_discr = stores.store(src).get_byte(src.rec, src.pos, 0);
+    if src_discr != JV_DISCR_OBJECT {
+        return None;
+    }
+    let obj_tp = stores.name("JObject");
+    let fields_pos = u32::from(stores.position(obj_tp, "fields")) + src.pos;
+    let fields_rec = stores.store(src).get_int(src.rec, fields_pos);
+    if fields_rec <= 0 {
+        return None;
+    }
+    let length = stores.store(src).get_int(fields_rec as u32, 4);
+    let jf_tp = stores.name("JsonField");
+    let jf_size = u32::from(stores.size(jf_tp));
+    let name_field_pos = u32::from(stores.position(jf_tp, "name"));
+    let value_field_pos = u32::from(stores.position(jf_tp, "value"));
+    for i in 0..length {
+        let elm_off = 8u32 + u32::try_from(i).expect("non-negative") * jf_size;
+        let name_rec = stores
+            .store(src)
+            .get_int(fields_rec as u32, elm_off + name_field_pos) as u32;
+        if stores.store(src).get_str(name_rec) == name {
+            return Some(DbRef {
+                store_nr: src.store_nr,
+                rec: fields_rec as u32,
+                pos: elm_off + value_field_pos,
+            });
+        }
+    }
+    None
+}
+
+/// Q1 schema-side: push a path-qualified diagnostic when a field's
+/// JsonValue has the wrong discriminant.  Absent fields (JNull) pass
+/// silently — only a non-null wrong kind triggers the diagnostic.
+fn push_kind_mismatch(
+    stores: &mut Stores,
+    actual_discr: i32,
+    expected_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) {
+    if actual_discr == JV_DISCR_NULL || actual_discr == expected_discr {
+        return;
+    }
+    let actual_name = match actual_discr {
+        JV_DISCR_NULL => "JNull",
+        JV_DISCR_BOOL => "JBool",
+        JV_DISCR_NUMBER => "JNumber",
+        JV_DISCR_STRING => "JString",
+        JV_DISCR_ARRAY => "JArray",
+        JV_DISCR_OBJECT => "JObject",
+        _ => "JUnknown",
+    };
+    let expected_name = match expected_discr {
+        JV_DISCR_BOOL => "JBool",
+        JV_DISCR_NUMBER => "JNumber",
+        JV_DISCR_STRING => "JString",
+        JV_DISCR_ARRAY => "JArray",
+        JV_DISCR_OBJECT => "JObject",
+        _ => "?",
+    };
+    stores.last_json_errors.push(format!(
+        "{struct_name}.{field_name}: expected {expected_name}, got {actual_name}"
+    ));
+}
+
+fn unwrap_long(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> i64 {
+    push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
+    if item_discr != JV_DISCR_NUMBER {
+        return i64::MIN;
+    }
+    let num_tp = stores.name("JNumber");
+    let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
+    let f = stores.store(sub).get_float(sub.rec, value_pos);
+    if f.is_finite() { f as i64 } else { i64::MIN }
+}
+
+fn unwrap_int(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> i32 {
+    push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
+    if item_discr != JV_DISCR_NUMBER {
+        return i32::MIN;
+    }
+    let num_tp = stores.name("JNumber");
+    let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
+    let f = stores.store(sub).get_float(sub.rec, value_pos);
+    if !f.is_finite() {
+        return i32::MIN;
+    }
+    let as_i64 = f as i64;
+    if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&as_i64) {
+        as_i64 as i32
+    } else {
+        i32::MIN
+    }
+}
+
+fn unwrap_float(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> f64 {
+    push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
+    if item_discr != JV_DISCR_NUMBER {
+        return f64::NAN;
+    }
+    let num_tp = stores.name("JNumber");
+    let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
+    stores.store(sub).get_float(sub.rec, value_pos)
+}
+
+fn unwrap_bool(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> i32 {
+    push_kind_mismatch(stores, item_discr, JV_DISCR_BOOL, struct_name, field_name);
+    if item_discr != JV_DISCR_BOOL {
+        return 0;
+    }
+    let bool_tp = stores.name("JBool");
+    let value_pos = u32::from(stores.position(bool_tp, "value")) + sub.pos;
+    stores.store(sub).get_byte(sub.rec, value_pos, 0)
+}
+
+fn unwrap_text(
+    stores: &mut Stores,
+    sub: &DbRef,
+    item_discr: i32,
+    struct_name: &str,
+    field_name: &str,
+) -> String {
+    push_kind_mismatch(stores, item_discr, JV_DISCR_STRING, struct_name, field_name);
+    if item_discr != JV_DISCR_STRING {
+        return String::new();
+    }
+    let str_tp = stores.name("JString");
+    let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
+    let s_rec = stores.store(sub).get_int(sub.rec, value_pos) as u32;
+    stores.store(sub).get_str(s_rec).to_owned()
+}
+
+/// Byte-copy `n_bytes` from `src` to `(dest.rec, dest_pos)` — used for
+/// the JsonValue-passthrough field case.  The runtime equivalent of the
+/// compile-time `OpCopyRecord` op for an inline struct-enum field.
+fn copy_bytes(stores: &mut Stores, src: &DbRef, dest: &DbRef, dest_pos: u32, n_bytes: u32) {
+    // Snapshot the bytes first because writing to dest may borrow
+    // stores mutably and invalidate the source pointer.
+    let mut buf: Vec<u8> = Vec::with_capacity(n_bytes as usize);
+    for i in 0..n_bytes {
+        buf.push(*stores.store(src).addr::<u8>(src.rec, src.pos + i));
+    }
+    let dest_store = stores.store_mut(dest);
+    for (i, byte) in buf.iter().enumerate() {
+        *dest_store.addr_mut::<u8>(dest.rec, dest_pos + i as u32) = *byte;
+    }
+}
+
+/// Populate a `vector<T>` field embedded in a struct from a JArray.
+/// The dest handle is at `dest_handle` (a 4-byte rec-nr slot inside
+/// the parent struct).  Iterates the JArray's items and for each one
+/// appends to the vector via `vector_append`, dispatching on the
+/// element type's `Parts`.
+fn populate_vector_from_jarray(
+    stores: &mut Stores,
+    dest_handle: &DbRef,
+    elem_kt: u16,
+    src_arr: &DbRef,
+) {
+    use crate::database::Parts;
+    let arr_discr = stores.store(src_arr).get_byte(src_arr.rec, src_arr.pos, 0);
+    if arr_discr != JV_DISCR_ARRAY {
+        return;
+    }
+    let array_tp = stores.name("JArray");
+    let items_pos = u32::from(stores.position(array_tp, "items")) + src_arr.pos;
+    let items_rec = stores.store(src_arr).get_int(src_arr.rec, items_pos);
+    if items_rec <= 0 {
+        return;
+    }
+    let length = stores.store(src_arr).get_int(items_rec as u32, 4);
+    let jv_tp = stores.name("JsonValue");
+    let jv_size = u32::from(stores.size(jv_tp));
+    let elem_size = u32::from(stores.size(elem_kt));
+    let kt_long = stores.name("long");
+    let kt_int = stores.name("integer");
+    let kt_float = stores.name("float");
+    let kt_bool = stores.name("boolean");
+    let kt_text = stores.name("text");
+    let elem_parts = stores.types[elem_kt as usize].parts.clone();
+    let elem_name = stores.types[elem_kt as usize].name.clone();
+    for i in 0..length {
+        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative") * jv_size;
+        let item = DbRef {
+            store_nr: src_arr.store_nr,
+            rec: items_rec as u32,
+            pos: elm_offset,
+        };
+        let item_discr = stores
+            .store(src_arr)
+            .get_byte(items_rec as u32, elm_offset, 0);
+        let elm = crate::vector::vector_append(dest_handle, elem_size, &mut stores.allocations);
+        if elem_kt == kt_long {
+            let v = unwrap_long(stores, &item, item_discr, "vector", &elem_name);
+            stores.store_mut(&elm).set_long(elm.rec, elm.pos, v);
+        } else if elem_kt == kt_int {
+            let v = unwrap_int(stores, &item, item_discr, "vector", &elem_name);
+            stores.store_mut(&elm).set_int(elm.rec, elm.pos, v);
+        } else if elem_kt == kt_float {
+            let v = unwrap_float(stores, &item, item_discr, "vector", &elem_name);
+            stores.store_mut(&elm).set_float(elm.rec, elm.pos, v);
+        } else if elem_kt == kt_bool {
+            let v = unwrap_bool(stores, &item, item_discr, "vector", &elem_name);
+            stores.store_mut(&elm).set_byte(elm.rec, elm.pos, 0, v);
+        } else if elem_kt == kt_text {
+            let s = unwrap_text(stores, &item, item_discr, "vector", &elem_name);
+            let new_s_rec = stores.store_mut(&elm).set_str(&s);
+            stores
+                .store_mut(&elm)
+                .set_int(elm.rec, elm.pos, new_s_rec as i32);
+        } else if matches!(elem_parts, Parts::Struct(_)) {
+            // Struct element — recurse into the walker writing into
+            // the freshly-appended embedded element slot.
+            populate_struct_from_jsonvalue(stores, &elm, elem_kt, &item);
+        }
+        crate::vector::vector_finish(dest_handle, &mut stores.allocations);
+    }
 }
 
 /// Q4 primitive constructor — allocate a JsonValue set to the `JNull`
@@ -2043,11 +2495,10 @@ fn n_json_object(stores: &mut Stores, stack: &mut DbRef) {
 /// safely call `v.has_field("name")` on any JsonValue without
 /// first pattern-matching the variant.
 ///
-/// Until P54 step 4 materialises the JObject arena, even a real
-/// JObject (which can't be constructed today) would return false
-/// here — the function is a forward-compatible stub.  When step 4
-/// lands, the `JV_DISCR_OBJECT` arm walks the `fields_id` arena
-/// vector and returns true iff the name matches an entry.
+/// For a real JObject, walks the arena `fields` vector and
+/// returns `true` iff the name matches an entry.  Distinguishes
+/// "absent" from "present-but-null" — a field whose value is
+/// `JNull` still returns `true`.
 fn n_has_field(stores: &mut Stores, stack: &mut DbRef) {
     let name = *stores.get::<Str>(stack);
     let v = *stores.get::<DbRef>(stack);
@@ -2227,12 +2678,43 @@ fn n_kind(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 /// Render a JsonValue to RFC 8259 JSON text.  The `pretty` flag
-/// is stored on the call today but unused — primitive variants
-/// produce identical output in canonical and pretty form.  When
-/// P54 step 4's arena materialiser lands, the container arms
-/// (`JArray` / `JObject`) will branch on `pretty` to produce
-/// `[\n  item0,\n  item1\n]` etc.
-fn json_to_text(stores: &Stores, v: &DbRef, _pretty: bool) -> String {
+/// controls indent emission in container arms: when `true`,
+/// non-empty `JArray` / `JObject` emit `\n` + 2-space indent per
+/// element/field and dedent the closing bracket to the parent's
+/// depth.  Empty containers stay `[]` / `{}` regardless.
+/// Primitives are byte-identical in both modes.
+fn json_to_text(stores: &Stores, v: &DbRef, pretty: bool) -> String {
+    json_to_text_at(stores, v, pretty, 0)
+}
+
+fn write_indent(out: &mut String, depth: usize) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+}
+
+fn write_json_string(out: &mut String, raw: &str) {
+    out.push('"');
+    for ch in raw.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> String {
     let discr = stores.store(v).get_byte(v.rec, v.pos, 0);
     match discr {
         JV_DISCR_NULL => "null".to_string(),
@@ -2262,30 +2744,10 @@ fn json_to_text(stores: &Stores, v: &DbRef, _pretty: bool) -> String {
             let s_rec = stores.store(v).get_int(v.rec, value_pos) as u32;
             let raw = stores.store(v).get_str(s_rec).to_string();
             let mut out = String::with_capacity(raw.len() + 2);
-            out.push('"');
-            for ch in raw.chars() {
-                match ch {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    '\x08' => out.push_str("\\b"),
-                    '\x0c' => out.push_str("\\f"),
-                    c if (c as u32) < 0x20 => {
-                        use std::fmt::Write as _;
-                        let _ = write!(out, "\\u{:04x}", c as u32);
-                    }
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
+            write_json_string(&mut out, &raw);
             out
         }
         JV_DISCR_ARRAY => {
-            // Step 4 second slice (2026-04-14): JArray renders real
-            // element content by recursing into each vector slot.
-            // Empty arrays render as `"[]"` via the same path.
             let array_tp = stores.name("JArray");
             let items_pos = u32::from(stores.position(array_tp, "items")) + v.pos;
             let items_rec = stores.store(v).get_int(v.rec, items_pos);
@@ -2304,23 +2766,26 @@ fn json_to_text(stores: &Stores, v: &DbRef, _pretty: bool) -> String {
                 if i > 0 {
                     out.push(',');
                 }
+                if pretty {
+                    out.push('\n');
+                    write_indent(&mut out, depth + 1);
+                }
                 let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jv_size;
                 let elm_ref = DbRef {
                     store_nr: v.store_nr,
                     rec: items_rec as u32,
                     pos: elm_offset,
                 };
-                out.push_str(&json_to_text(stores, &elm_ref, _pretty));
+                out.push_str(&json_to_text_at(stores, &elm_ref, pretty, depth + 1));
+            }
+            if pretty {
+                out.push('\n');
+                write_indent(&mut out, depth);
             }
             out.push(']');
             out
         }
         JV_DISCR_OBJECT => {
-            // Step 4 third slice (2026-04-14): JObject recurses into
-            // each JsonField slot, writing `"<name>":<value>` pairs
-            // separated by `,`.  Empty objects render `"{}"` via the
-            // same branch.  Name escaping matches the JString case
-            // to keep keys valid JSON.
             let obj_tp = stores.name("JObject");
             let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
             let fields_rec = stores.store(v).get_int(v.rec, fields_pos);
@@ -2341,37 +2806,31 @@ fn json_to_text(stores: &Stores, v: &DbRef, _pretty: bool) -> String {
                 if i > 0 {
                     out.push(',');
                 }
+                if pretty {
+                    out.push('\n');
+                    write_indent(&mut out, depth + 1);
+                }
                 let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
                 let name_rec = stores
                     .store(v)
                     .get_int(fields_rec as u32, elm_offset + name_field_pos)
                     as u32;
                 let raw = stores.store(v).get_str(name_rec).to_string();
-                out.push('"');
-                for ch in raw.chars() {
-                    match ch {
-                        '"' => out.push_str("\\\""),
-                        '\\' => out.push_str("\\\\"),
-                        '\n' => out.push_str("\\n"),
-                        '\r' => out.push_str("\\r"),
-                        '\t' => out.push_str("\\t"),
-                        '\x08' => out.push_str("\\b"),
-                        '\x0c' => out.push_str("\\f"),
-                        c if (c as u32) < 0x20 => {
-                            use std::fmt::Write as _;
-                            let _ = write!(out, "\\u{:04x}", c as u32);
-                        }
-                        c => out.push(c),
-                    }
-                }
-                out.push('"');
+                write_json_string(&mut out, &raw);
                 out.push(':');
+                if pretty {
+                    out.push(' ');
+                }
                 let value_ref = DbRef {
                     store_nr: v.store_nr,
                     rec: fields_rec as u32,
                     pos: elm_offset + value_field_pos,
                 };
-                out.push_str(&json_to_text(stores, &value_ref, _pretty));
+                out.push_str(&json_to_text_at(stores, &value_ref, pretty, depth + 1));
+            }
+            if pretty {
+                out.push('\n');
+                write_indent(&mut out, depth);
             }
             out.push('}');
             out

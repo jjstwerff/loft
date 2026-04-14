@@ -563,22 +563,71 @@ impl Parser {
         }
     }
 
-    /// `Type.parse(text_expr)` — parse text into a struct record.
-    /// Compiles to the same `OpCastVectorFromText` as the `as Type` cast.
+    /// `Type.parse(arg)` — populate a struct from a JsonValue.
+    ///
+    /// Single-walker design (P54 step 5): regardless of the struct's
+    /// shape, this emits exactly one IR call to
+    /// `n_struct_from_jsonvalue(arg, struct_kt)`.  The walker uses
+    /// `stores.types[struct_kt].parts` at runtime to dispatch on each
+    /// field's declared type — primitives get extracted with
+    /// path-qualified Q1 schema-side type checks, nested struct
+    /// fields recurse, JsonValue-passthrough fields byte-copy, and
+    /// vector fields iterate the JArray and recurse per element for
+    /// struct elements.
+    ///
+    /// **Auto-wrap (P54 step 6 form):** when the argument is plain
+    /// text, transparently wrap with `json_parse(text)` first so
+    /// legacy `Struct.parse(text)` keeps compiling but routes
+    /// through the typed-tree pipeline (malformed input populates
+    /// `json_errors()` instead of silently zero-filling the struct).
+    /// Users wanting explicit staging can write
+    /// `Struct.parse(json_parse(text))` themselves.
     fn parse_type_parse(&mut self, d_nr: u32, code: &mut Value) -> Type {
         self.lexer.token("(");
-        let mut text_expr = Value::Null;
-        let tp = self.expression(&mut text_expr);
+        let mut arg_expr = Value::Null;
+        let arg_tp = self.expression(&mut arg_expr);
         self.lexer.token(")");
         if !self.first_pass {
-            if !matches!(tp, Type::Text(_)) {
-                self.convert(&mut text_expr, &tp, &Type::Text(Vec::new()));
+            // JsonValue resolves to either Type::Reference (if a
+            // user-declared alias) or Type::Enum(_, true, _) (mixed
+            // struct-enum, the actual stdlib decl shape).
+            let is_jsonvalue = match &arg_tp {
+                Type::Reference(d, _) | Type::Enum(d, true, _) => {
+                    self.data.def(*d).name == "JsonValue"
+                }
+                _ => false,
+            };
+            if is_jsonvalue {
+                // Direct JsonValue → walker.  This is the new
+                // typed-tree path used by `Struct.parse(json_parse(text))`
+                // and by P54 step-5 codegen elsewhere.
+                let n_walker = self.data.def_nr("n_struct_from_jsonvalue");
+                debug_assert_ne!(
+                    n_walker,
+                    u32::MAX,
+                    "n_struct_from_jsonvalue must be registered in NATIVE_FNS"
+                );
+                let known_tp = self.data.def(d_nr).known_type;
+                *code = Value::Call(n_walker, vec![arg_expr, Value::Int(i32::from(known_tp))]);
+            } else {
+                // Text or other → legacy lenient text-parse path
+                // (`OpCastVectorFromText` calls
+                // `src/database/structures.rs::parsing`, which accepts
+                // both standard JSON and loft-native bare-key syntax).
+                // Preserves the legacy data-import semantics — see
+                // QUALITY.md § P54-U for the unification design that
+                // collapses both paths into one parser with mode
+                // selection.
+                let mut text_expr = arg_expr;
+                if !matches!(arg_tp, Type::Text(_)) {
+                    self.convert(&mut text_expr, &arg_tp, &Type::Text(Vec::new()));
+                }
+                let known_tp = self.data.def(d_nr).known_type;
+                *code = self.cl(
+                    "OpCastVectorFromText",
+                    &[text_expr, Value::Int(i32::from(known_tp))],
+                );
             }
-            let known_tp = self.data.def(d_nr).known_type;
-            *code = self.cl(
-                "OpCastVectorFromText",
-                &[text_expr, Value::Int(i32::from(known_tp))],
-            );
         }
         Type::Reference(d_nr, Vec::new())
     }

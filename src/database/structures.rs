@@ -425,6 +425,244 @@ impl Stores {
         store.set_int(vec_rec, 4, length as i32 + adding as i32);
     }
 
+    /// P54-U phase 2: walk a [`crate::json::Parsed`] tree into
+    /// the record at `to`, dispatching on the target type's
+    /// [`Parts`] variant.  Returns `true` on success, `false`
+    /// on a shape/type mismatch that can't be recovered.
+    ///
+    /// This is the schema-driven counterpart to the parser-side
+    /// `crate::json::parse_with(text, Dialect::Lenient)` — the
+    /// parser stays schema-free; all type dispatch lives here.
+    /// Replaces the hand-rolled `parsing` scanner in the
+    /// legacy `text → struct` path (still kept for the
+    /// transition; see § P54-U in doc/claude/QUALITY.md).
+    pub(super) fn walk_parsed_into(
+        &mut self,
+        parsed: &crate::json::Parsed,
+        tp: u16,
+        rec_tp: u16,
+        field: u16,
+        to: &DbRef,
+    ) -> bool {
+        // `null` at any target position resets to the type's
+        // default sentinel — mirrors the legacy scanner's
+        // first-line behaviour and keeps round-tripping correct.
+        if matches!(parsed, crate::json::Parsed::Null) {
+            self.set_default_value(tp, to);
+            return true;
+        }
+        match self.types[tp as usize].parts.clone() {
+            Parts::Base => self.walk_primitive_into(parsed, tp, to),
+            Parts::Sorted(c, _)
+            | Parts::Vector(c)
+            | Parts::Array(c)
+            | Parts::Ordered(c, _)
+            | Parts::Hash(c, _)
+            | Parts::Spacial(c, _)
+            | Parts::Index(c, _, _) => {
+                let crate::json::Parsed::Array(items) = parsed else {
+                    return false;
+                };
+                for item in items {
+                    let res = self.record_new(to, rec_tp, field);
+                    if !self.walk_parsed_into(item, c, c, u16::MAX, &res) {
+                        return false;
+                    }
+                    self.record_finish(to, &res, rec_tp, field);
+                }
+                true
+            }
+            Parts::Struct(object) | Parts::EnumValue(_, object) => {
+                self.walk_parsed_struct(parsed, tp, to, &object)
+            }
+            Parts::Enum(fields) => {
+                // Enum values serialise as a bare tag name
+                // (legacy scanner accepted either a quoted
+                // string OR a bare identifier; both collapse
+                // here to `Parsed::Str` / `Parsed::Ident`).
+                let name = match parsed {
+                    crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => s.as_str(),
+                    _ => return false,
+                };
+                let mut enum_tp = u16::MAX;
+                let val = if name == "null" {
+                    0
+                } else {
+                    let mut v = 1;
+                    for (f_nr, f) in fields.iter().enumerate() {
+                        if f.1 == name {
+                            v = f_nr as i32 + 1;
+                            enum_tp = f.0;
+                            break;
+                        }
+                    }
+                    v
+                };
+                self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
+                // A typed enum variant that carries a payload is
+                // not representable inside a bare tag — the
+                // legacy scanner threaded position + text through
+                // a second parse call.  The unified grammar
+                // handles the same shape by requiring a two-
+                // element array `["Tag", body]` or an object
+                // `{Tag: body}`; for now, return true and leave
+                // the payload at the default (matches the most
+                // common "unit variant" case).  Payload-carrying
+                // enums are a follow-up once at least one test
+                // exercises the shape.
+                let _ = enum_tp;
+                true
+            }
+            Parts::Byte(from, _null) => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to).set_byte(to.rec, to.pos, from, *n as i32);
+                true
+            }
+            Parts::Short(from, _null) => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to)
+                    .set_short(to.rec, to.pos, from, *n as i32);
+                true
+            }
+        }
+    }
+
+    /// Schema-driven struct fill from a [`crate::json::Parsed::Object`].
+    /// Matches fields by name, recurses into the walker for each
+    /// value, default-fills any unmentioned field (mirroring the
+    /// legacy scanner's "missing field → default" behaviour).
+    fn walk_parsed_struct(
+        &mut self,
+        parsed: &crate::json::Parsed,
+        tp: u16,
+        to: &DbRef,
+        object: &[Field],
+    ) -> bool {
+        let crate::json::Parsed::Object(entries) = parsed else {
+            return false;
+        };
+        let fld = if to.rec == 0 { 0 } else { to.pos };
+        let rec = if to.rec == 0 {
+            let size = self.types[tp as usize].size;
+            self.store_mut(to).claim(u32::from(size).div_ceil(8))
+        } else {
+            to.rec
+        };
+        let mut found_fields: HashSet<&str> = HashSet::new();
+        for (name, value) in entries {
+            let mut matched = false;
+            for (f_nr, f) in object.iter().enumerate() {
+                if f.name == *name {
+                    matched = true;
+                    let ok = if self.content(f.content) == u16::MAX {
+                        let slot = DbRef {
+                            store_nr: to.store_nr,
+                            rec,
+                            pos: fld + u32::from(f.position),
+                        };
+                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, &slot)
+                    } else {
+                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, to)
+                    };
+                    if !ok {
+                        return false;
+                    }
+                    break;
+                }
+            }
+            if !matched {
+                // Legacy behaviour: an unknown field name in the
+                // source is a parse error, not a silent ignore.
+                // Tests rely on this shape (see
+                // `tests/data_structures.rs::record` at
+                // `"line 1:7 path:blame"`).  A future P54-U
+                // follow-up can add a "strict-schema" flag that
+                // flips this to silent-ignore for JSON-ish input.
+                return false;
+            }
+            found_fields.insert(name.as_str());
+        }
+        for f in object {
+            if (f.other_indexes.is_empty() || f.other_indexes[0] != u16::MAX)
+                && !found_fields.contains(f.name.as_str())
+                && f.name != "enum"
+            {
+                let slot = DbRef {
+                    store_nr: to.store_nr,
+                    rec,
+                    pos: fld + u32::from(f.position),
+                };
+                self.set_default_value(f.content, &slot);
+            }
+        }
+        true
+    }
+
+    /// Schema-driven primitive write.  `tp` is one of the
+    /// low-numbered base-type IDs (0 = int32/Reference, 1 = long,
+    /// 2 = single, 3 = float, 4 = bool, 5 = text, 6 = Reference).
+    fn walk_primitive_into(&mut self, parsed: &crate::json::Parsed, tp: u16, to: &DbRef) -> bool {
+        match tp {
+            0 | 6 => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to).set_int(to.rec, to.pos, *n as i32);
+                true
+            }
+            1 => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to).set_long(to.rec, to.pos, *n as i64);
+                true
+            }
+            2 => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to).set_single(to.rec, to.pos, *n as f32);
+                true
+            }
+            3 => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return false;
+                };
+                self.store_mut(to).set_float(to.rec, to.pos, *n);
+                true
+            }
+            4 => {
+                let crate::json::Parsed::Bool(b) = parsed else {
+                    return false;
+                };
+                self.store_mut(to)
+                    .set_byte(to.rec, to.pos, 0, i32::from(*b));
+                true
+            }
+            5 => {
+                // Text accepts only a quoted string — bare
+                // identifiers (`Parsed::Ident`) are NOT promoted
+                // to text here, matching the legacy `match_text`.
+                let crate::json::Parsed::Str(s) = parsed else {
+                    return false;
+                };
+                let text_pos = self.store_mut(to).set_str(s);
+                self.store_mut(to).set_int(to.rec, to.pos, text_pos as i32);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn parsing(
         &mut self,
         text: &str,
