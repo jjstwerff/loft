@@ -39,6 +39,27 @@ impl State {
         let console = false; //logging;
         let mut stack = Stack::new(data.def(def_nr).variables.clone(), data, def_nr, logging);
         if stack.data.def(def_nr).code == Value::Null {
+            // B7 (2026-04-13): set up the same frame layout the regular
+            // path uses, so `add_return` emits a correct OpReturn.  For
+            // native fns declared as `pub fn name(...) -> T;` (no body),
+            // the variables list is empty so `function.arguments()`
+            // returns nothing — the regular path's `self.arguments` /
+            // `stack.position` accumulator is never run, and we used to
+            // emit `Return(ret=stale, discard=0)` with a leftover
+            // `self.arguments` from the previous function.  This caused
+            // native methods with struct-enum self (e.g.
+            // `fn len(self: JsonValue) -> integer;`) to loop forever in
+            // `Return(ret=12, value=4, discard=0)` because the runtime's
+            // unwind landed past the saved return-PC slot.  Compute the
+            // arg-frame size from the def's attributes (which exist for
+            // native fns even when variables don't) and account for the
+            // 4-byte return-PC slot.
+            let mut args_size: u16 = 0;
+            for attr in &stack.data.def(def_nr).attributes {
+                args_size += size(&attr.typedef, &Context::Argument);
+            }
+            self.arguments = args_size;
+            stack.position = args_size + 4; // args + return-address slot
             let start = self.code_pos;
             self.add_return(&mut stack, start);
             data.definitions[def_nr as usize].code_position = start;
@@ -917,6 +938,20 @@ impl State {
         // the variable's slot to TOS so the init opcode writes correctly.
         if pos < stack.position {
             stack.function.set_stack_pos(v, stack.position);
+        }
+        // PROBLEMS.md #139: when the slot allocator reserved a slot above
+        // TOS (because a zone-1 byte-sized variable — plain enum or
+        // boolean — was placed at a fixed slot inside the zone-2 frontier
+        // without advancing codegen's TOS through it), bump the runtime
+        // stack pointer with an OpReserveFrame so slot == TOS for the
+        // init opcode below.  The reserved bytes cover the zone-1 var's
+        // slot; the zone-1 var was already written via OpPutEnum/etc. so
+        // the bytes contain live data, not garbage.
+        else if pos > stack.position {
+            let gap = pos - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(gap);
+            stack.position += gap;
         }
         let pos = stack.function.stack(v);
         assert!(

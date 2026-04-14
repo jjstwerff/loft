@@ -617,6 +617,14 @@ impl Stores {
     }
 
     pub fn enum_value(&mut self, enum_tp: u16, value_name: &str, value_tp: u16) {
+        // B2 guard: a caller that hasn't yet run type-resolution on the parent
+        // enum may pass `u16::MAX` here (known_type unset).  Returning without
+        // panicking lets the later passes recover; the missing variant-type
+        // link surfaces as a normal type-check error downstream rather than
+        // an `index out of bounds` crash in the allocator.
+        if enum_tp == u16::MAX || (enum_tp as usize) >= self.types.len() {
+            return;
+        }
         if let Parts::Enum(variants) = &mut self.types[enum_tp as usize].parts {
             for variant in variants.iter_mut() {
                 if variant.1 == value_name {

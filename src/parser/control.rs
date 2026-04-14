@@ -49,6 +49,23 @@ pub(crate) fn definitely_returns(val: &Value) -> bool {
     }
 }
 
+/// Match-arm type unification — strip `Type::RefVar(…)` wrappers before
+/// delegating to `Type::is_same`.  Struct-enum pattern bindings yield a
+/// `&T` borrow (e.g. `JString { value } => value` has type `&text`), while
+/// sibling arms commonly return an owned `T` (`_ => ""`).  Requiring the
+/// owned/borrow distinction to match exactly makes the straightforward
+/// null-on-mismatch extractor pattern a compile error for no semantic
+/// gain — the caller reads the value regardless of ownership.  (P54 B6.)
+fn match_arm_types_unify(a: &Type, b: &Type) -> bool {
+    let strip = |t: &Type| -> Type {
+        match t {
+            Type::RefVar(inner) => (**inner).clone(),
+            _ => t.clone(),
+        }
+    };
+    strip(a).is_same(&strip(b))
+}
+
 impl Parser {
     // <block> ::= '}' | <expression> {';' <expression} '}'
     #[allow(clippy::too_many_lines)]
@@ -421,6 +438,16 @@ impl Parser {
                 let parent = self.data.def(*d_nr).parent;
                 (parent, true, true, false)
             }
+            Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Enum => {
+                // P54: iterating a `vector<StructEnum>` yields loop variables
+                // typed `Type::Reference(enum_def, _)` (via `for_type` in this
+                // file, line 1952 — struct-enums degrade to a reference type
+                // when carried through generic collections).  Without this
+                // arm, matching a for-loop variable over a struct-enum vector
+                // dropped into the error branch and every arm produced
+                // 'Expect token }' cascades.
+                (*d_nr, true, true, false)
+            }
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Struct => {
                 (*d_nr, true, true, true)
             }
@@ -599,9 +626,22 @@ impl Parser {
 
             // Get the discriminant integer for this variant.
             let disc: i32 = if is_struct {
-                // Struct enum: discriminant is attributes[0].value of the EnumValue def.
-                if let Value::Enum(nr, _) = self.data.def(variant_def_nr).attributes[0].value {
+                // Struct enum: field-carrying variants store the discriminant
+                // in attributes[0] (the synthetic "enum" attr added by
+                // parse_enum_variants).  Unit variants (`pub enum E { Null,
+                // Some { … } }`) carry no attributes of their own — fall
+                // back to the parent enum's attribute for this variant name.
+                let variant_attrs = &self.data.def(variant_def_nr).attributes;
+                if let Some(first) = variant_attrs.first()
+                    && let Value::Enum(nr, _) = first.value
+                {
                     i32::from(nr)
+                } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&pattern_name) {
+                    if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                        i32::from(nr)
+                    } else {
+                        0
+                    }
                 } else {
                     0
                 }
@@ -666,8 +706,21 @@ impl Parser {
                     );
                 } else {
                     let next_disc = if is_struct {
-                        if let Value::Enum(nr, _) = self.data.def(next_def_nr).attributes[0].value {
+                        // B1-style guard (same shape as line 603): unit
+                        // variants carry no attributes of their own; fall
+                        // back to the parent enum's attr list.
+                        let next_variant_attrs = &self.data.def(next_def_nr).attributes;
+                        if let Some(first) = next_variant_attrs.first()
+                            && let Value::Enum(nr, _) = first.value
+                        {
                             i32::from(nr)
+                        } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(&next_name) {
+                            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value
+                            {
+                                i32::from(nr)
+                            } else {
+                                0
+                            }
                         } else {
                             0
                         }
@@ -768,7 +821,9 @@ impl Parser {
             // Type unification across arms.
             if result_type == Type::Void {
                 result_type = arm_type.clone();
-            } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type)
+            } else if !self.first_pass
+                && arm_type != Type::Void
+                && !match_arm_types_unify(&result_type, &arm_type)
             {
                 diagnostic!(
                     self.lexer,
@@ -906,7 +961,10 @@ impl Parser {
         };
         if *result_type == Type::Void {
             *result_type = arm_type.clone();
-        } else if !self.first_pass && arm_type != Type::Void && !result_type.is_same(&arm_type) {
+        } else if !self.first_pass
+            && arm_type != Type::Void
+            && !match_arm_types_unify(result_type, &arm_type)
+        {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -1048,6 +1106,22 @@ impl Parser {
                             arm_stmts.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
+                            // B5 remaining half (2026-04-14): match-arm
+                            // bindings are field extractions from the
+                            // subject — the subject owns the store and
+                            // the binding is a borrowed view (a DbRef
+                            // pointing into the subject's record).
+                            // Emitting OpFreeRef for the binding at
+                            // function exit would decrement a store the
+                            // binding doesn't own; worse, if the arm
+                            // wasn't taken the slot is never assigned
+                            // and the free reads garbage bytes as a
+                            // DbRef (observed as out-of-bounds store_nr
+                            // ≈ 4621 in `p54_b5_recursive_struct_enum`).
+                            // Mark the binding `skip_free` so scope
+                            // cleanup leaves it alone in both the
+                            // taken and not-taken arms.
+                            self.vars.set_skip_free(v_nr);
                         }
                     }
                 }
@@ -1203,6 +1277,26 @@ impl Parser {
     /// Parse a match pattern literal (integer, float, text, boolean) and optionally
     /// a range suffix `..` or `..=`. Returns the pattern Value and its type.
     fn parse_match_pattern(&mut self, subject_type: &Type, subject_var: u16) -> (Value, Type) {
+        // INC#31: reject open-start ranges (`..hi =>`) in match arms with a
+        // useful diagnostic.  The range-pattern codegen further down assumes
+        // both `lo` and `hi` are real values — an absent `lo` would be
+        // silently encoded as Value::Null and either never match
+        // (interpreter) or crash native codegen (E0308: `()` vs i32).
+        if self.lexer.peek_token("..") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "open-ended range pattern `..hi` is not supported in match arms — \
+                 write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+                 or use a guard like `n if n < hi`"
+            );
+            // Consume the `..` so the rest of the arm parses cleanly.
+            self.lexer.token("..");
+            self.lexer.has_token("=");
+            let mut hi = Value::Null;
+            self.expression(&mut hi);
+            return (Value::Boolean(false), Type::Boolean);
+        }
         let mut lit = Value::Null;
         let negate = self.lexer.has_token("-");
         let lit_type = if let Some(n) = self.lexer.has_integer() {
@@ -1237,6 +1331,21 @@ impl Parser {
         // check for range pattern `lo..hi` or `lo..=hi`.
         if self.lexer.has_token("..") {
             let inclusive = self.lexer.has_token("=");
+            // INC#31: reject open-end range `lo..` in match arms — same
+            // silent-never-matches / native-codegen-crash trap as open-start.
+            if self.lexer.peek_token("=>")
+                || self.lexer.peek_token("|")
+                || self.lexer.peek_token("if")
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "open-ended range pattern `lo..` is not supported in match arms — \
+                     write the two-sided form `lo..hi` (exclusive) or `lo..=hi` (inclusive), \
+                     or use a guard like `n if n >= lo`"
+                );
+                return (Value::Boolean(false), Type::Boolean);
+            }
             let mut hi = Value::Null;
             self.expression(&mut hi);
             let mut lo_cond = Value::Null;
@@ -1908,7 +2017,16 @@ impl Parser {
                 t = t.depending(*d);
             }
             t
-        } else if let Type::Sorted(dnr, _, dep) | Type::Index(dnr, _, dep) = &in_type {
+        } else if let Type::Sorted(dnr, _, dep)
+        | Type::Index(dnr, _, dep)
+        | Type::Hash(dnr, _, dep) = &in_type
+        {
+            // C60 path 2c piece 2: hash iteration yields `reference<T>`,
+            // same shape as Sorted/Index.  This is the parser-side
+            // prerequisite before fill_iter (src/parser/fields.rs:599)
+            // can flip the hash arm to `on = 4`.  Without this, for-loop
+            // body parsing sees `e` as Type::Null and field access on
+            // `e.name` fails with "Unknown type null".
             Type::Reference(*dnr, dep.clone())
         } else if let Type::Iterator(i_tp, _) = &in_type {
             if **i_tp == Type::Null {
@@ -2029,7 +2147,15 @@ impl Parser {
         let ret = self.data.definitions[self.context as usize]
             .returned
             .clone();
-        if let Type::Vector(_, cur) | Type::Reference(_, cur) = &ret {
+        // B2-runtime / B3 / B7 unification (2026-04-13): struct-enums
+        // (Type::Enum with struct-enum discriminator `true`) live as
+        // heap-allocated records just like Reference and Vector do, so
+        // their return-slot must also be promoted to a hidden caller
+        // argument.  Without this arm the callee allocates its own
+        // DbRef locally; the caller never reserves matching stack space;
+        // OpReturn's value-width mismatches the reserved slot and the
+        // interpreter loops on Return(ret=0, value=16) at PC=0.
+        if let Type::Vector(_, cur) | Type::Reference(_, cur) | Type::Enum(_, true, cur) = &ret {
             let mut dep = cur.clone();
             for v in ls {
                 let n = self.vars.name(*v);
@@ -2052,6 +2178,7 @@ impl Parser {
             self.data.definitions[self.context as usize].returned = match ret {
                 Type::Vector(it, _) => Type::Vector(it, dep),
                 Type::Reference(td, _) => Type::Reference(td, dep),
+                Type::Enum(td, true, _) => Type::Enum(td, true, dep),
                 _ => {
                     diagnostic!(
                         self.lexer,

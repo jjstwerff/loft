@@ -64,9 +64,14 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d.h[<span class="st">"one"</span>], <span class="st">"one still present"</span>);
   d.h[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
 <p>no-op; does not panic</p>
-<h2 id="why-you-cannot-iterate-a-hash-directly">Why you cannot iterate a hash directly</h2>
-<p>A hash has no stable element order — internally, each record is placed in a slot chosen by a number computed from the key, so iteration order is unpredictable. <code>for item in c.lookup</code> is therefore a compile error. Always pair a hash with a vector when you need both fast lookup and ordered iteration.</p>
-<pre><code>}</code></pre>
+<h2 id="iterating-a-hash">Iterating a Hash</h2>
+<p><code>for e in h { ... }</code> walks the hash in ascending key order.  The loop variable has the same shape as a <code>sorted&lt;T&gt;</code> iteration — a <code>reference&lt;T&gt;</code> with <code>#index</code>, <code>#count</code>, and <code>#first</code> available.  Multi-field keys sort lexicographically.</p>
+<p>Under the hood the compiler builds a one-shot sorted snapshot of the hash's record-numbers and walks it, so iteration cost is O(n) + O(n log n) per <code>for</code>, not amortised across calls.  For a hot loop, pair the hash with a <code>vector&lt;T&gt;</code> or <code>sorted&lt;T[k]&gt;</code> on the same record type and iterate the companion collection.</p>
+<p><code>e#remove</code> is rejected at compile time — the snapshot is detached from the hash, so removing from it would not actually remove from the hash. Use <code>h[key] = null</code> to remove an entry.</p>
+<pre><code>  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> e <span class="kw">in</span> c.lookup { sum += e.v; }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">10</span>, <span class="st">"Sum via hash iteration: {sum}"</span>);
+}</code></pre>
 
   </article>
 <script src="search-index.js"></script>

@@ -37,6 +37,7 @@ mod calc;
 mod codegen_runtime;
 mod compile;
 mod const_eval;
+mod crash_report;
 mod data;
 mod database;
 mod extensions;
@@ -44,6 +45,7 @@ mod fill;
 mod formatter;
 mod generation;
 mod hash;
+mod json;
 mod keys;
 mod lexer;
 mod log_config;
@@ -366,6 +368,7 @@ fn install_from_registry(arg: &str) {
 }
 
 /// Extract version string from `loft.toml` content.
+#[cfg(feature = "registry")]
 fn extract_toml_version(content: &str) -> String {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -790,34 +793,39 @@ fn registry_sync() {
         std::process::exit(1);
     }
 
-    // Validate content.
-    let content = match std::fs::read_to_string(&tmp) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("loft registry sync: cannot read downloaded file: {e}");
+    // Validate content. (Cfg-gated: under `--no-default-features` the block
+    // above exits; gating the rest keeps clippy's `unreachable_code` /
+    // `dead_code` quiet without a blanket `#[allow]`.)
+    #[cfg(feature = "registry")]
+    {
+        let content = match std::fs::read_to_string(&tmp) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("loft registry sync: cannot read downloaded file: {e}");
+                let _ = std::fs::remove_file(&tmp);
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = registry::validate_registry_content(&content) {
+            eprintln!(
+                "loft registry sync: invalid registry content: {e}\n  local registry is unchanged."
+            );
             let _ = std::fs::remove_file(&tmp);
             std::process::exit(1);
         }
-    };
-    if let Err(e) = registry::validate_registry_content(&content) {
-        eprintln!(
-            "loft registry sync: invalid registry content: {e}\n  local registry is unchanged."
-        );
-        let _ = std::fs::remove_file(&tmp);
-        std::process::exit(1);
-    }
 
-    // Move into place.
-    if let Err(e) = std::fs::rename(&tmp, &dst) {
-        eprintln!("loft registry sync: cannot write {}: {e}", dst.display());
-        let _ = std::fs::remove_file(&tmp);
-        std::process::exit(1);
-    }
+        // Move into place.
+        if let Err(e) = std::fs::rename(&tmp, &dst) {
+            eprintln!("loft registry sync: cannot write {}: {e}", dst.display());
+            let _ = std::fs::remove_file(&tmp);
+            std::process::exit(1);
+        }
 
-    let (entries, _) = registry::parse_registry(&content);
-    let (pkgs, versions) = registry::registry_stats(&entries);
-    let today = chrono_date();
-    println!("registry synced: {pkgs} packages, {versions} versions  ({today})");
+        let (entries, _) = registry::parse_registry(&content);
+        let (pkgs, versions) = registry::registry_stats(&entries);
+        let today = chrono_date();
+        println!("registry synced: {pkgs} packages, {versions} versions  ({today})");
+    }
 }
 
 /// REG.4: Compare installed packages against the registry.
@@ -970,6 +978,7 @@ fn registry_list(installed_only: bool) {
 }
 
 /// Get a simple date string without pulling in the chrono crate.
+#[cfg(feature = "registry")]
 fn chrono_date() -> String {
     // Use file modification time of a temp file as a proxy for "now".
     let tmp = std::env::temp_dir().join(".loft_date_probe");
@@ -991,6 +1000,7 @@ fn chrono_date() -> String {
 }
 
 /// Convert days since Unix epoch to (year, month, day).
+#[cfg(feature = "registry")]
 fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     let z = days + 719_468;
@@ -1116,6 +1126,9 @@ fn add_native_extern_flags(
 
 #[allow(clippy::too_many_lines)]
 fn main() {
+    // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
+    // last-executed opcode before the default handler fires.
+    crate::crash_report::install("loft");
     let argv: Vec<String> = env::args_os()
         .skip(1)
         .map(|a| a.to_str().unwrap_or("").to_string())
@@ -2103,9 +2116,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             };
             // PKG.4: add --extern flags for native packages.
             add_native_extern_flags(&mut cmd, &p.data, None, native_deps_dir.as_deref());
-            let status = cmd.status();
-            let status = match status {
-                Ok(s) => s,
+            let output = cmd.output();
+            let output = match output {
+                Ok(o) => o,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!(
                         "loft: rustc not found; install the Rust toolchain to use --native mode"
@@ -2117,10 +2130,32 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                     std::process::exit(1);
                 }
             };
+            // Relay rustc's own output to the user.
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), &output.stderr);
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
+            let status = output.status;
             if !status.success() {
-                eprintln!(
-                    "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
-                );
+                // P138: detect the rand_core / cargo-cache staleness and print a
+                // clear recovery hint instead of a generic codegen-bug message.
+                let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
+                if stderr_utf8.contains("E0460")
+                    && (stderr_utf8.contains("rand_core")
+                        || stderr_utf8.contains("possibly newer version of crate"))
+                {
+                    eprintln!(
+                        "\nloft: native compilation failed because the cached `libloft.rlib` \
+                         references a different dependency version than the one now in \
+                         `target/release/deps/`.\n\n\
+                         This happens when `cargo build --bin loft` rebuilt the binary but \
+                         left the library (`--lib`) stale.\n\n\
+                         Fix:  cargo build --release --lib --bin loft\n\
+                         Or:   cargo clean && cargo build --release\n"
+                    );
+                } else {
+                    eprintln!(
+                        "loft: native compilation failed (codegen bug — try --native-emit to inspect the source)"
+                    );
+                }
                 std::process::exit(1);
             }
             // Store in cache for next run.

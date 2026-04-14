@@ -924,10 +924,10 @@ fn render_article_html_typst(html: &str) -> String {
             if let Some(end) = rest.find('>') {
                 pos += end + 1;
             } else {
-                pos += 1;
+                pos += rest.chars().next().map_or(1, char::len_utf8);
             }
         } else {
-            pos += 1;
+            pos += rest.chars().next().map_or(1, char::len_utf8);
         }
     }
     out

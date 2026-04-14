@@ -755,9 +755,38 @@ debug than the original problem.
 
 ---
 
+## Closed-by-Decision Register
+
+Before proposing a feature, fix, or language change, check
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).  It records
+questions that have been evaluated and explicitly declined —
+feature proposals (e.g. Rust-style literal suffixes), accepted
+limitations (e.g. WASM `par()` sequential), and design choices
+(e.g. closure capture by value).  The register exists so the
+same questions don't resurface every session.
+
+**Rules**:
+- Closed items are **not** backlog.  They don't belong in
+  ROADMAP.md's milestones, PLANNING.md's priorities, or
+  QUALITY.md's active tables.  A short cross-reference to
+  DESIGN_DECISIONS.md in an "Out of scope" section is enough.
+- **Re-opening** requires new evidence (a concrete use case,
+  incident report, or measurement) that wasn't available at the
+  decision.  Put it at the top of the revived entry; don't
+  silently flip.
+- **Adding** a new entry requires the same rigor: question,
+  evaluation, decision with date, and "revisit when" trigger.
+
+When declining a proposal, strike it (`~~…~~`) in its source doc
+and append a pointer to its new DESIGN_DECISIONS.md entry.  Keeps
+the git history discoverable without cluttering active tables.
+
+---
+
 ## See also
 
 - [CODE.md](CODE.md) — Naming conventions, function-length rules, clippy policy, null sentinels
+- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) — Closed-by-decision register (see above)
 - [TESTING.md](TESTING.md) — Test framework, `code!` / `expr!` macros, LogConfig debug presets
 - [PLANNING.md](PLANNING.md) — Backlog, version milestones, effort estimates
 - [PROBLEMS.md](PROBLEMS.md) — Open bugs; update here when fixing a known issue

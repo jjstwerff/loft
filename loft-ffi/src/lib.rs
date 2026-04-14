@@ -19,7 +19,6 @@
 
 use std::cell::RefCell;
 
-
 // ── Null sentinels ─────────────────────────────────────────────────────
 
 /// Null sentinel for `integer` (loft `i32`).
@@ -808,7 +807,9 @@ mod tests {
         LoftStore {
             ptr: buf.as_mut_ptr(),
             size: (buf.len() / 8) as u32,
-            ctx: LoftStoreCtx { _opaque: std::ptr::null_mut() },
+            ctx: LoftStoreCtx {
+                _opaque: std::ptr::null_mut(),
+            },
             claim_fn: None,
             reload_fn: None,
             resize_fn: None,
@@ -853,10 +854,7 @@ mod tests {
     #[test]
     fn text_opt_some_on_valid() {
         let data = "ok";
-        assert_eq!(
-            unsafe { text_opt(data.as_ptr(), data.len()) },
-            Some("ok")
-        );
+        assert_eq!(unsafe { text_opt(data.as_ptr(), data.len()) }, Some("ok"));
     }
 
     #[test]
@@ -866,7 +864,11 @@ mod tests {
 
     #[test]
     fn loft_ref_non_null() {
-        let r = LoftRef { store_nr: 1, rec: 42, pos: 8 };
+        let r = LoftRef {
+            store_nr: 1,
+            rec: 42,
+            pos: 8,
+        };
         assert!(!r.is_null());
     }
 

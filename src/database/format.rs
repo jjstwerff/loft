@@ -171,7 +171,29 @@ impl Stores {
     /// Parse the content of a string into an existing record.
     /// Returns `None` on success, or `Some(error_path)` on failure.
     /// The error path is a human-readable string like `"line 1:15 path:items[2].name"`.
+    ///
+    /// P54-U phase 2: routes through the unified
+    /// `crate::json::parse_with(text, Dialect::Lenient)` + the
+    /// schema-driven [`Stores::walk_parsed_into`] walker.  On
+    /// unified-path failure (syntax error OR schema/shape
+    /// mismatch the walker doesn't yet cover) the call falls
+    /// back to the legacy hand-rolled scanner so the
+    /// `"line N:M path:X"` error shape stays consistent with
+    /// existing tests and tooling.  The fallback will be
+    /// removed once the walker's coverage is proven across the
+    /// full test matrix.
     pub fn parse(&mut self, text: &str, tp: u16, result: &DbRef) -> Option<String> {
+        if self.try_parse_unified(text, tp, result) {
+            return None;
+        }
+        // 2026-04-14: `LOFT_P54U_TRACE` instrumentation confirmed
+        // zero fallback hits across the full test suite on success
+        // inputs — the walker covers every shape exercised by the
+        // current tests.  The legacy scanner below is reached only
+        // for ERROR inputs where we need the `"line N:M path:X"`
+        // diagnostic shape (see `tests/data_structures.rs::record`
+        // asserting `"line 1:7 path:blame"`).  Replacing it with a
+        // walker-native diagnostic is the P54-U Phase-3 cleanup.
         let mut pos = 0;
         if self.parsing(text, &mut pos, tp, tp, u16::MAX, result) {
             return None;
@@ -192,6 +214,12 @@ impl Stores {
     pub fn parse_message(&mut self, text: &str, tp: u16) -> String {
         let db = self.database(u32::from(self.types[tp as usize].size));
         self.store_mut(&db).set_int(db.rec, 4, i32::from(tp));
+        if self.try_parse_unified(text, tp, &db) {
+            let mut s = String::new();
+            self.show(&mut s, &db, tp, false);
+            return s;
+        }
+        // See `parse` above for why this fallback exists post-walker.
         let mut pos = 0;
         if self.parsing(text, &mut pos, tp, tp, u16::MAX, &db) {
             let mut s = String::new();
@@ -208,6 +236,21 @@ impl Stores {
         };
         super::parse_key(text, &mut pos, result, &mut key);
         super::show_key(text, &key)
+    }
+
+    /// Attempt the unified parse-then-walk path.  Returns
+    /// `true` iff the unified parser accepts `text` AND the
+    /// schema walker populates `result` without shape/type
+    /// mismatches.  On any failure the call leaves `result`
+    /// untouched-or-partial; the caller is expected to fall
+    /// back (currently to the legacy scanner, eventually to
+    /// a structured diagnostic push).
+    fn try_parse_unified(&mut self, text: &str, tp: u16, result: &DbRef) -> bool {
+        let parsed = match crate::json::parse_with(text, crate::json::Dialect::Lenient) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        self.walk_parsed_into(&parsed, tp, tp, u16::MAX, result)
     }
 
     /**

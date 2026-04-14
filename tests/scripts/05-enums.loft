@@ -104,7 +104,8 @@ fn main() {
   // get_enum returned 0 (not 255) for an out-of-bounds DbRef, so conv_bool_from_enum
   // never saw the null sentinel and the for-loop would never break.
   count = 0;
-  for d in dirs {
+  for iter_dir in dirs {
+    iter_dir;
     count += 1;
   }
   assert(count == 4, "for loop over enum vector terminates with correct count");
@@ -112,11 +113,11 @@ fn main() {
   first_dir = North;
   last_dir = North;
   n = 0;
-  for d in dirs {
+  for curr_dir in dirs {
     if n == 0 {
-      first_dir = d;
+      first_dir = curr_dir;
     }
-    last_dir = d;
+    last_dir = curr_dir;
     n += 1;
   }
   assert(first_dir == North, "first element from enum vector iteration");

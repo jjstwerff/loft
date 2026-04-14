@@ -840,6 +840,13 @@ type hash size(4);
 fn OpHashAdd(data: reference, rec: reference, tp: const u16);
 fn OpHashFind(data: reference, tp: const u16) -> reference[data];
 fn OpHashRemove(data: reference, rec: reference, tp: const u16);
+// C60 Step 3a-part2: iterate a hash in ascending key order.
+// Returns a fresh vector<reference<T>> with the hash's records sorted
+// by key field(s).  The parser desugars `for e in h { … }` into a
+// call with the hash's type id; direct user calls need to supply the
+// id via `sizeof`-style introspection (not yet exposed).  Inefficient
+// by design — walks + sorts all records per call.  See CAVEATS.md C60.
+pub fn hash_sorted(h: reference, tp: integer) -> reference;
 type index size(4);
 // type spacial;
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;

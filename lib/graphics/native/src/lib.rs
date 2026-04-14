@@ -899,9 +899,15 @@ pub extern "C" fn loft_gl_upload_canvas(
     if w == 0 || h == 0 || data_count < w * h {
         return 0;
     }
+    // C58: canonical `(0, 0) = canvas top-left` — no upload-side Y flip.
+    // GL's glTexImage2D stores the first buffer row as the texture's bottom
+    // row, so canvas-top lives at TC.y=0 after upload.  The 2D orthographic
+    // projection's `-2/H` already compensates for that when mapping
+    // user-supplied top-left screen coords to GL clip-space, so sprite and
+    // texture shaders can sample with identity V (no per-shader flip).
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for y in (0..h).rev() {
+    for y in 0..h {
         for x in 0..w {
             let px = pixels[(y * w + x) as usize];
             rgba.push(((px >> 16) & 0xFF) as u8); // R

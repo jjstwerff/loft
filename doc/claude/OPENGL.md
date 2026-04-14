@@ -227,6 +227,28 @@ pub struct Draw {
 
 ## 2D Drawing — canvas
 
+### Canonical coordinate convention (C58)
+
+The 2D canvas origin is the **top-left pixel** and `y` grows downward, in
+lockstep with HTML canvas, PNG file row order, and how users already
+think about 2D drawing.  This is a language-level guarantee:
+
+- `canvas(w, h)` returns a buffer whose first row is the visual top.
+- `gl_upload_canvas` uploads bytes in that order; GL's `glTexImage2D`
+  stores the first row at the texture's bottom, placing canvas-top at
+  texture coord `y = 0`.
+- The 2D orthographic projection (`create_painter_2d`) applies a
+  `-2/H` scale on Y so user-supplied screen coords with top-left
+  origin map correctly to clip-space.
+- Sprite and texture shaders sample with **identity V** (no
+  per-shader Y flip).  All three passes above together net to one
+  canonical orientation — callers never need to compensate.
+
+Regression-guarded by the 2×2 atlas corner check in
+`tests/scripts/snap_smoke.sh`.  Do not add a Y flip at the upload,
+shader, or projection site in isolation — each one on its own breaks
+a rectangular (non-square, non-N×1) atlas.
+
 ```loft
 // An RGBA pixel buffer of canvas_size × canvas_size pixels (square).
 // All pixels initialise to Rgba{r:0,g:0,b:0,a:0} (fully transparent).

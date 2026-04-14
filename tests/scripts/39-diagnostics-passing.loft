@@ -56,11 +56,15 @@ fn test_implicit_return_not_null() {
   assert(pe_dbl(3) == 6, "ok");
 }
 
-fn test_shadow_same_type_ok() {
+fn test_shadow_same_type_renamed_loop_var() {
+  // C61.local: same-type shadow of an outer local is rejected at parse.
+  // Rename the loop variable (documented fix) — the outer `x` survives
+  // and is printed unchanged.
   x = 10;
   v = [1, 2, 3];
-  for x in v { }
-  println("{x}");
+  total = 0;
+  for elem in v { total += elem; }
+  println("{x} {total}");
 }
 
 fn test_if_expr_with_else_ok() {

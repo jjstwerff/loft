@@ -295,6 +295,29 @@ impl Parser {
             }
             nr += 1;
         }
+        // B2 fix: in a mixed-kind enum (some unit variants, some struct-
+        // field variants), the unit variants processed *before* the
+        // first struct variant got typed as Enum(d_nr, false, _) because
+        // the parent enum had not yet been upgraded to struct-enum.
+        // Sync both each variant's `returned` type and the parent's
+        // per-variant attribute types to the final parent.returned so
+        // pattern match / construction / return paths all see the same
+        // struct-enum discriminator width.
+        if self.first_pass {
+            let parent_returned = self.data.def(d_nr).returned.clone();
+            if matches!(parent_returned, Type::Enum(_, true, _)) {
+                let num_variants = self.data.def(d_nr).attributes.len();
+                for a_nr in 0..num_variants {
+                    let v_name = self.data.def(d_nr).attributes[a_nr].name.clone();
+                    let v_nr = self.data.def_nr(&v_name);
+                    if v_nr != u32::MAX {
+                        self.data.definitions[v_nr as usize].returned = parent_returned.clone();
+                    }
+                    self.data.definitions[d_nr as usize].attributes[a_nr].typedef =
+                        parent_returned.clone();
+                }
+            }
+        }
         true
     }
 
@@ -873,13 +896,49 @@ impl Parser {
             } else {
                 Type::Unknown(0)
             };
+            // P91: if this parameter has `= expr`, the expression may
+            // reference earlier parameters of the same function.  Inject
+            // those earlier params into `self.vars` before parsing the
+            // default, track which var_nr each maps to, then rewrite the
+            // parsed Value tree so references use the *argument index*
+            // (0, 1, …) rather than the parser's internal var_nr.
+            // `fill_defaults` in src/parser/mod.rs::substitute_param_refs
+            // replaces `Var(argument_index)` with the caller's actual arg.
+            let injected: Vec<(String, u16, u16)> = if self.lexer.peek_token("=") {
+                let mut mapping = Vec::new();
+                for (i, a) in arguments.iter().enumerate() {
+                    if a.typedef.is_unknown() {
+                        continue;
+                    }
+                    if self.vars.var(&a.name) != u16::MAX {
+                        continue;
+                    }
+                    let v = self.vars.add_variable(&a.name, &a.typedef, &mut self.lexer);
+                    if v != u16::MAX {
+                        self.vars.become_argument(v);
+                        self.vars.defined(v);
+                        mapping.push((a.name.clone(), v, i as u16));
+                    }
+                }
+                mapping
+            } else {
+                Vec::new()
+            };
             let val = if self.lexer.has_token("=") {
                 let mut t = Value::Var(arguments.len() as u16);
                 self.expression(&mut t);
+                // Rewrite Var(injected_slot) → Var(arg_index) so the stored
+                // default is portable across call sites.
+                for (_name, slot, arg_idx) in &injected {
+                    t = Self::remap_var_nr(t, *slot, *arg_idx);
+                }
                 t
             } else {
                 Value::Null
             };
+            for (name, _, _) in &injected {
+                self.vars.remove_name(name);
+            }
             if !self.first_pass
                 && typedef.is_unknown()
                 && val == Value::Null
@@ -1075,10 +1134,13 @@ impl Parser {
                             self.lexer.has_token(",");
                             self.lexer.has_identifier();
                         }
+                        // C7/P22: keep the bespoke diagnostic (more helpful
+                        // than a generic "unknown type"); surface the
+                        // milestone so users know when to check back.
                         diagnostic!(
                             self.lexer,
                             Level::Error,
-                            "spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups"
+                            "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups"
                         );
                         Type::Unknown(0)
                     }

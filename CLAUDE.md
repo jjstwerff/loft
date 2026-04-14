@@ -17,7 +17,20 @@ cargo run --bin loft -- --help                # CLI help
 cargo run --bin gendoc                        # regenerate doc/*.html
 make ci                                       # fmt → clippy → test (full local gate)
 make test                                     # clippy + test; output in result.txt
+./scripts/find_problems.sh --bg               # background full-suite run
+./scripts/find_problems.sh --peek             #   inspect mid-run
+./scripts/find_problems.sh --wait             #   block for summary
 ```
+
+For any refactor likely to surface multiple test failures, kick off
+`find_problems.sh --bg` before going back to editing.  It runs
+`cargo test --release --no-fail-fast` detached, tees the log to
+`/tmp/loft_test.log`, and writes a structured summary to
+`/tmp/loft_problems.txt` on completion (FAILED list, stdout blocks,
+SIGSEGV context, plus a wrap-suite `--nocapture` re-run when a
+crash masks a specific `.loft` filename).  See
+[TESTING.md](doc/claude/TESTING.md) § "Preferred shape —
+background + peek + wait" for the full rationale.
 
 ---
 
@@ -207,6 +220,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) | Development workflow — branching, WIP commit, rebase sequence, CI |
 | [SLOTS.md](doc/claude/SLOTS.md) | Stack slot assignment — two-zone design, diagnostic tools, open issues |
 | [PROBLEMS.md](doc/claude/PROBLEMS.md) | Known bugs, limitations, workarounds, and fix plans |
+| [QUALITY.md](doc/claude/QUALITY.md) | Open programmer-biting issues, active sprint (P54), active design (C54), compiler blockers, enhancement tiers |
+| [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) | Closed-by-decision register — check before proposing features already declined (C3 / C38 / C54.D / …) |
 | [FORMATTER.md](doc/claude/FORMATTER.md) | Source formatter design and implementation notes |
 | [INCONSISTENCIES.md](doc/claude/INCONSISTENCIES.md) | Known language design inconsistencies and asymmetries |
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, optimisation plans, string alloc, const data, block copy analysis |

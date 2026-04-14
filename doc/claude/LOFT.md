@@ -31,7 +31,7 @@ and can emit Rust code for host integration.
 - [Shebang](#shebang)
 - [Summary of grammar (informal)](#summary-of-grammar-informal)
 - [Best Practices](#best-practices)
-- [Known Limitations](#known-limitations)
+- [Design decisions and constraints](#design-decisions-and-constraints)
 
 ---
 
@@ -85,6 +85,25 @@ returns `null` (`i32::MIN`). If a program needs the full 32-bit signed range, us
 `long` instead. For struct fields, `not null` reclaims the sentinel value for
 storage, allowing the full range.
 
+**`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
+or default?" but the answer differs by type because the null sentinel is in-band.
+For `boolean`, `false` *is* the null sentinel — `!b` is true for **both** `null`
+and `false`, and the two cases are indistinguishable.  For `integer`, `0` is a
+valid non-null value — `!n` fires **only** for `i32::MIN`, not for `0`.  Code
+ported from a boolean guard to an integer guard (or vice versa) silently changes
+meaning:
+
+```loft
+flag: boolean = false;
+if !flag { /* runs */ }     // catches both null and false
+
+count: integer = 0;
+if !count { /* skipped */ } // catches only null; zero passes through
+```
+
+The idiomatic "zero or null" check on an integer is `count == 0 or !count`,
+or simply `count == 0` if the sentinel and zero should be treated the same.
+
 Integer ranges can be constrained with `limit`:
 ```
 integer limit(-128, 127)   // fits in a byte
@@ -119,6 +138,18 @@ sorted<Elm[-key]>           // single key, descending
 index<Elm[nr, -key]>        // two keys: nr ascending, key descending
 hash<Count[c, t]>           // compound hash key
 ```
+
+**Gotcha — iteration direction is declared on the struct, not on the query.**
+A `-` prefix on a key field in `sorted<T[-key]>` or `index<T[-key]>` flips
+the iteration direction of *every* query against that collection — plain
+`for v in db.map`, range queries, and partial-key lookups all walk
+descending instead of ascending.  Reading the query site alone never
+reveals the direction: the `-` lives in the struct declaration, possibly
+hundreds of lines away.  When reviewing a query, cross-check the index
+declaration before reasoning about what "starts at X" means.
+Regression guards in `tests/issues.rs` (`inc12_sorted_ascending_iterates_forward`,
+`inc12_sorted_descending_iterates_backward`) lock the two directions on
+otherwise-identical structs.
 
 ### Enum types
 
@@ -296,11 +327,62 @@ Used for explicit type casts and conversions:
 "json-text" as Program   // deserialize text as a struct
 ```
 
-### Parsing (JSON / loft text → struct)
+### Type-conversion rules — when does loft convert automatically?
 
-`Type.parse(text)` parses JSON or loft-native text into a struct record.
-`vector<T>.parse(text)` parses a JSON array into an iterable vector.
-Parse errors are accessible via `record#errors`.
+Loft applies conversions in three modes: **implicit** (no annotation),
+**format-only** (implicit, but only inside `"{…}"` interpolation), and
+**explicit** (`as` required).  The mode depends on the types involved,
+not on the context — which means you can predict what a conversion will
+do by looking up the pair in this table:
+
+| From → To                          | Mode          | Notes |
+|------------------------------------|---------------|-------|
+| Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table |
+| `integer` ↔ `long`                 | Implicit      | Widens or narrows automatically; narrowing may null-trap at `i32::MIN` |
+| Integer ↔ `float` in arithmetic    | Implicit      | `3 + 1.5` is `4.5` — the integer widens to the float operand's width |
+| `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
+| `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
+| Integer / float / boolean → `text` | **Format-only** | `"n={m}"` renders the value inline; `t = m` with `t: text` is a compile error.  If you want the rendered form as a standalone text value, assign through interpolation: `t = "{m}"` |
+| `character` → `integer` (codepoint)| Explicit `as` | `'a' as integer` yields 97 |
+| `character` ↔ `text`               | See § String literals | Indexing vs. slicing asymmetry; concatenation via interpolation |
+| `text` (of form `"VariantName"`) → plain enum | Explicit `as` | `"West" as Direction` — the name must match a declared variant |
+| Struct-enum variant → parent enum  | Implicit on assignment | `p: Shape = Circle { r: 1.0 }` works without `as` |
+| Struct-enum variant ← parent enum  | `match` only  | Recover the concrete variant via pattern matching; there is no direct downcast |
+| `text` → struct / vector<T>        | Explicit `as` or `.parse` | `raw as Program` or `Program.parse(raw)` |
+
+**Rule of thumb:** conversions that cannot fail (widening numeric,
+struct-enum up-cast, rendering for display) are implicit.  Conversions
+that can fail (narrowing, parsing) require `as` or `.parse` so the
+failure point is visible at the call site.  The one special case is
+"integer/float → text" — implicit only inside format strings, explicit
+elsewhere — because loft treats format interpolation as a dedicated
+rendering operation, not a general coercion.
+
+### Parsing (JSON → JsonValue tree → struct)
+
+JSON support has two layers:
+
+**1. `JsonValue` enum (preferred for new code).** `json_parse(text) -> JsonValue` returns
+a typed tree covering all six RFC 8259 kinds (`JNull`, `JBool`, `JNumber`, `JString`,
+`JArray`, `JObject`).  Malformed input returns `JNull`; the error trail is in
+`json_errors()`.  Chained access (`v.field("k").item(0).as_text()`) is safe — every
+intermediate failure produces `JNull`, never a trap.  Full surface reference in
+[STDLIB.md § JSON](STDLIB.md).
+
+```
+v = json_parse(`{{"users":[{{"name":"Alice"}}]}}`);
+name = v.field("users").item(0).field("name").as_text();   // "Alice"
+reply = json_object([
+  JsonField { name: "ok",    value: json_bool(true) },
+  JsonField { name: "count", value: json_number(3.0) }
+]);
+text = reply.to_json();   // {{"ok":true,"count":3}}
+```
+
+**2. `Type.parse(text)` (legacy, transitional).**  Parses JSON or loft-native text
+directly into a struct record; parse errors via `record#errors`.  Slated for
+withdrawal in 0.9.0 — `Type.parse(JsonValue)` will be the replacement once P54
+step 5 lands.
 
 ```
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
@@ -462,6 +544,36 @@ msg = `Hello, {name}!
 
 Use backtick strings for GLSL shaders, multi-line templates, or text containing `"`.
 
+**Gotcha — indexing a text yields `character`, slicing yields `text`.**  The two
+operations on the same subject return different types:
+
+```
+txt = "hello";
+c = txt[0];       // character ('h') — a single Unicode scalar value
+s = txt[0..1];    // text ("h") — a one-character string
+```
+
+Practical consequences:
+- `text + text` concatenates (`txt[0..1] + txt[1..2]` is `"he"`).
+- `character + character` does **not** concatenate — `+` on characters is
+  the arithmetic operator.  Build text from characters via interpolation:
+  `"{c1}{c2}"` or `t = ""; t += "{c}"` in a loop.
+  **B7-family caveat (open issue):** returning a text built by
+  interpolating a character from a `-> text` function SIGSEGVs today
+  (`fn f() -> text { c = txt[0]; "{c}" }` crashes).  Same native-returned
+  temporary lifecycle that gates 5 ignored P54 tests.  Work around by
+  assigning the interpolated text to a local, then passing it explicitly
+  to the output sink instead of returning it.
+- `character == text` is a compile error today; format the character
+  first: `"{c}" == some_text`.
+- Vectors are consistent (`vec[0]` element, `vec[0..1]` `vector<T>`) —
+  the text/character asymmetry is deliberate because `character` is a
+  distinct scalar type, not a length-1 text.
+
+When your code manipulates text character-by-character, prefer `txt[i..j]`
+slicing (iterator-aware, stays in the text domain) over `txt[i]`
+(produces a character you then have to convert back).
+
 ## String formatting
 
 Both `"..."` and `` `...` `` strings support format specifiers using `{...}`:
@@ -561,6 +673,15 @@ Inside a loop, the iteration variable supports several attributes using `#`:
 | `#index`  | ✓ (0-based) | ✓ (0-based array position) | ✗ compile error | N/A |
 | `#remove` | ✓ (filtered) | ✓ (filtered) | ✓ (filtered) | use `h[key] = null` |
 
+**Gotcha — `#index` does not mean the same thing on text and vector.** On a text
+loop `c#index` is a **byte offset** into the underlying UTF-8 (so it advances by
+2–4 per non-ASCII character); on a vector or sorted loop `v#index` is a 0-based
+**element position**.  Code that relies on `#index` being a counter — say
+`if c#index == 5 { … }` — works on ASCII, then quietly stops working when an
+emoji or accented letter is added.  When you want a 0-based character count
+that matches vector semantics, use `c#count`; when you want byte offsets for
+slicing (e.g. `txt[c#index..c#next]`), use `c#index`.
+
 Text iteration example — `#index` and `#next` are always consistent: `c#next == c#index + len(c)`:
 ```
 // "Hi 😊!": H@0..1, i@1..2, ' '@2..3, '😊'@3..7, '!'@7..8
@@ -598,6 +719,33 @@ continue
 ```
 
 Only valid inside a loop.
+
+**Labelled break — `loop_var#break`.** To exit an *outer* loop from inside an inner
+one, write `outerVar#break` using the loop variable's name.  This reuses the
+`#attribute` syntax (see § Loop attributes — `#first`, `#count`, `#index`,
+`#remove`) as a control-flow statement: `x#break` is not a property read but a
+jump to just past the loop whose iterator is `x`.  A bare `break` always exits
+the nearest enclosing loop.
+
+```
+for x in 1..5 {
+    for y in 1..5 {
+        if y > x       { break; }        // exits the inner y loop only
+        if x * y >= 16 { x#break; }      // exits BOTH loops (jumps past x loop)
+    }
+}
+```
+
+**Gotcha (INC#18).** `x#break` looks like an attribute access but is a jump
+instruction — it produces no value and cannot appear on the right of `=`.
+
+**Labelled continue — `loop_var#continue`.** Symmetric to `x#break`: use
+`x#continue` from inside an inner loop to skip the remainder of the current
+*outer* iteration (named by `x`).  Semantics: jump back to the top of the
+`x` loop and advance it by one step, abandoning any remaining inner-loop
+iterations and any code between the inner loop's closing `}` and the end
+of the outer body.  A bare `continue` still targets only the innermost
+loop.
 
 ### Return
 
@@ -700,6 +848,22 @@ match color {
 }
 ```
 
+**JsonValue match:** the typed JSON tree returned by `json_parse(text)` is a
+struct-enum, so pattern matching is the canonical way to dispatch on a parsed
+JSON value.  Each arm names a variant; the destructured field exposes the
+inner payload (`items` for `JArray`, `fields` for `JObject`, `value` for the
+primitive variants).  A wildcard or `JNull` arm covers parse failures.
+
+```
+match json_parse(raw) {
+    JObject { fields } => for f in fields { handle(f.name, f.value) },
+    JArray  { items }  => for v in items  { handle_element(v) },
+    JNumber { value }  => log_info("scalar number: {value}"),
+    JNull              => log_warn("parse error: {json_errors()}"),
+    _                  => log_warn("unsupported root kind")
+}
+```
+
 **Match is an expression:** it produces a value that can be assigned or returned. All
 arms must produce the same type (or void).
 
@@ -731,14 +895,27 @@ v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
 v[i]                        // index (null if out of bounds)
-v[2..-1]                    // slice (negative indices count from end)
 v[start..end]               // slice range (end exclusive)
+v[start..=end]              // slice range (end inclusive)
 v[start..]                  // open-ended slice to end
 v[..end]                    // open-start slice from 0 to end (exclusive)
 [elem; 16]                  // repeat initializer: 16 copies of elem
 [for n in 1..7 { n * 2 }]  // vector comprehension (builds [2, 4, 6, 8, 10, 12])
 [for n in 1..10 if n % 2 == 0 { n }]  // comprehension with filter
 ```
+
+**Slices return iterators, not vectors.**  `v[lo..hi]` can be used in
+`for x in v[lo..hi] { … }` and wherever an iterator is accepted, but it
+cannot be assigned to a `vector<T>` local or passed where a `vector<T>`
+argument is expected.  To materialise a slice into a fresh vector, pair
+it with a comprehension: `sub = [for x in v[lo..hi] { x }]`.
+
+**Negative indices are not supported.**  `v[2..-1]` yields an empty
+iterator today (the range `2..-1` is empty), not "all but the last
+element."  To get "everything except the last", write
+`v[0..len(v) - 1]`.  Early drafts of this doc claimed negative indices
+counted from the end; the claim was aspirational and the form was
+never implemented.
 
 **Empty vectors** require a type annotation so the compiler knows the element type.
 Use `v: vector<T> = []` instead of the older `[for _ in 0..0 { default }]` pattern.
@@ -770,6 +947,18 @@ Lookup also returns `null` when an element is absent:
 if h[key] { /* found */ }
 elem = idx[42, "foo"]    // null if not present
 ```
+
+**Gotcha (INC#2) — vector has a richer literal/build API than the keyed
+collections.** All four collection types share `+=`, `for` iteration
+(hash iterates via its internal ordered index), and subscript removal
+(`h[key] = null`), but **comprehensions** (`[for x in c if p { … }]`)
+produce only a `vector<T>`; there is no `sorted<T>` / `index<T>` / `hash<T>`
+comprehension form — instead, build a vector literal and assign it to a
+keyed-collection field, which does implicit conversion.  Inside a `for`
+loop, `#index` is valid on vector and sorted but a compile error on index
+collections.  When porting code between collection types, treat these gaps
+as structural differences rather than bugs — they are intentional and not
+planned to close.
 
 ---
 
@@ -841,6 +1030,17 @@ Otherwise they are called as free functions:
 len(collection)
 round(PI * 1000.0)
 ```
+
+**Gotcha (INC#8) — method vs. free function is the stdlib author's choice.** The
+language has no rule about which operations *should* be methods vs. free
+functions; it depends entirely on whether the definition's first parameter is
+`self` (method-only), `both` (both forms), or neither (free-only).  The
+standard library makes this call per-function: `text.starts_with(s)` and
+`text.find(s)` are method-only (`self: text`); `len(v)`, `abs(n)`, `round(x)`
+are both-forms (`both: …`); `sum_of(v)` and `print(s)` are free-only.  A user
+cannot predict the call form without looking it up.  When in doubt, try
+free-function form first — the compiler's "Unknown field" vs. "method not
+found" error makes the available form obvious.
 
 ### The `both` parameter name
 

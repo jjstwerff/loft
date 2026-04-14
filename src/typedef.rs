@@ -174,6 +174,76 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     // Start from 0 (not start_def) so struct-enum variants defined in earlier
     // default library files are processed when later files trigger fill_all.
     // The has_type guard prevents double-processing.  Fixes S14 (PROBLEMS #80).
+    // B2-runtime (2026-04-13): Before laying out records, retroactively
+    // add a discriminant "enum" field to every unit variant of a mixed
+    // struct-enum.  `parse_enum_values` only adds this field inside the
+    // `has_token("{")` branch (struct variants), so sibling unit variants
+    // have 0 attributes and would produce a size-0 structure — runtime
+    // `OpDatabase(db_tp=…)` then panics `Incomplete record` in
+    // `Store::claim(size=0)`.  Check the parent's `returned` (set to
+    // `Type::Enum(_, true, _)` when ANY variant has braces) rather than
+    // the unit-variant child's (which stays `Type::Enum(_, false, _)`).
+    let enumerate_d_nr = data.def_nr("enumerate");
+    if enumerate_d_nr != u32::MAX {
+        for d_nr in 0..data.definitions() {
+            if matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) == 0 {
+                let parent = data.def(d_nr).parent;
+                if parent != u32::MAX && matches!(data.def(parent).returned, Type::Enum(_, true, _))
+                {
+                    let discriminant = {
+                        let mut v: u8 = 0;
+                        for (a_nr, a) in data.def(parent).attributes.iter().enumerate() {
+                            if a.name == data.def(d_nr).name {
+                                v = a_nr as u8 + 1;
+                                break;
+                            }
+                        }
+                        v
+                    };
+                    data.add_attribute(
+                        lexer,
+                        d_nr,
+                        "enum",
+                        Type::Enum(enumerate_d_nr, false, Vec::new()),
+                    );
+                    let attr_nr = data.def(d_nr).attr_names["enum"];
+                    data.set_attr_value(d_nr, attr_nr, Value::Enum(discriminant, u16::MAX));
+                }
+            }
+        }
+    }
+    // QUALITY B5 fix: register `main_vector<T>` wrapper structs for every
+    // `vector<T>` field found on a struct or enum-value.  Parser paths
+    // that assign or construct a `vector<T>` already call
+    // `data.vector_def(...)`, but **struct-enum variant fields** (e.g.
+    // `Node { kids: vector<Tree> }` inside `enum Tree`) go through
+    // `parse_enum_values` / `fill_all` without ever hitting a vector
+    // assignment site.  Without the wrapper, `gen_set_first_vector_null`'s
+    // `data.name_type("main_vector<Tree>")` lookup returns `u16::MAX`
+    // and the interpreter emits `OpDatabase(var, db_tp=u16::MAX)` that
+    // panics in `Store::claim` as "Incomplete record".  Register the
+    // wrappers here, BEFORE the main `fill_database` loop, so the loop
+    // then picks them up and assigns a real `known_type`.
+    let mut pending: Vec<Type> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        if !(matches!(data.def_type(d_nr), DefType::Struct)
+            || matches!(data.def_type(d_nr), DefType::EnumValue))
+        {
+            continue;
+        }
+        for a_nr in 0..data.attributes(d_nr) {
+            if let Type::Vector(content, _) = data.attr_type(d_nr, a_nr) {
+                let content_tp = *content;
+                let wrapper_name = format!("main_vector<{}>", content_tp.name(data));
+                if data.def_nr(&wrapper_name) == u32::MAX {
+                    pending.push(content_tp);
+                }
+            }
+        }
+    }
+    for tp in pending {
+        data.vector_def(lexer, &tp);
+    }
     for d_nr in 0..data.definitions() {
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))

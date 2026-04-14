@@ -1,0 +1,185 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P54: First-class JSON as a typed tree.
+//
+// `json_parse(text)` returns a `JsonValue` enum whose variants cover
+// every JSON kind.  Callers match on the variant to access the payload,
+// chain `field()` / `item()` for dynamic-shape navigation, and use the
+// typed extractors (`as_text`, `as_number`, `as_long`, `as_bool`) for
+// leaf values.  Malformed input returns `JNull` rather than panicking;
+// the last parse error is retrievable via `json_errors()`.
+//
+// Design: doc/claude/BITING_PLAN.md § P54, doc/claude/PROBLEMS.md #54.
+
+/// Typed union of JSON values.  The discriminant (1..6) picks the
+/// active variant; variant data lives in the variant's fields.
+/// Matches the six RFC 8259 kinds.
+pub enum JsonValue {
+  JNull,
+  JBool   { value: boolean },
+  JNumber { value: float not null },
+  JString { value: text },
+  JArray  { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> }
+}
+
+/// One field of a `JObject`.  Stored as a `vector<JsonField>` rather
+/// than a `hash<JsonField[name]>` in step 2 — the hash form is a 0.9.0
+/// follow-up once hash iteration and nested struct-enum-in-hash layouts
+/// are exercised end-to-end.  Linear scan is fine for the object sizes
+/// typical in configuration / API responses.
+pub struct JsonField {
+  name:  text,
+  value: JsonValue
+}
+
+/// Parse JSON text into a `JsonValue` tree.  Malformed input returns
+/// `JNull`; the error trail is accessible via `json_errors()`.  All
+/// six variants materialise (primitives, arrays, objects, nested
+/// containers); the entire tree lives in one store and frees as one
+/// unit when the root `DbRef` leaves scope.
+///
+/// ```loft
+/// match json_parse(raw) {
+///   JObject { fields } => for f in fields { handle(f) },
+///   JArray  { items }  => for v in items  { handle(v) },
+///   JNull              => println("parse error: {json_errors()}"),
+///   _                  => println("unexpected root kind"),
+/// }
+/// ```
+pub fn json_parse(raw: text) -> JsonValue;
+
+/// Return a pipe-separated trail of JSON parse errors from the most
+/// recent `json_parse` call.  Empty when the parse succeeded.  Each
+/// entry carries an RFC 6901 path, a `line:col` location, and a
+/// context snippet — see Q1 in `doc/claude/QUALITY.md`.
+pub fn json_errors() -> text;
+
+/// JObject indexer — returns the value at `name`, or `JNull` when
+/// `self` isn't a JObject or the key is missing.  Chained access
+/// like `root.field("a").field("b")` is safe — every intermediate
+/// missing produces `JNull`, never a trap.
+pub fn field(self: JsonValue, name: text) -> JsonValue;
+
+/// JArray indexer — returns the element at `index`, or `JNull` when
+/// `self` isn't a JArray or the index is out of bounds.
+pub fn item(self: JsonValue, index: integer) -> JsonValue;
+
+/// Length of a JArray's items vector or a JObject's fields vector.
+/// Returns `null` (i32::MIN) for any other variant.
+pub fn len(self: JsonValue) -> integer;
+
+/// Typed extractor — returns `null` (empty text) on kind mismatch.
+pub fn as_text(self: JsonValue) -> text;
+
+/// Typed extractor — returns `null` on kind mismatch.
+pub fn as_number(self: JsonValue) -> float;
+
+/// Typed extractor — returns `null` on kind mismatch.  Truncates the
+/// underlying `float` toward zero before converting.
+pub fn as_long(self: JsonValue) -> long;
+
+/// Typed extractor — returns `null` on kind mismatch.
+pub fn as_bool(self: JsonValue) -> boolean;
+
+/// Q2 introspection — returns the variant name as text:
+/// `"JNull"`, `"JBool"`, `"JNumber"`, `"JString"`, `"JArray"`,
+/// or `"JObject"`.  Cheap: reads the discriminant byte, formats
+/// a literal.  Useful for logs and conditional branches that
+/// don't want to commit to a full pattern match.
+pub fn kind(self: JsonValue) -> text;
+
+/// Q2 introspection — returns the field-name list of a `JObject`
+/// in insertion order, or an empty vector for any other variant.
+/// Safe idiom: `for k in v.keys() { ... }` works on any JsonValue
+/// because non-objects yield an empty walk.
+pub fn keys(self: JsonValue) -> vector<text>;
+
+/// Q2 introspection — returns the (name, value) entries of a
+/// `JObject` in insertion order so callers can iterate as
+/// `for entry in fields(v) { … entry.name … entry.value … }`.
+/// Values deep-copy (primitives + nested containers — full tree).
+/// Empty vector for any other variant.
+pub fn fields(self: JsonValue) -> vector<JsonField>;
+
+/// Q2 introspection — returns true iff `self` is a `JObject`
+/// variant carrying a field named `name`.  All other variants
+/// (including `JNull` on a parse error) return false, so the
+/// common pattern `if v.has_field("users") { … }` is safe to
+/// write on any JsonValue without first destructuring.
+/// Distinguishes "absent" from "present-but-null" — a field
+/// whose value is `JNull` still returns `true`.
+pub fn has_field(self: JsonValue, name: text) -> boolean;
+
+/// Q3 serialiser — render a JsonValue to canonical RFC 8259 JSON
+/// text.  All six variants serialise; `JArray` / `JObject` recurse
+/// through their children (full tree serialisation, nested
+/// containers walk naturally).  Strings escape `"`, `\\`, and
+/// ASCII control bytes; UTF-8 passes through verbatim.
+/// Non-finite numbers render as `null`.
+pub fn to_json(self: JsonValue) -> text;
+
+/// Q3 pretty serialiser — `to_json_pretty` produces 2-space
+/// indented, one-element-per-line output for non-empty `JArray` /
+/// `JObject` containers.  Empty containers render `[]` / `{}`
+/// (no newline padding).  Primitives are byte-identical to
+/// `to_json` (no nested structure to indent).  After object
+/// keys the colon is followed by a single space (`"k": v`).
+/// Useful for golden-file tests and log output.
+pub fn to_json_pretty(self: JsonValue) -> text;
+
+/// Q4 constructor — build a JsonValue set to the `JNull` variant.
+/// Useful in test fixtures and reply-construction code that needs
+/// a known-null JsonValue without going through `json_parse("null")`.
+pub fn json_null() -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JBool` variant
+/// carrying the supplied boolean payload.
+pub fn json_bool(v: boolean) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JNumber` variant
+/// carrying the supplied float payload.  Non-finite inputs
+/// (float null = NaN, or ±Inf) produce `JNull` with a diagnostic
+/// in `json_errors()` — mirrors the RFC 8259 constraint that JSON
+/// numbers must be finite.
+pub fn json_number(v: float) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JString` variant
+/// carrying the supplied text payload.  The text is copied into
+/// the JsonValue's own store, so the returned value owns the
+/// string independently of the argument's lifetime.
+pub fn json_string(v: text) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JArray` variant
+/// carrying the supplied items.  Each element is deep-copied into
+/// the new tree's arena via the shared `dbref_to_parsed` walker,
+/// so nested containers and arena-origin subtrees (e.g. a captured
+/// `field()` result) embed correctly.  Empty input produces a
+/// real empty JArray.
+pub fn json_array(items: vector<JsonValue>) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JObject` variant
+/// carrying the supplied fields.  Each field's value deep-copies via
+/// the same `dbref_to_parsed` walker as `json_array`, so a JObject
+/// can carry captured-subtree JArray / JObject values.  Empty input
+/// produces a real empty JObject.
+pub fn json_object(fields: vector<JsonField>) -> JsonValue;
+
+/// P54 step 5 internal walker — populate a struct of the given
+/// `struct_kt` (known-type number) from a JsonValue.  Compile-time
+/// codegen for `Struct.parse(JsonValue)` emits exactly one call
+/// to this function regardless of struct shape; the runtime walker
+/// uses `stores.types[struct_kt].parts` to dispatch on each
+/// field's declared type (primitive, nested struct, JsonValue
+/// passthrough, or vector).  Path-qualified Q1 schema-side
+/// diagnostics on type mismatches go to `json_errors()`.  Users
+/// should not call this directly — write `MyStruct.parse(value)`
+/// instead.
+///
+/// Return type is declared as `JsonValue` here purely because it
+/// shares the same DbRef byte layout as the actual `reference[T]`
+/// the walker produces — the compile-time codegen at
+/// `parse_type_parse` overrides the type to `reference[T]` for the
+/// caller while the stack accounting remains correct.
+pub fn struct_from_jsonvalue(v: JsonValue, struct_kt: integer) -> JsonValue;

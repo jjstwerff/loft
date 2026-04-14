@@ -376,6 +376,26 @@ pub fn OpIterate(
                 pack_iter(start, finish)
             }
         }
+        3 => {
+            // C60 piece 3: Ordered iteration — `data` points at a
+            // header record whose offset-4 word is the u32-stride
+            // rec-nr vector rec-nr.  Unbounded form (from/till empty)
+            // uses the "not started" sentinel recognised by
+            // `vector_next` (i32::MAX = 0x7FFF_FFFF), NOT u32::MAX.
+            if from.is_empty() && till.is_empty() {
+                pack_iter(i32::MAX as u32, 0)
+            } else if reverse {
+                let s = vector::ordered_find(&data, ex, all, keys, till).0 + u32::from(!ex);
+                let f = vector::ordered_find(&data, ex, all, keys, from).0 + 1;
+                pack_iter(s, f)
+            } else {
+                let s = vector::ordered_find(&data, true, all, keys, from).0;
+                let start = if s == 0 { u32::MAX } else { s - 1 };
+                let (t, cmp) = vector::ordered_find(&data, ex, all, keys, till);
+                let finish = if ex || cmp { t } else { t + 1 };
+                pack_iter(start, finish)
+            }
+        }
         _ => pack_iter(u32::MAX, u32::MAX),
     }
 }
@@ -450,6 +470,25 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             DbRef {
                 store_nr: data.store_nr,
                 rec: next_rec,
+                pos: 8,
+            }
+        }
+        3 => {
+            // C60 piece 3: Ordered iteration over u32-stride rec-nr
+            // vector.  Mirrors src/state/io.rs step() on=3 arm.
+            let mut pos = cur as i32;
+            vector::vector_next(&data, &mut pos, 4, all);
+            let store = crate::keys::store(&data, all);
+            let vector = store.get_int(data.rec, data.pos) as u32;
+            let rec = if pos == i32::MAX {
+                0
+            } else {
+                store.get_int(vector, pos as u32) as u32
+            };
+            cur = pos as u32;
+            DbRef {
+                store_nr: data.store_nr,
+                rec,
                 pos: 8,
             }
         }
@@ -1233,15 +1272,22 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     stores.start_time.elapsed().as_micros() as i64
 }
 
-/// Bytecode equivalent: `n_ticks` in `src/native.rs`.
-#[cfg(feature = "wasm")]
+/// Bytecode equivalent: `n_ticks` in `src/native.rs`.  P137: gated on
+/// target_arch, not the `wasm` feature — the `--html` build (wasm32,
+/// no `wasm` feature) returns 0 because no host time bridge exists.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
+}
+
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+pub fn n_ticks(_stores: &mut Stores) -> i64 {
+    0
 }
 
 /// Return the platform path separator as a loft character (`i32`).
@@ -1249,6 +1295,15 @@ pub fn n_ticks(stores: &mut Stores) -> i64 {
 /// Bytecode equivalent: `n_path_sep` in `src/native.rs`.
 pub fn n_path_sep(_stores: &mut Stores) -> i32 {
     crate::platform::sep() as i32
+}
+
+/// C60 piece 3: build a scratch u32-rec-nr vector from a hash,
+/// ascending by the hash's key.  The parser-desugared `for e in h`
+/// path calls this with the hash's type id as a compile-time constant
+/// and iterates the result via Ordered (on=3).  Bytecode equivalent:
+/// `n_hash_sorted` in `src/native.rs`.
+pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i32) -> DbRef {
+    stores.build_hash_sorted_vec(&h, tp as u16)
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.

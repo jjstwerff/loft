@@ -37,7 +37,19 @@ impl State {
             }
             return;
         }
-        #[cfg(not(feature = "wasm"))]
+        // QUALITY Tier 3 #9: explicit stub for `wasm32-unknown-unknown` without
+        // the `wasm` host-bridge feature (the `--html` browser build target).
+        // `std::fs::File::open` compiles there but fails at runtime in a way
+        // that depends on the embedding's panic-hook configuration.  The stub
+        // always leaves `buf` untouched — same observable semantics as a file
+        // that doesn't exist on native — so a `--html` program calling
+        // `file("x").content()` reliably gets an empty String instead of
+        // racing against an unpredictable runtime error.
+        #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+        {
+            let _ = (file, r);
+        }
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
         {
             let store = self.database.store(&file);
             let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
@@ -665,7 +677,21 @@ impl State {
             }
             3 => {
                 // ordered points to the position inside the vector of references
-                if reverse {
+                if from.is_empty() && till.is_empty() {
+                    // C60 piece 3 edit E: unbounded iteration (`for e
+                    // in h { … }` with no range).  ordered_find with an
+                    // empty key returns (0, true) which collapses
+                    // start=0/finish=0, so the step protocol never
+                    // fires even once.  Set start to the "not started"
+                    // sentinel that `vector_next` recognises at
+                    // src/vector.rs:455 — it checks `*pos == i32::MAX`
+                    // (the i32 positive max, 0x7FFF_FFFF), *not*
+                    // u32::MAX.  Passing u32::MAX here casts to i32 as
+                    // -1 and falls into the "advance" branch, reading
+                    // garbage at pos=-1+size.
+                    start = i32::MAX as u32;
+                    finish = 0;
+                } else if reverse {
                     start = vector::ordered_find(&data, true, all, &keys, &from).0 + u32::from(!ex);
                     finish = vector::ordered_find(&data, ex, all, &keys, &till).0 + 1;
                 } else {

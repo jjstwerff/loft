@@ -86,6 +86,22 @@ impl WorkerProgram {
 /// Panics if a worker thread panics.
 /// Each thread writes a non-overlapping slice — no channel, no reordering.
 #[allow(clippy::too_many_arguments)]
+// Threading path moves `program` into `Arc::new(program)`; non-threading path
+// only borrows it, hence the feature-gated allow.  The raw `out_ptr` is written
+// to from inside `unsafe { }` blocks in both paths; making the public function
+// `unsafe` would cascade across every `par(...)` call site and the QUALITY 6a
+// native-codegen path, so the allow narrows to the non-threading build where
+// clippy can trace the bare deref inline.  `dead_code` for the same reason as
+// `needless_pass_by_value`: only the threading callers live in main.rs's
+// binary crate view; under `--no-default-features` those callers are cfg'd out.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(
+        clippy::needless_pass_by_value,
+        clippy::not_unsafe_ptr_arg_deref,
+        dead_code
+    )
+)]
 pub fn run_parallel_direct(
     stores: &Stores,
     program: WorkerProgram,
@@ -186,6 +202,11 @@ pub fn run_parallel_direct(
 /// # Panics
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
 #[must_use]
 pub fn run_parallel_raw(
     stores: &Stores,
@@ -249,14 +270,14 @@ pub fn run_parallel_raw(
         let _ = n_threads;
         let mut state = program.new_state(stores.clone_for_worker());
         let mut results = vec![0u64; n_rows];
-        for row_idx in 0..n_rows {
+        for (row_idx, result) in results.iter_mut().enumerate() {
             let row_ref = vector::get_vector(
                 input,
                 element_size,
                 i32::try_from(row_idx).expect("row index fits i32"),
                 &state.database.allocations,
             );
-            results[row_idx] = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            *result = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
         }
         results
     }
@@ -266,6 +287,11 @@ pub fn run_parallel_raw(
 /// # Panics
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
 #[must_use]
 pub fn run_parallel_text(
     stores: &Stores,
@@ -329,14 +355,14 @@ pub fn run_parallel_text(
         let _ = n_threads;
         let mut state = program.new_state(stores.clone_for_worker());
         let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-        for row_idx in 0..n_rows {
+        for (row_idx, result) in results.iter_mut().enumerate() {
             let row_ref = vector::get_vector(
                 input,
                 element_size,
                 i32::try_from(row_idx).expect("row index fits i32"),
                 &state.database.allocations,
             );
-            results[row_idx] = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
+            *result = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
         }
         results
     }
@@ -347,6 +373,11 @@ pub fn run_parallel_text(
 /// # Panics
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
 #[must_use]
 pub fn run_parallel_ref(
     stores: &Stores,
@@ -425,6 +456,11 @@ pub fn run_parallel_ref(
 /// Parallel integer returns: one `i32` per row, original order.
 /// # Panics
 /// Panics if a worker thread panics.
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
 #[must_use]
 pub fn run_parallel_int(
     stores: &Stores,
@@ -488,7 +524,7 @@ pub fn run_parallel_int(
         let _ = n_threads;
         let mut state = program.new_state(stores.clone_for_worker());
         let mut results = vec![i32::MIN; n_rows];
-        for row_idx in 0..n_rows {
+        for (row_idx, result) in results.iter_mut().enumerate() {
             let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
             let row_ref = vector::get_vector(
                 input,
@@ -496,7 +532,7 @@ pub fn run_parallel_int(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            results[row_idx] = state.execute_at(fn_pos, &row_ref);
+            *result = state.execute_at(fn_pos, &row_ref);
         }
         results
     }
@@ -511,7 +547,13 @@ pub fn run_parallel_int(
 /// # Panics
 /// Panics if any row index exceeds `i32::MAX`.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code, unused_variables)] // A14.6 will wire this into the parser
+#[allow(dead_code, unused_variables)]
+// A14.6 will wire this into the parser
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, clippy::not_unsafe_ptr_arg_deref,)
+)]
 pub fn run_parallel_light(
     stores: &Stores,
     program: WorkerProgram,
@@ -609,6 +651,9 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Create a pool with `n_workers × stores_per_worker` stores, each with
     /// `store_capacity` words of initial capacity.
+    // Only called from the threading-enabled path; under `--no-default-features`
+    // the binary's view of this module has no callers.  See `run_parallel_direct`.
+    #[cfg_attr(not(feature = "threading"), allow(dead_code))]
     #[must_use]
     pub fn new(n_workers: usize, stores_per_worker: usize, store_capacity: u32) -> Self {
         let total = n_workers * stores_per_worker;
@@ -633,6 +678,9 @@ impl WorkerPool {
 /// Uses the same store-isolation model as `par()`: each arm gets a read-only snapshot.
 /// # Panics
 /// Panics if any arm thread panics.
+// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
+// (dead_code already allowed above — only needless_pass_by_value is feature-gated.)
+#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 pub fn run_parallel_block(stores: &Stores, program: WorkerProgram, arm_positions: &[u32]) {
     if arm_positions.is_empty() {
         return;

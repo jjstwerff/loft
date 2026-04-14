@@ -110,4 +110,25 @@ if [ $RC -ne 0 ]; then
   cat /tmp/loft_import.log
   exit $RC
 fi
+
+# C58 regression guard: the four sprites drawn at y=70 come from a 2×2
+# atlas whose quadrants are (in canvas coords) red, green, blue, white.
+# If the canvas→GL Y-flip cascade ever reintroduces a row swap, sprites
+# 0/2 and 1/3 will exchange colours and this check fails.
+probe() {
+  convert "$OUTPUT" -format "%[pixel:p{$1,$2}]" info:
+}
+want() {
+  got=$(probe "$1" "$2")
+  if [ "$got" != "$3" ]; then
+    echo "FAIL: sprite row-mapping regressed at ($1, $2) — got $got, want $3"
+    echo "      If the canvas Y convention changed intentionally, update this assert."
+    exit 1
+  fi
+}
+want 26  86 "srgb(220,60,60)"    # sprite 0 = atlas row 0 col 0 = red
+want 86  86 "srgb(60,220,60)"    # sprite 1 = atlas row 0 col 1 = green
+want 146 86 "srgb(60,60,220)"    # sprite 2 = atlas row 1 col 0 = blue
+want 206 86 "srgb(230,230,230)"  # sprite 3 = atlas row 1 col 1 = white
+
 exit 0

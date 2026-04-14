@@ -10,6 +10,13 @@ recommended fix path.
 
 Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
+**Before opening a new issue here, check
+[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** — the closed-by-decision
+register holds items explicitly evaluated and declined (C3 / C38 /
+C54.D / …).  If your symptom maps onto one of those, the fix is to
+produce new evidence (reproducer, incident, measurement) on the
+existing entry, not re-open it as a bug.
+
 ## Contents
 - [Open Issues — Quick Reference](#open-issues--quick-reference)
 - [Unimplemented Features](#unimplemented-features)
@@ -23,153 +30,196 @@ Completed fixes are removed — history lives in git and `CHANGELOG.md`.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 22 | Spatial index (`spacial<T>`) operations not implemented | Low | Compile-time error; use `sorted<T>` or `index<T>` |
-| 54 | `json_items` returns opaque `vector<text>` | Low | Accepted limitation; `JsonValue` enum deferred |
-| 55 | Thread-local `http_status()` not parallel-safe | Medium | Design constraint — use `HttpResponse` struct |
-| 86 | Lambda capture: misleading self-reference error | Low | Mitigated — clear error message at parse time |
-| 90 | `fn_call` HashMap lookup per call | Low | Negligible overhead; encode line in `OpCall` if measured |
-| 91 | `init(expr)` parameter form missing | Low | Pass default explicitly at call site |
-| 135 | Sprite atlas row indexing swap | Low | Cosmetic — affects 2×2 atlas layout |
-| 137 | `loft --html` Brick Buster runtime `unreachable` panic | Medium | Native mode works; browser build broken after instantiate |
-| 138 | `--native` rustc E0460: rand_core version mismatch | Medium | `make play` now builds `--lib --bin` together; cascades 700+ E0425 errors if stale |
-
----
-
-## Unimplemented Features
-
-### 22. Spatial index operations are not implemented
-
-`spacial<T>` in any field or variable type emits a compile-time error:
-
-```
-spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups
-```
-
-Both first-pass and second-pass parsers reject it, so no program reaches
-the runtime "Not implemented" panics.  Test:
-`spacial_not_implemented` in `tests/parse_errors.rs`.
-
-**Remaining work:** implement insert, lookup, copy, remove, iteration in
-`database.rs` and `fill.rs`.  Iteration first, then remove, then copy.
-The spacial index structure (radix tree or R-tree) is already allocated
-in the schema; iteration traversal is the main missing piece.
+| ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
+| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
+| ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
+| ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
+| ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
+| ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
+| 136 | wrap-suite SIGSEGV on `79-null-early-exit.loft` | **High — RELEASE BLOCK** | Skipped in `loft_suite` via `ignored_scripts()`; covered by dedicated `#[ignore] sigsegv_repro_79_alone` test. Runs fine via CLI + valgrind-clean. See § P136 below. |
 
 ---
 
 ## Interpreter Robustness
 
-### 86. Lambda capture produces a misleading codegen self-reference error
+### ~~86~~. Lambda capture — FULLY RESOLVED (closures shipped)
 
-**Symptom:** A lambda referencing an outer-scope variable crashed in codegen with
+With real closure capture in 0.8.3, the original codegen error
+`[generate_set] ... Var(1) self-reference — storage not yet allocated`
+is no longer reachable.  The parser-level mitigation
+(*"lambda captures variable X — closure capture is not yet supported"*)
+is also gone since the feature is implemented.
 
-```
-[generate_set] first-assignment of 'count' (var_nr=1) in 'n___lambda_0'
-contains a Var(1) self-reference — storage not yet allocated
-```
+The original reproducer now runs correctly end-to-end:
 
-**Reproducer:**
 ```loft
 fn test() {
     count = 0;
     f = fn(x: integer) { count += x; };
-    f(1);
+    f(10); f(32);
+    assert(count == 42);   // passes
 }
 ```
 
-The parser created a new local `count` inside the lambda; `count += x`
-desugars to `count = count + x` — the RHS reads the same uninitialised
-variable, tripping the self-reference guard in `generate_set`.
+**Regression guards:**
+- `tests/issues.rs::p1_1_lambda_void_body` — runtime behaviour (`count == 42`)
+- `tests/parse_errors.rs::capture_detected` — parse succeeds, no diagnostic
+- `tests/parse_errors.rs::no_capture_no_error` — no false capture positives
+- `tests/parse_errors.rs::local_not_captured` — lambda-local vars don't trigger capture
 
-**Status:** *(mitigated)* — The parser detects the outer-scope reference
-and emits `lambda captures variable 'count' — closure capture is not yet
-supported` before codegen runs.  Underlying feature (real closure capture)
-is tracked as A5.2–A5.5.
-
----
-
-### 90. `fn_call` HashMap lookup for source line on every call
-
-**Symptom:** Every loft function call performs
-`self.line_numbers.get(&self.code_pos)` inside `fn_call`.  Before
-stack-trace support, the line lookup only ran during the rare
-`stack_trace()` snapshot.
-
-**Root cause:** The source line is not encoded in `OpCall` operands; it
-lives in `line_numbers: HashMap<u32, u32>` keyed by bytecode position
-and must be looked up at runtime.
-
-**Workaround:** None needed — O(1) amortised lookup, small against the
-`Vec::push` + dispatch already in `fn_call`.
-
-**Fix path (if measured significant):** encode the source line as an
-extra `u32` operand of `OpCall` in codegen; the `call` handler reads it
-and passes it to `fn_call`, eliminating the runtime lookup at the cost
-of 4 bytes per `OpCall`.
+No open action.  Kept here as a marker for CHANGELOG readers; remove on
+the next 0.9.0 maintenance sweep.
 
 ---
 
-### 91. `init(expr)` parameter form missing
+### ~~91~~. Default-from-earlier-parameter — DONE
 
-**Symptom:** `init(expr)` on function parameters (dynamic defaults
-computed from earlier parameters) is not implemented.
+**Symptom:** `fn make_rect(w: integer, h: integer = w)` fails with
+*"Unknown variable 'w'"*; the default expression cannot reference
+earlier parameters of the same function.
 
-**Scope:** The core struct-field `init(expr)` works correctly —
-evaluated once at creation, `$` references resolved, writable after
-construction.  Circular detection on struct fields is also in place
-(`tests/scripts/72-parse-error-caveats.loft`).  Only the parameter-form
-extension is missing.
+**Semantics decision:** the default is evaluated *at function entry*,
+not at the call site.  That is deliberately different from struct-
+field `init(expr)`, which evaluates once at construction.  Required
+because the default's whole point is to see the earlier parameters'
+call-site values.
 
-**Workaround:** Compute the default at the call site and pass it
-explicitly.
+**Fix path (three parts):**
+1. `parse_arguments` — accept `= expr` referencing earlier params.
+   Earlier params are injected into `self.vars` as arguments
+   (via `add_variable` + `become_argument` + `defined`) before
+   parsing the default, then removed before returning so the
+   caller's own argument-registration is unaffected.
+2. Call site — pass a supplied-args bitmap (one bit per argument
+   with a default) so the callee knows which defaults to evaluate.
+3. Function prologue — emit `if !supplied(N) { arg_N = <default> }`
+   for each defaulted parameter, using the bitmap bit.
 
-**Fix path:** in `parse_arguments`, accept `init(expr)` alongside
-`= expr`; store the expression in `Attribute.value`; at the call site,
-emit the expression when no argument is supplied.
-
----
-
-## Web Services Design Constraints
-
-### 54. `json_items` returns opaque `vector<text>` — no compile-time element type
-
-**Severity:** Low — accepted design limitation
-
-`json_items(body)` parses a JSON array and returns element bodies as
-`vector<text>`.  The compiler cannot verify that the caller's parse
-function receives a valid JSON object body rather than an arbitrary
-string; a runtime parse error produces a partial zero-value struct
-rather than a diagnostic.
-
-**Workaround:** validate the HTTP response status before parsing
-(`if resp.ok()`).
-
-**Fix path (deferred):** a `JsonValue` enum (Object / Array / String /
-Number / Boolean / Null) gives compile-time structure but at high design
-cost.  Target: 1.1+.
-
-See also: [WEB_SERVICES.md](WEB_SERVICES.md).
+**Scope: M**, three moving parts.  The first naive attempt hit
+two-pass state issues in the parser alone; call-site + prologue are
+still to do.
 
 ---
 
-### 55. Thread-local `http_status()` is not parallel-safe
+## Web Services
 
-**Severity:** Medium — design trap; do not introduce this API.
+### 60. Hash iteration — designed 2026-04-13
 
-An `http_status()` returning the most-recent HTTP status as a
-thread-local integer (C `errno` pattern) is incorrect under loft's
-parallel execution model.  A `parallel_for` worker calling `http_get`
-would corrupt the thread-local of the calling thread.
+Full design in CAVEATS.md C60.  Summary: `for e in hash { … }`
+iterates in ascending key order, loop variable is the record (no
+tuple destructuring).  Implementation is a pre-loop lift that walks
+all records of the struct type into a scratch `vector<reference<T>>`,
+sorts by extracting key fields, and iterates the sorted vector.
+Inefficient by design (O(n log n) per loop); determinism beats
+unspecified-order for a scripting language.
 
-**Resolution:** return an `HttpResponse` struct from all HTTP functions.
-Status is a field on the returned value, not global state.  See
-WEB_SERVICES.md Approach B.  This is a design constraint to observe,
-not a bug to fix.
+Scope: parser routing at `src/parser/fields.rs:599`, a new
+`parse_iter_hash` in `src/parser/collections.rs`, a record-walk
+helper in `src/database/search.rs` (or reuse the `validate` walk at
+line 327), and one new opcode (`OpHashCollect` or `OpHashIterSetup`).
+
+Scope honestly M–MH.  Two days of focused work; the design is
+concrete and the scope is bounded.
+
+---
+
+### 54. `json_items` returns opaque `vector<text>` — 0.9.0
+
+**Symptom:** `json_items(body)` returns `vector<text>` where each
+element is either a JSON object body or garbage.  The caller writes
+`MyStruct.parse(body)` and gets a partial zero-value struct on
+malformed input — no type checking, no diagnostic.
+
+**Decision:** replace the text-based JSON surface with a first-class
+`JsonValue` enum.  No newtype-around-text half-measure — the newtype
+would keep the text surface, its shape predicates would be runtime
+peeks into the string, and `.parse` would still run a separate parser
+over every element.  Doing the parse once into a typed tree and then
+indexing / matching that tree is simpler, faster, and covers the
+dynamic-shape use case too.
+
+```loft
+pub enum JsonValue {
+    JNull,
+    JBool   { value: boolean },
+    JNumber { value: float not null },   // IEEE-754 per RFC 8259
+    JString { value: text },
+    JArray  { items:  vector<JsonValue> },
+    JObject { fields: vector<JsonField> }
+}
+
+pub struct JsonField { name: text, value: JsonValue }
+
+// Parse + diagnostics
+pub fn json_parse(raw: text)               -> JsonValue;
+pub fn json_errors()                       -> text;     // RFC 6901 path + line:col
+
+// Read surface
+pub fn kind(self: JsonValue)               -> text;     // "JNull" .. "JObject"
+pub fn len(self: JsonValue)                -> integer;  // null on non-container
+pub fn field(self: JsonValue, name: text)  -> JsonValue; // JObject only; JNull on miss / wrong kind
+pub fn item(self: JsonValue, index: integer) -> JsonValue; // JArray only; JNull on OOB / wrong kind
+pub fn has_field(self: JsonValue, name: text) -> boolean;
+pub fn keys(self: JsonValue)               -> vector<text>;
+pub fn fields(self: JsonValue)             -> vector<JsonField>; // values deep-copy
+
+// Typed extractors — null on kind mismatch
+pub fn as_text(self:   JsonValue) -> text;
+pub fn as_number(self: JsonValue) -> float;
+pub fn as_long(self:   JsonValue) -> long;
+pub fn as_bool(self:   JsonValue) -> boolean;
+
+// Write surface
+pub fn to_json(self: JsonValue)            -> text;     // canonical RFC 8259
+pub fn to_json_pretty(self: JsonValue)     -> text;     // 2-space indent for non-empty containers
+
+// Construction helpers
+pub fn json_null()                                 -> JsonValue;
+pub fn json_bool(v: boolean)                       -> JsonValue;
+pub fn json_number(v: float)                       -> JsonValue;  // non-finite → JNull
+pub fn json_string(v: text)                        -> JsonValue;
+pub fn json_array(items: vector<JsonValue>)        -> JsonValue;  // deep-copies items
+pub fn json_object(fields: vector<JsonField>)      -> JsonValue;  // deep-copies fields
+
+// Schema-driven (P54 step 5 — pending)
+pub fn parse(self: Type, v: JsonValue) -> Type;   // `MyStruct.parse(v)`
+```
+
+`JObject.fields` is stored as `vector<JsonField>` rather than the
+originally-designed `hash<JsonField[name]>` — the hash form is a
+0.9.0 follow-up once hash iteration and nested struct-enum-in-hash
+layouts are exercised end-to-end.  Linear scan is fine for the
+object sizes typical in configuration / API responses.
+
+The old `json_items` / `json_nested` / `json_long` / `json_float` /
+`json_bool` surface documented in [PLANNING.md](PLANNING.md) § H2
+is withdrawn.  All JSON work routes through `json_parse` →
+`JsonValue` from 0.9.0 onward.
+
+Full landing plan in [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
 
 ---
 
 ## Graphics / WebGL
 
-### 135. Sprite atlas row indexing swap
+### ~~135~~. Sprite atlas row indexing swap — FIXED
+
+Canvas upload no longer pre-flips rows; `TEX_VERT_2D` samples with
+identity V.  Canvas-top = GL TC.y = 0 on all three backends (native
+OpenGL, WebGL/wasm, `--html` export), and `lib/graphics/native/src/lib.rs`
++ `lib/graphics/js/loft-gl.js` + `doc/loft-gl-wasm.js` now agree on the
+same orientation.  Canonical convention locked in
+[OPENGL.md § Canvas coordinate convention](OPENGL.md).
+
+Regression guard: 2×2 atlas corner check added to
+`tests/scripts/snap_smoke.sh` — asserts sprite 0/1/2/3 render
+red/green/blue/white (matching the atlas's top-row / bottom-row
+layout).  `make test-gl-golden` fails if any future upload / shader /
+projection change reintroduces a row swap.
+
+Original issue kept below for context.
+
+### 135 (historical). Sprite atlas row indexing swap
 
 **Severity:** Low — cosmetic.
 
@@ -197,7 +247,33 @@ a 2×2 atlas are placed correctly.
 
 ---
 
-### 137. `loft --html` Brick Buster: runtime `unreachable` panic
+### ~~137~~. `loft --html` runtime `unreachable` panic — FIXED
+
+Root cause: `Stores::new()` called `std::time::Instant::now()` on the
+`--html` build (wasm32-unknown-unknown without the `wasm` feature).
+`Instant::now()` panics on this target with no time source; the panic
+compiles to `(unreachable)` in release builds, producing the infamous
+trap on the very first `loft_start` call — before any user code or
+host import ran.
+
+Fix: switch the start-time guard from `#[cfg(feature = "wasm")]` to
+`#[cfg(target_arch = "wasm32")]`.  Any wasm32 target uses the
+`start_time_ms: i64` field; feature-gated path calls the host bridge,
+no-feature path uses 0 as a benign epoch stub.  `n_ticks` on wasm32
+without the feature returns 0 (no time bridge, same contract).
+
+Verified: `fn main() { println("hello"); }` compiled with
+`loft --html` and instantiated in Node with a `loft_host_print` stub
+prints "hello from loft" cleanly.
+
+Test strategy used to find it: debug-built WASM carries Rust panic
+string symbols in the stack trace — `noop_debug.wasm` stack showed
+`std::time::Instant::now → loft::database::Stores::new` as the panic
+origin.  Release builds strip the names and reduce the trap to a bare
+`unreachable`, which is why previous diagnostic attempts bottomed out
+at "panic in bytecode dispatch, not a host call".
+
+### 137 (historical). `loft --html` Brick Buster: runtime `unreachable` panic
 
 **Severity:** Medium — breaks the deployed `brick-buster.html` on
 GitHub Pages; the wasm instantiates but panics as soon as `loft_start`
@@ -295,9 +371,214 @@ referencing an older `rand_core` rmeta hash than what's currently in
 current.  A manual `cargo clean && cargo build --release` is the
 fallback when a user's tree has other stale artefacts.
 
-**Fix path:** no code-level fix required — this is a cargo caching
-artefact.  Document in DEVELOPERS.md so new contributors know why
-`cargo build --bin loft` alone sometimes breaks the native path.
+**Mitigation (shipped, `src/main.rs`):** the `--native` driver now
+captures rustc's stderr and, on E0460 with "rand_core" or
+"possibly newer version of crate", prints an actionable hint —
+
+```
+loft: native compilation failed because the cached `libloft.rlib`
+references a different dependency version than the one now in
+`target/release/deps/`.
+
+Fix:  cargo build --release --lib --bin loft
+Or:   cargo clean && cargo build --release
+```
+
+This replaces the previous 700-error cascade with a single recovery
+instruction.  Test: introduce a stale rlib (`cargo build --bin loft`
+after modifying a dependency version) and run
+`loft --native <any-file>` — the hint should appear.
+
+---
+
+### ~~139~~. `_vector_N` slot-allocator TOS mismatch — FIXED
+
+**Fix:** `src/state/codegen.rs::gen_set_first_at_tos` now handles
+`pos > TOS` by emitting `OpReserveFrame(pos - TOS)` and advancing
+codegen's TOS to match.  The runtime stack pointer moves through
+the zone-1 byte-sized variable's slot (plain enum or boolean, already
+written via `OpPutEnum` / `OpPutBool`), so the subsequent init
+opcode writes to the correct zone-2 slot.
+
+**Root cause** (confirmed by trace):
+- Slot allocator places byte-sized zone-1 vars (1-byte plain enum,
+  1-byte boolean) at fixed slots just below the zone-2 frontier.
+- Codegen's TOS counter advances by the op deltas of the per-statement
+  push/pop cycle.  `OpConstEnum` pushes 1, `OpPutEnum` pops 1, net
+  zero.  The 1-byte zone-1 slot stays "written but not counted in TOS".
+- When the next zone-2 `Set(v, …)` runs, slot = zone2_start but TOS =
+  zone2_start - 1.  The former `pos == TOS` assert fired.
+- Reproducer: plain enum + vector + same-type loop write
+  (5 lines — see `tests/issues.rs::p139_enum_vec_same_type_write_through_loop`).
+
+**Why `stack.position = pos` alone failed** (the earlier naive
+attempt): the runtime stack pointer wasn't bumped, so subsequent
+reads pulled from the zone-1 slot as if it were the zone-2 slot.
+`OpReserveFrame` bumps the runtime pointer to match the codegen
+pointer.
+
+**Tests:** `tests/issues.rs::p139_enum_vec_same_type_write_through_loop`,
+`p139_enum_vec_two_loops_same_function`,
+`p139_bool_vec_write_through_loop`.  `tests/wrap::enums` (pre-existing
+snapshot test that originally surfaced the bug) stays green.
+
+---
+
+### 139.  *(historical note — see entry above for the fix)*
+
+Discovered 2026-04-12 during C61.local unconditional-reject attempt;
+narrowed 2026-04-12 to a 5-line reproducer; fixed 2026-04-13 via
+instrumented trace + `OpReserveFrame` in the set-first path.
+
+**Symptom:** codegen panics from `src/state/codegen.rs:922`:
+
+```
+[gen_set_first_at_tos] '_vector_3' in 'n_main': slot=N but TOS=N-1
+— caller must ensure TOS matches the variable's slot before calling
+```
+
+**Minimal reproducer** (plain enum + vector + same-typed
+cross-variable assignment inside a for-loop body):
+
+```loft
+enum Dir { North, East, South, West }
+fn main() {
+    dirs = [North, East, South, West];
+    first_d = North;
+    for elem in dirs { first_d = elem; }
+}
+```
+
+Trips `slot=N but TOS=N-1` — slot > TOS by exactly 1 byte, matching
+the enum discriminant size.  An alignment gap the allocator reserved
+(for the vector temp `_vector_N`) that the TOS counter didn't advance
+through.
+
+**Not a simple "advance TOS" fix:** naïvely setting
+`stack.position = pos` in `gen_set_first_at_tos` (the mirror of the
+existing `pos < TOS` correction) makes the assert pass but produces
+garbage at runtime (`index out of bounds: the len is 4 but the
+index is 768`).  The padded byte isn't actually free — it's either
+initialised by a prior op the allocator expected to run or the
+slot was pre-assigned without accounting for the enum's 1-byte
+discriminant.
+
+**Real fix path:** phase-B dump at the `_vector_N` creation site —
+what op produces the slot offset?  what writes into the alignment
+gap?  The assert is only the symptom; the root is in either
+`src/variables/slots.rs` (slot pre-assignment not accounting for
+byte-sized discriminants) or one of the `OpNewVector*` emit sites.
+
+**Why it matters now:** blocks C61.local's stdlib rename sweep.
+Latent in main today — no CI exercises the triggering layout — but
+independently reproducible via the enum + for-loop snippet above.
+
+**Discovered:** 2026-04-12 during C61.local unconditional-reject
+attempt (commit b716d1d, reverted).  Narrowed 2026-04-12 via a
+5-line reproducer and a failed naïve fix.
+
+---
+
+## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — RELEASE BLOCK
+
+**Severity:** High (release blocker — see RELEASE.md Gate Items).
+
+**Symptom:** `cargo test --release --test wrap` (or the full suite
+`./scripts/find_problems.sh`) aborts with one of:
+- `free(): invalid pointer`
+- `corrupted size vs. prev_size`
+- `signal 11 SIGSEGV: invalid memory reference`
+
+Always attributed to `loft_suite`, which runs every
+`tests/scripts/*.loft` sequentially through `wrap::run_test`.
+The wrap `loft_suite` now **skips `79-null-early-exit.loft`** via
+`ignored_scripts()`, but the script is STILL covered by a
+dedicated `#[ignore] sigsegv_repro_79_alone` regression test —
+that test currently crashes when run (`--ignored`), locking the
+reproducer for the eventual fix.
+
+**Not** caused by this session's P54-U changes.  Still reproduces
+after `git show HEAD:src/*` replaces every modified `src/` file
+with its committed HEAD content.  The bug is pre-existing at
+commit `d0d6932`.
+
+**Debugger fingerprints (valgrind):**
+
+```
+Invalid write of size 1
+   at loft::fill::op_return
+   by loft::state::State::execute_argv
+ Address ... is 8 bytes after a block of size 8,008 alloc'd
+   by loft::state::State::new
+```
+
+The 8008-byte block is the stack store allocated in `State::new`
+(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` writes
+8 bytes past the end of that block — `stack_pos` climbs above
+8000.  Live instrumentation shows `fn_return` being called
+repeatedly at `code_pos=6`, reading `u32::MAX` but getting `6` or
+similar small bytecode offsets, turning the wrap-test binary into
+an infinite loop that grows the stack by 12 bytes per iteration
+until it overflows into adjacent heap and corrupts Rust's
+allocator metadata.  The `Data::drop` at end of `run_test` then
+finds corrupted `Value`/`String` entries and glibc aborts.
+
+**Runs fine via CLI:**
+
+```
+$ target/release/loft tests/scripts/79-null-early-exit.loft
+  (exits 0, clean)
+$ valgrind target/release/loft tests/scripts/79-null-early-exit.loft
+  (zero memory errors)
+```
+
+So the bug lives somewhere in the difference between
+`cached_default()` → clone → `run_test` vs. a fresh
+`parser.parse_dir` → parse user file → execute.
+
+**Leading hypotheses (unverified):**
+
+1. **Frame-yield residue from a default-parse side effect.**  The
+   default library's parser pass registers some lazily-initialised
+   state (static `NATIVE_REGISTRY`, closure maps, etc.).  If the
+   cached clone differs subtly from a fresh parse — a differently-
+   sized stack reserve, a const-store offset, an unset `arguments`
+   register — main's `OpReturn` could read its ret/discard operands
+   off the wrong bytecode position and corrupt the stack.
+2. **C56 `?? return` interaction with top-level return.**  Script
+   79 is the ONLY script in the suite using `?? return`.  The
+   desugared form emits an inner `OpReturn` inside `safe_double`
+   / `chain_test` / `void_test`.  A compile-time mismatch between
+   `self.arguments` (cached at def_code entry) and the current
+   stack.position at the nested `Return` could land us at wrong
+   offsets on return.
+3. **Stale `self.arguments` between functions.**  `self.arguments`
+   is a `State` field mutated inside `def_code`.  If a previous
+   def's value leaks into another def's `gen_return`, the bytecode
+   for that return has the wrong `ret` operand.
+
+**To reproduce:**
+
+```
+cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
+```
+
+**Debug aids in place:**
+
+- `src/crash_report.rs` — `install("wrap")` / `set_context(pc, op,
+  d_nr, fn_name)` lets the interpreter publish the last opcode per
+  thread; a SIGSEGV/SIGABRT/SIGBUS handler prints it to stderr
+  async-signal-safely before the default handler produces a core
+  dump.  Call `crash_report::install("loft")` at the top of
+  `main.rs` or `run_test` to enable.
+- `ulimit -c unlimited` + `sysctl -w kernel.core_pattern=/tmp/core.%e.%p`
+  — local core dumps, inspect with `gdb -c core target/release/deps/wrap-<hash>`.
+- `valgrind --error-exitcode=42 --track-origins=yes --num-callers=30
+  target/release/deps/wrap-<hash> sigsegv_repro_79_alone --ignored
+  --nocapture` — points `op_return` at the out-of-bounds write.
+
+**Discovered:** 2026-04-14 during P54-U phase 2 test sweep.
+See `CHANGELOG.md` and `doc/claude/QUALITY.md` § P136 for ownership.
 
 ---
 

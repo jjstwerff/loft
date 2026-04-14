@@ -172,6 +172,91 @@ Check the allocations and structure of the hash table.
 # Panics
 When the structure is not correctly filled
 */
+// C60 Step 1a: this primitive is used from tests today; the stdlib
+// `hash_records` wrapper in Step 2 will be its first production caller.
+#[allow(dead_code)]
+/// C60 Step 1: collect every live record's record-number from a hash.
+///
+/// Walks the hash's internal bucket array — the same traversal pattern
+/// as `validate`, but appending each nonzero slot into a vector instead
+/// of asserting.  Returned order is internal bucket order (unspecified
+/// but stable for a given hash state) — callers that need a
+/// user-visible ordering sort the result afterwards.
+///
+/// Runs in O(room) time where `room` is the bucket array length,
+/// typically around 1.5× the live-record count.
+#[must_use]
+pub fn records(hash_ref: &DbRef, stores: &[Store]) -> Vec<u32> {
+    let claim = keys::store(hash_ref, stores).get_int(hash_ref.rec, hash_ref.pos) as u32;
+    if claim == 0 {
+        return Vec::new();
+    }
+    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let elms = (room - 1) * 2;
+    let mut out = Vec::new();
+    for i in 0..elms {
+        let rec = keys::store(hash_ref, stores).get_int(claim, 8 + i * 4) as u32;
+        if rec != 0 {
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// C60 Step 2: collect every live record sorted by the hash's key.
+///
+/// Ascending on each key field, with `-` prefix flipping the direction
+/// per-field — the existing `keys::compare` helper handles multi-field
+/// lexicographic order and the descending bit for us, so one call
+/// covers Steps 2 / 6 / 7 of the plan in CAVEATS.md C60.
+///
+/// Inefficient by design: walks the whole bucket array (Step 1) then
+/// sorts the collected references in O(n log n).  Suitable for the
+/// small hashes that scripting code typically iterates; users with a
+/// tight loop over a large hash should pair the hash with a `vector`
+/// or `sorted` for amortised traversal.
+///
+/// # Panics
+///
+/// Panics if `keys::compare` encounters a key field type it cannot
+/// compare — same invariant as the existing `hash::find` path and
+/// not reachable from valid loft source.
+#[must_use]
+#[allow(dead_code)]
+pub fn records_sorted(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<u32> {
+    let mut recs = records(hash_ref, stores);
+    // Build DbRefs once so the comparator doesn't re-materialise them.
+    // Records in a hash all live in the same store and share the same
+    // schema offset (pos=8 is the record body, matching what
+    // `validate` uses internally).
+    let store_nr = hash_ref.store_nr;
+    recs.sort_by(|a, b| {
+        let ra = DbRef {
+            store_nr,
+            rec: *a,
+            pos: 8,
+        };
+        let rb = DbRef {
+            store_nr,
+            rec: *b,
+            pos: 8,
+        };
+        keys::compare(&ra, &rb, stores, keys)
+    });
+    recs
+}
+
+/// Validate the bucket structure of a hash — each live slot's record
+/// must `find` back to the same rec-nr, and the stored length must
+/// match the number of nonzero slots.
+///
+/// # Panics
+///
+/// Panics via `assert_eq!` when the bucket structure is inconsistent
+/// (a slot whose key does not round-trip through `find`, or a stored
+/// length that does not match the actual live-slot count).  Used as a
+/// debug-time structural invariant check; callers should never hit a
+/// panic here in production.
 pub fn validate(hash_ref: &DbRef, stores: &[Store], keys: &[Key]) {
     let claim = keys::store(hash_ref, stores).get_int(hash_ref.rec, hash_ref.pos) as u32;
     let length = keys::store(hash_ref, stores).get_int(claim, 4) as u32;

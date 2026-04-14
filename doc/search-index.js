@@ -115,6 +115,7 @@ const SEARCH_INDEX=[
 {name:"join",kind:"fn",url:"stdlib-text.html"},
 {name:"len",kind:"fn",url:"stdlib-collections.html"},
 {name:"clear",kind:"fn",url:"stdlib-collections.html"},
+{name:"hash_sorted",kind:"fn",url:"stdlib-collections.html"},
 {name:"assert",kind:"fn",url:"stdlib-output-and-diagnostics.html"},
 {name:"panic",kind:"fn",url:"stdlib-output-and-diagnostics.html"},
 {name:"log_info",kind:"fn",url:"stdlib-output-and-diagnostics.html"},

@@ -156,6 +156,7 @@ impl Parser {
                     let elem_type = match is_type {
                         Type::Sorted(dnr, _, dep)
                         | Type::Index(dnr, _, dep)
+                        | Type::Hash(dnr, _, dep)
                         | Type::Spacial(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
                         _ => Type::Null,
                     };
@@ -491,6 +492,25 @@ use #count instead"
                 );
                 *t = Type::Void;
                 return;
+            }
+            // C60 Step 9: reject #remove on hash iteration.  The parser
+            // substitutes hash iteration with a scratch rec-nr vector
+            // (see parse_for, the `{id}#hash_scratch` variable), so
+            // #remove would remove from the snapshot, not the hash —
+            // silently diverging from the user's intent.
+            if !self.first_pass {
+                let coll = self.vars.loop_coll_var(index_var);
+                if coll != u16::MAX && self.vars.name(coll).contains("hash_scratch") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "#remove is not supported on hash iteration — the \
+                         iterated vector is a sorted snapshot; use \
+                         `hash[key] = null` to remove from the hash"
+                    );
+                    *t = Type::Void;
+                    return;
+                }
             }
             let on = self.vars.loop_on(index_var);
             let state_name = if on & 63 >= 1 && on & 63 <= 3 {
@@ -847,6 +867,44 @@ use #count instead"
                 self.vars.var_type(existing_var).name(&self.data)
             );
         }
+        // C61: reject two classes of shadow that both produce silent wrong
+        // values today:
+        //   * Nested same-name loops (`for i { for i { } }`) — the inner
+        //     iterator rewrites the outer's `#index` companion, detected
+        //     on pass 2 via the active-loop chain.
+        //   * Outer-local shadow (`x = 5; for x in …`) — the loop
+        //     silently clobbers `x`; detected on pass 1 via the
+        //     `was_loop_var` flag.  A plain local's slot has never served
+        //     as a loop variable, so the prior binding is unambiguously a
+        //     local.
+        // Sequential same-name loops stay legal because the prior slot
+        // carries `was_loop_var = true`.  `_` is exempt.
+        if id != "_" && existing_var != u16::MAX {
+            if !self.first_pass && self.vars.is_active_loop_var(existing_var) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "loop variable '{id}' shadows the enclosing loop's '{id}' — \
+                     rename the inner loop variable (e.g. inner_{id}); loft does \
+                     not support nested same-name loops"
+                );
+            } else if self.first_pass
+                && !self.vars.was_loop_var(existing_var)
+                && !self.vars.is_active_loop_var(existing_var)
+                && !matches!(self.vars.var_type(existing_var), Type::RefVar(_))
+                && (self.vars.var_type(existing_var).is_same(&var_tp)
+                    || self.vars.var_type(existing_var).is_unknown())
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "loop variable '{id}' shadows a local named '{id}' — \
+                     rename the loop variable (e.g. loop_{id}) or drop the \
+                     outer `{id}` if it was a dead placeholder; loft does \
+                     not block-scope loop variables"
+                );
+            }
+        }
         let for_var = self.create_var(id, &var_tp);
         self.vars.defined(for_var);
         let if_step = if self.lexer.has_token("if") {
@@ -888,6 +946,40 @@ use #count instead"
             // Save the original collection expression before the vector temp-copy substitution
             // so that is_iterated_value() can match field-access patterns like `db.items`.
             let orig_coll_expr = expr.clone();
+            // C60 piece 3 edit B (re-attempt with typed scratch): when
+            // iterating a hash, substitute the collection expression
+            // with a call to `hash_sorted(h, tp_id)` that builds a
+            // u32-stride rec-nr scratch in the hash's own store
+            // (edit A).  `in_type` stays Type::Hash so fill_iter hits
+            // the Hash arm and emits on=3 (edit C); the empty-bounds
+            // guard in iterate on=3 (edit E) handles unbounded.
+            //
+            // Key fix from prior segfault attempt: type the scratch
+            // variable with the hash's actual content def-nr
+            // (`Type::Reference(content, dep)`), not `Reference(0)`.
+            // Downstream type-size + free-cleanup machinery reads
+            // `self.data.def(content)`; passing 0 gave whatever
+            // definition happens to sit at index 0 and corrupted
+            // stack layout.
+            if let Type::Hash(content, _, dep) = in_type.clone() {
+                let scratch_tp = Type::Reference(content, dep.clone());
+                let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
+                let hash_tp_id = self.get_type(&in_type);
+                let tp_arg = if hash_tp_id == u16::MAX {
+                    0
+                } else {
+                    i32::from(hash_tp_id)
+                };
+                let hash_sorted_fn = self.data.def_nr("n_hash_sorted");
+                if hash_sorted_fn != u32::MAX {
+                    let call = Value::Call(hash_sorted_fn, vec![expr.clone(), Value::Int(tp_arg)]);
+                    fill = v_set(scratch_var, call);
+                    expr = Value::Var(scratch_var);
+                    if !self.first_pass {
+                        self.vars.set_type(scratch_var, scratch_tp);
+                    }
+                }
+            }
             if matches!(in_type, Type::Vector(_, _)) {
                 let vec_var = self.create_unique("vector", &in_type);
                 // On the second pass in_type may carry __vdb_N dependencies that
@@ -1678,6 +1770,32 @@ use #count instead"
     /// Compute the in-store byte size of a vector element type.
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
+        // B5 (2026-04-13): for a mixed struct-enum element type
+        // (`Type::Enum(_, true, _)`), the parent enum's `known_type` is
+        // a byte-sized enumerate (size 1) — wrong for vector storage,
+        // since instances are records.  Use the size of the largest
+        // variant's structure type instead.  Without this, recursive
+        // struct-enums (`vector<Tree>` inside Tree's own variant) trip
+        // `OpDatabase(db_tp=u16::MAX)` panics in `Store::claim`.
+        if let Type::Enum(parent_d_nr, true, _) = elm
+            && elm_td != u32::MAX
+        {
+            let mut max_size = 0i32;
+            for a_nr in 0..self.data.attributes(*parent_d_nr) {
+                let variant_name = self.data.attr_name(*parent_d_nr, a_nr);
+                let variant_d_nr = self.data.def_nr(&variant_name);
+                if variant_d_nr != u32::MAX {
+                    let variant_known = self.data.def(variant_d_nr).known_type;
+                    let s = i32::from(self.database.size(variant_known));
+                    if s > max_size {
+                        max_size = s;
+                    }
+                }
+            }
+            if max_size > 0 {
+                return max_size;
+            }
+        }
         if elm_td != u32::MAX {
             let known = self.data.def(elm_td).known_type;
             let db_size = i32::from(self.database.size(known));

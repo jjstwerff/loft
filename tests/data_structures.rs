@@ -4,10 +4,14 @@
 extern crate loft;
 
 use loft::database::Stores;
+use loft::hash;
+#[cfg(feature = "random")]
+use loft::keys;
 use loft::keys::{Content, DbRef, Str};
-use loft::{hash, keys};
 use loft::{tree, vector};
+#[cfg(feature = "random")]
 use rand_core::{RngCore, SeedableRng};
+#[cfg(feature = "random")]
 use rand_pcg::Pcg64Mcg;
 
 #[test]
@@ -220,6 +224,246 @@ pub fn hash() {
     assert_eq!(rec.rec, 0, "Null result");
 }
 
+/// C60 Step 1a: `hash::records` walks all live records in a hash and
+/// returns their record numbers.  Order is internal bucket order
+/// (unsorted, unspecified).  Callers that need sorted iteration wrap
+/// this via Step 2's `records_sorted`.
+#[test]
+pub fn hash_records_walk() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "cat", stores.name("integer"));
+    stores.field(s, "value", stores.name("float"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string(), "cat".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {cat:1, name:\"first\",value:1.23},
+        {cat:1, name:\"second\",value:1.34},
+        {cat:2, name:\"third\",value:1.78}
+    ]";
+    stores.parse(data, v, &into);
+    let recs = hash::records(&into, &stores.allocations);
+    assert_eq!(
+        recs.len(),
+        3,
+        "hash::records must return every live record: got {recs:?}"
+    );
+    // Each returned rec-nr must resolve to a non-zero record pointer.
+    for rec_nr in &recs {
+        assert_ne!(
+            *rec_nr, 0,
+            "record 0 is the null sentinel — should be skipped"
+        );
+    }
+    // The three record-numbers are distinct.
+    let mut sorted = recs.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), recs.len(), "duplicate rec-nr returned");
+}
+
+#[test]
+pub fn hash_records_empty() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    // Empty hash — no entries added.
+    let recs = hash::records(&into, &stores.allocations);
+    assert_eq!(
+        recs.len(),
+        0,
+        "empty hash must yield no records: got {recs:?}"
+    );
+}
+
+/// C60 Step 2: `hash::records_sorted` returns records in ascending
+/// key order — single-field key case.
+#[test]
+pub fn hash_records_sorted_single_field() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {name:\"zebra\",value:1},
+        {name:\"apple\",value:5},
+        {name:\"mango\",value:3}
+    ]";
+    stores.parse(data, v, &into);
+    let keys = stores.keys(v).to_vec();
+    let recs = hash::records_sorted(&into, &stores.allocations, &keys);
+    // Resolve each rec-nr to its `name` field for an observable order.
+    let names: Vec<String> = recs
+        .iter()
+        .map(|&r| {
+            let rec = DbRef {
+                store_nr: into.store_nr,
+                rec: r,
+                pos: 8,
+            };
+            let name_pos = stores.allocations[rec.store_nr as usize].get_int(rec.rec, rec.pos);
+            stores.allocations[rec.store_nr as usize]
+                .get_str(name_pos as u32)
+                .to_string()
+        })
+        .collect();
+    assert_eq!(names, vec!["apple", "mango", "zebra"]);
+}
+
+/// C60 Step 6: multi-field key, lexicographic order.  Hash keys are
+/// ascending-only at the schema level (the `-` descending prefix is a
+/// `sorted` / `index` feature that the parser rejects on hash with
+/// "Structure doesn't support descending fields" — see
+/// `src/parser/definitions.rs:1198`), so the whole key space is
+/// lexicographic ascending.
+#[test]
+pub fn hash_records_sorted_multi_field() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "region", stores.name("text"));
+    stores.field(s, "score", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["region".to_string(), "score".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {region:\"east\",score:10},
+        {region:\"west\",score:30},
+        {region:\"east\",score:50},
+        {region:\"west\",score:20}
+    ]";
+    stores.parse(data, v, &into);
+    let keys = stores.keys(v).to_vec();
+    let recs = hash::records_sorted(&into, &stores.allocations, &keys);
+    let pairs: Vec<(String, i32)> = recs
+        .iter()
+        .map(|&r| {
+            let rec = DbRef {
+                store_nr: into.store_nr,
+                rec: r,
+                pos: 8,
+            };
+            let store = &stores.allocations[rec.store_nr as usize];
+            let region_pos = store.get_int(rec.rec, rec.pos);
+            let region = store.get_str(region_pos as u32).to_string();
+            let score = store.get_int(rec.rec, rec.pos + 4);
+            (region, score)
+        })
+        .collect();
+    // Expected: lexicographic (region ASC, score ASC within region).
+    assert_eq!(
+        pairs,
+        vec![
+            ("east".to_string(), 10),
+            ("east".to_string(), 50),
+            ("west".to_string(), 20),
+            ("west".to_string(), 30),
+        ]
+    );
+}
+
+/// C60 Step 3 (path 2c, piece 1): `Stores::build_hash_sorted_vec`
+/// emits a u32 rec-nr vector at 4-byte stride — the layout that the
+/// on=4 iterate/step arm will walk.  The returned DbRef points at a
+/// header whose offset-4 word is the data record; offset 4 of the
+/// data record is the element count; offset 8..+4*n holds u32 rec-nrs.
+#[test]
+pub fn hash_sorted_vec_u32_layout() {
+    let mut stores = Stores::new();
+    let s = stores.structure("Elm", 0);
+    stores.field(s, "name", stores.name("text"));
+    stores.field(s, "value", stores.name("integer"));
+    let m = stores.structure("Main", 0);
+    let v = stores.hash(s, &["name".to_string()]);
+    stores.field(m, "data", v);
+    stores.finish();
+    let db = stores.database(8);
+    let into = DbRef {
+        store_nr: db.store_nr,
+        rec: db.rec,
+        pos: 4,
+    };
+    stores.set_default_value(v, &into);
+    let data = "[
+        {name:\"zebra\",value:1},
+        {name:\"apple\",value:5},
+        {name:\"mango\",value:3}
+    ]";
+    stores.parse(data, v, &into);
+    let result = stores.build_hash_sorted_vec(&into, v);
+    // C60 piece 3 edit A: scratch shares `store_nr` with the hash.
+    // This is what lets Ordered (on=3) iteration yield valid hash
+    // record refs — the yielded DbRef's store_nr comes from the
+    // scratch's store, which is now the same as the hash's store.
+    assert_eq!(
+        result.store_nr, into.store_nr,
+        "scratch must be allocated in the hash's store"
+    );
+    // Header: offset 4 holds the data-record number.
+    let data_rec = stores.allocations[result.store_nr as usize].get_int(result.rec, 4) as u32;
+    assert_ne!(data_rec, 0, "header must point at a nonzero data record");
+    // Data record: offset 4 = count.
+    let count = stores.allocations[result.store_nr as usize].get_int(data_rec, 4);
+    assert_eq!(count, 3, "expected 3 elements, got {count}");
+    // Data record offset 8..8+12 holds 3 u32 rec-nrs at 4-byte stride.
+    // Read each, resolve its `name` field, verify ascending order.
+    let mut names = Vec::new();
+    for i in 0..3u32 {
+        let base = 8 + i * 4;
+        let rec_nr = stores.allocations[result.store_nr as usize].get_int(data_rec, base) as u32;
+        assert_ne!(rec_nr, 0, "element {i} rec-nr should be nonzero");
+        let rec = DbRef {
+            store_nr: into.store_nr,
+            rec: rec_nr,
+            pos: 8,
+        };
+        // name field is at offset 0 of the record body (pos 8 + 0).
+        let store = &stores.allocations[rec.store_nr as usize];
+        let name_off = store.get_int(rec.rec, rec.pos);
+        names.push(store.get_str(name_off as u32).to_string());
+    }
+    assert_eq!(names, vec!["apple", "mango", "zebra"]);
+}
+
 #[test]
 pub fn array_record() {
     let mut stores = Stores::new();
@@ -354,6 +598,7 @@ pub fn index() {
     assert_eq!(check, "{n:\"five\",c:5}");
 }
 
+#[cfg(feature = "random")]
 #[test]
 pub fn index_deletions() {
     let mut stores = Stores::new();

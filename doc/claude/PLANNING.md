@@ -30,6 +30,11 @@ release gate criteria, project structure changes, and release artifact checklist
 **Completed items are removed entirely** — history lives in git and `CHANGELOG.md`.
 Cross-document links are at the end; this doc is for future work.
 
+**Before proposing a new item here, check [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** —
+that file holds the closed-by-decision register (features evaluated and explicitly
+declined).  If the idea is already there, surface new evidence on the existing entry
+instead of re-proposing it.
+
 ---
 
 ## Contents
@@ -2460,7 +2465,17 @@ If `to_json` is called on a struct without `#json`, emit a compile error:
 
 ---
 
-### H2  JSON primitive extraction stdlib
+### ~~H2  JSON primitive extraction stdlib~~ — WITHDRAWN
+
+**Status:** Withdrawn 2026-04 — superseded by [P54 § JsonValue
+enum](QUALITY.md#active-sprint--p54-jsonvalue-enum).  The
+text-based `json_text/int/long/float/bool/items/nested` surface
+this section designed has been replaced wholesale by the typed
+`JsonValue` tree (`json_parse(text) -> JsonValue` plus six
+variants and dedicated read/write helpers — see
+[STDLIB.md § JSON](STDLIB.md)).  The original design is preserved
+below as a historical record; do not implement.
+
 **Sources:** [WEB_SERVICES.md](WEB_SERVICES.md) § Approach B; CODE.md § Dependencies
 **Description:** Add a new stdlib module `default/06_web.loft` with JSON field-extraction
 functions.  Functions extract a single typed value from a JSON object body supplied as

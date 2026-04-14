@@ -1,6 +1,58 @@
 
 # Testing Framework
 
+## Reach for this first — efficient failure triage
+
+After a refactor expected to touch many tests, do NOT iterate
+"run → see one failure → fix → re-run → see the next failure":
+each cycle pays the compile + test-startup cost and discovers
+only one failure at a time.  Run a single `--no-fail-fast`
+pass and read the captured failures once.
+
+### Preferred shape — background + peek + wait
+
+```bash
+./scripts/find_problems.sh --bg        # kick it off, returns immediately
+# keep working; while the ~60-90 s run proceeds:
+./scripts/find_problems.sh --peek      # snapshot of any failures so far
+# when done:
+./scripts/find_problems.sh --wait      # block until finished, then summarise
+# result: /tmp/loft_problems.txt
+```
+
+`--bg` starts `cargo test --release --no-fail-fast` in a detached
+subshell and writes the raw log to `/tmp/loft_test.log`.  `--peek`
+tails the live log and pulls out any `FAILED` markers, inline
+panics, and SIGSEGV context (last ~15 lines before each crash).
+`--wait` blocks on the background pid and then produces the
+final summary.
+
+Running in the background is the default for a reason: the
+suite takes long enough that blocking on it wastes cycles you
+could spend reading the failure pattern that's already showing
+up in the log.  **Never run the full test suite in the
+foreground** — always go through `--bg`.  `cargo clippy` and
+single-file tests (`cargo test --release --test issues
+<prefix>`) stay foreground.
+
+### Foreground shape (small contexts)
+
+When you just want one run and are happy to wait:
+
+```bash
+./scripts/find_problems.sh                  # streams to stdout + log
+./scripts/find_problems.sh /tmp/log /tmp/problems  # custom paths
+```
+
+The summary has one `test NAME ... FAILED` line per failure,
+the stdout block for each, a SIGSEGV-context block when a
+binary crashed, and (if a wrap-suite crash was detected) a
+re-run of `loft_suite` under `--nocapture --test-threads=1`
+that recovers the crashing `.loft` file's name.
+
+See § [One-pass-find-all-problems workflow](#one-pass-find-all-problems-workflow)
+below for the full rationale and when NOT to use this shape.
+
 ## Contents
 - [Overview](#overview)
 - [Entry Points](#entry-points)
@@ -603,6 +655,191 @@ make test
 1. Deletes all files in `tests/generated/` and `tests/result/`.
 2. Runs `cargo test -- --nocapture --test-threads=1`, appending output to `result.txt`.
 
+### Fast-iteration workflow — don't spam the full suite
+
+When iterating on a specific test family (e.g. `p54_*`, `q3_*`,
+`b7_*`) during development, use a **tight name prefix filter**
+so cargo only builds + runs the tests you care about.
+The full `cargo test --release --test issues` suite compiles to
+~244 tests and takes ~30 s; a prefix-filtered run is ~1–2 s
+plus the one-time compile.
+
+```bash
+# Good — 1-2 s, runs ~5 tests:
+cargo test --release --test issues q3_to_json
+
+# Good — runs exactly one test:
+cargo test --release --test issues q3_to_json_of_jbool_true
+
+# Bad — runs the full 244-test suite every time (~30 s),
+# even though you only needed the 5 q3 tests:
+cargo test --release --test issues
+```
+
+The filter is a **case-sensitive substring match** on the test
+name, no separator required.  Don't add `-- q3_` (with the
+`--` flag separator) — that works too but has more parsing
+overhead.  A bare prefix is the Rust-standard pattern.
+
+### Don't stack duplicate cargo invocations
+
+If you invoke `cargo test` while a previous `cargo test` from
+the same terminal is still running (or still live in the shell's
+background), both invocations queue on the `target/` build lock.
+Each cargo invocation also pays the 1-2 s startup cost.
+Symptoms of stacked runs: test output is slow to appear; a
+`ps aux | grep issues-` shows several copies of the test
+binary running at >60 % CPU; the harness reports "has been
+running for over 60 seconds" on a test that should finish
+in milliseconds.
+
+**Rule:** always let a `cargo test` run complete before
+launching the next.  If a run hangs (suspicious of an infinite
+loop in a new test), kill the *specific* test binary and
+inspect:
+
+```bash
+# See what's running:
+ps aux | grep -E "issues-|cargo test" | grep -v grep
+
+# Force-kill all test binaries + cargo driver:
+pkill -9 -f "issues-"; pkill -9 -f "cargo test"
+```
+
+Then re-run with a narrower filter to identify which test
+is looping.  **Do not** add `--test-threads=1` to "serialise
+the mess"; that masks the bug and makes finding the real
+looper harder.
+
+### Diagnosing a hang vs a failure
+
+- **Hang** — test binary stays live at high CPU for more than
+  its expected runtime.  Likely root cause: an infinite
+  loop reading garbage memory (e.g. a String whose `len`
+  field got written as a huge value), a format-specifier
+  that doesn't terminate, or a recursive call with no base.
+  Narrow to one test via `cargo test --release --test <file>
+  <exact_name>` and run under `LOFT_LOG=full` to get the
+  bytecode trace up to the hang point.
+- **Failure** — test binary completes but output doesn't
+  match expected.  Diagnostic output lives in
+  `tests/dumps/<file>_<test>.txt` (under debug builds or
+  when `LOFT_LOG` is set).  Check the end of the dump file
+  for `FAILED` markers.  The test harness's `.result(…)`
+  check runs after execution, so a failed test has the full
+  bytecode trace available.
+
+Hangs caused by escape-sequence parsing in `code!()` have
+appeared twice now (e.g. `q3_to_json_of_jstring_with_escapes`
+— the loft parser's handling of `\\` inside
+Rust-double-escaped string literals fed through `code!()`).
+When a test involving string escapes hangs, move the repro
+to a standalone `.loft` file first (`/tmp/foo.loft`) to
+isolate whether the bug is in the test plumbing or in loft
+itself.
+
+### One-pass-find-all-problems workflow
+
+When a refactor touches code that many tests cover, the default
+"run → see one panic → fix → re-run → see next panic" loop pays
+the build + test-startup cost on every iteration.  A single
+~60-second test pass already runs every test if the early
+failures don't abort the whole binary — Rust test harnesses
+default to "continue on failure" within a single test binary,
+but `cargo test` itself stops after the FIRST test binary that
+produces a non-zero exit status.
+
+Use `--no-fail-fast` to keep going across all test binaries,
+redirect to a file, and read the file once.  The checked-in
+helper `scripts/find_problems.sh` wraps this:
+
+```bash
+./scripts/find_problems.sh
+# → /tmp/loft_test.log   raw test output
+# → /tmp/loft_problems.txt   compact failure summary
+```
+
+**Peek while a run is in flight.**  `tee` writes the log live,
+so you can inspect failures before the whole suite finishes:
+
+```bash
+./scripts/find_problems.sh --peek
+# reads /tmp/loft_test.log, prints any FAILED markers found so far
+# plus their stdout blocks; shows the current tail if none yet
+```
+
+Optional: `./scripts/find_problems.sh <log-path> <problems-path>`
+to write to other locations.  Equivalent inline:
+
+```bash
+cargo test --release --no-fail-fast 2>&1 | tee /tmp/loft_test.log
+{
+  grep -E "^test .* FAILED$" /tmp/loft_test.log
+  echo
+  grep -B1 -A6 "^---- " /tmp/loft_test.log
+} > /tmp/loft_problems.txt
+```
+
+`/tmp/loft_problems.txt` has the structure:
+
+```
+test errors_accessor_path_on_failure ... FAILED
+test q3_to_json_pretty_three_level_nesting ... FAILED
+... (all failure headers)
+
+---- errors_accessor_path_on_failure stdout ----
+thread 'errors_accessor_path_on_failure' (3741234) panicked at src/native.rs:172:5:
+expected #errors entries for bad input (errors_accessor_path_on_failure:5)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- q3_to_json_pretty_three_level_nesting stdout ----
+thread 'q3_to_json_pretty_three_level_nesting' (3741198) panicked at tests/testing.rs:437:13:
+Test failed {"a":{"b":[1]}} != "{ ... " (q3_to_json_pretty_three_level_nesting:9)
+... (one block per failed test)
+```
+
+Read this once, plan all the fixes, apply, re-run.  No
+"two-pass-per-failure" cycle.
+
+**Why this isn't the default:**
+
+- `cargo test`'s default fail-fast is useful for fast feedback
+  when iterating on ONE area — you see the first problem
+  immediately without waiting for the rest.
+- `--no-fail-fast` is what you want for a refactor sweep where
+  you EXPECT multiple failures and want to plan the fix order.
+
+**Patterns to apply:**
+
+- For per-test diagnosis, the `tests/dumps/<file>_<test>.txt`
+  file (debug builds or `LOFT_LOG=...` set) carries the full
+  bytecode trace.  The problems file points you at WHICH
+  tests failed; the dump file tells you WHY each one failed.
+- After applying fixes, re-run the same command — diff the new
+  problems file against the old to confirm your changes only
+  closed problems (didn't introduce new ones).
+- Stable problems are easier to track via the
+  `ignored_tests.baseline` mechanism (see § Test Coverage Gaps)
+  — that's the long-term home for "known-failing" tests; the
+  problems file is for in-flight refactor work.
+
+**Checked-in helper:** `scripts/find_problems.sh` (executable,
+takes optional `$1` log path and `$2` problems-summary path).
+Reach for the script instead of typing the inline pipeline —
+future sessions will find it by `ls scripts/` or by greping for
+"find_problems" in this doc.
+
+**When NOT to use this workflow:**
+
+- During focused development on ONE test family — use the
+  prefix-filter form (`cargo test --release --test issues
+  q3_to_json`).  Faster feedback, no problems-file overhead.
+- When you've JUST landed a substantial change and want to
+  confirm zero regressions — `cargo test --release` (default
+  fail-fast) tells you faster if SOMETHING broke; only flip
+  to `--no-fail-fast` once you know there are multiple failures
+  to triage.
+
 ---
 
 ## Validating Generated Code — the `generated/` Workspace
@@ -1191,6 +1428,89 @@ grep -E "definitely lost|indirectly lost|possibly lost|ERROR SUMMARY" /tmp/v.log
 
 Debug-build loft + valgrind + Mesa swrast is **very slow** — expect
 10-100x slowdown. Use a short loop count for ad-hoc checks.
+
+---
+
+## Debugging `loft --html` WASM traps
+
+WASM compiled in release mode strips Rust panic strings — a
+runtime fault surfaces as a bare `RuntimeError: unreachable executed`
+with no message.  This can send diagnosis deep into the wrong place
+(we spent several sessions chasing "panic in bytecode dispatch" for
+P137 when the real cause was `Instant::now()` in init).
+
+### The technique
+
+1. **Write a minimal reproducer.** If `fn main() { }` or
+   `fn main() { println("hi"); }` traps, the bug is in WASM init
+   (Stores::new / stdlib load / host-import wiring), **not** in any
+   user-code path.  Don't bisect user code yet.
+
+2. **Rebuild the same generated Rust as a debug wasm** to preserve
+   panic symbols in the stack trace.  The `loft_html.rs` file is
+   written to `/tmp/loft_html.rs` by `loft --html` immediately before
+   the rustc invocation; grab a copy before the wrapper deletes it:
+
+   ```bash
+   ./target/release/loft --html /tmp/app.html --path $(pwd)/ app.loft &
+   sleep 0.3 && cp /tmp/loft_html.rs /tmp/loft_html_saved.rs
+   wait
+   ```
+
+3. **Compile the saved Rust without `-O`** so Rust's panic machinery
+   still emits symbols:
+
+   ```bash
+   rustc --edition=2024 --target wasm32-unknown-unknown \
+     --crate-type cdylib \
+     --extern loft=target/wasm32-unknown-unknown/release/libloft.rlib \
+     -L dependency=target/wasm32-unknown-unknown/release/deps \
+     -L dependency=target/release/deps \
+     /tmp/loft_html_saved.rs -o /tmp/debug.wasm
+   ```
+
+4. **Run in Node with `tools/wasm_repro.mjs`** and print the stack:
+
+   ```bash
+   node tools/wasm_repro.mjs /tmp/debug.wasm
+   ```
+
+   The debug build's stack shows `_ZN...` mangled Rust symbols.  The
+   first non-panic-machinery symbol is the function that panicked —
+   often `std::...::now`, `Vec::index`, `Option::unwrap`,
+   `core::panicking::panic_fmt`.
+
+### Repro harness — `tools/wasm_repro.mjs`
+
+Loads a WASM file with loose stub imports (loft_io and loft_gl via a
+Proxy that answers any method with a no-op) and runs `loft_start`.
+
+```bash
+node tools/wasm_repro.mjs <path/to/wasm> [--trace]
+```
+
+Exit code 0 = clean run; 1 = trap.  `--trace` records every host
+import call into a buffer printed on trap — revealing which loft
+function last reached the host boundary before the fault.
+
+Used by the **`tests/html_wasm.rs::p137_html_hello_world_does_not_trap`**
+regression test, which builds a hello-world `.loft` program through
+`--html`, extracts the WASM, and runs the harness.  Skipped in
+environments without node or the wasm32-unknown-unknown rustup target.
+
+### Why the release trap had no message
+
+Rust compiled for `wasm32-unknown-unknown` with `-O` uses
+`panic = "abort"` by default: any panic becomes a bare
+`(unreachable)` instruction with no format string, no location, no
+call to a panic handler.  On native + debug this is the opposite —
+panics carry a source location and a formatted message.  When the
+browser / Node engine hits the unreachable, it produces a generic
+`RuntimeError: unreachable executed` with only the WASM function
+index in the stack trace.
+
+The fix path is always: rebuild without `-O`, get a symbol-preserving
+stack, and the panic site appears.
 
 ---
 

@@ -387,10 +387,86 @@ Mutating filesystem operations return a `FileResult` enum:
 
 ## JSON / Parsing
 
+JSON support has two layers:
+
+1. **`JsonValue` enum** — a first-class typed tree (preferred for new code; covers dynamic shapes).
+2. **`{value:j}` interpolation + `Type.parse(text)`** — legacy text-based path; `Type.parse(JsonValue)` is the in-progress replacement (P54 step 5).
+
+### JsonValue surface
+
+```loft
+pub enum JsonValue {
+  JNull,
+  JBool   { value: boolean },
+  JNumber { value: float not null },
+  JString { value: text },
+  JArray  { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> }
+}
+pub struct JsonField { name: text, value: JsonValue }
+```
+
+| Function | Description |
+|---|---|
+| `json_parse(text) -> JsonValue` | Parse JSON; malformed input returns `JNull` |
+| `json_errors() -> text` | Pipe-separated diagnostics from the last `json_parse` |
+| `kind(v) -> text` | Variant name: `"JNull"` / `"JBool"` / `"JNumber"` / `"JString"` / `"JArray"` / `"JObject"` |
+| `len(v) -> integer` | Length of a `JArray`/`JObject`; null sentinel for any other variant |
+| `field(v, name) -> JsonValue` | `JObject` lookup; `JNull` on miss / wrong kind |
+| `item(v, index) -> JsonValue` | `JArray` index; `JNull` on out-of-bounds / wrong kind |
+| `has_field(v, name) -> boolean` | `true` iff `JObject` carries a field named `name` |
+| `keys(v) -> vector<text>` | Field names in insertion order; empty for non-objects |
+| `fields(v) -> vector<JsonField>` | Full `(name, value)` entries; values deep-copied |
+| `as_text(v) / as_number(v) / as_long(v) / as_bool(v)` | Typed extractor; null on kind mismatch |
+| `to_json(v) -> text` | Canonical RFC 8259 serialisation (no whitespace) |
+| `to_json_pretty(v) -> text` | 2-space indent, one element per line for non-empty containers |
+| `json_null() -> JsonValue` | Constructor — `JNull` |
+| `json_bool(v: boolean) -> JsonValue` | Constructor — `JBool` |
+| `json_number(v: float) -> JsonValue` | Constructor — `JNumber`; non-finite (NaN / Inf) → `JNull` |
+| `json_string(v: text) -> JsonValue` | Constructor — `JString` |
+| `json_array(items: vector<JsonValue>) -> JsonValue` | Constructor — `JArray`; deep-copies items |
+| `json_object(fields: vector<JsonField>) -> JsonValue` | Constructor — `JObject`; deep-copies fields |
+
+#### Reading
+
+```loft
+v = json_parse(`{{"users":[{{"name":"Alice"}}]}}`);
+name = v.field("users").item(0).field("name").as_text();   // "Alice"
+// every intermediate failure produces JNull, never a trap
+
+match v {
+  JObject _ => for f in v.fields() { handle(f) },
+  JArray _  => for elm in v.items() { handle(elm) },
+  _         => log_warn("expected container: {json_errors()}")
+}
+```
+
+#### Building
+
+```loft
+reply = json_object([
+  JsonField { name: "ok",    value: json_bool(true) },
+  JsonField { name: "count", value: json_number(3.0) }
+]);
+text = reply.to_json();   // {"ok":true,"count":3}
+```
+
+#### Forwarding a captured subtree
+
+```loft
+inbox = json_parse(request_body);
+response = json_object([
+  JsonField { name: "echo", value: inbox.field("payload") }
+]);
+return response.to_json_pretty();
+```
+
+### Legacy text-based API (transitional)
+
 | Expression | Description |
 |---|---|
 | `"{value:j}"` | Serialise any struct/enum/vector to JSON text |
-| `Type.parse(text)` | Parse JSON or loft-native text into a struct |
+| `Type.parse(text)` | Parse JSON or loft-native text into a struct (P54 step 5 will require `Type.parse(JsonValue)` for structs) |
 | `vector<T>.parse(text)` | Parse a JSON array into an iterable vector |
 | `record#errors` | Iterate parse errors from the last `Type.parse()` call |
 
@@ -399,6 +475,8 @@ user = User.parse(`{{"id":42,"name":"Alice"}}`);
 scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
 for e in user#errors { log_warn(e); }
 ```
+
+New code should prefer the `JsonValue` surface; the text-based `Struct.parse(text)` form is slated for withdrawal in the 0.9.0 milestone (see [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum)).
 
 ---
 

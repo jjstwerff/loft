@@ -544,11 +544,11 @@ fn type_def(self: Parser, define: boolean) -> u16 {
   t = self.code.get_type(id);
   if !t && define {
     self.code.define(false, id, code::TypeDef, self.cur_file, self.lexer.get_line());
-    for p in parameters {
-      self.code.field(null, p);
+    for param in parameters {
+      self.code.field(null, param);
     }
-    for f in flds {
-      self.code.field(f, 65535);
+    for fld in flds {
+      self.code.field(fld, 65535);
     }
     self.code.finish_define();
     return self.code.get_type(id);

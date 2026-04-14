@@ -814,10 +814,61 @@ impl Parser {
                     "generic type {tv_name}: method call requires a concrete type",
                 );
             } else {
-                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                // QUALITY 6c (follow-on): when a free call fails but a method
+                // `t_<LEN><Type>_<name>` exists on some other type, tell the
+                // user to call it as a method.  Mirror image of the
+                // field-access hint that covers the method→free direction.
+                let method_types = self.find_method_receivers(name);
+                if method_types.is_empty() {
+                    diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                } else {
+                    let receivers = method_types.join(" / ");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
+                    );
+                }
             }
             Type::Unknown(0)
         }
+    }
+
+    /// Scan all definitions for methods named `name` (encoded as
+    /// `t_<LEN><TypeName>_<name>`) and return the list of receiver type
+    /// names in definition order, de-duplicated.  Powers the 6c
+    /// free→method hint in `call`.
+    fn find_method_receivers(&self, name: &str) -> Vec<String> {
+        let suffix = format!("_{name}");
+        let mut receivers: Vec<String> = Vec::new();
+        for d_nr in 0..self.data.definitions() {
+            let def_name = &self.data.def(d_nr).name;
+            let Some(rest) = def_name.strip_prefix("t_") else {
+                continue;
+            };
+            if !rest.ends_with(&suffix) {
+                continue;
+            }
+            let digit_end = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digit_end == 0 {
+                continue;
+            }
+            let Ok(type_len) = rest[..digit_end].parse::<usize>() else {
+                continue;
+            };
+            let type_start = digit_end;
+            let Some(type_end) = type_start.checked_add(type_len) else {
+                continue;
+            };
+            if rest.len() != type_end + suffix.len() || !rest.is_char_boundary(type_end) {
+                continue;
+            }
+            let type_name = &rest[type_start..type_end];
+            if !type_name.is_empty() && !receivers.iter().any(|t| t == type_name) {
+                receivers.push(type_name.to_string());
+            }
+        }
+        receivers
     }
 
     /// Try to instantiate a generic function template for the given call-site types.
@@ -1919,10 +1970,81 @@ impl Parser {
                     );
                     all_types[a_nr] = tp.clone();
                 } else {
-                    actual[a_nr] = default;
+                    // P91: default expressions may reference earlier
+                    // parameters by `Var(N)` slots (e.g. `b: integer = a * 2`
+                    // produces a tree with `Var(0)`).  Substitute those
+                    // references with the caller's actual argument values
+                    // so the emitted code uses the caller's scope, not
+                    // the callee's (which wouldn't resolve at the call
+                    // site).  Only parameters 0..a_nr are earlier; no
+                    // recursion into the current or later default.
+                    let substituted = Self::substitute_param_refs(default, &actual[..a_nr]);
+                    actual[a_nr] = substituted;
                     all_types[a_nr] = tp.clone();
                 }
             }
+        }
+    }
+
+    /// P91: replace `Value::Var(from)` with `Value::Var(to)` throughout
+    /// a default-expression tree.  Used by `parse_arguments` to rewrite
+    /// internally-allocated slot numbers into stable argument indices
+    /// before the default is stored on the function definition.
+    pub(crate) fn remap_var_nr(val: Value, from: u16, to: u16) -> Value {
+        match val {
+            Value::Var(n) if n == from => Value::Var(to),
+            Value::Call(op, xs) => Value::Call(
+                op,
+                xs.into_iter()
+                    .map(|x| Self::remap_var_nr(x, from, to))
+                    .collect(),
+            ),
+            Value::CallRef(op, xs) => Value::CallRef(
+                op,
+                xs.into_iter()
+                    .map(|x| Self::remap_var_nr(x, from, to))
+                    .collect(),
+            ),
+            Value::Set(v, inner) => {
+                let v = if v == from { to } else { v };
+                Value::Set(v, Box::new(Self::remap_var_nr(*inner, from, to)))
+            }
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|x| Self::remap_var_nr(x, from, to))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
+    /// P91: replace `Value::Var(i)` for `i < args.len()` with `args[i]`
+    /// in a default-expression tree.  Used at call sites to transplant a
+    /// default's earlier-parameter references into the caller's scope.
+    fn substitute_param_refs(val: Value, args: &[Value]) -> Value {
+        match val {
+            Value::Var(n) if (n as usize) < args.len() => args[n as usize].clone(),
+            Value::Call(op, xs) => Value::Call(
+                op,
+                xs.into_iter()
+                    .map(|x| Self::substitute_param_refs(x, args))
+                    .collect(),
+            ),
+            Value::CallRef(op, xs) => Value::CallRef(
+                op,
+                xs.into_iter()
+                    .map(|x| Self::substitute_param_refs(x, args))
+                    .collect(),
+            ),
+            Value::Set(v, inner) => {
+                Value::Set(v, Box::new(Self::substitute_param_refs(*inner, args)))
+            }
+            Value::Insert(ops) => Value::Insert(
+                ops.into_iter()
+                    .map(|x| Self::substitute_param_refs(x, args))
+                    .collect(),
+            ),
+            other => other,
         }
     }
     // ********************

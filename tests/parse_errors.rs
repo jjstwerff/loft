@@ -3,6 +3,8 @@
 
 extern crate loft;
 
+use loft::data::Value;
+
 mod testing;
 
 #[test]
@@ -166,7 +168,7 @@ fn unknown_sizeof() {
 
 #[test]
 fn index_non_indexable() {
-    code!("fn test() { v = 5; v[1]; }").error("Indexing a non vector at index_non_indexable:1:23");
+    code!("fn test() { v = 5; v[1]; }").error("Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; declare them as a struct field and initialise via a vector literal: `struct Db { h: hash<Row[id]> }; db = Db { h: [Row { id: 1 }] }` at index_non_indexable:1:23");
 }
 
 #[test]
@@ -392,9 +394,19 @@ fn test() { assert(compute(5) == 5, \"ok\"); }"
 
 #[test]
 fn spacial_not_implemented() {
-    // spacial<T> is a reserved keyword; all uses must produce a compile error.
+    // C7/P22: spacial<T> is a reserved keyword; its diagnostic now
+    // surfaces the 1.1+ timeline so a user who typed it knows when
+    // the feature ships and which substitute to reach for.
     code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point, x, y> }\nfn test() {}")
-        .error("spacial<T> is not yet implemented; use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+}
+
+/// C7/P22 regression guard: the diagnostic also fires for a local
+/// variable (not just a struct field) and carries the same hint.
+#[test]
+fn spacial_not_implemented_in_local() {
+    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point, x, y> = []; }")
+        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented_in_local:2:39");
 }
 
 /// F57: write_file on a struct with a collection-type field must produce a compile error.
@@ -503,7 +515,11 @@ fn shadow_different_type() {
 
 #[test]
 fn shadow_same_type_ok() {
-    // Same-type reuse (integer → integer loop var) is idiomatic; no error.
+    // C61.local: same-type shadow of an outer local is now rejected at
+    // parse time — renaming the loop variable or dropping the outer
+    // local are the two documented fixes.  Previously this test was
+    // named "_ok" because the reuse silently succeeded; it now pins the
+    // rejection to prevent regression.
     code!(
         "fn test() {
     x = 10;
@@ -511,6 +527,12 @@ fn shadow_same_type_ok() {
     for x in v { }
     println(\"{x}\");
 }"
+    )
+    .error(
+        "loop variable 'x' shadows a local named 'x' — rename the loop \
+         variable (e.g. loop_x) or drop the outer `x` if it was a dead \
+         placeholder; loft does not block-scope loop variables at \
+         shadow_same_type_ok:4:17",
     );
 }
 
@@ -926,6 +948,110 @@ fn p85c_named_fn_inside_fn_emits_diagnostic() {
 }
 
 #[test]
+fn c61_nested_same_name_loop_rejected() {
+    // C61: nested `for i { for i { } }` silently aliases the outer
+    // iterator's `#index` companion, causing wrong runtime results.
+    // The parser now rejects it with an actionable rename hint.
+    code!(
+        "fn test() {\n  \
+           for i in 0..3 {\n    \
+             for i in 10..13 { }\n  \
+           }\n\
+         }"
+    )
+    .error(
+        "loop variable 'i' shadows the enclosing loop's 'i' — \
+         rename the inner loop variable (e.g. inner_i); loft does \
+         not support nested same-name loops at c61_nested_same_name_loop_rejected:3:22",
+    )
+    .warning("Variable i is never read at c61_nested_same_name_loop_rejected:2:18");
+}
+
+#[test]
+fn c61_local_shadow_rejected() {
+    // C61.local: a for-loop variable that would silently clobber a
+    // same-named outer local is rejected at parse time with a rename
+    // hint.  Unblocked by PROBLEMS.md #139's OpReserveFrame fix, which
+    // made it possible to rename stdlib docs without tripping the
+    // slot-allocator TOS mismatch on layout changes.
+    code!(
+        "fn run() -> integer {\n  \
+           x = 99;\n  \
+           for x in 0..3 { }\n  \
+           x\n\
+         }"
+    )
+    .expr("run()")
+    .error(
+        "loop variable 'x' shadows a local named 'x' — rename the loop \
+         variable (e.g. loop_x) or drop the outer `x` if it was a dead \
+         placeholder; loft does not block-scope loop variables at \
+         c61_local_shadow_rejected:3:18",
+    );
+}
+
+#[test]
+fn c61_local_shadow_renamed_ok() {
+    // Regression guard: renaming the loop variable keeps the outer
+    // local intact.
+    code!(
+        "fn run() -> integer {\n  \
+           x = 99;\n  \
+           for loop_x in 0..3 { x + loop_x; }\n  \
+           x\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(99));
+}
+
+#[test]
+fn c61_local_dropped_outer_ok() {
+    // Regression guard: dropping the dead outer placeholder is the
+    // other documented fix.  `a` is live only inside the loop.
+    code!(
+        "fn run() -> integer {\n  \
+           t = 0;\n  \
+           for a in 1..6 { t += a; }\n  \
+           t\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(15));
+}
+
+#[test]
+fn c61_nested_different_names_ok() {
+    // Regression guard: nested loops with *different* names still parse.
+    code!(
+        "fn run() -> integer {\n  \
+           total = 0;\n  \
+           for i in 0..3 { for j in 10..13 { total += j + i; } }\n  \
+           total\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(108));
+}
+
+#[test]
+fn c61_sequential_same_name_ok() {
+    // Regression guard: sequential same-name loops (non-nested) remain
+    // valid — only nested aliasing is rejected.
+    code!(
+        "fn run() -> integer {\n  \
+           a = 0;\n  \
+           for i in 0..3 { a += i; }\n  \
+           b = 0;\n  \
+           for i in 10..13 { b += i; }\n  \
+           a + b\n\
+         }"
+    )
+    .expr("run()")
+    .result(Value::Int(36));
+}
+
+#[test]
 fn p85c_lambda_inside_fn_still_works() {
     // Regression guard: lambda expressions (`fn(args) { ... }`) must not
     // trigger the file-scope-only diagnostic.
@@ -954,4 +1080,34 @@ fn l1_missing_semicolon_single_diagnostic() {
 fn l1_missing_semicolon_in_body_single_diagnostic() {
     code!("fn foo(x: integer) -> integer {\n  y = x + 1\n  y * 2\n}\nfn test() {}")
         .error("Expect token ; at l1_missing_semicolon_in_body_single_diagnostic:3:4");
+}
+
+// ── P54 struct-enum blockers (BITING_PLAN § P54) ─────────────────────────
+//
+// Regression guards for the struct-enum compiler bugs surfaced while
+// building JsonValue.  Each bug is tracked as B1..B7 in BITING_PLAN.md.
+// Fixed bugs pin the diagnostic-or-success behaviour; open bugs land as
+// `#[ignore]`'d with the expected future state so the test goes green
+// automatically when the fix lands.
+
+/// B2 was originally: `fn mk() -> Shade { Shade.N }` for a mixed-kind
+/// enum (unit + struct-field variants) errored with 'Shade should be
+/// Shade on return from block' because the unit variant's declared
+/// `Type::Enum(d, false, _)` didn't unify with the struct-enum-upgraded
+/// parent's `Type::Enum(d, true, _)`.
+///
+/// Full fix now lands (`parse_enum_values` post-pass syncs every
+/// variant's type to the final parent type), so the compile passes
+/// cleanly with no diagnostic.  Runtime use of the returned
+/// struct-enum is still blocked by B3/B4 — tracked separately in
+/// `tests/issues.rs::p54_b3_single_variant_return`.
+#[test]
+fn p54_b2_unit_variant_return_compiles() {
+    // No .error() or .fatal() — the test passes when compilation
+    // produces no diagnostics.
+    code!(
+        "pub enum Shade { N, V { v: integer } }
+fn mk() -> Shade { Shade.N }
+fn test() {}"
+    );
 }

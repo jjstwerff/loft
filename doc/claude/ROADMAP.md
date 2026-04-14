@@ -1,8 +1,27 @@
-
-// Copyright (c) 2026 Jurjen Stellingwerff
-// SPDX-License-Identifier: LGPL-3.0-or-later
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
 
 # Roadmap
+
+## Roadmap vs. release plan
+
+This file is the **wish list**: items we want to do, ordered by
+when they fit best into the project's arc.  Not every roadmap
+item blocks a release — many can slip from one milestone to the
+next without holding up a ship.
+
+The companion file [RELEASE.md](RELEASE.md) answers a narrower
+question: "what MUST be true before we tag and publish?"  When a
+roadmap item is also a release blocker, it gets echoed into
+RELEASE.md's gate lists.
+
+| File | Scope | Question it answers |
+|---|---|---|
+| **ROADMAP.md** (this file) | Things we'd like to do | "What's the arc of work, and in what order?" |
+| **[RELEASE.md](RELEASE.md)** | Ship checklist | "What must be true before we can publish?" |
+| **[PLANNING.md](PLANNING.md)** | Priority-ordered backlog | "What's the next best thing to pick up?" |
 
 Items in expected implementation order, grouped by milestone.
 Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
@@ -92,6 +111,15 @@ export to GLB. Web only — multiplayer comes in 1.0.0.
 
 Design: `../moros/doc/claude/`
 
+### Must-fix blockers (share the Moros editor's code paths)
+
+Step plans for both entries: [QUALITY.md](QUALITY.md).
+
+| ID    | Title                                                           | E  | Source                       |
+|-------|-----------------------------------------------------------------|----|------------------------------|
+| P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, QUALITY.md |
+| ~~P135~~ | ~~Canvas Y-flip three-way compensation~~ | S | **Done** — upload flip removed + TEX_VERT_2D samples identity V; 2×2 atlas corner guard in `snap_smoke.sh`. Canonical convention locked in OPENGL.md |
+
 ### Sprint A–C: Data model + editor + loft backend
 
 | ID     | Title                                                  | E  | Design | Depends on    |
@@ -153,6 +181,28 @@ highlighting, decent error messages, and a REPL for experimentation.
 | AOT    | Auto-compile libraries to native shared libs           | M  | ✓      | PLANNING.md      |
 | C52    | Stdlib name clash: warning + `std::` prefix            | M  | ✓      | PLANNING.md      |
 | C53    | Match arms: library enums + bare variant names         | M  | ✓      | PLANNING.md      |
+
+### User-biting caveats — all ship in 0.9.0
+
+Each of these is a commitment, not a maybe.  Deferring any of them
+makes the "fully working language" label dishonest.
+
+Step plans for both entries: [QUALITY.md](QUALITY.md).
+
+| ID   | Title                                                                     | E  | Source                      |
+|------|---------------------------------------------------------------------------|----|-----------------------------|
+| C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, QUALITY.md  |
+| P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, QUALITY.md |
+
+**Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
+- ~~C7/P22~~ — `spacial<T>` diagnostic references 1.1+ timeline
+- ~~C60~~ — hash iteration in ascending key order (`quality` branch)
+- ~~C61.local~~ — outer-local shadow reject on pass 1
+- ~~C61-nested~~ — parse-time reject for `for i { for i { } }`
+- ~~P86~~ — real closures; regression guards in `tests/issues.rs` and `tests/parse_errors.rs`
+- ~~P91~~ — default-from-earlier-parameter via call-site Var(N) substitution
+- ~~P138~~ — `loft --native` prints actionable hint on E0460 + rand_core
+- ~~SLOT-VEC3 / #139~~ — `OpReserveFrame` fires when slot sits above TOS
 
 ### Compilation cache and constant store
 
