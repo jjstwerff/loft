@@ -1754,8 +1754,16 @@ impl State {
                 return_expr = 0;
                 tp = Type::Void;
             } else {
-                has_return = false;
-                return_expr = 0;
+                // Preserve return_expr across cleanup ops (FreeRef/FreeText)
+                // that don't produce a return value. These are inserted by
+                // scope analysis between the tail expression and Return(Null).
+                let is_cleanup = matches!(v, Value::Call(d, _)
+                    if stack.data.def(*d).name == "OpFreeRef"
+                    || stack.data.def(*d).name == "OpFreeText");
+                if !is_cleanup {
+                    has_return = false;
+                    return_expr = 0;
+                }
                 tp = self.generate(v, stack, false);
             }
             if self.stack_pos > s_pos && !matches!(v, Value::Set(_, _)) {

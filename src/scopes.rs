@@ -231,7 +231,7 @@ impl Scopes {
                 let scope = self.enter_scope();
                 self.loops.push(scope);
                 function.mark_loop_scope(scope);
-                let ls = self.convert(lp, function, data);
+                let ls = self.convert(lp, function, data, false);
                 self.loops.pop();
                 self.exit_scope();
                 Value::Loop(Box::new(Block {
@@ -318,8 +318,19 @@ impl Scopes {
                         hoisted_ref = Some(ret_v);
                     }
                 }
+                // The function body block (scope 0 → 1) with a non-void
+                // result needs is_return=true so frees land between the
+                // tail expression and the Return, not after it.
+                let is_body_return = self.scope == 0
+                    && bl.result != Type::Void
+                    && data.def(self.d_nr).returned != Type::Void;
                 let scope = self.enter_scope();
-                let ls = self.convert(bl, function, data);
+                // Move hoisted var from outer scope (0) to body scope so
+                // get_free_vars at body exit can find and free it.
+                if let Some(w) = hoisted_ref {
+                    self.var_scope.insert(w, scope);
+                }
+                let ls = self.convert(bl, function, data, is_body_return);
                 self.exit_scope();
                 let block = Value::Block(Box::new(Block {
                     operators: ls,
@@ -611,8 +622,16 @@ impl Scopes {
         }
     }
 
-    /// Convert the content of loops and blocks
-    fn convert(&mut self, bl: &Block, function: &mut Function, data: &Data) -> Vec<Value> {
+    /// Convert the content of loops and blocks.
+    /// `is_return` should be true for the function body block of a non-void
+    /// function — frees must happen before the tail expression returns.
+    fn convert(
+        &mut self,
+        bl: &Block,
+        function: &mut Function,
+        data: &Data,
+        is_return: bool,
+    ) -> Vec<Value> {
         let mut ls = Vec::new();
         for v in &bl.operators {
             let sv = self.scan(v, function, data);
@@ -633,7 +652,8 @@ impl Scopes {
         for &v in &scope_vars {
             self.var_mapping.remove(&v);
         }
-        for v in self.free_vars(false, &expr, function, data, &bl.result, self.scope) {
+        let frees = self.free_vars(is_return, &expr, function, data, &bl.result, self.scope);
+        for v in frees {
             ls.push(v);
         }
         ls
@@ -712,7 +732,11 @@ impl Scopes {
     ) -> Vec<Value> {
         let scope_debug = std::env::var("LOFT_LOG").as_deref() == Ok("scope_debug");
         let mut ls = Vec::new();
-        for v in self.variables(to_scope) {
+        let vars = self.variables(to_scope);
+        if scope_debug {
+            eprintln!("[get_free_vars] fn={} to_scope={to_scope} scope={} vars={vars:?} ret_var={ret_var}", data.def(self.d_nr).name, self.scope);
+        }
+        for v in vars {
             if v == ret_var {
                 continue;
             }
