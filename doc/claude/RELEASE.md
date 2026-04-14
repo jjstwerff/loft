@@ -74,6 +74,26 @@ releases alike.  It applies whether the target is 0.8.4 or 1.0.0.
 A "quick fix" tag that closes one bug but leaves another open is
 still a broken build and still gets blocked.
 
+### 0.8.4 deferred (2026-04-14)
+
+The 0.8.4 tag attempt this date was **deferred** when the safety
+gate caught a P54 chained-call leak: every `json_*().method()`
+expression leaks the temporary JsonValue store at scope exit.
+Debug-build assertion (`Database X not correctly freed` in
+`src/state/debug.rs`) caught it on CI; release build silently
+leaks per call.  34 tests added to the ignore baseline as a
+workaround so quality-branch CI stays green for ongoing work,
+but the underlying leak blocks the tag.
+
+**Unblock plan** (task #46): parser-side `dep` declaration for
+JsonValue accessor methods (`field`, `item`, `kind`, `keys`,
+`fields`, `as_*`) so they are correctly typed as borrowing into
+self's arena.  Once accessors carry `dep=[0]`, extend scope
+analysis's `inline_struct_return` to lift `Type::Enum + native +
+code_null + dep.is_empty()` (the constructors with no self).
+Un-ignore the 34 baselined tests, verify the zero-leak gate
+passes in debug, then re-attempt the tag.
+
 Severity legend:
 - **H** — hard block.  Release cannot ship.
 - **M** — block unless the exact scenario is documented and the
