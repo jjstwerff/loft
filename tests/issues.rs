@@ -5491,7 +5491,6 @@ fn q1_json_errors_includes_line_and_byte() {
 // Documented in LOFT.md § String literals as a caveat and in
 // QUALITY.md § B7.  Goes green when B7 lands.
 #[test]
-#[ignore = "B7 family — text-return of `\"{c}\"` (character interpolation) SIGSEGVs"]
 fn b7_character_interpolation_return_crashes() {
     code!(
         "fn build_b7c() -> text {

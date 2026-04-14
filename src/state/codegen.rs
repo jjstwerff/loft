@@ -1381,11 +1381,23 @@ impl State {
         };
         let lib_nr = self.library_names.get(lib_lookup).copied();
         if stack.data.def(op).is_operator() {
+            // B7: OpAppendCharacter on a RefVar(Text) target must use
+            // OpAppendStackCharacter — same pattern as OpAppendText →
+            // OpAppendStackText in set_var.  Without this, the append
+            // writes to the raw RefVar slot instead of dereferencing it.
+            let actual_op = if name == "OpAppendCharacter"
+                && let Some(Value::Var(v)) = parameters.first()
+                && matches!(stack.function.tp(*v), Type::RefVar(_))
+            {
+                stack.data.def_nr("OpAppendStackCharacter")
+            } else {
+                op
+            };
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
-            self.code_add(stack.data.def(op).op_code as u8);
-            stack.operator(op);
+            self.code_add(stack.data.def(actual_op).op_code as u8);
+            stack.operator(actual_op);
             if was_stack != u16::MAX {
                 stack.position = was_stack;
             }

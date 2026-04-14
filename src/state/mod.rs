@@ -1882,6 +1882,17 @@ impl State {
     ) -> Result<(), Error> {
         debug::execute_log_impl(self, log, name, config, data)
     }
+
+    /// Dump IR / bytecode / variables without executing.
+    /// Respects the `LogConfig` phases (ir, bytecode, variables).
+    pub fn dump_bytecode(
+        &mut self,
+        log: &mut dyn Write,
+        config: &LogConfig,
+        data: &mut Data,
+    ) -> Result<(), Error> {
+        crate::compile::show_code(log, self, data, config)
+    }
 }
 
 #[inline]
