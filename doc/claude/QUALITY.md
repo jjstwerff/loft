@@ -23,13 +23,13 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Active sprint** — see § P54 below |
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Step 4 COMPLETE 2026-04-14** (arena materialiser shipped in 4 slices: empty containers, non-empty primitive arrays, non-empty primitive objects, nested containers).  `json_parse` now returns fully-materialised JsonValue trees.  Steps 5-8 remain (`Type::parse(JsonValue)` codegen, `.parse(text)` rejection, unignore acceptance tests, docs).  See § P54 below |
 | Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Parser side shipped** — RFC 6901 path + line:column + context snippet now in `json_errors()`.  Schema-side reuse (P54 step 5) still pending |
-| Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Designed, not landed** — see § Q2 below |
-| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **Designed, not landed** — see § Q3 below |
-| Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | Medium | **Designed, not landed** — see § Q4 below |
+| Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
+| Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14**: `to_json` + `to_json_pretty` ship for primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
+| Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | — | **Q4 COMPLETE 2026-04-14**: all six constructors ship with real behaviour.  `json_null` / `json_bool` / `json_number` / `json_string` wire the primitives directly; `json_array` / `json_object` deep-copy caller-supplied items/fields into a fresh arena via a shared `dbref_to_parsed` + `materialise_primitive_into` helper, handling nested containers.  See § Q4 below |
 | C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
-| B5 | Recursive struct-enum — `vector<Tree>` field allocates with `db_tp=u16::MAX` | Medium | Compiler — **further-narrowed 2026-04-13** (post-B7 fix): interpreter-only.  Inside `n_count`, an `OpDatabase(var=12, db_tp=0xFFFF)` fires.  Trace shows `var_t: Tree` parameter is fine; the failing op is for an internal slot allocated for the iteration — likely the for-loop's `__vector_N` work-ref or `kids` binding.  Native-codegen schema does NOT register `main_vector<Tree>` (it isn't in the structures list), so when `gen_set_first_vector_null` looks up `name_type("main_vector<Tree>")`, it returns `u16::MAX` — emitted into bytecode and causes the runtime panic.  **Fix path:** ensure `main_vector<Tree>` (and main_vector for any struct-enum element type) is registered during `fill_database` of the parent struct/enum that contains it, OR detect the missing registration in `gen_set_first_vector_null` and either auto-register or emit a parser-level diagnostic.  The non-recursive case `vector<JV>` works because the field is inside a struct (Box.items) where field-type resolution uses a different path that doesn't need `main_vector<JV>` |
+| B5 | Recursive struct-enum — recursive tail call returns to wrong PC | Medium | Compiler — **two layers shipped 2026-04-14, third layer open.**  Layer 1 (type registration, `src/typedef.rs::fill_all`): walks every struct/enum-variant attribute and calls `data.vector_def(...)` for every `vector<T>` content type before the `fill_database` loop, so `main_vector<Tree>` gets a real `known_type` and `OpDatabase(db_tp=…)` no longer receives `u16::MAX`.  Closes the original "Incomplete record" panic.  Layer 2 (match-arm bindings, `src/parser/control.rs:1103`): `create_unique` for `mv_<field>` now sets `skip_free` on the binding variable — the binding is a borrowed view into the subject's record, not an owned store, so the exit-time OpFreeRef would decrement a store the binding doesn't own (worse, the not-taken arm's slot is never assigned and the free reads garbage bytes as a DbRef, observed as out-of-bounds store_nr ≈ 4621).  Closes the garbage-FreeRef crash.  Positive guards: `p54_b5_recursive_struct_enum_construction` (construct + match + `kids.len()`); `p54_b5_not_taken_arm_with_vector_binding_ok` (layer 2 in isolation — not-taken arm with vector-bound field); `p54_b5_for_loop_over_enum_variant_vector` (layers 1+2 combined via match-arm for-loop over `vector<Tree>`, nested match per element, no recursion).  **Remaining (still-ignored) layer 3:** the recursive path — `count(Node{kids:[Leaf,...]})` → inside match's Node arm → `count(k)` for each leaf → inner `count(Leaf{...})` returns 3 — the inner `OpReturn` jumps to a bogus PC (OpCastIntFromText on a null text, then random ops).  Symptom matches B3-family (struct-enum tail-expression return).  Recursive `count` isn't a tail-expr case directly, but the call-stack may be mis-computed.  Regression guard: `p54_b5_recursive_struct_enum` stays `#[ignore]` with a narrower reason. |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
@@ -92,34 +92,226 @@ match json_parse(raw) {
 }
 ```
 
-### Status (2026-04-13)
+### Status (2026-04-14)
 
 | Layer | State |
 |---|---|
 | Stdlib enum + surface signatures | **Shipped** (`default/06_json.loft`) |
 | Rust JSON parser (`src/json.rs`) | **Shipped** — full RFC 8259, 9 unit tests |
-| `n_json_parse` for primitives (null/bool/number/string) | **Shipped** |
+| `n_json_parse` (all variants — primitives + arrays + objects + nested) | **Shipped** — step 4 complete |
 | `n_json_errors` | **Shipped** |
-| `n_as_text`, `n_as_number`, `n_as_long`, `n_as_bool`, `n_field`, `n_item`, `n_len` | **Shipped** — primitives real, indexers stubbed (return JNull) |
-| Acceptance tests | **26 green, 13 ignored** in `tests/issues.rs::p54_*` |
+| `n_as_text`, `n_as_number`, `n_as_long`, `n_as_bool` | **Shipped** |
+| `n_field` (JObject lookup), `n_item` (JArray index), `n_len` | **Shipped** — real arena reads, not stubs |
+| `n_kind`, `n_has_field`, `n_to_json`, `n_to_json_pretty` | **Shipped** (Q2 / Q3) |
+| `n_json_null`, `n_json_bool`, `n_json_number`, `n_json_string` | **Shipped** (Q4 primitives) |
+| `n_keys`, `n_fields` (Q2 vector-returning) | **Pending** (need vector-build-from-native pattern) |
+| `n_json_array`, `n_json_object` (Q4 containers) | **Shipped** (full deep-copy via `dbref_to_parsed`) |
+| `T.parse(JsonValue)` codegen (step 5) | **Pending** |
+| `T.to_json()` codegen (Q3 struct serialiser) | **Pending** (mirror of step 5) |
+| Acceptance tests | **39+ green, 6 ignored** in `tests/issues.rs::p54_*` |
 
 ### Remaining steps
 
-**Step 4 (arena materialisation).**  Make `JArray` / `JObject` real.
+**Step 4 (arena materialisation) — COMPLETE 2026-04-14 (four slices in one day).**
+
+**First slice — empty containers.**  `[]` and `{}` now materialise
+as real `JArray` / `JObject` variants rather than the earlier
+`JNull`-stub, because they have no children and so don't need the
+arena allocator.  Specifically:
+
+- `src/native.rs::n_json_parse` — new branches for
+  `Parsed::Array(v) if v.is_empty()` and
+  `Parsed::Object(v) if v.is_empty()` that set the correct
+  discriminant byte + clear diagnostics.  Non-empty containers
+  still fall through to the JNull stub with the "materialisation
+  pending" diagnostic.
+- `src/native.rs::n_len` — returns 0 for `JV_DISCR_ARRAY` /
+  `JV_DISCR_OBJECT` (today every container is empty; when the
+  full arena ships this path reads the arena vector length).
+- `src/native.rs::json_to_text` (shared by `to_json` + pretty) —
+  renders `"[]"` / `"{}"` for container discriminants.
+- Regression guards in `tests/issues.rs` (12 total):
+  - **Per-surface**: `p54_step4_empty_{array,object}_has_{jarray,jobject}_kind`,
+    `…_len_is_zero`, `…_to_json`,
+    `p54_step4_empty_array_round_trips_through_to_json`
+    (parse→serialise→parse agrees on the empty-array
+    discriminant), `p54_step4_nonempty_array_still_stubs_as_jnull`
+    (prevents accidental partial impl that would claim wrong
+    length).
+  - **Cross-integration** (added 2026-04-14): locks the
+    interactions between step 4's materialisation and the Q2
+    (`has_field`) / Q3 (`to_json_pretty`) / existing (`field` /
+    `item`) surfaces so a future refactor can't silently break
+    the chain while keeping individual per-surface tests green:
+    `p54_step4_empty_object_has_no_field`,
+    `p54_step4_empty_{object_field,array_item}_lookup_returns_jnull`,
+    `p54_step4_empty_{array,object}_pretty_matches_canonical`.
+
+**Second slice — non-empty primitive arrays.**  Arrays whose
+elements are all primitive variants (JNull / JBool / JNumber /
+JString — no nested containers) now materialise as real JArray
+with elements stored in an arena sub-record inside the root's
+store.  The sub-record is allocated via `vector_append` (shared
+with the rest of the stdlib's vector plumbing), so the entire
+tree lives in one store and frees as one unit.
+
+* `src/native.rs::n_json_parse` — new guarded branch for
+  `Parsed::Array(v) if v.iter().all(matches!(Null|Bool|Number|Str))`;
+  pre-initialises the JArray items field, calls
+  `vector_append` per element, delegates to the helper
+  `materialise_primitive_into(stores, slot, child)` for the
+  discriminant + payload write.
+* `src/native.rs::n_len` — JArray arm now reads the arena
+  vector's length word at offset 4 (empty arrays still return
+  0 via the `items_rec <= 0` guard).
+* `src/native.rs::n_item` — full implementation: dispatches on
+  JArray discriminant, walks to the i-th slot via
+  `8 + i * sizeof(JsonValue)`, returns a borrowed DbRef into the
+  parent's store.  Out-of-range indices / non-JArray receivers
+  return a fresh JNull.
+* `src/native.rs::json_to_text` — JArray recursive rendering:
+  walks each arena slot and recurses via `json_to_text` so
+  mixed-primitive arrays serialise correctly.  Empty arrays
+  still render `"[]"` via the same branch.
+* `materialise_primitive_into` helper — one-line-per-variant
+  dispatch that writes discriminant + payload into a
+  pre-allocated JsonValue slot.  Shared by the
+  vector-append path today; nested-container handler (later
+  slice) will call it for leaf rewrites.
+* Closed one ignored test: **`p54_parse_array_item_access`**
+  (was `#[ignore]` "P54 step 4: parse_array + item() indexed
+  access") is now green.  Baseline drops from 8 → 7.
+* Regression guards in `tests/issues.rs` (9 new):
+  `p54_step4_nonempty_primitive_array_has_jarray_kind`,
+  `…_length_correct`, `…_item_0_is_first`,
+  `…_item_1_is_middle`, `…_item_out_of_range_returns_jnull`,
+  `p54_step4_nonempty_bool_array_item_kind`,
+  `p54_step4_nonempty_string_array_item_value`,
+  `p54_step4_nonempty_array_to_json_round_trips`,
+  `p54_step4_nonempty_array_to_json_text_shape` (e.g.
+  `json_parse("[1,2,3]").to_json()` = `"[1,2,3]"`).
+* Negative guard retained:
+  `p54_step4_nested_array_still_stubs_as_jnull` — arrays
+  containing other arrays (`[[1,2],[3,4]]`) still hit the
+  stub; the nested-container materialiser is a later slice.
+
+**Third slice — non-empty primitive objects.**  Objects of the
+shape `{"k1": v1, "k2": v2, ...}` where every value is a
+primitive (no nested containers) now materialise as real
+JObject variants with `JsonField { name, value }` entries
+stored in an arena sub-record.  Same arena pattern as the
+JArray slice, plus a per-element name-text write.
+
+* `src/native.rs::n_json_parse` — new guarded branch for
+  `Parsed::Object(v) if v.iter().all(|(_, p)| primitive)`;
+  allocates the fields-vector sub-record via `vector_append`,
+  writes the name text via `set_str`, then delegates to
+  `materialise_primitive_into` for the nested JsonValue slot.
+* `src/native.rs::n_len` — JObject arm now reads the arena
+  vector's length at offset 4.
+* `src/native.rs::n_field` — full implementation: dispatches
+  on JObject discriminant, linear-scans the JsonField vector
+  comparing each name to the query, returns a borrowed DbRef
+  into the matched slot's `value` field (or fresh JNull on miss).
+* `src/native.rs::n_has_field` — real implementation: same
+  linear scan, returns boolean instead of a DbRef.  No longer
+  a forward-compatible stub.
+* `src/native.rs::json_to_text` — JObject arm recurses into
+  each JsonField slot, writes `"<name>":<value>` pairs with
+  the same escape rules as JString keys.
+* Closed one ignored test: **`p54_parse_object_field_access`**
+  (was `#[ignore]` "P54 step 4: parse_object + field() chained
+  access") is now green.  Baseline drops from 7 → 6.
+* Regression guards (`tests/issues.rs`, 9 new):
+  `p54_step4_nonempty_primitive_object_has_jobject_kind`,
+  `…_length_correct`, `p54_step4_nonempty_object_field_{hit,miss}_...`,
+  `p54_step4_nonempty_object_has_field_{hit,miss}`,
+  `p54_step4_nonempty_object_to_json_text_shape`,
+  `p54_step4_nonempty_object_to_json_round_trips`,
+  `p54_step4_nonempty_object_mixed_primitive_values`.
+
+**Fourth slice — nested containers.**  Arrays-of-arrays,
+objects-of-objects, and arbitrary-depth mixes all materialise
+now.  `materialise_primitive_into` (despite its now-anachronistic
+name) was extended with `Parsed::Array` and `Parsed::Object`
+recursive arms.  Each nested container's items / fields vector
+is allocated via `vector_append` in the **slot's own store**, so
+the entire tree shares the root JsonValue's store and frees
+together (File-pattern arena).  `n_json_parse`'s previous
+all-primitive-only guards on the array / object branches were
+dropped — both now unconditionally call into the recursive
+helper.  The earlier "materialisation pending" stub branch was
+deleted (no longer reachable).
+
+* Sites: `src/native.rs::materialise_primitive_into` — added
+  Array + Object arms; `src/native.rs::n_json_parse` — removed
+  primitive-only `where v.iter().all(...)` clauses, removed
+  fallback stub branch.  Simpler control flow.
+* Negative-stub regression `p54_step4_nested_array_still_stubs_as_jnull`
+  REPLACED with positive `p54_step4_nested_array_materialises`.
+* Regression guards (`tests/issues.rs`, 9 new):
+  `p54_step4_nested_array_outer_length`, `…_inner_length`,
+  `…_inner_item_value` (3-deep navigation),
+  `p54_step4_nested_object_chained_field` (chained `.field()`),
+  `p54_step4_array_of_objects_field_lookup` (mixed: outer
+  array, inner object),
+  `p54_step4_object_with_array_field` (mixed: outer object,
+  inner array — locks both directions of recursion),
+  `p54_step4_nested_array_to_json_text_shape` (`[[1,2],[3,4]]`
+  serialises canonically),
+  `p54_step4_object_with_array_to_json_text_shape`
+  (`{"k":[1,2]}` serialises canonically).
+
+**Step 4 status:** **COMPLETE.**  Every JSON document `json_parse`
+now produces a fully materialised JsonValue tree.  The arena
+contract holds: one root store per parse, all sub-records frees
+together when the root DbRef leaves scope.  Q2 `keys` / `fields`,
+Q3 nested-container serialisation, and Q4 container constructors
+remain — but they now sit on a working arena, not a stub.
 The recursive enum form `JArray { items: vector<JsonValue> }` trips
 B5.  Workaround: arena indirection — children are stored in a per-parse
 allocation and referenced by integer index (`items_id`, `fields_id`).
 The arena is allocated in the **same store** as the root JsonValue so
 the entire tree frees as one unit when the root DbRef goes out of
-scope (the `File` pattern, not `stores.database()`).  Critical files:
-`src/native.rs::n_json_parse` (extend with `write_value_tree` walking
-the `Parsed` tree from `src/json.rs`); `src/native.rs::n_field` /
-`n_item` / `n_len` (real implementations dispatching on discriminant).
+scope (the `File` pattern, not `stores.database()`).
+
+**Current state (2026-04-14 explore walk).**
+* `src/native.rs:1316-1323` — `jv_alloc` allocator stub: calls
+  `stores.database(words.max(2))` and claims a fresh single-record
+  store per JsonValue.  This is the file-pattern bottleneck —
+  nested children want to share the root's store, not each get
+  their own.
+* `src/native.rs:1325-1392` — `n_json_parse` materialises
+  primitives (JNull / JBool / JNumber / JString) via discriminant +
+  variant-field writes.  Arrays and objects hit the
+  "materialisation pending (P54 step 4)" diagnostic at line 1379.
+* `src/native.rs:1401-1453` — `n_as_text` / `n_as_number` /
+  `n_as_long` / `n_as_bool` extractors are **real** (not stubs).
+* `src/native.rs:1461-1488` — `n_field`, `n_item`, `n_len` return
+  JNull / `i32::MIN` stubs.
+
+**Step 4 change set.**
+1. Extend `jv_alloc` (`src/native.rs:1316-1323`) to accept an
+   optional parent store so nested allocations land in the root's
+   store.  New signature: `jv_alloc_arena(stores, root, words,
+   children_count) -> DbRef`.
+2. Extend `n_json_parse` (`src/native.rs:1325-1392`) to walk
+   `Parsed::Array` / `Parsed::Object` recursively — materialise
+   each child via `jv_alloc_arena(root, …)`, write the arena
+   record index as `items_id` / `fields_id` on the variant payload.
+3. Replace the three dispatch stubs at `src/native.rs:1461-1488`
+   with real implementations: read the discriminant byte, dispatch
+   on JArray/JObject, fetch the arena record, index or search by
+   name, return `JNull` on absent / OOB.
 
 **Step 5 (`Type::parse(JsonValue)` codegen).**  Per-struct unwrap that
 walks the schema, calls `n_field` for each declared field, converts
 via the `n_as_*` extractors, stores into the destination.  Site:
-`src/parser/objects.rs:527` (`parse_type_parse`).
+`src/parser/objects.rs:568-584` (`parse_type_parse`).  Today that
+function is text-only — argument coerced to text, emitted as
+`OpCastVectorFromText`.  Step 5 adds a JsonValue-unwrap path branch
+before the text branch; step 6 rejects plain text for struct
+targets at the same site.
 
 **Field-type matrix** (explicit policy — the P54 bite was silent
 field-level zeroing; this spells out the replacement):
@@ -505,7 +697,7 @@ and try `field()` on each" — which isn't free-form at all.
 /// Returns the variant name as text: "JNull", "JBool",
 /// "JNumber", "JString", "JArray", "JObject".  Cheap — reads the
 /// discriminant byte, formats a literal.
-pub fn kind(self: JsonValue) -> text;
+pub fn kind(self: JsonValue) -> text;            // ★ LANDED 2026-04-14
 
 /// JObject: returns the vector of declared field names in
 /// insertion order.  Any other variant: empty vector.
@@ -526,11 +718,91 @@ this promotes it to the public surface.
 
 ### Implementation
 
-- `n_kind` — 10 lines; reads the discriminant, writes a static
-  string literal via `stores.scratch`.
-- `n_keys` / `n_fields` / `n_has_field` — dispatch on
-  discriminant, read the arena's object record, walk its
-  `JsonField` vector.  Same arena machinery P54 step 4 builds.
+- `n_kind` — **LANDED 2026-04-14 in `src/native.rs`**.  Reads the
+  discriminant byte at offset 0, returns one of six variant
+  names via `stores.scratch` + `Str::new`.  Unknown bytes map
+  to `"JUnknown"` defensively.  Registered as both free (`n_kind`)
+  and method alias (`t_9JsonValue_kind`).  Guard tests in
+  `tests/issues.rs`: `q2_kind_of_jnull_free_form` and
+  `q2_kind_of_jnull_method_form` (dispatch), plus one per
+  primitive variant (`jbool`, `jnumber`, `jstring`), and
+  `q2_kind_of_parsed_primitive` locking the discriminant agreement
+  between `n_json_parse` and `n_kind`.
+
+  **B7 note:** this is the first Q2 method that dispatches on a
+  `JsonValue` local — shipping it exercised the method-call
+  surface that B7 was originally supposed to block.  The method
+  form works ok today (`v.kind()`) in both debug and release,
+  suggesting that some combination of the B2-runtime retrofit,
+  the B5 layer-1/2 fixes, and the `t_9JsonValue_*` method-alias
+  registration for the older `n_as_*` / `n_field` / `n_item` /
+  `n_len` natives has narrowed B7's actual scope to just the
+  character-interpolation text-return path
+  (`b7_character_interpolation_return_crashes`, still `#[ignore]`).
+  See § Compiler blockers — B7 for the narrowed symptom.
+
+- **`n_keys` — JObject walk LANDED 2026-04-14.**  Returns an
+  empty `vector<text>` for non-JObject variants; for JObject,
+  walks the fields vector and copies each name into the result
+  vector store.  Establishes the vector-from-native pattern for
+  text elements: `database(text_size)` claims the handle store
+  with the right per-element size; `vector_append` claims the
+  inner vector record on first call; `set_str` allocates a
+  string sub-record for each name and the new record-nr is
+  written into the slot.  Insertion order preserved (linear
+  walk).  Registered as both `n_keys` (free) and
+  `t_9JsonValue_keys` (method alias).  Regression guards:
+  `q2_keys_on_jnull_is_empty`, `…jbool…`,
+  `q2_keys_on_jobject_returns_field_names_length`,
+  `q2_keys_on_jobject_returns_multiple_field_names_length`,
+  `q2_keys_on_jobject_preserves_first_name`,
+  `q2_keys_on_jobject_collects_all_names`,
+  `q2_keys_for_loop_is_safe`.
+- **`n_fields` — JObject walk LANDED 2026-04-14 (full deep-copy
+  2026-04-14 PM).**  Mirrors `n_keys`'s walk pattern; each result
+  element is a `JsonField` struct.  Names copy verbatim.
+  **All value kinds deep-copy** via a shared
+  `dbref_to_parsed(stores, src) -> crate::json::Parsed` helper
+  that walks the source arena recursively, plus the existing
+  `materialise_primitive_into` writer on the result side —
+  primitives (JNull / JBool / JNumber / JString) and containers
+  (JArray / JObject with arbitrary nesting) all round-trip.
+  Regression guards: `q2_fields_on_jnull_is_empty`,
+  `q2_fields_on_jstring_is_empty`,
+  `q2_fields_on_jobject_returns_field_entries_length`,
+  `q2_fields_on_jobject_collects_multiple_entries`,
+  `q2_fields_collects_all_names`,
+  `q2_fields_preserves_primitive_number_values`,
+  `q2_fields_preserves_container_values_array`,
+  `q2_fields_preserves_container_values_object`,
+  `q2_fields_for_loop_is_safe`.
+
+  **Q2 cross-integration:**
+  `q2_full_surface_smoke_on_jobject` exercises kind + has_field
+  + keys + fields on the same JObject value and sums to 4 — every
+  helper now returns its real JObject answer.
+
+- **`n_has_field` — LANDED 2026-04-14 (stub 2026-04-14 AM,
+  real impl 2026-04-14 PM with P54 step 4 third slice).**
+  First shipped as a forward-compatible stub returning `false`
+  unconditionally (JObject couldn't be constructed at that
+  point).  After the step 4 third slice materialised primitive
+  JObjects, rewritten to do a real linear scan: dispatches on
+  JObject discriminant, walks the JsonField vector, compares
+  each name to the query, returns true on first match.
+  Primitive variants still return false through the short-
+  circuit path.  Registered as both `n_has_field` (free) and
+  `t_9JsonValue_has_field` (method alias).  Regression guards:
+  - Primitives return false:
+    `q2_has_field_on_jnull_is_false`, `…jbool…`, `…jnumber…`,
+    `…jstring…`.
+  - Dispatch paths:
+    `q2_has_field_free_form_on_parsed_primitive`
+    (free-dispatch + method-alias lock),
+    `q2_has_field_gates_conditional_safely` (control-flow
+    pattern).
+  - JObject positive + negative (step 4 third slice):
+    `p54_step4_nonempty_object_has_field_{hit,miss}`.
 
 ### Iteration example
 
@@ -576,7 +848,7 @@ serialise → compare) is impossible.
 /// Serialise a JsonValue tree to canonical JSON text.
 /// Object keys emitted in insertion order; no extraneous
 /// whitespace; numbers formatted per RFC 8259.
-pub fn to_json(self: JsonValue) -> text;
+pub fn to_json(self: JsonValue) -> text;          // ★ primitives LANDED 2026-04-14
 
 /// Pretty-printed variant — 2-space indent, one element per line
 /// for arrays/objects with >1 element.  Useful for logs and
@@ -591,6 +863,56 @@ pub fn to_json_pretty(self: JsonValue) -> text;
 pub fn to_json(self: T) -> text;                  // one per type; codegen-generated
 pub fn to_json_pretty(self: T) -> text;
 ```
+
+**Primitive slice — 2026-04-14.**  Both `to_json(self: JsonValue)`
+and `to_json_pretty(self: JsonValue)` landed for the four
+primitive variants.  Implementation: `src/native.rs` factors the
+core rendering into a shared helper `json_to_text(stores, v,
+pretty: bool)` — today `pretty` is captured but unused because
+primitives produce byte-identical output in both forms (no
+nested structure to indent).  When P54 step 4's arena
+materialiser lands, the container arms (`JArray` / `JObject`)
+will branch on `pretty` for 2-space indent + one-element-per-line
+layout at the same call site.  `n_to_json` and
+`n_to_json_pretty` are registered as both free and
+method-alias forms so callers can use either syntax.
+
+The canonical path dispatches on the discriminant byte, writes
+`"null"` / `"true"` / `"false"` for `JNull` / `JBool`, uses
+Rust's `f64::Display` shortest-round-trip for `JNumber`, and
+applies the canonical escape set (`"` / `\\` / `\n` / `\r` /
+`\t` / `\b` / `\f`, plus `\uXXXX` for other control bytes) to
+`JString`.  Non-finite numbers serialise as `null` (RFC 8259
+constraint).
+
+Regression guards in `tests/issues.rs` (13 total):
+- `to_json` (canonical): `q3_to_json_of_jnull`,
+  `q3_to_json_of_jbool_true/false`,
+  `q3_to_json_of_jnumber_integer/fractional`,
+  `q3_to_json_of_nan_becomes_null` (non-finite → `"null"`),
+  `q3_to_json_of_jstring_plain` (`"hello"` round-trip).
+- `to_json_pretty` (byte-identical to canonical for primitives):
+  `q3_to_json_pretty_of_jnull/jbool/jnumber/jstring`,
+  `q3_to_json_pretty_free_form` (free-fn dispatch + method-alias
+  registration), and `q3_to_json_and_pretty_agree_on_primitive`
+  — directly asserts `to_json(v) == to_json_pretty(v)` so a
+  future divergence on primitives is caught at the call site.
+
+**Container slice (JArray / JObject)** — the `n_to_json` stub
+currently returns the placeholder `"<pending step 4>"` for
+containers rather than panicking, so mixed-tree calls don't
+crash during the P54 sprint.  The full recursive formatter
+lands with P54 step 4's arena walk — the algorithm is the
+same primitive dispatch recursed, sharing the escape logic.
+
+**Deferred — escape-sequence regressions in `code!()` tests.**
+Two additional guards for `"a\"b\\c"` and `"a\nb"` round-trips
+were attempted but the first hung the test harness (loft
+parser's interpretation of double-escaped strings fed through
+Rust's `code!()` macro needs isolated investigation; the
+Rust-side escape logic in `n_to_json` is exercised by unit
+inspection).  Move escape-sequence repros to standalone
+`.loft` files for debugging before re-adding the tests.
 
 ### Field-type matrix for struct → JSON
 
@@ -673,12 +995,12 @@ multi-session compiler surgery.
 ### Surface — helper constructors (bypass B2-runtime)
 
 ```loft
-pub fn json_null() -> JsonValue;
-pub fn json_bool(v: boolean) -> JsonValue;
-pub fn json_number(v: float not null) -> JsonValue;
-pub fn json_string(v: text) -> JsonValue;
-pub fn json_array(items: vector<JsonValue>) -> JsonValue;
-pub fn json_object(fields: vector<JsonField>) -> JsonValue;
+pub fn json_null() -> JsonValue;            // ★ LANDED 2026-04-14
+pub fn json_bool(v: boolean) -> JsonValue;  // ★ LANDED 2026-04-14
+pub fn json_number(v: float) -> JsonValue;  // ★ LANDED 2026-04-14
+pub fn json_string(v: text) -> JsonValue;   // ★ LANDED 2026-04-14
+pub fn json_array(items: vector<JsonValue>) -> JsonValue;   // blocked on step 4
+pub fn json_object(fields: vector<JsonField>) -> JsonValue; // blocked on step 4
 ```
 
 Plus a struct-literal shortcut for JsonField:
@@ -691,6 +1013,82 @@ These are **native** functions that allocate arena records
 directly — the same path `n_json_parse` uses internally.  They
 sidestep B2-runtime because the variant is constructed in Rust,
 not via loft's struct-enum literal syntax.
+
+**Primitive slice — 2026-04-14 (four of six shipped).**
+`json_null`, `json_bool`, `json_number`, and `json_string` all
+landed.  `src/native.rs` grows four `n_json_*` fns, each using
+the existing `jv_alloc` helper and the same
+discriminant-byte + payload-field layout `n_json_parse` already
+writes for parsed primitives.  Registered in `NATIVE_FNS`;
+declarations added to `default/06_json.loft` under the
+extractors.  `json_number` rejects non-finite inputs (NaN /
+±Inf) by storing `JNull` + appending a diagnostic to
+`json_errors()`, matching the RFC 8259 constraint.
+`json_string` copies the text into the JsonValue's own store so
+the returned value lifetime-extends its payload.
+
+Regression guards (`tests/issues.rs`, 9 total):
+- `q4_json_null_returns_jnull_variant`
+- `q4_two_json_nulls_via_match_works`
+- `q4_json_bool_round_trips_true`
+- `q4_json_bool_round_trips_false`
+- `q4_json_number_round_trips_finite`
+- `q4_json_number_negative_finite`
+- `q4_json_number_nan_becomes_jnull`
+- `q4_json_string_round_trips`
+- `q4_json_string_empty`
+
+All guards use pattern-match destructuring for the variant
+payload — not method calls — so they ride on the working path
+guarded by `b7_multiple_json_parse_via_match_works`, avoiding
+the still-open B7 method-surface bug.  The string tests
+specifically measure `value.len()` inside the match arm rather
+than returning the bound `value: text` (the text-escape path
+trips the same native-returned-text lifecycle issue as
+`b7_character_interpolation_return_crashes`).
+
+**Container slice (empty input) — 2026-04-14.**
+`json_array(items)` / `json_object(fields)` shipped with
+empty-input support today.  Implementation: read the input
+vector's DbRef from the stack, query its length via
+`vector::length_vector`; if 0, build the empty-container
+variant via the same path `json_parse("[]")` /
+`json_parse("{{}}")` use.  For non-empty input, the
+constructors deep-copy each element / field into the new
+arena via a shared `dbref_to_parsed(stores, src) -> Parsed`
+helper that walks the source JsonValue tree recursively,
+and the existing `materialise_primitive_into` writer
+materialises each Parsed sub-tree into the destination
+root's store.  Nested containers round-trip
+(`json_array([json_array([…])])`, objects inside arrays,
+arrays inside objects).
+
+* Sites: `src/native.rs::n_json_array`, `n_json_object` —
+  each ~30 lines, mirror shape.  Registered as both free
+  fns (`n_*`).  Method aliases not added because these are
+  free constructors, not methods on a receiver.
+* Shared helper: `dbref_to_parsed` (same file) walks a
+  JsonValue DbRef tree and produces the transient
+  `crate::json::Parsed` snapshot used by the existing
+  writer.  Also used by `n_fields` to deep-copy container
+  values while walking a JObject.
+* Regression guards (`tests/issues.rs`, 13 total):
+  `q4_json_array_empty_vector_returns_jarray`,
+  `…_empty_has_zero_length`,
+  `…_empty_serialises_as_brackets`,
+  `q4_json_array_nonempty_input_returns_jarray`,
+  `q4_json_array_multi_element_round_trips`,
+  `q4_json_array_item_access_after_construction`,
+  `q4_json_array_nested_construction`,
+  `q4_json_object_empty_vector_returns_jobject`,
+  `…_empty_has_zero_length`,
+  `…_empty_serialises_as_braces`,
+  `q4_json_object_single_field_round_trips`,
+  `q4_json_object_multi_field_length`,
+  `q4_json_object_serialisation`.
+
+**Container slice (non-empty deep-copy) — LANDED
+2026-04-14.**
 
 ### Builder ergonomics
 
@@ -936,9 +1334,8 @@ independent codegen surgeries with no overlap, and B7 unblocks
 ergonomics gap; the `return n;` workaround stays good for any
 user who needs it.
 
-**B5 — Recursive struct-enum runtime crash** (re-diagnosed further
-2026-04-13).  The failure is now known to be a **test-harness divergence**,
-not a general interpreter bug.  The same loft source:
+**B5 — Recursive struct-enum runtime crash** (progress 2026-04-14:
+**two layers shipped, third open.**)  The reference loft source:
 
 ```loft
 pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -952,100 +1349,126 @@ fn run() -> integer {
     root = Node { kids: [Leaf { v: 3 }, Leaf { v: 4 }] };
     count(root)
 }
-fn main() { println("{run()}"); }
 ```
 
-* `cargo run --release --bin loft -- rec.loft` → prints `7` ✓
-* `cargo test --release --test issues p54_b5 -- --ignored` → panics
-  `assertion failed: size >= 1: "Incomplete record"` at
-  `src/store.rs:221`, under an `OpDatabase` op whose `db_tp` is `0xFFFF`.
+**Layer 1 — type registration (LANDED 2026-04-14).**  `fill_all`
+now walks every struct and enum-variant attribute for
+`Type::Vector(T)` fields and calls `data.vector_def(lexer, &T)`
+before the main `fill_database` loop.  The wrapper struct
+`main_vector<Tree>` is then registered and `fill_database` assigns
+it a real `known_type`.  Parser-path assignment sites already
+called `vector_def`; this covers the struct-enum-variant
+declaration site that nothing else hit.  Closes the original
+"Incomplete record" panic on `OpDatabase(db_tp=u16::MAX)`.
 
-Further reductions pin down the difference:
+* Site: `src/typedef.rs::fill_all` (the pre-loop scan before
+  line 215).
+* Positive guard: `p54_b5_recursive_struct_enum_construction` in
+  `tests/issues.rs`.
 
-* `build() -> Tree` alone (construct + match, no recursion) — both paths ok.
-* `count(t)` with `return match ... v, x`, called non-recursively — both ok.
-* `count(t)` recursive on `[Leaf, Leaf]` siblings — standalone ok, harness fails.
+**Layer 2 — match-arm binding lifetime (LANDED 2026-04-14).**
+`src/parser/control.rs:1103` `create_unique("mv_<field>", &field_type)`
+now calls `self.vars.set_skip_free(v_nr)` on the binding variable.
+The binding is a borrowed view (a `DbRef` field extraction from
+the subject's record) — it does not own a store.  Without
+`skip_free`, scope cleanup emitted `OpFreeRef(mv_…)` at function
+exit.  In the taken arm, that decrements a store the binding
+doesn't own.  In the **not-taken** arm, that slot was never
+assigned and the free reads garbage bytes as a DbRef — observed
+as out-of-bounds `store_nr ≈ 4621` in `Stores::free_named`.
+Closes the garbage-FreeRef crash.
 
-So the harness-only divergence lives in `tests/testing.rs`.  Candidates:
-`cached_default()` (shared state across tests — may retain stores
-populated by an earlier test); the parse path via `parse_str` vs
-`main.rs`'s primary entrypoint; the always-called `generate_code`
-native-codegen side effect on line 219.  Workaround: arena indirection
-(P54 step 0).  Test: `p54_b5_recursive_struct_enum` (`#[ignore]`).
+* Site: `src/parser/control.rs:1103-1125`.
+* Positive guards: `p54_b5_not_taken_arm_with_vector_binding_ok`,
+  `p54_b5_for_loop_over_enum_variant_vector` in `tests/issues.rs`.
 
-**Fix approach (revised 2026-04-13).**  Skip the typedef surgery the
-earlier design targeted — the live-binary path shows `fill_database` /
-`known_type` propagation is correct in the general case.  Instead:
+**Layer 3 — recursive tail-call return PC (OPEN).**  After layers
+1 and 2 land, the still-ignored test `p54_b5_recursive_struct_enum`
+now gets FURTHER through execution before crashing.  The full
+construction + match + for-loop path runs correctly until the
+inner recursive `count(k)` call returns.  At that point the
+trace shows:
 
-1. Re-run the harness with `LOFT_LOG=variables` and `LOFT_LOG=fn:count`
-   on the failing case and diff against the passing live-binary trace to
-   locate the exact op where `db_tp` diverges.
-2. If the divergence is in `cached_default()`: give each test a fresh
-   `Stores` rather than a clone of the cached one for struct-enum
-   scenarios.
-3. If it's the always-on `generate_code` call at `tests/testing.rs:219`:
-   hoist it behind the same `log_active` gate the other instrumentation
-   uses, so it doesn't mutate state before `state.execute` runs.
+```
+4506:[160] GotoWord(jump=4643)                 ← jump to match end of inner call
+4643:[160] Return(ret=9[128], value=4, discard=44) -> 3[116]  ← inner Return
+   9:[120] Goto(jump=32)                       ← PC=9 is wrong; wanders away
+  31:[120] CastIntFromText(v1=<raw:0x0>[104])  ← reads null text, wanders further
+```
 
-**Estimated scope:** one session once the divergence op is located.
+The inner Return pops `ret=9` from the stack as the return PC,
+but PC=9 is nowhere near the caller's `c += count(k)` site — it
+lands in unrelated bytecode (`OpCastIntFromText` on a null text),
+then wanders into random ops.  The return-PC slot was read from
+the wrong address.
 
-**Fix design (revised 2026-04-13 after runtime trace).**  The original
-"memoise `fill_database`" surgery appears to be in-tree already
-(compile now succeeds on the same `Tree` reproducer that tripped
-the 500-depth guard in earlier writeups).  What remains is the
-**known_type handshake** for recursively-defined cells.
-`fill_database` has branches (lines 249-253 for `Type::Vector`,
-similar for Hash/Sorted/Index/Spacial) that read
-`data.def(c_nr).known_type` and, when it's `u16::MAX`, recurse via
-`fill_database(data, database, c_nr)`.  For a self-referential
-content type (`vector<Tree>` where the cell type is Tree itself,
-still in progress), the recursion is skipped by the memoisation
-but `c_tp` stays at `u16::MAX` — and that MAX propagates into the
-enclosing def's known_type entry, then into runtime `OpDatabase`
-ops, then into `Store::claim(size=0)` → panic.
+**Candidate root cause.**  `src/state/codegen.rs::add_return`
+around line 1772-1774 emits OpReturn with `self.code_add(self.arguments)`
+— a per-function argument-frame size captured on `State`.  The
+observed `ret=9` doesn't match n_count's actual argument frame
+(1 × `const Tree` = DbRef = 12 bytes).  Either:
 
-**Fix:** when `fill_database` detects re-entry for a type already
-in progress, **don't return the unresolved `u16::MAX`** — either
-(a) return a sentinel struct type sized to fit `DbRef` (12 bytes)
-for the recursive cell, since recursive content is always
-heap-allocated through a DbRef anyway, or (b) add a second pass
-after all defs' top-level structures are allocated, which walks
-the vector/hash/etc. cells that were deferred and fills them in
-then.  Option (a) is the smaller change.
+1. **`self.arguments` is stale** at the emit site — it's a `State`
+   field reset per-function in `def_code` (`src/state/codegen.rs:57-79`)
+   but not captured into the `Stack` context, so if something
+   mutates it between function start and `add_return`, the value
+   is wrong.  Mitigation: capture into `Stack` at function entry;
+   use captured value in `add_return`.
+2. **Ret-field semantics don't match "arg size"** — it may be the
+   return-slot offset from the frame base.  Compute `ret_slot`
+   explicitly at emit time rather than piggy-backing on
+   `self.arguments`.
+3. **Runtime reader mis-reads** — if emission is correct,
+   `src/state/mod.rs:476-495` (`fn_return`) reads PC from the
+   wrong stack offset.  The fix lives there.
 
-**File:** `src/typedef.rs:209-311` (`fill_database`).
-**Estimated scope:** one session.
+**Fix path.**  Instrumentation-first: add a debug `eprintln!` in
+`add_return` logging `(fn_name, self.arguments, size_of_return,
+stack.position)`; correlate with the runtime trace's OpReturn
+fields to disambiguate the three candidates before editing.
+
+**Files:** `src/state/codegen.rs:1759-1778` (`add_return`),
+`src/state/codegen.rs:57-79` (`def_code` prologue),
+`src/state/mod.rs:268` (fn_call PC push),
+`src/state/mod.rs:476-495` (`fn_return` PC pop).
+**Estimated scope:** 1-2 sessions once the instrumentation
+disambiguates which candidate is the actual root cause.
 
 **Verification path:**
-1. With the fix applied, the recursive enum form
-   ```loft
-   pub enum JsonValue {
-       JArray  { items: vector<JsonValue> },
-       JObject { fields: vector<JsonField> },
-       ...
-   }
-   pub struct JsonField { name: text, value: JsonValue }
-   ```
-   compiles instead of tripping the 500-depth guard.
-2. `cargo test --release --test issues p54_b5_recursive_struct_enum`
-   flips from `#[ignore]` to green.
-3. Once B5 is fixed, **P54 step 4 simplifies** — the
-   arena-indirection workaround (`items_id: integer` + a separate
-   `vector<JsonValue>` arena) becomes optional rather than
-   compelled by codegen.  The arena workaround can stay for
-   performance reasons (one allocation vs. many) but the natural
-   `vector<JsonValue>` form also works.
+1. Instrumentation trace agrees with ONE of the three candidates.
+2. The emitted OpReturn's `ret` field matches `sizeof(DbRef) = 12`
+   for `const Tree`.
+3. `p54_b5_recursive_struct_enum` un-ignored; output = 7.
+4. The three positive guards (`..._construction`,
+   `..._not_taken_arm_with_vector_binding_ok`,
+   `..._for_loop_over_enum_variant_vector`) remain green.
 
-**Side-effect risk:** low.  Memoization in compile-time layout is
-a standard transform; no runtime behaviour change.  Test exposure:
-add a test compiling a self-referential enum with a non-recursive
-base case (e.g. a simple Tree<T>) to lock the memoization works
-correctly.
+**Related symptom.**  Layer 3's trace matches B3-family
+(struct-enum tail-expression return).  B3 itself shipped 2026-04-13
+as "struct-enum return types now get hidden caller pre-alloc args
+just like Reference/Vector"; layer 3 may require pairing the call-
+site pre-alloc with a recursion-aware return-slot accounting fix.
 
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
 **B7 — Native-returned temporary lifecycle (broader than initially scoped).**
+
+**Scope narrowed 2026-04-14.**  Several B7-family symptoms listed
+below were *observed* during earlier investigation but no longer
+reproduce on the current branch — presumably closed as a
+side-effect of the B2-runtime retrofit, B5 layers 1+2, and the
+`t_9JsonValue_*` method-alias registrations.  What remains is
+strictly the **character-interpolation text-return** path, guarded
+by `b7_character_interpolation_return_crashes` (`#[ignore]`).  The
+method-on-JsonValue-returning-scalar case (originally parked at
+`b7_method_on_jsonvalue_returning_integer_crashes`) now works in
+both debug and release; the regression guard was renamed 2026-04-14
+to `b7_method_on_jsonvalue_returning_integer_works` to reflect its
+current invariant (method dispatch must not crash / leak on the
+`len(v)` shape).  The historical paragraphs below describe the
+bug's reach at the time they were written — they are preserved for
+the narrowing audit trail, not as current-state claims.
 
 **Unification finding 2026-04-13.**  B7's signature — `~500 iterations of
 Return(ret=0, value=16, discard=0) at PC=0` followed by legitimate code
@@ -1159,19 +1582,37 @@ machinery must also be wrong.  Candidates to investigate next:
    free.  The original P54 design plan (Step 1) called this out
    as the B7 root cause: "allocate the arena store inside the
    caller's variable's store, not via `stores.database()`".
-2. `get_free_vars` (lines 728-779) may be emitting OpFreeRef
-   *twice* for variables that received a struct-enum from a
-   native call — one path through the Set-from-call site at
-   line 447-449 and a second through the variables-cleanup loop.
+
+2. ★ **Most likely candidate (narrowed 2026-04-14 via explore-agent
+   walk of `src/scopes.rs`):** the **Set-path at lines 447-466**
+   marks the `__ref_*` *temporary* binding `skip_free` when a
+   native returns a struct-enum, but **does not mark the
+   receiving variable `v` itself**.  Then at scope exit,
+   `get_free_vars` at line 759 evaluates
+   `emit = dep.is_empty() && !in_ret && !function.is_skip_free(v)`
+   — since `v` was never marked, the check returns true and a
+   second `OpFreeRef(v)` fires on top of the callee's internal
+   free.  **Fix:** extend the Set-path marking logic to also call
+   `self.vars.set_skip_free(v)` on the LHS receiving variable
+   when its origin is a `Type::Enum(_, true, _)` native return.
+   Mirror of the existing temporary-marking code path.
+
 3. The interpreter codegen `state/codegen.rs:1043-1050`
    (referenced in the line 445 comment as the sibling skip-free
-   logic) may need parallel treatment.
+   logic) may need parallel treatment — only if candidate 2
+   alone is insufficient.
 
 **Estimated scope (revised):** 2-3 sessions.  Not the one-line
-fix the design predicted.  The first session's job: instrument
-the run with `LOFT_LOG=full` for `b7_method_on_jsonvalue_returning_integer_crashes`
-and identify which OpFreeRef site fires twice on the JsonValue
-store.  Then fix the duplicate emission.
+fix the design predicted.  Session 1: instrument the run with
+`LOFT_LOG=full` for `b7_method_on_jsonvalue_returning_integer_crashes`
+and confirm candidate 2's double-emit hypothesis (log every
+`OpFreeRef` emission site along with the variable number).
+Session 2: ship the `set_skip_free(v)` extension + the
+single-line `inline_struct_return` fix together; re-run, confirm
+the single-store free; un-ignore the two B7 guard tests.
+Session 3: un-ignore the 5 P54 text-return-through-fn family
+tests + verify `b7_multiple_json_parse_via_match_works` stays
+green.
 
 **Verification path:**
 1. Run the currently-`#[ignore]`'d B7-family tests with `--ignored`

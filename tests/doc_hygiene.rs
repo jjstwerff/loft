@@ -237,6 +237,63 @@ fn quality_const_store_mmap_matches_const_store_md() {
     );
 }
 
+/// P54 / Q2 / Q3 / Q4 native-registration guard.  The existing
+/// `tests/issues.rs::native_rs_functions_up_to_date` only checks
+/// functions that carry a `#rust "..."` annotation in `default/`;
+/// the P54 JSON family ships pure-native declarations like
+/// `pub fn json_null() -> JsonValue;` with no `#rust` body, so
+/// their wiring through `NATIVE_FNS` has no automated guard.  A
+/// future edit that deletes an entry from `NATIVE_FNS` without
+/// removing the loft declaration would leave the declaration
+/// "declared but not implemented" — callers get a silent runtime
+/// panic rather than a compile-time error.
+///
+/// This guard enumerates every `pub fn <name>(…) -> <T>;` header
+/// in `default/06_json.loft` (body-less declarations = pure
+/// natives) and asserts `"n_<name>"` appears as a key in the
+/// `NATIVE_FNS` array in `src/native.rs`.  Covers every Q2 / Q3
+/// / Q4 helper shipped on the P54 branch.
+#[test]
+fn p54_json_natives_registered_for_every_declaration() {
+    let stdlib =
+        fs::read_to_string("default/06_json.loft").expect("cannot read default/06_json.loft");
+    let native = fs::read_to_string("src/native.rs").expect("cannot read src/native.rs");
+    let mut missing: Vec<String> = Vec::new();
+    // Walk lines; a body-less declaration is `pub fn <name>(…) -> <T>;`
+    // ending in `;`.  Declarations with `{` start a loft-side
+    // implementation (not a native), skip those.
+    for line in stdlib.lines() {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("pub fn ") else {
+            continue;
+        };
+        let Some(paren) = rest.find('(') else {
+            continue;
+        };
+        let name = &rest[..paren];
+        if name.is_empty() {
+            continue;
+        }
+        // Must end with `;` on the same line (no body).  Multi-line
+        // signatures aren't used in 06_json.loft today; if that
+        // changes, extend this to join continuations before checking.
+        if !rest.trim_end().ends_with(';') {
+            continue;
+        }
+        let needle = format!("\"n_{name}\"");
+        if !native.contains(&needle) {
+            missing.push(name.to_string());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "default/06_json.loft declares {} pure-native fn(s) without a matching NATIVE_FNS entry in src/native.rs:\n  {}\n\
+         For each missing name `foo`, add `(\"n_foo\", n_foo)` to NATIVE_FNS and implement `fn n_foo(...)`.  See QUALITY.md § P54 for the JSON native surface.",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
+
 /// QUALITY Tier 3 #9 — `wasm32-unknown-unknown` without the `wasm`
 /// host-bridge feature has no reachable filesystem.  `file().content()`
 /// and `file().exists()` must return safe defaults (empty string /

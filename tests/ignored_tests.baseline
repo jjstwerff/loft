@@ -8,9 +8,7 @@
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
 b7_character_interpolation_return_crashes	B7 family — text-return of `"{c}"` (character interpolation) SIGSEGVs
 file_content_nonexistent_trace	SIGSEGV in execute_log: File.content() on non-existent file corrupts caller's String
-p54_b5_recursive_struct_enum	P54 B5: recursive struct-enum — OpDatabase(db_tp=u16::MAX) panics in Store::claim
-p54_parse_array_item_access	P54 step 4: parse_array + item() indexed access
-p54_parse_object_field_access	P54 step 4: parse_object + field() chained access
+p54_b5_recursive_struct_enum	P54 B5 (narrower): match-arm bindings fixed; recursive count(t) returns to wrong PC — looks B3-adjacent.
 p54_struct_parse_accepts_jsonvalue	P54 step 6-7: .parse(JsonValue) accepts typed tree
 p54_struct_parse_rejects_plain_text	P54 step 6: .parse(text) rejected — must use json_parse first
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

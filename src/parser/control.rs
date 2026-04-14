@@ -1106,6 +1106,22 @@ impl Parser {
                             arm_stmts.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
+                            // B5 remaining half (2026-04-14): match-arm
+                            // bindings are field extractions from the
+                            // subject — the subject owns the store and
+                            // the binding is a borrowed view (a DbRef
+                            // pointing into the subject's record).
+                            // Emitting OpFreeRef for the binding at
+                            // function exit would decrement a store the
+                            // binding doesn't own; worse, if the arm
+                            // wasn't taken the slot is never assigned
+                            // and the free reads garbage bytes as a
+                            // DbRef (observed as out-of-bounds store_nr
+                            // ≈ 4621 in `p54_b5_recursive_struct_enum`).
+                            // Mark the binding `skip_free` so scope
+                            // cleanup leaves it alone in both the
+                            // taken and not-taken arms.
+                            self.vars.set_skip_free(v_nr);
                         }
                     }
                 }

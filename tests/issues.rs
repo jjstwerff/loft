@@ -3358,12 +3358,20 @@ fn p54_extractor_as_text_wrong_kind_returns_null() {
     .result(Value::str("is-null"));
 }
 
+// Un-ignored 2026-04-14 by P54 step 4 third slice — non-empty
+// primitive objects now materialise, n_field walks the arena
+// vector for a name match, chained `.as_text()` reads the
+// JString value out of the matched JsonField slot.
+//
+// Loft strings treat `{…}` as interpolation; the JSON `{` and
+// `}` in the literal are doubled (`{{` / `}}`) so they reach
+// `json_parse` as single braces.  Rationale in LOFT.md §
+// String literals.
 #[test]
-#[ignore = "P54 step 4: parse_object + field() chained access"]
 fn p54_parse_object_field_access() {
     code!(
         "fn run() -> text {
-    v = json_parse(\"{\\\"name\\\":\\\"Alice\\\",\\\"age\\\":30}\");
+    v = json_parse(\"{{\\\"name\\\":\\\"Alice\\\",\\\"age\\\":30}}\");
     v.field(\"name\").as_text()
 }"
     )
@@ -3371,8 +3379,10 @@ fn p54_parse_object_field_access() {
     .result(Value::str("Alice"));
 }
 
+// Un-ignored 2026-04-14 by P54 step 4 second slice — non-empty
+// primitive arrays now materialise, `n_item` dispatches on JArray,
+// and `as_long()` returns the element's numeric payload.
 #[test]
-#[ignore = "P54 step 4: parse_array + item() indexed access"]
 fn p54_parse_array_item_access() {
     code!(
         "fn run() -> long {
@@ -3558,15 +3568,24 @@ fn run() -> float {
     .result(Value::Float(42.5));
 }
 
-/// B5 (open): self-referential struct-enum (`vector<Self>` in a variant)
-/// used to trip the 500-depth `fill_database` recursion guard; after
-/// the memoisation landed, it now reaches runtime and panics in
-/// `Store::claim` under an `OpDatabase` whose `db_tp` is `u16::MAX`
-/// (recursive content cell's `known_type` never got filled in).
-/// Spec: declaration compiles, pattern match dispatches correctly.
-/// See QUALITY.md § B5 for the revised fix design.
+/// B5 (narrower-open 2026-04-14): self-referential struct-enum.
+/// Two B5 layers are now fixed:
+///   1. `fill_all` registers `main_vector<T>` wrappers for every
+///      struct/enum-variant `vector<T>` field — closes the original
+///      "Incomplete record" panic on `OpDatabase(db_tp=u16::MAX)`.
+///      Positive guard: `p54_b5_recursive_struct_enum_construction`.
+///   2. Match-arm bindings carry `skip_free` — closes the garbage
+///      `FreeRef(ref(4621,…))` on a not-taken arm's binding slot.
+///
+/// What still fails here is a **recursion / return-PC issue**: after
+/// the inner recursive `count(k)` call returns from the `Leaf` arm,
+/// control flow ends up at an unrelated bytecode PC (OpCastIntFromText
+/// on a null pointer, then wandering into random ops).  Looks more
+/// like a struct-enum-tail-return / B3-family symptom in the
+/// recursive-call path than a match lifetime one.  See QUALITY.md
+/// § B5 for the current state and where to continue.
 #[test]
-#[ignore = "P54 B5: recursive struct-enum — OpDatabase(db_tp=u16::MAX) panics in Store::claim"]
+#[ignore = "P54 B5 (narrower): match-arm bindings fixed; recursive count(t) returns to wrong PC — looks B3-adjacent."]
 fn p54_b5_recursive_struct_enum() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -3587,6 +3606,94 @@ fn run() -> integer {
     )
     .expr("run()")
     .result(Value::Int(7));
+}
+
+/// B5 match-arm-binding regression (layer 2): the not-taken arm of
+/// a match whose binding is a `vector<T>` must not crash scope
+/// cleanup.  Before the `skip_free` fix at src/parser/control.rs:1103,
+/// the match's `_mv_items_*` binding in the `Full { items }` arm
+/// was freed at function exit even when the `Empty` arm was taken,
+/// reading garbage bytes as a `DbRef` and panicking in
+/// `Stores::free_named` with an out-of-bounds `store_nr`.  Now
+/// skip_free suppresses the OpFreeRef emission, so the garbage
+/// slot stays untouched.  Guards the layer-2 half of B5 against
+/// regression independently of the recursion path still open in
+/// `p54_b5_recursive_struct_enum`.
+#[test]
+fn p54_b5_not_taken_arm_with_vector_binding_ok() {
+    code!(
+        "struct Item { v: integer }
+pub enum Wrap { Empty, Full { items: vector<Item> } }
+fn run() -> integer {
+    w = Empty;
+    match w {
+        Empty => 42,
+        Full { items } => items.len()
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(42));
+}
+
+/// B5 type-registration regression: a recursive struct-enum (`Node`
+/// variant contains `vector<Tree>`) must get its `main_vector<Tree>`
+/// wrapper registered during `fill_all`, so codegen's
+/// `name_type("main_vector<Tree>")` lookup returns a real
+/// `known_type` instead of `u16::MAX`.  Without this fix, simply
+/// constructing `Node { kids: [...] }` would panic in
+/// `Store::claim("Incomplete record")` — the scenario the original
+/// B5 ticket reported.  This narrower regression guard exercises
+/// just the construct-and-measure-len path (no match, no for-loop),
+/// isolating the half of B5 that is now fixed from the still-open
+/// match-arm-binding half tracked in `p54_b5_recursive_struct_enum`.
+#[test]
+fn p54_b5_recursive_struct_enum_construction() {
+    code!(
+        "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
+fn run() -> integer {
+    root = Node { kids: [Leaf { v: 3 }, Leaf { v: 4 }] };
+    match root {
+        Leaf { v } => v,
+        Node { kids } => kids.len()
+    }
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(2));
+}
+
+/// B5 layer 1 + 2 combined regression: iterate over a struct-enum-
+/// variant `vector<T>` binding inside a match arm.  Exercises the
+/// same code paths as `p54_b5_recursive_struct_enum` (the still-
+/// ignored recursive one) up to but not including the recursive
+/// inner call — so if the recursion layer lands later, a regression
+/// on type registration OR binding skip_free gets caught here even
+/// when the recursive path is green.  Asserts the for-loop sees
+/// each element with its correct `Leaf.v` payload.
+#[test]
+fn p54_b5_for_loop_over_enum_variant_vector() {
+    code!(
+        "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
+fn run() -> integer {
+    root = Node { kids: [Leaf { v: 3 }, Leaf { v: 4 }, Leaf { v: 5 }] };
+    sum = 0;
+    match root {
+        Leaf { v } => sum += v,
+        Node { kids } => {
+            for k in kids {
+                match k {
+                    Leaf { v } => sum += v,
+                    Node { kids } => sum += kids.len()
+                }
+            }
+        }
+    }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(12));
 }
 
 /// P54 related — positive baseline for struct-enum parameter passing.
@@ -4728,29 +4835,26 @@ fn run_enum() -> integer {
     .result(Value::Int(4)); // plain-enum integer values are 1-indexed
 }
 
-// ── B7 family — ANY method call on a JsonValue local crashes ──────────
+// ── B7 family — method call on a JsonValue returning a scalar ────────
 //
-// Investigation while attempting to ship Q2 (kind/keys/fields/has_field)
-// uncovered a wider B7 blast radius than previously documented:
-// a method call on a JsonValue that *just returns an integer*
-// (no text, no struct-enum) crashes with double-free at exit
-// even when its body only reads the discriminant byte and never
-// touches the store contents.
+// Historical note (renamed 2026-04-14): this test was originally
+// added as `b7_method_on_jsonvalue_returning_integer_crashes` —
+// a regression marker for the period when every method call on a
+// JsonValue local (even one returning a scalar like `len(v)`)
+// double-freed the JsonValue store at scope exit.  The crash was
+// resolved as a side-effect of later B-family landings (B2-runtime
+// retrofit, B5 layers 1+2, the `t_9JsonValue_*` method-alias
+// registrations for `n_as_*` / `n_field` / `n_item` / `n_len`).
 //
-// 2026-04-13: a single-line fix at `inline_struct_return`
-// (extending the type match to `Type::Enum(_, true, _)`) was tried
-// per the QUALITY.md design and did NOT close the bug — the inline
-// form (`len(json_parse(...))`) and the assigned-to-local form
-// (`v = json_parse(...); len(v)`) both still hit "stores not freed"
-// + "double free or corruption" at exit.  The fix is necessary
-// (the type match was demonstrably wrong) but not sufficient;
-// deeper investigation needed.  See QUALITY.md § B7.
-//
-// Asserts the boolean return as a marker of the expected
-// behaviour once B7 lands (`len(v)` on JNull returns null;
-// `!null` is true).
+// Today the test passes in both debug and release and guards the
+// opposite invariant: method dispatch on a JsonValue local that
+// returns a scalar must NOT crash and must NOT leak at scope exit.
+// The remaining B7 symptom is narrower — the character-
+// interpolation text-return path still SIGSEGVs, guarded by
+// `b7_character_interpolation_return_crashes` (`#[ignore]`).
+// See QUALITY.md § B7.
 #[test]
-fn b7_method_on_jsonvalue_returning_integer_crashes() {
+fn b7_method_on_jsonvalue_returning_integer_works() {
     code!(
         "fn run_b7m() -> boolean {
     v_b7m = json_parse(\"null\");
@@ -4760,6 +4864,44 @@ fn b7_method_on_jsonvalue_returning_integer_crashes() {
     )
     .expr("run_b7m()")
     .result(Value::Boolean(true));
+}
+
+/// Repeated method dispatch on the same JsonValue local.  If the
+/// historical B7 double-free were still present, the second
+/// `.kind()` call would trip the lifecycle bug because the
+/// first call's post-dispatch cleanup had already decremented
+/// the store's ref-count.  Today both calls succeed and return
+/// the expected variant name.
+#[test]
+fn b7_repeated_method_dispatch_on_jsonvalue_works() {
+    code!(
+        "fn run_b7rm() -> text {
+    v_b7rm = json_parse(\"true\");
+    k1_b7rm = v_b7rm.kind();
+    k2_b7rm = v_b7rm.kind();
+    if k1_b7rm == k2_b7rm { k1_b7rm } else { \"MISMATCH\" }
+}"
+    )
+    .expr("run_b7rm()")
+    .result(Value::str("JBool"));
+}
+
+/// B7 method surface works on Q4-constructed JsonValues, not just
+/// on `json_parse` results.  This locks that `json_null()` (and by
+/// extension the other Q4 primitive constructors) produces a
+/// JsonValue whose scope-exit cleanup doesn't conflict with method
+/// dispatch — the same invariant the renamed `_works` test locks
+/// for the json_parse side.
+#[test]
+fn b7_method_on_q4_constructed_jsonvalue_works() {
+    code!(
+        "fn run_b7q4() -> text {
+    v_b7q4 = json_number(42.0);
+    v_b7q4.kind()
+}"
+    )
+    .expr("run_b7q4()")
+    .result(Value::str("JNumber"));
 }
 
 // ── Q1: parser-side rich diagnostics through json_errors() ─────────────
@@ -4873,6 +5015,1549 @@ fn b7_multiple_json_parse_via_match_works() {
     )
     .expr("run_b7p()")
     .result(Value::Boolean(true));
+}
+
+/// Q4 first slice — `json_null()` constructs a `JsonValue` set to
+/// the `JNull` variant.  Primitive-only; doesn't need P54 step 4's
+/// arena materialisation (no payload).  Consumed via pattern-match
+/// so it rides on the working path guarded by
+/// `b7_multiple_json_parse_via_match_works` rather than the still-
+/// open method-call surface.  When P54 step 4 lands, the companion
+/// `json_bool` / `json_number` / `json_string` primitives follow
+/// the same shape; the container constructors `json_array` /
+/// `json_object` land with the arena allocator.
+#[test]
+fn q4_json_null_returns_jnull_variant() {
+    code!(
+        "fn run_q4n() -> boolean {
+    v_q4n = json_null();
+    match v_q4n { JNull => true, _ => false }
+}"
+    )
+    .expr("run_q4n()")
+    .result(Value::Boolean(true));
+}
+
+/// Q4 first slice — `json_null()` ignoring the B7 method-call
+/// surface: two independent `json_null()` calls in the same
+/// function, each consumed via its own match.  Mirrors the
+/// `b7_multiple_json_parse_via_match_works` shape to guarantee
+/// the constructor doesn't trip the B7 double-free when two
+/// results coexist.
+#[test]
+fn q4_two_json_nulls_via_match_works() {
+    code!(
+        "fn run_q4nn() -> integer {
+    a_q4nn = json_null();
+    b_q4nn = json_null();
+    ok_a_q4nn = match a_q4nn { JNull => 1, _ => 0 };
+    ok_b_q4nn = match b_q4nn { JNull => 1, _ => 0 };
+    ok_a_q4nn + ok_b_q4nn
+}"
+    )
+    .expr("run_q4nn()")
+    .result(Value::Int(2));
+}
+
+/// Q4 second slice — `json_bool(v)` constructs a `JBool` variant
+/// carrying the supplied boolean payload.  Pattern-match on the
+/// result binds the `value` field; this guard locks both
+/// construction (discriminant byte written) and the payload round-
+/// trip (field offset correct).
+#[test]
+fn q4_json_bool_round_trips_true() {
+    code!(
+        "fn run_q4bt() -> boolean {
+    v_q4bt = json_bool(true);
+    match v_q4bt { JBool { value } => value, _ => false }
+}"
+    )
+    .expr("run_q4bt()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn q4_json_bool_round_trips_false() {
+    code!(
+        "fn run_q4bf() -> integer {
+    v_q4bf = json_bool(false);
+    match v_q4bf { JBool { value } => { if value { 1 } else { 2 } }, _ => 0 }
+}"
+    )
+    .expr("run_q4bf()")
+    .result(Value::Int(2));
+}
+
+/// Q4 third slice — `json_number(v)` constructs a `JNumber` variant
+/// carrying the supplied float payload.  Non-finite input produces
+/// `JNull` with a diagnostic in `json_errors()` — that behaviour is
+/// guarded by `q4_json_number_nan_becomes_jnull` below.
+#[test]
+fn q4_json_number_round_trips_finite() {
+    code!(
+        "fn run_q4nr() -> float {
+    v_q4nr = json_number(2.75);
+    match v_q4nr { JNumber { value } => value, _ => 0.0 }
+}"
+    )
+    .expr("run_q4nr()")
+    .result(Value::Float(2.75));
+}
+
+#[test]
+fn q4_json_number_negative_finite() {
+    code!(
+        "fn run_q4nn2() -> float {
+    v_q4nn2 = json_number(-2.5);
+    match v_q4nn2 { JNumber { value } => value, _ => 0.0 }
+}"
+    )
+    .expr("run_q4nn2()")
+    .result(Value::Float(-2.5));
+}
+
+/// Q4 third slice negative-case — feeding `float null` (NaN) or
+/// non-finite values makes `json_number` store `JNull` with a
+/// diagnostic, not a numeric payload that would violate RFC 8259.
+#[test]
+fn q4_json_number_nan_becomes_jnull() {
+    code!(
+        "fn run_q4nn3() -> integer {
+    nan_val_q4 = 0.0 / 0.0;
+    v_q4nn3 = json_number(nan_val_q4);
+    match v_q4nn3 { JNull => 1, _ => 0 }
+}"
+    )
+    .expr("run_q4nn3()")
+    .result(Value::Int(1));
+}
+
+/// Q4 fourth slice — `json_string(v)` constructs a `JString`
+/// variant carrying a copy of the supplied text.  The text is
+/// written into the JsonValue's own store, so the returned value
+/// lifetime-extends the payload independently of `v`.
+///
+/// Reading the bound `value: text` out of the match arm trips the
+/// same native-returned-text lifecycle bug that B7's
+/// `b7_character_interpolation_return_crashes` guards (the Str
+/// pointer into the JsonValue store gets returned and later freed
+/// as a DbRef).  Until B7 lands, the test verifies the shape of
+/// the variant — `JString` branch taken — by measuring the
+/// bound text's length (integer return, no Str escape) rather
+/// than returning the value itself.
+#[test]
+fn q4_json_string_round_trips() {
+    code!(
+        "fn run_q4sr() -> integer {
+    v_q4sr = json_string(\"hello world\");
+    match v_q4sr { JString { value } => value.len(), _ => -1 }
+}"
+    )
+    .expr("run_q4sr()")
+    .result(Value::Int(11));
+}
+
+#[test]
+fn q4_json_string_empty() {
+    code!(
+        "fn run_q4se() -> integer {
+    v_q4se = json_string(\"\");
+    match v_q4se { JString { value } => value.len(), _ => -1 }
+}"
+    )
+    .expr("run_q4se()")
+    .result(Value::Int(0));
+}
+
+/// Q2 — `kind(self: JsonValue) -> text` introspection.  One guard
+/// per primitive variant, in both free-function syntax `kind(v)`
+/// and method syntax `v.kind()`, to lock the registration of both
+/// dispatch paths (NATIVE_FNS registers `n_kind` + the
+/// `t_9JsonValue_kind` method alias).  Container variants
+/// (`JArray`, `JObject`) land with P54 step 4's arena materialiser.
+#[test]
+fn q2_kind_of_jnull_free_form() {
+    code!(
+        "fn run_q2kn() -> text {
+    v_q2kn = json_null();
+    kind(v_q2kn)
+}"
+    )
+    .expr("run_q2kn()")
+    .result(Value::str("JNull"));
+}
+
+#[test]
+fn q2_kind_of_jnull_method_form() {
+    code!(
+        "fn run_q2kn2() -> text {
+    v_q2kn2 = json_null();
+    v_q2kn2.kind()
+}"
+    )
+    .expr("run_q2kn2()")
+    .result(Value::str("JNull"));
+}
+
+#[test]
+fn q2_kind_of_jbool() {
+    code!(
+        "fn run_q2kb() -> text {
+    v_q2kb = json_bool(true);
+    v_q2kb.kind()
+}"
+    )
+    .expr("run_q2kb()")
+    .result(Value::str("JBool"));
+}
+
+#[test]
+fn q2_kind_of_jnumber() {
+    code!(
+        "fn run_q2knum() -> text {
+    v_q2knum = json_number(42.0);
+    v_q2knum.kind()
+}"
+    )
+    .expr("run_q2knum()")
+    .result(Value::str("JNumber"));
+}
+
+#[test]
+fn q2_kind_of_jstring() {
+    code!(
+        "fn run_q2ks() -> text {
+    v_q2ks = json_string(\"hello\");
+    v_q2ks.kind()
+}"
+    )
+    .expr("run_q2ks()")
+    .result(Value::str("JString"));
+}
+
+/// Q2 kind() on a json_parse result — locks that the discriminant
+/// byte written by `n_json_parse` for parsed primitives matches
+/// the one `n_kind` reads back.  A JSON-parser-vs-kind-reader drift
+/// would make `kind(json_parse(x))` return "JUnknown".
+#[test]
+fn q2_kind_of_parsed_primitive() {
+    code!(
+        "fn run_q2kp() -> text {
+    v_q2kp = json_parse(\"true\");
+    kind(v_q2kp)
+}"
+    )
+    .expr("run_q2kp()")
+    .result(Value::str("JBool"));
+}
+
+/// Q3 primitive-slice — `to_json(self: JsonValue) -> text` renders
+/// a JsonValue to canonical RFC 8259 JSON text.  One guard per
+/// primitive variant, each measured by text equality to lock the
+/// serialisation contract.  Container variants (JArray / JObject)
+/// render as `"<pending step 4>"` today; the full recursive
+/// formatter lands with P54 step 4.
+#[test]
+fn q3_to_json_of_jnull() {
+    code!(
+        "fn run_q3tn() -> text {
+    v_q3tn = json_null();
+    to_json(v_q3tn)
+}"
+    )
+    .expr("run_q3tn()")
+    .result(Value::str("null"));
+}
+
+#[test]
+fn q3_to_json_of_jbool_true() {
+    code!(
+        "fn run_q3tb() -> text {
+    v_q3tb = json_bool(true);
+    v_q3tb.to_json()
+}"
+    )
+    .expr("run_q3tb()")
+    .result(Value::str("true"));
+}
+
+#[test]
+fn q3_to_json_of_jbool_false() {
+    code!(
+        "fn run_q3tbf() -> text {
+    v_q3tbf = json_bool(false);
+    v_q3tbf.to_json()
+}"
+    )
+    .expr("run_q3tbf()")
+    .result(Value::str("false"));
+}
+
+#[test]
+fn q3_to_json_of_jnumber_integer() {
+    code!(
+        "fn run_q3tni() -> text {
+    v_q3tni = json_number(42.0);
+    v_q3tni.to_json()
+}"
+    )
+    .expr("run_q3tni()")
+    .result(Value::str("42"));
+}
+
+#[test]
+fn q3_to_json_of_jnumber_fractional() {
+    code!(
+        "fn run_q3tnf() -> text {
+    v_q3tnf = json_number(2.75);
+    v_q3tnf.to_json()
+}"
+    )
+    .expr("run_q3tnf()")
+    .result(Value::str("2.75"));
+}
+
+/// Non-finite inputs to json_number (NaN, ±Inf) construct a JNull
+/// variant with a diagnostic — to_json on that reads "null", not
+/// the garbage representation of the bad float.  Matches RFC 8259
+/// which forbids non-finite numeric literals.
+#[test]
+fn q3_to_json_of_nan_becomes_null() {
+    code!(
+        "fn run_q3tnn() -> text {
+    nan_q3 = 0.0 / 0.0;
+    v_q3tnn = json_number(nan_q3);
+    v_q3tnn.to_json()
+}"
+    )
+    .expr("run_q3tnn()")
+    .result(Value::str("null"));
+}
+
+#[test]
+fn q3_to_json_of_jstring_plain() {
+    code!(
+        "fn run_q3ts() -> text {
+    v_q3ts = json_string(\"hello\");
+    v_q3ts.to_json()
+}"
+    )
+    .expr("run_q3ts()")
+    .result(Value::str("\"hello\""));
+}
+
+// Q3 escape-sequence regressions (`"a\"b\\c"` round-trip; `\n` /
+// `\t` / control-byte encoding) are deferred.  Initial attempt
+// exposed that loft's String parser currently drops backslash-
+// escapes in string literals inside `code!()` test scaffolding
+// (the `q3_to_json_of_jstring_with_escapes` case hung on the
+// loft-side interpretation of the `\\` sequence; needs isolated
+// reproducer + investigation).  The Rust-side escape logic in
+// `n_to_json` is exercised; the test-harness plumbing is what's
+// blocking.  Track as a follow-up under Q3.
+
+/// Q3 pretty-print primitive slice — `to_json_pretty(self: JsonValue)`
+/// produces identical output to `to_json` for primitive variants
+/// (no nested structure to indent).  Divergence lands with P54
+/// step 4's arena materialiser.  These guards lock that primitive
+/// output is byte-identical across the two entry points today, so
+/// a future change that adds pretty-specific padding for
+/// primitives would be caught.
+#[test]
+fn q3_to_json_pretty_of_jnull() {
+    code!(
+        "fn run_q3pn() -> text {
+    v_q3pn = json_null();
+    v_q3pn.to_json_pretty()
+}"
+    )
+    .expr("run_q3pn()")
+    .result(Value::str("null"));
+}
+
+#[test]
+fn q3_to_json_pretty_of_jbool() {
+    code!(
+        "fn run_q3pb() -> text {
+    v_q3pb = json_bool(true);
+    v_q3pb.to_json_pretty()
+}"
+    )
+    .expr("run_q3pb()")
+    .result(Value::str("true"));
+}
+
+#[test]
+fn q3_to_json_pretty_of_jnumber() {
+    code!(
+        "fn run_q3pnum() -> text {
+    v_q3pnum = json_number(42.0);
+    v_q3pnum.to_json_pretty()
+}"
+    )
+    .expr("run_q3pnum()")
+    .result(Value::str("42"));
+}
+
+#[test]
+fn q3_to_json_pretty_of_jstring() {
+    code!(
+        "fn run_q3ps() -> text {
+    v_q3ps = json_string(\"hi\");
+    v_q3ps.to_json_pretty()
+}"
+    )
+    .expr("run_q3ps()")
+    .result(Value::str("\"hi\""));
+}
+
+/// Q3 — `to_json` and `to_json_pretty` must agree on primitives.
+/// This regression guard compares the outputs directly and fails
+/// if they ever diverge for a primitive variant (which would
+/// indicate the pretty path is accidentally formatting leaf
+/// values differently from the canonical path).
+#[test]
+fn q3_to_json_and_pretty_agree_on_primitive() {
+    code!(
+        "fn run_q3pa() -> boolean {
+    v_q3pa = json_number(2.75);
+    canonical_q3pa = v_q3pa.to_json();
+    pretty_q3pa = v_q3pa.to_json_pretty();
+    canonical_q3pa == pretty_q3pa
+}"
+    )
+    .expr("run_q3pa()")
+    .result(Value::Boolean(true));
+}
+
+/// Q3 — free-function dispatch of `to_json_pretty`.  Locks the
+/// `n_to_json_pretty` registration in NATIVE_FNS alongside the
+/// `t_9JsonValue_to_json_pretty` method alias.
+#[test]
+fn q3_to_json_pretty_free_form() {
+    code!(
+        "fn run_q3pf() -> text {
+    v_q3pf = json_null();
+    to_json_pretty(v_q3pf)
+}"
+    )
+    .expr("run_q3pf()")
+    .result(Value::str("null"));
+}
+
+/// P54 step 4 first slice — empty arrays `[]` and empty objects
+/// `{}` are now materialised as real `JArray` / `JObject`
+/// variants (not the earlier `JNull`-stub).  This unblocks
+/// `kind()`, `len()`, `has_field()`, and `to_json()` for the
+/// empty-container case today; non-empty containers remain
+/// stubbed until the full arena materialiser lands.
+#[test]
+fn p54_step4_empty_array_has_jarray_kind() {
+    code!(
+        "fn run_p4ea() -> text {
+    v_p4ea = json_parse(\"[]\");
+    v_p4ea.kind()
+}"
+    )
+    .expr("run_p4ea()")
+    .result(Value::str("JArray"));
+}
+
+#[test]
+fn p54_step4_empty_object_has_jobject_kind() {
+    // Loft string literals treat `{...}` as interpolation; escape
+    // literal braces by doubling (`{{` → `{`, `}}` → `}`), so
+    // `"{{}}"` in loft source is the two-char JSON empty-object
+    // literal `{}`.  Same trick below on the other object tests.
+    code!(
+        "fn run_p4eo() -> text {
+    v_p4eo = json_parse(\"{{}}\");
+    v_p4eo.kind()
+}"
+    )
+    .expr("run_p4eo()")
+    .result(Value::str("JObject"));
+}
+
+/// Step 4 first slice — `len()` returns 0 for empty containers
+/// (both JArray and JObject).  Primitive variants still return
+/// the integer null sentinel via the unchanged path.
+#[test]
+fn p54_step4_empty_array_len_is_zero() {
+    code!(
+        "fn run_p4al() -> integer {
+    v_p4al = json_parse(\"[]\");
+    v_p4al.len()
+}"
+    )
+    .expr("run_p4al()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn p54_step4_empty_object_len_is_zero() {
+    code!(
+        "fn run_p4ol() -> integer {
+    v_p4ol = json_parse(\"{{}}\");
+    v_p4ol.len()
+}"
+    )
+    .expr("run_p4ol()")
+    .result(Value::Int(0));
+}
+
+/// Step 4 first slice — `to_json()` now renders `"[]"` / `"{}"`
+/// for empty containers instead of the earlier `"<pending step
+/// 4>"` placeholder.  Non-empty containers still render the
+/// placeholder until the full arena materialiser lands.
+#[test]
+fn p54_step4_empty_array_to_json() {
+    code!(
+        "fn run_p4aj() -> text {
+    v_p4aj = json_parse(\"[]\");
+    v_p4aj.to_json()
+}"
+    )
+    .expr("run_p4aj()")
+    .result(Value::str("[]"));
+}
+
+#[test]
+fn p54_step4_empty_object_to_json() {
+    code!(
+        "fn run_p4oj() -> text {
+    v_p4oj = json_parse(\"{{}}\");
+    v_p4oj.to_json()
+}"
+    )
+    .expr("run_p4oj()")
+    .result(Value::str("{}"));
+}
+
+/// Step 4 first slice — round-trip: parse `[]`, serialise, parse
+/// again, confirm the discriminant agrees end-to-end.  Locks that
+/// `n_json_parse` and `n_to_json` agree on empty containers.
+#[test]
+fn p54_step4_empty_array_round_trips_through_to_json() {
+    code!(
+        "fn run_p4ar() -> text {
+    first_p4ar = json_parse(\"[]\");
+    round_p4ar = json_parse(first_p4ar.to_json());
+    round_p4ar.kind()
+}"
+    )
+    .expr("run_p4ar()")
+    .result(Value::str("JArray"));
+}
+
+/// Step 4 fourth slice (2026-04-14) — nested containers
+/// (arrays-of-arrays, objects-of-objects, or any mix) now
+/// materialise too, closing step 4.  This guard reverses the
+/// earlier stub assertion: `[[1,2],[3,4]]` is a real JArray,
+/// not a JNull stub.
+#[test]
+fn p54_step4_nested_array_materialises() {
+    code!(
+        "fn run_p4nm() -> text {
+    v_p4nm = json_parse(\"[[1,2],[3,4]]\");
+    v_p4nm.kind()
+}"
+    )
+    .expr("run_p4nm()")
+    .result(Value::str("JArray"));
+}
+
+/// Step 4 second slice (2026-04-14) — non-empty arrays of primitive
+/// elements now materialise into real JArray variants with elements
+/// in an arena sub-record of the root's store.  The
+/// `n_json_parse` + `n_len` + `n_item` + `n_to_json` paths all
+/// dispatch on JArray and cooperate: parse produces the arena,
+/// len reads the vector header, item reads the N-th slot,
+/// to_json recurses.  Nested containers still stub as JNull
+/// (guarded above).
+#[test]
+fn p54_step4_nonempty_primitive_array_has_jarray_kind() {
+    code!(
+        "fn run_p4npk() -> text {
+    v_p4npk = json_parse(\"[1,2,3]\");
+    v_p4npk.kind()
+}"
+    )
+    .expr("run_p4npk()")
+    .result(Value::str("JArray"));
+}
+
+#[test]
+fn p54_step4_nonempty_primitive_array_length_correct() {
+    code!(
+        "fn run_p4npl() -> integer {
+    v_p4npl = json_parse(\"[1,2,3]\");
+    v_p4npl.len()
+}"
+    )
+    .expr("run_p4npl()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p54_step4_nonempty_primitive_array_item_0_is_first() {
+    code!(
+        "fn run_p4npi0() -> long {
+    v_p4npi0 = json_parse(\"[10,20,30]\");
+    v_p4npi0.item(0).as_long()
+}"
+    )
+    .expr("run_p4npi0()")
+    .result(Value::Long(10));
+}
+
+#[test]
+fn p54_step4_nonempty_primitive_array_item_1_is_middle() {
+    code!(
+        "fn run_p4npi1() -> long {
+    v_p4npi1 = json_parse(\"[10,20,30]\");
+    v_p4npi1.item(1).as_long()
+}"
+    )
+    .expr("run_p4npi1()")
+    .result(Value::Long(20));
+}
+
+#[test]
+fn p54_step4_nonempty_primitive_array_item_out_of_range_returns_jnull() {
+    code!(
+        "fn run_p4npior() -> text {
+    v_p4npior = json_parse(\"[10,20]\");
+    v_p4npior.item(5).kind()
+}"
+    )
+    .expr("run_p4npior()")
+    .result(Value::str("JNull"));
+}
+
+#[test]
+fn p54_step4_nonempty_bool_array_item_kind() {
+    code!(
+        "fn run_p4npbk() -> text {
+    v_p4npbk = json_parse(\"[true,false]\");
+    v_p4npbk.item(0).kind()
+}"
+    )
+    .expr("run_p4npbk()")
+    .result(Value::str("JBool"));
+}
+
+#[test]
+fn p54_step4_nonempty_string_array_item_value() {
+    code!(
+        "fn run_p4npsi() -> text {
+    v_p4npsi = json_parse(\"[\\\"hello\\\",\\\"world\\\"]\");
+    v_p4npsi.item(1).kind()
+}"
+    )
+    .expr("run_p4npsi()")
+    .result(Value::str("JString"));
+}
+
+#[test]
+fn p54_step4_nonempty_array_to_json_round_trips() {
+    code!(
+        "fn run_p4narj() -> integer {
+    v_p4narj = json_parse(\"[1,2,3]\");
+    round_p4narj = json_parse(v_p4narj.to_json());
+    round_p4narj.len()
+}"
+    )
+    .expr("run_p4narj()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p54_step4_nonempty_array_to_json_text_shape() {
+    // `[1,2,3]` serialises each JNumber via `f64::Display`, which
+    // prints `1` / `2` / `3` for whole-number floats.
+    code!(
+        "fn run_p4nats() -> text {
+    v_p4nats = json_parse(\"[1,2,3]\");
+    v_p4nats.to_json()
+}"
+    )
+    .expr("run_p4nats()")
+    .result(Value::str("[1,2,3]"));
+}
+
+// The original `p54_parse_array_item_access` test (originally
+// `#[ignore]`'d) was un-ignored in place 2026-04-14 by P54 step 4
+// second slice — see that test's comment + commit history.
+
+/// Step 4 third slice (2026-04-14) — non-empty primitive objects.
+/// Tests mirror the array second-slice guards: discriminant,
+/// length, field lookup (hit + miss), has_field, to_json, and
+/// a round-trip.  Every loft string with `{` / `}` doubles them
+/// to `{{` / `}}` per LOFT.md § String literals.
+#[test]
+fn p54_step4_nonempty_primitive_object_has_jobject_kind() {
+    code!(
+        "fn run_p4ok() -> text {
+    v_p4oK = json_parse(\"{{\\\"k\\\":1}}\");
+    v_p4oK.kind()
+}"
+    )
+    .expr("run_p4ok()")
+    .result(Value::str("JObject"));
+}
+
+#[test]
+fn p54_step4_nonempty_primitive_object_length_correct() {
+    code!(
+        "fn run_p4ol() -> integer {
+    v_p4oL = json_parse(\"{{\\\"a\\\":1,\\\"b\\\":2,\\\"c\\\":3}}\");
+    v_p4oL.len()
+}"
+    )
+    .expr("run_p4ol()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p54_step4_nonempty_object_field_hit_returns_value() {
+    code!(
+        "fn run_p4oh() -> long {
+    v_p4oH = json_parse(\"{{\\\"age\\\":30}}\");
+    v_p4oH.field(\"age\").as_long()
+}"
+    )
+    .expr("run_p4oh()")
+    .result(Value::Long(30));
+}
+
+#[test]
+fn p54_step4_nonempty_object_field_miss_returns_jnull() {
+    code!(
+        "fn run_p4om() -> text {
+    v_p4oM = json_parse(\"{{\\\"k\\\":1}}\");
+    v_p4oM.field(\"missing\").kind()
+}"
+    )
+    .expr("run_p4om()")
+    .result(Value::str("JNull"));
+}
+
+#[test]
+fn p54_step4_nonempty_object_has_field_hit() {
+    code!(
+        "fn run_p4ohh() -> boolean {
+    v_p4oHh = json_parse(\"{{\\\"users\\\":true}}\");
+    v_p4oHh.has_field(\"users\")
+}"
+    )
+    .expr("run_p4ohh()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn p54_step4_nonempty_object_has_field_miss() {
+    code!(
+        "fn run_p4ohm() -> boolean {
+    v_p4oHm = json_parse(\"{{\\\"k\\\":1}}\");
+    v_p4oHm.has_field(\"q\")
+}"
+    )
+    .expr("run_p4ohm()")
+    .result(Value::Boolean(false));
+}
+
+#[test]
+fn p54_step4_nonempty_object_to_json_text_shape() {
+    code!(
+        "fn run_p4oj() -> text {
+    v_p4oJ = json_parse(\"{{\\\"k\\\":1}}\");
+    v_p4oJ.to_json()
+}"
+    )
+    .expr("run_p4oj()")
+    .result(Value::str("{\"k\":1}"));
+}
+
+#[test]
+fn p54_step4_nonempty_object_to_json_round_trips() {
+    code!(
+        "fn run_p4or() -> integer {
+    v_p4oR = json_parse(\"{{\\\"a\\\":1,\\\"b\\\":2}}\");
+    round_p4oR = json_parse(v_p4oR.to_json());
+    round_p4oR.len()
+}"
+    )
+    .expr("run_p4or()")
+    .result(Value::Int(2));
+}
+
+#[test]
+fn p54_step4_nonempty_object_mixed_primitive_values() {
+    code!(
+        "fn run_p4omx() -> text {
+    v_p4oMx = json_parse(\"{{\\\"s\\\":\\\"hi\\\",\\\"n\\\":7,\\\"b\\\":true}}\");
+    v_p4oMx.field(\"s\").as_text()
+}"
+    )
+    .expr("run_p4omx()")
+    .result(Value::str("hi"));
+}
+
+/// Step 4 fourth slice — nested arrays.  Outer `[[1,2],[3,4]]`
+/// has length 2, each item is itself a JArray of length 2.
+#[test]
+fn p54_step4_nested_array_outer_length() {
+    code!(
+        "fn run_p4nal() -> integer {
+    v_p4nal = json_parse(\"[[1,2],[3,4]]\");
+    v_p4nal.len()
+}"
+    )
+    .expr("run_p4nal()")
+    .result(Value::Int(2));
+}
+
+#[test]
+fn p54_step4_nested_array_inner_length() {
+    code!(
+        "fn run_p4nil() -> integer {
+    v_p4nil = json_parse(\"[[1,2,3],[4,5]]\");
+    v_p4nil.item(0).len()
+}"
+    )
+    .expr("run_p4nil()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p54_step4_nested_array_inner_item_value() {
+    code!(
+        "fn run_p4niv() -> long {
+    v_p4niv = json_parse(\"[[10,20],[30,40]]\");
+    v_p4niv.item(1).item(0).as_long()
+}"
+    )
+    .expr("run_p4niv()")
+    .result(Value::Long(30));
+}
+
+/// Step 4 fourth slice — nested objects.
+/// `{"a": {"b": 7}}` — outer field "a" is a JObject; inner
+/// field "b" is a JNumber 7.
+#[test]
+fn p54_step4_nested_object_chained_field() {
+    code!(
+        "fn run_p4nocf() -> long {
+    v_p4nocf = json_parse(\"{{\\\"a\\\":{{\\\"b\\\":7}}}}\");
+    v_p4nocf.field(\"a\").field(\"b\").as_long()
+}"
+    )
+    .expr("run_p4nocf()")
+    .result(Value::Long(7));
+}
+
+/// Step 4 fourth slice — array of objects.  `[{"k":1},{"k":2}]`
+/// — outer is JArray, each item is a JObject with field `"k"`.
+#[test]
+fn p54_step4_array_of_objects_field_lookup() {
+    code!(
+        "fn run_p4aof() -> long {
+    v_p4aof = json_parse(\"[{{\\\"k\\\":1}},{{\\\"k\\\":2}}]\");
+    v_p4aof.item(1).field(\"k\").as_long()
+}"
+    )
+    .expr("run_p4aof()")
+    .result(Value::Long(2));
+}
+
+/// Step 4 fourth slice — object containing an array.  Locks the
+/// reverse mix from `array_of_objects` so both directions of the
+/// recursion are exercised.
+#[test]
+fn p54_step4_object_with_array_field() {
+    code!(
+        "fn run_p4owaf() -> integer {
+    v_p4owaf = json_parse(\"{{\\\"items\\\":[10,20,30]}}\");
+    v_p4owaf.field(\"items\").len()
+}"
+    )
+    .expr("run_p4owaf()")
+    .result(Value::Int(3));
+}
+
+/// Step 4 fourth slice — to_json round-trip for nested containers.
+#[test]
+fn p54_step4_nested_array_to_json_text_shape() {
+    code!(
+        "fn run_p4narts() -> text {
+    v_p4narts = json_parse(\"[[1,2],[3,4]]\");
+    v_p4narts.to_json()
+}"
+    )
+    .expr("run_p4narts()")
+    .result(Value::str("[[1,2],[3,4]]"));
+}
+
+#[test]
+fn p54_step4_object_with_array_to_json_text_shape() {
+    code!(
+        "fn run_p4owats() -> text {
+    v_p4owats = json_parse(\"{{\\\"k\\\":[1,2]}}\");
+    v_p4owats.to_json()
+}"
+    )
+    .expr("run_p4owats()")
+    .result(Value::str("{\"k\":[1,2]}"));
+}
+
+/// Step 4 + Q2 cross-integration — `has_field` on an empty
+/// JObject returns false (no fields to look up).  The two pieces
+/// were developed independently; this guard locks their
+/// interaction so a future has_field rewrite can't accidentally
+/// claim a field exists on an empty object.
+#[test]
+fn p54_step4_empty_object_has_no_field() {
+    code!(
+        "fn run_p4oh() -> boolean {
+    v_p4oh = json_parse(\"{{}}\");
+    v_p4oh.has_field(\"anything\")
+}"
+    )
+    .expr("run_p4oh()")
+    .result(Value::Boolean(false));
+}
+
+/// Step 4 + existing `field()` stub cross-integration — querying
+/// any key on an empty JObject returns JNull.  Regressing this
+/// would break the common `if v.has_field(k) { v.field(k) … }`
+/// pattern when users write it on a JSON-parsed empty object.
+#[test]
+fn p54_step4_empty_object_field_lookup_returns_jnull() {
+    code!(
+        "fn run_p4ofl() -> text {
+    v_p4ofl = json_parse(\"{{}}\");
+    v_p4ofl.field(\"k\").kind()
+}"
+    )
+    .expr("run_p4ofl()")
+    .result(Value::str("JNull"));
+}
+
+/// Step 4 + existing `item()` stub cross-integration — any index
+/// into an empty JArray returns JNull.  Locks that out-of-range
+/// access doesn't accidentally leak into an uninitialised
+/// variant slot.
+#[test]
+fn p54_step4_empty_array_item_lookup_returns_jnull() {
+    code!(
+        "fn run_p4eil() -> text {
+    v_p4eil = json_parse(\"[]\");
+    v_p4eil.item(0).kind()
+}"
+    )
+    .expr("run_p4eil()")
+    .result(Value::str("JNull"));
+}
+
+/// Step 4 + Q3 `to_json_pretty` cross-integration — pretty output
+/// for an empty container is byte-identical to canonical
+/// (`"[]"` / `"{}"`) — there's nothing to indent.  Locks that
+/// divergence between canonical and pretty only happens when a
+/// container has content.
+#[test]
+fn p54_step4_empty_array_pretty_matches_canonical() {
+    code!(
+        "fn run_p4eapc() -> boolean {
+    v_p4eapc = json_parse(\"[]\");
+    canonical_p4eapc = v_p4eapc.to_json();
+    pretty_p4eapc = v_p4eapc.to_json_pretty();
+    canonical_p4eapc == pretty_p4eapc
+}"
+    )
+    .expr("run_p4eapc()")
+    .result(Value::Boolean(true));
+}
+
+#[test]
+fn p54_step4_empty_object_pretty_matches_canonical() {
+    code!(
+        "fn run_p4eopc() -> text {
+    v_p4eopc = json_parse(\"{{}}\");
+    v_p4eopc.to_json_pretty()
+}"
+    )
+    .expr("run_p4eopc()")
+    .result(Value::str("{}"));
+}
+
+/// Q2 — `has_field(self: JsonValue, name: text) -> boolean` —
+/// forward-compatible stub.  Today returns false for every
+/// primitive variant (JNull / JBool / JNumber / JString); a real
+/// JObject can't be constructed until P54 step 4 so the JObject
+/// branch isn't exercised yet.  When step 4 ships, these guards
+/// still stand (primitives still return false) and a new
+/// `q2_has_field_on_jobject` test will cover the positive case.
+#[test]
+fn q2_has_field_on_jnull_is_false() {
+    code!(
+        "fn run_q2hn() -> boolean {
+    v_q2hn = json_null();
+    v_q2hn.has_field(\"k\")
+}"
+    )
+    .expr("run_q2hn()")
+    .result(Value::Boolean(false));
+}
+
+#[test]
+fn q2_has_field_on_jbool_is_false() {
+    code!(
+        "fn run_q2hb() -> boolean {
+    v_q2hb = json_bool(true);
+    v_q2hb.has_field(\"value\")
+}"
+    )
+    .expr("run_q2hb()")
+    .result(Value::Boolean(false));
+}
+
+#[test]
+fn q2_has_field_on_jnumber_is_false() {
+    code!(
+        "fn run_q2hnum() -> boolean {
+    v_q2hnum = json_number(42.0);
+    v_q2hnum.has_field(\"n\")
+}"
+    )
+    .expr("run_q2hnum()")
+    .result(Value::Boolean(false));
+}
+
+#[test]
+fn q2_has_field_on_jstring_is_false() {
+    code!(
+        "fn run_q2hs() -> boolean {
+    v_q2hs = json_string(\"hello\");
+    v_q2hs.has_field(\"anything\")
+}"
+    )
+    .expr("run_q2hs()")
+    .result(Value::Boolean(false));
+}
+
+/// Q2 — free-function form of `has_field`.  Locks the `n_has_field`
+/// registration in NATIVE_FNS alongside the
+/// `t_9JsonValue_has_field` method alias so both dispatch paths
+/// keep working.
+#[test]
+fn q2_has_field_free_form_on_parsed_primitive() {
+    code!(
+        "fn run_q2hf() -> boolean {
+    v_q2hf = json_parse(\"42\");
+    has_field(v_q2hf, \"k\")
+}"
+    )
+    .expr("run_q2hf()")
+    .result(Value::Boolean(false));
+}
+
+/// Q2 — `keys(self: JsonValue) -> vector<text>` returns the
+/// field names of a JObject in insertion order, empty vector
+/// for every other variant.  First slice (2026-04-14): empty
+/// vector unconditionally — JObject walk lands in a follow-up.
+/// These guards lock the empty-vector return shape across all
+/// variants, in both free and method form.
+#[test]
+fn q2_keys_on_jnull_is_empty() {
+    code!(
+        "fn run_q2kne() -> integer {
+    v_q2kne = json_null();
+    ks_q2kne = v_q2kne.keys();
+    ks_q2kne.len()
+}"
+    )
+    .expr("run_q2kne()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q2_keys_on_jbool_is_empty() {
+    code!(
+        "fn run_q2kbe() -> integer {
+    v_q2kbe = json_bool(true);
+    keys(v_q2kbe).len()
+}"
+    )
+    .expr("run_q2kbe()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q2_keys_on_jobject_returns_field_names_length() {
+    // (Was `q2_keys_on_jobject_is_empty_today` until 2026-04-14
+    // when the JObject walk shipped.)  Locks that `keys()` on
+    // a JObject now returns the actual field-name vector.
+    code!(
+        "fn run_q2koe() -> integer {
+    v_q2koe = json_parse(\"{{\\\"k\\\":1}}\");
+    v_q2koe.keys().len()
+}"
+    )
+    .expr("run_q2koe()")
+    .result(Value::Int(1));
+}
+
+#[test]
+fn q2_keys_on_jobject_returns_multiple_field_names_length() {
+    code!(
+        "fn run_q2km() -> integer {
+    v_q2km = json_parse(\"{{\\\"a\\\":1,\\\"b\\\":2,\\\"c\\\":3}}\");
+    v_q2km.keys().len()
+}"
+    )
+    .expr("run_q2km()")
+    .result(Value::Int(3));
+}
+
+/// Q2 — `keys()` JObject walk preserves insertion order: the
+/// first key in the source is the first key in the result.
+#[test]
+fn q2_keys_on_jobject_preserves_first_name() {
+    code!(
+        "fn run_q2kf() -> text {
+    v_q2kf = json_parse(\"{{\\\"alpha\\\":1,\\\"beta\\\":2}}\");
+    ks_q2kf = v_q2kf.keys();
+    first_q2kf = \"\";
+    for k in ks_q2kf {
+        if first_q2kf == \"\" { first_q2kf = k; }
+    }
+    first_q2kf
+}"
+    )
+    .expr("run_q2kf()")
+    .result(Value::str("alpha"));
+}
+
+/// Q2 — `keys()` collects every name, locked by joining them.
+#[test]
+fn q2_keys_on_jobject_collects_all_names() {
+    code!(
+        "fn run_q2kc() -> text {
+    v_q2kc = json_parse(\"{{\\\"x\\\":1,\\\"y\\\":2}}\");
+    out_q2kc = \"\";
+    for k in v_q2kc.keys() { out_q2kc += k; out_q2kc += \"|\"; }
+    out_q2kc
+}"
+    )
+    .expr("run_q2kc()")
+    .result(Value::str("x|y|"));
+}
+
+/// Q2 — the empty `keys()` result is a real iterable: a `for`
+/// loop over it terminates without executing the body.  Locks
+/// that callers can write `for k in v.keys() { ... }` today
+/// without it crashing or looping forever.
+#[test]
+fn q2_keys_for_loop_is_safe() {
+    code!(
+        "fn run_q2kfl() -> integer {
+    v_q2kfl = json_null();
+    count_q2kfl = 0;
+    for _k in v_q2kfl.keys() { count_q2kfl += 1; }
+    count_q2kfl
+}"
+    )
+    .expr("run_q2kfl()")
+    .result(Value::Int(0));
+}
+
+/// Q2 — `fields(self: JsonValue) -> vector<JsonField>` mirrors
+/// `keys`'s shape but returns (name, value) entries.  First
+/// slice (2026-04-14): empty vector for every variant including
+/// JObject — the real walk lands with `keys`'s JObject walk.
+#[test]
+fn q2_fields_on_jnull_is_empty() {
+    code!(
+        "fn run_q2fne() -> integer {
+    v_q2fne = json_null();
+    fs_q2fne = v_q2fne.fields();
+    fs_q2fne.len()
+}"
+    )
+    .expr("run_q2fne()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q2_fields_on_jstring_is_empty() {
+    code!(
+        "fn run_q2fse() -> integer {
+    v_q2fse = json_string(\"hi\");
+    fields(v_q2fse).len()
+}"
+    )
+    .expr("run_q2fse()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q2_fields_on_jobject_returns_field_entries_length() {
+    // (Was `q2_fields_on_jobject_is_empty_today` until 2026-04-14
+    // when the JObject walk shipped.)  Locks that `fields()`
+    // on a JObject now returns a vector of JsonField entries.
+    code!(
+        "fn run_q2foe() -> integer {
+    v_q2foe = json_parse(\"{{\\\"k\\\":1}}\");
+    v_q2foe.fields().len()
+}"
+    )
+    .expr("run_q2foe()")
+    .result(Value::Int(1));
+}
+
+#[test]
+fn q2_fields_on_jobject_collects_multiple_entries() {
+    code!(
+        "fn run_q2fm() -> integer {
+    v_q2fm = json_parse(\"{{\\\"a\\\":1,\\\"b\\\":2,\\\"c\\\":3}}\");
+    v_q2fm.fields().len()
+}"
+    )
+    .expr("run_q2fm()")
+    .result(Value::Int(3));
+}
+
+/// Q2 — `fields()` JObject walk preserves names: iterating the
+/// result and reading `.name` gives back each JsonField's name.
+#[test]
+fn q2_fields_collects_all_names() {
+    code!(
+        "fn run_q2fcn() -> text {
+    v_q2fcn = json_parse(\"{{\\\"x\\\":1,\\\"y\\\":2}}\");
+    out_q2fcn = \"\";
+    for entry in v_q2fcn.fields() { out_q2fcn += entry.name; out_q2fcn += \"|\"; }
+    out_q2fcn
+}"
+    )
+    .expr("run_q2fcn()")
+    .result(Value::str("x|y|"));
+}
+
+/// Q2 — `fields()` JObject walk also copies primitive values:
+/// iterating gives back each `entry.value` as the right variant
+/// with the right payload.  This guard covers JNumber.
+#[test]
+fn q2_fields_preserves_primitive_number_values() {
+    code!(
+        "fn run_q2fp() -> long {
+    v_q2fp = json_parse(\"{{\\\"k\\\":42}}\");
+    sum_q2fp = 0l;
+    for entry in v_q2fp.fields() {
+        sum_q2fp += entry.value.as_long();
+    }
+    sum_q2fp
+}"
+    )
+    .expr("run_q2fp()")
+    .result(Value::Long(42));
+}
+
+/// Q2 — `fields()` JObject walk: container values deep-copy
+/// into the result vector (JArray preserved).
+#[test]
+fn q2_fields_preserves_container_values_array() {
+    code!(
+        "fn run_q2fca() -> text {
+    v_q2fca = json_parse(\"{{\\\"k\\\":[1,2,3]}}\");
+    kind_q2fca = \"\";
+    for entry in v_q2fca.fields() { kind_q2fca = entry.value.kind(); }
+    kind_q2fca
+}"
+    )
+    .expr("run_q2fca()")
+    .result(Value::str("JArray"));
+}
+
+/// Q2 — `fields()` JObject walk: container values deep-copy
+/// into the result vector (JObject preserved).
+#[test]
+fn q2_fields_preserves_container_values_object() {
+    code!(
+        "fn run_q2fco() -> text {
+    v_q2fco = json_parse(\"{{\\\"k\\\":{{\\\"a\\\":1}}}}\");
+    kind_q2fco = \"\";
+    for entry in v_q2fco.fields() { kind_q2fco = entry.value.kind(); }
+    kind_q2fco
+}"
+    )
+    .expr("run_q2fco()")
+    .result(Value::str("JObject"));
+}
+
+#[test]
+fn q2_fields_for_loop_is_safe() {
+    code!(
+        "fn run_q2ffl() -> integer {
+    v_q2ffl = json_bool(true);
+    count_q2ffl = 0;
+    for _entry in v_q2ffl.fields() { count_q2ffl += 1; }
+    count_q2ffl
+}"
+    )
+    .expr("run_q2ffl()")
+    .result(Value::Int(0));
+}
+
+/// Q4 container constructors — first slice (2026-04-14):
+/// `json_array(items)` and `json_object(fields)` build empty
+/// containers when given empty input vectors.  Non-empty input
+/// returns JNull + diagnostic; the per-element deep-copy lands
+/// in a follow-up.
+#[test]
+fn q4_json_array_empty_vector_returns_jarray() {
+    code!(
+        "fn run_q4ae() -> text {
+    items_q4ae: vector<JsonValue> = [];
+    v_q4ae = json_array(items_q4ae);
+    v_q4ae.kind()
+}"
+    )
+    .expr("run_q4ae()")
+    .result(Value::str("JArray"));
+}
+
+#[test]
+fn q4_json_array_empty_has_zero_length() {
+    code!(
+        "fn run_q4ael() -> integer {
+    items_q4ael: vector<JsonValue> = [];
+    v_q4ael = json_array(items_q4ael);
+    v_q4ael.len()
+}"
+    )
+    .expr("run_q4ael()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q4_json_array_empty_serialises_as_brackets() {
+    code!(
+        "fn run_q4aes() -> text {
+    items_q4aes: vector<JsonValue> = [];
+    v_q4aes = json_array(items_q4aes);
+    v_q4aes.to_json()
+}"
+    )
+    .expr("run_q4aes()")
+    .result(Value::str("[]"));
+}
+
+#[test]
+fn q4_json_array_nonempty_input_returns_jarray() {
+    // (Was `…_stubs_to_jnull` until 2026-04-14 when the deep-copy
+    // landed.)  Locks that non-empty input now produces a real
+    // JArray with the right element count.
+    code!(
+        "fn run_q4ans() -> integer {
+    items_q4ans: vector<JsonValue> = [json_null()];
+    v_q4ans = json_array(items_q4ans);
+    v_q4ans.len()
+}"
+    )
+    .expr("run_q4ans()")
+    .result(Value::Int(1));
+}
+
+/// Q4 `json_array` deep-copy — multiple elements, mixed primitive
+/// variants, all preserved in the result arena.  `to_json` round-
+/// trips back to the canonical text form.
+#[test]
+fn q4_json_array_multi_element_round_trips() {
+    code!(
+        "fn run_q4amrt() -> text {
+    items_q4amrt: vector<JsonValue> = [
+        json_number(1.0),
+        json_number(2.0),
+        json_number(3.0)
+    ];
+    v_q4amrt = json_array(items_q4amrt);
+    v_q4amrt.to_json()
+}"
+    )
+    .expr("run_q4amrt()")
+    .result(Value::str("[1,2,3]"));
+}
+
+/// Q4 `json_array` deep-copy — element index access.  `item(N)`
+/// reads back the value passed at position N.
+#[test]
+fn q4_json_array_item_access_after_construction() {
+    code!(
+        "fn run_q4aiac() -> long {
+    items_q4aiac: vector<JsonValue> = [
+        json_number(10.0),
+        json_number(20.0),
+        json_number(30.0)
+    ];
+    v_q4aiac = json_array(items_q4aiac);
+    v_q4aiac.item(1).as_long()
+}"
+    )
+    .expr("run_q4aiac()")
+    .result(Value::Long(20));
+}
+
+/// Q4 `json_array` deep-copy — recursive: array of arrays.
+/// Inner arrays are themselves built via `json_array`, then
+/// embedded.  Outer length 2; inner length 2.
+#[test]
+fn q4_json_array_nested_construction() {
+    code!(
+        "fn run_q4anc() -> integer {
+    inner_a_q4anc: vector<JsonValue> = [json_number(1.0), json_number(2.0)];
+    inner_b_q4anc: vector<JsonValue> = [json_number(3.0), json_number(4.0)];
+    outer_q4anc: vector<JsonValue> = [
+        json_array(inner_a_q4anc),
+        json_array(inner_b_q4anc)
+    ];
+    v_q4anc = json_array(outer_q4anc);
+    v_q4anc.item(1).item(0).as_long() as integer
+}"
+    )
+    .expr("run_q4anc()")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn q4_json_object_empty_vector_returns_jobject() {
+    code!(
+        "fn run_q4oe() -> text {
+    fields_q4oe: vector<JsonField> = [];
+    v_q4oe = json_object(fields_q4oe);
+    v_q4oe.kind()
+}"
+    )
+    .expr("run_q4oe()")
+    .result(Value::str("JObject"));
+}
+
+#[test]
+fn q4_json_object_empty_has_zero_length() {
+    code!(
+        "fn run_q4oel() -> integer {
+    fields_q4oel: vector<JsonField> = [];
+    v_q4oel = json_object(fields_q4oel);
+    v_q4oel.len()
+}"
+    )
+    .expr("run_q4oel()")
+    .result(Value::Int(0));
+}
+
+#[test]
+fn q4_json_object_empty_serialises_as_braces() {
+    code!(
+        "fn run_q4oes() -> text {
+    fields_q4oes: vector<JsonField> = [];
+    v_q4oes = json_object(fields_q4oes);
+    v_q4oes.to_json()
+}"
+    )
+    .expr("run_q4oes()")
+    .result(Value::str("{}"));
+}
+
+/// Q4 `json_object` deep-copy — single field round-trip.  Build a
+/// JsonField in loft, pass it to json_object, read back via
+/// field() lookup.
+#[test]
+fn q4_json_object_single_field_round_trips() {
+    code!(
+        "fn run_q4osf() -> long {
+    f_q4osf = JsonField { name: \"k\", value: json_number(42.0) };
+    fields_q4osf: vector<JsonField> = [f_q4osf];
+    v_q4osf = json_object(fields_q4osf);
+    v_q4osf.field(\"k\").as_long()
+}"
+    )
+    .expr("run_q4osf()")
+    .result(Value::Long(42));
+}
+
+/// Q4 `json_object` deep-copy — multi-field length.
+#[test]
+fn q4_json_object_multi_field_length() {
+    code!(
+        "fn run_q4omfl() -> integer {
+    fa_q4omfl = JsonField { name: \"a\", value: json_number(1.0) };
+    fb_q4omfl = JsonField { name: \"b\", value: json_string(\"x\") };
+    fc_q4omfl = JsonField { name: \"c\", value: json_bool(true) };
+    fields_q4omfl: vector<JsonField> = [fa_q4omfl, fb_q4omfl, fc_q4omfl];
+    v_q4omfl = json_object(fields_q4omfl);
+    v_q4omfl.len()
+}"
+    )
+    .expr("run_q4omfl()")
+    .result(Value::Int(3));
+}
+
+/// Q4 `json_object` deep-copy — to_json round-trip.  Build via
+/// json_object, serialise via to_json, parse back, confirm shape.
+#[test]
+fn q4_json_object_serialisation() {
+    code!(
+        "fn run_q4os() -> text {
+    f1_q4os = JsonField { name: \"k\", value: json_number(7.0) };
+    fields_q4os: vector<JsonField> = [f1_q4os];
+    v_q4os = json_object(fields_q4os);
+    v_q4os.to_json()
+}"
+    )
+    .expr("run_q4os()")
+    .result(Value::str("{\"k\":7}"));
+}
+
+/// Q2 full-surface smoke — exercises every Q2 helper
+/// (`kind`, `has_field`, `keys`, `fields`) on the same JObject
+/// value in one expression chain.  Locks the four-way dispatch
+/// interaction.  Score breakdown today (post both keys + fields
+/// JObject walks 2026-04-14): kind=="JObject" → 1, has_field("k")
+/// → 1, keys.len() → 1, fields.len() → 1.  Total 4 — every Q2
+/// helper now returns its real JObject answer.
+#[test]
+fn q2_full_surface_smoke_on_jobject() {
+    code!(
+        "fn run_q2fs() -> integer {
+    v_q2fs = json_parse(\"{{\\\"k\\\":1}}\");
+    score_q2fs = 0;
+    if v_q2fs.kind() == \"JObject\" { score_q2fs += 1; }
+    if v_q2fs.has_field(\"k\")     { score_q2fs += 1; }
+    score_q2fs += v_q2fs.keys().len();
+    score_q2fs += v_q2fs.fields().len();
+    score_q2fs
+}"
+    )
+    .expr("run_q2fs()")
+    .result(Value::Int(4));
+}
+
+/// Q2 — the common guarded-access idiom works today and will
+/// keep working when step 4 lands.  `if v.has_field(k) { … }`
+/// is the forward-compatible pattern — on a primitive it
+/// takes the else branch, on a JObject (future) it takes the
+/// then branch iff the key is present.  This guard locks the
+/// control-flow shape.
+#[test]
+fn q2_has_field_gates_conditional_safely() {
+    code!(
+        "fn run_q2hg() -> integer {
+    v_q2hg = json_parse(\"null\");
+    if v_q2hg.has_field(\"users\") { 1 } else { 2 }
+}"
+    )
+    .expr("run_q2hg()")
+    .result(Value::Int(2));
 }
 
 // INC#18 — `x#break` is a labelled-break statement that reuses the

@@ -603,6 +603,89 @@ make test
 1. Deletes all files in `tests/generated/` and `tests/result/`.
 2. Runs `cargo test -- --nocapture --test-threads=1`, appending output to `result.txt`.
 
+### Fast-iteration workflow — don't spam the full suite
+
+When iterating on a specific test family (e.g. `p54_*`, `q3_*`,
+`b7_*`) during development, use a **tight name prefix filter**
+so cargo only builds + runs the tests you care about.
+The full `cargo test --release --test issues` suite compiles to
+~244 tests and takes ~30 s; a prefix-filtered run is ~1–2 s
+plus the one-time compile.
+
+```bash
+# Good — 1-2 s, runs ~5 tests:
+cargo test --release --test issues q3_to_json
+
+# Good — runs exactly one test:
+cargo test --release --test issues q3_to_json_of_jbool_true
+
+# Bad — runs the full 244-test suite every time (~30 s),
+# even though you only needed the 5 q3 tests:
+cargo test --release --test issues
+```
+
+The filter is a **case-sensitive substring match** on the test
+name, no separator required.  Don't add `-- q3_` (with the
+`--` flag separator) — that works too but has more parsing
+overhead.  A bare prefix is the Rust-standard pattern.
+
+### Don't stack duplicate cargo invocations
+
+If you invoke `cargo test` while a previous `cargo test` from
+the same terminal is still running (or still live in the shell's
+background), both invocations queue on the `target/` build lock.
+Each cargo invocation also pays the 1-2 s startup cost.
+Symptoms of stacked runs: test output is slow to appear; a
+`ps aux | grep issues-` shows several copies of the test
+binary running at >60 % CPU; the harness reports "has been
+running for over 60 seconds" on a test that should finish
+in milliseconds.
+
+**Rule:** always let a `cargo test` run complete before
+launching the next.  If a run hangs (suspicious of an infinite
+loop in a new test), kill the *specific* test binary and
+inspect:
+
+```bash
+# See what's running:
+ps aux | grep -E "issues-|cargo test" | grep -v grep
+
+# Force-kill all test binaries + cargo driver:
+pkill -9 -f "issues-"; pkill -9 -f "cargo test"
+```
+
+Then re-run with a narrower filter to identify which test
+is looping.  **Do not** add `--test-threads=1` to "serialise
+the mess"; that masks the bug and makes finding the real
+looper harder.
+
+### Diagnosing a hang vs a failure
+
+- **Hang** — test binary stays live at high CPU for more than
+  its expected runtime.  Likely root cause: an infinite
+  loop reading garbage memory (e.g. a String whose `len`
+  field got written as a huge value), a format-specifier
+  that doesn't terminate, or a recursive call with no base.
+  Narrow to one test via `cargo test --release --test <file>
+  <exact_name>` and run under `LOFT_LOG=full` to get the
+  bytecode trace up to the hang point.
+- **Failure** — test binary completes but output doesn't
+  match expected.  Diagnostic output lives in
+  `tests/dumps/<file>_<test>.txt` (under debug builds or
+  when `LOFT_LOG` is set).  Check the end of the dump file
+  for `FAILED` markers.  The test harness's `.result(…)`
+  check runs after execution, so a failed test has the full
+  bytecode trace available.
+
+Hangs caused by escape-sequence parsing in `code!()` have
+appeared twice now (e.g. `q3_to_json_of_jstring_with_escapes`
+— the loft parser's handling of `\\` inside
+Rust-double-escaped string literals fed through `code!()`).
+When a test involving string escapes hangs, move the repro
+to a standalone `.loft` file first (`/tmp/foo.loft`) to
+isolate whether the bug is in the test plumbing or in loft
+itself.
+
 ---
 
 ## Validating Generated Code — the `generated/` Workspace

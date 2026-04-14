@@ -85,3 +85,99 @@ pub fn as_long(self: JsonValue) -> long;
 
 /// Typed extractor — returns `null` on kind mismatch.
 pub fn as_bool(self: JsonValue) -> boolean;
+
+/// Q2 introspection — returns the variant name as text:
+/// `"JNull"`, `"JBool"`, `"JNumber"`, `"JString"`, `"JArray"`,
+/// or `"JObject"`.  Cheap: reads the discriminant byte, formats
+/// a literal.  Useful for logs and conditional branches that
+/// don't want to commit to a full pattern match.
+pub fn kind(self: JsonValue) -> text;
+
+/// Q2 introspection — returns the field-name list of a `JObject`
+/// in insertion order, or an empty vector for any other variant
+/// (forward-compatible idiom: `for k in v.keys() { ... }` is safe
+/// to write on any JsonValue).  Today this returns an empty
+/// vector for every variant (including JObject) — the JObject
+/// walk producing real names lands in a follow-up slice.  See
+/// QUALITY.md § Q2.
+pub fn keys(self: JsonValue) -> vector<text>;
+
+/// Q2 introspection — returns the (name, value) entries of a
+/// `JObject` in insertion order so callers can iterate as
+/// `for entry in fields(v) { … entry.name … entry.value … }`.
+/// Empty vector for any other variant.  First slice (2026-04-14):
+/// empty for every variant including JObject; the JObject walk
+/// lands together with `keys`'s JObject walk in a follow-up.
+pub fn fields(self: JsonValue) -> vector<JsonField>;
+
+/// Q2 introspection — returns true iff `self` is a `JObject`
+/// variant carrying a field named `name`.  All other variants
+/// (including `JNull` on a parse error) return false, so the
+/// common pattern `if v.has_field("users") { … }` is safe to
+/// write on any JsonValue without first destructuring.
+///
+/// Until P54 step 4 materialises the `JObject` arena, this is
+/// a forward-compatible stub: no real JObject can be
+/// constructed today, so every call returns false.  The API
+/// shape is already stable so callers can write the guarded-
+/// access pattern and pick up real answers when step 4 lands.
+pub fn has_field(self: JsonValue, name: text) -> boolean;
+
+/// Q3 serialiser — render a JsonValue to canonical RFC 8259 JSON
+/// text.  Primitive variants (`JNull`, `JBool`, `JNumber`,
+/// `JString`) serialise fully.  Container variants (`JArray`,
+/// `JObject`) render as the placeholder `"<pending step 4>"`
+/// until P54 step 4's arena materialiser lands — when that ships,
+/// the container arms recurse naturally.  Strings escape `"`,
+/// `\\`, and ASCII control bytes; UTF-8 passes through verbatim.
+/// Non-finite numbers render as `null`.
+pub fn to_json(self: JsonValue) -> text;
+
+/// Q3 pretty serialiser — `to_json_pretty` produces the same
+/// canonical text as `to_json` for primitive variants (no nested
+/// structure, nothing to indent).  When P54 step 4's arena
+/// materialises `JArray` / `JObject`, the container arms will
+/// diverge — 2-space indent, one element per line for collections
+/// with more than one element.  Useful for golden-file tests and
+/// log output.
+pub fn to_json_pretty(self: JsonValue) -> text;
+
+/// Q4 constructor — build a JsonValue set to the `JNull` variant.
+/// Useful in test fixtures and reply-construction code that needs
+/// a known-null JsonValue without going through `json_parse("null")`.
+/// The `JArray` / `JObject` container constructors land with P54
+/// step 4's arena materialisation.
+pub fn json_null() -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JBool` variant
+/// carrying the supplied boolean payload.
+pub fn json_bool(v: boolean) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JNumber` variant
+/// carrying the supplied float payload.  Non-finite inputs
+/// (float null = NaN, or ±Inf) produce `JNull` with a diagnostic
+/// in `json_errors()` — mirrors the RFC 8259 constraint that JSON
+/// numbers must be finite.
+pub fn json_number(v: float) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JString` variant
+/// carrying the supplied text payload.  The text is copied into
+/// the JsonValue's own store, so the returned value owns the
+/// string independently of the argument's lifetime.
+pub fn json_string(v: text) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JArray` variant
+/// carrying the supplied items.  Empty input produces a real empty
+/// JArray today; non-empty input returns `JNull` + a diagnostic in
+/// `json_errors()` because the per-element deep-copy from the
+/// caller's vector store into the new arena is pending a Q4
+/// follow-up slice.  The signature is API-stable — callers can
+/// already write `json_array([])` for the empty case and pick up
+/// real container construction when the deep-copy lands.
+pub fn json_array(items: vector<JsonValue>) -> JsonValue;
+
+/// Q4 constructor — build a JsonValue set to the `JObject` variant
+/// carrying the supplied fields.  Empty input produces a real empty
+/// JObject today; non-empty input returns `JNull` + a diagnostic in
+/// `json_errors()` (same forward-compat shape as `json_array`).
+pub fn json_object(fields: vector<JsonField>) -> JsonValue;

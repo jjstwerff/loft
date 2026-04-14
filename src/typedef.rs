@@ -212,6 +212,38 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             }
         }
     }
+    // QUALITY B5 fix: register `main_vector<T>` wrapper structs for every
+    // `vector<T>` field found on a struct or enum-value.  Parser paths
+    // that assign or construct a `vector<T>` already call
+    // `data.vector_def(...)`, but **struct-enum variant fields** (e.g.
+    // `Node { kids: vector<Tree> }` inside `enum Tree`) go through
+    // `parse_enum_values` / `fill_all` without ever hitting a vector
+    // assignment site.  Without the wrapper, `gen_set_first_vector_null`'s
+    // `data.name_type("main_vector<Tree>")` lookup returns `u16::MAX`
+    // and the interpreter emits `OpDatabase(var, db_tp=u16::MAX)` that
+    // panics in `Store::claim` as "Incomplete record".  Register the
+    // wrappers here, BEFORE the main `fill_database` loop, so the loop
+    // then picks them up and assigns a real `known_type`.
+    let mut pending: Vec<Type> = Vec::new();
+    for d_nr in 0..data.definitions() {
+        if !(matches!(data.def_type(d_nr), DefType::Struct)
+            || matches!(data.def_type(d_nr), DefType::EnumValue))
+        {
+            continue;
+        }
+        for a_nr in 0..data.attributes(d_nr) {
+            if let Type::Vector(content, _) = data.attr_type(d_nr, a_nr) {
+                let content_tp = *content;
+                let wrapper_name = format!("main_vector<{}>", content_tp.name(data));
+                if data.def_nr(&wrapper_name) == u32::MAX {
+                    pending.push(content_tp);
+                }
+            }
+        }
+    }
+    for tp in pending {
+        data.vector_def(lexer, &tp);
+    }
     for d_nr in 0..data.definitions() {
         if ((matches!(data.def_type(d_nr), DefType::EnumValue) && data.attributes(d_nr) > 0)
             || matches!(data.def_type(d_nr), DefType::Struct))
