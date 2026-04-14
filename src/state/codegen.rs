@@ -899,7 +899,7 @@ impl State {
                         .def(*fn_nr)
                         .attributes
                         .iter()
-                        .any(|a| a.hidden && matches!(a.typedef, Type::Reference(_, _)));
+                        .any(|a| a.hidden && a.typedef.heap_dep().is_some());
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
                     let tp_val = if has_hidden_ref {
                         i32::from(tp_nr)
@@ -1817,8 +1817,8 @@ impl State {
     }
 
     pub(super) fn known_type(&self, tp: &Type, stack: &Stack) -> u16 {
-        if let Type::Reference(c, _) = tp {
-            stack.data.def(*c).known_type
+        if let Some(c) = tp.heap_def_nr() {
+            stack.data.def(c).known_type
         } else {
             self.database.name(&tp.name(stack.data))
         }

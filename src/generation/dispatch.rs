@@ -36,14 +36,14 @@ impl Output<'_> {
         // when a call returns a Reference and the callee has
         // visible Reference params, the returned DbRef may alias a parameter.
         // Deep-copy to prevent aliasing.
-        if let (Type::Reference(d_nr, _), Value::Call(fn_nr, args)) = (variables.tp(var), to)
+        if let (Some(d_nr), Value::Call(fn_nr, args)) = (variables.tp(var).heap_def_nr(), to)
             && self.data.def(*fn_nr).name.starts_with("n_")
             && self.data.def(*fn_nr).code != Value::Null
             && self.data.def(*fn_nr).attributes.iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             })
         {
-            let tp_nr = self.data.def(*d_nr).known_type;
+            let tp_nr = self.data.def(d_nr).known_type;
             if !self.declared.contains(&var) {
                 self.declared.insert(var);
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
@@ -80,11 +80,11 @@ impl Output<'_> {
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Type::Reference(d_nr, _), Value::Var(src)) = (variables.tp(var), to)
-            && matches!(variables.tp(*src), Type::Reference(_, _))
+        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to)
+            && variables.tp(*src).heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));
-            let tp_nr = self.data.def(*d_nr).known_type;
+            let tp_nr = self.data.def(d_nr).known_type;
             if self.declared.contains(&var) {
                 // Reassignment: the variable was pre-declared via null_named
                 // (Set(var, Null)) at function entry.  OpDatabase below
@@ -723,7 +723,7 @@ impl Output<'_> {
                         self.output_code_inner(w, &vals[5 + i])?;
                         write!(w, "; ")?;
                     }
-                    let is_ref = matches!(&worker_ret, Type::Reference(_, _));
+                    let is_ref = worker_ret.heap_def_nr().is_some();
                     let par_fn = if matches!(&worker_ret, Type::Text(_)) {
                         "n_parallel_for_text_native"
                     } else if is_ref {

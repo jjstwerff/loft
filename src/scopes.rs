@@ -153,10 +153,10 @@ fn check_arg_ref_allocs(ir: &Value, function: &Function, fn_name: &str) {
                 && ops.len() >= 2
                 && let Value::Set(v, val) = &ops[0]
                 && matches!(val.as_ref(), Value::Null)
-                && matches!(function.tp(*v), Type::Reference(_, dep) if dep.is_empty())
+                && function.tp(*v).is_heap_owned()
             {
                 panic!(
-                    "[check_arg_ref_allocs] Set('{name}', Null) for owned Reference \
+                    "[check_arg_ref_allocs] Set('{name}', Null) for owned heap type \
                      is nested inside a Call/CallRef argument in '{fn_name}'. \
                      This corrupts the CallRef arg layout (A5.6). \
                      scan_args in scopes.rs must bubble it out.",
@@ -814,10 +814,7 @@ impl Scopes {
                 for v_nr in 0..n_vars {
                     if function.is_argument(v_nr)
                         && function.is_const_param(v_nr)
-                        && matches!(
-                            function.tp(v_nr),
-                            Type::Reference(_, _) | Type::Vector(_, _)
-                        )
+                        && function.tp(v_nr).heap_dep().is_some()
                     {
                         ls.push(Value::Call(
                             lock_fn,
@@ -860,12 +857,11 @@ impl Scopes {
                     continue;
                 }
                 if !chain.contains(&v_scope)
-                    && let Type::Reference(_, dep) = function.tp(v)
-                    && dep.is_empty()
+                    && function.tp(v).is_heap_owned()
                     && !function.is_skip_free(v)
                 {
                     eprintln!(
-                        "[scope_debug] ORPHANED Reference '{}' (var={v}): \
+                        "[scope_debug] ORPHANED heap var '{}' (var={v}): \
                          its scope={v_scope} is not in the chain to to_scope={to_scope}",
                         function.name(v),
                     );
@@ -953,8 +949,7 @@ impl Scopes {
                 // Existing A5.6 hoisting: lift Set(w, Null) for owned Reference.
                 let is_a56_hoisted = ops.len() == 2
                     && if let Value::Set(v, val) = &ops[0] {
-                        matches!(val.as_ref(), Value::Null)
-                            && matches!(function.tp(*v), Type::Reference(_, dep) if dep.is_empty())
+                        matches!(val.as_ref(), Value::Null) && function.tp(*v).is_heap_owned()
                     } else {
                         false
                     };
