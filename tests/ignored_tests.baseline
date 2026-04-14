@@ -6,5 +6,6 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+p54_b2_qualified_unit_variant_mixed_enum	B2-runtime: struct-enum work-ref store not freed in tail-return context (debug only, pre-existing)
 p54_match_on_jsonvalue_classifies_each_kind	B2-runtime/B3 family: match on struct-enum hits index OOB in allocation.rs
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

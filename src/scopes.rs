@@ -308,7 +308,9 @@ impl Scopes {
                 if let Some(Value::Var(ret_v)) = bl.operators.last() {
                     let ret_v = *self.var_mapping.get(ret_v).unwrap_or(ret_v);
                     if !self.var_scope.contains_key(&ret_v)
-                        && let Type::Reference(_, dep) | Type::Vector(_, dep) = function.tp(ret_v)
+                        && let Type::Reference(_, dep)
+                        | Type::Vector(_, dep)
+                        | Type::Enum(_, true, dep) = function.tp(ret_v)
                         && dep.is_empty()
                     {
                         self.var_scope.insert(ret_v, self.scope);
