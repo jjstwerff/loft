@@ -340,6 +340,15 @@ impl Output<'_> {
             if let Some(tp) = self.infer_type(arg) {
                 if narrow_int_cast(&tp).is_some() {
                     format!("({substituted}) as i32")
+                } else if matches!(tp, Type::Text(_))
+                    && matches!(arg, Value::Call(d, _) if
+                        matches!(self.data.def(*d).returned, Type::Text(_))
+                        && self.data.def(*d).rust.is_empty()
+                        && !self.data.def(*d).name.starts_with("Op"))
+                {
+                    // Text-returning user fn calls produce `Str`; callees
+                    // expect `&str`.  Deref at the binding site.
+                    format!("&*({substituted})")
                 } else {
                     substituted.clone()
                 }

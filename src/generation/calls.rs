@@ -67,7 +67,21 @@ impl Output<'_> {
                     let s = String::from_utf8(buf).unwrap();
                     write!(w, "{s} as u32")?;
                 } else {
+                    // B7-native: text-returning user fn calls produce `Str`,
+                    // but callees expect `&str`.  Wrap with `&*` to deref.
+                    let needs_deref = idx < def_fn.attributes.len()
+                        && matches!(def_fn.attributes[idx].typedef, Type::Text(_))
+                        && matches!(v, Value::Call(d, _) if
+                            matches!(self.data.def(*d).returned, Type::Text(_))
+                            && self.data.def(*d).rust.is_empty()
+                            && !self.data.def(*d).name.starts_with("Op"));
+                    if needs_deref {
+                        write!(w, "&*(")?;
+                    }
                     self.output_code_inner(w, v)?;
+                    if needs_deref {
+                        write!(w, ")")?;
+                    }
                 }
             }
         }
