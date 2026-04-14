@@ -110,6 +110,35 @@ every release.
 | **P122** | H | Store leak in game loops — struct/vector temps not freed at end-of-iteration.  Originally scoped as a Brick Buster ergonomics fix; **generalises** to any loop-body struct/vector construction.  Status-unknown (previously listed as "appears fixed"); must be re-verified in the zero-leak gate above. | PROBLEMS.md |
 | **Parallel leak audit** | M | `parallel { ... }` blocks — the A15 structured-concurrency path spawns workers that hold `ParallelCtx`; confirm no worker Stores remain after join.  Run the zero-leak gate with `LOFT_LOG=stores` on `tests/scripts/22-threading.loft`, `80-parallel-block.loft`. | THREADING.md |
 
+### Test suite integrity — no release may silently skip tests
+
+An ignored test is a bug you promised you would fix, then pulled
+out of CI.  Every `#[ignore]` hides a known failure — if the
+suite is silently skipping them, the release's "all green"
+status is a lie.  The bar is simple: **no `#[ignore]` attribute
+ships unless explicitly approved with a documented rationale
+and a linked issue**.
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **Zero-ignore gate** | H | Every `#[ignore]` (and every `#[ignore = "..."]`) must either be (a) removed because the underlying bug is fixed, or (b) explicitly approved by the release owner with a one-line rationale in `tests/ignored_tests.baseline`.  The approval must cite the blocking issue ID (e.g. `B7 family — ...`, `CI harness SIGABRT (P136-adjacent)`) so the ignore traces back to the open bug.  Unreviewed ignores — where the reason is vague or the owner didn't sign off — block the release. | `tests/ignored_tests.baseline` + `tests/doc_hygiene.rs::ignored_tests_baseline_is_current` |
+| **Skip-list audit** | H | Every `SKIP` / `NATIVE_SKIP` / `SCRIPTS_NATIVE_SKIP` / `ignored_scripts()` entry must be traceable to a specific open blocker issue.  "Currently worked around by skipping" counts as an ignore and must appear in the same baseline approval flow. | `tests/native.rs`, `tests/wrap.rs::ignored_scripts`, `tests/native_loader.rs` |
+
+Baseline as of 2026-04-14 (all 4 entries require owner sign-off
+before tagging):
+- `b7_character_interpolation_return_crashes` → tracks B7.
+- `file_content_nonexistent_trace` → tracks P136-adjacent CI
+  harness bug.
+- `p54_b5_recursive_struct_enum` → tracks B5 layer 3.
+- `regen_fill_rs` → maintenance-only, not a test of runtime
+  behaviour (regenerates `src/fill.rs`); candidate for
+  explicit permanent exemption.
+
+Plus `tests/wrap.rs::sigsegv_repro_79_alone` (standalone
+`#[ignore]`) and `tests/wrap.rs::ignored_scripts()` skipping
+`79-null-early-exit.loft` in `loft_suite` — both tracked under
+P136.
+
 ---
 
 ## Milestone-specific blockers
