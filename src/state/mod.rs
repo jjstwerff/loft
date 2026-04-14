@@ -476,9 +476,6 @@ impl State {
     pub fn fn_return(&mut self, ret: u16, value: u8, discard: u16) {
         let pos = self.stack_pos;
         self.stack_pos -= u32::from(discard);
-        // Clean up any text positions in the discarded range.  This can happen
-        // when conditional match arms with field bindings produce text values —
-        // the scope analysis may not emit OpFreeText for all branches.
         if cfg!(debug_assertions) {
             let orphans: Vec<u32> = self
                 .text_positions
@@ -1424,9 +1421,17 @@ impl State {
         let mut trail_head: usize = 0;
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
+            let op_pos_rt = self.code_pos;
             #[cfg(debug_assertions)]
             let op_pos = self.code_pos;
             let op = *self.code::<u8>();
+            // Publish the current bytecode position + op byte so that a
+            // subsequent SIGSEGV/SIGABRT prints the crash location.
+            // Cheap: one thread-local store per op.
+            {
+                let fn_d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
+                crate::crash_report::set_context(op_pos_rt, op, "(opcode dispatch)", fn_d_nr, "");
+            }
             #[cfg(debug_assertions)]
             {
                 trail_pos[trail_head] = op_pos;

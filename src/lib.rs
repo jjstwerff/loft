@@ -43,6 +43,7 @@ unsafe extern "C" {
 pub mod diagnostics;
 pub mod base64;
 mod calc;
+pub mod crash_report;
 pub mod data;
 pub mod database;
 pub mod hash;

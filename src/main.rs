@@ -37,6 +37,7 @@ mod calc;
 mod codegen_runtime;
 mod compile;
 mod const_eval;
+mod crash_report;
 mod data;
 mod database;
 mod extensions;
@@ -1125,6 +1126,9 @@ fn add_native_extern_flags(
 
 #[allow(clippy::too_many_lines)]
 fn main() {
+    // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
+    // last-executed opcode before the default handler fires.
+    crate::crash_report::install("loft");
     let argv: Vec<String> = env::args_os()
         .skip(1)
         .map(|a| a.to_str().unwrap_or("").to_string())

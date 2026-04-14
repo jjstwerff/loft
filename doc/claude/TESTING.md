@@ -1,6 +1,58 @@
 
 # Testing Framework
 
+## Reach for this first — efficient failure triage
+
+After a refactor expected to touch many tests, do NOT iterate
+"run → see one failure → fix → re-run → see the next failure":
+each cycle pays the compile + test-startup cost and discovers
+only one failure at a time.  Run a single `--no-fail-fast`
+pass and read the captured failures once.
+
+### Preferred shape — background + peek + wait
+
+```bash
+./scripts/find_problems.sh --bg        # kick it off, returns immediately
+# keep working; while the ~60-90 s run proceeds:
+./scripts/find_problems.sh --peek      # snapshot of any failures so far
+# when done:
+./scripts/find_problems.sh --wait      # block until finished, then summarise
+# result: /tmp/loft_problems.txt
+```
+
+`--bg` starts `cargo test --release --no-fail-fast` in a detached
+subshell and writes the raw log to `/tmp/loft_test.log`.  `--peek`
+tails the live log and pulls out any `FAILED` markers, inline
+panics, and SIGSEGV context (last ~15 lines before each crash).
+`--wait` blocks on the background pid and then produces the
+final summary.
+
+Running in the background is the default for a reason: the
+suite takes long enough that blocking on it wastes cycles you
+could spend reading the failure pattern that's already showing
+up in the log.  **Never run the full test suite in the
+foreground** — always go through `--bg`.  `cargo clippy` and
+single-file tests (`cargo test --release --test issues
+<prefix>`) stay foreground.
+
+### Foreground shape (small contexts)
+
+When you just want one run and are happy to wait:
+
+```bash
+./scripts/find_problems.sh                  # streams to stdout + log
+./scripts/find_problems.sh /tmp/log /tmp/problems  # custom paths
+```
+
+The summary has one `test NAME ... FAILED` line per failure,
+the stdout block for each, a SIGSEGV-context block when a
+binary crashed, and (if a wrap-suite crash was detected) a
+re-run of `loft_suite` under `--nocapture --test-threads=1`
+that recovers the crashing `.loft` file's name.
+
+See § [One-pass-find-all-problems workflow](#one-pass-find-all-problems-workflow)
+below for the full rationale and when NOT to use this shape.
+
 ## Contents
 - [Overview](#overview)
 - [Entry Points](#entry-points)
@@ -685,6 +737,108 @@ When a test involving string escapes hangs, move the repro
 to a standalone `.loft` file first (`/tmp/foo.loft`) to
 isolate whether the bug is in the test plumbing or in loft
 itself.
+
+### One-pass-find-all-problems workflow
+
+When a refactor touches code that many tests cover, the default
+"run → see one panic → fix → re-run → see next panic" loop pays
+the build + test-startup cost on every iteration.  A single
+~60-second test pass already runs every test if the early
+failures don't abort the whole binary — Rust test harnesses
+default to "continue on failure" within a single test binary,
+but `cargo test` itself stops after the FIRST test binary that
+produces a non-zero exit status.
+
+Use `--no-fail-fast` to keep going across all test binaries,
+redirect to a file, and read the file once.  The checked-in
+helper `scripts/find_problems.sh` wraps this:
+
+```bash
+./scripts/find_problems.sh
+# → /tmp/loft_test.log   raw test output
+# → /tmp/loft_problems.txt   compact failure summary
+```
+
+**Peek while a run is in flight.**  `tee` writes the log live,
+so you can inspect failures before the whole suite finishes:
+
+```bash
+./scripts/find_problems.sh --peek
+# reads /tmp/loft_test.log, prints any FAILED markers found so far
+# plus their stdout blocks; shows the current tail if none yet
+```
+
+Optional: `./scripts/find_problems.sh <log-path> <problems-path>`
+to write to other locations.  Equivalent inline:
+
+```bash
+cargo test --release --no-fail-fast 2>&1 | tee /tmp/loft_test.log
+{
+  grep -E "^test .* FAILED$" /tmp/loft_test.log
+  echo
+  grep -B1 -A6 "^---- " /tmp/loft_test.log
+} > /tmp/loft_problems.txt
+```
+
+`/tmp/loft_problems.txt` has the structure:
+
+```
+test errors_accessor_path_on_failure ... FAILED
+test q3_to_json_pretty_three_level_nesting ... FAILED
+... (all failure headers)
+
+---- errors_accessor_path_on_failure stdout ----
+thread 'errors_accessor_path_on_failure' (3741234) panicked at src/native.rs:172:5:
+expected #errors entries for bad input (errors_accessor_path_on_failure:5)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- q3_to_json_pretty_three_level_nesting stdout ----
+thread 'q3_to_json_pretty_three_level_nesting' (3741198) panicked at tests/testing.rs:437:13:
+Test failed {"a":{"b":[1]}} != "{ ... " (q3_to_json_pretty_three_level_nesting:9)
+... (one block per failed test)
+```
+
+Read this once, plan all the fixes, apply, re-run.  No
+"two-pass-per-failure" cycle.
+
+**Why this isn't the default:**
+
+- `cargo test`'s default fail-fast is useful for fast feedback
+  when iterating on ONE area — you see the first problem
+  immediately without waiting for the rest.
+- `--no-fail-fast` is what you want for a refactor sweep where
+  you EXPECT multiple failures and want to plan the fix order.
+
+**Patterns to apply:**
+
+- For per-test diagnosis, the `tests/dumps/<file>_<test>.txt`
+  file (debug builds or `LOFT_LOG=...` set) carries the full
+  bytecode trace.  The problems file points you at WHICH
+  tests failed; the dump file tells you WHY each one failed.
+- After applying fixes, re-run the same command — diff the new
+  problems file against the old to confirm your changes only
+  closed problems (didn't introduce new ones).
+- Stable problems are easier to track via the
+  `ignored_tests.baseline` mechanism (see § Test Coverage Gaps)
+  — that's the long-term home for "known-failing" tests; the
+  problems file is for in-flight refactor work.
+
+**Checked-in helper:** `scripts/find_problems.sh` (executable,
+takes optional `$1` log path and `$2` problems-summary path).
+Reach for the script instead of typing the inline pipeline —
+future sessions will find it by `ls scripts/` or by greping for
+"find_problems" in this doc.
+
+**When NOT to use this workflow:**
+
+- During focused development on ONE test family — use the
+  prefix-filter form (`cargo test --release --test issues
+  q3_to_json`).  Faster feedback, no problems-file overhead.
+- When you've JUST landed a substantial change and want to
+  confirm zero regressions — `cargo test --release` (default
+  fail-fast) tells you faster if SOMETHING broke; only flip
+  to `--no-fail-fast` once you know there are multiple failures
+  to triage.
 
 ---
 

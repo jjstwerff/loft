@@ -17,7 +17,20 @@ cargo run --bin loft -- --help                # CLI help
 cargo run --bin gendoc                        # regenerate doc/*.html
 make ci                                       # fmt → clippy → test (full local gate)
 make test                                     # clippy + test; output in result.txt
+./scripts/find_problems.sh --bg               # background full-suite run
+./scripts/find_problems.sh --peek             #   inspect mid-run
+./scripts/find_problems.sh --wait             #   block for summary
 ```
+
+For any refactor likely to surface multiple test failures, kick off
+`find_problems.sh --bg` before going back to editing.  It runs
+`cargo test --release --no-fail-fast` detached, tees the log to
+`/tmp/loft_test.log`, and writes a structured summary to
+`/tmp/loft_problems.txt` on completion (FAILED list, stdout blocks,
+SIGSEGV context, plus a wrap-suite `--nocapture` re-run when a
+crash masks a specific `.loft` filename).  See
+[TESTING.md](doc/claude/TESTING.md) § "Preferred shape —
+background + peek + wait" for the full rationale.
 
 ---
 
