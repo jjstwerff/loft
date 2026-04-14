@@ -2253,23 +2253,8 @@ fn o7_format_string_with_capacity() {
 // regresses, that variant is exercised by the LOFT_LOG-driven test dumps,
 // not by this guard.
 //
-// Re-ignored 2026-04-14: CI's nextest runner aborts this test with SIGABRT
-// (`TRY 1 ABRT`).  Passes locally in isolation, but the CI harness's
-// parallel run corrupts state between tests in the same binary (same
-// pattern as the pre-existing P136 wrap-suite SIGSEGV).  Keep the test
-// but ignore until the underlying harness/state issue is root-caused.
-#[test]
-#[ignore = "CI harness SIGABRT (P136-adjacent); passes in isolation"]
-fn file_content_nonexistent_trace() {
-    code!(
-        "fn test() {
-    f = file(\"/nonexistent_file_trace_test.txt\");
-    t = f.content();
-    assert(t == \"\", \"expected empty, got '{t}'\");
-}"
-    )
-    .result(Value::Null);
-}
+// Deleted: file_content_nonexistent_trace — duplicate of file_content_nonexistent
+// (passing), and the ignore was for a P136-adjacent harness bug, not a behavior gap.
 
 // ── P122: Struct return inside loop should not exhaust store pool ────────────
 // When a function returns a struct, the callee allocates a store. Inside a loop
@@ -3947,20 +3932,8 @@ fn run() -> boolean {
     .result(Value::Boolean(true));
 }
 
-#[test]
-#[ignore = "P54 step 6 intentionally NOT shipped as hard rejection — text args auto-wrap through json_parse for backward compatibility"]
-fn p54_struct_parse_rejects_plain_text() {
-    code!(
-        "struct User { name: text }
-fn run() -> text {
-    u = User.parse(\"{{\\\"name\\\":\\\"Bob\\\"}}\");
-    u.name
-}"
-    )
-    .error(
-        "User.parse expects a JsonValue — call json_parse(text) first at p54_struct_parse_rejects_plain_text:3:44",
-    );
-}
+// Deleted: p54_struct_parse_rejects_plain_text — tested a rejected design decision
+// (hard rejection of text args). Current design auto-wraps through json_parse.
 
 // ── P54 struct-enum blockers — runtime specs (BITING_PLAN § P54) ──────────
 //
