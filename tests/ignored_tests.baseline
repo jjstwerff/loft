@@ -7,7 +7,6 @@
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
 file_content_nonexistent_trace	CI harness SIGABRT (P136-adjacent); passes in isolation
-p54_b5_recursive_struct_enum	P54 B5 (narrower): match-arm bindings fixed; recursive count(t) returns to wrong PC — looks B3-adjacent.
 p54_match_on_jsonvalue_classifies_each_kind	B2-runtime/B3 family: match on struct-enum hits index OOB in allocation.rs
 p54_struct_parse_rejects_plain_text	P54 step 6 intentionally NOT shipped as hard rejection — text args auto-wrap through json_parse for backward compatibility
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

@@ -4093,7 +4093,6 @@ fn run() -> float {
 /// recursive-call path than a match lifetime one.  See QUALITY.md
 /// § B5 for the current state and where to continue.
 #[test]
-#[ignore = "P54 B5 (narrower): match-arm bindings fixed; recursive count(t) returns to wrong PC — looks B3-adjacent."]
 fn p54_b5_recursive_struct_enum() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }

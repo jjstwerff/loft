@@ -492,14 +492,36 @@ impl State {
             stack.position = stack_pos;
             let fp = self.generate(f_val, stack, false);
             let false_stack = stack.position;
-            self.code_put(end, (self.code_pos - false_pos) as i16); // actual end
-            // when one branch diverges (return/break/continue), use the
-            // other branch's stack position. The divergent branch exits the
-            // scope so its stack delta is irrelevant at the join point.
-            if is_divergent(t_val) {
-                stack.position = false_stack;
-            } else if is_divergent(f_val) {
-                stack.position = true_stack;
+            // B5: when both arms are non-divergent but exit at different stack
+            // levels (e.g. match arms with different local allocations), the
+            // shorter arm's result value sits at a lower stack position than
+            // the longer arm's.  Rather than padding (which would bury the
+            // result under garbage), emit the join point at the SHORTER arm's
+            // level and make the longer arm discard its extra bytes before
+            // reaching the join point (its result is already on top of stack).
+            if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
+                let target = true_stack.min(false_stack);
+                if false_stack > target {
+                    // Shrink the false arm's stack to match the true arm.
+                    let excess = false_stack - target;
+                    stack.add_op("OpFreeStack", self);
+                    let ret_size = size(&stack.data.def(stack.def_nr).returned, &Context::Argument);
+                    self.code_add(ret_size as u8);
+                    self.code_add(excess + ret_size as u16);
+                    stack.position = target;
+                }
+                self.code_put(end, (self.code_pos - false_pos) as i16);
+                stack.position = target;
+            } else {
+                self.code_put(end, (self.code_pos - false_pos) as i16);
+                // when one branch diverges (return/break/continue), use the
+                // other branch's stack position. The divergent branch exits the
+                // scope so its stack delta is irrelevant at the join point.
+                if is_divergent(t_val) {
+                    stack.position = false_stack;
+                } else if is_divergent(f_val) {
+                    stack.position = true_stack;
+                }
             }
             if matches!(tp, Type::Never) {
                 return fp;
