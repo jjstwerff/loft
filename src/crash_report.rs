@@ -46,7 +46,12 @@ thread_local! {
     static LAST_CTX: Cell<Ctx> = const { Cell::new(Ctx::EMPTY) };
 }
 
+// On non-Unix platforms the signal-handler consumer is compiled
+// out, so the fields look unread to rustc.  The thread-local
+// `set_context` writes still happen (and the tests read them),
+// so `#[allow(dead_code)]` is correct here for both targets.
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Ctx {
     pc: u32,
     fn_d_nr: u32,
@@ -173,13 +178,14 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
     // core dump and terminating the process.
 }
 
-#[cfg(unix)]
+// `Writer` and its methods are pure Rust — available on every
+// platform so the `#[cfg(test)]` unit tests compile uniformly.
+// Only the signal-handler path that invokes it is `#[cfg(unix)]`.
 struct Writer<'a> {
     buf: &'a mut [u8],
     pos: usize,
 }
 
-#[cfg(unix)]
 impl<'a> Writer<'a> {
     fn new(buf: &'a mut [u8]) -> Self {
         Writer { buf, pos: 0 }
