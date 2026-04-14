@@ -1586,6 +1586,163 @@ diagnostic from every source has full location info.
 
 ---
 
+## Active design — Dep-inference for native fn returns (zero-leak unblock)
+
+**Bite (2026-04-14).**  P54 ships a JsonValue surface
+(`json_null`, `json_bool`, `json_number`, `json_string`,
+`json_array`, `json_object` constructors plus `field`, `item`,
+`kind`, `keys`, `fields`, `as_*` accessors).  Every chained
+expression like `json_null().as_bool()` or
+`v.field("x").kind()` leaks the temporary JsonValue store at
+scope exit.  CI's debug-mode `execute_log_steps` assertion
+(`Database X not correctly freed` at `src/state/debug.rs:994`)
+catches it; release mode silently leaks per call.
+
+Root cause: scope analysis's `inline_struct_return`
+(`src/scopes.rs:~1026`) only lifts user-defined Reference returns
+(`def.code != Value::Null`).  Native struct-enum returns
+(`Type::Enum(_, true, dep)`) are never lifted — but the
+constructors DO allocate fresh stores that need freeing.  The
+existing system can't distinguish constructors (need lift) from
+accessors (must NOT lift — they borrow into self's arena).
+
+The discriminator is the `dep` field on the return type.  An
+accessor borrows from `self` so its return should declare
+`dep=[<self_attr_index>]`.  A constructor has no self so its
+return should declare `dep=[]`.  Today both are declared
+`dep=[]` because native function declarations never run through
+`ref_return` (which only fires for fns with bodies).
+
+**Decision: implicit dep inference for native fn returns.**
+
+When a native function declaration `pub fn name(self: T, ...)
+-> R;` is parsed and the return type R structurally matches the
+self type T (same `Reference(d, _)` or `Enum(d, true, _)` with
+the same `d`), automatically populate the return's `dep` with
+`[<self_attr_index>]`.  No syntax change required; no per-fn
+annotation; the parser infers borrowing from "returns the same
+thing self is".
+
+Cases handled correctly:
+
+| Native | Self type | Return type | Inferred dep | Lifted? |
+|---|---|---|---|---|
+| `json_null()` | (none) | `JsonValue` | `[]` | YES (constructor, owned) |
+| `json_string(text)` | (none) | `JsonValue` | `[]` | YES |
+| `json_array(vec<JV>)` | (none) | `JsonValue` | `[]` | YES |
+| `json_parse(text)` | (none) | `JsonValue` | `[]` | YES |
+| `field(self: JV, text)` | `JsonValue` | `JsonValue` | `[0]` (= self) | NO (borrows) |
+| `item(self: JV, integer)` | `JsonValue` | `JsonValue` | `[0]` | NO |
+| `kind(self: JV)` | `JsonValue` | `text` | n/a (text) | n/a |
+| `as_bool(self: JV)` | `JsonValue` | `boolean` | n/a (bool) | n/a |
+| `Type.parse(text)` | (none) | `Type` | `[]` | YES |
+
+The accessor-method tests added in P54 (`field()`, `item()`)
+return JsonValue from a JsonValue self → infer dep=[0] → not
+lifted → no use-after-free.  The constructor tests (`json_null`,
+`json_bool`, etc.) return JsonValue with no self → dep=[] → lift
+→ OpFreeRef fires at scope exit → no leak.
+
+### Surface change (`src/parser/definitions.rs` or wherever
+native fn parsing happens)
+
+After parsing a native fn declaration with an empty body, before
+storing the return type, check:
+
+```rust
+if let Type::Reference(ret_d, ref mut dep) | Type::Enum(ret_d, true, ref mut dep)
+        = &mut def.returned
+    && dep.is_empty()
+{
+    for (i, attr) in def.attributes.iter().enumerate() {
+        if attr.name == "self" {
+            let self_d = match &attr.typedef {
+                Type::Reference(d, _) | Type::Enum(d, true, _) => Some(*d),
+                _ => None,
+            };
+            if self_d == Some(*ret_d) {
+                dep.push(i as u16);
+            }
+            break;
+        }
+    }
+}
+```
+
+### Surface change (`src/scopes.rs::inline_struct_return`)
+
+Once accessors carry a non-empty `dep` and constructors carry
+`dep=[]`, extend the lift to native struct-enum constructors:
+
+```rust
+fn inline_struct_return(val: &Value, data: &Data, _outer_call: u32) -> Option<u32> {
+    if let Value::Call(fn_nr, _) = val {
+        let def = data.def(*fn_nr);
+        // existing rule: user-defined struct return
+        if def.name.starts_with("n_")
+            && def.code != Value::Null
+            && let Type::Reference(d_nr, _) = &def.returned
+        {
+            return Some(*d_nr);
+        }
+        // new rule: native struct-enum constructor (dep-empty)
+        if (def.name.starts_with("n_") || def.name.starts_with("t_"))
+            && let Type::Enum(d_nr, true, dep) = &def.returned
+            && dep.is_empty()
+        {
+            return Some(*d_nr);
+        }
+    }
+    None
+}
+```
+
+### Tests to un-ignore once the dep-fix lands
+
+All 34 entries in `tests/ignored_tests.baseline` tagged
+`p54-leak: chained json call temp not freed (zero-leak gate)`
+should pass once dep inference is correct AND the lift extends
+to struct-enum constructors.  Iterate: regenerate baseline via
+`python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`,
+run `cargo test --test issues p54_` in DEBUG mode, expect green.
+
+### Acceptance criteria
+
+- `cargo test --test issues p54_` — all p54 tests green in DEBUG
+  build (no `Database X not correctly freed` panic).
+- 34 ignore entries removed from `tests/ignored_tests.baseline`
+  and from `tests/issues.rs` `#[ignore]` attributes.
+- `tests/wrap.rs::loft_suite` — leak warnings on scripts
+  `42-file-result.loft`, `62-index-range-queries.loft`,
+  `76-struct-vector-return.loft` either disappear or are
+  separately diagnosed (not all of them are this same root
+  cause).
+- 0.8.4 tag attempt resumes (per RELEASE.md § Safety gate
+  deferral).
+
+### Implementation cost
+
+- ~30 lines in `src/parser/definitions.rs` for the inference.
+- ~10 lines in `src/scopes.rs::inline_struct_return` to lift
+  the new constructor case.
+- One regression test in `tests/issues.rs` that asserts the
+  inferred dep on `field()` and json_null() (read via
+  `Data::def(...)`).
+- ~5 deletions from `tests/ignored_tests.baseline` per
+  unignored test (× 34).
+- One CHANGELOG entry under `[Unreleased]`.
+
+### Why this belongs here
+
+This is the unblock for the 0.8.4 tag.  Without it, the P54
+JsonValue surface ships with a real production leak — every
+short-lived JsonValue (constructor or arena lookup) leaks
+unbounded in any program that exercises the API.  RELEASE.md §
+Safety gate explicitly blocks the tag on this.  Task #46
+tracks the implementation.
+
+---
+
 ## Compiler blockers — struct-enum bugs
 
 **Status (2026-04-13):** Concrete fix designs documented for all
