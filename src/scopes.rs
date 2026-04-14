@@ -745,7 +745,7 @@ impl Scopes {
             }
         } else if let Value::Block(bl) = expr {
             return insert_free(bl, &ls, is_return);
-        } else if is_return && is_value_return_type(tp) {
+        } else if is_return && is_value_return_type(tp) && !matches!(expr, Value::Return(_)) {
             // B5-L3: when a value-returning function's tail expression is a
             // non-Block, non-Var, non-Null value (If/Match/Call etc.) and
             // there are free ops to run before return, save the expression's
@@ -755,6 +755,8 @@ impl Scopes {
             // reading the expression's result from top-of-stack via Return's
             // `value` bytes, but native codegen produced `let _ = expr; ...;
             // return 0` and dropped the function's actual return value.
+            // Skip when expr is already a `Value::Return(...)` — wrapping
+            // would generate `let _ret = return …` (E0308 in native).
             self.ret_temp_counter += 1;
             let name = format!("__ret_{}", self.ret_temp_counter);
             let tmp = function.add_temp_var(&name, tp);
@@ -765,7 +767,7 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
-        } else if is_return && matches!(tp, Type::Text(_)) {
+        } else if is_return && matches!(tp, Type::Text(_)) && !matches!(expr, Value::Return(_)) {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
             // temp's String holds an OWN copy (OpAppendText copies bytes),
@@ -774,6 +776,7 @@ impl Scopes {
             // OpFreeText isn't emitted at scope exit — the String leaks
             // for the duration of the caller's read, which is fine because
             // the caller copies bytes via AppendText immediately on return.
+            // Same `Return` guard as above.
             self.ret_temp_counter += 1;
             let name = format!("__ret_{}", self.ret_temp_counter);
             let tmp = function.add_temp_var(&name, tp);

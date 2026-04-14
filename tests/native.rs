@@ -244,6 +244,25 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
+    // Honour `// @ARGS: --lib <dir>` lines at the top of the test file
+    // so scripts using `use foo::*` can locate fixtures alongside
+    // wrap.rs's loft_suite (e.g. tests/lib/importlib.loft for
+    // 88-imports.loft).  Only `--lib <dir>` is recognised; other
+    // CLI-side flags are ignored at this layer.
+    if let Ok(src) = std::fs::read_to_string(entry) {
+        for line in src.lines().take(20) {
+            if let Some(args) = line.trim().strip_prefix("// @ARGS:") {
+                let mut tokens = args.split_whitespace();
+                while let Some(tok) = tokens.next() {
+                    if tok == "--lib"
+                        && let Some(dir) = tokens.next()
+                    {
+                        p.lib_dirs.push(dir.to_string());
+                    }
+                }
+            }
+        }
+    }
     let start_def = p.data.definitions();
     p.parse(&entry.to_string_lossy(), false);
     for l in p.diagnostics.lines() {
