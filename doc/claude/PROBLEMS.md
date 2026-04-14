@@ -36,6 +36,7 @@ existing entry, not re-open it as a bug.
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
+| 136 | wrap-suite SIGSEGV on `79-null-early-exit.loft` | **High — RELEASE BLOCK** | Skipped in `loft_suite` via `ignored_scripts()`; covered by dedicated `#[ignore] sigsegv_repro_79_alone` test. Runs fine via CLI + valgrind-clean. See § P136 below. |
 
 ---
 
@@ -139,37 +140,61 @@ dynamic-shape use case too.
 
 ```loft
 pub enum JsonValue {
-    JObject { fields: hash<JsonField[name]> },
-    JArray  { items:  vector<JsonValue> },
-    JString { value:  text },
-    JNumber { value:  float not null },   // IEEE-754 per RFC 8259
-    JBool   { value:  boolean },
     JNull,
+    JBool   { value: boolean },
+    JNumber { value: float not null },   // IEEE-754 per RFC 8259
+    JString { value: text },
+    JArray  { items:  vector<JsonValue> },
+    JObject { fields: vector<JsonField> }
 }
 
 pub struct JsonField { name: text, value: JsonValue }
 
-pub fn json_parse(raw: text) -> JsonValue;         // replaces every json_* fn
-pub fn to_json(self: JsonValue) -> text;           // round-trip
+// Parse + diagnostics
+pub fn json_parse(raw: text)               -> JsonValue;
+pub fn json_errors()                       -> text;     // RFC 6901 path + line:col
 
-// JObject / JArray indexers return JNull on miss, never garbage:
-pub fn field(self: JsonValue, name: text)  -> JsonValue;   // object only
-pub fn item(self: JsonValue, index: integer) -> JsonValue; // array only
+// Read surface
+pub fn kind(self: JsonValue)               -> text;     // "JNull" .. "JObject"
+pub fn len(self: JsonValue)                -> integer;  // null on non-container
+pub fn field(self: JsonValue, name: text)  -> JsonValue; // JObject only; JNull on miss / wrong kind
+pub fn item(self: JsonValue, index: integer) -> JsonValue; // JArray only; JNull on OOB / wrong kind
+pub fn has_field(self: JsonValue, name: text) -> boolean;
+pub fn keys(self: JsonValue)               -> vector<text>;
+pub fn fields(self: JsonValue)             -> vector<JsonField>; // values deep-copy
 
-// Typed extractors — null on kind mismatch:
+// Typed extractors — null on kind mismatch
 pub fn as_text(self:   JsonValue) -> text;
 pub fn as_number(self: JsonValue) -> float;
 pub fn as_long(self:   JsonValue) -> long;
 pub fn as_bool(self:   JsonValue) -> boolean;
-pub fn len(self: JsonValue)       -> integer;     // array or object fields
 
+// Write surface
+pub fn to_json(self: JsonValue)            -> text;     // canonical RFC 8259
+pub fn to_json_pretty(self: JsonValue)     -> text;     // 2-space indent for non-empty containers
+
+// Construction helpers
+pub fn json_null()                                 -> JsonValue;
+pub fn json_bool(v: boolean)                       -> JsonValue;
+pub fn json_number(v: float)                       -> JsonValue;  // non-finite → JNull
+pub fn json_string(v: text)                        -> JsonValue;
+pub fn json_array(items: vector<JsonValue>)        -> JsonValue;  // deep-copies items
+pub fn json_object(fields: vector<JsonField>)      -> JsonValue;  // deep-copies fields
+
+// Schema-driven (P54 step 5 — pending)
 pub fn parse(self: Type, v: JsonValue) -> Type;   // `MyStruct.parse(v)`
 ```
 
+`JObject.fields` is stored as `vector<JsonField>` rather than the
+originally-designed `hash<JsonField[name]>` — the hash form is a
+0.9.0 follow-up once hash iteration and nested struct-enum-in-hash
+layouts are exercised end-to-end.  Linear scan is fine for the
+object sizes typical in configuration / API responses.
+
 The old `json_items` / `json_nested` / `json_long` / `json_float` /
-`json_bool` surface documented in [PLANNING.md](PLANNING.md) is
-withdrawn.  All JSON work routes through `json_parse` → `JsonValue`
-from 0.9.0 onward.
+`json_bool` surface documented in [PLANNING.md](PLANNING.md) § H2
+is withdrawn.  All JSON work routes through `json_parse` →
+`JsonValue` from 0.9.0 onward.
 
 Full landing plan in [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
 
@@ -451,6 +476,109 @@ independently reproducible via the enum + for-loop snippet above.
 **Discovered:** 2026-04-12 during C61.local unconditional-reject
 attempt (commit b716d1d, reverted).  Narrowed 2026-04-12 via a
 5-line reproducer and a failed naïve fix.
+
+---
+
+## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — RELEASE BLOCK
+
+**Severity:** High (release blocker — see RELEASE.md Gate Items).
+
+**Symptom:** `cargo test --release --test wrap` (or the full suite
+`./scripts/find_problems.sh`) aborts with one of:
+- `free(): invalid pointer`
+- `corrupted size vs. prev_size`
+- `signal 11 SIGSEGV: invalid memory reference`
+
+Always attributed to `loft_suite`, which runs every
+`tests/scripts/*.loft` sequentially through `wrap::run_test`.
+The wrap `loft_suite` now **skips `79-null-early-exit.loft`** via
+`ignored_scripts()`, but the script is STILL covered by a
+dedicated `#[ignore] sigsegv_repro_79_alone` regression test —
+that test currently crashes when run (`--ignored`), locking the
+reproducer for the eventual fix.
+
+**Not** caused by this session's P54-U changes.  Still reproduces
+after `git show HEAD:src/*` replaces every modified `src/` file
+with its committed HEAD content.  The bug is pre-existing at
+commit `d0d6932`.
+
+**Debugger fingerprints (valgrind):**
+
+```
+Invalid write of size 1
+   at loft::fill::op_return
+   by loft::state::State::execute_argv
+ Address ... is 8 bytes after a block of size 8,008 alloc'd
+   by loft::state::State::new
+```
+
+The 8008-byte block is the stack store allocated in `State::new`
+(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` writes
+8 bytes past the end of that block — `stack_pos` climbs above
+8000.  Live instrumentation shows `fn_return` being called
+repeatedly at `code_pos=6`, reading `u32::MAX` but getting `6` or
+similar small bytecode offsets, turning the wrap-test binary into
+an infinite loop that grows the stack by 12 bytes per iteration
+until it overflows into adjacent heap and corrupts Rust's
+allocator metadata.  The `Data::drop` at end of `run_test` then
+finds corrupted `Value`/`String` entries and glibc aborts.
+
+**Runs fine via CLI:**
+
+```
+$ target/release/loft tests/scripts/79-null-early-exit.loft
+  (exits 0, clean)
+$ valgrind target/release/loft tests/scripts/79-null-early-exit.loft
+  (zero memory errors)
+```
+
+So the bug lives somewhere in the difference between
+`cached_default()` → clone → `run_test` vs. a fresh
+`parser.parse_dir` → parse user file → execute.
+
+**Leading hypotheses (unverified):**
+
+1. **Frame-yield residue from a default-parse side effect.**  The
+   default library's parser pass registers some lazily-initialised
+   state (static `NATIVE_REGISTRY`, closure maps, etc.).  If the
+   cached clone differs subtly from a fresh parse — a differently-
+   sized stack reserve, a const-store offset, an unset `arguments`
+   register — main's `OpReturn` could read its ret/discard operands
+   off the wrong bytecode position and corrupt the stack.
+2. **C56 `?? return` interaction with top-level return.**  Script
+   79 is the ONLY script in the suite using `?? return`.  The
+   desugared form emits an inner `OpReturn` inside `safe_double`
+   / `chain_test` / `void_test`.  A compile-time mismatch between
+   `self.arguments` (cached at def_code entry) and the current
+   stack.position at the nested `Return` could land us at wrong
+   offsets on return.
+3. **Stale `self.arguments` between functions.**  `self.arguments`
+   is a `State` field mutated inside `def_code`.  If a previous
+   def's value leaks into another def's `gen_return`, the bytecode
+   for that return has the wrong `ret` operand.
+
+**To reproduce:**
+
+```
+cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
+```
+
+**Debug aids in place:**
+
+- `src/crash_report.rs` — `install("wrap")` / `set_context(pc, op,
+  d_nr, fn_name)` lets the interpreter publish the last opcode per
+  thread; a SIGSEGV/SIGABRT/SIGBUS handler prints it to stderr
+  async-signal-safely before the default handler produces a core
+  dump.  Call `crash_report::install("loft")` at the top of
+  `main.rs` or `run_test` to enable.
+- `ulimit -c unlimited` + `sysctl -w kernel.core_pattern=/tmp/core.%e.%p`
+  — local core dumps, inspect with `gdb -c core target/release/deps/wrap-<hash>`.
+- `valgrind --error-exitcode=42 --track-origins=yes --num-callers=30
+  target/release/deps/wrap-<hash> sigsegv_repro_79_alone --ignored
+  --nocapture` — points `op_return` at the out-of-bounds write.
+
+**Discovered:** 2026-04-14 during P54-U phase 2 test sweep.
+See `CHANGELOG.md` and `doc/claude/QUALITY.md` § P136 for ownership.
 
 ---
 

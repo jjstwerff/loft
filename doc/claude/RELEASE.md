@@ -1,146 +1,187 @@
 
 # Release Planning
 
+## What this file is — and isn't
+
+This file answers one question: **what must be true before we tag
+and publish a release of the loft language?**  Every line below
+is a gate.  If an item here is still open on release day, the
+release slips.  If an item you think matters is not here, it does
+not block a release (and probably belongs in
+[PLANNING.md](PLANNING.md) or [ROADMAP.md](ROADMAP.md) instead).
+
+RELEASE.md is the **ship checklist**.  The full project backlog,
+priorities, and ambitions live elsewhere:
+
+| File | Scope | Question it answers |
+|---|---|---|
+| **RELEASE.md** (this file) | Ship checklist | "What must be true before we can publish?" |
+| **[ROADMAP.md](ROADMAP.md)** | Things we want to do, grouped by milestone | "What's the arc of work for the project, in what order?" |
+| **[PLANNING.md](PLANNING.md)** | Priority-ordered backlog, all features | "What's the next best thing to pick up?" |
+| **[PROBLEMS.md](PROBLEMS.md)** | Known bugs with severity | "What's broken today?" |
+| **[QUALITY.md](QUALITY.md)** | Open programmer-biting issues and active sprints | "Which open issues bite users, and what are we actively working on?" |
+
+RELEASE.md only cites items from those four files — it doesn't
+define new work, it promotes existing work to a "must close before
+publish" status.  When a ROADMAP.md item becomes a release blocker,
+it gets a RELEASE.md row.  When it ships, the RELEASE.md row is
+crossed out (the underlying item stays in its home file with its
+fix date).
+
+Demo applications (Brick Buster, Moros editor, the Web IDE shell,
+the server / game-client libraries, and the scene scripting layer)
+follow their own lifecycle and are deliberately out of scope here
+— they can ship on their own cadence without gating the language
+releases they depend on.  Their individual backlogs live in
+[PLANNING.md](PLANNING.md) and [ROADMAP.md](ROADMAP.md).
+
 ## What each milestone means
-
-**0.8.4 — Awesome Brick Buster.**
-The Brick Buster demo has audio (chiptune synthesis), title/pause/game-over
-screens with restart, and ships as a single-file HTML export via
-`loft --html`. All language blockers (P117–P131, L4–L6, S5) are fixed.
-Remaining polish (hand-designed levels, background music, art) can go
-into 0.8.5 without blocking this release. Audience: anyone who can
-click a link.
-
-**0.8.5 — Working Moros editor.**
-The Moros hex RPG scene editor runs end-to-end in the browser: load a map,
-paint hexes, place walls and items, see a live 3D preview, export to GLB.
-Web only — multiplayer comes later. Audience: tabletop RPG hobbyists who
-want to design dungeons and ship them as static files.
 
 **0.9.0 — Fully working loft language.**
 The language is feature-complete, well-documented, and tooling-friendly.
-PROBLEMS.md has zero "appears fixed but unverified" entries. There's a
-REPL, a VS Code extension, decent error recovery, and `loft.lock` for
-reproducible builds. The four issues today's release-mode switch flagged
-as "appears fixed" (P117, P120, P121, P124, P127) are definitively closed.
-Audience: developers who want to write loft as a real language, not just
-a game scripting tool.
+PROBLEMS.md has zero "appears fixed but unverified" entries and no
+open compiler-correctness bugs.  A REPL and decent error recovery
+ship.  Audience: developers who want to write loft as a real language.
 
-**1.0.0 — Totally sure everything works.**
-1.0.0 is the **stability contract**: any program valid on 1.0.0 compiles
-and runs identically on any 1.0.x or 1.x.0 release. The contract covers:
+**1.0.0 — Stability contract.**
+1.0.0 is the stability contract: any program valid on 1.0.0 compiles
+and runs identically on any 1.0.x or 1.x.0 release.  The contract
+covers:
 - The core language surface (syntax, type system, documented stdlib API, CLI flags).
 - The public IDE API (WASM `compileAndRun` / `getSymbols` JS interface).
-- The interpreter does not panic or silently produce wrong results.
 - A user can write, run, and share a real program — from the terminal or the browser.
 
-The Web IDE (W1–W6), the multiplayer stack (SRV.*, GC.*), and the scene
-scripting layer (SC.*) all ship in 1.0.0. Plus the **stability gate** in
-ROADMAP.md: valgrind clean, four-platform binaries, no `**High**` open
-issues, no shortcuts. See [ROADMAP.md § 1.0.0](ROADMAP.md) for the full
-checklist.
+Safety (no crashes, no memory corruption, no leaks) is NOT a 1.0
+addition — it is the floor for every release, tracked under the
+[Safety gate](#safety-gate--blocks-every-release) below.  1.0.0
+additionally requires the four-platform-binary stability gate
+and a full INCONSISTENCIES.md sweep; see
+[ROADMAP.md § 1.0.0](ROADMAP.md).
 
 ---
 
-## Gate Items — MUST for 1.0
+## Safety gate — blocks EVERY release
 
-These block a 1.0 release because they cause panics on valid programs, ship
-incorrect public identity, or leave public keywords in a permanently-broken
-state.
+**We do not ship broken builds.  Ever.**  The items below block
+every tag from the next patch release onward, not just 1.0.  A
+release that crashes, corrupts memory, or leaks per iteration is
+not a release — it's a bug report on a schedule.  If a safety
+blocker is open on release day, the release slips.  There is no
+"we'll fix it next version" for crashes and leaks.
+
+This bar applies to patch releases, minor releases, and major
+releases alike.  It applies whether the target is 0.8.4 or 1.0.0.
+A "quick fix" tag that closes one bug but leaves another open is
+still a broken build and still gets blocked.
+
+Severity legend:
+- **H** — hard block.  Release cannot ship.
+- **M** — block unless the exact scenario is documented and the
+  release notes call it out as a known issue.
+
+### Crashes — no release may crash on valid input
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **B2-runtime** | H | Unit-variant literal construction in a struct-enum crashes at runtime (`JsonValue.JNull { is_null: true }` segfaults).  Layer-1 parser side fixed; runtime side open.  Blocks every release that exposes `Option<T>` / `Result<T,E>` / `JsonValue` construction. | QUALITY.md § B2-runtime |
+| **B3** | H | Struct-enum tail-expression return crashes.  Value returned through a tail position corrupts the caller frame. | QUALITY.md § B3 |
+| **B5 layer 3** | H | Recursive struct-enum returns to wrong PC (layers 1 + 2 landed 2026-04-14; the recursive inner `OpReturn` still jumps to bogus PC). | QUALITY.md § B5 |
+| **B7** | H | Native-returned temporary lifecycle — duplicate / out-of-order `OpFreeRef` emission.  Revised estimate: 2-3 sessions with `LOFT_LOG=full`. | QUALITY.md § B7 |
+| **P136** | H | wrap-suite SIGSEGV on `79-null-early-exit.loft`.  Heap corruption in the `cached_default()` + `run_test` path; `corrupted size vs. prev_size` inside `drop_in_place<Data>`.  Runs fine via CLI and is valgrind-clean there.  Reproducer: `#[ignore] sigsegv_repro_79_alone`.  Currently worked around by `loft_suite` skipping the script. | PROBLEMS.md § P136 |
+
+### Memory safety — no release may corrupt memory
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **Valgrind-clean gate** | H | `valgrind target/release/loft <script>` must produce `ERROR SUMMARY: 0 errors from 0 contexts` AND `definitely lost: 0 bytes in 0 blocks` on every script in `tests/scripts/` and every doc in `tests/docs/`.  Run on the tag candidate before release. | ROADMAP.md |
+
+### Memory leaks — no release may leak on valid programs
+
+Long-running programs — servers, game loops, REPLs — cannot
+tolerate per-iteration leaks.  A release that leaks even one
+store per loop iteration is unusable for production workloads;
+users hit out-of-memory before the language gets a chance to
+prove itself.  This bar isn't a 1.0 feature — it's the floor for
+every release.
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **Zero-leak gate** | H | `State::check_store_leaks` must emit no `Warning: N stores not freed at program exit` lines across the full test suite AND a hands-on run of every `tests/scripts/*.loft`.  Today the wrap suite still reports leaks on at least `76-struct-vector-return.loft`, `42-file-result.loft`, and `62-index-range-queries.loft` (1 store each).  Each leak path must be traced and closed — not silenced via `is_locked()` or the `const_refs` skip. | `src/state/mod.rs:1486` check_store_leaks |
+| **P122** | H | Store leak in game loops — struct/vector temps not freed at end-of-iteration.  Originally scoped as a Brick Buster ergonomics fix; **generalises** to any loop-body struct/vector construction.  Status-unknown (previously listed as "appears fixed"); must be re-verified in the zero-leak gate above. | PROBLEMS.md |
+| **Parallel leak audit** | M | `parallel { ... }` blocks — the A15 structured-concurrency path spawns workers that hold `ParallelCtx`; confirm no worker Stores remain after join.  Run the zero-leak gate with `LOFT_LOG=stores` on `tests/scripts/22-threading.loft`, `80-parallel-block.loft`. | THREADING.md |
+
+---
+
+## Milestone-specific blockers
+
+The items below gate a SPECIFIC milestone (0.9.0 or 1.0.0) without
+blocking earlier patch releases that don't claim to ship them.
+
+### Language-surface gaps (0.9.0 blockers)
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **L1** | H | Error recovery — cascading errors after one bad token; high UX impact. | PLANNING.md § L1 |
+| **P2** | H | REPL / interactive mode — needed for the "write real loft" story once the browser IDE is deferred past 1.0. | PLANNING.md § P2 |
+| **W-warn** | M | Clippy-inspired developer warnings in the interpreter. | PLANNING.md § W-warn |
+| **C52** | M | stdlib name clash + `std::` prefix hygiene. | PLANNING.md § C52 |
+| **P117** | M | Re-verify the original `file()` pattern with `LOFT_STORES=warn` — fix landed but not re-run end-to-end. | PROBLEMS.md |
+| **P120** | M | Full GL example suite end-to-end on a display (fix appears verified; one hands-on pass needed). | PROBLEMS.md |
+| **P121** | M | Debug-build valgrind pass over `tests/scripts/50-tuples.loft`. | PROBLEMS.md |
+| **P124** | M | `--native-emit` inspection of generated Rust (fix appears verified; one hands-on pass needed). | PROBLEMS.md |
+
+### Stability gate (1.0 blocker)
+
+Safety (valgrind-clean, zero-leak, zero-crash) is tracked under the
+[Safety gate](#safety-gate--blocks-every-release) above and is a
+blocker for every release, not just 1.0.  The items below are the
+1.0-specific additions on top of that floor.
+
+| ID | H/M | Summary | Reference |
+|---|---|---|---|
+| **Multi-platform binaries** | H | Pre-built binaries published for Linux x86_64-musl, macOS x86_64, macOS aarch64, Windows x86_64-msvc.  Hands-on smoke test of each before publishing the tag. | ROADMAP.md § 1.0.0 |
+| **Zero open High issues** | H | No entry in PROBLEMS.md or QUALITY.md tagged **High** severity at release time. | PROBLEMS.md |
+| **INCONSISTENCIES sweep** | M | 6 open entries in INCONSISTENCIES.md — none are code blockers but #6 (plain enums cannot have methods) and #10 (sizeof(u8) = 4) need documentation coverage before 1.0. | INCONSISTENCIES.md |
+
+### Code-debt cleanup (nice-to-have for 1.0)
+
+| ID | Summary |
+|---|---|
+| **P54-U phase 3** | Delete ~540 lines of legacy `src/database/structures.rs::parsing` scanner once a walker-native `Diagnostic` shape replaces the `"line N:M path:X"` error-path format.  Walker already covers the success path (zero fallback hits across the full test suite).  See QUALITY.md § P54-U. |
+| **T2-0** | `loft --format` code formatter — professional tooling polish; zero correctness risk. |
+| **T1-2** | Wildcard imports (`use mylib::*`) — friction removal; medium payoff. |
+| **T1-4** | Match expressions — largest language feature gap.  If deferred past 1.0, INCONSISTENCY #6 must be prominently documented in CHANGELOG.md and the HTML reference. |
 
 Completed historical gate items (T0-1 through T0-7, T1-5, PROBLEMS #10,
-#37–#40, A4 pre-gate, Cargo.toml, README, CHANGELOG, CI pipeline, R1) are
-recorded in CHANGELOG.md.
-
-**Open as of 2026-04-11:**
-
-- **P117 / P120–P131** — all **fixed and verified** with regression tests.
-  See PROBLEMS.md § Fixed for the full list.
-- **Stability gate** — see ROADMAP.md § 1.0.0 for the full hands-on
-  checklist (valgrind, 4-platform binaries, INCONSISTENCIES.md sweep).
-
-No High or Medium severity issues remain open.  All remaining items in
-PROBLEMS.md are Low severity with documented workarounds.
+#37–#40, P117/P120–P131 fixes, A4 pre-gate, Cargo.toml, README, CHANGELOG,
+CI pipeline, R1) are recorded in CHANGELOG.md.
 
 ---
 
-## Nice-to-Have for 1.0
+## Explicitly out of scope here
 
-Include if bandwidth exists before tagging 1.0; ship without if they push the date out significantly.
+The following have their own lifecycles and are **not** tracked as
+release blockers in this file.  They may ship before, during, or
+after any of the language milestones above — independently:
 
-| Item | Value | Effort |
-|---|---|---|
-| **T1-2** wildcard imports (`use mylib::*`) | Genuine friction removal; medium payoff | Medium |
-| **T1-4** match expressions | Largest language feature gap; makes language feel complete | High |
-| **T2-0** code formatter (`loft --format`) | Professional tooling polish; zero correctness risk | Small–Medium |
-| HTML reference on GitHub Pages | Users can read docs without cloning the repo | Small (CI step) |
-| Pre-built release binaries | Users can install without Rust toolchain | Small (GitHub Actions matrix) |
+- **Brick Buster** demo (G3/G5/G6 audio-graphics, BK.*, G7.P itch.io).
+- **Moros hex RPG editor** demo (MO.*).
+- **Web IDE** shell and multi-file support (W1.1 HTML export kept
+  here because it is a language-side feature; W2–W6 are IDE work
+  and deferred).
+- **Server library** (SRV.*), **game-client library** (GC.*), and
+  **scene scripting** layer (SC.*) — these are applications/libraries
+  built on top of the language, not part of the language surface.
 
-If T1-4 ships in 1.0, update `doc/09-enum.html` and add `doc/21-match.html`.
-If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as a known limitation in CHANGELOG.md and the HTML reference.
+See [PLANNING.md](PLANNING.md) / [ROADMAP.md](ROADMAP.md) for the
+backlogs of those projects.
 
 ---
 
-## Items by milestone
+## Explicitly 1.1+ language work
 
-### 0.8.4 gate items
-
-| Item | Notes |
-|---|---|
-| **P122** store leak in game loops | Free struct/vector temps at end of loop iteration. Today's brick-buster has to use bitmasks + raw-float collision APIs to dodge this. **Headline language fix for 0.8.4.** |
-| G3 tilemap rendering | Lets BK.3 levels be data instead of code |
-| G5 audio sound effects | Brick hit, paddle bounce, pickup chimes |
-| G6 background music | With volume mix during play |
-| W1.1 single-file HTML export | `loft --html game.loft` → one file |
-| BK.1–BK.8 game polish | Audio, levels, screen shake, pause menu, title/game-over screens, high scores, art pass |
-| G7.P playable Brick Buster on itch.io | The actual ship target |
-
-### 0.8.5 gate items
-
-| Item | Notes |
-|---|---|
-| MO.1a–MO.6 moros backend | Data model, palette types, JSON I/O, paint/wall/item ops, undo/redo, slope tool, stencil stamping |
-| MO.C1–MO.E5 moros JS frontend | Hex canvas, tools, palettes, undo, localStorage |
-| MO.7a–MO.10 moros 3D renderer | Hex geometry, wall slabs, stairs, camera, hex picking, GLB export |
-| MO.W1, MO.W2 WASM builds | Editor and renderer compiled for the browser |
-| MO.12a–MO.12c WASM↔JS wiring | Live 3D preview panel + GLB export button |
-| MO.P moros editor on GH Pages | The actual ship target |
-
-### 0.9.0 gate items
-
-| Item | Notes |
-|---|---|
-| L1 error recovery | Cascading errors after one bad token; high UX impact |
-| P2 REPL / interactive mode | No browser IDE yet (that's 1.0.0); a terminal REPL is the answer for now |
-| W-warn developer warnings | Clippy-inspired diagnostics |
-| AOT auto-compile libraries | Native shared libs without manual `cargo build` |
-| C52 stdlib name clash + `std::` prefix | Naming hygiene |
-| ~~C53 match arms with library enums + bare names~~ | **Done** — `tests/imports.rs::match_accepts_library_enum_variants` |
-| ~~**P127** file-scope vector constants~~ | **Done** — pre-built in CONST_STORE via `OpConstRef`; both reproducers pass |
-| **Verify P117** | Re-test the original `file()` pattern with `LOFT_STORES=warn` |
-| **Verify P120** | Re-run the full GL example suite end-to-end on a display |
-| **Verify P121** | Debug-build valgrind pass over `tests/scripts/50-tuples.loft` |
-| **Verify P124** | `--native-emit` inspection of generated Rust |
-| SH.1, SH.2 syntax highlighting | TextMate grammar + VS Code extension |
-| DX.1, DX.2 quick-start examples + CI | `examples/` directory + CI workflow polish |
-| PKG.7 lock file | Reproducible builds |
-| FFI.1–FFI.4 native extension docs | Generic marshaller, cdylib loader, docs |
-
-### 1.0.0 gate items (on top of 0.9.0)
-
-| Item | Notes |
-|---|---|
-| W2 editor shell | Visible IDE |
-| W3 symbol navigation | Go-to-definition, find-usages |
-| W4 multi-file projects | IndexedDB persistence |
-| W5 docs/examples browser | Integrated documentation |
-| W6 export/import + PWA | Offline support; closes the loop |
-| SC.1–SC.6 scene scripting | Hex enter/exit/interact hooks; in-browser hot-reload |
-| SRV.1–SRV.G server library | HTTP routing, WebSockets, auth, ACME, game loop |
-| GC.1–GC.6 game client library | WebSocket protocol, lobby, prediction, WASM script loading |
-| **Stability gate** | See ROADMAP.md § 1.0.0 — valgrind clean, 4-platform binaries, zero open `**High**` issues, hands-on testing |
-
-### Explicitly 1.1+
+Deferred past 1.0 by design — they are either additive (can land in
+a minor) or too large a change to block the stability contract on.
 
 | Item | Notes |
 |---|---|
@@ -149,18 +190,6 @@ If T1-4 does not ship in 1.0, INCONSISTENCY #6 must be prominently documented as
 | A5 closure capture | Very high effort; depends on P1 |
 | C57 route decorator syntax | `@get` / `@post` / `@ws` annotations |
 | W1.14 WASM Tier 2 | Web Worker pool + `par()` parallelism |
-
----
-
-## Open Inconsistencies for 1.0
-
-Of the 6 still-open entries in INCONSISTENCIES.md, none are hard blockers, but the following need documentation coverage before 1.0:
-
-| Entry | Action |
-|---|---|
-| #6 — plain enums cannot have methods | Document as known limitation if T1-4 (match) is deferred; resolved by T1-4 if included |
-| #10 — sizeof(u8) returns 4 | Document as accepted behaviour in LOFT.md (compiler minimum alignment) |
-| Others | Verify each is documented in LOFT.md / INCONSISTENCIES.md; no code change needed |
 
 ---
 

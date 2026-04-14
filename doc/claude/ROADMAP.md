@@ -5,6 +5,24 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Roadmap
 
+## Roadmap vs. release plan
+
+This file is the **wish list**: items we want to do, ordered by
+when they fit best into the project's arc.  Not every roadmap
+item blocks a release — many can slip from one milestone to the
+next without holding up a ship.
+
+The companion file [RELEASE.md](RELEASE.md) answers a narrower
+question: "what MUST be true before we tag and publish?"  When a
+roadmap item is also a release blocker, it gets echoed into
+RELEASE.md's gate lists.
+
+| File | Scope | Question it answers |
+|---|---|---|
+| **ROADMAP.md** (this file) | Things we'd like to do | "What's the arc of work, and in what order?" |
+| **[RELEASE.md](RELEASE.md)** | Ship checklist | "What must be true before we can publish?" |
+| **[PLANNING.md](PLANNING.md)** | Priority-ordered backlog | "What's the next best thing to pick up?" |
+
 Items in expected implementation order, grouped by milestone.
 Full descriptions and fix paths: [PLANNING.md](PLANNING.md).
 

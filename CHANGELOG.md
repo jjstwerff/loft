@@ -9,6 +9,154 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### P54 sprint — first-class `JsonValue` (in progress)
+
+`Type.parse(text)` silently zeroed structs on malformed JSON — the
+typeless surface contradicts loft's "static types catch mistakes"
+promise.  Replacing the text-based JSON API with a first-class
+`JsonValue` enum.  Steps 1–3 (signature + parser + extractors) and
+step 4 (arena materialisation) landed; steps 5–8 still in progress.
+
+**`JsonValue` surface (shipped):**
+- `enum JsonValue { JNull, JBool, JNumber, JString, JArray, JObject }`
+  with arena-in-store layout — every parse produces a tree that
+  frees as one unit when its root `DbRef` leaves scope.
+- `json_parse(text) -> JsonValue` materialises all six variants
+  including arbitrarily-nested containers; malformed input
+  returns `JNull` and `json_errors()` carries an RFC 6901 path
+  + `line:col` + context snippet for each error.
+- Read surface: `kind()`, `len()`, `field()`, `item()`,
+  `has_field()`, `keys()`, `fields()`, `as_text/as_number/as_long/as_bool`.
+- Write surface: `to_json()` (canonical) and `to_json_pretty()`
+  (2-space indent, one element per line for non-empty containers;
+  `"k": v` after object keys).  Strings escape `"`, `\\`, control
+  bytes; UTF-8 passes through verbatim.  Non-finite numbers
+  serialise as `null`.
+- Construction helpers: `json_null()`, `json_bool()`, `json_number()`,
+  `json_string()`, `json_array(items)`, `json_object(fields)` —
+  containers deep-copy their input via the shared `dbref_to_parsed`
+  walker, so captured-subtree forwarding (`field(...)` result
+  embedded in a fresh JObject) round-trips.
+
+**Compiler bugs unblocked along the way:**
+- B1 (unit-variant match index-OOB).
+- B2-runtime layers 1+2 (struct-enum unit-variant construction —
+  `parse_enum_values` retrofit + `parse_constant_value` v_block
+  wrap).
+- B3 ref_return Enum arm (struct-enum return types now get the
+  same caller-side hidden pre-alloc args as Reference/Vector).
+- B5 layers 1+2 (`vector<T>` type registration in `fill_all`;
+  match-arm vector bindings get `skip_free`).
+- B7 baseline (`def_code` null-code path now sets `self.arguments`
+  + `stack.position` from def attributes for native fns; native
+  registry aliases `t_9JsonValue_<method>` → `n_<method>`).
+
+**Steps 5–6 + Q1–Q4 (shipped):**
+- Step 5: `Struct.parse(JsonValue)` codegen via single runtime
+  walker `n_struct_from_jsonvalue` — primitives, nested structs,
+  JsonValue passthrough, and `vector<T>` fields of every primitive
+  type plus `vector<Struct>`.
+- Step 6: text arg to `Struct.parse(text)` routes to the legacy
+  lenient path (auto-wrap preserved for backward compat; hard
+  rejection withdrawn to avoid breaking existing scripts).
+- Q1 schema-side diagnostics: `<Struct>.<field>: expected <Kind>,
+  got <Kind>` pushed to `last_json_errors` on type mismatches;
+  absent fields pass silently.
+- 25 P54 + Q1 acceptance tests in `tests/issues.rs`.
+
+### P54-U — unified JSON parser (shipped)
+
+After P54 two JSON parsers coexisted: `src/json.rs::parse` (strict
+RFC 8259) for the typed JsonValue path, and
+`src/database/structures.rs::parsing` (legacy lenient) for
+`vector<T>.parse(text)` / `text as Type`.  P54-U collapses both
+behind a single parser with a dialect knob.
+
+- `src/json.rs`: `Dialect::{Strict, Lenient}` enum + `parse_with(
+  input, dialect)`.  Strict = RFC 8259.  Lenient adds bare-key
+  identifiers (`{val: 7}`) AND bare-identifier values for enum
+  tags (`{category: Hourly}`) via new `Parsed::Ident` variant.
+- `src/database/structures.rs::walk_parsed_into` — schema-driven
+  walker dispatching on every `Parts::*` variant.  Replaces the
+  hand-rolled scanner for the success path.
+- `src/database/format.rs::parse` + `parse_message` route through
+  the unified parser first, fall back to legacy only for the
+  `"line N:M path:X"` error-path reporting that one test
+  (`tests/data_structures.rs::record`) asserts.
+- Instrumented `LOFT_P54U_TRACE` run confirmed zero success-path
+  fallback hits across the full test suite.
+- 10 new json-module unit tests.
+
+Phase 3 (delete ~540 lines of legacy scanner) still pending —
+needs walker-native `Diagnostic` shape to replace the legacy
+error format.  See `doc/claude/QUALITY.md` § P54-U.
+
+### Crash reporter (shipped)
+
+- New `src/crash_report.rs` installs SIGSEGV / SIGABRT / SIGBUS
+  handlers that print the last bytecode PC + op byte + function
+  d_nr from a thread-local context before the default handler
+  produces the core dump.  Async-signal-safe; no heap allocation
+  inside the handler.
+- Interpreter's execute loop publishes context via
+  `set_context(pc, op, op_name, fn_d_nr, fn_name)` — one
+  thread-local store per opcode.
+- `src/main.rs` installs on startup; `tests/wrap.rs::run_test`
+  installs idempotently so test-binary crashes also surface
+  context.
+- 5 unit tests (writer_basic / writer_zero / writer_max /
+  context_updates / install_is_idempotent).
+
+### Test workflow — background / peek / wait (shipped)
+
+- New `scripts/find_problems.sh` with `--bg` / `--peek` / `--wait`
+  / `--nocapture rerun` modes.  Default shape for any refactor
+  likely to surface multiple failures: kick off `--bg` before
+  editing, peek mid-way, wait for summary.
+- Auto-reruns `wrap::loft_suite` with `--nocapture
+  --test-threads=1` when a wrap-suite SIGSEGV masks the crashing
+  `.loft` filename.
+- Documented in `doc/claude/TESTING.md` § "Preferred shape —
+  background + peek + wait" (prominent at top of file) and in
+  `CLAUDE.md` key commands.
+
+### Release / roadmap documentation rewrite
+
+- `doc/claude/RELEASE.md` rewritten around release blockers only.
+  Demo work (Brick Buster, Moros, Web IDE, server/game-client
+  libraries) explicitly out of scope — their lifecycles are
+  independent.
+- **Safety gate blocks EVERY release** — not a 1.0 feature.
+  Memory leaks, crashes, and memory-corruption bugs gate every
+  tag from 0.8.4 onwards.  Explicit section at the top of
+  RELEASE.md.
+- P136 (wrap-suite SIGSEGV) marked as current release-block.
+  Pre-existing — reproduces at HEAD commit `d0d6932`.
+- Cross-reference from `doc/claude/ROADMAP.md` (wish list) to
+  `RELEASE.md` (ship checklist).
+
+### Known-open release blockers (document-only)
+
+See `doc/claude/RELEASE.md` § "Safety gate" for the full list.
+Summary of items that may ship 0.8.4 OPEN if the tag is cut
+before they close:
+
+- **P136** — wrap-suite SIGSEGV on `79-null-early-exit.loft`
+  (only via `cached_default()` test path; CLI runs clean; skipped
+  in `loft_suite`).
+- **B2-runtime / B3 / B5 layer 3 / B7** — struct-enum compiler
+  bugs affecting user-written struct-enum construction + recursive
+  methods.  The stdlib `json_parse(text) -> JsonValue` path is
+  unaffected.
+- **Zero-leak gate** — 3 scripts (42, 62, 76) report 1 leaked
+  store each; fix pending.
+
+Each of the above is listed explicitly as a release-blocker in
+RELEASE.md; none were introduced by the P54 / P54-U sprint.
+
+Documentation: see [QUALITY.md § P54](doc/claude/QUALITY.md#active-sprint--p54-jsonvalue-enum)
+for the full landing record.
+
 ### Brick Buster 0.8.4 polish pass
 
 Gameplay feel:
