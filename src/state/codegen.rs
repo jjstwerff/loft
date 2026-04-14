@@ -746,7 +746,11 @@ impl State {
 
     pub(super) fn gen_set_first_vector_null(&mut self, stack: &mut Stack, v: u16) {
         if let Type::Vector(elm_tp, dep) = stack.function.tp(v).clone() {
-            if dep.is_empty() {
+            // skip_free variables are match-arm bindings that borrow from the
+            // subject — don't allocate a store, just push a null sentinel.
+            if stack.function.is_skip_free(v) {
+                stack.add_op("OpNullRefSentinel", self);
+            } else if dep.is_empty() {
                 // TODO move this convoluted implementation to a new operator.
                 stack.add_op("OpConvRefFromNull", self);
                 stack.add_op("OpDatabase", self);
