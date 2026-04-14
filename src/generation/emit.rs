@@ -646,8 +646,14 @@ impl Output<'_> {
                     let vname = sanitize(self.data.def(self.def_nr).variables.name(*nr));
                     writeln!(w, "&mut var_{vname}")?;
                 } else {
-                    let wrap_result = is_return_expr && is_text_result;
-                    let narrow_cast = if is_return_expr {
+                    // A `Value::Return(...)` already emits its own `return …`
+                    // (typed for the function signature), so wrapping it in
+                    // `Str::new(...)` would produce `Str::new(return Str::new(X))`
+                    // which fails Rust type-check.  Same reasoning for narrow
+                    // int casts: the return statement carries the right type.
+                    let value_is_return = matches!(v, Value::Return(_));
+                    let wrap_result = is_return_expr && is_text_result && !value_is_return;
+                    let narrow_cast = if is_return_expr && !value_is_return {
                         narrow_int_cast(&bl.result)
                     } else {
                         None

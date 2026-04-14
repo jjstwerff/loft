@@ -737,15 +737,30 @@ impl Scopes {
     ) -> Vec<Value> {
         let ret_var = returned_var(expr);
         let mut ls = self.get_free_vars(function, data, to_scope, tp, ret_var);
+        // The B5-L3 wrap (Set(__ret_N, expr); free ops; Return(Var(__ret_N)))
+        // must not fire when `expr` is already a `Return` or contains one
+        // at its tail — otherwise we'd emit `let _ret = return …` (E0308 in
+        // native).  Recurse through `Insert` (which scopes wraps Return in
+        // for free-vars cleanup) and `Block`.
+        let expr_is_terminal = expr_ends_in_return(expr);
         if ls.is_empty() || matches!(expr, Value::Null | Value::Var(_)) {
-            if is_return {
+            if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
-            } else if !matches!(expr, Value::Null) {
+            } else if matches!(expr, Value::Null) {
+                // skip
+            } else {
                 ls.push(expr.clone());
             }
         } else if let Value::Block(bl) = expr {
             return insert_free(bl, &ls, is_return);
-        } else if is_return && is_value_return_type(tp) && !matches!(expr, Value::Return(_)) {
+        } else if expr_is_terminal {
+            // expr is already a `Return(...)` (or `Insert(...)` ending in
+            // one) — the cleanup was emitted alongside it by the inner
+            // Return arm's free_vars call.  Re-emitting `ls` here would
+            // duplicate every OpFreeText/OpFreeRef and tack on a dead
+            // `Return(Null)`.  Just propagate the terminal as-is.
+            return vec![expr.clone()];
+        } else if is_return && is_value_return_type(tp) && !expr_is_terminal {
             // B5-L3: when a value-returning function's tail expression is a
             // non-Block, non-Var, non-Null value (If/Match/Call etc.) and
             // there are free ops to run before return, save the expression's
@@ -767,7 +782,7 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
-        } else if is_return && matches!(tp, Type::Text(_)) && !matches!(expr, Value::Return(_)) {
+        } else if is_return && matches!(tp, Type::Text(_)) && !expr_is_terminal {
             // B5-L3 extension for text returns: save the expression's text
             // to a `__ret_N` temp, run free ops, then return the temp.  The
             // temp's String holds an OWN copy (OpAppendText copies bytes),
@@ -776,7 +791,42 @@ impl Scopes {
             // OpFreeText isn't emitted at scope exit — the String leaks
             // for the duration of the caller's read, which is fine because
             // the caller copies bytes via AppendText immediately on return.
-            // Same `Return` guard as above.
+            //
+            // Native codegen also needs the wrap (otherwise the call result
+            // is dropped + `return null` returns the typed null sentinel).
+            // The native emit converts `Set(__ret, call)` into
+            // `let __ret: String = call(...).to_string()` — fine for the
+            // interpreter but for native, `Str::new(&__ret)` after Return
+            // would dangle.  Detect this in `output_block` and emit
+            // `return Str::new(call(...))` directly, dropping the temp.
+            self.ret_temp_counter += 1;
+            let name = format!("__ret_{}", self.ret_temp_counter);
+            let tmp = function.add_temp_var(&name, tp);
+            function.set_skip_free(tmp);
+            self.var_scope.insert(tmp, self.scope);
+            self.var_order.push(tmp);
+            let mut result = Vec::with_capacity(ls.len() + 2);
+            result.push(v_set(tmp, expr.clone()));
+            result.extend(ls);
+            result.push(Value::Return(Box::new(Value::Var(tmp))));
+            return result;
+        } else if is_return
+            && matches!(
+                tp,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+            && !expr_is_terminal
+        {
+            // B5-L3 extension for ref/vector/struct-enum returns: same
+            // pattern as text — save the call result (DbRef) to a
+            // `__ret_N` temp, run free ops, then return the temp.  The
+            // temp is `skip_free` so the underlying store isn't double-
+            // freed (caller already owns it via the buffer arg).  Without
+            // this, the IR emitted the call as a discarded statement
+            // followed by `return null` — interpreter recovered via TOS,
+            // but native produced `return DbRef { store_nr: u16::MAX, … }`
+            // and the next OpCopyRecord crashed on the null sentinel
+            // (`87-store-leaks.loft` regression).
             self.ret_temp_counter += 1;
             let name = format!("__ret_{}", self.ret_temp_counter);
             let tmp = function.add_temp_var(&name, tp);
@@ -1202,6 +1252,20 @@ fn insert_free(block: &Block, free: &[Value], is_return: bool) -> Vec<Value> {
         var_size: 0,
     })));
     res
+}
+
+/// True when `expr` is a `Return` (or recursively ends with one through
+/// `Insert`/`Block` wrappers).  Used by `free_vars` to decide whether the
+/// B5-L3 `__ret_N` wrap is safe — wrapping a terminal expression would
+/// produce `let _ret = return …` in native and double-emit the inner
+/// Return inside the Set's expression generator.
+fn expr_ends_in_return(expr: &Value) -> bool {
+    match expr {
+        Value::Return(_) => true,
+        Value::Insert(ops) => ops.last().is_some_and(expr_ends_in_return),
+        Value::Block(bl) => bl.operators.last().is_some_and(expr_ends_in_return),
+        _ => false,
+    }
 }
 
 /// Whether a function's return type holds a plain value (no heap ownership).
