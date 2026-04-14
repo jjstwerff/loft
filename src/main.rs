@@ -117,7 +117,9 @@ fn print_help() {
     println!(
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
-    println!("  --dump                        compile to bytecode, dump to stderr, and exit (no execution)");
+    println!(
+        "  --dump                        compile to bytecode, dump to stderr, and exit (no execution)"
+    );
     println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");

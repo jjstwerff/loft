@@ -1885,6 +1885,9 @@ impl State {
 
     /// Dump IR / bytecode / variables without executing.
     /// Respects the `LogConfig` phases (ir, bytecode, variables).
+    ///
+    /// # Errors
+    /// Returns an error if the writer fails.
     pub fn dump_bytecode(
         &mut self,
         log: &mut dyn Write,

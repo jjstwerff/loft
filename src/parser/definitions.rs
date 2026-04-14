@@ -754,19 +754,15 @@ impl Parser {
         // from constructors (dep empty, own).
         if self.first_pass && self.lexer.peek_token(";") {
             let def = &self.data.definitions[self.context as usize];
-            if let Some(self_attr) = def.attributes.first() {
-                if self_attr.name == "self" {
-                    if let Type::Enum(ret_nr, true, dep) = &def.returned {
-                        if dep.is_empty() {
-                            if let Type::Enum(self_nr, true, _) = &self_attr.typedef {
-                                if ret_nr == self_nr {
-                                    self.data.definitions[self.context as usize].returned =
-                                        Type::Enum(*ret_nr, true, vec![0]);
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(self_attr) = def.attributes.first()
+                && self_attr.name == "self"
+                && let Type::Enum(ret_nr, true, dep) = &def.returned
+                && dep.is_empty()
+                && let Type::Enum(self_nr, true, _) = &self_attr.typedef
+                && ret_nr == self_nr
+            {
+                self.data.definitions[self.context as usize].returned =
+                    Type::Enum(*ret_nr, true, vec![0]);
             }
         }
         if !self.lexer.has_token(";") {

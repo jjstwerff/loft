@@ -507,7 +507,7 @@ impl State {
                     stack.add_op("OpFreeStack", self);
                     let ret_size = size(&stack.data.def(stack.def_nr).returned, &Context::Argument);
                     self.code_add(ret_size as u8);
-                    self.code_add(excess + ret_size as u16);
+                    self.code_add(excess + ret_size);
                     stack.position = target;
                 }
                 self.code_put(end, (self.code_pos - false_pos) as i16);
