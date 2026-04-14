@@ -3454,7 +3454,6 @@ fn p54_chained_access_on_nested_object() {
 /// supported.  When the doc is read by a new user, the same
 /// arms must dispatch correctly today.
 #[test]
-#[ignore = "B2-runtime/B3 family: match on struct-enum hits index OOB in allocation.rs"]
 fn p54_match_on_jsonvalue_classifies_each_kind() {
     code!(
         "fn classify_pmj(raw: text) -> text {
@@ -4402,11 +4401,12 @@ fn run() -> text {
 }
 
 /// B2-runtime (qualified form): `Sig.Idle` as an expression in a
-/// mixed struct-enum also fails to construct a matchable record,
-/// though it at least doesn't panic — the match silently exits.
-/// Same root cause as `p54_b2_unit_variant_literal_construction`.
+/// mixed struct-enum.  The parse path (parser/fields.rs) was giving
+/// the result block `Type::Enum(dnr, true, vec![w])` — propagating
+/// the work-ref into the LHS as a dep, so `s` became a borrower and
+/// nothing freed the store.  Fixed by mirroring parser/objects.rs
+/// and using `vec![]` instead (LHS owns, work-ref is skip_free).
 #[test]
-#[ignore = "B2-runtime: struct-enum work-ref store not freed in tail-return context (debug only, pre-existing)"]
 fn p54_b2_qualified_unit_variant_mixed_enum() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }

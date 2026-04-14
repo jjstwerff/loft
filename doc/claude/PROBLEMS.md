@@ -36,7 +36,7 @@ existing entry, not re-open it as a bug.
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
-| 136 | wrap-suite SIGSEGV on `79-null-early-exit.loft` | **High — RELEASE BLOCK** | Skipped in `loft_suite` via `ignored_scripts()`; covered by dedicated `#[ignore] sigsegv_repro_79_alone` test. Runs fine via CLI + valgrind-clean. See § P136 below. |
+| ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 
 ---
 
@@ -479,7 +479,38 @@ attempt (commit b716d1d, reverted).  Narrowed 2026-04-12 via a
 
 ---
 
-## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — RELEASE BLOCK
+## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — FIXED
+
+**Root cause.** `state/codegen.rs::gen_if` (the `f_val == Value::Null`
+branch) left `stack.position` at the true-branch's end-state after emitting
+a divergent true branch.  At runtime the join point is reached only via
+the `OpGotoFalseWord` jump, where `stack_pos` equals the pre-if value —
+so every subsequent `Var*` / `Put*` op encoded `var_pos = codegen_stack −
+slot` was 4 bytes off.  Writes through `_ncr_1` / `val` corrupted the
+return-address slot; after a handful of `safe_double` calls the
+interpreter read a small bytecode offset as a return address and
+re-entered already-returned code, growing the stack by ~12 bytes per
+iteration until it overflowed the 8008-byte stack store.
+
+`is_divergent` also did not recognise `Value::Insert([..., Return(...)])`
+— the shape `scopes.rs` produces when it wraps a `Return` with
+`free_vars` cleanup.  So even the else-present branch's divergence reset
+(line 520-524) silently missed the C56 case.
+
+**Fix.** Two small edits in `src/state/codegen.rs`:
+- Widen `is_divergent` to recurse into the last op of `Value::Insert` and
+  `Value::Block`.
+- In the `*f_val == Value::Null` arm of `gen_if`, reset
+  `stack.position = stack_pos` when the true branch is divergent.
+
+**Tests.**  `tests/wrap.rs::sigsegv_repro_79_alone` is no longer
+`#[ignore]`d; `tests/wrap.rs::loft_suite` now runs
+`79-null-early-exit.loft` (previously skipped via `ignored_scripts()`).
+Passes debug + release, and under `target/release/loft --interpret`.
+
+---
+
+## 136. (historical) Wrap-suite SIGSEGV on `79-null-early-exit.loft`
 
 **Severity:** High (release blocker — see RELEASE.md Gate Items).
 

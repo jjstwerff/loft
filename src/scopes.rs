@@ -54,6 +54,13 @@ struct Scopes {
     /// Counter for `__lift_N` temporary variables created to own inline struct
     /// arguments (P135 fix).
     lift_counter: u16,
+    /// Variables added by `scan_args` for inline struct-returning call arguments.
+    /// These are conditionally assigned inside if-chains / match arms, so the
+    /// outer block needs a `Set(v, Null)` at function entry to reserve their
+    /// slot in codegen's stack.position — otherwise the function-level
+    /// `OpFreeRef(__lift_N)` at function exit reads a slot that was never
+    /// allocated along every execution path (P54-B3-family crash).
+    lift_vars: Vec<u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -73,12 +80,26 @@ pub fn check(data: &mut Data) {
             loops: vec![],
             scan_depth: 0,
             lift_counter: 0,
+            lift_vars: Vec::new(),
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
             scopes.var_scope.insert(a, 0);
         }
-        let code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
+        let mut code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
+        // P54-B3: lift vars from `scan_args` are assigned inside conditional
+        // branches (if-chains, match arms) but their `OpFreeRef` lives at
+        // function exit.  Without a Set(v, Null) at function entry, codegen's
+        // stack.position never reserves their slot along every execution path,
+        // and `generate_var` asserts when the function-exit free reads a slot
+        // that some branch never pushed.  Prepend the null-inits now.
+        if !scopes.lift_vars.is_empty()
+            && let Value::Block(bl) = &mut code
+        {
+            for &v in scopes.lift_vars.iter().rev() {
+                bl.operators.insert(0, v_set(v, Value::Null));
+            }
+        }
         data.definitions[d_nr as usize].code = code;
         data.definitions[d_nr as usize].variables = function;
         // in debug builds, assert that every owned Reference variable emitted an
@@ -734,7 +755,11 @@ impl Scopes {
         let mut ls = Vec::new();
         let vars = self.variables(to_scope);
         if scope_debug {
-            eprintln!("[get_free_vars] fn={} to_scope={to_scope} scope={} vars={vars:?} ret_var={ret_var}", data.def(self.d_nr).name, self.scope);
+            eprintln!(
+                "[get_free_vars] fn={} to_scope={to_scope} scope={} vars={vars:?} ret_var={ret_var}",
+                data.def(self.d_nr).name,
+                self.scope
+            );
         }
         for v in vars {
             if v == ret_var {
@@ -1002,6 +1027,7 @@ impl Scopes {
                         let tmp = function.add_temp_var(&name, &tp);
                         self.var_scope.insert(tmp, self.scope);
                         self.var_order.push(tmp);
+                        self.lift_vars.push(tmp);
                         preamble.push(v_set(tmp, final_val));
                         ls.push(Value::Var(tmp));
                     } else {
@@ -1027,6 +1053,7 @@ impl Scopes {
                 let tmp = function.add_temp_var(&name, &tp);
                 self.var_scope.insert(tmp, self.scope);
                 self.var_order.push(tmp);
+                self.lift_vars.push(tmp);
                 preamble.push(v_set(tmp, scanned));
                 ls.push(Value::Var(tmp));
             } else {
@@ -1124,6 +1151,8 @@ fn returned_var(expr: &Value) -> u16 {
             }
             v
         }
+        Value::Return(inner) | Value::Drop(inner) => returned_var(inner),
+        Value::Insert(ops) => ops.last().map_or(u16::MAX, returned_var),
         _ => u16::MAX,
     }
 }

@@ -47,6 +47,13 @@ impl Str {
     /// or length look like uninitialised stack garbage, avoiding SIGSEGV.
     #[must_use]
     pub fn try_str<'a>(&self) -> Option<&'a str> {
+        // An empty Rust `String` has its `ptr` set to `NonNull::dangling()` —
+        // typically a small alignment-sized value like 0x1.  Treat `len == 0`
+        // as a valid empty string regardless of the ptr, so trace output
+        // shows `""` instead of `<raw:0x1>` (parser_debug dump).
+        if self.len == 0 {
+            return Some("");
+        }
         if self.ptr.is_null()
             || (self.ptr as usize) < (1 << 16)
             || self.len > 10_000_000

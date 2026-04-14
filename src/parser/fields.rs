@@ -162,11 +162,16 @@ impl Parser {
                         &std::collections::HashSet::new(),
                     );
                     list.push(Value::Var(w));
+                    // Mirror the unqualified-form path in parser/objects.rs:
+                    // the LHS of assignment owns the store (empty dep); the
+                    // work-ref is skip_free so it isn't double-freed.  With
+                    // `vec![w]` the LHS got `dep=[__ref_N]` which made it a
+                    // borrower — nothing freed the store (P54-B2 leak).
                     self.vars.set_skip_free(w);
                     *code =
-                        crate::data::v_block(list, Type::Enum(dnr, true, vec![w]), "EnumUnitLit");
+                        crate::data::v_block(list, Type::Enum(dnr, true, vec![]), "EnumUnitLit");
                     self.data.attr_used(dnr, fnr);
-                    return Type::Enum(dnr, true, vec![w]);
+                    return Type::Enum(dnr, true, vec![]);
                 }
             }
             *code = Self::replace_record_ref(expr, &code.clone());

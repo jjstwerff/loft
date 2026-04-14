@@ -483,6 +483,15 @@ impl State {
         let true_stack = stack.position;
         if *f_val == Value::Null {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
+            // P136: when the true branch diverges (return/break/continue, possibly
+            // wrapped by scopes.rs in Insert/Block), execution only reaches the
+            // join point via the goto-false path — where runtime stack_pos equals
+            // the pre-if `stack_pos`, not `true_stack`. Without this reset, every
+            // subsequent Var/Put encodes a wrong offset and writes corrupt the
+            // return-address slot, eventually overflowing the stack store.
+            if is_divergent(t_val) {
+                stack.position = stack_pos;
+            }
         } else {
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
@@ -2058,7 +2067,15 @@ impl State {
 /// Check if a Value is a divergent expression (return/break/continue)
 /// that never produces a value at the join point.
 fn is_divergent(val: &Value) -> bool {
-    matches!(val, Value::Return(_) | Value::Break(_) | Value::Continue(_))
+    match val {
+        Value::Return(_) | Value::Break(_) | Value::Continue(_) => true,
+        // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
+        // raw-Return check misses it. Walk the last op of Insert/Block to recover
+        // divergence for these wrappers.
+        Value::Insert(ops) => ops.last().is_some_and(is_divergent),
+        Value::Block(bl) => bl.operators.last().is_some_and(is_divergent),
+        _ => false,
+    }
 }
 
 /// Recursively checks whether `value` contains a direct `Var(v)` reference.
