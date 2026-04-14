@@ -810,34 +810,6 @@ impl Scopes {
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
-        } else if is_return
-            && matches!(
-                tp,
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-            )
-            && !expr_is_terminal
-        {
-            // B5-L3 extension for ref/vector/struct-enum returns: same
-            // pattern as text — save the call result (DbRef) to a
-            // `__ret_N` temp, run free ops, then return the temp.  The
-            // temp is `skip_free` so the underlying store isn't double-
-            // freed (caller already owns it via the buffer arg).  Without
-            // this, the IR emitted the call as a discarded statement
-            // followed by `return null` — interpreter recovered via TOS,
-            // but native produced `return DbRef { store_nr: u16::MAX, … }`
-            // and the next OpCopyRecord crashed on the null sentinel
-            // (`87-store-leaks.loft` regression).
-            self.ret_temp_counter += 1;
-            let name = format!("__ret_{}", self.ret_temp_counter);
-            let tmp = function.add_temp_var(&name, tp);
-            function.set_skip_free(tmp);
-            self.var_scope.insert(tmp, self.scope);
-            self.var_order.push(tmp);
-            let mut result = Vec::with_capacity(ls.len() + 2);
-            result.push(v_set(tmp, expr.clone()));
-            result.extend(ls);
-            result.push(Value::Return(Box::new(Value::Var(tmp))));
-            return result;
         } else {
             ls.insert(0, expr.clone());
             if is_return {
