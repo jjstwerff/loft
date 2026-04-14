@@ -37,7 +37,8 @@ existing entry, not re-open it as a bug.
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
-| 142 | `vector<T>` field panics when T is from imported file | High | Put all structs that reference each other via `vector<T>` in the same `.loft` file |
+| ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
+| 143 | SIGSEGV returning default struct from function iterating nested vectors | High | Avoid `Hex {}` return from functions that iterate `vector<Chunk>` containing `vector<Hex>` via cross-file `use` |
 
 ---
 
@@ -695,6 +696,52 @@ sufficient for the Moros `moros_map` package (all types in one file).
 data model).  The designed layout had `types.loft`, `palette.loft`, and
 `spawn.loft` as separate files with `Map` referencing all of them via
 `vector<T>` fields.
+
+---
+
+### 143. SIGSEGV returning default struct from function iterating nested vectors
+
+**Severity:** High — crashes the interpreter.
+
+**Symptom:** `SIGSEGV caught, last op: (opcode dispatch) (op=194)` when a
+function returns `Hex {}` (default-constructed struct) as a fallback after
+iterating a `vector<Chunk>` where `Chunk` contains `vector<Hex>`.  The
+function works correctly when called from a single-file program but
+crashes when loaded via `use` from a multi-file package.
+
+**Reproducer:**
+
+```loft
+// types.loft (imported via use)
+pub struct Hex { h_material: integer not null }
+pub struct Chunk { ck_cx: integer not null, ck_cy: integer not null,
+                   ck_cz: integer not null, ck_hexes: vector<Hex> }
+
+// entry.loft
+use types;
+pub struct Map { m_chunks: vector<Chunk> }
+pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
+  for gh_c in m.m_chunks {
+    if gh_c.ck_cx == q / 32 && gh_c.ck_cz == r / 32 {
+      return gh_c.ck_hexes[0];
+    }
+  }
+  Hex {}   // ← SIGSEGV here
+}
+
+// test.loft
+use entry;
+fn test_missing() {
+  m = Map { m_chunks: [] };
+  h = map_get_hex(m, 5, 5, 0);   // crashes
+}
+```
+
+**Workaround:** Avoid returning a default-constructed struct from functions
+that iterate nested `vector<struct>`.  Use a boolean `map_has_chunk()`
+guard and skip the call when the chunk is missing.
+
+**Discovered:** 2026-04-14 while implementing MO.2 (moros_map serialization).
 
 ---
 
