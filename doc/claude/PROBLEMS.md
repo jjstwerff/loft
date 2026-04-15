@@ -900,11 +900,20 @@ the first call successfully added a chunk via `OpNewRecord` +
 `&mut DbRef` are lost when the caller returns and a new `&mut DbRef`
 function is called.
 
-**Root cause (hypothesis):** `OpFinishRecord` writes to the vector
-referenced by `*var_m`, but the `DbRef` that the caller holds may
-point to a stale store position after the vector grows (reallocation
-changes the store layout).  The second call reads the old position
-and sees the pre-growth state.
+**Code path:** `OpNewRecord` → `record_new` → `vector_append`
+(`src/vector.rs:92`) appends to the chunks vector inside the Map's
+store.  `vector_append` calls `store.resize()` which may move the
+vector data to a new `rec` and updates the parent field at
+`store.set_int(db.rec, db.pos, new_vec)`.  The store modification
+appears correct — the parent's field pointer is updated in place.
+Yet the next caller reading `(*var_m).pos + 4` sees `len=0`.
+
+**Loft files involved:**
+- `src/vector.rs:92` — `vector_append` (vector reallocation)
+- `src/database/structures.rs:205` — `record_new` (dispatch)
+- `src/codegen_runtime.rs:69` — `OpNewRecord` (native entry)
+- `src/codegen_runtime.rs:87` — `OpFinishRecord` (native entry)
+- `src/generation/calls.rs:50` — `&mut DbRef` forwarding (P144 fix)
 
 **Discovered:** 2026-04-15.  Isolated from the moros_map `edit.loft`
 test suite.
