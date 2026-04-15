@@ -8515,17 +8515,23 @@ fn inc18_bare_break_exits_innermost_only() {
 //   early-return `gh_c.ck_hexes[0]` (DbRef into a `for`-iterator element
 //   inside the argument `m`) vs fallthrough `Hex {}` (local promoted to
 //   hidden `__ref_1`).  Calling the function twice on the same populated
-//   Map SIGSEGVs whenever memory layout doesn't catch it (P143).
+//   Map used to SIGSEGV whenever memory layout didn't catch it (P143).
+//
+// Fix landed in `src/state/codegen.rs::gen_set_first_ref_call_copy` —
+// emit `n_set_store_lock(arg, true)` for every ref-typed argument of
+// the call before `OpCopyRecord`, then `n_set_store_lock(arg, false)`
+// after.  The existing `OpCopyRecord` guard at `src/state/io.rs:1001`
+// already skips the source-free when the source store is `locked`,
+// so an early-return that aliased one of the args no longer kills
+// the caller's argument.  The work-ref scope-exit logic in
+// `src/scopes.rs::free_vars` was extended to free `__ref_*` /
+// `__rref_*` work-refs to recover the storage that the
+// non-aliased-source path used to claim via the `0x8000` bit.
 //
 // Fixtures: `tests/lib/p143_types.loft`, `tests/lib/p143_entry.loft`,
 // `tests/lib/p143_main.loft` — three IR shapes (empty-map fallback,
 // found-on-first-chunk, loop-fallback-after-non-matching-chunk).
-//
-// Three fix attempts have failed (see `doc/claude/PROBLEMS.md` § P143
-// for the full attempt history); the test stays `#[ignore]` while
-// the next attempt is designed.
 #[test]
-#[ignore = "P143 still open — three attempts cascaded; needs the parser-side `__ref_1` early-return wrap to also allocate a stack slot for the new work-ref var"]
 fn p143_default_struct_return_from_nested_vector_use() {
     let mut p = Parser::new();
     p.lib_dirs.push("tests/lib".to_string());

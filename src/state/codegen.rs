@@ -1171,17 +1171,56 @@ impl State {
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
-    /// Sets the high bit on the type parameter to signal OpCopyRecord to free the
-    /// source store after copying (issue #120 — prevents callee store leak).
+    ///
+    /// Sets the `0x8000` "free source" bit on `OpCopyRecord` (issue #120 —
+    /// prevents callee store leak), but FIRST locks every ref-typed
+    /// argument of the call, then unlocks them after the copy.  The
+    /// existing `OpCopyRecord` code at `src/state/io.rs:1001` skips the
+    /// source-free when the source store is `locked`, so an early-return
+    /// that aliased one of the args (P143:
+    /// `return arg.field[i]` inside `for ... in arg.collection { ... }`)
+    /// does not free part of the caller's argument.  Args that were
+    /// already locked at function entry (const params) get a no-op lock
+    /// + a redundant-but-harmless unlock — `n_set_store_lock` doesn't
+    ///   touch program-lifetime locked stores (rc >= u32::MAX/2).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
         stack.add_op("OpDatabase", self);
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
         self.code_add(tp_nr);
+
+        // Collect ref-typed args of the call to bracket with lock/unlock
+        // so OpCopyRecord's `0x8000` source-free skips them.
+        let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value {
+            let attrs = stack.data.def(*fn_nr).attributes.clone();
+            args.iter()
+                .enumerate()
+                .filter_map(|(i, arg)| {
+                    let tp = attrs.get(i).map(|a| &a.typedef)?;
+                    if !matches!(
+                        tp,
+                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                    ) {
+                        return None;
+                    }
+                    if let Value::Var(av) = arg {
+                        Some(*av)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let lock_fn = stack.data.def_nr("n_set_store_lock");
+        for av in &ref_args {
+            let lock = Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(true)]);
+            self.generate(&lock, stack, false);
+        }
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         // High bit = free source store after deep copy.
-        // Safe with store reference counting: free_named only frees when rc drops to 0.
         // Disabled under WASM: frame yield/resume creates store aliases that rc
         // alone cannot track yet; freeing causes "Allocating a used store" panics.
         #[cfg(not(feature = "wasm"))]
@@ -1193,6 +1232,10 @@ impl State {
             vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
         );
         self.generate(&copy_val, stack, false);
+        for av in &ref_args {
+            let unlock = Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(false)]);
+            self.generate(&unlock, stack, false);
+        }
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {

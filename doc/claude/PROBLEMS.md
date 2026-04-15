@@ -38,7 +38,7 @@ existing entry, not re-open it as a bug.
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 | ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
-| 143 | SIGSEGV returning default struct from function iterating nested vectors | High | Avoid `Hex {}` return from functions that iterate `vector<Chunk>` containing `vector<Hex>` via cross-file `use`. Fixtures + ignored regression test land at `tests/lib/p143_*.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`; first fix attempt (commits 82a8483/078459f, reverted in ddc4a24) traded the use-after-free for a leak that broke `p122_gl_collision_struct_api` in debug, and a follow-up mirror broke `brick_buster_yield_resume`. Needs a narrower fix that detects when the callee's return DbRef aliases an argument vs an internal allocation. |
+| ~~143~~ | SIGSEGV returning default struct from function iterating nested vectors | — | **Fixed** — `gen_set_first_ref_call_copy` (`src/state/codegen.rs`) now brackets `OpCopyRecord` with `n_set_store_lock(arg, true)` / `(arg, false)` for every ref-typed argument of the call.  `OpCopyRecord`'s existing `!locked` guard at `src/state/io.rs:1001` then skips the source-free when the source aliases one of the locked args (the P143 case: `return arg.field[i]` returns a DbRef into `arg`).  `src/scopes.rs::free_vars` was extended to free `__ref_*`/`__rref_*` work-refs at function exit so the non-aliased path's storage doesn't leak.  Tests: `tests/lib/p143_{types,entry,main}.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`. |
 
 ---
 
@@ -699,9 +699,11 @@ data model).  The designed layout had `types.loft`, `palette.loft`, and
 
 ---
 
-### 143. SIGSEGV returning default struct from function iterating nested vectors
+### ~~143~~. SIGSEGV returning default struct from function iterating nested vectors — FIXED
 
-**Severity:** High — crashes the interpreter.
+**Status:** Fixed 2026-04-15 — see "Final fix" section below.
+
+**Severity:** High — used to crash the interpreter.
 
 **Symptom:** `SIGSEGV caught, last op: (opcode dispatch) (op=194)` when a
 function returns `Hex {}` (default-constructed struct) as a fallback after
@@ -796,33 +798,35 @@ Two sub-issues blocked it:
     with "attempt to subtract with overflow" because the slot
     allocator (run earlier) didn't see this var.
 
-**Promising directions for the next attempt:**
-1. **Defer the wrap to scopes.rs**: rerun the wrap injection in the
-   scope-analysis pass after `ref_return` has had a chance to set up
-   `__ref_1`.  This avoids the parse-order chicken-and-egg.
-2. **Allocate the work-ref earlier**: walk the function body in a
-   pre-pass to find any `return` that needs the wrap, allocate the
-   work-ref var BEFORE the slot allocator runs.
-3. **Runtime alias check**: extend `OpCopyRecord` to skip
-   `free_source` when `data.store_nr` matches any of the call's
-   visible-Reference-arg store_nrs.  Requires plumbing the arg
-   store_nrs to the OpCopyRecord callsite (or doing the check
-   against a per-frame "live arg refs" set).
-4. **Wire `inc_rc`**: the unused refcount infrastructure at
-   `src/database/allocation.rs:146-160` would make the 0x8000 path's
-   comment ("safe with store reference counting") actually true.
-   Every aliasing edge bumps rc; OpCopyRecord's free-source
-   decrements; only frees when rc reaches 0.  Largest blast radius
-   but the most semantically correct.
+**Final fix (variant of option 3 above):** Instead of changing
+`OpCopyRecord` to walk arguments at runtime, achieve the same effect
+by *locking* the args at codegen time — `OpCopyRecord` already has a
+`!locked` guard at `src/state/io.rs:1001` that skips the source-free
+when the source store is locked.
 
-Note: under main's behaviour (0x8000 unconditional, no inc_rc)
-work-ref stores get marked `free` then immediately reused via
-`OpDatabase`'s `clear+claim` path — the bitmap reports them as
-free even while live data lives in their backing memory.  Tests
-pass because the leak-check exempts `free` stores, and nothing
-else allocates into the slot before the function exits.  This is
-fragile but currently functional; any fix should be careful not
-to introduce a real free→reuse-by-other race.
+`gen_set_first_ref_call_copy` in `src/state/codegen.rs` now emits, for
+every Reference/Vector/Enum-struct argument of the call:
+
+```
+n_set_store_lock(arg, true)   ← lock before OpCopyRecord
+... OpCopyRecord(call_result, v, tp | 0x8000)
+n_set_store_lock(arg, false)  ← unlock after
+```
+
+If the callee's early-return aliased one of those args, OpCopyRecord
+sees `data.store_nr` is locked → skips the free → caller's argument
+stays intact.  If the callee returned a fresh allocation (its
+`__ref_1` work-ref), `data.store_nr` is unlocked → free as before.
+Const args are already locked from function entry; the lock op is a
+no-op on them, and `n_set_store_lock(false)` on a program-lifetime
+locked store (rc >= u32::MAX/2) is a no-op too — so const args don't
+get their lock cleared.
+
+Companion change: `src/scopes.rs::free_vars` now treats
+`__ref_*`/`__rref_*` work-refs as freeable at function exit
+regardless of their `dep` list, recovering storage that previously
+leaked via `OpDatabase`'s "clear+claim into free-marked store"
+path.
 
 ---
 
