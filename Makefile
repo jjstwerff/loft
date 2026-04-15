@@ -26,8 +26,18 @@
 #   make all        Format source + build the native binary.
 #   make test       Full test suite (fmt + clippy + tests). ~1-2 minutes.
 #   make quick      Same tests without the clippy/fmt gate. Faster iteration.
-#   make ci         Full automated pipeline (logs to result.txt; runs GL
-#                   + packages suites). What the remote runner does.
+#   make ci         Mirror of .github/workflows/ci.yml — fmt, clippy
+#                   (deny warnings), build --all-targets, build
+#                   --no-default-features, nextest run --profile ci.
+#                   Runs the SAME gates the remote runner uses, in the
+#                   same order, so a green `make ci` predicts a green
+#                   PR.  Logs to result.txt.  Does NOT run the
+#                   GL / packages suites — those live in their own
+#                   targets (test-packages, test-gl-smoke, test-gl-golden)
+#                   and are NOT gated by the remote.
+#   make ci-full    `ci` + the development-only suites (test-packages,
+#                   test-gl-smoke, test-gl-golden).  What we used to
+#                   call `make ci` before the slim-down.
 #   make ship       Fast local pre-push gate: fmt + both clippy variants
 #                   + release tests, streamed to the terminal, chained
 #                   with && so `make ship && git push` stops on first
@@ -382,7 +392,7 @@ test-packages:
 
 # Headless GL example tests — tiered:
 #
-#   test-gl-smoke    : 3 representative examples, ~20s. Wired into `make ci`.
+#   test-gl-smoke    : 3 representative examples, ~20s. Wired into `make ci-full`.
 #                      Catches catastrophic regressions (window creation,
 #                      Painter2D draw path, scene-graph render path).
 #   test-gl-headless : full set (14 today, 26 once P120 lands), ~90-180s.
@@ -546,14 +556,36 @@ ci:
 	# Recreate the directory so these tests don't fail with NotFound when
 	# parallel test scheduling lets them race the helpers that *do* create it.
 	mkdir -p tests/generated
-	# --release on cargo test: see comment on the `test` target — debug mode
-	# pushes the suite from ~1 minute to ~30 minutes because the loft
-	# bytecode interpreter is dominated by debug Rust overhead.
+	# Mirror of .github/workflows/ci.yml in invocation order so a green
+	# local `make ci` predicts a green PR:
+	#   1. Format     job → cargo fmt -- --check
+	#   2. Clippy     job → cargo clippy -- -D warnings    (no --release,
+	#                       no --tests, no --no-default-features — that
+	#                       matches the remote runner exactly)
+	#   3. Test       job → cargo build --all-targets,
+	#                       cargo build --no-default-features,
+	#                       cargo nextest run --profile ci
+	#
+	# Drift from what GH runs is the most common cause of "passed local,
+	# failed remote" — keep this list short and IDENTICAL to ci.yml.
+	# The `Browser build + probe` (gallery) job is intentionally not
+	# mirrored here: it requires wasm-pack + node + a clean network and
+	# is heavy enough that local devs run `make gallery` separately when
+	# touching the wasm bundle.  Other dev-only suites (test-packages,
+	# test-gl-smoke, test-gl-golden) live in `make ci-full`.
 	cargo fmt -- --check > result.txt 2>&1 && \
-	cargo clippy --tests -- -D warnings >> result.txt 2>&1 && \
-	cargo clippy --no-default-features --all-targets -- -D warnings >> result.txt 2>&1 && \
-	cargo check --no-default-features >> result.txt 2>&1 && \
-	cargo test --release >> result.txt 2>&1 && \
+	cargo clippy -- -D warnings >> result.txt 2>&1 && \
+	cargo build --all-targets >> result.txt 2>&1 && \
+	cargo build --no-default-features >> result.txt 2>&1 && \
+	(cargo nextest --version >/dev/null 2>&1 || cargo install cargo-nextest --locked) >> result.txt 2>&1 && \
+	cargo nextest run --profile ci >> result.txt 2>&1
+
+# Local-only superset of `ci`: same gates plus the development suites
+# that are NOT in .github/workflows/ci.yml — package smoke tests and
+# the GL/golden visual regression.  Useful before merging an
+# infrastructure change that could affect them; not required for the
+# remote PR gate.
+ci-full: ci
 	$(MAKE) test-packages >> result.txt 2>&1 && \
 	$(MAKE) test-gl-smoke >> result.txt 2>&1 && \
 	$(MAKE) test-gl-golden >> result.txt 2>&1
