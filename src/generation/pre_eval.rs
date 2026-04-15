@@ -5,7 +5,7 @@
 //! before emitting the main code.  This avoids nested borrow conflicts in
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
-use crate::data::{Type, Value};
+use crate::data::{Block, Type, Value};
 use std::io::Write;
 
 use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
@@ -743,6 +743,81 @@ impl Output<'_> {
                 matches!(def.returned, Type::Void)
             }
             Value::Block(bl) => matches!(bl.result, Type::Void),
+            _ => false,
+        }
+    }
+
+    /// Detect the native-only ref-return tail-call capture pattern.
+    ///
+    /// Matches ref/vector/struct-enum-returning blocks whose tail is:
+    /// `[..., Call(user_fn -> matching ref type), cleanup_ops*, Return(Null)]`
+    /// where `cleanup_ops` is zero or more of `OpFreeText`, `OpFreeRef`,
+    /// `n_set_store_lock`, or `Value::Line`.
+    ///
+    /// Without the capture, `scopes::free_vars`'s else-branch produces
+    /// `[Call, free, Return(Null)]` — native codegen then emits the Call
+    /// as a discarded statement and returns a null DbRef sentinel,
+    /// losing the tail call's result (`tests/scripts/87-store-leaks.loft`).
+    ///
+    /// The capture lets `output_block` emit
+    /// `let __native_tail_ret: DbRef = <call>;` at the Call position and
+    /// `return __native_tail_ret;` in place of the Return(Null), preserving
+    /// the original execution order (Call runs before cleanup runs before
+    /// the typed return).  The scopes-level B5-L3 wrap was reverted in
+    /// `ef6a32b` because it broke `brick_buster_yield_resume` via the
+    /// interpreter's deep-copy path; this emit-time fix sidesteps that.
+    pub(super) fn detect_ref_tail_capture(
+        &self,
+        bl: &Block,
+        operators: &[Value],
+    ) -> Option<(usize, usize)> {
+        match &bl.result {
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {}
+            _ => return None,
+        }
+        let ret_idx = operators
+            .iter()
+            .rposition(|op| !matches!(op, Value::Line(_)))?;
+        let Value::Return(ret_val) = &operators[ret_idx] else {
+            return None;
+        };
+        if !matches!(**ret_val, Value::Null) {
+            return None;
+        }
+        // Walk backwards through cleanup ops to find the tail user Call.
+        let mut i = ret_idx;
+        while i > 0 {
+            i -= 1;
+            match &operators[i] {
+                Value::Line(_) => {}
+                Value::Call(d_nr, _) => {
+                    let name = &self.data.def(*d_nr).name;
+                    if name == "OpFreeText" || name == "OpFreeRef" || name == "n_set_store_lock" {
+                        continue;
+                    }
+                    // Candidate tail Call — require its return type to match
+                    // the block's heap shape.  Only user-level functions
+                    // (not raw `Op*` or loft-builtin calls) qualify.
+                    if name.starts_with("Op") {
+                        return None;
+                    }
+                    let callee_ret = &self.data.def(*d_nr).returned;
+                    if !Self::heap_shape_matches(callee_ret, &bl.result) {
+                        return None;
+                    }
+                    return Some((i, ret_idx));
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn heap_shape_matches(callee_ret: &Type, block_result: &Type) -> bool {
+        match (callee_ret, block_result) {
+            (Type::Reference(d1, _), Type::Reference(d2, _)) => d1 == d2,
+            (Type::Vector(d1, _), Type::Vector(d2, _)) => d1 == d2,
+            (Type::Enum(d1, true, _), Type::Enum(d2, true, _)) => d1 == d2,
             _ => false,
         }
     }

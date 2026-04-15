@@ -560,6 +560,12 @@ impl Output<'_> {
         } else {
             &bl.operators
         };
+        // Native-only ref-return tail-call capture (87-store-leaks).
+        // See pre_eval.rs::detect_ref_tail_capture for the pattern.  At the
+        // call index we emit `let __native_tail_ret: DbRef = <call>;`; at
+        // the Return(Null) index we emit `return __native_tail_ret;`
+        // instead of the null-sentinel `return DbRef { store_nr: u16::MAX, … }`.
+        let tail_capture = self.detect_ref_tail_capture(bl, operators);
         // When the block expects a non-void result but trailing operator(s) are
         // void (drops, if-without-else, etc.), find the last non-void operator
         // and capture its value before the trailing void ops run.
@@ -576,6 +582,16 @@ impl Output<'_> {
             && return_idx.is_some_and(|i| matches!(operators[i], Value::Return(_)));
         for (vnr, v) in operators.iter().enumerate() {
             if matches!(v, Value::Line(_)) {
+                continue;
+            }
+            // Ref-return tail-call capture: `return __native_tail_ret;` in
+            // place of the Return(Null)'s null-sentinel emission.  No pre_evals
+            // — the Return(Null) itself references no vars.
+            if let Some((_, ret_idx)) = tail_capture
+                && vnr == ret_idx
+            {
+                self.indent(w)?;
+                writeln!(w, "return __native_tail_ret;")?;
                 continue;
             }
             // O7: pre-compute format-segment count so that text assignments at the
@@ -650,6 +666,8 @@ impl Output<'_> {
             } else {
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
+                let is_tail_capture_call =
+                    tail_capture.is_some_and(|(call_idx, _)| vnr == call_idx);
                 // When OpCreateStack is the tail expression of a non-void block, the
                 // op itself emits nothing at runtime (it's a stack-slot no-op), but
                 // the block must return the mutable reference.  Emit `&mut var_<name>`
@@ -674,7 +692,9 @@ impl Output<'_> {
                     } else {
                         None
                     };
-                    if wrap_result {
+                    if is_tail_capture_call {
+                        write!(w, "let __native_tail_ret: DbRef = ")?;
+                    } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
                         write!(w, "(")?;
