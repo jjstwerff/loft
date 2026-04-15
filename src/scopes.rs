@@ -526,6 +526,25 @@ impl Scopes {
                 }
             }
         }
+        // P147: companion to the P146 fix above for the
+        // var-to-var deep-copy path.  When `Set(v, Var(src))` and
+        // both are References to the same struct, codegen takes
+        // `gen_set_first_ref_var_copy` (state/codegen.rs:1025-1033)
+        // which OpConvRefFromNull + OpDatabase + OpCopyRecord
+        // deep-copies src into a FRESH store owned by `v`.  This
+        // path is hit by the I13 iterator protocol's hidden
+        // `__iter_obj_N = c` setup (parser/collections.rs:209).
+        // Strip v's declared deps so get_free_vars emits OpFreeRef.
+        if let Value::Var(src) = value
+            && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = function.tp(v).clone()
+            && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) = function.tp(*src)
+            && d_nr == *src_d
+        {
+            let deps: Vec<u16> = function.tp(v).depend().clone();
+            for d in deps {
+                function.make_independent(v, d);
+            }
+        }
         let scanned = self.scan(value, function, data);
         // Flatten: if the scanned value is Insert([preamble..., final_call]),
         // hoist the preamble out so the IR becomes

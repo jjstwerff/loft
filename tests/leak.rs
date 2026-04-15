@@ -251,6 +251,96 @@ fn p146_script_95_alias_copy_leak() {
     );
 }
 
+/// P147 (script 81 — iterator-protocol main): 3 calls to a constructor
+/// `new_counter(integer) -> Counter` followed by `for x in c { ... }`
+/// using the I13 iterator protocol leak the constructor's alloc'd
+/// stores at scope exit.
+#[test]
+#[ignore = "P147 — investigating, un-ignore for sharp diagnostic"]
+fn p147_script_81_iterator_protocol_leak() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse("tests/scripts/81-iterator-protocol.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    let _ = state.execute_log(&mut std::io::stderr(), "main", &config, &p.data);
+}
+
+/// P148 (script 45 — A10 field iteration): `for f in s#fields { ... }`
+/// leaks 1 store per iteration (8 total: 3 from Point, 4 from Mixed,
+/// + 1 from the iterator itself).
+#[test]
+#[ignore = "P148 — investigating, un-ignore for sharp diagnostic"]
+fn p148_script_45_field_iteration_leak() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse("tests/scripts/45-field-iter.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    let _ = state.execute_log(&mut std::io::stderr(), "main", &config, &p.data);
+}
+
+/// P149 reproducer: script 76's test_p105_nested_struct_in_vector
+/// SIGSEGVs under execute_log at `OpCopyRecord(data=ref(0,0,0x40080000),
+/// to=ref(2,5,24), tp=68)`.  The source DbRef has `store_nr=0` (the
+/// stack store) with a `pos` of 0x40080000 — the bit pattern of float
+/// 2.125, suggesting a slot was reused for a float and then read as
+/// a DbRef.  Pre-existing memory issue (observed before the P146 fix);
+/// reproduces deterministically only via execute_log's stricter access
+/// checks.  The wrap-suite path (execute, warning-only) does not hit
+/// this — so the script appears clean there.
+///
+/// Distinct from P146/P147/P148 — this is a slot/lifetime mismatch
+/// in nested struct initialization, not a missing free.
+#[test]
+#[ignore = "P149 open — slot reuse SEGV under execute_log; un-ignore for sharp diagnostic"]
+fn p149_script_76_nested_struct_segv() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse("tests/scripts/76-struct-vector-return.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    let _ = state.execute_log(
+        &mut std::io::stderr(),
+        "test_p105_nested_struct_in_vector",
+        &config,
+        &p.data,
+    );
+}
+
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
 ///

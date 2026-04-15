@@ -697,6 +697,16 @@ fn entry_point_names(data: &Data, start_def: u32) -> Vec<String> {
         if matches!(def.returned, loft::data::Type::Iterator(_, _)) {
             continue;
         }
+        // P147: skip value-returning helpers (e.g. `fn svr_identity() ->
+        // SvMat`) that happen to be zero-param.  Convention in
+        // tests/scripts/ is that entry-points return Void; helpers return
+        // values for assignment.  Calling a value-returning helper here
+        // throws away the returned store, leaking it.  None of the
+        // existing scripts have a `fn main()` / `fn test_*()` returning
+        // a value, so this filter only excludes accidental sweeps.
+        if !matches!(def.returned, loft::data::Type::Void) {
+            continue;
+        }
         let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
         names.push(user_name.to_string());
     }
