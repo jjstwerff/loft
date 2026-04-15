@@ -1171,28 +1171,8 @@ impl State {
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
-    ///
-    /// Does NOT set the `0x8000` "free source" bit on OpCopyRecord.  The source
-    /// might alias an argument (e.g. `map_get_hex(m) -> Hex` returning
-    /// `gh_c.ck_hexes[0]` — a DbRef into `m` rather than into the callee's
-    /// hidden `__ref_1` buffer).  In that case, freeing the source kills the
-    /// argument's store, and the next call on the same argument reads freed
-    /// memory (P143 SIGSEGV).  The comment that previously claimed "safe with
-    /// store reference counting" was wrong — `inc_rc` is declared but never
-    /// called, so every store has `ref_count = 1` and the "decrement on free"
-    /// path behaves as an unconditional free.
-    ///
-    /// To avoid leaking the caller-allocated work-ref that backs the callee's
-    /// hidden `__ref_1` buffer, emit an explicit `OpFreeRef` on every hidden
-    /// ref-typed arg of the call after the copy completes.  Two cases:
-    ///   - Callee fell through and wrote to its `__ref_1`: the work-ref's
-    ///     store IS the source we just deep-copied; freeing it now reclaims
-    ///     the temp.
-    ///   - Callee took early-return aliasing an arg: the work-ref's store is
-    ///     a fresh empty allocation that nobody else references; freeing it
-    ///     here doesn't touch the aliased arg.
-    ///
-    /// Either way the work-ref is safe to free.
+    /// Sets the high bit on the type parameter to signal OpCopyRecord to free the
+    /// source store after copying (issue #120 — prevents callee store leak).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
@@ -1200,40 +1180,19 @@ impl State {
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
-        let tp_val = i32::from(tp_nr);
+        // High bit = free source store after deep copy.
+        // Safe with store reference counting: free_named only frees when rc drops to 0.
+        // Disabled under WASM: frame yield/resume creates store aliases that rc
+        // alone cannot track yet; freeing causes "Allocating a used store" panics.
+        #[cfg(not(feature = "wasm"))]
+        let tp_with_free = i32::from(tp_nr) | 0x8000;
+        #[cfg(feature = "wasm")]
+        let tp_with_free = i32::from(tp_nr);
         let copy_val = Value::Call(
             copy_nr,
-            vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
+            vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
         );
         self.generate(&copy_val, stack, false);
-
-        // Free every hidden-ref arg of the call.  Workrefs are always
-        // `Value::Var(_)`; resolve via `var_mapping` because variables.rs
-        // can rename across passes.
-        if let Value::Call(fn_nr, args) = value {
-            let attrs = stack.data.def(*fn_nr).attributes.clone();
-            for (i, attr) in attrs.iter().enumerate() {
-                if !attr.hidden {
-                    continue;
-                }
-                if !matches!(
-                    attr.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                ) {
-                    continue;
-                }
-                let Some(Value::Var(wv)) = args.get(i) else {
-                    continue;
-                };
-                // Skip workrefs that scopes already marked skip_free
-                // (they participate in a different ownership chain).
-                if stack.function.is_skip_free(*wv) {
-                    continue;
-                }
-                let free_call = Value::Call(stack.data.def_nr("OpFreeRef"), vec![Value::Var(*wv)]);
-                self.generate(&free_call, stack, false);
-            }
-        }
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {
