@@ -61,13 +61,6 @@ impl Output<'_> {
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);
         }
-        // Quick check: is there any Return(Null) at all?
-        if !ops
-            .iter()
-            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null))
-        {
-            return std::borrow::Cow::Borrowed(ops);
-        }
         let is_free_op = |op: &Value| {
             if let Value::Call(d, _) = op {
                 let name = &self.data.def(*d).name;
@@ -76,8 +69,97 @@ impl Output<'_> {
                 false
             }
         };
+
+        // Pass 1 — B5-L3 text-temp collapse:
+        //   [Set(__ret_N, Call(...)), ..., Return(Var(__ret_N))]
+        //     → [..., Return(Call(...))]
+        //
+        // The Set+Return dance is emitted by scopes.rs::free_vars to keep
+        // the interpreter happy (it copies bytes into __ret_N so subsequent
+        // OpFreeText on the original work buffer doesn't dangle the TOS
+        // Str).  Native would materialise Set(__ret_N, Call) as
+        // `let var___ret: String = call(...).to_string()` and Return(Var)
+        // as `return Str::new(&var___ret)` — the local String drops at
+        // function exit and the returned Str's raw ptr dangles
+        // (`tests/scripts/86-interfaces.loft::if_label`).  For this narrow
+        // pattern, the inner Call already returns a borrow into a program-
+        // lifetime Store; collapsing to `return Call(...)` keeps that
+        // borrow intact.
+        //
+        // Safety criteria — all must hold:
+        //   • Set target var name starts with `__ret_` and is skip_free.
+        //   • Target type is Type::Text(_).
+        //   • Set value is a `Value::Call` (not If/Match/Block — those can
+        //     borrow from free-op targets and would dangle post-collapse).
+        //   • Return is `Return(Var(target))`.
+        //   • No other operator between Set and Return reads or writes
+        //     the target var.
+        let variables = &self.data.def(self.def_nr).variables;
         let mut result: Vec<Value> = ops.to_vec();
-        // Process all Return(Null) occurrences (usually just one).
+        let mut ret_search_from = 0;
+        while let Some(ret_pos) = result[ret_search_from..]
+            .iter()
+            .position(|op| {
+                matches!(op, Value::Return(v) if matches!(v.as_ref(), Value::Var(target) if
+                    variables.name(*target).starts_with("__ret_")
+                    && variables.is_skip_free(*target)
+                    && matches!(variables.tp(*target), Type::Text(_))))
+            })
+            .map(|p| p + ret_search_from)
+        {
+            ret_search_from = ret_pos + 1;
+            // Extract the Return's target var_nr.
+            let target = if let Value::Return(inner) = &result[ret_pos]
+                && let Value::Var(v) = inner.as_ref()
+            {
+                *v
+            } else {
+                continue;
+            };
+            // Find the preceding Set(target, <safe-to-inline>).
+            // A value is safe to inline into the Return position when it
+            // doesn't borrow from any local that might be freed between
+            // Set and Return.  Calls to user fns / string literals / vars
+            // (args or program-lifetime) qualify; If/Match/Block can
+            // borrow from __work_N locals that free ops clobber, so
+            // they're excluded.
+            let set_pos = result[..ret_pos].iter().position(|op| {
+                matches!(op, Value::Set(v, val) if *v == target
+                && matches!(
+                    val.as_ref(),
+                    Value::Call(_, _) | Value::Text(_)
+                ))
+            });
+            let Some(set_idx) = set_pos else { continue };
+            // No other use of `target` between set_idx+1 and ret_pos-1.
+            let target_used_between = result[set_idx + 1..ret_pos]
+                .iter()
+                .any(|op| Self::value_mentions_var(op, target));
+            if target_used_between {
+                continue;
+            }
+            // Perform the collapse: extract the Call from the Set,
+            // remove the Set, and rewrite Return(Var) → Return(Call).
+            let Value::Set(_, call_box) = result.remove(set_idx) else {
+                unreachable!("set_pos pointed at a Set");
+            };
+            let ret_pos_after = ret_pos - 1;
+            result[ret_pos_after] = Value::Return(call_box);
+            ret_search_from = ret_pos_after + 1;
+        }
+
+        // Pass 2 — existing Return(Null) expr hoist.
+        // Quick check: is there any Return(Null) left?
+        let has_return_null = result
+            .iter()
+            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null));
+        if !has_return_null {
+            return if result.len() == ops.len() && result.iter().zip(ops).all(|(a, b)| a == b) {
+                std::borrow::Cow::Borrowed(ops)
+            } else {
+                std::borrow::Cow::Owned(result)
+            };
+        }
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
@@ -99,6 +181,32 @@ impl Output<'_> {
             }
         }
         std::borrow::Cow::Owned(result)
+    }
+
+    /// Does `op` read or write the variable `var_nr` (recursively)?
+    /// Used by `patch_hoisted_returns` to confirm that a `__ret_N` temp
+    /// isn't touched between its `Set` and `Return(Var)` before collapsing.
+    fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
+        match op {
+            Value::Var(v) => *v == var_nr,
+            Value::Set(v, inner) => *v == var_nr || Self::value_mentions_var(inner, var_nr),
+            Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
+                args.iter().any(|a| Self::value_mentions_var(a, var_nr))
+            }
+            Value::If(cond, t, f) => {
+                Self::value_mentions_var(cond, var_nr)
+                    || Self::value_mentions_var(t, var_nr)
+                    || Self::value_mentions_var(f, var_nr)
+            }
+            Value::Block(bl) | Value::Loop(bl) => bl
+                .operators
+                .iter()
+                .any(|o| Self::value_mentions_var(o, var_nr)),
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                Self::value_mentions_var(inner, var_nr)
+            }
+            _ => false,
+        }
     }
 
     /// Use this to detect sub-expressions that would cause a double-borrow of `stores`

@@ -536,14 +536,30 @@ impl Output<'_> {
         // discarded statement and returns STRING_NULL.
         let fn_name = &self.data.def(self.def_nr).name;
         let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
+        // Any text-returning block whose body contains the B5-L3
+        // `Set(__ret_N, call); ...; Return(Var(__ret_N))` temp-transfer
+        // pattern must also go through `patch_hoisted_returns` so the
+        // collapse pass can rewrite it to `return call(...)` — otherwise
+        // the local `String` ret-temp drops at function exit and the
+        // returned `Str` raw ptr dangles
+        // (`tests/scripts/86-interfaces.loft::if_label`).
+        let has_ret_temp = matches!(bl.result, Type::Text(_))
+            && bl.operators.iter().any(|op| {
+                matches!(op, Value::Set(v, _) if
+                    self.data.def(self.def_nr).variables.name(*v).starts_with("__ret_")
+                    && self.data.def(self.def_nr).variables.is_skip_free(*v))
+            });
         let patched_ops;
-        let operators: &[Value] =
-            if is_void_block || matches!(bl.result, Type::Never) || is_t_stub_text_body {
-                patched_ops = self.patch_hoisted_returns(&bl.operators);
-                &patched_ops
-            } else {
-                &bl.operators
-            };
+        let operators: &[Value] = if is_void_block
+            || matches!(bl.result, Type::Never)
+            || is_t_stub_text_body
+            || has_ret_temp
+        {
+            patched_ops = self.patch_hoisted_returns(&bl.operators);
+            &patched_ops
+        } else {
+            &bl.operators
+        };
         // When the block expects a non-void result but trailing operator(s) are
         // void (drops, if-without-else, etc.), find the last non-void operator
         // and capture its value before the trailing void ops run.
