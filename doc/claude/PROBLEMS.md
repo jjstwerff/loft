@@ -39,6 +39,7 @@ existing entry, not re-open it as a bug.
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 | ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
 | ~~143~~ | SIGSEGV returning default struct from function iterating nested vectors | — | **Fixed** — `gen_set_first_ref_call_copy` (`src/state/codegen.rs`) now brackets `OpCopyRecord` with `n_set_store_lock(arg, true)` / `(arg, false)` for every ref-typed argument of the call.  `OpCopyRecord`'s existing `!locked` guard at `src/state/io.rs:1001` then skips the source-free when the source aliases one of the locked args (the P143 case: `return arg.field[i]` returns a DbRef into `arg`).  `src/scopes.rs::free_vars` was extended to free `__ref_*`/`__rref_*` work-refs at function exit so the non-aliased path's storage doesn't leak.  Tests: `tests/lib/p143_{types,entry,main}.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`. |
+| 144 | Infinite loop when `&Struct` functions call each other in cross-file packages | High | Don't call other `&Map` functions from within a `&Map` function in a multi-file package |
 
 ---
 
@@ -827,6 +828,43 @@ Companion change: `src/scopes.rs::free_vars` now treats
 regardless of their `dep` list, recovering storage that previously
 leaked via `OpDatabase`'s "clear+claim into free-marked store"
 path.
+
+---
+
+### 144. Infinite loop when `&Struct` functions call each other in cross-file packages
+
+**Severity:** High — hangs the interpreter with no output.
+
+**Symptom:** A function taking `&Map` that calls another function also
+taking `&Map` (e.g. `map_paint_material` calling `map_ensure_chunk`
+then iterating `m.m_chunks`) causes an infinite loop in multi-file
+packages loaded via `use`. The same code in a single file works fine.
+
+**Reproducer:** In a multi-file package with `types.loft` defining Hex/Chunk
+and `moros_map.loft` defining Map:
+
+```loft
+pub fn map_ensure_chunk(m: &Map, q: integer, r: integer, cy: integer) { ... }
+
+pub fn map_paint_material(m: &Map, q: integer, r: integer, cy: integer, material: integer) {
+  map_ensure_chunk(m, q, r, cy);   // calls another &Map function
+  // ... iterate m.m_chunks — hangs here
+}
+```
+
+Functions that don't call other `&Map` functions work fine
+(`map_ensure_chunk` alone, `map_set_hex` alone).
+
+**Root cause (likely):** The flat variable namespace corrupts parameter
+slots when multiple `&Struct` functions share loop variable names or
+parameter positions across call boundaries in multi-file packages.
+
+**Workaround:** Keep `&Struct` mutation functions self-contained — don't
+call other `&Struct` functions from within one. Use `map_set_hex` with
+a full Hex struct instead of convenience wrappers.
+
+**Discovered:** 2026-04-15 while implementing MO.3 (moros hex edit
+operations).
 
 ---
 
