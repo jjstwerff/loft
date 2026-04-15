@@ -500,7 +500,22 @@ impl Scopes {
             let has_ref_params = data.def(*fn_nr).attributes.iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
-            if !has_ref_params {
+            if has_ref_params {
+                // P146: codegen will take gen_set_first_ref_call_copy
+                // (state/codegen.rs:1186-1238) — OpConvRefFromNull +
+                // OpDatabase + lock-args + OpCopyRecord deep-copy into a
+                // FRESH store owned by `v`.  Strip v's declared deps so
+                // get_free_vars emits OpFreeRef at scope exit; otherwise
+                // the parser's "borrows from arg N" inference suppresses
+                // emission and the deep-copied store leaks (the
+                // `dep_empty=false` path in scopes.rs:906).  Mirrors the
+                // adoption-path skip_free below for symmetry with the
+                // codegen branches in state/codegen.rs:1048-1066.
+                let deps: Vec<u16> = function.tp(v).depend().clone();
+                for d in deps {
+                    function.make_independent(v, d);
+                }
+            } else {
                 for arg in args {
                     if let Value::Var(wv) = arg {
                         let wv = *self.var_mapping.get(wv).unwrap_or(wv);
