@@ -2058,23 +2058,28 @@ site pre-alloc with a recursion-aware return-slot accounting fix.
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
-**B7 — Native-returned temporary lifecycle (broader than initially scoped).**
+**B7 — Native-returned temporary lifecycle.**  **FIXED.**  All five
+B7 regression guards pass without `#[ignore]`:
 
-**Scope narrowed 2026-04-14.**  Several B7-family symptoms listed
-below were *observed* during earlier investigation but no longer
-reproduce on the current branch — presumably closed as a
-side-effect of the B2-runtime retrofit, B5 layers 1+2, and the
-`t_9JsonValue_*` method-alias registrations.  What remains is
-strictly the **character-interpolation text-return** path, guarded
-by `b7_character_interpolation_return_crashes` (`#[ignore]`).  The
-method-on-JsonValue-returning-scalar case (originally parked at
-`b7_method_on_jsonvalue_returning_integer_crashes`) now works in
-both debug and release; the regression guard was renamed 2026-04-14
-to `b7_method_on_jsonvalue_returning_integer_works` to reflect its
-current invariant (method dispatch must not crash / leak on the
-`len(v)` shape).  The historical paragraphs below describe the
-bug's reach at the time they were written — they are preserved for
-the narrowing audit trail, not as current-state claims.
+- `b7_method_on_jsonvalue_returning_integer_works` — `len(v)` on
+  `JsonValue` (the original method-dispatch case).
+- `b7_method_on_q4_constructed_jsonvalue_works` — same shape with
+  the JsonValue built via `json_*` constructors.
+- `b7_repeated_method_dispatch_on_jsonvalue_works` — chained
+  method calls.
+- `b7_multiple_json_parse_via_match_works` — sequential
+  `json_parse` calls consumed via pattern match.
+- `b7_character_interpolation_return_crashes` — name kept for
+  search-back compatibility but the test passes (`build_b7c() == "h"`).
+
+Closed as a side-effect of the B2-runtime retrofit, B5 layers 1+2,
+the `t_9JsonValue_*` method-alias registrations, the dep-inference
+fix in PR #171, and the lock-args-around-OpCopyRecord work in
+PR #172 — no dedicated B7 commit was needed.
+
+The historical paragraphs below describe the bug's reach at the
+time they were written — preserved as the narrowing audit trail,
+not as current-state claims.
 
 **Unification finding 2026-04-13.**  B7's signature — `~500 iterations of
 Return(ret=0, value=16, discard=0) at PC=0` followed by legitimate code

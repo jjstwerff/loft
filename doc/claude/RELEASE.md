@@ -95,7 +95,7 @@ character-interpolation, P136 harness, step-6 by design).
 
 **Remaining blockers for 0.8.4 tag:**
 - WASM-build + WASM-runtime gates (see above)
-- Crash bugs: B2-runtime, B3, B5 L3, B7, P136
+- Crash bugs: P136 (B2-runtime, B3, B5, B7 all closed)
 - Zero-leak gate (wrap-suite scripts 42/62/76)
 - Zero-ignore baseline approval
 
@@ -121,11 +121,17 @@ WASM path is broken is a release that doesn't work for most users.
 
 | ID | H/M | Summary | Reference |
 |---|---|---|---|
-| **B2-runtime** | H | Unit-variant literal construction in a struct-enum crashes at runtime (`JsonValue.JNull { is_null: true }` segfaults).  Layer-1 parser side fixed; runtime side open.  Blocks every release that exposes `Option<T>` / `Result<T,E>` / `JsonValue` construction. | QUALITY.md § B2-runtime |
-| **B3** | H | Struct-enum tail-expression return crashes.  Value returned through a tail position corrupts the caller frame. | QUALITY.md § B3 |
-| **B5 layer 3** | H | Recursive struct-enum returns to wrong PC (layers 1 + 2 landed 2026-04-14; the recursive inner `OpReturn` still jumps to bogus PC). | QUALITY.md § B5 |
-| **B7** | H | Native-returned temporary lifecycle — duplicate / out-of-order `OpFreeRef` emission.  Revised estimate: 2-3 sessions with `LOFT_LOG=full`. | QUALITY.md § B7 |
 | **P136** | H | wrap-suite SIGSEGV on `79-null-early-exit.loft`.  Heap corruption in the `cached_default()` + `run_test` path; `corrupted size vs. prev_size` inside `drop_in_place<Data>`.  Runs fine via CLI and is valgrind-clean there.  Reproducer: `#[ignore] sigsegv_repro_79_alone`.  Currently worked around by `loft_suite` skipping the script. | PROBLEMS.md § P136 |
+
+Closed (kept for audit trail, no longer block):
+- B2-runtime — closed 2026-04-13 (unit-variant retrofit).
+- B3 — closed 2026-04-13 (hidden caller pre-alloc for struct-enum returns).
+- B5 — all three layers closed (layers 1+2 2026-04-14; layer 3 closed
+  as a side-effect of struct-enum return-slot work in PR #168→#174).
+  All four `p54_b5_*` guards green.
+- B7 — closed as a side-effect of the B2-runtime / B5 / dep-inference /
+  lock-args work across PR #168→#172.  All five `b7_*` guards green
+  (the old `_crashes` suffix stays for search-back compatibility).
 
 ### Memory safety — no release may corrupt memory
 
@@ -162,15 +168,14 @@ and a linked issue**.
 | **Zero-ignore gate** | H | Every `#[ignore]` (and every `#[ignore = "..."]`) must either be (a) removed because the underlying bug is fixed, or (b) explicitly approved by the release owner with a one-line rationale in `tests/ignored_tests.baseline`.  The approval must cite the blocking issue ID (e.g. `B7 family — ...`, `CI harness SIGABRT (P136-adjacent)`) so the ignore traces back to the open bug.  Unreviewed ignores — where the reason is vague or the owner didn't sign off — block the release. | `tests/ignored_tests.baseline` + `tests/doc_hygiene.rs::ignored_tests_baseline_is_current` |
 | **Skip-list audit** | H | Every `SKIP` / `NATIVE_SKIP` / `SCRIPTS_NATIVE_SKIP` / `ignored_scripts()` entry must be traceable to a specific open blocker issue.  "Currently worked around by skipping" counts as an ignore and must appear in the same baseline approval flow. | `tests/native.rs`, `tests/wrap.rs::ignored_scripts`, `tests/native_loader.rs` |
 
-Baseline as of 2026-04-14 (all 4 entries require owner sign-off
-before tagging):
-- `b7_character_interpolation_return_crashes` → tracks B7.
-- `file_content_nonexistent_trace` → tracks P136-adjacent CI
-  harness bug.
-- `p54_b5_recursive_struct_enum` → tracks B5 layer 3.
+Baseline as of 2026-04-15 — only one entry remains:
 - `regen_fill_rs` → maintenance-only, not a test of runtime
   behaviour (regenerates `src/fill.rs`); candidate for
   explicit permanent exemption.
+
+(B5/B7 ignores all removed once the underlying bugs were
+confirmed closed; `file_content_nonexistent_trace` and
+`sigsegv_repro_79_alone` no longer carry `#[ignore]` attrs.)
 
 Plus `tests/wrap.rs::sigsegv_repro_79_alone` (standalone
 `#[ignore]`) and `tests/wrap.rs::ignored_scripts()` skipping

@@ -5446,16 +5446,17 @@ fn q1_json_errors_includes_line_and_byte() {
     .result(Value::Boolean(true));
 }
 
-// B7 family — character-interpolation-return SIGSEGV.
+// B7 family — character-interpolation-return regression guard.
 //
-// Discovered while writing INC#9 regression tests:
-// `fn f() -> text { c = txt[0]; "{c}" }` SIGSEGVs.  The text
-// built via n_format_text on a character isn't tracked for free
-// on the outer function's text-return path.  Same B7 lifecycle
-// family as the JsonValue method crashes.
+// Originally a SIGSEGV reproducer (discovered while writing INC#9
+// regression tests): `fn f() -> text { c = txt[0]; "{c}" }`
+// crashed because the text built via n_format_text on a character
+// wasn't tracked for free on the outer function's text-return path.
 //
-// Documented in LOFT.md § String literals as a caveat and in
-// QUALITY.md § B7.  Goes green when B7 lands.
+// Closed as a side-effect of the B2-runtime / B5 / dep-inference /
+// lock-args fixes that landed across PR #168 → #172.  Kept as a
+// regression guard.  Old `_crashes` suffix retained for
+// search-back compatibility — the test now passes.
 #[test]
 fn b7_character_interpolation_return_crashes() {
     code!(
