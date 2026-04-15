@@ -127,6 +127,27 @@ impl Stores {
         let store = &mut self.allocations[al as usize];
         store.ref_count = 0;
         store.unlock();
+        // LOFT_LOG=poison_free: overwrite the freed buffer with a
+        // recognisable pattern so subsequent stale-DbRef reads hit
+        // loud garbage (0xDEADBEEF repeated) instead of whatever bytes
+        // the allocator happens to have left.  Skip the size-header
+        // word (offset 0..8) so the bitmap/housekeeping can still read
+        // the "freed" marker; start poisoning from offset 8.
+        if self.poison_free {
+            let cap_bytes = store.capacity_words() as usize * 8;
+            if cap_bytes > 8 {
+                unsafe {
+                    let base = store.ptr.add(8);
+                    // Write 0xDEADBEEF to every i32-aligned word past the
+                    // size header.  Use a byte-level loop to avoid worrying
+                    // about alignment requirements on the raw pointer.
+                    const POISON: [u8; 4] = [0xEF, 0xBE, 0xAD, 0xDE];
+                    for off in 0..(cap_bytes - 8) {
+                        *base.add(off) = POISON[off & 3];
+                    }
+                }
+            }
+        }
         store.free = true;
         // S29 (P1-R4 M4-b): mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
@@ -467,6 +488,7 @@ impl Stores {
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
+            poison_free: self.poison_free,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
@@ -536,6 +558,7 @@ impl Stores {
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
+            poison_free: self.poison_free,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

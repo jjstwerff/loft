@@ -1525,6 +1525,9 @@ pub(super) fn execute_log_impl(
         library: &raw const state.library,
         stack_trace_lib_nr: stk_lib_nr,
     }));
+    // `LOFT_LOG=poison_free`: wire the runtime flag into the Stores so
+    // every `free_named` overwrites the freed buffer with 0xDEADBEEF.
+    state.database.poison_free = config.poison_free;
 
     // If logging is suppressed for this function, fall back to silent execution.
     if !config.phases.execution || !config.show_function(name) {
