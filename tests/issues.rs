@@ -4048,22 +4048,15 @@ fn run() -> float {
     .result(Value::Float(42.5));
 }
 
-/// B5 (narrower-open 2026-04-14): self-referential struct-enum.
-/// Two B5 layers are now fixed:
+/// B5 full regression guard: self-referential struct-enum with
+/// recursive method.  Three layers had to land for this to pass:
 ///   1. `fill_all` registers `main_vector<T>` wrappers for every
 ///      struct/enum-variant `vector<T>` field — closes the original
 ///      "Incomplete record" panic on `OpDatabase(db_tp=u16::MAX)`.
-///      Positive guard: `p54_b5_recursive_struct_enum_construction`.
 ///   2. Match-arm bindings carry `skip_free` — closes the garbage
 ///      `FreeRef(ref(4621,…))` on a not-taken arm's binding slot.
-///
-/// What still fails here is a **recursion / return-PC issue**: after
-/// the inner recursive `count(k)` call returns from the `Leaf` arm,
-/// control flow ends up at an unrelated bytecode PC (OpCastIntFromText
-/// on a null pointer, then wandering into random ops).  Looks more
-/// like a struct-enum-tail-return / B3-family symptom in the
-/// recursive-call path than a match lifetime one.  See QUALITY.md
-/// § B5 for the current state and where to continue.
+///   3. Struct-enum return-slot accounting (closed as a side-effect
+///      of the cross-PR struct-enum return work landed in #168→#174).
 #[test]
 fn p54_b5_recursive_struct_enum() {
     code!(

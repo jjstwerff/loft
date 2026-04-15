@@ -1929,8 +1929,19 @@ independent codegen surgeries with no overlap, and B7 unblocks
 ergonomics gap; the `return n;` workaround stays good for any
 user who needs it.
 
-**B5 — Recursive struct-enum runtime crash** (progress 2026-04-14:
-**two layers shipped, third open.**)  The reference loft source:
+**B5 — Recursive struct-enum runtime crash.**  **FIXED.**  All four
+guards (`p54_b5_recursive_struct_enum`,
+`p54_b5_recursive_struct_enum_construction`,
+`p54_b5_not_taken_arm_with_vector_binding_ok`,
+`p54_b5_for_loop_over_enum_variant_vector`) now pass without
+`#[ignore]`.  The recursive `count(Node {...})` returns 7 as
+expected.  Layer 3 (the recursive tail-call return-PC bug
+described historically below) closed as a side-effect of the
+struct-enum return-slot work that landed across PR #168 → #174 —
+no dedicated commit needed for layer 3 itself.
+
+**Historical layered diagnosis kept for context.**  The reference
+loft source:
 
 ```loft
 pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
