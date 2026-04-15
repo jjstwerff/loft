@@ -938,6 +938,16 @@ fn get_store_lock(r: reference) -> boolean;
 // Only `true` is accepted from loft code via d#lock = true.
 // A non-const variable may also use d#lock = false to unlock.
 fn set_store_lock(r: reference, locked: boolean);
+// Yield control back to the host frame loop.  Sets the interpreter's
+// `frame_yield` flag, which makes `state.execute_argv` return after
+// the current opcode.  The host then drives the next frame: in WASM
+// the browser's requestAnimationFrame, in native CLI the
+// `while frame_yield { state.resume() }` loop in `main.rs`, and in
+// tests the same loop in the wrap suite.  Use this from frame-driven
+// loft programs (animation, game loops) so they can be tested under
+// the interpreter without a graphics backend — the same flag that
+// `gl_swap_buffers` sets when running with real graphics.
+fn yield_frame();
 // --- Parallel ---
 // Internal: run a loft function over every element of a vector in parallel.
 // Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.

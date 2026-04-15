@@ -300,17 +300,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([
-        // 85-yield-resume.loft calls `mock_yield_frame` — a native function
-        // declared in `tests/lib/yield_test/` that has no real
-        // implementation.  The test passes via `tests/leak.rs::
-        // brick_buster_yield_resume`, which calls
-        // `state.replace_native("mock_yield_frame", ...)` to inject an
-        // in-process implementation.  `wrap::loft_suite` cannot do that
-        // because it has no per-script setup hook.  This is a runtime
-        // requirement, not the @ARGS framework gap.
-        "85-yield-resume.loft",
-    ])
+    HashSet::from([])
 }
 
 macro_rules! script_test {
@@ -936,6 +926,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             let should_fail = file_level_fail || expect_fail.contains(name.as_str());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 state.execute(name, &p_data);
+                // Drive resume after `yield_frame()` returns control —
+                // mirrors the CLI's `while frame_yield { state.resume() }`
+                // loop in `src/main.rs:2291-2294`.  Without this, scripts
+                // that yield (e.g. `tests/scripts/85-yield-resume.loft`)
+                // would only execute the work between fn entry and the
+                // first `yield_frame()` call.
+                while state.database.frame_yield {
+                    state.resume();
+                }
             }));
             let msg_from = |payload: &Box<dyn std::any::Any + Send>| -> String {
                 if let Some(s) = payload.downcast_ref::<String>() {
