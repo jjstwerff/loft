@@ -5,7 +5,7 @@
 //! before emitting the main code.  This avoids nested borrow conflicts in
 //! generated Rust code where `stores` would be borrowed mutably twice.
 
-use crate::data::{Type, Value};
+use crate::data::{Block, Type, Value};
 use std::io::Write;
 
 use super::{Output, PreEvalEntry, narrow_int_cast, sanitize};
@@ -61,13 +61,6 @@ impl Output<'_> {
         if matches!(fn_returned, Type::Void) {
             return std::borrow::Cow::Borrowed(ops);
         }
-        // Quick check: is there any Return(Null) at all?
-        if !ops
-            .iter()
-            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null))
-        {
-            return std::borrow::Cow::Borrowed(ops);
-        }
         let is_free_op = |op: &Value| {
             if let Value::Call(d, _) = op {
                 let name = &self.data.def(*d).name;
@@ -76,8 +69,97 @@ impl Output<'_> {
                 false
             }
         };
+
+        // Pass 1 — B5-L3 text-temp collapse:
+        //   [Set(__ret_N, Call(...)), ..., Return(Var(__ret_N))]
+        //     → [..., Return(Call(...))]
+        //
+        // The Set+Return dance is emitted by scopes.rs::free_vars to keep
+        // the interpreter happy (it copies bytes into __ret_N so subsequent
+        // OpFreeText on the original work buffer doesn't dangle the TOS
+        // Str).  Native would materialise Set(__ret_N, Call) as
+        // `let var___ret: String = call(...).to_string()` and Return(Var)
+        // as `return Str::new(&var___ret)` — the local String drops at
+        // function exit and the returned Str's raw ptr dangles
+        // (`tests/scripts/86-interfaces.loft::if_label`).  For this narrow
+        // pattern, the inner Call already returns a borrow into a program-
+        // lifetime Store; collapsing to `return Call(...)` keeps that
+        // borrow intact.
+        //
+        // Safety criteria — all must hold:
+        //   • Set target var name starts with `__ret_` and is skip_free.
+        //   • Target type is Type::Text(_).
+        //   • Set value is a `Value::Call` (not If/Match/Block — those can
+        //     borrow from free-op targets and would dangle post-collapse).
+        //   • Return is `Return(Var(target))`.
+        //   • No other operator between Set and Return reads or writes
+        //     the target var.
+        let variables = &self.data.def(self.def_nr).variables;
         let mut result: Vec<Value> = ops.to_vec();
-        // Process all Return(Null) occurrences (usually just one).
+        let mut ret_search_from = 0;
+        while let Some(ret_pos) = result[ret_search_from..]
+            .iter()
+            .position(|op| {
+                matches!(op, Value::Return(v) if matches!(v.as_ref(), Value::Var(target) if
+                    variables.name(*target).starts_with("__ret_")
+                    && variables.is_skip_free(*target)
+                    && matches!(variables.tp(*target), Type::Text(_))))
+            })
+            .map(|p| p + ret_search_from)
+        {
+            ret_search_from = ret_pos + 1;
+            // Extract the Return's target var_nr.
+            let target = if let Value::Return(inner) = &result[ret_pos]
+                && let Value::Var(v) = inner.as_ref()
+            {
+                *v
+            } else {
+                continue;
+            };
+            // Find the preceding Set(target, <safe-to-inline>).
+            // A value is safe to inline into the Return position when it
+            // doesn't borrow from any local that might be freed between
+            // Set and Return.  Calls to user fns / string literals / vars
+            // (args or program-lifetime) qualify; If/Match/Block can
+            // borrow from __work_N locals that free ops clobber, so
+            // they're excluded.
+            let set_pos = result[..ret_pos].iter().position(|op| {
+                matches!(op, Value::Set(v, val) if *v == target
+                && matches!(
+                    val.as_ref(),
+                    Value::Call(_, _) | Value::Text(_)
+                ))
+            });
+            let Some(set_idx) = set_pos else { continue };
+            // No other use of `target` between set_idx+1 and ret_pos-1.
+            let target_used_between = result[set_idx + 1..ret_pos]
+                .iter()
+                .any(|op| Self::value_mentions_var(op, target));
+            if target_used_between {
+                continue;
+            }
+            // Perform the collapse: extract the Call from the Set,
+            // remove the Set, and rewrite Return(Var) → Return(Call).
+            let Value::Set(_, call_box) = result.remove(set_idx) else {
+                unreachable!("set_pos pointed at a Set");
+            };
+            let ret_pos_after = ret_pos - 1;
+            result[ret_pos_after] = Value::Return(call_box);
+            ret_search_from = ret_pos_after + 1;
+        }
+
+        // Pass 2 — existing Return(Null) expr hoist.
+        // Quick check: is there any Return(Null) left?
+        let has_return_null = result
+            .iter()
+            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null));
+        if !has_return_null {
+            return if result.len() == ops.len() && result.iter().zip(ops).all(|(a, b)| a == b) {
+                std::borrow::Cow::Borrowed(ops)
+            } else {
+                std::borrow::Cow::Owned(result)
+            };
+        }
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
@@ -99,6 +181,32 @@ impl Output<'_> {
             }
         }
         std::borrow::Cow::Owned(result)
+    }
+
+    /// Does `op` read or write the variable `var_nr` (recursively)?
+    /// Used by `patch_hoisted_returns` to confirm that a `__ret_N` temp
+    /// isn't touched between its `Set` and `Return(Var)` before collapsing.
+    fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
+        match op {
+            Value::Var(v) => *v == var_nr,
+            Value::Set(v, inner) => *v == var_nr || Self::value_mentions_var(inner, var_nr),
+            Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
+                args.iter().any(|a| Self::value_mentions_var(a, var_nr))
+            }
+            Value::If(cond, t, f) => {
+                Self::value_mentions_var(cond, var_nr)
+                    || Self::value_mentions_var(t, var_nr)
+                    || Self::value_mentions_var(f, var_nr)
+            }
+            Value::Block(bl) | Value::Loop(bl) => bl
+                .operators
+                .iter()
+                .any(|o| Self::value_mentions_var(o, var_nr)),
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                Self::value_mentions_var(inner, var_nr)
+            }
+            _ => false,
+        }
     }
 
     /// Use this to detect sub-expressions that would cause a double-borrow of `stores`
@@ -340,6 +448,15 @@ impl Output<'_> {
             if let Some(tp) = self.infer_type(arg) {
                 if narrow_int_cast(&tp).is_some() {
                     format!("({substituted}) as i32")
+                } else if matches!(tp, Type::Text(_))
+                    && matches!(arg, Value::Call(d, _) if
+                        matches!(self.data.def(*d).returned, Type::Text(_))
+                        && self.data.def(*d).rust.is_empty()
+                        && !self.data.def(*d).name.starts_with("Op"))
+                {
+                    // Text-returning user fn calls produce `Str`; callees
+                    // expect `&str`.  Deref at the binding site.
+                    format!("&*({substituted})")
                 } else {
                     substituted.clone()
                 }
@@ -626,6 +743,81 @@ impl Output<'_> {
                 matches!(def.returned, Type::Void)
             }
             Value::Block(bl) => matches!(bl.result, Type::Void),
+            _ => false,
+        }
+    }
+
+    /// Detect the native-only ref-return tail-call capture pattern.
+    ///
+    /// Matches ref/vector/struct-enum-returning blocks whose tail is:
+    /// `[..., Call(user_fn -> matching ref type), cleanup_ops*, Return(Null)]`
+    /// where `cleanup_ops` is zero or more of `OpFreeText`, `OpFreeRef`,
+    /// `n_set_store_lock`, or `Value::Line`.
+    ///
+    /// Without the capture, `scopes::free_vars`'s else-branch produces
+    /// `[Call, free, Return(Null)]` — native codegen then emits the Call
+    /// as a discarded statement and returns a null DbRef sentinel,
+    /// losing the tail call's result (`tests/scripts/87-store-leaks.loft`).
+    ///
+    /// The capture lets `output_block` emit
+    /// `let __native_tail_ret: DbRef = <call>;` at the Call position and
+    /// `return __native_tail_ret;` in place of the Return(Null), preserving
+    /// the original execution order (Call runs before cleanup runs before
+    /// the typed return).  The scopes-level B5-L3 wrap was reverted in
+    /// `ef6a32b` because it broke `brick_buster_yield_resume` via the
+    /// interpreter's deep-copy path; this emit-time fix sidesteps that.
+    pub(super) fn detect_ref_tail_capture(
+        &self,
+        bl: &Block,
+        operators: &[Value],
+    ) -> Option<(usize, usize)> {
+        match &bl.result {
+            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {}
+            _ => return None,
+        }
+        let ret_idx = operators
+            .iter()
+            .rposition(|op| !matches!(op, Value::Line(_)))?;
+        let Value::Return(ret_val) = &operators[ret_idx] else {
+            return None;
+        };
+        if !matches!(**ret_val, Value::Null) {
+            return None;
+        }
+        // Walk backwards through cleanup ops to find the tail user Call.
+        let mut i = ret_idx;
+        while i > 0 {
+            i -= 1;
+            match &operators[i] {
+                Value::Line(_) => {}
+                Value::Call(d_nr, _) => {
+                    let name = &self.data.def(*d_nr).name;
+                    if name == "OpFreeText" || name == "OpFreeRef" || name == "n_set_store_lock" {
+                        continue;
+                    }
+                    // Candidate tail Call — require its return type to match
+                    // the block's heap shape.  Only user-level functions
+                    // (not raw `Op*` or loft-builtin calls) qualify.
+                    if name.starts_with("Op") {
+                        return None;
+                    }
+                    let callee_ret = &self.data.def(*d_nr).returned;
+                    if !Self::heap_shape_matches(callee_ret, &bl.result) {
+                        return None;
+                    }
+                    return Some((i, ret_idx));
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn heap_shape_matches(callee_ret: &Type, block_result: &Type) -> bool {
+        match (callee_ret, block_result) {
+            (Type::Reference(d1, _), Type::Reference(d2, _)) => d1 == d2,
+            (Type::Vector(d1, _), Type::Vector(d2, _)) => d1 == d2,
+            (Type::Enum(d1, true, _), Type::Enum(d2, true, _)) => d1 == d2,
             _ => false,
         }
     }

@@ -253,6 +253,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [RENDERER.md](doc/claude/RENDERER.md) | High-level renderer design — scene-driven PBR with shadows, helper abstractions |
 | [WEB_EXAMPLES.md](doc/claude/WEB_EXAMPLES.md) | Web gallery + unified rendering: native OpenGL / WebGL / GLB from one API |
 | [GAME_INFRA.md](doc/claude/GAME_INFRA.md) | Game infrastructure: sprites, tilemap, collision, audio, FFI, HTML export, warnings |
+| [PIPELINE.md](doc/claude/PIPELINE.md) | Game asset pipeline: AI prototype → artist polish → integration |
 | [../PROMPTS.md](doc/PROMPTS.md) | Working with Claude — practices and when to use each prompt in `prompts.txt` |
 
 ---

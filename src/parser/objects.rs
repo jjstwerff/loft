@@ -513,12 +513,12 @@ impl Parser {
                                 );
                                 list.push(Value::Var(w));
                                 // The work-ref's DbRef is copied into the
-                                // receiving slot (the LHS of assignment or
-                                // the surrounding expression), so its store
-                                // is owned downstream — don't double-free
-                                // the __ref_N too.
+                                // receiving slot (the LHS of assignment).
+                                // The LHS OWNS the store (empty dep); the
+                                // work-ref is skip_free (same store, no
+                                // double-free).
                                 self.vars.set_skip_free(w);
-                                *code = v_block(list, Type::Enum(en, true, vec![w]), "EnumUnitLit");
+                                *code = v_block(list, Type::Enum(en, true, vec![]), "EnumUnitLit");
                                 return t;
                             }
                         }

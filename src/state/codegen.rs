@@ -483,6 +483,15 @@ impl State {
         let true_stack = stack.position;
         if *f_val == Value::Null {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
+            // P136: when the true branch diverges (return/break/continue, possibly
+            // wrapped by scopes.rs in Insert/Block), execution only reaches the
+            // join point via the goto-false path — where runtime stack_pos equals
+            // the pre-if `stack_pos`, not `true_stack`. Without this reset, every
+            // subsequent Var/Put encodes a wrong offset and writes corrupt the
+            // return-address slot, eventually overflowing the stack store.
+            if is_divergent(t_val) {
+                stack.position = stack_pos;
+            }
         } else {
             stack.add_op("OpGotoWord", self);
             let end = self.code_pos;
@@ -492,14 +501,36 @@ impl State {
             stack.position = stack_pos;
             let fp = self.generate(f_val, stack, false);
             let false_stack = stack.position;
-            self.code_put(end, (self.code_pos - false_pos) as i16); // actual end
-            // when one branch diverges (return/break/continue), use the
-            // other branch's stack position. The divergent branch exits the
-            // scope so its stack delta is irrelevant at the join point.
-            if is_divergent(t_val) {
-                stack.position = false_stack;
-            } else if is_divergent(f_val) {
-                stack.position = true_stack;
+            // B5: when both arms are non-divergent but exit at different stack
+            // levels (e.g. match arms with different local allocations), the
+            // shorter arm's result value sits at a lower stack position than
+            // the longer arm's.  Rather than padding (which would bury the
+            // result under garbage), emit the join point at the SHORTER arm's
+            // level and make the longer arm discard its extra bytes before
+            // reaching the join point (its result is already on top of stack).
+            if !is_divergent(t_val) && !is_divergent(f_val) && true_stack != false_stack {
+                let target = true_stack.min(false_stack);
+                if false_stack > target {
+                    // Shrink the false arm's stack to match the true arm.
+                    let excess = false_stack - target;
+                    stack.add_op("OpFreeStack", self);
+                    let ret_size = size(&stack.data.def(stack.def_nr).returned, &Context::Argument);
+                    self.code_add(ret_size as u8);
+                    self.code_add(excess + ret_size);
+                    stack.position = target;
+                }
+                self.code_put(end, (self.code_pos - false_pos) as i16);
+                stack.position = target;
+            } else {
+                self.code_put(end, (self.code_pos - false_pos) as i16);
+                // when one branch diverges (return/break/continue), use the
+                // other branch's stack position. The divergent branch exits the
+                // scope so its stack delta is irrelevant at the join point.
+                if is_divergent(t_val) {
+                    stack.position = false_stack;
+                } else if is_divergent(f_val) {
+                    stack.position = true_stack;
+                }
             }
             if matches!(tp, Type::Never) {
                 return fp;
@@ -724,7 +755,19 @@ impl State {
 
     pub(super) fn gen_set_first_vector_null(&mut self, stack: &mut Stack, v: u16) {
         if let Type::Vector(elm_tp, dep) = stack.function.tp(v).clone() {
-            if dep.is_empty() {
+            // skip_free variables are match-arm bindings that borrow from the
+            // subject — don't allocate a store, just push a null sentinel.
+            if stack.function.is_skip_free(v) {
+                stack.add_op("OpNullRefSentinel", self);
+            } else if stack.function.is_inline_ref(v) {
+                // Lift temporaries (scopes.rs scan_args) are always assigned
+                // from a call result before first read; the null-init only
+                // needs to reserve the slot and leave a null DbRef so an
+                // OpFreeRef along an un-taken path is a no-op.  Skipping the
+                // full pre-alloc avoids a dangling vector store (P54-B/Q2
+                // chain-leak fix).
+                stack.add_op("OpNullRefSentinel", self);
+            } else if dep.is_empty() {
                 // TODO move this convoluted implementation to a new operator.
                 stack.add_op("OpConvRefFromNull", self);
                 stack.add_op("OpDatabase", self);
@@ -873,7 +916,7 @@ impl State {
                         .def(*fn_nr)
                         .attributes
                         .iter()
-                        .any(|a| a.hidden && matches!(a.typedef, Type::Reference(_, _)));
+                        .any(|a| a.hidden && a.typedef.heap_dep().is_some());
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
                     let tp_val = if has_hidden_ref {
                         i32::from(tp_nr)
@@ -1381,11 +1424,23 @@ impl State {
         };
         let lib_nr = self.library_names.get(lib_lookup).copied();
         if stack.data.def(op).is_operator() {
+            // B7: OpAppendCharacter on a RefVar(Text) target must use
+            // OpAppendStackCharacter — same pattern as OpAppendText →
+            // OpAppendStackText in set_var.  Without this, the append
+            // writes to the raw RefVar slot instead of dereferencing it.
+            let actual_op = if name == "OpAppendCharacter"
+                && let Some(Value::Var(v)) = parameters.first()
+                && matches!(stack.function.tp(*v), Type::RefVar(_))
+            {
+                stack.data.def_nr("OpAppendStackCharacter")
+            } else {
+                op
+            };
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
-            self.code_add(stack.data.def(op).op_code as u8);
-            stack.operator(op);
+            self.code_add(stack.data.def(actual_op).op_code as u8);
+            stack.operator(actual_op);
             if was_stack != u16::MAX {
                 stack.position = was_stack;
             }
@@ -1716,8 +1771,16 @@ impl State {
                 return_expr = 0;
                 tp = Type::Void;
             } else {
-                has_return = false;
-                return_expr = 0;
+                // Preserve return_expr across cleanup ops (FreeRef/FreeText)
+                // that don't produce a return value. These are inserted by
+                // scope analysis between the tail expression and Return(Null).
+                let is_cleanup = matches!(v, Value::Call(d, _)
+                    if stack.data.def(*d).name == "OpFreeRef"
+                    || stack.data.def(*d).name == "OpFreeText");
+                if !is_cleanup {
+                    has_return = false;
+                    return_expr = 0;
+                }
                 tp = self.generate(v, stack, false);
             }
             if self.stack_pos > s_pos && !matches!(v, Value::Set(_, _)) {
@@ -1779,8 +1842,8 @@ impl State {
     }
 
     pub(super) fn known_type(&self, tp: &Type, stack: &Stack) -> u16 {
-        if let Type::Reference(c, _) = tp {
-            stack.data.def(*c).known_type
+        if let Some(c) = tp.heap_def_nr() {
+            stack.data.def(c).known_type
         } else {
             self.database.name(&tp.name(stack.data))
         }
@@ -2012,7 +2075,15 @@ impl State {
 /// Check if a Value is a divergent expression (return/break/continue)
 /// that never produces a value at the join point.
 fn is_divergent(val: &Value) -> bool {
-    matches!(val, Value::Return(_) | Value::Break(_) | Value::Continue(_))
+    match val {
+        Value::Return(_) | Value::Break(_) | Value::Continue(_) => true,
+        // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
+        // raw-Return check misses it. Walk the last op of Insert/Block to recover
+        // divergence for these wrappers.
+        Value::Insert(ops) => ops.last().is_some_and(is_divergent),
+        Value::Block(bl) => bl.operators.last().is_some_and(is_divergent),
+        _ => false,
+    }
 }
 
 /// Recursively checks whether `value` contains a direct `Var(v)` reference.

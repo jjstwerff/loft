@@ -36,7 +36,8 @@ existing entry, not re-open it as a bug.
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
-| 136 | wrap-suite SIGSEGV on `79-null-early-exit.loft` | **High — RELEASE BLOCK** | Skipped in `loft_suite` via `ignored_scripts()`; covered by dedicated `#[ignore] sigsegv_repro_79_alone` test. Runs fine via CLI + valgrind-clean. See § P136 below. |
+| ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
+| 142 | `vector<T>` field panics when T is from imported file | High | Put all structs that reference each other via `vector<T>` in the same `.loft` file |
 
 ---
 
@@ -479,7 +480,38 @@ attempt (commit b716d1d, reverted).  Narrowed 2026-04-12 via a
 
 ---
 
-## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — RELEASE BLOCK
+## 136. Wrap-suite SIGSEGV on `79-null-early-exit.loft` — FIXED
+
+**Root cause.** `state/codegen.rs::gen_if` (the `f_val == Value::Null`
+branch) left `stack.position` at the true-branch's end-state after emitting
+a divergent true branch.  At runtime the join point is reached only via
+the `OpGotoFalseWord` jump, where `stack_pos` equals the pre-if value —
+so every subsequent `Var*` / `Put*` op encoded `var_pos = codegen_stack −
+slot` was 4 bytes off.  Writes through `_ncr_1` / `val` corrupted the
+return-address slot; after a handful of `safe_double` calls the
+interpreter read a small bytecode offset as a return address and
+re-entered already-returned code, growing the stack by ~12 bytes per
+iteration until it overflowed the 8008-byte stack store.
+
+`is_divergent` also did not recognise `Value::Insert([..., Return(...)])`
+— the shape `scopes.rs` produces when it wraps a `Return` with
+`free_vars` cleanup.  So even the else-present branch's divergence reset
+(line 520-524) silently missed the C56 case.
+
+**Fix.** Two small edits in `src/state/codegen.rs`:
+- Widen `is_divergent` to recurse into the last op of `Value::Insert` and
+  `Value::Block`.
+- In the `*f_val == Value::Null` arm of `gen_if`, reset
+  `stack.position = stack_pos` when the true branch is divergent.
+
+**Tests.**  `tests/wrap.rs::sigsegv_repro_79_alone` is no longer
+`#[ignore]`d; `tests/wrap.rs::loft_suite` now runs
+`79-null-early-exit.loft` (previously skipped via `ignored_scripts()`).
+Passes debug + release, and under `target/release/loft --interpret`.
+
+---
+
+## 136. (historical) Wrap-suite SIGSEGV on `79-null-early-exit.loft`
 
 **Severity:** High (release blocker — see RELEASE.md Gate Items).
 
@@ -502,7 +534,7 @@ after `git show HEAD:src/*` replaces every modified `src/` file
 with its committed HEAD content.  The bug is pre-existing at
 commit `d0d6932`.
 
-**Debugger fingerprints (valgrind):**
+**Debugger fingerprints (valgrind + crash reporter):**
 
 ```
 Invalid write of size 1
@@ -512,16 +544,32 @@ Invalid write of size 1
    by loft::state::State::new
 ```
 
+In a debug build the bounds check fires earlier:
+
+```
+thread 'sigsegv_repro_79_alone' panicked at src/store.rs:902:9:
+Store read out of bounds: rec=1 fld=8005 size=4 store_size=8008
+
+=== loft crash (wrap) SIGABRT caught ===
+  last op:  (opcode dispatch) (op=5)
+  pc:       0
+  fn:       (?) (d_nr=4294967295)
+===
+```
+
 The 8008-byte block is the stack store allocated in `State::new`
-(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` writes
-8 bytes past the end of that block — `stack_pos` climbs above
-8000.  Live instrumentation shows `fn_return` being called
-repeatedly at `code_pos=6`, reading `u32::MAX` but getting `6` or
-similar small bytecode offsets, turning the wrap-test binary into
-an infinite loop that grows the stack by 12 bytes per iteration
-until it overflows into adjacent heap and corrupts Rust's
-allocator metadata.  The `Data::drop` at end of `run_test` then
-finds corrupted `Value`/`String` entries and glibc aborts.
+(`db.database(1000)` → 1000 words × 8 bytes).  `op_return` (op=5)
+writes 8 bytes past the end of that block — `stack_pos` climbs
+above 8000.  Live instrumentation shows `fn_return` being called
+repeatedly at `code_pos=6` (or 12 / 18), reading `u32::MAX` but
+getting `6` / `12` / similar small bytecode offsets, turning the
+wrap-test binary into an infinite loop that grows the stack by
+12 bytes per iteration until it overflows into adjacent heap and
+corrupts Rust's allocator metadata.  The `Data::drop` at end of
+`run_test` then finds corrupted `Value`/`String` entries and
+glibc aborts.  `call_stack` is empty by the time the loop runs
+(d_nr=u32::MAX in the crash report) — execution has already
+left main and is "returning past the bottom of the stack".
 
 **Runs fine via CLI:**
 
@@ -563,14 +611,19 @@ So the bug lives somewhere in the difference between
 cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
 ```
 
-**Debug aids in place:**
+**Debug aids already in place** (no setup needed for next session):
 
-- `src/crash_report.rs` — `install("wrap")` / `set_context(pc, op,
-  d_nr, fn_name)` lets the interpreter publish the last opcode per
-  thread; a SIGSEGV/SIGABRT/SIGBUS handler prints it to stderr
-  async-signal-safely before the default handler produces a core
-  dump.  Call `crash_report::install("loft")` at the top of
-  `main.rs` or `run_test` to enable.
+- `src/crash_report.rs` — `install("loft")` is called from
+  `src/main.rs` startup; `install("wrap")` is called from
+  `tests/wrap.rs::run_test`.  The interpreter's execute loop in
+  `src/state/mod.rs::execute_argv` calls `set_context(pc, op_code,
+  op_name, fn_d_nr, fn_name)` at every opcode dispatch.  On
+  SIGSEGV/SIGABRT/SIGBUS the handler async-signal-safely prints
+  the published context to stderr, then the default handler runs
+  to produce the core dump.
+- `tests/wrap.rs::sigsegv_repro_79_alone` (`#[ignore]`) is the
+  standalone reproducer; `tests/wrap.rs::ignored_scripts()`
+  skips `79-null-early-exit.loft` from `loft_suite`.
 - `ulimit -c unlimited` + `sysctl -w kernel.core_pattern=/tmp/core.%e.%p`
   — local core dumps, inspect with `gdb -c core target/release/deps/wrap-<hash>`.
 - `valgrind --error-exitcode=42 --track-origins=yes --num-callers=30
@@ -578,7 +631,70 @@ cargo test --release --test wrap sigsegv_repro_79_alone -- --ignored --nocapture
   --nocapture` — points `op_return` at the out-of-bounds write.
 
 **Discovered:** 2026-04-14 during P54-U phase 2 test sweep.
-See `CHANGELOG.md` and `doc/claude/QUALITY.md` § P136 for ownership.
+Reproduces at `d7ef549` (`origin/main` after PR #170 merge); was
+also reproducible at the pre-merge `d0d6932` commit.
+See `CHANGELOG.md` and `doc/claude/RELEASE.md` § "Crashes" for
+release-block ownership.
+
+---
+
+## Package / Multi-file
+
+### 142. `vector<T>` field panics when T is a struct from an imported file
+
+**Severity:** High — blocks multi-file library layout for any package that
+uses `vector<StructType>` fields where the struct is defined in a separate
+`.loft` file.
+
+**Symptom:** The parser panics with:
+
+```
+assertion `left != right` failed: Unknown vector unknown(N) content type on [M]Outer.field
+  left: 4294967295
+ right: 4294967295
+```
+
+at `src/typedef.rs:311` during the type-fill phase (`fill_all`).
+
+**Reproducer (minimal):**
+
+```
+# inner.loft
+pub struct Inner { val: integer not null }
+
+# outer.loft
+use inner
+pub struct Outer { items: vector<Inner> }
+fn test_it() {
+  o = Outer { items: [] };
+  assert(len(o.items) == 0, "empty");
+}
+```
+
+Run: `loft --lib <dir-containing-inner> outer.loft` → panic.
+
+The identical code in a single file works without issue:
+
+```
+struct Inner { val: integer not null }
+struct Outer { items: vector<Inner> }
+```
+
+**Root cause (likely):** `typedef.rs::fill_all` resolves `vector<T>` content
+types during the type registration loop.  When `T` is a struct loaded via
+`use` from a different file, the struct def-nr is not yet known at the point
+where the vector content type is resolved — the two-pass design fills types
+file-by-file, so cross-file struct references in vector generics see
+`u16::MAX` (4294967295) instead of the real def-nr.
+
+**Workaround:** Put all structs that reference each other via `vector<T>`,
+`hash<T>`, `index<T>`, or `sorted<T>` in the same `.loft` file.  This is
+sufficient for the Moros `moros_map` package (all types in one file).
+
+**Discovered:** 2026-04-14 while implementing MO.1a (Moros hex scene map
+data model).  The designed layout had `types.loft`, `palette.loft`, and
+`spawn.loft` as separate files with `Map` referencing all of them via
+`vector<T>` fields.
 
 ---
 

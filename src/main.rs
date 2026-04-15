@@ -117,6 +117,9 @@ fn print_help() {
     println!(
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
+    println!(
+        "  --dump                        compile to bytecode, dump to stderr, and exit (no execution)"
+    );
     println!("  --native                      compile to native Rust via rustc and run (default)");
     println!("  --native-release              like --native but emit only reachable functions and");
     println!("                                compile with rustc -O (optimised build)");
@@ -1144,6 +1147,7 @@ fn main() {
     let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = true;
     let mut native_release = false;
+    let mut dump_only = false;
     // None  = flag not given
     // Some("") = flag given without explicit path → use .loft/ default
     // Some(path) = explicit output path
@@ -1196,6 +1200,9 @@ fn main() {
             format_mode = Some(("check", path));
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
+        } else if a == "--dump" {
+            native_mode = false;
+            dump_only = true;
         } else if a == "--native" {
             native_mode = true;
         } else if a == "--native-release" {
@@ -2219,11 +2226,16 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
     let main_nr = p.data.def_nr("n_main");
-    if main_nr == u32::MAX {
+    if main_nr == u32::MAX && !dump_only {
         // No main() — wrap each zero-parameter user function in a synthetic
         // main() that calls it. This ensures proper scope cleanup: stores
         // allocated by struct-returning functions are freed when the caller's
         // variables go out of scope, before the leak check runs.
+        //
+        // `--dump` skips this wrap-and-execute path — it wants to see the
+        // bytecode of the user functions as parsed, not a synthetic caller
+        // (and the synthetic caller may itself panic on buggy user code,
+        // aborting before the dump is written).
         let mut test_names: Vec<String> = Vec::new();
         for d_nr in start_def..p.data.definitions() {
             let def = p.data.def(d_nr);
@@ -2257,6 +2269,16 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             p.data = wp.data;
             state.execute_argv("main", &p.data, &[]);
         }
+    } else if dump_only {
+        // --dump: compile to bytecode, dump to stderr, exit (no execution).
+        // Respects LOFT_LOG for extra detail (e.g. LOFT_LOG=variables --dump).
+        let config = if std::env::var("LOFT_LOG").is_ok() {
+            log_config::LogConfig::from_env()
+        } else {
+            log_config::LogConfig::static_only()
+        };
+        let mut log = std::io::stderr();
+        let _ = state.dump_bytecode(&mut log, &config, &mut p.data);
     } else if std::env::var("LOFT_LOG").is_ok() {
         let config = log_config::LogConfig::from_env();
         let mut log = std::io::stderr();

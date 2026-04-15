@@ -109,23 +109,31 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
     let mut segments = Vec::new();
     let mut pre: Vec<Value> = Vec::new();
     for op in ops {
-        if let Value::Yield(inner) = op {
+        // Generator functions written as `fn() -> iterator<T> { for x in ... { yield x } }`
+        // get an implicit `Return(<for-block>)` wrap from block_result.  Peek through
+        // Return/Insert wrappers so the inner Block-with-yields still becomes a
+        // ForLoopBody segment instead of an opaque `pre` statement.
+        let inner_op = match op {
+            Value::Return(inner) | Value::Drop(inner) => inner.as_ref(),
+            _ => op,
+        };
+        if let Value::Yield(inner) = inner_op {
             segments.push(YieldSegment::Simple {
                 pre: std::mem::take(&mut pre),
                 val: *inner.clone(),
             });
-        } else if let Some(init) = detect_yield_from(op) {
+        } else if let Some(init) = detect_yield_from(inner_op) {
             segments.push(YieldSegment::YieldFrom {
                 pre: std::mem::take(&mut pre),
                 init,
             });
-        } else if matches!(op, Value::Block(_)) && contains_yield(op) {
+        } else if matches!(inner_op, Value::Block(_)) && contains_yield(inner_op) {
             // A block (typically a for-loop) that contains yields somewhere inside.
             // Use the eager-collect approach: the factory will run the block and
             // push all yielded values to a Vec<i64>; next_i64 pops from that buffer.
             segments.push(YieldSegment::ForLoopBody {
                 pre: std::mem::take(&mut pre),
-                body: op.clone(),
+                body: inner_op.clone(),
             });
         } else {
             pre.push(op.clone());

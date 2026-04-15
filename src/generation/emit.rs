@@ -536,14 +536,36 @@ impl Output<'_> {
         // discarded statement and returns STRING_NULL.
         let fn_name = &self.data.def(self.def_nr).name;
         let is_t_stub_text_body = matches!(bl.result, Type::Text(_)) && fn_name.starts_with("t_");
+        // Any text-returning block whose body contains the B5-L3
+        // `Set(__ret_N, call); ...; Return(Var(__ret_N))` temp-transfer
+        // pattern must also go through `patch_hoisted_returns` so the
+        // collapse pass can rewrite it to `return call(...)` — otherwise
+        // the local `String` ret-temp drops at function exit and the
+        // returned `Str` raw ptr dangles
+        // (`tests/scripts/86-interfaces.loft::if_label`).
+        let has_ret_temp = matches!(bl.result, Type::Text(_))
+            && bl.operators.iter().any(|op| {
+                matches!(op, Value::Set(v, _) if
+                    self.data.def(self.def_nr).variables.name(*v).starts_with("__ret_")
+                    && self.data.def(self.def_nr).variables.is_skip_free(*v))
+            });
         let patched_ops;
-        let operators: &[Value] =
-            if is_void_block || matches!(bl.result, Type::Never) || is_t_stub_text_body {
-                patched_ops = self.patch_hoisted_returns(&bl.operators);
-                &patched_ops
-            } else {
-                &bl.operators
-            };
+        let operators: &[Value] = if is_void_block
+            || matches!(bl.result, Type::Never)
+            || is_t_stub_text_body
+            || has_ret_temp
+        {
+            patched_ops = self.patch_hoisted_returns(&bl.operators);
+            &patched_ops
+        } else {
+            &bl.operators
+        };
+        // Native-only ref-return tail-call capture (87-store-leaks).
+        // See pre_eval.rs::detect_ref_tail_capture for the pattern.  At the
+        // call index we emit `let __native_tail_ret: DbRef = <call>;`; at
+        // the Return(Null) index we emit `return __native_tail_ret;`
+        // instead of the null-sentinel `return DbRef { store_nr: u16::MAX, … }`.
+        let tail_capture = self.detect_ref_tail_capture(bl, operators);
         // When the block expects a non-void result but trailing operator(s) are
         // void (drops, if-without-else, etc.), find the last non-void operator
         // and capture its value before the trailing void ops run.
@@ -560,6 +582,16 @@ impl Output<'_> {
             && return_idx.is_some_and(|i| matches!(operators[i], Value::Return(_)));
         for (vnr, v) in operators.iter().enumerate() {
             if matches!(v, Value::Line(_)) {
+                continue;
+            }
+            // Ref-return tail-call capture: `return __native_tail_ret;` in
+            // place of the Return(Null)'s null-sentinel emission.  No pre_evals
+            // — the Return(Null) itself references no vars.
+            if let Some((_, ret_idx)) = tail_capture
+                && vnr == ret_idx
+            {
+                self.indent(w)?;
+                writeln!(w, "return __native_tail_ret;")?;
                 continue;
             }
             // O7: pre-compute format-segment count so that text assignments at the
@@ -634,6 +666,8 @@ impl Output<'_> {
             } else {
                 let is_return_expr =
                     !is_void_block && !has_trailing_void && return_idx == Some(vnr);
+                let is_tail_capture_call =
+                    tail_capture.is_some_and(|(call_idx, _)| vnr == call_idx);
                 // When OpCreateStack is the tail expression of a non-void block, the
                 // op itself emits nothing at runtime (it's a stack-slot no-op), but
                 // the block must return the mutable reference.  Emit `&mut var_<name>`
@@ -646,13 +680,21 @@ impl Output<'_> {
                     let vname = sanitize(self.data.def(self.def_nr).variables.name(*nr));
                     writeln!(w, "&mut var_{vname}")?;
                 } else {
-                    let wrap_result = is_return_expr && is_text_result;
-                    let narrow_cast = if is_return_expr {
+                    // A `Value::Return(...)` already emits its own `return …`
+                    // (typed for the function signature), so wrapping it in
+                    // `Str::new(...)` would produce `Str::new(return Str::new(X))`
+                    // which fails Rust type-check.  Same reasoning for narrow
+                    // int casts: the return statement carries the right type.
+                    let value_is_return = matches!(v, Value::Return(_));
+                    let wrap_result = is_return_expr && is_text_result && !value_is_return;
+                    let narrow_cast = if is_return_expr && !value_is_return {
                         narrow_int_cast(&bl.result)
                     } else {
                         None
                     };
-                    if wrap_result {
+                    if is_tail_capture_call {
+                        write!(w, "let __native_tail_ret: DbRef = ")?;
+                    } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
                         write!(w, "(")?;

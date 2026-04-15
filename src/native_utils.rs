@@ -44,6 +44,11 @@ pub(crate) fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBu
     if exe_dir.join("libloft.rlib").exists() {
         return Some(exe_dir.clone());
     }
+    // Cargo places rlibs in target/<profile>/deps/ — check that too.
+    let deps = exe_dir.join("deps");
+    if deps.join("libloft.rlib").exists() {
+        return Some(deps);
+    }
     // Installed as <prefix>/bin/loft — look in <prefix>/share/loft/.
     if exe_dir.file_name()? == "bin" {
         let share = exe_dir.parent()?.join("share").join("loft");

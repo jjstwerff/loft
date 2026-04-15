@@ -507,7 +507,10 @@ impl State {
         let var = *self.code::<u16>();
         let db_tp = *self.code::<u16>();
         let code_pos = self.code_pos;
-        let size = self.database.size(db_tp);
+        // B2-runtime: for EnumValue types, the record must be large enough
+        // for the parent enum's largest variant.  The parent's size covers
+        // all variants; the variant's own size may be smaller (unit variants).
+        let size = self.database.enum_parent_size(db_tp);
         let db = *self.get_var::<DbRef>(var);
         self.database.clear(&db);
         let r = self.database.claim(&db, u32::from(size));

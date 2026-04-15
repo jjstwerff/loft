@@ -297,13 +297,6 @@ fn ignored_scripts() -> HashSet<&'static str> {
         // so the script runner picks it up via its own invocation path
         // and tests/imports.rs covers the same ground at the Rust level.
         "88-imports.loft",
-        // P136: pre-existing SIGSEGV in the test-harness path —
-        // stack overflow in `fill::op_return` during `drop_in_place<Data>`.
-        // Runs fine via CLI and valgrind-clean; only crashes through
-        // `cached_default()` clone.  Covered by the dedicated
-        // `#[ignore] sigsegv_repro_79_alone` test below.  See
-        // `doc/claude/PROBLEMS.md` § P136.
-        "79-null-early-exit.loft",
     ])
 }
 
@@ -431,16 +424,17 @@ fn last() -> std::io::Result<()> {
     run_test(PathBuf::from("tests/docs/16-parser.loft"), false, true)
 }
 
-/// Reproducer for the pre-existing SIGSEGV / heap-corruption crash in
-/// `loft_suite` on `tests/scripts/79-null-early-exit.loft`.  Crash is
-/// in `fill::op_return` (stack overflow — stack_pos exceeds the 8000-byte
-/// stack buffer) only in the test-harness path via `cached_default()`
-/// clone; the same script runs green via the CLI `target/release/loft`
-/// binary and via valgrind (zero memory errors).  Documented in
-/// `doc/claude/PROBLEMS.md` § P136 as a pre-existing bug to fix before
-/// re-enabling the wrap `loft_suite` run on `79-null-early-exit.loft`.
+/// Regression test for P136 — SIGSEGV / heap-corruption on
+/// `tests/scripts/79-null-early-exit.loft`.  Root cause was in
+/// `state/codegen.rs::gen_if`: when the true branch diverges (C56
+/// `?? return` desugars to `if (is_null) { return ret } else null`)
+/// and `f_val == Null`, `stack.position` was left at the true branch's
+/// end-state instead of being reset to the pre-if value.  Runtime then
+/// reached the join point (via goto-false) with a smaller stack_pos
+/// than codegen expected, and every subsequent Var/Put read/wrote four
+/// bytes off — eventually clobbering the return-address slot and
+/// looping into an 8008-byte stack overflow.
 #[test]
-#[ignore]
 fn sigsegv_repro_79_alone() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(
@@ -483,12 +477,7 @@ fn file_debug() -> std::io::Result<()> {
 
 /// Debug the run of `16-parser.loft` with a full execution trace written to
 /// `tests/dumps/16-parser.loft.txt`.  Use this when diagnosing parser regressions.
-/// Ignored: the execute_log trace dereferences a &text DbRef whose debug dump
-/// reads uninitialised stack memory (the runtime itself works — only the trace
-/// formatter segfaults).  See the `<raw:0x1>` in the dump at GetFileText.
-/// Run explicitly: cargo test -- parser_debug --ignored
 #[test]
-#[ignore]
 fn parser_debug() -> std::io::Result<()> {
     let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     run_test(PathBuf::from("tests/docs/16-parser.loft"), true, true)

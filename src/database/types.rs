@@ -748,6 +748,30 @@ impl Stores {
         }
     }
 
+    /// For EnumValue types, return the parent enum's size (which covers
+    /// the largest variant).  For all other types, return their own size.
+    /// B2-runtime: unit enum variants may have a smaller type size than
+    /// the parent enum needs.  The Database opcode must claim enough
+    /// space for `set_default_value` to initialize all fields.
+    pub fn enum_parent_size(&self, tp: u16) -> u16 {
+        if tp == u16::MAX {
+            return 0;
+        }
+        let own_size = self.types[tp as usize].size;
+        // Check if any type in the system is an Enum whose variants include tp.
+        // If so, use the Enum's size (which is the max of all variants).
+        for t in &self.types {
+            if let Parts::Enum(variants) = &t.parts {
+                for (v_tp, _) in variants {
+                    if *v_tp == tp && t.size > own_size {
+                        return t.size;
+                    }
+                }
+            }
+        }
+        own_size
+    }
+
     #[must_use]
     pub fn position(&self, tp: u16, field: &str) -> u16 {
         if tp == u16::MAX {

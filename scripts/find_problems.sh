@@ -152,6 +152,9 @@ if [[ "${1:-}" == "--bg" ]]; then
     echo "use --peek to inspect or --wait to block until it finishes" >&2
     exit 1
   fi
+  # Remove stale bytecode caches so tests always compile fresh.
+  find tests/ -name '*.loftc' -delete 2>/dev/null || true
+  find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
   # Tee via a subshell so the script returns after backgrounding.
   (cargo test --release --no-fail-fast > "$LOG" 2>&1
    summarise "$LOG" "$OUT") &
@@ -164,6 +167,8 @@ fi
 # Default: foreground run — stream output AND write summary.
 LOG="${1:-$LOG_DEFAULT}"
 OUT="${2:-$OUT_DEFAULT}"
+find tests/ -name '*.loftc' -delete 2>/dev/null || true
+find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
 cargo test --release --no-fail-fast 2>&1 | tee "$LOG"
 summarise "$LOG" "$OUT"
 echo

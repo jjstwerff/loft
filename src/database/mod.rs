@@ -215,6 +215,12 @@ pub struct Stores {
     /// Set by `OpStoreClosure` (native) immediately before calling the lambda;
     /// read by `OpGetClosure` in the match-dispatch arm.
     pub closure_map: HashMap<u32, DbRef>,
+    /// Shared `JsonValue::JNull` sentinel record for `n_field` / `n_item`
+    /// fallback paths.  Lazily allocated on first use (after JsonValue's
+    /// `known_type` has been registered), kept for the process lifetime —
+    /// its containing store is flagged `free = false` so `check_store_leaks`
+    /// ignores it.  See P54 `p54_missing_chain_returns_jnull` fix.
+    pub jnull_sentinel: Option<DbRef>,
 }
 
 impl Default for Stores {
@@ -253,6 +259,7 @@ impl Clone for Stores {
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
             closure_map: HashMap::new(),
+            jnull_sentinel: None,
         }
     }
 }
@@ -521,6 +528,7 @@ impl Stores {
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
             closure_map: HashMap::new(),
+            jnull_sentinel: None,
         };
         result.base_type("integer", 4); // 0
         result.base_type("long", 8); // 1

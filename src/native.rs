@@ -1343,6 +1343,27 @@ fn jv_alloc(stores: &mut Stores) -> DbRef {
     stores.database(words.max(2))
 }
 
+/// Shared `JsonValue::JNull` sentinel used by `n_field` / `n_item` fallback
+/// paths — those natives have `dep=[0]` (borrow from self), so any freshly
+/// allocated record is a leak.  Instead, they all return this single record.
+/// Lazily allocated on first call; its store is `lock()`ed so future writes
+/// panic (guaranteeing the sentinel stays JNull) and `check_store_leaks`
+/// ignores it for the process lifetime.
+fn jv_null_sentinel(stores: &mut Stores) -> DbRef {
+    if let Some(r) = stores.jnull_sentinel {
+        return r;
+    }
+    let r = jv_alloc(stores);
+    stores
+        .store_mut(&r)
+        .set_byte(r.rec, r.pos, 0, JV_DISCR_NULL);
+    if (r.store_nr as usize) < stores.allocations.len() {
+        stores.allocations[r.store_nr as usize].lock();
+    }
+    stores.jnull_sentinel = Some(r);
+    r
+}
+
 // (Note: the `materialise_primitive_into` rustdoc lives directly
 // above its `fn` declaration further down — the helper between
 // here and there is `dbref_to_parsed`, which has its own rustdoc.)
@@ -1753,22 +1774,16 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
         .store(&self_ref)
         .get_byte(self_ref.rec, self_ref.pos, 0);
     if discr != JV_DISCR_OBJECT {
-        let fallback = jv_alloc(stores);
-        stores
-            .store_mut(&fallback)
-            .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-        stores.put(stack, fallback);
+        let r = jv_null_sentinel(stores);
+        stores.put(stack, r);
         return;
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + self_ref.pos;
     let fields_rec = stores.store(&self_ref).get_int(self_ref.rec, fields_pos);
     if fields_rec <= 0 {
-        let fallback = jv_alloc(stores);
-        stores
-            .store_mut(&fallback)
-            .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-        stores.put(stack, fallback);
+        let r = jv_null_sentinel(stores);
+        stores.put(stack, r);
         return;
     }
     let length = stores.store(&self_ref).get_int(fields_rec as u32, 4);
@@ -1793,11 +1808,8 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
             return;
         }
     }
-    let fallback = jv_alloc(stores);
-    stores
-        .store_mut(&fallback)
-        .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-    stores.put(stack, fallback);
+    let r = jv_null_sentinel(stores);
+    stores.put(stack, r);
 }
 
 /// JArray indexer.  Step 4 second slice: for a real JArray with
@@ -1816,31 +1828,22 @@ fn n_item(stores: &mut Stores, stack: &mut DbRef) {
         .store(&self_ref)
         .get_byte(self_ref.rec, self_ref.pos, 0);
     if discr != JV_DISCR_ARRAY || index < 0 {
-        let fallback = jv_alloc(stores);
-        stores
-            .store_mut(&fallback)
-            .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-        stores.put(stack, fallback);
+        let r = jv_null_sentinel(stores);
+        stores.put(stack, r);
         return;
     }
     let array_tp = stores.name("JArray");
     let items_pos = u32::from(stores.position(array_tp, "items")) + self_ref.pos;
     let items_rec = stores.store(&self_ref).get_int(self_ref.rec, items_pos);
     if items_rec <= 0 {
-        let fallback = jv_alloc(stores);
-        stores
-            .store_mut(&fallback)
-            .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-        stores.put(stack, fallback);
+        let r = jv_null_sentinel(stores);
+        stores.put(stack, r);
         return;
     }
     let length = stores.store(&self_ref).get_int(items_rec as u32, 4);
     if index >= length {
-        let fallback = jv_alloc(stores);
-        stores
-            .store_mut(&fallback)
-            .set_byte(fallback.rec, fallback.pos, 0, JV_DISCR_NULL);
-        stores.put(stack, fallback);
+        let r = jv_null_sentinel(stores);
+        stores.put(stack, r);
         return;
     }
     let jv_tp = stores.name("JsonValue");
@@ -1923,11 +1926,15 @@ fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
     let src = *stores.get::<DbRef>(stack);
     let struct_kt = struct_kt_arg as u16;
     // `stores.size` returns the struct's size in bytes; `database`
-    // wants words (8 bytes each).  Round up + min 2 words so the
-    // handle's i32 fields at offset 8 always have valid backing
-    // (the boolean allocator-corruption fix from stash@{0}).
+    // wants words (8 bytes each).  Round up + 1 word for the record
+    // header (matches `jv_alloc`); without the `+1`, struct fields at
+    // offset >= (words*8 - 8) would land past the record's tail —
+    // `populate_struct_from_jsonvalue` panicked at the second field
+    // of `WithPayload { name: text, info: JsonValue }` because name
+    // ended up at struct-relative offset 16 in a record whose data
+    // area was only 16 bytes.  See `p54_struct_parse_captures_jsonvalue_field_verbatim`.
     let bytes = u32::from(stores.size(struct_kt));
-    let words = bytes.div_ceil(8);
+    let words = bytes.div_ceil(8) + 1;
     let result = stores.database(words.max(2));
     populate_struct_from_jsonvalue(stores, &result, struct_kt, &src);
     stores.put(stack, result);

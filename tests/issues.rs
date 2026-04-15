@@ -2253,23 +2253,8 @@ fn o7_format_string_with_capacity() {
 // regresses, that variant is exercised by the LOFT_LOG-driven test dumps,
 // not by this guard.
 //
-// Re-ignored 2026-04-14: CI's nextest runner aborts this test with SIGABRT
-// (`TRY 1 ABRT`).  Passes locally in isolation, but the CI harness's
-// parallel run corrupts state between tests in the same binary (same
-// pattern as the pre-existing P136 wrap-suite SIGSEGV).  Keep the test
-// but ignore until the underlying harness/state issue is root-caused.
-#[test]
-#[ignore = "CI harness SIGABRT (P136-adjacent); passes in isolation"]
-fn file_content_nonexistent_trace() {
-    code!(
-        "fn test() {
-    f = file(\"/nonexistent_file_trace_test.txt\");
-    t = f.content();
-    assert(t == \"\", \"expected empty, got '{t}'\");
-}"
-    )
-    .result(Value::Null);
-}
+// Deleted: file_content_nonexistent_trace — duplicate of file_content_nonexistent
+// (passing), and the ignore was for a P136-adjacent harness bug, not a behavior gap.
 
 // ── P122: Struct return inside loop should not exhaust store pool ────────────
 // When a function returns a struct, the callee allocates a store. Inside a loop
@@ -3427,7 +3412,6 @@ fn p54_parse_array_item_access() {
 /// produces JNull rather than trapping.  The positive-path
 /// counterpart is `p54_chained_access_on_nested_object`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_missing_chain_returns_jnull() {
     // `{` in a loft text literal triggers format-string interpolation;
     // use a primitive that json_parse handles to produce a non-object
@@ -3470,7 +3454,6 @@ fn p54_chained_access_on_nested_object() {
 /// supported.  When the doc is read by a new user, the same
 /// arms must dispatch correctly today.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_match_on_jsonvalue_classifies_each_kind() {
     code!(
         "fn classify_pmj(raw: text) -> text {
@@ -3577,7 +3560,6 @@ fn run_label() -> text {
 /// JsonValue slot; kind() on the embedded payload reads the
 /// discriminant back as `"JArray"` confirming the bytes round-trip.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_struct_parse_captures_jsonvalue_field_verbatim() {
     code!(
         "struct WithPayload { name: text, info: JsonValue }
@@ -3949,20 +3931,8 @@ fn run() -> boolean {
     .result(Value::Boolean(true));
 }
 
-#[test]
-#[ignore = "P54 step 6 intentionally NOT shipped as hard rejection — text args auto-wrap through json_parse for backward compatibility"]
-fn p54_struct_parse_rejects_plain_text() {
-    code!(
-        "struct User { name: text }
-fn run() -> text {
-    u = User.parse(\"{{\\\"name\\\":\\\"Bob\\\"}}\");
-    u.name
-}"
-    )
-    .error(
-        "User.parse expects a JsonValue — call json_parse(text) first at p54_struct_parse_rejects_plain_text:3:44",
-    );
-}
+// Deleted: p54_struct_parse_rejects_plain_text — tested a rejected design decision
+// (hard rejection of text args). Current design auto-wraps through json_parse.
 
 // ── P54 struct-enum blockers — runtime specs (BITING_PLAN § P54) ──────────
 //
@@ -4060,7 +4030,6 @@ fn run() -> integer {
 /// value still references it.  `return n;` works — see
 /// `p54_struct_enum_explicit_return_of_local`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b3_float_via_intermediate() {
     code!(
         "pub enum JV { A { v: float not null } }
@@ -4096,7 +4065,6 @@ fn run() -> float {
 /// recursive-call path than a match lifetime one.  See QUALITY.md
 /// § B5 for the current state and where to continue.
 #[test]
-#[ignore = "P54 B5 (narrower): match-arm bindings fixed; recursive count(t) returns to wrong PC — looks B3-adjacent."]
 fn p54_b5_recursive_struct_enum() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -4131,7 +4099,6 @@ fn run() -> integer {
 /// regression independently of the recursion path still open in
 /// `p54_b5_recursive_struct_enum`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b5_not_taken_arm_with_vector_binding_ok() {
     code!(
         "struct Item { v: integer }
@@ -4160,7 +4127,6 @@ fn run() -> integer {
 /// isolating the half of B5 that is now fixed from the still-open
 /// match-arm-binding half tracked in `p54_b5_recursive_struct_enum`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b5_recursive_struct_enum_construction() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -4185,7 +4151,6 @@ fn run() -> integer {
 /// when the recursive path is green.  Asserts the for-loop sees
 /// each element with its correct `Leaf.v` payload.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b5_for_loop_over_enum_variant_vector() {
     code!(
         "pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -4286,7 +4251,6 @@ fn run() -> integer {
 /// (B6 fix) and returns the expected values for both matching and
 /// mismatching kind arms.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_tagged_struct_extractors_work_today() {
     code!(
         "struct Tagged { kind: integer, text_val: text, num_val: float }
@@ -4324,7 +4288,6 @@ fn run() -> text {
 /// the `t.as_text()` call site receives a struct-enum argument,
 /// matches it, and returns the bound text.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_struct_enum_extractors_spec() {
     code!(
         "pub enum Jv { Jstr { v: text }, Jnum { v: float } }
@@ -4400,7 +4363,6 @@ fn run() -> text {
 /// producing a valid struct-enum record from a bare unit-variant name
 /// is still broken.  When that's fixed, this test goes green.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b2_unit_variant_literal_construction() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }
@@ -4439,11 +4401,12 @@ fn run() -> text {
 }
 
 /// B2-runtime (qualified form): `Sig.Idle` as an expression in a
-/// mixed struct-enum also fails to construct a matchable record,
-/// though it at least doesn't panic — the match silently exits.
-/// Same root cause as `p54_b2_unit_variant_literal_construction`.
+/// mixed struct-enum.  The parse path (parser/fields.rs) was giving
+/// the result block `Type::Enum(dnr, true, vec![w])` — propagating
+/// the work-ref into the LHS as a dep, so `s` became a borrower and
+/// nothing freed the store.  Fixed by mirroring parser/objects.rs
+/// and using `vec![]` instead (LHS owns, work-ref is skip_free).
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b2_qualified_unit_variant_mixed_enum() {
     code!(
         "pub enum Sig { Off, Idle, On { level: integer } }
@@ -4584,7 +4547,6 @@ fn run() -> integer {
 /// suppress the free of any local whose store is being returned,
 /// or to materialize a copy.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_b3_int_via_intermediate() {
     code!(
         "pub enum JV { A { v: integer } }
@@ -4706,7 +4668,6 @@ fn run() -> integer {
 /// one arm, pass through in another.  Exercises the full Reference
 /// / return / assignment path.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_struct_enum_multi_call_flow() {
     code!(
         "pub enum V { A { v: integer }, B { v: text } }
@@ -5503,7 +5464,6 @@ fn q1_json_errors_includes_line_and_byte() {
 // Documented in LOFT.md § String literals as a caveat and in
 // QUALITY.md § B7.  Goes green when B7 lands.
 #[test]
-#[ignore = "B7 family — text-return of `\"{c}\"` (character interpolation) SIGSEGVs"]
 fn b7_character_interpolation_return_crashes() {
     code!(
         "fn build_b7c() -> text {
@@ -5568,7 +5528,6 @@ fn q4_json_null_returns_jnull_variant() {
 /// — but a typo in either side would silently mis-name the
 /// variant).
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_kind_cross_check_null() {
     code!(
         "fn run_q4ckn() -> text {
@@ -5580,7 +5539,6 @@ fn q4_constructor_kind_cross_check_null() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_kind_cross_check_bool() {
     code!(
         "fn run_q4ckb() -> text {
@@ -5592,7 +5550,6 @@ fn q4_constructor_kind_cross_check_bool() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_kind_cross_check_number() {
     code!(
         "fn run_q4cknum() -> text {
@@ -5604,7 +5561,6 @@ fn q4_constructor_kind_cross_check_number() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_kind_cross_check_string() {
     code!(
         "fn run_q4cks() -> text {
@@ -5621,7 +5577,6 @@ fn q4_constructor_kind_cross_check_string() {
 /// substitution at the introspection level, not just the
 /// internal storage.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_kind_cross_check_nan_is_jnull() {
     code!(
         "fn run_q4cknan() -> text {
@@ -5642,7 +5597,6 @@ fn q4_constructor_kind_cross_check_nan_is_jnull() {
 /// reads the constructor-specific position — only `to_json()`
 /// touches every byte and renders it as text.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_null() {
     code!(
         "fn run_q4ctjn() -> text {
@@ -5654,7 +5608,6 @@ fn q4_constructor_to_json_cross_check_null() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_bool_true() {
     code!(
         "fn run_q4ctjbt() -> text {
@@ -5666,7 +5619,6 @@ fn q4_constructor_to_json_cross_check_bool_true() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_bool_false() {
     code!(
         "fn run_q4ctjbf() -> text {
@@ -5678,7 +5630,6 @@ fn q4_constructor_to_json_cross_check_bool_false() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_number_integral() {
     code!(
         "fn run_q4ctjni() -> text {
@@ -5690,7 +5641,6 @@ fn q4_constructor_to_json_cross_check_number_integral() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_number_fractional() {
     code!(
         "fn run_q4ctjnf() -> text {
@@ -5702,7 +5652,6 @@ fn q4_constructor_to_json_cross_check_number_fractional() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_to_json_cross_check_string() {
     code!(
         "fn run_q4ctjs() -> text {
@@ -5718,7 +5667,6 @@ fn q4_constructor_to_json_cross_check_string() {
 /// the constructor's payload-write position matches the
 /// extractor's read position for each primitive variant.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_as_bool_round_trips() {
     code!(
         "fn run_q4cab() -> boolean {
@@ -5730,7 +5678,6 @@ fn q4_constructor_as_bool_round_trips() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_as_long_round_trips() {
     code!(
         "fn run_q4cal() -> long {
@@ -5742,7 +5689,6 @@ fn q4_constructor_as_long_round_trips() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_as_text_round_trips() {
     code!(
         "fn run_q4cat() -> text {
@@ -5760,7 +5706,6 @@ fn q4_constructor_as_text_round_trips() {
 /// not via the constructor surface, so this cross-check is the
 /// only one that exercises the deep-copy → name-scan invariant.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_has_field_finds_present_name() {
     code!(
         "fn run_q4chf() -> boolean {
@@ -5780,7 +5725,6 @@ fn q4_constructor_has_field_finds_present_name() {
 /// every constructed field name.  Asserts both presence and
 /// count via `keys().len()`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_keys_lists_constructed_names() {
     code!(
         "fn run_q4ckl() -> integer {
@@ -5801,7 +5745,6 @@ fn q4_constructor_keys_lists_constructed_names() {
 /// above this locks both faces of the JObject introspection
 /// surface against the constructor.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_fields_lists_constructed_entries() {
     code!(
         "fn run_q4cfl() -> integer {
@@ -5823,7 +5766,6 @@ fn q4_constructor_fields_lists_constructed_entries() {
 /// Locks the full chain `json_object(...) → field(name) →
 /// as_text()`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_field_lookup_extracts_value() {
     code!(
         "fn run_q4cfl2() -> text {
@@ -5983,7 +5925,6 @@ fn p54_err_path_escapes_slash_and_tilde() {
 /// the integer null sentinel (`i64::MIN`).  The stdlib spec says
 /// "null on kind mismatch" — never directly tested.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_long_on_jstring_returns_null_sentinel() {
     code!(
         "fn run_alos() -> long {
@@ -6001,7 +5942,6 @@ fn p54_as_long_on_jstring_returns_null_sentinel() {
 /// check rather than a direct text comparison because the
 /// underlying sentinel is `"\0"`, not the empty string.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_text_on_jnumber_returns_null() {
     code!(
         "fn run_aton() -> boolean {
@@ -6016,7 +5956,6 @@ fn p54_as_text_on_jnumber_returns_null() {
 /// Extractor null-on-mismatch — `as_bool()` on a JNull returns
 /// `false` (the boolean null sentinel).
 #[test]
-#[ignore = "p54-leak: json_null() temp on call chain not freed (zero-leak gate)"]
 fn p54_as_bool_on_jnull_returns_false() {
     code!(
         "fn run_abon() -> boolean {
@@ -6032,7 +5971,6 @@ fn p54_as_bool_on_jnull_returns_false() {
 /// underlying float toward zero before converting."  Locks the
 /// behaviour for both signs — `2.7 → 2` and `-2.7 → -2`.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_long_truncates_positive_float_toward_zero() {
     code!(
         "fn run_altp() -> long {
@@ -6044,7 +5982,6 @@ fn p54_as_long_truncates_positive_float_toward_zero() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_long_truncates_negative_float_toward_zero() {
     code!(
         "fn run_altn() -> long {
@@ -6061,7 +5998,6 @@ fn p54_as_long_truncates_negative_float_toward_zero() {
 /// boundary cases.  Locks `""`, `"   "` (whitespace-only), and
 /// arbitrary garbage all return JNull.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_empty_string_returns_jnull() {
     code!(
         "fn run_pes() -> text {
@@ -6073,7 +6009,6 @@ fn p54_parse_empty_string_returns_jnull() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_whitespace_only_returns_jnull() {
     code!(
         "fn run_pwo() -> text {
@@ -6085,7 +6020,6 @@ fn p54_parse_whitespace_only_returns_jnull() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_garbage_input_returns_jnull() {
     code!(
         "fn run_pgi() -> text {
@@ -6112,7 +6046,6 @@ fn p54_parse_garbage_input_returns_jnull() {
 /// pattern matching via wildcard works (existing q4 tests),
 /// but field-binding doesn't.  Tracked under B7.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_match_destructuring_jbool_extracts_value() {
     code!(
         "fn run_q4mb() -> boolean {
@@ -6127,7 +6060,6 @@ fn q4_match_destructuring_jbool_extracts_value() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_match_destructuring_jnumber_extracts_value() {
     code!(
         "fn run_q4mn() -> float {
@@ -6148,7 +6080,6 @@ fn q4_match_destructuring_jnumber_extracts_value() {
 /// self-inequality (`f != f` is true iff f is NaN — the only
 /// reliable loft-level NaN test).
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_number_on_jnumber_returns_value() {
     code!(
         "fn run_annv() -> float {
@@ -6160,7 +6091,6 @@ fn p54_as_number_on_jnumber_returns_value() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_number_on_jstring_returns_nan() {
     code!(
         "fn run_annjs() -> boolean {
@@ -6173,7 +6103,6 @@ fn p54_as_number_on_jstring_returns_nan() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_as_number_on_jbool_returns_nan() {
     code!(
         "fn run_annjb() -> boolean {
@@ -6191,7 +6120,6 @@ fn p54_as_number_on_jbool_returns_nan() {
 /// paths on numbers like `1.` but not successful scientific
 /// inputs.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_scientific_notation_is_jnumber() {
     code!(
         "fn run_psn() -> text {
@@ -6203,7 +6131,6 @@ fn p54_parse_scientific_notation_is_jnumber() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_scientific_notation_extracts_value() {
     code!(
         "fn run_psnv() -> boolean {
@@ -6223,7 +6150,6 @@ fn p54_parse_scientific_notation_extracts_value() {
 /// explicitly allows negative zero (`-0` is a valid
 /// `JNumber`).
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_leading_zero_integer_is_rejected() {
     code!(
         "fn run_plz() -> text {
@@ -6235,7 +6161,6 @@ fn p54_parse_leading_zero_integer_is_rejected() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_parse_negative_zero_is_accepted() {
     code!(
         "fn run_pnz() -> text {
@@ -6292,7 +6217,6 @@ fn p54_parse_serialise_preserves_insertion_order() {
 /// (which only asserted `.len() == 2`) by asserting every key
 /// appears at the correct index, in the caller-supplied order.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_constructor_keys_preserves_insertion_order() {
     code!(
         "fn run_q4kio() -> text {
@@ -6336,7 +6260,6 @@ fn p54_deep_nesting_five_levels_navigable() {
 /// every container would turn `[]` into `[\n  ]` at depth 1 —
 /// this guard catches that.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q3_to_json_pretty_empty_container_inside_non_empty() {
     code!(
         "fn run_q3pein() -> text {
@@ -6395,7 +6318,6 @@ fn q2_has_field_matches_empty_name_key() {
 /// items field — so the binding codegen path for a non-empty
 /// container wasn't directly exercised.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_match_jarray_binds_non_empty_items() {
     code!(
         "fn run_pmjba() -> integer {
@@ -6414,7 +6336,6 @@ fn p54_match_jarray_binds_non_empty_items() {
 /// is covered at both the minimum (zero-length) and the
 /// non-degenerate (three-element) boundaries.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_match_jarray_binds_empty_items() {
     code!(
         "fn run_pmjbe() -> integer {
@@ -6978,7 +6899,6 @@ fn p54_step4_len_on_jstring_is_null_sentinel() {
 /// access safety guarantee (every intermediate missing produces
 /// `JNull`, never a trap).
 #[test]
-#[ignore = "p54-leak: chained json_*().method() temp not freed (zero-leak gate)"]
 fn p54_step4_field_on_jstring_returns_jnull() {
     code!(
         "fn run_fjs() -> text {
@@ -6991,7 +6911,6 @@ fn p54_step4_field_on_jstring_returns_jnull() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_step4_field_missing_key_returns_jnull() {
     code!(
         "fn run_fmk() -> text {
@@ -7006,7 +6925,6 @@ fn p54_step4_field_missing_key_returns_jnull() {
 /// P54 step-4 null-safety — `item()` on non-JArray, negative
 /// index, and out-of-bounds index all return `JNull`.
 #[test]
-#[ignore = "p54-leak: chained json_*().method() temp not freed (zero-leak gate)"]
 fn p54_step4_item_on_jnumber_returns_jnull() {
     code!(
         "fn run_ijn() -> text {
@@ -7019,7 +6937,6 @@ fn p54_step4_item_on_jnumber_returns_jnull() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json_*().method() temp not freed (zero-leak gate)"]
 fn p54_step4_item_negative_index_returns_jnull() {
     code!(
         "fn run_ini() -> text {
@@ -7032,7 +6949,6 @@ fn p54_step4_item_negative_index_returns_jnull() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json_*().method() temp not freed (zero-leak gate)"]
 fn p54_step4_item_out_of_bounds_returns_jnull() {
     code!(
         "fn run_iob() -> text {
@@ -7325,7 +7241,6 @@ fn p54_step4_nonempty_primitive_array_item_1_is_middle() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_step4_nonempty_primitive_array_item_out_of_range_returns_jnull() {
     code!(
         "fn run_p4npior() -> text {
@@ -7434,7 +7349,6 @@ fn p54_step4_nonempty_object_field_hit_returns_value() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_step4_nonempty_object_field_miss_returns_jnull() {
     code!(
         "fn run_p4om() -> text {
@@ -7636,7 +7550,6 @@ fn p54_step4_empty_object_has_no_field() {
 /// would break the common `if v.has_field(k) { v.field(k) … }`
 /// pattern when users write it on a JSON-parsed empty object.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_step4_empty_object_field_lookup_returns_jnull() {
     code!(
         "fn run_p4ofl() -> text {
@@ -7653,7 +7566,6 @@ fn p54_step4_empty_object_field_lookup_returns_jnull() {
 /// access doesn't accidentally leak into an uninitialised
 /// variant slot.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn p54_step4_empty_array_item_lookup_returns_jnull() {
     code!(
         "fn run_p4eil() -> text {
@@ -7787,7 +7699,6 @@ fn q2_keys_on_jnull_is_empty() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_keys_on_jbool_is_empty() {
     code!(
         "fn run_q2kbe() -> integer {
@@ -7800,7 +7711,6 @@ fn q2_keys_on_jbool_is_empty() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_keys_on_jobject_returns_field_names_length() {
     // (Was `q2_keys_on_jobject_is_empty_today` until 2026-04-14
     // when the JObject walk shipped.)  Locks that `keys()` on
@@ -7816,7 +7726,6 @@ fn q2_keys_on_jobject_returns_field_names_length() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_keys_on_jobject_returns_multiple_field_names_length() {
     code!(
         "fn run_q2km() -> integer {
@@ -7898,7 +7807,6 @@ fn q2_fields_on_jnull_is_empty() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_fields_on_jstring_is_empty() {
     code!(
         "fn run_q2fse() -> integer {
@@ -7911,7 +7819,6 @@ fn q2_fields_on_jstring_is_empty() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_fields_on_jobject_returns_field_entries_length() {
     // (Was `q2_fields_on_jobject_is_empty_today` until 2026-04-14
     // when the JObject walk shipped.)  Locks that `fields()`
@@ -7927,7 +7834,6 @@ fn q2_fields_on_jobject_returns_field_entries_length() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_fields_on_jobject_collects_multiple_entries() {
     code!(
         "fn run_q2fm() -> integer {
@@ -8065,7 +7971,6 @@ fn q4_json_array_empty_serialises_as_brackets() {
 }
 
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_array_nonempty_input_returns_jarray() {
     // (Was `…_stubs_to_jnull` until 2026-04-14 when the deep-copy
     // landed.)  Locks that non-empty input now produces a real
@@ -8085,7 +7990,6 @@ fn q4_json_array_nonempty_input_returns_jarray() {
 /// variants, all preserved in the result arena.  `to_json` round-
 /// trips back to the canonical text form.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_array_multi_element_round_trips() {
     code!(
         "fn run_q4amrt() -> text {
@@ -8105,7 +8009,6 @@ fn q4_json_array_multi_element_round_trips() {
 /// Q4 `json_array` deep-copy — element index access.  `item(N)`
 /// reads back the value passed at position N.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_array_item_access_after_construction() {
     code!(
         "fn run_q4aiac() -> long {
@@ -8126,7 +8029,6 @@ fn q4_json_array_item_access_after_construction() {
 /// Inner arrays are themselves built via `json_array`, then
 /// embedded.  Outer length 2; inner length 2.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_array_nested_construction() {
     code!(
         "fn run_q4anc() -> integer {
@@ -8187,7 +8089,6 @@ fn q4_json_object_empty_serialises_as_braces() {
 /// JsonField in loft, pass it to json_object, read back via
 /// field() lookup.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_object_single_field_round_trips() {
     code!(
         "fn run_q4osf() -> long {
@@ -8203,7 +8104,6 @@ fn q4_json_object_single_field_round_trips() {
 
 /// Q4 `json_object` deep-copy — multi-field length.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_object_multi_field_length() {
     code!(
         "fn run_q4omfl() -> integer {
@@ -8222,7 +8122,6 @@ fn q4_json_object_multi_field_length() {
 /// Q4 `json_object` deep-copy — to_json round-trip.  Build via
 /// json_object, serialise via to_json, parse back, confirm shape.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q4_json_object_serialisation() {
     code!(
         "fn run_q4os() -> text {
@@ -8306,7 +8205,6 @@ fn q4_forward_captured_subtree_round_trip() {
 /// → 1, keys.len() → 1, fields.len() → 1.  Total 4 — every Q2
 /// helper now returns its real JObject answer.
 #[test]
-#[ignore = "p54-leak: chained json call temp not freed (zero-leak gate)"]
 fn q2_full_surface_smoke_on_jobject() {
     code!(
         "fn run_q2fs() -> integer {

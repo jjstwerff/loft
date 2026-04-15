@@ -1862,6 +1862,8 @@ impl Parser {
             Type::Spacial(to, key, Self::resolve_deps(types, &d))
         } else if let Type::Reference(to, d) = tp {
             Type::Reference(to, Self::resolve_deps(types, &filter_hidden(&d)))
+        } else if let Type::Enum(to, true, d) = tp {
+            Type::Enum(to, true, Self::resolve_deps(types, &filter_hidden(&d)))
         } else {
             tp
         }
@@ -1879,7 +1881,8 @@ impl Parser {
             | Type::Hash(_, _, ad)
             | Type::Index(_, _, ad)
             | Type::Spacial(_, _, ad)
-            | Type::Reference(_, ad) = &types[*ar as usize]
+            | Type::Reference(_, ad)
+            | Type::Enum(_, true, ad) = &types[*ar as usize]
             {
                 for a in ad {
                     dp.insert(*a);
@@ -2086,15 +2089,22 @@ impl Parser {
                     None
                 };
                 if self.data.use_exists(&id) {
-                    if let Some(s) = spec {
-                        let lib_source = self.data.get_source(&id);
-                        self.pending_imports.push(PendingImport {
-                            for_source: self.data.source,
-                            lib_source,
-                            spec: s,
-                        });
+                    let lib_source = self.data.get_source(&id);
+                    // Plain `use foo` (no ::* or ::names) implicitly imports
+                    // all pub definitions so they are visible in this source.
+                    let import_spec = spec.unwrap_or(ImportSpec::Wildcard);
+                    self.pending_imports.push(PendingImport {
+                        for_source: self.data.source,
+                        lib_source,
+                        spec: import_spec,
+                    });
+                    if !self.lexer.has_token(";") {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Missing ';' after 'use {id}' — use statements must end with a semicolon"
+                        );
                     }
-                    self.lexer.token(";");
                     continue;
                 }
                 let f = self.lib_path(&id);
@@ -2117,7 +2127,12 @@ impl Parser {
                     drop(spec);
                     self.lexer.switch(&f);
                 } else {
-                    diagnostic!(self.lexer, Level::Error, "Included file {id} not found");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Library '{id}' not found — searched lib/, lib_dirs, and sibling packages"
+                    );
+                    self.lexer.has_token(";");
                 }
             }
         }

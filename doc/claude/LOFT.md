@@ -380,9 +380,8 @@ text = reply.to_json();   // {{"ok":true,"count":3}}
 ```
 
 **2. `Type.parse(text)` (legacy, transitional).**  Parses JSON or loft-native text
-directly into a struct record; parse errors via `record#errors`.  Slated for
-withdrawal in 0.9.0 — `Type.parse(JsonValue)` will be the replacement once P54
-step 5 lands.
+directly into a struct record; parse errors via `record#errors`.  `Type.parse(JsonValue)`
+is the preferred replacement (shipped).
 
 ```
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
@@ -558,12 +557,8 @@ Practical consequences:
 - `character + character` does **not** concatenate — `+` on characters is
   the arithmetic operator.  Build text from characters via interpolation:
   `"{c1}{c2}"` or `t = ""; t += "{c}"` in a loop.
-  **B7-family caveat (open issue):** returning a text built by
-  interpolating a character from a `-> text` function SIGSEGVs today
-  (`fn f() -> text { c = txt[0]; "{c}" }` crashes).  Same native-returned
-  temporary lifecycle that gates 5 ignored P54 tests.  Work around by
-  assigning the interpolated text to a local, then passing it explicitly
-  to the output sink instead of returning it.
+  Returning interpolated characters from functions works correctly:
+  `fn f() -> text { c = txt[0]; "{c}" }` returns `"h"`.
 - `character == text` is a compile error today; format the character
   first: `"{c}" == some_text`.
 - Vectors are consistent (`vec[0]` element, `vec[0..1]` `vector<T>`) —
@@ -853,11 +848,14 @@ struct-enum, so pattern matching is the canonical way to dispatch on a parsed
 JSON value.  Each arm names a variant; the destructured field exposes the
 inner payload (`items` for `JArray`, `fields` for `JObject`, `value` for the
 primitive variants).  A wildcard or `JNull` arm covers parse failures.
+Assign the parse result to a variable first — `match json_parse(raw)` inline
+does not work yet (codegen limitation).
 
 ```
-match json_parse(raw) {
+v = json_parse(raw);
+match v {
     JObject { fields } => for f in fields { handle(f.name, f.value) },
-    JArray  { items }  => for v in items  { handle_element(v) },
+    JArray  { items }  => for vi in items { handle_element(vi) },
     JNumber { value }  => log_info("scalar number: {value}"),
     JNull              => log_warn("parse error: {json_errors()}"),
     _                  => log_warn("unsupported root kind")
