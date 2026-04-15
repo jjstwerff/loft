@@ -209,6 +209,56 @@ pub fn test() {
     );
 }
 
+/// P146 reproducer: `var = user_fn(arg)` where `user_fn` returns its
+/// param (`fn ac_identity(p: AcPoint) -> AcPoint { p }`) leaks the
+/// result variable's store at function exit.
+///
+/// Diagnosis via `LOFT_LOG=alloc_free` (un-ignore to run):
+/// - The runtime takes the P143 lock-args + OpCopyRecord deep-copy
+///   path, so `ac_copy` becomes an INDEPENDENT store.
+/// - Scope analysis at parse time treats `ac_identity(ac_orig)` as
+///   "returns alias of arg 0", so the result variable is not given an
+///   `OpFreeRef` at scope exit (the parser thinks the borrow is freed
+///   transitively via `ac_orig`).
+/// - At function exit only `ac_orig` is freed; `ac_copy`'s store
+///   leaks.
+///
+/// Same family as P143 / dep-inference.  Fix lives in `src/scopes.rs`:
+/// when a user-defined fn returns its param AND the call site goes
+/// through the deep-copy path (because the LHS variable already
+/// exists), the LHS needs independent scope cleanup.
+///
+/// Affects 5 wrap-suite scripts: 45, 62, 76, 81, 95.  Closing this
+/// (or its dep-inference cousin) likely closes most of the zero-leak
+/// gate at once.  Un-ignore to get a sharp `Database N not correctly
+/// freed` panic with the exact alloc op + pc.
+#[test]
+#[ignore = "P146 open — alias-return + deep-copy leak; un-ignore for sharp diagnostic"]
+fn p146_script_95_alias_copy_leak() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.parse("tests/scripts/95-alias-copy.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    let _ = state.execute_log(
+        &mut std::io::stderr(),
+        "test_aliased_return_copies",
+        &config,
+        &p.data,
+    );
+}
+
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
 ///
