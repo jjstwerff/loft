@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Reference parameter forwarding
+// @TITLE: Forwarding & parameters between functions
+// @ARGS: --lib tests/lib
+// When a function receives a `&Struct` (mutable reference) parameter and
+// passes it to another function that also takes `&Struct`, the reference
+// must be forwarded without dereferencing. This is P144.
+use p144_entry;
+
+fn main() {
+  // box_set_val calls box_ensure(b) internally — forwarding the & param.
+  b = Box { items: [] };
+  box_set_val(b, 42);
+  assert(b.items[0].val == 42, "P144: & forwarded — item set to 42");
+
+  // Calling the inner function directly also works.
+  b2 = Box { items: [] };
+  box_ensure(b2);
+  assert(len(b2.items) == 1, "ensure added one item");
+  assert(b2.items[0].val == 0, "default val is 0");
+
+  // Multiple forwards: ensure is idempotent.
+  box_ensure(b2);
+  assert(len(b2.items) == 1, "ensure idempotent");
+
+  // Set a second value via box_set_val on a pre-populated box.
+  b3 = Box { items: [] };
+  b3.items += [Inner { val: 10 }];
+  b3.items += [Inner { val: 0 }];
+  box_set_val(b3, 99);
+  assert(b3.items[0].val == 10, "existing item preserved");
+  assert(b3.items[1].val == 99, "zero item replaced");
+}
