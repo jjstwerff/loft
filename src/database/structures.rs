@@ -555,7 +555,7 @@ impl Stores {
             to.rec
         };
         let mut found_fields: HashSet<&str> = HashSet::new();
-        for (name, value) in entries {
+        for (name, _key_at, value) in entries {
             let mut matched = false;
             for (f_nr, f) in object.iter().enumerate() {
                 if f.name == *name {

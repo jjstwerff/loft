@@ -1458,7 +1458,7 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
                         rec: fields_rec as u32,
                         pos: elem_offset + value_field_pos,
                     };
-                    entries.push((name, dbref_to_parsed(stores, &value_slot)));
+                    entries.push((name, 0usize, dbref_to_parsed(stores, &value_slot)));
                 }
             }
             crate::json::Parsed::Object(entries)
@@ -1544,7 +1544,7 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
             let sm = stores.store_mut(slot);
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_OBJECT);
             sm.set_int(slot.rec, fields_abs_pos, 0);
-            for (key, inner) in v {
+            for (key, _key_at, inner) in v {
                 let elm =
                     crate::vector::vector_append(&fields_db, jf_size, &mut stores.allocations);
                 let name_rec = stores.store_mut(&elm).set_str(key);
@@ -1676,7 +1676,7 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             let store_mut = stores.store_mut(&result);
             store_mut.set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
             store_mut.set_int(result.rec, fields_abs_pos, 0);
-            for (key, child) in v {
+            for (key, _key_at, child) in v {
                 let elm =
                     crate::vector::vector_append(&fields_db, jf_size, &mut stores.allocations);
                 // Write name: set_str claims a sub-record for the
@@ -2486,7 +2486,8 @@ fn n_json_object(stores: &mut Stores, stack: &mut DbRef) {
         let jf_size = u32::from(stores.size(jf_tp));
         let name_field_pos = u32::from(stores.position(jf_tp, "name"));
         let value_field_pos = u32::from(stores.position(jf_tp, "value"));
-        let mut entries: Vec<(String, crate::json::Parsed)> = Vec::with_capacity(length as usize);
+        let mut entries: Vec<(String, usize, crate::json::Parsed)> =
+            Vec::with_capacity(length as usize);
         for i in 0..length {
             let elem_offset = 8u32 + i * jf_size;
             let name_rec = stores
@@ -2499,7 +2500,7 @@ fn n_json_object(stores: &mut Stores, stack: &mut DbRef) {
                 rec: input_inner_rec,
                 pos: elem_offset + value_field_pos,
             };
-            entries.push((name, dbref_to_parsed(stores, &value_slot)));
+            entries.push((name, 0usize, dbref_to_parsed(stores, &value_slot)));
         }
         materialise_primitive_into(stores, &result, &crate::json::Parsed::Object(entries));
         stores.last_json_errors.clear();
