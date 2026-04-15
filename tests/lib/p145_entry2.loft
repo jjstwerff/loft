@@ -1,0 +1,46 @@
+use p145_types;
+pub struct Map {
+  chunks: vector<Chunk>,
+  mats: vector<MatDef>,
+  walls: vector<WallDef>,
+  items: vector<ItemDef>,
+  spawns: vector<Spawn>,
+  routines: vector<Routine>,
+}
+
+pub fn new_map() -> Map {
+  Map { chunks: [], mats: [], walls: [], items: [], spawns: [], routines: [] }
+}
+
+pub fn ensure(m: &Map) {
+  for ec in m.chunks {
+    if ec.cx == 0 && ec.cy == 0 && ec.cz == 0 { return; }
+  }
+  hexes: vector<Hex> = [];
+  for _ in 0..4 { hexes += [Hex {}]; }
+  m.chunks += [Chunk { cx: 0, cy: 0, cz: 0, hexes: hexes }];
+}
+
+pub fn set_hex(m: &Map, h: Hex) {
+  ensure(m);
+  for sc in m.chunks {
+    if sc.cx == 0 && sc.cy == 0 && sc.cz == 0 {
+      sc.hexes[0] = h;
+      return;
+    }
+  }
+}
+
+pub fn paint(m: &Map, v: integer) {
+  ensure(m);
+  for pc in m.chunks {
+    if pc.cx == 0 && pc.cy == 0 && pc.cz == 0 {
+      pc.hexes[0].mat = v;
+      return;
+    }
+  }
+}
+
+pub fn to_json(m: Map) -> text {
+  "{m:j}"
+}

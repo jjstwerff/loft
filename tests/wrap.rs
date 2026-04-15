@@ -41,12 +41,18 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// `dir` skips these so that all other docs files are still exercised.
 /// Remove an entry here once the underlying issue is fixed.
 const SUITE_SKIP: &[&str] = &[
-    // All previously skipped files now pass (verified 2026-04-03).
+    // 31-ref-forward.loft requires `--lib tests/lib` (declared via
+    // file-level `// @ARGS:`) to resolve `use p144_entry`.  `wrap.rs::dir`
+    // doesn't honour @ARGS and uses the default `cached_default()` parser
+    // setup with no lib_dirs.  The Rust-level P144 tests in
+    // `tests/issues.rs::p144_ref_param_forward_*` cover the same ground.
+    "31-ref-forward.loft",
 ];
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "19-threading.loft", // todo!(); WASM threading model differs
+    "19-threading.loft",   // todo!(); WASM threading model differs
+    "31-ref-forward.loft", // requires --lib tests/lib (see SUITE_SKIP).
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then

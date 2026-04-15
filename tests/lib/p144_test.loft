@@ -1,0 +1,13 @@
+use p144_pkg;
+
+fn test_box_ensure() {
+  b = Box { items: [] };
+  box_ensure(b);
+  assert(len(b.items) == 1, "one item");
+}
+
+fn test_box_set() {
+  b = Box { items: [] };
+  box_set(b, 0, 42);
+  assert(b.items[0].val == 42, "val set");
+}

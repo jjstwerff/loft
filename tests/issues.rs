@@ -8551,3 +8551,122 @@ fn p143_default_struct_return_from_nested_vector_use() {
         "P143 regression: had_fatal set — ref-returning fn with early-return-through-iterator + fallthrough-default still corrupts memory"
     );
 }
+
+/// P144: forwarding a `&Struct` parameter to another function that also
+/// takes `&Struct` caused native codegen to emit `*var_b` (deref) instead
+/// of `var_b` (pass-through).  The fix in `calls.rs` detects when a
+/// `Value::Var` pointing to a `RefVar` parameter is passed to another
+/// `RefVar` parameter and emits it directly.
+///
+/// Interpreter test: parse + execute the cross-file package.
+#[test]
+fn p144_ref_param_forward_interpreter() {
+    let mut p = Parser::new();
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p144_main.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P144 regression: & param forward caused runtime error"
+    );
+}
+
+/// P144: native codegen test — the generated Rust must compile and run.
+#[test]
+fn p144_ref_param_forward_native() {
+    let mut p = Parser::new();
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p144_main.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+
+    // Emit the native Rust source and verify it compiles.
+    let rs_path = std::env::temp_dir().join("loft_p144_native.rs");
+    {
+        let mut f = std::fs::File::create(&rs_path).unwrap();
+        let start_def = 0;
+        let end_def = p.data.definitions();
+        let main_nr = p.data.def_nr("n_main");
+        let entry_defs: Vec<u32> = if main_nr < end_def {
+            vec![main_nr]
+        } else {
+            (start_def..end_def).collect()
+        };
+        let mut out = loft::generation::Output {
+            data: &p.data,
+            stores: &state.database,
+            counter: 0,
+            indent: 0,
+            def_nr: 0,
+            declared: std::collections::HashSet::new(),
+            reachable: std::collections::HashSet::new(),
+            loop_stack: Vec::new(),
+            next_format_count: 0,
+            yield_collect: false,
+            fn_ref_context: false,
+            call_stack_prefix: None,
+            wasm_browser: false,
+        };
+        out.output_native_reachable(&mut f, start_def, end_def, &entry_defs)
+            .unwrap();
+    }
+
+    // Read and check the generated source contains the fix pattern.
+    let source = std::fs::read_to_string(&rs_path).unwrap();
+    // The call to box_ensure should pass var_b directly, not *var_b.
+    assert!(
+        !source.contains("n_box_ensure(stores, *var_b)"),
+        "P144 regression: native codegen still emits *var_b for & param forward.\nGenerated: {}",
+        rs_path.display()
+    );
+    assert!(
+        source.contains("n_box_ensure(stores, var_b)"),
+        "P144 regression: expected direct var_b pass-through for & param.\nGenerated: {}",
+        rs_path.display()
+    );
+    let _ = std::fs::remove_file(&rs_path);
+}
+
+/// P145 regression: user fn name collision with native stdlib
+/// (e.g. user `to_json` → `n_to_json`, stdlib also has `n_to_json`
+/// for JsonValue serialization).  `generate_call` used to emit
+/// `OpStaticCall` (native dispatch) whenever `library_names`
+/// matched, bypassing the user body's `OpCall` path and
+/// corrupting the stack.  Fix: skip library_names lookup when
+/// `def.code != Value::Null`.
+#[test]
+fn p145_text_return_multivec_struct_cross_file() {
+    let mut p = Parser::new();
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p145_main2.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P145 regression: to_json on cross-file multi-vector struct crashed"
+    );
+}

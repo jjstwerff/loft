@@ -39,6 +39,8 @@ existing entry, not re-open it as a bug.
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 | ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
 | ~~143~~ | SIGSEGV returning default struct from function iterating nested vectors | — | **Fixed** — `gen_set_first_ref_call_copy` (`src/state/codegen.rs`) now brackets `OpCopyRecord` with `n_set_store_lock(arg, true)` / `(arg, false)` for every ref-typed argument of the call.  `OpCopyRecord`'s existing `!locked` guard at `src/state/io.rs:1001` then skips the source-free when the source aliases one of the locked args (the P143 case: `return arg.field[i]` returns a DbRef into `arg`).  `src/scopes.rs::free_vars` was extended to free `__ref_*`/`__rref_*` work-refs at function exit so the non-aliased path's storage doesn't leak.  Tests: `tests/lib/p143_{types,entry,main}.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`. |
+| ~~144~~ | Native codegen emits `*var_b` instead of `var_b` for `&` param forwarding | — | **Fixed** — `output_call_user_fn` detects `RefVar` → `RefVar` forwarding |
+| ~~145~~ | SIGSEGV calling text-returning fn on multi-vector struct in cross-file package | — | **Fixed** — user function `n_to_json` collided with native stdlib `n_to_json` (JsonValue serializer) in `library_names`; codegen emitted `OpStaticCall` (native dispatch) instead of `OpCall` (user bytecode).  Fix: `generate_call` skips `library_names` lookup when the definition has a user body (`code != Value::Null`).  Tests: `tests/issues.rs::p145_text_return_multivec_struct_cross_file` |
 
 ---
 
@@ -827,6 +829,44 @@ Companion change: `src/scopes.rs::free_vars` now treats
 regardless of their `dep` list, recovering storage that previously
 leaked via `OpDatabase`'s "clear+claim into free-marked store"
 path.
+
+---
+
+### ~~144~~. Infinite loop when `&Struct` functions call each other in cross-file packages — FIXED
+
+Reclassified as a symptom of P145. See P145 for root cause and fix.
+
+---
+
+### ~~145~~. SIGSEGV / infinite loop calling user function with name colliding native stdlib — FIXED
+
+**Root cause:** User function `to_json(m: Map) -> text` gets internal
+name `n_to_json`, which collides with the native stdlib's
+`n_to_json` (JsonValue serializer registered in `src/native.rs:98`).
+During bytecode generation, `generate_call` looked up the function
+name in `library_names` and found the native entry, emitting
+`OpStaticCall` (native function dispatch) instead of `OpCall` (user
+bytecode dispatch).  `OpStaticCall` reads completely different stack
+arguments, causing a SIGSEGV.
+
+The PROBLEMS.md P144 entry originally described "store mutations lost
+through forwarded `&mut DbRef`" — that was a misdiagnosis of the
+same underlying name collision.  The native `n_to_json` function
+operates on `JsonValue`, not `Map`, so it reads garbage DbRef bytes
+from the caller's stack.
+
+**Fix:** `src/state/codegen.rs` `generate_call` now checks
+`data.def(op).code != Value::Null` — if the definition has a user
+body, it always uses `OpCall`, never `OpStaticCall`, regardless of
+whether the name appears in `library_names`.
+
+**Guard:** `src/state/io.rs` `format_db()` now validates store_nr and
+db_tp bounds under `#[cfg(debug_assertions)]` so future store-access
+bugs panic with diagnostics instead of SIGSEGVing.
+
+**Tests:** `tests/issues.rs::p145_text_return_multivec_struct_cross_file`
+
+**Discovered:** 2026-04-15.  Fixed: 2026-04-15.
 
 ---
 

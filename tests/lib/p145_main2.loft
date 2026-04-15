@@ -1,0 +1,6 @@
+use p145_entry2;
+fn main() {
+  m = new_map();
+  j = to_json(m);
+  assert(j != "", "P145: to_json on cross-file multi-vector struct");
+}
