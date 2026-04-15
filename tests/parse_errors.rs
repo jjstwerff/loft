@@ -1111,3 +1111,39 @@ fn mk() -> Shade { Shade.N }
 fn test() {}"
     );
 }
+
+/// `--features emit-repro` writes the assembled test source to
+/// `/tmp/loft-repro/<name>.loft` before executing, with a thin
+/// `fn main() { test(); }` tail appended so the file is directly
+/// runnable via `target/release/loft <path>`.  Test name MUST match
+/// the generated filename — `Test::drop` uses `stdext::function_name!()`.
+#[cfg(feature = "emit-repro")]
+#[test]
+fn emit_repro_produces_runnable_loft_file() {
+    let path = "/tmp/loft-repro/emit_repro_produces_runnable_loft_file.loft";
+    let _ = std::fs::remove_file(path);
+
+    code!(
+        "fn run() -> integer {
+    1 + 2
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(3));
+
+    let contents = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!("emit-repro: expected {path} to be written but read failed: {e}")
+    });
+    assert!(
+        contents.contains("fn run() -> integer {"),
+        "emit-repro: body missing from {path}:\n---\n{contents}"
+    );
+    assert!(
+        contents.contains("pub fn test()"),
+        "emit-repro: test() wrapper missing from {path}:\n---\n{contents}"
+    );
+    assert!(
+        contents.contains("fn main() {") && contents.contains("test();"),
+        "emit-repro: runnable `fn main() {{ test(); }}` tail missing from {path}:\n---\n{contents}"
+    );
+}
