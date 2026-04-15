@@ -94,10 +94,11 @@ to 6 (maintenance, B2/B3 match crash, B5 recursive, B7
 character-interpolation, P136 harness, step-6 by design).
 
 **Remaining blockers for 0.8.4 tag:**
-- WASM-build + WASM-runtime gates (see above)
-- Crash bugs: P136 (B2-runtime, B3, B5, B7 all closed)
-- Zero-leak gate (wrap-suite scripts 42/62/76)
-- Zero-ignore baseline approval
+- WASM-build + WASM-runtime gates — both verified green
+  (run via `make wasm-html-test` to avoid the rlib-feature collision)
+- Crash bugs: none (B2-runtime, B3, B5, B7, P136 all closed)
+- Zero-leak gate (wrap-suite scripts 42/62/76, plus newly-spotted 95)
+- Zero-ignore baseline approval (down to 1 maintenance entry)
 
 Severity legend:
 - **H** — hard block.  Release cannot ship.
@@ -119,11 +120,9 @@ WASM path is broken is a release that doesn't work for most users.
 
 ### Crashes — no release may crash on valid input
 
-| ID | H/M | Summary | Reference |
-|---|---|---|---|
-| **P136** | H | wrap-suite SIGSEGV on `79-null-early-exit.loft`.  Heap corruption in the `cached_default()` + `run_test` path; `corrupted size vs. prev_size` inside `drop_in_place<Data>`.  Runs fine via CLI and is valgrind-clean there.  Reproducer: `#[ignore] sigsegv_repro_79_alone`.  Currently worked around by `loft_suite` skipping the script. | PROBLEMS.md § P136 |
+**No open crash blockers as of 2026-04-15.**  All previously-listed
+crash gates closed:
 
-Closed (kept for audit trail, no longer block):
 - B2-runtime — closed 2026-04-13 (unit-variant retrofit).
 - B3 — closed 2026-04-13 (hidden caller pre-alloc for struct-enum returns).
 - B5 — all three layers closed (layers 1+2 2026-04-14; layer 3 closed
@@ -132,6 +131,10 @@ Closed (kept for audit trail, no longer block):
 - B7 — closed as a side-effect of the B2-runtime / B5 / dep-inference /
   lock-args work across PR #168→#172.  All five `b7_*` guards green
   (the old `_crashes` suffix stays for search-back compatibility).
+- P136 — closed (`gen_if` divergent-true-branch fix).
+  `tests/wrap.rs::sigsegv_repro_79_alone` and `loft_suite` (which
+  walks `79-null-early-exit.loft`) both green; `ignored_scripts()`
+  is empty.
 
 ### Memory safety — no release may corrupt memory
 
