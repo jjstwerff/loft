@@ -915,6 +915,14 @@ Yet the next caller reading `(*var_m).pos + 4` sees `len=0`.
 - `src/codegen_runtime.rs:87` — `OpFinishRecord` (native entry)
 - `src/generation/calls.rs:50` — `&mut DbRef` forwarding (P144 fix)
 
+**Minimal loft reproducer:** `tests/lib/p145_main2.loft` calls
+`to_json(m)` where `to_json` is `pub fn to_json(m: Map) -> text {
+"{m:j}" }` defined in a cross-file package.  Inline `"{m:j}"` at
+the call site works; calling the wrapper function SIGSEGVs.  The
+struct must have multiple `vector<T>` fields (fewer than ~3 does
+not trigger it).  Files: `tests/lib/p145_types.loft`,
+`tests/lib/p145_entry2.loft`, `tests/lib/p145_main2.loft`.
+
 **Discovered:** 2026-04-15.  Isolated from the moros_map `edit.loft`
 test suite.
 
