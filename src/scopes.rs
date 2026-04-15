@@ -884,7 +884,26 @@ impl Scopes {
                 let in_ret = dep_has_var(&tp_deps)
                     || dep_has_var(&ret_deps)
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                let emit = dep.is_empty() && !in_ret && !function.is_skip_free(v);
+                // Work-refs (`__ref_N` / `__rref_N`) carry their own var
+                // in the dep list (`src/parser/mod.rs:1924-1928`) so the
+                // standard `dep.is_empty()` gate skips them.  But work-
+                // refs allocated to back ref-returning calls accumulate
+                // unfreed stores when:
+                //   - `gen_set_first_ref_call_copy`'s `0x8000` doesn't
+                //     fire (e.g. when the callee MIGHT return a DbRef
+                //     aliasing one of its args — P143), or
+                //   - the call-site reuses the same work-ref slot across
+                //     loop iterations and `OpDatabase`'s `clear+claim`
+                //     leaves the store marked `free` from the previous
+                //     iteration even while live data lives in it.
+                // Free them explicitly at function exit so the leak-check
+                // at `src/state/debug.rs:1045` doesn't trip.  Skip when
+                // the work-ref participates in the return chain.
+                let is_work_ref = {
+                    let n = function.name(v);
+                    n.starts_with("__ref_") || n.starts_with("__rref_")
+                };
+                let emit = (dep.is_empty() || is_work_ref) && !in_ret && !function.is_skip_free(v);
                 if scope_debug && !emit {
                     eprintln!(
                         "[scope_debug] NOT freeing '{}' (var={v}, scope={}, to_scope={to_scope}): \

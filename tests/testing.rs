@@ -206,6 +206,32 @@ impl Drop for Test {
             }
             code += &self.test();
         }
+        // emit-repro: dump the assembled test source to /tmp/loft-repro/
+        // so a failing test can be replayed standalone via
+        //   target/release/loft /tmp/loft-repro/<test>.loft
+        // Emitted BEFORE parse/execute so a panic still leaves the file.
+        #[cfg(feature = "emit-repro")]
+        {
+            let _ = std::fs::create_dir_all("/tmp/loft-repro");
+            let path = format!("/tmp/loft-repro/{}.loft", self.name);
+            let header = format!(
+                "// Auto-generated reproducer for tests/{}.rs::{}\n\
+                 // Source: Test::drop writes this under `--features emit-repro`.\n\
+                 // Run:    target/release/loft {path}\n\n",
+                self.file, self.name,
+            );
+            // Tests expect a `pub fn test()` entry point; `loft` runs `fn main`.
+            // Append a thin `main` that calls `test` so the file is directly
+            // runnable.  Skip when the body is a parse-error fixture (no
+            // runnable shape) or already defines `fn main`.
+            let needs_main = !code.contains("fn main(") && !code.contains("fn main ");
+            let tail = if needs_main {
+                "\n\nfn main() {\n    test();\n}\n"
+            } else {
+                "\n"
+            };
+            let _ = std::fs::write(&path, header + &code + tail);
+        }
         p.parse_str(&code, &self.name, false);
         for (d, s) in &self.sizes {
             let size = p.database.size(p.data.def(p.data.def_nr(d)).known_type);

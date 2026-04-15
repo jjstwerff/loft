@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P143 regression fixture — entry module.
+// Re-exports `Hex` / `Chunk` via `use p143_types;`, adds `Map`, and
+// exposes `map_get_hex` which returns a default-constructed `Hex {}` on
+// the fallback path (loop fell through).  The original bug SIGSEGV'd on
+// `op=194` whenever this default return was executed from a caller
+// loaded through a separate `use`.
+
+use p143_types;
+
+pub struct Map {
+  m_chunks: vector<Chunk>
+}
+
+// Iterate nested `vector<Chunk>` containing `vector<Hex>`; on match,
+// return the first Hex.  On fallback, return a default Hex {} — this
+// was the crashing path before PR #171.
+pub fn map_get_hex(m: Map, q: integer, r: integer) -> Hex {
+  for gh_c in m.m_chunks {
+    if gh_c.ck_cx == q / 32 && gh_c.ck_cz == r / 32 {
+      return gh_c.ck_hexes[0];
+    }
+  }
+  Hex {}
+}

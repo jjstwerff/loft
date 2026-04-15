@@ -35,6 +35,14 @@ mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
 native-extensions = ["dep:libloading"]
 registry     = ["dep:ureq", "dep:zip"]
+# Development aid — when set, `tests/testing.rs::Test::drop` writes each
+# test's assembled loft source to `/tmp/loft-repro/<test_name>.loft`
+# *before* running it, with a `fn main() { test(); }` tail appended so
+# the file is directly runnable via `target/release/loft <path>`.  Useful
+# for failing `issues.rs` / `expressions.rs` cases whose `code!`/`expr!`
+# macros hide the full source — grab it off disk, run it standalone,
+# iterate.  No runtime impact when the feature is off (default).
+emit-repro   = []
 
 [dependencies]
 rand_core          = { version = "0.9", optional = true }

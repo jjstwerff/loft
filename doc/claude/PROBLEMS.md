@@ -37,7 +37,8 @@ existing entry, not re-open it as a bug.
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
-| 142 | `vector<T>` field panics when T is from imported file | High | Put all structs that reference each other via `vector<T>` in the same `.loft` file |
+| ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
+| ~~143~~ | SIGSEGV returning default struct from function iterating nested vectors | — | **Fixed** — `gen_set_first_ref_call_copy` (`src/state/codegen.rs`) now brackets `OpCopyRecord` with `n_set_store_lock(arg, true)` / `(arg, false)` for every ref-typed argument of the call.  `OpCopyRecord`'s existing `!locked` guard at `src/state/io.rs:1001` then skips the source-free when the source aliases one of the locked args (the P143 case: `return arg.field[i]` returns a DbRef into `arg`).  `src/scopes.rs::free_vars` was extended to free `__ref_*`/`__rref_*` work-refs at function exit so the non-aliased path's storage doesn't leak.  Tests: `tests/lib/p143_{types,entry,main}.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`. |
 
 ---
 
@@ -695,6 +696,137 @@ sufficient for the Moros `moros_map` package (all types in one file).
 data model).  The designed layout had `types.loft`, `palette.loft`, and
 `spawn.loft` as separate files with `Map` referencing all of them via
 `vector<T>` fields.
+
+---
+
+### ~~143~~. SIGSEGV returning default struct from function iterating nested vectors — FIXED
+
+**Status:** Fixed 2026-04-15 — see "Final fix" section below.
+
+**Severity:** High — used to crash the interpreter.
+
+**Symptom:** `SIGSEGV caught, last op: (opcode dispatch) (op=194)` when a
+function returns `Hex {}` (default-constructed struct) as a fallback after
+iterating a `vector<Chunk>` where `Chunk` contains `vector<Hex>`.  The
+function works correctly when called from a single-file program but
+crashes when loaded via `use` from a multi-file package.
+
+**Reproducer:**
+
+```loft
+// types.loft (imported via use)
+pub struct Hex { h_material: integer not null }
+pub struct Chunk { ck_cx: integer not null, ck_cy: integer not null,
+                   ck_cz: integer not null, ck_hexes: vector<Hex> }
+
+// entry.loft
+use types;
+pub struct Map { m_chunks: vector<Chunk> }
+pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
+  for gh_c in m.m_chunks {
+    if gh_c.ck_cx == q / 32 && gh_c.ck_cz == r / 32 {
+      return gh_c.ck_hexes[0];
+    }
+  }
+  Hex {}   // ← SIGSEGV here
+}
+
+// test.loft
+use entry;
+fn test_missing() {
+  m = Map { m_chunks: [] };
+  h = map_get_hex(m, 5, 5, 0);   // crashes
+}
+```
+
+**Workaround:** Avoid returning a default-constructed struct from functions
+that iterate nested `vector<struct>`.  Use a boolean `map_has_chunk()`
+guard and skip the call when the chunk is missing.
+
+**Discovered:** 2026-04-14 while implementing MO.2 (moros_map serialization).
+
+**Regression fixtures:** `tests/lib/p143_types.loft`,
+`tests/lib/p143_entry.loft`, `tests/lib/p143_main.loft` — three IR
+shapes (empty-map fallback, found-on-first-chunk, loop-fallback-after-
+miss).  `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`
+runs the script under the interpreter and asserts `had_fatal` stays
+false.  Currently `#[ignore]` until a working fix lands.
+
+**Fix-attempt history (2026-04-15):** Commits `82a8483` + `078459f`
+dropped the unconditional `0x8000` "free source" bit on
+`OpCopyRecord` in `gen_set_first_ref_call_copy`
+(`src/state/codegen.rs:1192-1196`) and added explicit `OpFreeRef` on
+hidden ref-typed args of the call.  In release that fixed P143
+(use-after-free gone, valgrind clean) but in debug the leak-check at
+`src/state/debug.rs:1045` caught a per-iteration work-ref leak in
+`p122_gl_collision_struct_api` — the reassignment path at
+`src/state/codegen.rs:891-931` already chose `tp_val = tp_nr` when
+`has_hidden_ref` is true and never freed the work-ref either.  A
+follow-up that mirrored the OpFreeRef-on-hidden-ref-args loop into
+the reassign path then broke `brick_buster_yield_resume` — the
+explicit free of the work-ref before scope exit invalidated the
+returned `Mat4`'s `m: vector<float>` field, which was deep-copied via
+`OpCopyRecord` but apparently still aliased through the work-ref's
+store somehow.  All three commits reverted in `ddc4a24`.
+
+**Why the obvious fix doesn't work:** The 0x8000 path frees whatever
+the callee returned, on the assumption the callee allocated a fresh
+store via `__ref_1`.  That's the common case (fall-through with a
+local promoted to `__ref_1` via `ref_return`).  The pathological
+case is an early-return that returns a DbRef *aliasing one of the
+callee's arguments* (e.g. `return gh_c.ck_hexes[0]` inside
+`for gh_c in m.m_chunks` — the returned DbRef points into the
+caller's `m`).  Freeing that "source" frees part of the caller's
+argument.  Conversely, NOT freeing it leaks the work-ref's allocation.
+Both behaviours are in the existing test suite.
+
+**Third attempt (2026-04-15, also failed):** Tried option 3 above —
+inject `OpDatabase + OpCopyRecord(returned_dbref, __ref_1, tp) +
+Return(__ref_1)` at `src/parser/control.rs::parse_return` for ref/
+struct-enum returns whose dep doesn't already contain `__ref_1`.
+Mirror of the existing vector-return wrap at lines 2248-2266.
+Two sub-issues blocked it:
+  - Timing: at the time `parse_return` processes the early-return,
+    the fallthrough's `Struct {}` literal (which would create the
+    `__ref_1` work-ref) hasn't been parsed yet, so `__ref_1` doesn't
+    exist as a variable.  Either the wrap needs to defer to a
+    post-parse pass, or it needs to allocate the work-ref on demand.
+  - Slot allocation: allocating `__ref_1` on demand via
+    `vars.work_refs(&t, &mut self.lexer)` creates a variable but
+    leaves `stack_pos = u16::MAX`.  Codegen at
+    `src/state/codegen.rs:1869` does `before_stack - r` and panics
+    with "attempt to subtract with overflow" because the slot
+    allocator (run earlier) didn't see this var.
+
+**Final fix (variant of option 3 above):** Instead of changing
+`OpCopyRecord` to walk arguments at runtime, achieve the same effect
+by *locking* the args at codegen time — `OpCopyRecord` already has a
+`!locked` guard at `src/state/io.rs:1001` that skips the source-free
+when the source store is locked.
+
+`gen_set_first_ref_call_copy` in `src/state/codegen.rs` now emits, for
+every Reference/Vector/Enum-struct argument of the call:
+
+```
+n_set_store_lock(arg, true)   ← lock before OpCopyRecord
+... OpCopyRecord(call_result, v, tp | 0x8000)
+n_set_store_lock(arg, false)  ← unlock after
+```
+
+If the callee's early-return aliased one of those args, OpCopyRecord
+sees `data.store_nr` is locked → skips the free → caller's argument
+stays intact.  If the callee returned a fresh allocation (its
+`__ref_1` work-ref), `data.store_nr` is unlocked → free as before.
+Const args are already locked from function entry; the lock op is a
+no-op on them, and `n_set_store_lock(false)` on a program-lifetime
+locked store (rc >= u32::MAX/2) is a no-op too — so const args don't
+get their lock cleared.
+
+Companion change: `src/scopes.rs::free_vars` now treats
+`__ref_*`/`__rref_*` work-refs as freeable at function exit
+regardless of their `dep` list, recovering storage that previously
+leaked via `OpDatabase`'s "clear+claim into free-marked store"
+path.
 
 ---
 

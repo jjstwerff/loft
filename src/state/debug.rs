@@ -8,7 +8,7 @@ use crate::keys::{DbRef, Key};
 use crate::log_config::{LogConfig, TailBuffer};
 use crate::native::FUNCTIONS;
 use crate::variables::size;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Error, Write};
 use std::str::FromStr;
 
@@ -931,6 +931,16 @@ impl State {
 
         // TODO Allow command line parameters on main functions
         let mut step = 0;
+        // alloc_free trace state: per-store-nr, the (pc, op_name) of the
+        // op that allocated it.  Populated only when config.trace_alloc_free
+        // is set; used to emit `[alloc #N at pc=…]` and matching `[free #N
+        // (allocated at pc=…)]` lines around each opcode.
+        let mut alloc_pcs: HashMap<u16, (u32, String)> = HashMap::new();
+        let mut prev_free: Vec<bool> = if config.trace_alloc_free {
+            self.database.allocations.iter().map(|s| s.free).collect()
+        } else {
+            Vec::new()
+        };
         while self.code_pos < self.bytecode.len() as u32 {
             let code = self.code_pos;
             let op = *self.code::<u8>();
@@ -955,6 +965,33 @@ impl State {
             OPERATORS[op as usize](self);
             if trace_this {
                 self.log_result(log, op, code, data)?;
+            }
+
+            // alloc_free trace: emit `[alloc #N …]` / `[free #N …]` lines
+            // by diffing the allocations' free state before/after the op.
+            if config.trace_alloc_free {
+                let allocs = &self.database.allocations;
+                if allocs.len() > prev_free.len() {
+                    prev_free.resize(allocs.len(), true);
+                }
+                for (s_nr, s) in allocs.iter().enumerate() {
+                    let was_free = prev_free.get(s_nr).copied().unwrap_or(true);
+                    if was_free && !s.free {
+                        writeln!(log, "    [alloc #{s_nr} at pc={code} op={op_base}]")?;
+                        alloc_pcs.insert(s_nr as u16, (code, op_name.clone()));
+                    } else if !was_free && s.free {
+                        let origin = alloc_pcs
+                            .get(&(s_nr as u16))
+                            .map_or_else(|| "<unknown>".to_string(), |(p, n)| format!("{n}@{p}"));
+                        writeln!(
+                            log,
+                            "    [free  #{s_nr} at pc={code} op={op_base} (allocated at {origin})]"
+                        )?;
+                    }
+                    if let Some(slot) = prev_free.get_mut(s_nr) {
+                        *slot = s.free;
+                    }
+                }
             }
 
             // Variable introspection: dump live variables in the current frame
@@ -997,7 +1034,16 @@ impl State {
                     if s.is_locked() {
                         continue;
                     }
-                    assert!(s.free, "Database {s_nr} not correctly freed");
+                    if !s.free {
+                        if let Some((p, n)) = alloc_pcs.get(&(s_nr as u16)) {
+                            panic!(
+                                "Database {s_nr} not correctly freed (allocated by \
+                                 {n} at pc={p}; rerun with LOFT_LOG=alloc_free for \
+                                 the full trace)"
+                            );
+                        }
+                        panic!("Database {s_nr} not correctly freed");
+                    }
                 }
                 writeln!(log, "Finished")?;
                 return Ok(());
@@ -1479,6 +1525,9 @@ pub(super) fn execute_log_impl(
         library: &raw const state.library,
         stack_trace_lib_nr: stk_lib_nr,
     }));
+    // `LOFT_LOG=poison_free`: wire the runtime flag into the Stores so
+    // every `free_named` overwrites the freed buffer with 0xDEADBEEF.
+    state.database.poison_free = config.poison_free;
 
     // If logging is suppressed for this function, fall back to silent execution.
     if !config.phases.execution || !config.show_function(name) {

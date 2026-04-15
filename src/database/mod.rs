@@ -143,6 +143,7 @@ impl Debug for Content {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct Stores {
     pub types: Vec<Type>,
     pub names: HashMap<String, u16>,
@@ -182,6 +183,12 @@ pub struct Stores {
     /// FY.1: When true, the interpreter loop yields back to the caller.
     /// Set by `gl_swap_buffers` in WASM mode; cleared by `resume_frame`.
     pub frame_yield: bool,
+    /// When true, `free_named` overwrites the freed store's buffer with a
+    /// poison pattern (`0xDEADBEEF` i32 words) so subsequent reads through a
+    /// stale DbRef hit recognisable garbage instead of whatever bytes the
+    /// allocator leaves.  Enabled by `LOFT_LOG=poison_free` via
+    /// `execute_log_impl` (or anywhere else that wires it).
+    pub poison_free: bool,
     /// When true, assert() reports results (pass/fail) to `assert_results`
     /// instead of panicking on failure.  Used by the WASM playground.
     pub report_asserts: bool,
@@ -249,6 +256,7 @@ impl Clone for Stores {
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
+            poison_free: self.poison_free,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
@@ -510,6 +518,7 @@ impl Stores {
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
+            poison_free: false,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

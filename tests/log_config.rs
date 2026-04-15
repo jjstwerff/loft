@@ -565,3 +565,63 @@ fn variables_preset_covers_all_functions() {
         "variables(): n_test section must be present\n---\n{out}"
     );
 }
+
+/// `LOFT_LOG=poison_free` writes 0xDEADBEEF bytes into a store's buffer
+/// when it is freed.  Without poisoning, a stale DbRef would read whatever
+/// bytes the previous tenant wrote (often still valid-looking struct data
+/// — a latent use-after-free that may or may not crash depending on
+/// memory layout).  With poisoning, subsequent reads land on 0xDEADBEEF
+/// and fail any size/length sanity check, surfacing the bug loudly.
+#[test]
+fn poison_free_overwrites_freed_buffer() {
+    use loft::database::Stores;
+
+    let mut stores = Stores::new();
+    stores.poison_free = true;
+
+    let db = stores.database_named(64, "poison_test");
+    let store_nr = db.store_nr;
+    stores.allocations[store_nr as usize].set_int(1, 8, 0x1111_1111);
+
+    stores.free(&db);
+
+    // Read the poisoned bytes directly from the store buffer.  Poison
+    // pattern is a little-endian 0xDEADBEEF repeated (EF BE AD DE).
+    let ptr = stores.allocations[store_nr as usize].ptr;
+    let mut first = [0u8; 4];
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr.add(8), first.as_mut_ptr(), 4);
+    }
+    assert_eq!(
+        first,
+        [0xEF, 0xBE, 0xAD, 0xDE],
+        "poison_free: freed buffer must be overwritten with 0xDEADBEEF pattern, got {first:?}"
+    );
+}
+
+/// `LOFT_LOG=poison_free` is opt-in — when the flag is off, the freed
+/// buffer keeps its prior bytes.  Guards against the poisoning ever
+/// becoming unconditional (it is a diagnostic, not a default).
+#[test]
+fn poison_free_default_off_leaves_buffer() {
+    use loft::database::Stores;
+
+    let mut stores = Stores::new();
+    assert!(!stores.poison_free);
+
+    let db = stores.database_named(64, "no_poison_test");
+    let store_nr = db.store_nr;
+    stores.allocations[store_nr as usize].set_int(1, 8, 0x1111_1111);
+    stores.free(&db);
+
+    let ptr = stores.allocations[store_nr as usize].ptr;
+    let mut first = [0u8; 4];
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr.add(8), first.as_mut_ptr(), 4);
+    }
+    assert_ne!(
+        first,
+        [0xEF, 0xBE, 0xAD, 0xDE],
+        "poison_free default-off: freed buffer must NOT contain 0xDEADBEEF pattern"
+    );
+}
