@@ -50,7 +50,10 @@ impl Output<'_> {
             } else if idx < def_fn.attributes.len()
                 && matches!(def_fn.attributes[idx].typedef, Type::RefVar(_))
                 && let Value::Var(nr) = v
-                && matches!(self.data.def(self.def_nr).variables.tp(*nr), Type::RefVar(_))
+                && matches!(
+                    self.data.def(self.def_nr).variables.tp(*nr),
+                    Type::RefVar(_)
+                )
             {
                 // P144: forwarding a & parameter to another & parameter.
                 // The variable is already &mut DbRef — pass it directly
