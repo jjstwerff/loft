@@ -1182,13 +1182,17 @@ impl State {
     /// called, so every store has `ref_count = 1` and the "decrement on free"
     /// path behaves as an unconditional free.
     ///
-    /// Consequence: the caller-allocated work-ref that was passed as the
-    /// callee's hidden return buffer may outlive this call (leak) when the
-    /// callee took an early-return path through an argument.  That leak is
-    /// bounded by the caller's scope — `scopes::free_vars` emits `OpFreeRef`
-    /// on these work-refs at function exit — and never grows unbounded
-    /// across calls within the same function body.  A narrow store leak is
-    /// strictly preferable to a use-after-free.
+    /// To avoid leaking the caller-allocated work-ref that backs the callee's
+    /// hidden `__ref_1` buffer, emit an explicit `OpFreeRef` on every hidden
+    /// ref-typed arg of the call after the copy completes.  Two cases:
+    ///   - Callee fell through and wrote to its `__ref_1`: the work-ref's
+    ///     store IS the source we just deep-copied; freeing it now reclaims
+    ///     the temp.
+    ///   - Callee took early-return aliasing an arg: the work-ref's store is
+    ///     a fresh empty allocation that nobody else references; freeing it
+    ///     here doesn't touch the aliased arg.
+    ///
+    /// Either way the work-ref is safe to free.
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
@@ -1202,6 +1206,34 @@ impl State {
             vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
         );
         self.generate(&copy_val, stack, false);
+
+        // Free every hidden-ref arg of the call.  Workrefs are always
+        // `Value::Var(_)`; resolve via `var_mapping` because variables.rs
+        // can rename across passes.
+        if let Value::Call(fn_nr, args) = value {
+            let attrs = stack.data.def(*fn_nr).attributes.clone();
+            for (i, attr) in attrs.iter().enumerate() {
+                if !attr.hidden {
+                    continue;
+                }
+                if !matches!(
+                    attr.typedef,
+                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+                ) {
+                    continue;
+                }
+                let Some(Value::Var(wv)) = args.get(i) else {
+                    continue;
+                };
+                // Skip workrefs that scopes already marked skip_free
+                // (they participate in a different ownership chain).
+                if stack.function.is_skip_free(*wv) {
+                    continue;
+                }
+                let free_call = Value::Call(stack.data.def_nr("OpFreeRef"), vec![Value::Var(*wv)]);
+                self.generate(&free_call, stack, false);
+            }
+        }
     }
 
     pub(super) fn clear_stack(&mut self, stack: &mut Stack, loop_nr: u16) {
