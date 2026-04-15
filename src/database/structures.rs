@@ -9,192 +9,15 @@ use crate::vector;
 use crate::{hash, keys, tree};
 use std::collections::HashSet;
 
-fn match_token(text: &str, pos: &mut usize, token: u8) -> bool {
-    if *pos < text.len() && text.as_bytes()[*pos] == token {
-        *pos += 1;
-        true
-    } else {
-        false
-    }
-}
-
-fn match_empty(text: &str, pos: &mut usize) {
-    let mut c = *pos;
-    let bytes = text.as_bytes();
-    while c < bytes.len() && (bytes[c] == b' ' || bytes[c] == b'\t' || bytes[c] == b'\n') {
-        c += 1;
-        *pos = c;
-    }
-}
-
-fn match_null(text: &str, pos: &mut usize) -> bool {
-    if text.len() >= *pos + 4 && &text[*pos..*pos + 4] == "null" {
-        *pos += 4;
-        true
-    } else {
-        false
-    }
-}
-
-fn match_boolean(text: &str, pos: &mut usize, value: &mut bool) -> bool {
-    if text.len() >= *pos + 4 && &text[*pos..*pos + 4] == "true" {
-        *pos += 4;
-        *value = true;
-        true
-    } else if text.len() >= *pos + 5 && &text[*pos..*pos + 5] == "false" {
-        *pos += 4;
-        *value = false;
-        true
-    } else {
-        false
-    }
-}
-
-fn skip_integer(text: &str, pos: &mut usize) -> usize {
-    let mut c = *pos;
-    let bytes = text.as_bytes();
-    if c < bytes.len() && bytes[c] == b'-' {
-        c += 1;
-    }
-    while c < bytes.len() && bytes[c] >= b'0' && bytes[c] <= b'9' {
-        c += 1;
-    }
-    c
-}
-
-fn match_integer(text: &str, pos: &mut usize, value: &mut i32) -> bool {
-    let c = skip_integer(text, pos);
-    if c == *pos {
-        false
-    } else {
-        *value = text[*pos..c].parse().unwrap();
-        *pos = c;
-        true
-    }
-}
-
-fn match_long(text: &str, pos: &mut usize, value: &mut i64) -> bool {
-    let c = skip_integer(text, pos);
-    if c == *pos {
-        false
-    } else {
-        *value = text[*pos..c].parse().unwrap();
-        *pos = c;
-        true
-    }
-}
-
-fn skip_float(text: &str, pos: &mut usize) -> usize {
-    let mut c = *pos;
-    let bytes = text.as_bytes();
-    if c < bytes.len() && bytes[c] == b'-' {
-        c += 1;
-    }
-    while c < bytes.len()
-        && ((bytes[c] >= b'0' && bytes[c] <= b'9') || bytes[c] == b'e' || bytes[c] == b'.')
-    {
-        c += 1;
-        if c < bytes.len() && bytes[c - 1] == b'e' && bytes[c] == b'-' {
-            c += 1;
-        }
-    }
-    c
-}
-
-fn match_single(text: &str, pos: &mut usize, value: &mut f32) -> bool {
-    let c = skip_float(text, pos);
-    if c == *pos {
-        false
-    } else {
-        *value = text[*pos..c].parse().unwrap();
-        *pos = c;
-        true
-    }
-}
-
-fn match_float(text: &str, pos: &mut usize, value: &mut f64) -> bool {
-    let c = skip_float(text, pos);
-    if c == *pos {
-        false
-    } else {
-        *value = text[*pos..c].parse().unwrap();
-        *pos = c;
-        true
-    }
-}
-
-fn match_identifier(text: &str, pos: &mut usize, value: &mut String) -> bool {
-    let mut c = *pos;
-    let bytes = text.as_bytes();
-    if c < bytes.len()
-        && ((bytes[c] >= b'a' && bytes[c] <= b'z')
-            || bytes[c] >= b'A' && bytes[c] <= b'Z'
-            || bytes[c] == b'_')
-    {
-        c += 1;
-        while c < bytes.len()
-            && ((bytes[c] >= b'0' && bytes[c] <= b'9')
-                || (bytes[c] >= b'a' && bytes[c] <= b'z')
-                || bytes[c] >= b'A' && bytes[c] <= b'Z'
-                || bytes[c] == b'_')
-        {
-            c += 1;
-        }
-        *value = text[*pos..c].parse().unwrap();
-        *pos = c;
-        true
-    } else {
-        false
-    }
-}
-
-pub(super) fn match_text(text: &str, pos: &mut usize, value: &mut String) -> bool {
-    let mut c = *pos;
-    let bytes = text.as_bytes();
-    value.clear();
-    if c < bytes.len() && (bytes[c] == b'"' || bytes[c] == b'\'') {
-        let close = bytes[c];
-        c += 1;
-        while c < bytes.len() && bytes[c] != close {
-            if bytes[c] == b'\\' {
-                c += 1;
-                if c == bytes.len() {
-                    return false;
-                }
-                if bytes[c] == b'n' {
-                    *value += "\n";
-                } else if bytes[c] == b't' {
-                    *value += "\t";
-                } else if bytes[c] == b'\\' {
-                    *value += "\\";
-                } else if bytes[c] == b'"' {
-                    *value += "\"";
-                } else if bytes[c] == b'\'' {
-                    *value += "\'";
-                } else {
-                    return false;
-                }
-            } else {
-                let s = c;
-                while c < bytes.len() && bytes[c] > 127 {
-                    c += 1;
-                }
-                if c == bytes.len() || bytes[c] == close {
-                    return false;
-                }
-                c += 1;
-                *value += &text[s..c];
-            }
-        }
-        if bytes[c] == close {
-            *pos = c + 1;
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
+/// Walker-native diagnostic for `walk_parsed_into` failures.
+///
+/// `at` is a byte offset into the original input; `path` is the
+/// dotted-key / `[index]` path to the failing node.  `format.rs`
+/// converts these into the user-visible `"line N:M path:X"` shape
+/// using `crate::json::line_col_of`.
+pub(super) struct WalkErr {
+    pub at: usize,
+    pub path: Vec<String>,
 }
 
 impl Stores {
@@ -436,6 +259,7 @@ impl Stores {
     /// Replaces the hand-rolled `parsing` scanner in the
     /// legacy `text → struct` path (still kept for the
     /// transition; see § P54-U in doc/claude/QUALITY.md).
+    #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
     pub(super) fn walk_parsed_into(
         &mut self,
         parsed: &crate::json::Parsed,
@@ -443,16 +267,17 @@ impl Stores {
         rec_tp: u16,
         field: u16,
         to: &DbRef,
-    ) -> bool {
+        path: &mut Vec<String>,
+    ) -> Result<(), WalkErr> {
         // `null` at any target position resets to the type's
         // default sentinel — mirrors the legacy scanner's
         // first-line behaviour and keeps round-tripping correct.
         if matches!(parsed, crate::json::Parsed::Null) {
             self.set_default_value(tp, to);
-            return true;
+            return Ok(());
         }
         match self.types[tp as usize].parts.clone() {
-            Parts::Base => self.walk_primitive_into(parsed, tp, to),
+            Parts::Base => self.walk_primitive_into(parsed, tp, to, path),
             Parts::Sorted(c, _)
             | Parts::Vector(c)
             | Parts::Array(c)
@@ -461,19 +286,22 @@ impl Stores {
             | Parts::Spacial(c, _)
             | Parts::Index(c, _, _) => {
                 let crate::json::Parsed::Array(items) = parsed else {
-                    return false;
+                    return Err(WalkErr {
+                        at: 0,
+                        path: path.clone(),
+                    });
                 };
-                for item in items {
+                for (idx, item) in items.iter().enumerate() {
+                    path.push(format!("[{idx}]"));
                     let res = self.record_new(to, rec_tp, field);
-                    if !self.walk_parsed_into(item, c, c, u16::MAX, &res) {
-                        return false;
-                    }
+                    self.walk_parsed_into(item, c, c, u16::MAX, &res, path)?;
                     self.record_finish(to, &res, rec_tp, field);
+                    path.pop();
                 }
-                true
+                Ok(())
             }
             Parts::Struct(object) | Parts::EnumValue(_, object) => {
-                self.walk_parsed_struct(parsed, tp, to, &object)
+                self.walk_parsed_struct(parsed, tp, to, &object, path)
             }
             Parts::Enum(fields) => {
                 // Enum values serialise as a bare tag name
@@ -482,9 +310,13 @@ impl Stores {
                 // here to `Parsed::Str` / `Parsed::Ident`).
                 let name = match parsed {
                     crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => s.as_str(),
-                    _ => return false,
+                    _ => {
+                        return Err(WalkErr {
+                            at: 0,
+                            path: path.clone(),
+                        });
+                    }
                 };
-                let mut enum_tp = u16::MAX;
                 let val = if name == "null" {
                     0
                 } else {
@@ -492,43 +324,40 @@ impl Stores {
                     for (f_nr, f) in fields.iter().enumerate() {
                         if f.1 == name {
                             v = f_nr as i32 + 1;
-                            enum_tp = f.0;
                             break;
                         }
                     }
                     v
                 };
                 self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
-                // A typed enum variant that carries a payload is
-                // not representable inside a bare tag — the
-                // legacy scanner threaded position + text through
-                // a second parse call.  The unified grammar
-                // handles the same shape by requiring a two-
-                // element array `["Tag", body]` or an object
-                // `{Tag: body}`; for now, return true and leave
-                // the payload at the default (matches the most
-                // common "unit variant" case).  Payload-carrying
-                // enums are a follow-up once at least one test
-                // exercises the shape.
-                let _ = enum_tp;
-                true
+                // Payload-carrying enums (typed variants) are not
+                // representable inside a bare tag — would require
+                // `["Tag", body]` / `{Tag: body}` shape support;
+                // tracked as P54-U follow-up once a test exercises it.
+                Ok(())
             }
             Parts::Byte(from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(WalkErr {
+                        at: 0,
+                        path: path.clone(),
+                    });
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to).set_byte(to.rec, to.pos, from, *n as i32);
-                true
+                Ok(())
             }
             Parts::Short(from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(WalkErr {
+                        at: 0,
+                        path: path.clone(),
+                    });
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to)
                     .set_short(to.rec, to.pos, from, *n as i32);
-                true
+                Ok(())
             }
         }
     }
@@ -537,15 +366,20 @@ impl Stores {
     /// Matches fields by name, recurses into the walker for each
     /// value, default-fills any unmentioned field (mirroring the
     /// legacy scanner's "missing field → default" behaviour).
+    #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
     fn walk_parsed_struct(
         &mut self,
         parsed: &crate::json::Parsed,
         tp: u16,
         to: &DbRef,
         object: &[Field],
-    ) -> bool {
+        path: &mut Vec<String>,
+    ) -> Result<(), WalkErr> {
         let crate::json::Parsed::Object(entries) = parsed else {
-            return false;
+            return Err(WalkErr {
+                at: 0,
+                path: path.clone(),
+            });
         };
         let fld = if to.rec == 0 { 0 } else { to.pos };
         let rec = if to.rec == 0 {
@@ -555,36 +389,41 @@ impl Stores {
             to.rec
         };
         let mut found_fields: HashSet<&str> = HashSet::new();
-        for (name, _key_at, value) in entries {
+        for (name, key_at, value) in entries {
             let mut matched = false;
             for (f_nr, f) in object.iter().enumerate() {
                 if f.name == *name {
                     matched = true;
-                    let ok = if self.content(f.content) == u16::MAX {
+                    path.push(name.clone());
+                    let res = if self.content(f.content) == u16::MAX {
                         let slot = DbRef {
                             store_nr: to.store_nr,
                             rec,
                             pos: fld + u32::from(f.position),
                         };
-                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, &slot)
+                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, &slot, path)
                     } else {
-                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, to)
+                        self.walk_parsed_into(value, f.content, tp, f_nr as u16, to, path)
                     };
-                    if !ok {
-                        return false;
-                    }
+                    res?;
+                    path.pop();
                     break;
                 }
             }
             if !matched {
-                // Legacy behaviour: an unknown field name in the
-                // source is a parse error, not a silent ignore.
-                // Tests rely on this shape (see
-                // `tests/data_structures.rs::record` at
-                // `"line 1:7 path:blame"`).  A future P54-U
-                // follow-up can add a "strict-schema" flag that
-                // flips this to silent-ignore for JSON-ish input.
-                return false;
+                // An unknown field name in the source is a parse
+                // error.  Position the caret at the byte just past
+                // the key (the `:` after the name) — matches the
+                // legacy `parse_key`/`show_key` shape that
+                // `tests/data_structures.rs::record` asserts as
+                // `"line 1:7 path:blame"` for input
+                // `{blame:"nothing"}`.
+                let mut err_path = path.clone();
+                err_path.push(name.clone());
+                return Err(WalkErr {
+                    at: key_at + name.len(),
+                    path: err_path,
+                });
             }
             found_fields.insert(name.as_str());
         }
@@ -601,309 +440,77 @@ impl Stores {
                 self.set_default_value(f.content, &slot);
             }
         }
-        true
+        Ok(())
     }
 
     /// Schema-driven primitive write.  `tp` is one of the
     /// low-numbered base-type IDs (0 = int32/Reference, 1 = long,
     /// 2 = single, 3 = float, 4 = bool, 5 = text, 6 = Reference).
-    fn walk_primitive_into(&mut self, parsed: &crate::json::Parsed, tp: u16, to: &DbRef) -> bool {
+    #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
+    fn walk_primitive_into(
+        &mut self,
+        parsed: &crate::json::Parsed,
+        tp: u16,
+        to: &DbRef,
+        path: &mut Vec<String>,
+    ) -> Result<(), WalkErr> {
+        let mismatch = || WalkErr {
+            at: 0,
+            path: path.clone(),
+        };
         match tp {
             0 | 6 => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to).set_int(to.rec, to.pos, *n as i32);
-                true
+                Ok(())
             }
             1 => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to).set_long(to.rec, to.pos, *n as i64);
-                true
+                Ok(())
             }
             2 => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to).set_single(to.rec, to.pos, *n as f32);
-                true
+                Ok(())
             }
             3 => {
                 let crate::json::Parsed::Number(n) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 self.store_mut(to).set_float(to.rec, to.pos, *n);
-                true
+                Ok(())
             }
             4 => {
                 let crate::json::Parsed::Bool(b) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 self.store_mut(to)
                     .set_byte(to.rec, to.pos, 0, i32::from(*b));
-                true
+                Ok(())
             }
             5 => {
                 // Text accepts only a quoted string — bare
-                // identifiers (`Parsed::Ident`) are NOT promoted
-                // to text here, matching the legacy `match_text`.
+                // identifiers (`Parsed::Ident`) are NOT promoted to
+                // text, matching the legacy `match_text` behaviour.
                 let crate::json::Parsed::Str(s) = parsed else {
-                    return false;
+                    return Err(mismatch());
                 };
                 let text_pos = self.store_mut(to).set_str(s);
                 self.store_mut(to).set_int(to.rec, to.pos, text_pos as i32);
-                true
+                Ok(())
             }
-            _ => false,
+            _ => Err(mismatch()),
         }
-    }
-
-    pub fn parsing(
-        &mut self,
-        text: &str,
-        pos: &mut usize,
-        tp: u16,
-        rec_tp: u16,
-        field: u16,
-        to: &DbRef,
-    ) -> bool {
-        if match_null(text, pos) {
-            self.set_default_value(tp, to);
-        }
-        match self.types[tp as usize].parts.clone() {
-            Parts::Base => {
-                if self.parse_simple(text, pos, tp, to) {
-                    return true;
-                }
-            }
-            Parts::Sorted(c, _)
-            | Parts::Vector(c)
-            | Parts::Array(c)
-            | Parts::Ordered(c, _)
-            | Parts::Hash(c, _)
-            | Parts::Spacial(c, _)
-            | Parts::Index(c, _, _) => {
-                match_empty(text, pos);
-                if match_token(text, pos, b'[') {
-                    match_empty(text, pos);
-                    if match_token(text, pos, b']') {
-                        return true;
-                    }
-                    loop {
-                        let res = self.record_new(to, rec_tp, field);
-                        if !self.parsing(text, pos, c, c, u16::MAX, &res) {
-                            return false;
-                        }
-                        self.record_finish(to, &res, rec_tp, field);
-                        match_empty(text, pos);
-                        if !match_token(text, pos, b',') {
-                            break;
-                        }
-                        match_empty(text, pos);
-                    }
-                    match_empty(text, pos);
-                    if !match_token(text, pos, b']') {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            Parts::Struct(object) | Parts::EnumValue(_, object) => {
-                return self.parse_struct(text, pos, tp, to, &object);
-            }
-            Parts::Enum(fields) => {
-                let mut value = String::new();
-                let mut result = match_text(text, pos, &mut value);
-                if !result {
-                    result = match_identifier(text, pos, &mut value);
-                    if !result {
-                        return result;
-                    }
-                }
-                let mut enum_tp = u16::MAX;
-                let val = if value == "null" {
-                    0
-                } else {
-                    let mut v = 1;
-                    for (f_nr, f) in fields.iter().enumerate() {
-                        if f.1 == value {
-                            v = f_nr as i32 + 1;
-                            enum_tp = f.0;
-                            break;
-                        }
-                    }
-                    v
-                };
-                self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
-                if enum_tp < u16::MAX && self.types[enum_tp as usize].size > 1 {
-                    match_empty(text, pos);
-                    if !self.parsing(text, pos, enum_tp, enum_tp, u16::MAX, to) {
-                        return false;
-                    }
-                }
-            }
-            Parts::Byte(from, _null) => {
-                let mut value = 0;
-                if !match_integer(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_byte(to.rec, to.pos, from, value);
-            }
-            Parts::Short(from, _null) => {
-                let mut value = 0;
-                if !match_integer(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_short(to.rec, to.pos, from, value);
-            }
-        }
-        true
-    }
-
-    pub(super) fn parse_struct(
-        &mut self,
-        text: &str,
-        pos: &mut usize,
-        tp: u16,
-        to: &DbRef,
-        object: &[Field],
-    ) -> bool {
-        if match_token(text, pos, b'{') {
-            match_empty(text, pos);
-            if match_token(text, pos, b'}') {
-                return true;
-            }
-            let fld = if to.rec == 0 { 0 } else { to.pos };
-            let rec = if to.rec == 0 {
-                let size = self.types[tp as usize].size;
-                self.store_mut(to).claim(u32::from(size).div_ceil(8))
-            } else {
-                to.rec
-            };
-            let mut found_fields = HashSet::new();
-            loop {
-                let mut field_name = String::new();
-                // Accept both JSON-style "field" and loft-style field names.
-                if !match_text(text, pos, &mut field_name)
-                    && !match_identifier(text, pos, &mut field_name)
-                {
-                    return false;
-                }
-                match_empty(text, pos);
-                if !match_token(text, pos, b':') {
-                    return false;
-                }
-                match_empty(text, pos);
-                for (f_nr, f) in object.iter().enumerate() {
-                    if f.name == field_name {
-                        let result = if self.content(f.content) == u16::MAX {
-                            let field = DbRef {
-                                store_nr: to.store_nr,
-                                rec,
-                                pos: fld + u32::from(f.position),
-                            };
-                            self.parsing(text, pos, f.content, tp, f_nr as u16, &field)
-                        } else {
-                            self.parsing(text, pos, f.content, tp, f_nr as u16, to)
-                        };
-                        if !result {
-                            return false;
-                        }
-                    }
-                }
-                found_fields.insert(field_name);
-                match_empty(text, pos);
-                if !match_token(text, pos, b',') {
-                    break;
-                }
-                match_empty(text, pos);
-            }
-            match_empty(text, pos);
-            if !match_token(text, pos, b'}') {
-                return false;
-            }
-            for f in object {
-                if (f.other_indexes.is_empty() || f.other_indexes[0] != u16::MAX)
-                    && !found_fields.contains(&f.name)
-                    && f.name != "enum"
-                {
-                    let field = DbRef {
-                        store_nr: to.store_nr,
-                        rec,
-                        pos: to.pos + u32::from(f.position),
-                    };
-                    self.set_default_value(f.content, &field);
-                }
-            }
-        } else {
-            return false;
-        }
-        true
-    }
-
-    pub(super) fn parse_simple(
-        &mut self,
-        text: &str,
-        pos: &mut usize,
-        tp: u16,
-        to: &DbRef,
-    ) -> bool {
-        match tp {
-            0 | 6 => {
-                let mut value = 0;
-                if !match_integer(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_int(to.rec, to.pos, value);
-            }
-            1 => {
-                let mut value = 0;
-                if !match_long(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_long(to.rec, to.pos, value);
-            }
-            2 => {
-                let mut value = 0.0;
-                if !match_single(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_single(to.rec, to.pos, value);
-            }
-            3 => {
-                let mut value = 0.0;
-                if !match_float(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to).set_float(to.rec, to.pos, value);
-            }
-            4 => {
-                let mut value = false;
-                if !match_boolean(text, pos, &mut value) {
-                    return false;
-                }
-                self.store_mut(to)
-                    .set_byte(to.rec, to.pos, 0, i32::from(value));
-            }
-            5 => {
-                let mut value = String::new();
-                if !match_text(text, pos, &mut value) {
-                    return false;
-                }
-                let text_pos = self.store_mut(to).set_str(&value);
-                self.store_mut(to).set_int(to.rec, to.pos, text_pos as i32);
-            }
-            _ => {
-                return false;
-            }
-        }
-        true
     }
 
     /**
