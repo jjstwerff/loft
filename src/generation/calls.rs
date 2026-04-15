@@ -47,6 +47,16 @@ impl Output<'_> {
             if let Some(vr) = self.create_stack_var(v) {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
+            } else if idx < def_fn.attributes.len()
+                && matches!(def_fn.attributes[idx].typedef, Type::RefVar(_))
+                && let Value::Var(nr) = v
+                && matches!(self.data.def(self.def_nr).variables.tp(*nr), Type::RefVar(_))
+            {
+                // P144: forwarding a & parameter to another & parameter.
+                // The variable is already &mut DbRef — pass it directly
+                // instead of dereferencing with *var_name.
+                let name = sanitize(self.data.def(self.def_nr).variables.name(*nr));
+                write!(w, "var_{name}")?;
             } else {
                 // wrap i32 literal into (u32, null_DbRef) for fn-ref params.
                 let param_is_fnref = idx < def_fn.attributes.len()

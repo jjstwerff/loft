@@ -1,0 +1,17 @@
+use p144_types;
+
+pub fn box_ensure(b: &Box) {
+  if len(b.items) == 0 {
+    b.items += [Inner { val: 0 }];
+  }
+}
+
+pub fn box_set_val(b: &Box, val: integer) {
+  box_ensure(b);
+  for bsv_item in b.items {
+    if bsv_item.val == 0 {
+      bsv_item.val = val;
+      return;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+use p144_entry;
+
+fn main() {
+  b = Box { items: [] };
+  box_set_val(b, 42);
+  assert(b.items[0].val == 42, "P144: & param forwarded correctly");
+}

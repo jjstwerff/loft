@@ -1,0 +1,2 @@
+pub struct Inner { val: integer not null }
+pub struct Box { items: vector<Inner> }
