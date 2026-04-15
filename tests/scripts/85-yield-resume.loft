@@ -1,5 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// NOTE: this file does NOT carry `// @ARGS: --lib …` even though it
+// uses cross-package imports.  Adding @ARGS would let `wrap::loft_suite`
+// load the libs but the test still requires `mock_yield_frame` to be
+// injected via `state.replace_native(...)` — only `tests/leak.rs::
+// brick_buster_yield_resume` does that.  And native_scripts would
+// then try to compile against a `loft_graphics_native` crate that
+// isn't on the Cargo manifest.  Keep the file in
+// `wrap::ignored_scripts()` so loft_suite skips it; the leak.rs test
+// covers it with the right setup.
+//
 // Reproduce the Brick Buster yield/resume bug locally.
 // Uses the REAL math library (Mat4, mat4_mul) to match the exact
 // type schema and store allocation order from the graphics examples.
