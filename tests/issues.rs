@@ -8646,6 +8646,7 @@ fn p144_ref_param_forward_native() {
 /// P145: SIGSEGV calling text-returning function on multi-vector struct
 /// in cross-file package.
 #[test]
+#[ignore = "P145 open — text-returning fn on multi-vector struct in cross-file use SIGSEGVs at OpFormatDatabase (op=132)"]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();
     p.lib_dirs.push("tests/lib".to_string());

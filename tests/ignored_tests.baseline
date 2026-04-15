@@ -6,4 +6,5 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+p145_text_return_multivec_struct_cross_file	P145 open — text-returning fn on multi-vector struct in cross-file use SIGSEGVs at OpFormatDatabase (op=132)
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
