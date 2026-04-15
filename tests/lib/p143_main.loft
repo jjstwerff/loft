@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P143 regression — default-struct return from a function iterating
+// `vector<Chunk>` containing `vector<Hex>`, both types loaded via
+// cross-file `use`.  Before PR #171 this SIGSEGV'd on the fallback
+// (`Hex {}`) return.  Now passes interpreter + native.
+
+use p143_entry;
+
+fn main() {
+  // (1) Fallback path — empty map, loop falls through, returns default Hex {}.
+  // This was the crashing case.
+  m_empty = Map { m_chunks: [] };
+  h_default = map_get_hex(m_empty, 5, 5);
+  assert(h_default.h_material == 0, "P143 fallback: default material must be 0, got {h_default.h_material}");
+
+  // (2) Found path — single chunk with two hexes; first hex returned.
+  // Sanity check so a regression in the non-fallback branch also shows up.
+  hexes = [Hex { h_material: 7 }, Hex { h_material: 9 }];
+  c = Chunk { ck_cx: 0, ck_cy: 0, ck_cz: 0, ck_hexes: hexes };
+  m_one = Map { m_chunks: [c] };
+  h_found = map_get_hex(m_one, 0, 0);
+  assert(h_found.h_material == 7, "P143 found: first hex material must be 7, got {h_found.h_material}");
+
+  // (3) Fallback after the iterator advanced past non-matching chunks —
+  // exercises the loop-then-default path, which had a distinct IR shape
+  // from the empty-vector case.
+  h_missing = map_get_hex(m_one, 999, 999);
+  assert(h_missing.h_material == 0, "P143 loop-fallback: default material must be 0, got {h_missing.h_material}");
+}

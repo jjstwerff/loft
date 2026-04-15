@@ -1171,8 +1171,24 @@ impl State {
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
-    /// Sets the high bit on the type parameter to signal OpCopyRecord to free the
-    /// source store after copying (issue #120 — prevents callee store leak).
+    ///
+    /// Does NOT set the `0x8000` "free source" bit on OpCopyRecord.  The source
+    /// might alias an argument (e.g. `map_get_hex(m) -> Hex` returning
+    /// `gh_c.ck_hexes[0]` — a DbRef into `m` rather than into the callee's
+    /// hidden `__ref_1` buffer).  In that case, freeing the source kills the
+    /// argument's store, and the next call on the same argument reads freed
+    /// memory (P143 SIGSEGV).  The comment that previously claimed "safe with
+    /// store reference counting" was wrong — `inc_rc` is declared but never
+    /// called, so every store has `ref_count = 1` and the "decrement on free"
+    /// path behaves as an unconditional free.
+    ///
+    /// Consequence: the caller-allocated work-ref that was passed as the
+    /// callee's hidden return buffer may outlive this call (leak) when the
+    /// callee took an early-return path through an argument.  That leak is
+    /// bounded by the caller's scope — `scopes::free_vars` emits `OpFreeRef`
+    /// on these work-refs at function exit — and never grows unbounded
+    /// across calls within the same function body.  A narrow store leak is
+    /// strictly preferable to a use-after-free.
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
         stack.add_op("OpConvRefFromNull", self);
@@ -1180,17 +1196,10 @@ impl State {
         self.code_add(size_of::<crate::keys::DbRef>() as u16);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
-        // High bit = free source store after deep copy.
-        // Safe with store reference counting: free_named only frees when rc drops to 0.
-        // Disabled under WASM: frame yield/resume creates store aliases that rc
-        // alone cannot track yet; freeing causes "Allocating a used store" panics.
-        #[cfg(not(feature = "wasm"))]
-        let tp_with_free = i32::from(tp_nr) | 0x8000;
-        #[cfg(feature = "wasm")]
-        let tp_with_free = i32::from(tp_nr);
+        let tp_val = i32::from(tp_nr);
         let copy_val = Value::Call(
             copy_nr,
-            vec![value.clone(), Value::Var(v), Value::Int(tp_with_free)],
+            vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
         );
         self.generate(&copy_val, stack, false);
     }

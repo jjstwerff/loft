@@ -8510,3 +8510,38 @@ fn inc18_bare_break_exits_innermost_only() {
     .expr("run()")
     .result(Value::Int(6));
 }
+
+// P143 regression — ref-returning function with two return paths:
+//   early-return `gh_c.ck_hexes[0]` (DbRef into a `for`-iterator element
+//   inside the argument `m`) vs fallthrough `Hex {}` (local promoted to
+//   hidden `__ref_1`).  Calling the function twice on the same populated
+//   Map trips a DbRef-lifetime bug that SIGSEGVs in release mode whenever
+//   memory layout doesn't happen to catch it (test-binary linkage shows
+//   the crash reliably; the CLI binary is currently silent-lucky).
+//
+// Fixtures: `tests/lib/p143_types.loft`, `tests/lib/p143_entry.loft`,
+// `tests/lib/p143_main.loft`.  The `_main` script covers three distinct
+// IR shapes: empty-map fallback, found-on-first-chunk, and loop-
+// fallback-after-non-matching-chunk.  The bug reproduces with just
+// two found-path calls on the same Map.
+#[test]
+fn p143_default_struct_return_from_nested_vector_use() {
+    let mut p = Parser::new();
+    // Mirror src/main.rs:1580: canonical lib_dirs + parse_dir(default).
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p143_main.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P143 regression: had_fatal set — ref-returning fn with early-return-through-iterator + fallthrough-default still corrupts memory"
+    );
+}

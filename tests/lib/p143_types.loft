@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// P143 regression fixture — types module.
+// `p143_entry` imports this file; test-level code imports `p143_entry`.
+// The chain exercises two-level cross-file `use` so
+// `p143_entry::map_get_hex`'s body sees `Hex` + `Chunk` via transitive
+// resolution rather than a direct import.
+
+pub struct Hex {
+  h_material: integer not null
+}
+
+pub struct Chunk {
+  ck_cx: integer not null,
+  ck_cy: integer not null,
+  ck_cz: integer not null,
+  ck_hexes: vector<Hex>
+}

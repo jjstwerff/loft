@@ -38,7 +38,7 @@ existing entry, not re-open it as a bug.
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 | ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
-| 143 | SIGSEGV returning default struct from function iterating nested vectors | High | Avoid `Hex {}` return from functions that iterate `vector<Chunk>` containing `vector<Hex>` via cross-file `use` |
+| ~~143~~ | SIGSEGV returning default struct from function iterating nested vectors | — | **Fixed** — `gen_set_first_ref_call_copy` in `src/state/codegen.rs` no longer sets the `0x8000` "free source" bit on `OpCopyRecord`.  The ref-counting that was supposed to make that safe never ran (`inc_rc` defined but unused), so an early-return returning a DbRef through an argument (e.g. `gh_c.ck_hexes[0]` inside the arg `m`) caused the caller to free its own argument's store.  Regression: `tests/lib/p143_{types,entry,main}.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`. |
 
 ---
 
@@ -699,49 +699,47 @@ data model).  The designed layout had `types.loft`, `palette.loft`, and
 
 ---
 
-### 143. SIGSEGV returning default struct from function iterating nested vectors
+### ~~143~~. SIGSEGV returning default struct from function iterating nested vectors — FIXED
 
-**Severity:** High — crashes the interpreter.
+**Status:** Fixed 2026-04-15 — `gen_set_first_ref_call_copy` no
+longer tells `OpCopyRecord` to free its source.
 
-**Symptom:** `SIGSEGV caught, last op: (opcode dispatch) (op=194)` when a
-function returns `Hex {}` (default-constructed struct) as a fallback after
-iterating a `vector<Chunk>` where `Chunk` contains `vector<Hex>`.  The
-function works correctly when called from a single-file program but
-crashes when loaded via `use` from a multi-file package.
+**Root cause:** `src/state/codegen.rs::gen_set_first_ref_call_copy`
+unconditionally set the `0x8000` bit on the type parameter passed
+to `OpCopyRecord`, which the interpreter reads as "also free the
+source store after deep-copying".  The original comment claimed
+that was "safe with store reference counting", but `inc_rc` in
+`src/database/allocation.rs:146` is defined and never called — every
+store lives with `ref_count = 1` and the rc-gated branch of `free`
+is unreachable.
 
-**Reproducer:**
+When a ref-returning function takes an early-return path that
+returns a DbRef *aliasing one of its own arguments* (e.g. inside a
+`for`-loop: `return gh_c.ck_hexes[0];` — a DbRef into the caller's
+`m` via the iterator element), the 0x8000 path freed the caller's
+argument.  The next call on the same argument dereferenced a freed
+Store and SIGSEGV'd — observed most reliably in integration tests
+where the allocator handed the freed slot back to unrelated data
+before the next read (CLI binary happened to get valid-looking
+garbage).
 
-```loft
-// types.loft (imported via use)
-pub struct Hex { h_material: integer not null }
-pub struct Chunk { ck_cx: integer not null, ck_cy: integer not null,
-                   ck_cz: integer not null, ck_hexes: vector<Hex> }
+**Fix:** Drop the `| 0x8000` in `gen_set_first_ref_call_copy`.  The
+caller-allocated work-ref that backs the callee's hidden `__ref_1`
+buffer is no longer freed by the copy op itself — instead it stays
+alive until `scopes::free_vars` sweeps the caller's frame at
+function exit.  A narrow bounded leak strictly preferable to a
+use-after-free.
 
-// entry.loft
-use types;
-pub struct Map { m_chunks: vector<Chunk> }
-pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
-  for gh_c in m.m_chunks {
-    if gh_c.ck_cx == q / 32 && gh_c.ck_cz == r / 32 {
-      return gh_c.ck_hexes[0];
-    }
-  }
-  Hex {}   // ← SIGSEGV here
-}
+**Regression:** `tests/lib/p143_types.loft`,
+`tests/lib/p143_entry.loft`, `tests/lib/p143_main.loft` exercise
+three distinct IR shapes — empty-map fallback, found-on-first-
+chunk, and loop-fallback-after-miss.
+`tests/issues.rs::p143_default_struct_return_from_nested_vector_use`
+asserts the interpreter sees no `had_fatal`; the native path is
+exercised by the same fixtures via the script runner.
 
-// test.loft
-use entry;
-fn test_missing() {
-  m = Map { m_chunks: [] };
-  h = map_get_hex(m, 5, 5, 0);   // crashes
-}
-```
-
-**Workaround:** Avoid returning a default-constructed struct from functions
-that iterate nested `vector<struct>`.  Use a boolean `map_has_chunk()`
-guard and skip the call when the chunk is missing.
-
-**Discovered:** 2026-04-14 while implementing MO.2 (moros_map serialization).
+**Discovered:** 2026-04-14 while implementing MO.2 (moros_map
+serialization).  Latent since at least 2026-04-13 (P142/P137 cluster).
 
 ---
 
