@@ -8643,10 +8643,14 @@ fn p144_ref_param_forward_native() {
     let _ = std::fs::remove_file(&rs_path);
 }
 
-/// P145: SIGSEGV calling text-returning function on multi-vector struct
-/// in cross-file package.
+/// P145 regression: user fn name collision with native stdlib
+/// (e.g. user `to_json` → `n_to_json`, stdlib also has `n_to_json`
+/// for JsonValue serialization).  `generate_call` used to emit
+/// `OpStaticCall` (native dispatch) whenever `library_names`
+/// matched, bypassing the user body's `OpCall` path and
+/// corrupting the stack.  Fix: skip library_names lookup when
+/// `def.code != Value::Null`.
 #[test]
-#[ignore = "P145 open — text-returning fn on multi-vector struct in cross-file use SIGSEGVs at OpFormatDatabase (op=132)"]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();
     p.lib_dirs.push("tests/lib".to_string());
