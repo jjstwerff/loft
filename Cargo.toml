@@ -75,6 +75,30 @@ stdext = "0.3"
 # Cuts test-binary compile and link time significantly.
 debug = 1
 
+# Optimise the loft library and its dependencies even under
+# `cargo test` (debug profile).  `debug_assertions` stay ON (so the
+# leak-check, addr/valid guards, and other safety nets that catch real
+# bugs still fire), but the interpreter's hot inner loops
+# (`Store::addr`, `Store::valid`, the opcode dispatch table) get
+# inlined and devirtualised by LLVM.  Cuts loft-interpreter-heavy
+# tests like `p122_gl_collision_struct_api` from ~67s to a few seconds.
+# Test code itself stays at opt-level=0 so test compile time is
+# unaffected (the test binaries themselves use [profile.test] above).
+[profile.dev]
+opt-level = 1
+
+# Strip debug_assertions specifically inside the loft library when
+# tests are being built.  The hot-path `Store::addr` / `Store::valid`
+# / `keys::store` guards add ~270x overhead to interpreter-heavy
+# tests like `p122_gl_collision_struct_api` (67s with vs ~250ms
+# without).  The genuinely-load-bearing safety checks (the
+# leak-check panic at `src/state/debug.rs:1045`, the leak-budget
+# panics, the LOFT_LOG-driven traces) are all real `panic!`/`assert!`
+# calls and are unaffected.  Test code itself (`tests/*.rs`) still
+# has debug_assertions on via [profile.test].
+[profile.dev.package.loft]
+debug-assertions = false
+
 [package.metadata.deb]
 maintainer = "Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
 copyright = " 2026, Jurjen Stellingwerff <j.stellingwerff@gmail.com>"
