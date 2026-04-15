@@ -489,6 +489,31 @@ impl State {
         let db_tp = *self.code::<u16>();
         let format = *self.code::<u8>();
         let val = *self.get_stack::<DbRef>();
+        // P145: validate DbRef and known_type before raw pointer access
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                val.store_nr == u16::MAX
+                    || (val.store_nr as usize) < self.database.allocations.len(),
+                "format_db: store_nr={} out of range (allocations.len={}), \
+                 rec={}, pos={}, db_tp={}",
+                val.store_nr,
+                self.database.allocations.len(),
+                val.rec,
+                val.pos,
+                db_tp
+            );
+            assert!(
+                (db_tp as usize) < self.database.types.len(),
+                "format_db: db_tp={} out of range (types.len={}), \
+                 store_nr={}, rec={}, pos={}",
+                db_tp,
+                self.database.types.len(),
+                val.store_nr,
+                val.rec,
+                val.pos
+            );
+        }
         let mut s = String::new();
         ShowDb {
             stores: &self.database,

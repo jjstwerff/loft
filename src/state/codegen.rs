@@ -1459,13 +1459,26 @@ impl State {
             return Type::Boolean;
         }
         // resolve library index — prefer #native symbol, fall back to def name.
+        // P145: only use the library_names fallback for functions without a user-
+        // defined body.  A user function whose `n_<name>` collides with a native
+        // stdlib name (e.g. user `to_json` vs native `n_to_json` for JsonValue)
+        // must go through OpCall, not OpStaticCall.
         let native_sym = stack.data.def(op).native.clone();
-        let lib_lookup: &str = if native_sym.is_empty() {
-            &name
-        } else {
+        let has_user_body = stack.data.def(op).code != Value::Null;
+        let lib_lookup: &str = if !native_sym.is_empty() {
             &native_sym
+        } else if has_user_body {
+            // User function with a body — never route through native dispatch,
+            // even if the name happens to match a library_names entry.
+            ""
+        } else {
+            &name
         };
-        let lib_nr = self.library_names.get(lib_lookup).copied();
+        let lib_nr = if lib_lookup.is_empty() {
+            None
+        } else {
+            self.library_names.get(lib_lookup).copied()
+        };
         if stack.data.def(op).is_operator() {
             // B7: OpAppendCharacter on a RefVar(Text) target must use
             // OpAppendStackCharacter — same pattern as OpAppendText →
