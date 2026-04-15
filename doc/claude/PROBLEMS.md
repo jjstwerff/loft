@@ -38,7 +38,7 @@ existing entry, not re-open it as a bug.
 | ~~139~~ | `_vector_N` slot-allocator TOS mismatch | — | **Fixed** — `gen_set_first_at_tos` emits `OpReserveFrame(gap)` when the allocator's slot is above TOS (zone-1 byte-sized vars left the gap). Tests: `tests/issues.rs::p139_*` |
 | ~~136~~ | wrap-suite SIGSEGV on `79-null-early-exit.loft` | — | **Fixed** — `state/codegen.rs::gen_if` now resets `stack.position` to the pre-if value when the true branch diverges and `f_val == Null`; `is_divergent` recurses into `Insert`/`Block` wrappers (C56 `?? return` puts `Return` inside an `Insert` after scope analysis). Tests: `tests/wrap.rs::sigsegv_repro_79_alone` (un-`#[ignore]`d), `loft_suite` now covers the script. |
 | ~~142~~ | `vector<T>` field panics when T is from imported file | — | **Fixed** — plain `use` now imports all pub definitions via `import_all` |
-| 143 | SIGSEGV returning default struct from function iterating nested vectors | High | Avoid `Hex {}` return from functions that iterate `vector<Chunk>` containing `vector<Hex>` via cross-file `use` |
+| 143 | SIGSEGV returning default struct from function iterating nested vectors | High | Avoid `Hex {}` return from functions that iterate `vector<Chunk>` containing `vector<Hex>` via cross-file `use`. Fixtures + ignored regression test land at `tests/lib/p143_*.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`; first fix attempt (commits 82a8483/078459f, reverted in ddc4a24) traded the use-after-free for a leak that broke `p122_gl_collision_struct_api` in debug, and a follow-up mirror broke `brick_buster_yield_resume`. Needs a narrower fix that detects when the callee's return DbRef aliases an argument vs an internal allocation. |
 
 ---
 
@@ -742,6 +742,87 @@ that iterate nested `vector<struct>`.  Use a boolean `map_has_chunk()`
 guard and skip the call when the chunk is missing.
 
 **Discovered:** 2026-04-14 while implementing MO.2 (moros_map serialization).
+
+**Regression fixtures:** `tests/lib/p143_types.loft`,
+`tests/lib/p143_entry.loft`, `tests/lib/p143_main.loft` — three IR
+shapes (empty-map fallback, found-on-first-chunk, loop-fallback-after-
+miss).  `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`
+runs the script under the interpreter and asserts `had_fatal` stays
+false.  Currently `#[ignore]` until a working fix lands.
+
+**Fix-attempt history (2026-04-15):** Commits `82a8483` + `078459f`
+dropped the unconditional `0x8000` "free source" bit on
+`OpCopyRecord` in `gen_set_first_ref_call_copy`
+(`src/state/codegen.rs:1192-1196`) and added explicit `OpFreeRef` on
+hidden ref-typed args of the call.  In release that fixed P143
+(use-after-free gone, valgrind clean) but in debug the leak-check at
+`src/state/debug.rs:1045` caught a per-iteration work-ref leak in
+`p122_gl_collision_struct_api` — the reassignment path at
+`src/state/codegen.rs:891-931` already chose `tp_val = tp_nr` when
+`has_hidden_ref` is true and never freed the work-ref either.  A
+follow-up that mirrored the OpFreeRef-on-hidden-ref-args loop into
+the reassign path then broke `brick_buster_yield_resume` — the
+explicit free of the work-ref before scope exit invalidated the
+returned `Mat4`'s `m: vector<float>` field, which was deep-copied via
+`OpCopyRecord` but apparently still aliased through the work-ref's
+store somehow.  All three commits reverted in `ddc4a24`.
+
+**Why the obvious fix doesn't work:** The 0x8000 path frees whatever
+the callee returned, on the assumption the callee allocated a fresh
+store via `__ref_1`.  That's the common case (fall-through with a
+local promoted to `__ref_1` via `ref_return`).  The pathological
+case is an early-return that returns a DbRef *aliasing one of the
+callee's arguments* (e.g. `return gh_c.ck_hexes[0]` inside
+`for gh_c in m.m_chunks` — the returned DbRef points into the
+caller's `m`).  Freeing that "source" frees part of the caller's
+argument.  Conversely, NOT freeing it leaks the work-ref's allocation.
+Both behaviours are in the existing test suite.
+
+**Third attempt (2026-04-15, also failed):** Tried option 3 above —
+inject `OpDatabase + OpCopyRecord(returned_dbref, __ref_1, tp) +
+Return(__ref_1)` at `src/parser/control.rs::parse_return` for ref/
+struct-enum returns whose dep doesn't already contain `__ref_1`.
+Mirror of the existing vector-return wrap at lines 2248-2266.
+Two sub-issues blocked it:
+  - Timing: at the time `parse_return` processes the early-return,
+    the fallthrough's `Struct {}` literal (which would create the
+    `__ref_1` work-ref) hasn't been parsed yet, so `__ref_1` doesn't
+    exist as a variable.  Either the wrap needs to defer to a
+    post-parse pass, or it needs to allocate the work-ref on demand.
+  - Slot allocation: allocating `__ref_1` on demand via
+    `vars.work_refs(&t, &mut self.lexer)` creates a variable but
+    leaves `stack_pos = u16::MAX`.  Codegen at
+    `src/state/codegen.rs:1869` does `before_stack - r` and panics
+    with "attempt to subtract with overflow" because the slot
+    allocator (run earlier) didn't see this var.
+
+**Promising directions for the next attempt:**
+1. **Defer the wrap to scopes.rs**: rerun the wrap injection in the
+   scope-analysis pass after `ref_return` has had a chance to set up
+   `__ref_1`.  This avoids the parse-order chicken-and-egg.
+2. **Allocate the work-ref earlier**: walk the function body in a
+   pre-pass to find any `return` that needs the wrap, allocate the
+   work-ref var BEFORE the slot allocator runs.
+3. **Runtime alias check**: extend `OpCopyRecord` to skip
+   `free_source` when `data.store_nr` matches any of the call's
+   visible-Reference-arg store_nrs.  Requires plumbing the arg
+   store_nrs to the OpCopyRecord callsite (or doing the check
+   against a per-frame "live arg refs" set).
+4. **Wire `inc_rc`**: the unused refcount infrastructure at
+   `src/database/allocation.rs:146-160` would make the 0x8000 path's
+   comment ("safe with store reference counting") actually true.
+   Every aliasing edge bumps rc; OpCopyRecord's free-source
+   decrements; only frees when rc reaches 0.  Largest blast radius
+   but the most semantically correct.
+
+Note: under main's behaviour (0x8000 unconditional, no inc_rc)
+work-ref stores get marked `free` then immediately reused via
+`OpDatabase`'s `clear+claim` path — the bitmap reports them as
+free even while live data lives in their backing memory.  Tests
+pass because the leak-check exempts `free` stores, and nothing
+else allocates into the slot before the function exits.  This is
+fragile but currently functional; any fix should be careful not
+to introduce a real free→reuse-by-other race.
 
 ---
 

@@ -8510,3 +8510,38 @@ fn inc18_bare_break_exits_innermost_only() {
     .expr("run()")
     .result(Value::Int(6));
 }
+
+// P143 regression — ref-returning function with two return paths:
+//   early-return `gh_c.ck_hexes[0]` (DbRef into a `for`-iterator element
+//   inside the argument `m`) vs fallthrough `Hex {}` (local promoted to
+//   hidden `__ref_1`).  Calling the function twice on the same populated
+//   Map SIGSEGVs whenever memory layout doesn't catch it (P143).
+//
+// Fixtures: `tests/lib/p143_types.loft`, `tests/lib/p143_entry.loft`,
+// `tests/lib/p143_main.loft` — three IR shapes (empty-map fallback,
+// found-on-first-chunk, loop-fallback-after-non-matching-chunk).
+//
+// Three fix attempts have failed (see `doc/claude/PROBLEMS.md` § P143
+// for the full attempt history); the test stays `#[ignore]` while
+// the next attempt is designed.
+#[test]
+#[ignore = "P143 still open — three attempts cascaded; needs the parser-side `__ref_1` early-return wrap to also allocate a stack slot for the new work-ref var"]
+fn p143_default_struct_return_from_nested_vector_use() {
+    let mut p = Parser::new();
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p143_main.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P143 regression: had_fatal set — ref-returning fn with early-return-through-iterator + fallthrough-default still corrupts memory"
+    );
+}

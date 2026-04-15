@@ -6,4 +6,5 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+p143_default_struct_return_from_nested_vector_use	P143 still open — fix dropped 0x8000 on OpCopyRecord but cascades to brick_buster (Mat4) and p122 leak; needs narrower alias-with-arg detection
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
