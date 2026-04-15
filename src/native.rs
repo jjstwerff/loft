@@ -56,6 +56,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_source_dir", n_source_dir),
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
+    ("n_yield_frame", n_yield_frame),
     #[cfg(feature = "threading")]
     ("n_parallel_for_int", n_parallel_for_int),
     #[cfg(feature = "threading")]
@@ -476,6 +477,16 @@ fn n_set_store_lock(stores: &mut Stores, stack: &mut DbRef) {
     } else {
         stores.unlock_store(&r);
     }
+}
+
+/// Yield control back to the host frame loop.  Sets `frame_yield = true`,
+/// which causes `State::execute_argv` to return after the current opcode
+/// completes; the host then drives the next frame (browser raf in WASM,
+/// `state.resume()` loop in native CLI / tests, etc.).  Mirrors the
+/// `gl_swap_buffers` mechanism without requiring a graphics backend, so
+/// frame-driven loft programs are testable in pure interpreter mode.
+fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
+    stores.frame_yield = true;
 }
 
 // ── Parallel threading functions (feature = "threading") ──────────────

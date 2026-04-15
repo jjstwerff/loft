@@ -40,19 +40,11 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// Files in `tests/docs/` that are known to be broken (open issues).
 /// `dir` skips these so that all other docs files are still exercised.
 /// Remove an entry here once the underlying issue is fixed.
-const SUITE_SKIP: &[&str] = &[
-    // 31-ref-forward.loft requires `--lib tests/lib` (declared via
-    // file-level `// @ARGS:`) to resolve `use p144_entry`.  `wrap.rs::dir`
-    // doesn't honour @ARGS and uses the default `cached_default()` parser
-    // setup with no lib_dirs.  The Rust-level P144 tests in
-    // `tests/issues.rs::p144_ref_param_forward_*` cover the same ground.
-    "31-ref-forward.loft",
-];
+const SUITE_SKIP: &[&str] = &[];
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
-    "19-threading.loft",   // todo!(); WASM threading model differs
-    "31-ref-forward.loft", // requires --lib tests/lib (see SUITE_SKIP).
+    "19-threading.loft", // todo!(); WASM threading model differs
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then
@@ -77,6 +69,19 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
+    // Honour `// @ARGS: --lib <dir>` — same logic as `run_test`.
+    for line in source.lines().take(20) {
+        if let Some(args) = line.trim().strip_prefix("// @ARGS:") {
+            let mut tokens = args.split_whitespace();
+            while let Some(tok) = tokens.next() {
+                if tok == "--lib"
+                    && let Some(dir) = tokens.next()
+                {
+                    p.lib_dirs.push(dir.to_string());
+                }
+            }
+        }
+    }
     let start_def = p.data.definitions();
     p.parse(&entry.to_string_lossy(), false);
     for l in p.diagnostics.lines() {
@@ -295,15 +300,7 @@ fn loft_suite() -> std::io::Result<()> {
 /// Scripts that have a dedicated `#[test] #[ignore]` wrapper.
 /// Removed once the feature lands and the #[ignore] is dropped.
 fn ignored_scripts() -> HashSet<&'static str> {
-    HashSet::from([
-        // Requires lib_dirs (graphics, math, yield_test) — tested via leak.rs instead.
-        "85-yield-resume.loft",
-        // Requires `--lib tests/lib` (declared via file-level @ARGS) to
-        // resolve importlib.  wrap.rs's run_test does not honour @ARGS,
-        // so the script runner picks it up via its own invocation path
-        // and tests/imports.rs covers the same ground at the Rust level.
-        "88-imports.loft",
-    ])
+    HashSet::from([])
 }
 
 macro_rules! script_test {
@@ -811,6 +808,24 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
     let (data, db) = cached_default();
     p.data = data;
     p.database = db;
+    // Honour `// @ARGS: --lib <dir>` lines at the top of the test file so
+    // scripts using `use foo` / `use foo::*` can locate fixtures in
+    // `tests/lib/`.  Same parser as `tests/native.rs:252-265` — the two
+    // runners are now symmetric on the `@ARGS` convention.  Any other
+    // flag in the @ARGS line (e.g. `--path`, `--html`) is ignored at
+    // this layer.
+    for line in source.lines().take(20) {
+        if let Some(args) = line.trim().strip_prefix("// @ARGS:") {
+            let mut tokens = args.split_whitespace();
+            while let Some(tok) = tokens.next() {
+                if tok == "--lib"
+                    && let Some(dir) = tokens.next()
+                {
+                    p.lib_dirs.push(dir.to_string());
+                }
+            }
+        }
+    }
     #[cfg(debug_assertions)]
     let types = p.database.types.len();
     let start_def = p.data.definitions();
@@ -911,6 +926,15 @@ fn run_test(entry: PathBuf, debug: bool, allow_dump: bool) -> std::io::Result<()
             let should_fail = file_level_fail || expect_fail.contains(name.as_str());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 state.execute(name, &p_data);
+                // Drive resume after `yield_frame()` returns control —
+                // mirrors the CLI's `while frame_yield { state.resume() }`
+                // loop in `src/main.rs:2291-2294`.  Without this, scripts
+                // that yield (e.g. `tests/scripts/85-yield-resume.loft`)
+                // would only execute the work between fn entry and the
+                // first `yield_frame()` call.
+                while state.database.frame_yield {
+                    state.resume();
+                }
             }));
             let msg_from = |payload: &Box<dyn std::any::Any + Send>| -> String {
                 if let Some(s) = payload.downcast_ref::<String>() {

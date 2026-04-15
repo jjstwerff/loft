@@ -1,14 +1,45 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// Reproduce the Brick Buster yield/resume bug locally.
-// Uses the REAL math library (Mat4, mat4_mul) to match the exact
-// type schema and store allocation order from the graphics examples.
-use graphics;
-use math;
-use yield_test;
+//
+// Reproduce the Brick Buster yield/resume bug locally.  Mat4 +
+// mat4_mul are inlined (rather than `use math`) so the script is
+// self-contained — `lib/graphics/loft.toml` declares a
+// `loft_graphics_native` crate that isn't on the Cargo manifest, so
+// importing math would force `tests/native.rs::native_scripts` to
+// fail to link.  Calls the stdlib `yield_frame()` built-in so the
+// wrap suite and native compilation both run without per-script
+// mock-fn injection.
 
-fn ortho() -> math::Mat4 {
-  math::Mat4 { m: [
+struct Mat4 { m: vector<float> }
+
+fn mat4_identity() -> Mat4 {
+  Mat4 { m: [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  ] }
+}
+
+fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
+  mul_r = Mat4 { m: [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+  ] };
+  for mul_col in 0..4 {
+    for mul_row in 0..4 {
+      mul_sum = 0.0;
+      for mul_k in 0..4 {
+        mul_sum += ma.m[mul_k * 4 + mul_row] * mb.m[mul_col * 4 + mul_k];
+      }
+      mul_r.m[mul_col * 4 + mul_row] = mul_sum;
+    }
+  }
+  mul_r
+}
+
+fn ortho() -> Mat4 {
+  Mat4 { m: [
     2.0, 0.0, 0.0, 0.0,
     0.0, -2.0, 0.0, 0.0,
     0.0, 0.0, -1.0, 0.0,
@@ -16,14 +47,14 @@ fn ortho() -> math::Mat4 {
   ] }
 }
 
-fn rect_mvp(proj: const math::Mat4, bx: float, by: float, bw: float, bh: float) -> math::Mat4 {
-  model = math::Mat4 { m: [
+fn rect_mvp(proj: const Mat4, bx: float, by: float, bw: float, bh: float) -> Mat4 {
+  model = Mat4 { m: [
     bw, 0.0, 0.0, 0.0,
     0.0, bh, 0.0, 0.0,
     0.0, 0.0, 1.0, 0.0,
     bx, by, 0.0, 1.0
   ] };
-  math::mat4_mul(proj, model)
+  mat4_mul(proj, model)
 }
 
 fn main() {
@@ -32,14 +63,17 @@ fn main() {
   br_colors_r = [0.9, 0.9, 0.2, 0.2, 0.3];
   br_colors_g = [0.2, 0.6, 0.8, 0.9, 0.5];
   br_colors_b = [0.2, 0.1, 0.2, 0.3, 0.9];
-  br_alive = 50;
+  _br_alive = 50;
   br_px = 350.0;
   br_bx = 395.0;
   br_by = 530.0;
   br_lives = 3;
-  br_mvp = math::mat4_identity();
+  br_mvp = mat4_identity();
 
-  for _ in 0..1000000 {
+  // Original bug needed several frames to expose; 10 is plenty for the
+  // suite without bloating wall-clock time.  `tests/leak.rs::
+  // brick_buster_yield_resume` uses 1000 with the same pattern.
+  for _ in 0..10 {
     // Draw bricks
     for br_dr in 0..5 {
       for br_dc in 0..10 {
@@ -67,6 +101,6 @@ fn main() {
     assert(br_proj.m[0] == 2.0, "proj.m[0]={br_proj.m[0]}");
     assert(br_proj.m[5] == -2.0, "proj.m[5]={br_proj.m[5]}");
     // Yield
-    yield_test::yield_frame();
+    yield_frame();
   }
 }

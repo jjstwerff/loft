@@ -211,6 +211,14 @@ pub fn test() {
 
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
+///
+/// 85-yield-resume.loft now calls the stdlib `yield_frame()` built-in
+/// (`src/native.rs::n_yield_frame`) directly — no more
+/// `state.replace_native("mock_yield_frame", …)` injection — so this
+/// test simply parses, executes, and drives resume in the same shape
+/// as `wrap::loft_suite`.  Kept here as the leak-budget guard
+/// (`check_leaks()` after exit) on top of the wrap-suite functional
+/// coverage.
 #[test]
 fn brick_buster_yield_resume() {
     let mut p = Parser::new();
@@ -227,11 +235,6 @@ fn brick_buster_yield_resume() {
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
-
-    fn mock_yield(stores: &mut loft::database::Stores, _stack: &mut loft::keys::DbRef) {
-        stores.frame_yield = true;
-    }
-    state.replace_native("mock_yield_frame", mock_yield);
 
     state.execute("main", &p.data);
     assert!(state.database.frame_yield, "should have yielded");
