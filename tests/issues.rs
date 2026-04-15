@@ -8642,3 +8642,26 @@ fn p144_ref_param_forward_native() {
     );
     let _ = std::fs::remove_file(&rs_path);
 }
+
+/// P145: SIGSEGV calling text-returning function on multi-vector struct
+/// in cross-file package.
+#[test]
+fn p145_text_return_multivec_struct_cross_file() {
+    let mut p = Parser::new();
+    p.lib_dirs.push("tests/lib".to_string());
+    p.parse_dir("default", true, false).unwrap();
+    p.parse("tests/lib/p145_main2.loft", false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+    assert!(
+        !state.database.had_fatal,
+        "P145 regression: to_json on cross-file multi-vector struct crashed"
+    );
+}
