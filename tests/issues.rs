@@ -8854,6 +8854,141 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P154 regression guard — `s.v = helper_fn(s.v, …)` must not wipe the
+/// field.  Root cause (closed): the P152 lowering emitted
+/// OpClearVector(s.v) BEFORE OpAppendVector evaluated the RHS, so the
+/// helper saw an already-empty field and returned an empty vector, which
+/// was then copied back as empty.
+/// Fix: when the RHS is a non-Var expression, capture it into a fresh
+/// local temp FIRST, then clear + append from the temp.
+#[test]
+fn p154_vec_field_assign_from_helper_reading_self() {
+    code!(
+        "struct S { v: vector<integer> }
+fn tail(v: vector<integer>, drop: integer) -> vector<integer> {
+    rebuilt: vector<integer> = [];
+    keep = len(v) - drop;
+    for i in 0..keep { rebuilt += [v[i]]; }
+    rebuilt
+}
+fn test() {
+    s = S { v: [1, 2, 3] };
+    s.v = tail(s.v, 1);
+    assert(len(s.v) == 2, \"expected 2 got {len(s.v)}\");
+    assert(s.v[0] == 1, \"[0] {s.v[0]}\");
+    assert(s.v[1] == 2, \"[1] {s.v[1]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P154 complement — `s.v = s.v` must be a no-op, not a wipe.
+/// Handled by the self-identity guard: IR-equal LHS and RHS collapse
+/// to an empty Insert.
+#[test]
+fn p154_vec_field_self_identity_is_noop() {
+    code!(
+        "struct S { v: vector<integer> }
+fn test() {
+    s = S { v: [10, 20, 30] };
+    s.v = s.v;
+    assert(len(s.v) == 3, \"len {len(s.v)}\");
+    assert(s.v[1] == 20, \"[1] {s.v[1]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P154 complement — `s.v = hexes` (plain Var RHS) must still work.
+/// The Var-only fast path skips the temp (unnecessary for Var reads).
+#[test]
+fn p154_vec_field_assign_from_plain_var_still_works() {
+    code!(
+        "struct S { v: vector<integer> }
+fn test() {
+    fresh: vector<integer> = [7, 8, 9];
+    s = S { v: [] };
+    s.v = fresh;
+    assert(len(s.v) == 3, \"len {len(s.v)}\");
+    assert(s.v[0] == 7, \"[0] {s.v[0]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P155 regression guard — push/undo/mid-assert/redo/final-read
+/// sequence SIGSEGVs in OpGetVector.  Triggered when a helper fn that
+/// reads a struct out of a vector is called between an undo-style
+/// restore and a redo-style restore, with a mid-assert reading the
+/// field in between.  Removing the mid-assert makes the crash
+/// disappear.  Hypothesis: the helper returns a DbRef into a store
+/// that gets freed before the final read, leaving a dangling ref that
+/// OpGetVector dereferences.  See PROBLEMS.md P155 for the 22-line
+/// minimal reproducer.
+/// P156 regression guard — `vector<T>` with a T that shadows a stdlib
+/// constant (e.g. `E`, `PI`) used to panic `typedef.rs:309` instead of
+/// emitting the clean "struct conflicts with constant" diagnostic.
+/// Fix: `parser/definitions.rs::sub_type` checks the resolved element
+/// def's DefType up-front and emits a proper diagnostic if it's not a
+/// type; `typedef.rs::fill_database` softened the assert to `continue`
+/// so a prior parser error never panics the runtime.
+#[test]
+fn p156_vector_element_shadows_constant() {
+    let s = loft::platform::sep_str();
+    code!(
+        "struct E { x: integer }
+struct Big { v: vector<E> }
+fn test() { }"
+    )
+    .error(&format!(
+        "struct 'E' conflicts with a constant of the same name already defined \
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p156_vector_element_shadows_constant:1:11"
+    ))
+    .error(&format!(
+        "'E' is a Constant, not a type — the element of vector<T> must be a \
+         struct or enum (defined at default{s}01_code.loft:383:24) \
+         at p156_vector_element_shadows_constant:2:26"
+    ));
+}
+
+/// P155 regression guard — push/undo/mid-assert/redo/final-read used
+/// to SIGSEGV in OpGetVector.  Root cause: `state/codegen.rs::generate_set`
+/// (reassignment path, lines 891-932) emitted `OpCopyRecord` with the
+/// 0x8000 "free source" flag around a user-fn call, but without the
+/// `n_set_store_lock` bracket.  When the callee returned a DbRef
+/// aliased with a caller arg — e.g. `read_at(c, idx)` returns into
+/// `c.items` — the free-source flag freed the caller's arg store.
+/// Later uses of that arg SIGSEGV'd.  Fix: mirror the
+/// `gen_set_first_ref_call_copy` lock/unlock bracket (which the P143
+/// fix added) onto the reassignment path.
+#[test]
+fn p155_segv_undo_redo_midassert() {
+    code!(
+        "struct H { m: integer not null }
+struct Elm { prev: H }
+struct Ct { items: vector<H> }
+struct Ss { undo: vector<Elm>, redo: vector<Elm> }
+fn read_at(c: Ct, idx: integer) -> H { c.items[idx] }
+fn test() {
+    c = Ct { items: [H{}, H{}, H{}, H{}, H{}, H{}] };
+    s = Ss { undo: [], redo: [] };
+    h = read_at(c, 2);
+    s.undo += [Elm { prev: h }];
+    nh = H {}; nh.m = 77; c.items[2] = nh;
+    e = s.undo[0];
+    cur = read_at(c, 2);
+    s.redo += [Elm { prev: cur }];
+    c.items[2] = e.prev;
+    assert(read_at(c, 2).m == 0, \"reverted\");
+    re = s.redo[0];
+    c.items[2] = re.prev;
+    assert(read_at(c, 2).m == 77, \"reapplied\");
+}"
+    )
+    .result(Value::Null);
+}
+
 #[test]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();

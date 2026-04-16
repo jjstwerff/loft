@@ -49,6 +49,9 @@ existing entry, not re-open it as a bug.
 | ~~151~~ | Forward-reference to struct-returning fn + field mutation corrupts variable type inference | — | **Fixed 2026-04-16.**  `parser/fields.rs::field()` silently dropped the field-name token when the receiver had unknown type in pass-1 (returning the original `Value::Var(x)` unchanged), so `x.v = 99` collapsed to `x = 99` for downstream assignment processing.  `parse_assign_op` → `change_var` then set x's type to the RHS expression's type (integer for `x.v = 99`).  Pass-2 rejected the now-resolved `x = callee()` returning the struct.  Fix: wrap `code` in `Value::Drop` when `field()` returns early on an unknown receiver — `code != Value::Var(x)` ⇒ `assign_var_nr` returns `u16::MAX` ⇒ `change_var` skips the spurious type update.  Tests: `tests/issues.rs::p151_forward_ref_struct_call_with_mutation`. |
 | ~~152~~ | `s.vec_field = vec_var` silently dropped at runtime (data-loss); struct-field whole-replacement also breaks `&` mutation check | — | **Fixed 2026-04-16.** parse_assign_op now rewrites `field = vec_var` to OpClearVector + OpAppendVector (deep copy into the field) and `field = []` to OpClearVector alone; find_written_vars unifies first_arg_write so collection ops + OpCopyRecord count as writes through OpGetField destinations.  Tests: `tests/issues.rs::p152_*` (4 regression guards). |
 | ~~153~~ | Local vector ≥187 elements transferred to a struct field via construction → element rewrites read back as null / corrupt the heap | — | **Fixed 2026-04-16.** Two adjacent bugs in `src/database/structures.rs`: `vector_set_size` wrote the new length to the pre-resize rec after `Store::resize` relocated the block; `vector_add`'s byte-copy branches used `new_db` captured before `vector_set_size` ran, so writes landed in freed memory.  Fix: track the relocation in `vector_set_size` (update `vec_rec` after resize); re-read the destination rec in `vector_add` after `vector_set_size`.  Also widened `parser/objects.rs::handle_field` to emit the deep-copy OpAppendVector for any non-Insert vector initializer (not just bare Var), fixing `C { v: build() }`.  Tests: `tests/issues.rs::p153_*` (4 guards). |
+| ~~154~~ | `s.v = helper_fn(s.v, …)` wipes the field; `s.v = s.v` clears to empty | — | **Fixed 2026-04-16.** Introduced by the P152 lowering: `s.v = rhs` expanded to `OpClearVector(s.v); OpAppendVector(s.v, rhs, tp)` but RHS was evaluated AFTER the clear, so any helper reading `s.v` saw empty.  Fix: detect non-Var RHS in `parser/expressions.rs::parse_assign_op`, capture it to a fresh local temp BEFORE the clear, then append from the temp.  Self-identity `s.v = s.v` (IR-equal LHS/RHS) collapses to a no-op.  Tests: `tests/issues.rs::p154_*` (3 guards). |
+| ~~155~~ | Push/mutate/undo/mid-assert/redo/final-read sequence SIGSEGVs in `OpGetVector` | — | **Fixed 2026-04-16.** `src/state/codegen.rs::generate_set` (reassignment path, lines 891-932) emitted `OpCopyRecord` with the 0x8000 "free source" flag around a user-fn call, but without the `n_set_store_lock` bracket that `gen_set_first_ref_call_copy` (first-assignment path) uses.  When the callee returned a DbRef aliased with a caller arg, the free-source flag freed the caller's arg store; later uses SIGSEGV'd in `OpGetVector`.  Fix: port the lock/unlock bracket onto the reassignment path (same pattern as P143).  Tests: `tests/issues.rs::p155_segv_undo_redo_midassert`. |
+| ~~156~~ | `struct X { v: vector<C> }` where C is the name of a stdlib constant (e.g. `E`, `PI`) panics in `typedef.rs:309` instead of emitting the "struct conflicts with constant" diagnostic | — | **Fixed 2026-04-16.** `parser/definitions.rs::sub_type` now checks the element def's DefType before descending into the collection branch — emits a proper diagnostic for Constant / Function / Routine.  `typedef.rs::fill_database` soft-continues on an unresolved vector content type so undefined-element-type programs (`vector<Undef>`) also diagnose cleanly instead of panicking.  Tests: `tests/issues.rs::p156_vector_element_shadows_constant`. |
 
 ---
 
@@ -1048,6 +1051,122 @@ function-call transfer, append-after-transfer, direct-into-field control).
 **Discovered:** 2026-04-16, while wiring `lib/moros_editor`'s undo stack on
 top of `lib/moros_map` (whose `build_chunk` builds a 1024-element vector
 before struct construction).  Fixed: 2026-04-16.
+
+---
+
+### 155. SIGSEGV in `OpGetVector` after push/undo/mid-assert/redo/final-read sequence
+
+**Severity:** High — reliable crash.
+
+**Symptom:** The loft interpreter aborts with SIGSEGV at `OpGetVector`
+(op=194) when a function runs the shape "mutate a vector field via a
+recorded snapshot, undo, read the field in an assert, redo, read the
+field again".  Removing the mid-assert read makes the crash go away.
+
+**Minimal reproducer** (22 lines, self-contained):
+
+```loft
+struct H { m: integer not null }
+struct Elm { prev: H }
+struct Ct { items: vector<H> }
+struct Ss { undo: vector<Elm>, redo: vector<Elm> }
+
+fn read_at(c: Ct, idx: integer) -> H { c.items[idx] }
+
+fn test_r() {
+  c = Ct { items: [H{}, H{}, H{}, H{}, H{}, H{}] };
+  s = Ss { undo: [], redo: [] };
+  h = read_at(c, 2);
+  s.undo += [Elm { prev: h }];
+  nh = H {}; nh.m = 77; c.items[2] = nh;
+  e = s.undo[0];
+  cur = read_at(c, 2);
+  s.redo += [Elm { prev: cur }];
+  c.items[2] = e.prev;
+  assert(read_at(c, 2).m == 0, "reverted");   // ← removing this makes the crash go away
+  re = s.redo[0];
+  c.items[2] = re.prev;
+  assert(read_at(c, 2).m == 77, "reapplied"); // ← SIGSEGV here
+}
+
+fn test() { test_r(); }
+```
+
+**Hypothesis:** The pattern leaves a store reference live that points
+into a freed/relocated record.  The mid-assert's `read_at(c, 2)` may
+produce a DbRef (returning an H from the vector) whose underlying store
+gets freed before the final read, leaving the retained ref dangling.
+When the final `c.items[2] = re.prev` + `read_at(c, 2)` sequence re-
+enters `OpGetVector`, it dereferences a dangling DbRef.
+
+The crash signature — op=194 (`get_vector`), path through a helper fn
+that returns a struct extracted from a vector — matches the P143 family
+of "DbRef into arg gets freed" issues but triggers on a different
+lifecycle shape.  Likely needs a `scopes::free_vars` extension or a
+`n_set_store_lock` bracket around the helper call.
+
+**Workaround:** Inline `c.items[i]` field reads directly in the assert
+instead of going through a helper that returns the struct; or drop the
+mid-assert between undo and redo.
+
+**Discovered:** 2026-04-16, while building out `lib/moros_editor`'s
+redo + batch test suite.
+
+**Tests:** `tests/issues.rs::p155_segv_undo_redo_midassert`
+(regression guard; `#[ignore]`'d until fixed).
+
+---
+
+### 156. `vector<T>` with a struct T that shadows a stdlib constant panics the parser
+
+**Severity:** Low — clean error exists for other usages of the same shadowed struct name; only the vector-element-type path is broken.
+
+**Symptom:**
+
+```loft
+struct E { x: integer }           // E is also a loft stdlib constant
+                                  // (Euler's number, default/01_code.loft:383)
+struct Big { v: vector<E> }       // ← this line trips the assert
+fn main() { }
+```
+
+```
+thread 'main' panicked at src/typedef.rs:309:21:
+assertion `left != right` failed: Unknown vector unknown(0)
+content type on [544]Big.v
+```
+
+**What works** — the same `struct E` referenced any other way produces
+the correct diagnostic:
+
+- `fn main() { e = E { x: 5 }; }` → `error: struct 'E' conflicts with
+  a constant of the same name`
+- `struct Big { v: sorted<E[x]> }` → same clean error
+- `struct Big { v: hash<E[x]> }` → same clean error
+
+Only `vector<E>` skips the name-conflict check, registers the struct
+with an unresolved type nr, and later panics in `fill_database` when
+resolving the content type.
+
+**Root cause hypothesis:** `parse_type` / the type-resolver for
+`vector<T>` defers T resolution differently than the other collection
+parsers.  For `sorted<T[key]>` / `hash<T[key]>` the `[key]` parse
+forces a full name lookup that surfaces the conflict; for bare
+`vector<T>` the lookup falls through a path that stores
+`Type::Unknown(0)` and never re-checks the conflict.
+
+**Fix path:** walk `vector<T>` through the same name-conflict detector
+that fires for `struct E { … }` at the bare-use sites.  The check
+should be at parse time, before `fill_database` walks the content type.
+
+**Workaround:** rename the struct (`Elem`, `PiType`, `CharType`) — any
+name that doesn't collide with a stdlib constant.  `PI` and `E` are
+the currently-exposed constants (`default/01_code.loft:379`, `:383`).
+
+**Discovered:** 2026-04-16, during moros_editor test scaffolding.
+
+**Tests:** `tests/issues.rs::p156_vector_element_shadows_constant`
+(regression guard; `#[ignore]`'d until fixed).
 
 ---
 

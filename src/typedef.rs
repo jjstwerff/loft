@@ -306,14 +306,13 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             let tp = match a_type {
                 Type::Vector(c_type, _) => {
                     let c_nr = data.type_elm(&c_type);
-                    assert_ne!(
-                        c_nr,
-                        u32::MAX,
-                        "Unknown vector {} content type on [{d_nr}]{}.{}",
-                        c_type.name(data),
-                        data.def(d_nr).name,
-                        data.attr_name(d_nr, a_nr)
-                    );
+                    // P156: unresolved vector content — parser already emitted
+                    // a diagnostic (constant-shadow, undefined type, etc.).
+                    // Skip this attribute rather than panicking so the user
+                    // sees the proper error instead of an interpreter crash.
+                    if c_nr == u32::MAX {
+                        continue;
+                    }
                     let mut c_tp = data.def(c_nr).known_type;
                     if c_tp == u16::MAX {
                         fill_database(data, database, c_nr);

@@ -8,50 +8,168 @@ use moros_map;
 // ── Undo stack ─────────────────────────────────────────────────────
 
 // One undo entry: snapshot of a hex BEFORE an edit.
+// ue_batch_id groups edits together; 0 = standalone, >0 = batch id
+// shared by all edits inside one `batch_begin` / `batch_end` pair.
 pub struct UndoEntry {
-  ue_q:    integer not null,
-  ue_r:    integer not null,
-  ue_cy:   integer not null,
-  ue_prev: Hex,
+  ue_q:        integer not null,
+  ue_r:        integer not null,
+  ue_cy:       integer not null,
+  ue_batch_id: integer not null,
+  ue_prev:     Hex,
 }
 
-// LIFO undo stack.
+// LIFO undo stack with parallel redo stack.
+// us_batch_id  — the id being tagged onto pushes inside a batch (0 = not in batch).
+// us_next_id   — counter for the next unique batch id to assign.
 pub struct UndoStack {
-  us_entries: vector<UndoEntry>,
+  us_entries:  vector<UndoEntry>,
+  us_redo:     vector<UndoEntry>,
+  us_batch_id: integer not null,
+  us_next_id:  integer not null,
 }
 
 pub fn undo_empty() -> UndoStack {
-  UndoStack { us_entries: [] }
-}
-
-// Capture the hex at (q, r, cy) before mutating it.
-pub fn undo_push(s: &UndoStack, m: Map, q: integer, r: integer, cy: integer) {
-  prev = map_get_hex(m, q, r, cy);
-  s.us_entries += [UndoEntry { ue_q: q, ue_r: r, ue_cy: cy, ue_prev: prev }];
-}
-
-// Undo the most recent edit.  Returns true if anything was undone.
-pub fn undo_pop(s: &UndoStack, m: &Map) -> boolean {
-  n = len(s.us_entries);
-  if n == 0 { return false; }
-  e = s.us_entries[n - 1];
-  map_set_hex(m, e.ue_q, e.ue_r, e.ue_cy, e.ue_prev);
-  // Drop the last entry by shrinking the vector.
-  // (moros_map's vector mutation works element-wise; rebuild without the tail.)
-  rebuilt: vector<UndoEntry> = [];
-  for i in 0..(n - 1) {
-    rebuilt += [s.us_entries[i]];
-  }
-  s.us_entries = rebuilt;
-  true
+  UndoStack { us_entries: [], us_redo: [], us_batch_id: 0, us_next_id: 1 }
 }
 
 pub fn undo_depth(s: UndoStack) -> integer { len(s.us_entries) }
+pub fn redo_depth(s: UndoStack) -> integer { len(s.us_redo) }
+
+// ── Batch mode ────────────────────────────────────────────────────
+
+// Group all subsequent edits until `batch_end` as one logical undo step.
+// Nested begin/end pairs collapse to the outermost batch.
+pub fn batch_begin(s: &UndoStack) {
+  if s.us_batch_id == 0 {
+    s.us_batch_id = s.us_next_id;
+    s.us_next_id = s.us_next_id + 1;
+  }
+}
+
+pub fn batch_end(s: &UndoStack) {
+  s.us_batch_id = 0;
+}
+
+pub fn in_batch(s: UndoStack) -> boolean { s.us_batch_id != 0 }
+
+// ── Push / pop primitives ─────────────────────────────────────────
+
+// Capture the hex at (q, r, cy) before mutating it.  Clears the redo stack.
+pub fn undo_push(s: &UndoStack, m: Map, q: integer, r: integer, cy: integer) {
+  prev = map_get_hex(m, q, r, cy);
+  s.us_entries += [UndoEntry {
+    ue_q: q, ue_r: r, ue_cy: cy,
+    ue_batch_id: s.us_batch_id,
+    ue_prev: prev,
+  }];
+  // Any fresh edit invalidates the redo history.
+  s.us_redo = [];
+}
+
+// Count how many trailing entries in `v` share the same batch id as
+// the top entry.  Always >= 1 when v is non-empty.  Standalone edits
+// (batch_id == 0) are never grouped.
+fn count_logical_group(v: vector<UndoEntry>) -> integer {
+  n = len(v);
+  if n == 0 { return 0; }
+  top_id = v[n - 1].ue_batch_id;
+  if top_id == 0 { return 1; }
+  count = 0;
+  for i in rev(0..n) {
+    if v[i].ue_batch_id != top_id { break; }
+    count = count + 1;
+  }
+  count
+}
+
+// Rebuild `v` without the last `drop` entries.  Used in place of a
+// `pop_back` primitive on vectors.
+fn without_tail(v: vector<UndoEntry>, drop: integer) -> vector<UndoEntry> {
+  rebuilt: vector<UndoEntry> = [];
+  keep = len(v) - drop;
+  for i in 0..keep {
+    rebuilt += [v[i]];
+  }
+  rebuilt
+}
+
+// ── Undo / redo ──────────────────────────────────────────────────
+
+// Undo one logical operation (single edit or entire batch).
+// Returns true if anything was undone.  Each reverted entry is pushed
+// onto the redo stack carrying the post-edit state so `redo()` can
+// reapply it.
+pub fn undo_pop(s: &UndoStack, m: &Map) -> boolean {
+  n = len(s.us_entries);
+  if n == 0 { return false; }
+  count = count_logical_group(s.us_entries);
+  for k in 0..count {
+    idx = n - 1 - k;
+    e = s.us_entries[idx];
+    cur = map_get_hex(m, e.ue_q, e.ue_r, e.ue_cy);
+    s.us_redo += [UndoEntry {
+      ue_q: e.ue_q, ue_r: e.ue_r, ue_cy: e.ue_cy,
+      ue_batch_id: e.ue_batch_id,
+      ue_prev: cur,
+    }];
+    map_set_hex(m, e.ue_q, e.ue_r, e.ue_cy, e.ue_prev);
+  }
+  s.us_entries = without_tail(s.us_entries, count);
+  true
+}
+
+// Redo the last undone operation (single edit or entire batch).
+// Returns true if anything was reapplied.
+pub fn redo(s: &UndoStack, m: &Map) -> boolean {
+  n = len(s.us_redo);
+  if n == 0 { return false; }
+  count = count_logical_group(s.us_redo);
+  for k in 0..count {
+    idx = n - 1 - k;
+    e = s.us_redo[idx];
+    cur = map_get_hex(m, e.ue_q, e.ue_r, e.ue_cy);
+    s.us_entries += [UndoEntry {
+      ue_q: e.ue_q, ue_r: e.ue_r, ue_cy: e.ue_cy,
+      ue_batch_id: e.ue_batch_id,
+      ue_prev: cur,
+    }];
+    map_set_hex(m, e.ue_q, e.ue_r, e.ue_cy, e.ue_prev);
+  }
+  s.us_redo = without_tail(s.us_redo, count);
+  true
+}
 
 // ── Recording editors ─────────────────────────────────────────────
+// Each wraps the corresponding moros_map convenience editor and
+// records a pre-edit snapshot so the mutation can be undone.
 
-// Like map_paint_material but also records the previous state for undo.
 pub fn paint_material_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, mat: integer) {
   undo_push(s, m, q, r, cy);
   map_paint_material(m, q, r, cy, mat);
+}
+
+pub fn set_height_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, height: integer) {
+  undo_push(s, m, q, r, cy);
+  map_set_height(m, q, r, cy, height);
+}
+
+pub fn adjust_height_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, delta: integer) {
+  cur = map_get_hex(m, q, r, cy);
+  undo_push(s, m, q, r, cy);
+  map_set_height(m, q, r, cy, cur.h_height + delta);
+}
+
+pub fn place_item_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, item: integer, rotation: integer) {
+  undo_push(s, m, q, r, cy);
+  map_place_item(m, q, r, cy, item, rotation);
+}
+
+pub fn remove_item_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer) {
+  undo_push(s, m, q, r, cy);
+  map_place_item(m, q, r, cy, 0, 0);
+}
+
+pub fn set_wall_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, edge: integer, wall: integer) {
+  undo_push(s, m, q, r, cy);
+  map_set_wall(m, q, r, cy, edge, wall);
 }

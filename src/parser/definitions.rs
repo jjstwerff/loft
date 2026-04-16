@@ -1117,6 +1117,40 @@ impl Parser {
 
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
         if let Some(sub_name) = self.lexer.has_identifier() {
+            // P156: before trying to resolve the element type, fail fast if the
+            // identifier shadows a non-type definition (constant, function).
+            // parse_type silently returns None in that case; sub_type's later
+            // assert!(self.first_pass) masks the issue in pass 1 and
+            // typedef.rs::fill_database panics later when a struct-def happens
+            // to carry the same name without being a real type.
+            let dn = self.data.def_nr(&sub_name);
+            if dn != u32::MAX {
+                let dt = self.data.def_type(dn);
+                if !matches!(
+                    dt,
+                    DefType::Struct
+                        | DefType::Enum
+                        | DefType::EnumValue
+                        | DefType::Type
+                        | DefType::Unknown
+                ) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is a {:?}, not a type — the element of {}<T> must \
+                         be a struct or enum (defined at {})",
+                        sub_name,
+                        dt,
+                        type_name,
+                        self.data.def(dn).position
+                    );
+                    // Consume the rest of the <...> so the parser stays
+                    // synchronised on the next token.
+                    self.lexer.recover_to(&[">", ";", "}"]);
+                    self.lexer.has_closing_angle();
+                    return Some(Type::Unknown(0));
+                }
+            }
             if let Some(tp) = self.parse_type(on_d, &sub_name, false) {
                 let sub_nr = if let Type::Unknown(d) = tp {
                     d
