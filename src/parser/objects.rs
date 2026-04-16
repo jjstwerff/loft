@@ -1329,8 +1329,13 @@ impl Parser {
             // field ref with Var(d) — no copy operation is generated.
             // Emit OpAppendVector to deep-copy the source vector into the
             // struct's field so the data is independent of the source store.
+            //
+            // P153: the same holds for any non-Insert vector-typed
+            // expression (e.g. `C { v: build() }` where `build` returns a
+            // vector).  Before this was a plain push, which left the field
+            // uninitialised.
             if let Type::Vector(ref content, _) = td {
-                if !self.first_pass && matches!(value, Value::Var(_)) {
+                if !self.first_pass && !matches!(value, Value::Insert(_) | Value::Null) {
                     let pos = self
                         .database
                         .position(self.data.def(td_nr).known_type, field);

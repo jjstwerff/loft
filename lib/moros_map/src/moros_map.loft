@@ -68,7 +68,7 @@ pub fn map_has_chunk(m: Map, q: integer, r: integer, cy: integer) -> boolean {
 // Build a 32x32 chunk of default hexes at the given chunk coordinates.
 fn build_chunk(cx: integer, cy: integer, cz: integer) -> Chunk {
   hexes: vector<Hex> = [];
-  for _ in 0..4 {
+  for _ in 0..1024 {
     hexes += [Hex {}];
   }
   Chunk { ck_cx: cx, ck_cy: cy, ck_cz: cz, ck_hexes: hexes }
