@@ -47,6 +47,11 @@
 # More specialised:
 #
 #   make wasm            Build the wasm-pack bundle that drives the gallery.
+#   make wasm-html-test  WASM-runtime safety gate (tests/html_wasm.rs).
+#                        Rebuilds the wasm rlib in the --html shape first
+#                        so the gate is deterministic regardless of whether
+#                        `make wasm` last stomped the rlib with the
+#                        wasm-bindgen variant.
 #   make install         System-wide install (sudo).
 #   make test-gl-golden  Pixel-compare the smoke-test screenshot (Xvfb).
 #   make fill            Regenerate src/fill.rs from default/*.loft annotations.
@@ -132,6 +137,16 @@ profile:
 	RUSTFLAGS=-g cargo build --release >result.txt 2>&1
 	flamegraph -o profiler.svg -- target/release/loft auto
 
+# wasm: build the browser bundle (loft.js + loft_bg.wasm under doc/pkg/)
+# via wasm-pack.  Uses the `wasm` feature → pulls in wasm-bindgen → the
+# resulting wasm has __wbindgen_placeholder__ imports that wasm-bindgen-cli
+# replaces during post-processing.  This is the wasm-pack pipeline; it
+# is NOT compatible with the `loft --html` pipeline (see `make game` /
+# `make wasm-html-test`), which links a no-wasm-feature rlib instead.
+#
+# CAVEAT: this overwrites target/wasm32-unknown-unknown/release/libloft.rlib
+# with the wasm-bindgen variant.  Re-run `make game` (or
+# `make wasm-html-test`) afterwards if you need the --html variant back.
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
 
@@ -349,6 +364,33 @@ play:
 	@./target/release/loft --native \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/25-brick-buster.loft
+
+# wasm-html-test: run the WASM-runtime safety gate (tests/html_wasm.rs).
+#
+# Why this target exists:  `make wasm` (wasm-pack pipeline) and
+# `loft --html` (Brick Buster pipeline) both write to the same path
+# `target/wasm32-unknown-unknown/release/libloft.rlib` but with
+# incompatible feature sets.  After `make wasm` the rlib pulls in
+# wasm-bindgen and the html_wasm tests fail to instantiate (`Import #1
+# module="__wbindgen_placeholder__": module is not an object or
+# function`).  This target rebuilds the rlib in the --html shape
+# (no `wasm` feature) before invoking the test, so the gate is
+# deterministic regardless of what was built last.
+#
+# RELEASE.md § Safety gate cites this as the WASM-runtime gate.
+wasm-html-test:
+	@echo "  [1/3] checking wasm32-unknown-unknown target ..."
+	@rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown || { \
+	    echo "    FAIL: rustup target not installed"; \
+	    echo "    install with: rustup target add wasm32-unknown-unknown"; \
+	    exit 1; }
+	@echo "  [2/3] rebuilding wasm rlib for --html (no wasm feature) ..."
+	@cargo build --release -q --target wasm32-unknown-unknown --lib --no-default-features --features random || { \
+	    echo "    FAIL: wasm rlib build"; exit 1; }
+	@cargo build --release -q --lib --bin loft || { \
+	    echo "    FAIL: host binary + libloft.rlib build"; exit 1; }
+	@echo "  [3/3] running html_wasm safety gate ..."
+	@cargo test --release --test html_wasm
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg

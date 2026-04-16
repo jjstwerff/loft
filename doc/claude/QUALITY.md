@@ -23,7 +23,7 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / long / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **Native-codegen stubs for JSON natives still pending** (4 scripts in NATIVE_SKIP — the walker takes typed args so it's wireable in one new entry; the per-native typed-impl refactor for the user-facing surface remains follow-up work).  `p54_struct_parse_rejects_plain_text` stays `#[ignore]`'d by design. |
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / long / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
 | Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Q1 COMPLETE 2026-04-14** — parser side: RFC 6901 path + line:column + context snippet with caret, all 5 `p54_err_*` acceptance tests green; 8 unit tests in `src/json::tests`; 6 `q1_*` tests for state-clearing.  Schema side: kind checks live inline in the unified `n_struct_from_jsonvalue` walker — primitive fields receiving a wrong JSON variant (and not `JNull`, which signals "absent field" and stays silent) push a `"<Struct>.<field>: expected <KKind>, got <KKind>"` diagnostic to `json_errors()`.  Symmetric across direct fields and `vector<struct>` element fields (same walker code path).  6 `q1_schema_side_*` tests covering type-mismatch, missing-field-silent, clean-parse, vector-element mismatch, text-receiving-number, boolean-receiving-string. |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14** (canonical + pretty both shipped): `to_json` walks all six variants — primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
@@ -1929,8 +1929,19 @@ independent codegen surgeries with no overlap, and B7 unblocks
 ergonomics gap; the `return n;` workaround stays good for any
 user who needs it.
 
-**B5 — Recursive struct-enum runtime crash** (progress 2026-04-14:
-**two layers shipped, third open.**)  The reference loft source:
+**B5 — Recursive struct-enum runtime crash.**  **FIXED.**  All four
+guards (`p54_b5_recursive_struct_enum`,
+`p54_b5_recursive_struct_enum_construction`,
+`p54_b5_not_taken_arm_with_vector_binding_ok`,
+`p54_b5_for_loop_over_enum_variant_vector`) now pass without
+`#[ignore]`.  The recursive `count(Node {...})` returns 7 as
+expected.  Layer 3 (the recursive tail-call return-PC bug
+described historically below) closed as a side-effect of the
+struct-enum return-slot work that landed across PR #168 → #174 —
+no dedicated commit needed for layer 3 itself.
+
+**Historical layered diagnosis kept for context.**  The reference
+loft source:
 
 ```loft
 pub enum Tree { Leaf { v: integer }, Node { kids: vector<Tree> } }
@@ -2047,23 +2058,28 @@ site pre-alloc with a recursion-aware return-slot accounting fix.
 **B6 — Match-arm type unification.**  **FIXED** commit `5684df2`.
 Regression: `p54_b6_match_arm_value_text_unifies`.
 
-**B7 — Native-returned temporary lifecycle (broader than initially scoped).**
+**B7 — Native-returned temporary lifecycle.**  **FIXED.**  All five
+B7 regression guards pass without `#[ignore]`:
 
-**Scope narrowed 2026-04-14.**  Several B7-family symptoms listed
-below were *observed* during earlier investigation but no longer
-reproduce on the current branch — presumably closed as a
-side-effect of the B2-runtime retrofit, B5 layers 1+2, and the
-`t_9JsonValue_*` method-alias registrations.  What remains is
-strictly the **character-interpolation text-return** path, guarded
-by `b7_character_interpolation_return_crashes` (`#[ignore]`).  The
-method-on-JsonValue-returning-scalar case (originally parked at
-`b7_method_on_jsonvalue_returning_integer_crashes`) now works in
-both debug and release; the regression guard was renamed 2026-04-14
-to `b7_method_on_jsonvalue_returning_integer_works` to reflect its
-current invariant (method dispatch must not crash / leak on the
-`len(v)` shape).  The historical paragraphs below describe the
-bug's reach at the time they were written — they are preserved for
-the narrowing audit trail, not as current-state claims.
+- `b7_method_on_jsonvalue_returning_integer_works` — `len(v)` on
+  `JsonValue` (the original method-dispatch case).
+- `b7_method_on_q4_constructed_jsonvalue_works` — same shape with
+  the JsonValue built via `json_*` constructors.
+- `b7_repeated_method_dispatch_on_jsonvalue_works` — chained
+  method calls.
+- `b7_multiple_json_parse_via_match_works` — sequential
+  `json_parse` calls consumed via pattern match.
+- `b7_character_interpolation_return_crashes` — name kept for
+  search-back compatibility but the test passes (`build_b7c() == "h"`).
+
+Closed as a side-effect of the B2-runtime retrofit, B5 layers 1+2,
+the `t_9JsonValue_*` method-alias registrations, the dep-inference
+fix in PR #171, and the lock-args-around-OpCopyRecord work in
+PR #172 — no dedicated B7 commit was needed.
+
+The historical paragraphs below describe the bug's reach at the
+time they were written — preserved as the narrowing audit trail,
+not as current-state claims.
 
 **Unification finding 2026-04-13.**  B7's signature — `~500 iterations of
 Return(ret=0, value=16, discard=0) at PC=0` followed by legitimate code

@@ -37,7 +37,11 @@ pub enum Parsed {
     Str(String),
     Ident(String),
     Array(Vec<Parsed>),
-    Object(Vec<(String, Parsed)>),
+    /// Object entries carry the byte offset of the key within the
+    /// original input — used by the schema walker to produce
+    /// `"line N:M path:X"` diagnostics on shape mismatches without
+    /// re-scanning the source.  Tuple shape: `(name, key_byte_offset, value)`.
+    Object(Vec<(String, usize, Parsed)>),
 }
 
 /// Input dialect selector.
@@ -216,7 +220,21 @@ fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect)
         b'[' => parse_array(bytes, i, path, dialect),
         b'{' => parse_object(bytes, i, path, dialect),
         c if dialect == Dialect::Lenient && (c.is_ascii_alphabetic() || c == b'_') => {
-            Ok(parse_bare_identifier_value(bytes, i))
+            let (tag, j) = parse_bare_identifier_value(bytes, i);
+            // Struct-enum-variant-with-payload shape: `Tag { fields }`.
+            // Represented as `Object([(tag_name, ident_start, Object(fields))])`
+            // — a single-entry object whose key is the variant tag.  The
+            // schema walker's Parts::Enum arm detects this shape and
+            // dispatches to the variant's EnumValue struct.  Only applies
+            // when the identifier is NOT a reserved word (null/true/false).
+            if let Parsed::Ident(name) = &tag {
+                let k = skip_ws(bytes, j);
+                if k < bytes.len() && bytes[k] == b'{' {
+                    let (obj, end) = parse_object(bytes, k, path, dialect)?;
+                    return Ok((Parsed::Object(vec![(name.clone(), i, obj)]), end));
+                }
+            }
+            Ok((tag, j))
         }
         b'n' => parse_literal(bytes, i, b"null", Parsed::Null),
         b't' => parse_literal(bytes, i, b"true", Parsed::Bool(true)),
@@ -417,7 +435,7 @@ fn parse_object(
 ) -> ParseResult {
     debug_assert_eq!(bytes[start], b'{');
     let mut i = skip_ws(bytes, start + 1);
-    let mut fields: Vec<(String, Parsed)> = Vec::new();
+    let mut fields: Vec<(String, usize, Parsed)> = Vec::new();
     if i < bytes.len() && bytes[i] == b'}' {
         return Ok((Parsed::Object(fields), i + 1));
     }
@@ -425,6 +443,7 @@ fn parse_object(
         if i >= bytes.len() {
             return Err(("expected object key".to_string(), i));
         }
+        let key_at = i;
         let (name, j) = parse_object_key(bytes, i, dialect)?;
         i = skip_ws(bytes, j);
         if i >= bytes.len() || bytes[i] != b':' {
@@ -435,7 +454,7 @@ fn parse_object(
         let res = parse_value(bytes, i, path, dialect);
         let (v, k) = res?;
         path.pop();
-        fields.push((name, v));
+        fields.push((name, key_at, v));
         i = skip_ws(bytes, k);
         if i >= bytes.len() {
             return Err(("unterminated object".to_string(), start));
@@ -559,9 +578,9 @@ mod tests {
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].0, "a");
-        assert!(matches!(fields[0].1, Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
         assert_eq!(fields[1].0, "b");
-        assert!(matches!(fields[1].1, Parsed::Str(ref s) if s == "hi"));
+        assert!(matches!(fields[1].2, Parsed::Str(ref s) if s == "hi"));
     }
 
     #[test]
@@ -571,7 +590,7 @@ mod tests {
             panic!("expected object");
         };
         assert_eq!(fields.len(), 2);
-        let Parsed::Array(items) = &fields[0].1 else {
+        let Parsed::Array(items) = &fields[0].2 else {
             panic!("expected array");
         };
         assert_eq!(items.len(), 2);
@@ -579,7 +598,7 @@ mod tests {
             panic!("expected inner object");
         };
         assert_eq!(inner[0].0, "x");
-        assert!(matches!(inner[0].1, Parsed::Bool(true)));
+        assert!(matches!(inner[0].2, Parsed::Bool(true)));
     }
 
     // ── Q1: structured errors with path / line:col / snippet ────────
@@ -686,7 +705,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, "val");
-        assert!(matches!(fields[0].1, Parsed::Number(n) if (n - 7.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 7.0).abs() < f64::EPSILON));
     }
 
     #[test]
@@ -730,9 +749,9 @@ mod tests {
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, "category");
         assert!(
-            matches!(&fields[0].1, Parsed::Ident(s) if s == "Daily"),
+            matches!(&fields[0].2, Parsed::Ident(s) if s == "Daily"),
             "expected Ident(\"Daily\"), got {:?}",
-            fields[0].1
+            fields[0].2
         );
     }
 
@@ -743,9 +762,9 @@ mod tests {
         else {
             panic!("expected object");
         };
-        assert!(matches!(fields[0].1, Parsed::Bool(true)));
-        assert!(matches!(fields[1].1, Parsed::Bool(false)));
-        assert!(matches!(fields[2].1, Parsed::Null));
+        assert!(matches!(fields[0].2, Parsed::Bool(true)));
+        assert!(matches!(fields[1].2, Parsed::Bool(false)));
+        assert!(matches!(fields[2].2, Parsed::Null));
     }
 
     #[test]
@@ -788,9 +807,9 @@ mod tests {
             panic!("expected object");
         };
         assert_eq!(fields.len(), 4);
-        assert!(matches!(&fields[0].1, Parsed::Str(s) if s == "Hello World!"));
-        assert!(matches!(&fields[1].1, Parsed::Ident(s) if s == "Hourly"));
-        assert!(matches!(fields[2].1, Parsed::Number(n) if (n - 12345.0).abs() < f64::EPSILON));
-        assert!(matches!(fields[3].1, Parsed::Number(n) if (n - 0.15).abs() < 1e-9));
+        assert!(matches!(&fields[0].2, Parsed::Str(s) if s == "Hello World!"));
+        assert!(matches!(&fields[1].2, Parsed::Ident(s) if s == "Hourly"));
+        assert!(matches!(fields[2].2, Parsed::Number(n) if (n - 12345.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[3].2, Parsed::Number(n) if (n - 0.15).abs() < 1e-9));
     }
 }

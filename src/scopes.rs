@@ -500,7 +500,22 @@ impl Scopes {
             let has_ref_params = data.def(*fn_nr).attributes.iter().any(|a| {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
-            if !has_ref_params {
+            if has_ref_params {
+                // P146: codegen will take gen_set_first_ref_call_copy
+                // (state/codegen.rs:1186-1238) — OpConvRefFromNull +
+                // OpDatabase + lock-args + OpCopyRecord deep-copy into a
+                // FRESH store owned by `v`.  Strip v's declared deps so
+                // get_free_vars emits OpFreeRef at scope exit; otherwise
+                // the parser's "borrows from arg N" inference suppresses
+                // emission and the deep-copied store leaks (the
+                // `dep_empty=false` path in scopes.rs:906).  Mirrors the
+                // adoption-path skip_free below for symmetry with the
+                // codegen branches in state/codegen.rs:1048-1066.
+                let deps: Vec<u16> = function.tp(v).depend().clone();
+                for d in deps {
+                    function.make_independent(v, d);
+                }
+            } else {
                 for arg in args {
                     if let Value::Var(wv) = arg {
                         let wv = *self.var_mapping.get(wv).unwrap_or(wv);
@@ -509,6 +524,25 @@ impl Scopes {
                         }
                     }
                 }
+            }
+        }
+        // P147: companion to the P146 fix above for the
+        // var-to-var deep-copy path.  When `Set(v, Var(src))` and
+        // both are References to the same struct, codegen takes
+        // `gen_set_first_ref_var_copy` (state/codegen.rs:1025-1033)
+        // which OpConvRefFromNull + OpDatabase + OpCopyRecord
+        // deep-copies src into a FRESH store owned by `v`.  This
+        // path is hit by the I13 iterator protocol's hidden
+        // `__iter_obj_N = c` setup (parser/collections.rs:209).
+        // Strip v's declared deps so get_free_vars emits OpFreeRef.
+        if let Value::Var(src) = value
+            && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = function.tp(v).clone()
+            && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) = function.tp(*src)
+            && d_nr == *src_d
+        {
+            let deps: Vec<u16> = function.tp(v).depend().clone();
+            for d in deps {
+                function.make_independent(v, d);
             }
         }
         let scanned = self.scan(value, function, data);
