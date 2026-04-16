@@ -8644,6 +8644,37 @@ fn p144_ref_param_forward_native() {
 /// matched, bypassing the user body's `OpCall` path and
 /// corrupting the stack.  Fix: skip library_names lookup when
 /// `def.code != Value::Null`.
+/// P151: forward-reference to a struct-returning fn + field mutation
+/// on the result corrupts variable type inference.  Trigger:
+/// ```
+/// fn one() { x = callee(); x.v = 99; }
+/// fn callee() -> H { H { v: 7 } }
+/// ```
+/// errors with `Variable 'x' cannot change type from integer to H`.
+/// Reordering `callee` BEFORE `one` works around it.
+///
+/// Hypothesis: pass-1 sees `x = callee()` with callee's return type
+/// unknown → x's type stays unset → the subsequent `x.v = 99`
+/// mutation infers x as integer (the field type) → pass-2 can't
+/// reset x to H.
+///
+/// Workaround in `lib/moros_map/src/moros_map.loft`: define
+/// `map_get_hex` BEFORE `map_paint_material` etc.
+#[test]
+#[ignore = "P151 open — forward-ref struct call + field mutation breaks type inference"]
+fn p151_forward_ref_struct_call_with_mutation() {
+    code!(
+        "struct H { v: integer }
+fn one() {
+    x = callee();
+    x.v = 99;
+}
+fn callee() -> H { H { v: 7 } }
+fn test() { one(); }"
+    )
+    .result(Value::Null);
+}
+
 #[test]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();
