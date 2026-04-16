@@ -1,0 +1,28 @@
+// MO.2: tests for map_has_chunk / map_get_hex.
+use moros_map;
+
+fn test_has_chunk() {
+  m = map_empty();
+  m.m_chunks += [Chunk { ck_cx: 1, ck_cy: 0, ck_cz: 2, ck_hexes: [] }];
+  assert(map_has_chunk(m, 32, 64, 0) == true, "chunk found");
+  assert(map_has_chunk(m, 0, 0, 0) == false, "chunk not found");
+}
+
+fn test_get_hex_found() {
+  m = map_empty();
+  hexes: vector<Hex> = [];
+  hexes += [Hex { h_material: 10 }];
+  hexes += [Hex { h_material: 20 }];
+  hexes += [Hex { h_material: 30 }];
+  m.m_chunks += [Chunk { ck_cx: 0, ck_cy: 0, ck_cz: 0, ck_hexes: hexes }];
+  h0 = map_get_hex(m, 0, 0, 0);
+  assert(h0.h_material == 10, "hex 0");
+  h1 = map_get_hex(m, 0, 1, 0);
+  assert(h1.h_material == 20, "hex 1");
+}
+
+fn test_get_hex_missing_chunk() {
+  m = map_empty();
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_material == 0, "default hex");
+}

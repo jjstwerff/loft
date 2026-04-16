@@ -1,0 +1,192 @@
+// MO.1a + MO.1b: tests for all moros_map types.
+use moros_map;
+
+// ── MO.1a: HexAddress ────────────────────────────────────────────────
+
+fn test_hex_address() {
+  addr = HexAddress { ha_q: 10, ha_r: 20, ha_cy: 0 };
+  assert(addr.ha_q == 10, "addr q");
+  assert(addr.ha_r == 20, "addr r");
+  assert(addr.ha_cy == 0, "addr cy");
+}
+
+fn test_hex_address_negative() {
+  addr = HexAddress { ha_q: -5, ha_r: -3, ha_cy: 2 };
+  assert(addr.ha_q == -5, "negative q");
+  assert(addr.ha_r == -3, "negative r");
+}
+
+// ── MO.1a: Hex ───────────────────────────────────────────────────────
+
+fn test_hex_default() {
+  h = Hex {};
+  assert(h.h_height == 0, "default height");
+  assert(h.h_material == 0, "default material");
+  assert(h.h_item == 0, "default item");
+  assert(h.h_item_rotation == 0, "default rotation");
+  assert(h.h_wall_n == 0, "default wall_n");
+  assert(h.h_wall_ne == 0, "default wall_ne");
+  assert(h.h_wall_se == 0, "default wall_se");
+}
+
+fn test_hex_fields() {
+  h = Hex {
+    h_height: 100,
+    h_material: 5,
+    h_item: 3,
+    h_item_rotation: 42,
+    h_wall_n: 1,
+    h_wall_ne: 2,
+    h_wall_se: 3,
+  };
+  assert(h.h_height == 100, "height");
+  assert(h.h_material == 5, "material");
+  assert(h.h_item == 3, "item");
+  assert(h.h_item_rotation == 42, "rotation");
+  assert(h.h_wall_n == 1, "wall_n");
+  assert(h.h_wall_ne == 2, "wall_ne");
+  assert(h.h_wall_se == 3, "wall_se");
+}
+
+fn test_hex_rotation_extract() {
+  // rotation 7, spawn_flag set (bit 5), no waypoint
+  h = Hex { h_item_rotation: 7 | (1 << 5) };
+  assert(hex_rotation(h) == 7, "rotation extract");
+  assert(hex_spawn_flag(h) == true, "spawn flag set");
+  assert(hex_waypoint_flag(h) == false, "waypoint flag clear");
+}
+
+fn test_hex_waypoint_flag() {
+  // rotation 23, no spawn, waypoint set (bit 6)
+  h2 = Hex { h_item_rotation: 23 | (1 << 6) };
+  assert(hex_rotation(h2) == 23, "rotation 23");
+  assert(hex_spawn_flag(h2) == false, "spawn clear");
+  assert(hex_waypoint_flag(h2) == true, "waypoint set");
+}
+
+fn test_hex_all_flags() {
+  // rotation 15, both flags set
+  h3 = Hex { h_item_rotation: 15 | (1 << 5) | (1 << 6) };
+  assert(hex_rotation(h3) == 15, "rotation 15");
+  assert(hex_spawn_flag(h3) == true, "both: spawn");
+  assert(hex_waypoint_flag(h3) == true, "both: waypoint");
+}
+
+// ── MO.1a: Chunk ─────────────────────────────────────────────────────
+
+fn test_chunk_empty() {
+  c = Chunk { ck_cx: 1, ck_cy: 0, ck_cz: 2, ck_hexes: [] };
+  assert(c.ck_cx == 1, "chunk cx");
+  assert(c.ck_cy == 0, "chunk cy");
+  assert(c.ck_cz == 2, "chunk cz");
+  assert(len(c.ck_hexes) == 0, "chunk empty");
+}
+
+fn test_chunk_with_hexes() {
+  hexes: vector<Hex> = [];
+  for ch_i in 0..3 {
+    hexes += [Hex { h_height: ch_i * 10, h_material: ch_i + 1 }];
+  }
+  c = Chunk { ck_cx: 0, ck_cy: 0, ck_cz: 0, ck_hexes: hexes };
+  assert(len(c.ck_hexes) == 3, "3 hexes");
+  assert(c.ck_hexes[0].h_height == 0, "hex 0 height");
+  assert(c.ck_hexes[1].h_height == 10, "hex 1 height");
+  assert(c.ck_hexes[2].h_material == 3, "hex 2 material");
+}
+
+// ── MO.1a: Map + map_empty ───────────────────────────────────────────
+
+fn test_map_empty() {
+  m = map_empty();
+  assert(m.m_name == "untitled", "empty map name");
+  assert(len(m.m_chunks) == 0, "no chunks");
+  assert(len(m.m_material_palette) == 0, "no materials");
+  assert(len(m.m_wall_palette) == 0, "no walls");
+  assert(len(m.m_item_palette) == 0, "no items");
+  assert(len(m.m_spawn_points) == 0, "no spawns");
+  assert(len(m.m_npc_routines) == 0, "no routines");
+}
+
+// ── MO.1b: MaterialDef ───────────────────────────────────────────────
+
+fn test_material_def() {
+  md = MaterialDef {
+    md_name: "grass",
+    md_category: "terrain",
+    md_stair_kind: "",
+    md_texture: 0,
+    md_tint_r: 80, md_tint_g: 160, md_tint_b: 60,
+    md_walkable: 1, md_swimmable: 0,
+    md_climbable: 0, md_slippery: 0, md_loud: 0,
+  };
+  assert(md.md_name == "grass", "mat name");
+  assert(md.md_category == "terrain", "mat category");
+  assert(md.md_tint_g == 160, "mat green");
+  assert(md.md_walkable == 1, "mat walkable");
+}
+
+// ── MO.1b: WallDef ───────────────────────────────────────────────────
+
+fn test_wall_def() {
+  wd = WallDef {
+    wd_name: "stone_wall",
+    wd_body: "SOLID",
+    wd_base: "STONE",
+    wd_thickness: 0.0,
+    wd_texture: 0,
+    wd_tint_r: 128, wd_tint_g: 128, wd_tint_b: 128,
+  };
+  assert(wd.wd_name == "stone_wall", "wall name");
+  assert(wd.wd_body == "SOLID", "wall body");
+  assert(wd.wd_base == "STONE", "wall base");
+  assert(wd.wd_tint_r == 128, "wall grey");
+}
+
+fn test_wall_thick() {
+  tw = WallDef {
+    wd_name: "thick_wood",
+    wd_body: "THICK_FLAT",
+    wd_base: "WOOD",
+    wd_thickness: 0.3,
+    wd_texture: 0,
+    wd_tint_r: 139, wd_tint_g: 90, wd_tint_b: 43,
+  };
+  assert(tw.wd_thickness > 0.2, "thick wall");
+}
+
+// ── MO.1b: ItemDef ───────────────────────────────────────────────────
+
+fn test_item_def() {
+  id = ItemDef {
+    id_name: "oak_tree",
+    id_kind: "TREE",
+    id_model: 0,
+    id_symmetric: 1,
+    id_arc_radius: 0.0,
+  };
+  assert(id.id_name == "oak_tree", "item name");
+  assert(id.id_kind == "TREE", "item kind");
+  assert(id.id_symmetric == 1, "item symmetric");
+}
+
+// ── MO.1b: palettes in Map ──────────────────────────────────────────
+
+fn test_map_with_palettes() {
+  m = map_empty();
+  m.m_material_palette += [MaterialDef {
+    md_name: "void", md_category: "void", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 0, md_tint_g: 0, md_tint_b: 0,
+    md_walkable: 0, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  }];
+  m.m_material_palette += [MaterialDef {
+    md_name: "stone_floor", md_category: "floor", md_stair_kind: "",
+    md_texture: 1, md_tint_r: 160, md_tint_g: 160, md_tint_b: 160,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 1,
+  }];
+  assert(len(m.m_material_palette) == 2, "two materials");
+  assert(m.m_material_palette[0].md_name == "void", "mat 0");
+  assert(m.m_material_palette[1].md_name == "stone_floor", "mat 1");
+  assert(m.m_material_palette[1].md_loud == 1, "stone is loud");
+}
