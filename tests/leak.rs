@@ -338,30 +338,30 @@ fn p149_script_76_nested_struct_segv() {
     );
 }
 
-/// P150 minimal reproducer: a function with both an EARLY-RETURN
-/// constructor and a fall-through `Struct.parse(text)` path leaks 1
-/// placeholder store from the caller's hidden `__ref_*`
-/// ConvRefFromNull pre-alloc.
+/// P150 regression guard: a function with both an EARLY-RETURN
+/// constructor and a fall-through `Struct.parse(text)` path used to
+/// leak 1 placeholder store per call from the caller's hidden
+/// `__ref_*` ConvRefFromNull pre-alloc.
 ///
-/// Diagnosis: codegen for `m = make(...)` pre-allocates a slot for
-/// the hidden return-ref via OpConvRefFromNull (creating a fresh
-/// "null" store).  When the callee's early-return returns a DbRef
-/// to a store created INSIDE the callee (not into the hidden
+/// Root cause (closed): codegen for `m = make(...)` pre-allocates a
+/// slot for the hidden return-ref via OpConvRefFromNull (creating a
+/// fresh "null" store).  When the callee's early-return returns a
+/// DbRef to a store created INSIDE the callee (not into the hidden
 /// return slot), the caller's pre-alloc store is orphaned —
-/// `__ref_*` is marked skip_free (`src/state/codegen.rs:1062` and
-/// `src/scopes.rs:523`) so the caller's variable owns the callee's
-/// store, and the original ConvRefFromNull store is never freed.
+/// `__ref_*` was marked `skip_free` (`src/state/codegen.rs:1062` and
+/// `src/scopes.rs:523`) so the caller's variable would own the
+/// callee's store, and the original ConvRefFromNull store was never
+/// freed.  Severity was per-call (game loops at 60fps would saturate
+/// u16 store space in ~18 minutes).
 ///
-/// Fix attempt 2026-04-16 (reverted): removing the `set_skip_free`
-/// in both codegen + scopes paths closes this leak but causes the
-/// `lib/moros_map/tests/serial.loft` test to HANG (infinite loop)
-/// in `map_to_json` — the broader skip_free is load-bearing for
-/// the typical adoption case.  A narrower fix needs to detect
-/// callees that return a fresh store on at least one path (e.g.
-/// `return <call>` not at the tail position) and only drop
-/// skip_free for those.  Filed in PROBLEMS.md as P150.
+/// Fix: drop the `set_skip_free` calls in both paths.  The runtime
+/// tolerates double-free as a no-op
+/// (`src/database/allocation.rs:103-105`'s `if store.free { return }`),
+/// so the typical-adoption case (where __ref_* aliases m's store)
+/// is unaffected — both frees fire, second is no-op.  The orphan
+/// case now reclaims the placeholder via the existing is_work_ref
+/// check in `scopes.rs::get_free_vars`.
 #[test]
-#[ignore = "P150 open — narrower fix needed; broad skip_free removal hangs"]
 fn p150_early_return_struct_orphans_caller_pre_alloc() {
     // Minimal trigger: a user fn that has an EARLY-RETURN of a constructor
     // call AND a fall-through `Struct.parse(text)` path.  The caller's
@@ -388,12 +388,13 @@ pub fn test() {
     );
 }
 
-/// P150 file-level reproducer: `lib/moros_map/tests/serial.loft` leaks 1 store
-/// when run via interpreter (warning: `2(bc:0)`).  Native run is clean.
-/// Triggered by `test_from_json_empty_string` calling map_from_json("")
-/// which has the early-return + fall-through Struct.parse shape.
+/// P150 file-level regression guard: `lib/moros_map/tests/serial.loft`
+/// USED to leak 1 store via interpreter (warning: `2(bc:0)`) when
+/// `test_from_json_empty_string` called `map_from_json("")`, which has
+/// the early-return + fall-through `Struct.parse` shape that triggered
+/// the orphan placeholder alloc.  Closed by the same fix as the minimal
+/// repro above — see its docstring.
 #[test]
-#[ignore = "P150 open — see p150_early_return_struct_orphans_caller_pre_alloc"]
 fn p150_moros_map_serial_leak() {
     loft::crash_report::install("leak");
     let mut p = Parser::new();

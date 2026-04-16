@@ -1051,18 +1051,28 @@ impl State {
             if has_ref_params {
                 self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             } else {
+                // P150: previously this branch marked every __ref_* arg
+                // as skip_free under the assumption that the callee always
+                // wrote into the placeholder (so v and __ref_N shared a
+                // store, freeing both = double-free).  But when the callee
+                // returns a fresh store (early-return through a constructor
+                // call, or T.parse(text) that allocates fresh — both
+                // shapes used by `lib/moros_map/src/moros_map.loft`'s
+                // `map_from_json`), the placeholder ConvRefFromNull alloc
+                // is orphaned: __ref_N's slot still points to the
+                // placeholder, m's slot points to the callee's fresh
+                // store, and skip_free on __ref_N suppresses the OpFreeRef
+                // that would reclaim the placeholder.
+                //
+                // The runtime tolerates double-free as a no-op (see
+                // database/allocation.rs:103-105: `if store.free { return }`),
+                // so leaving __ref_N to be freed by scopes.rs's is_work_ref
+                // gate at scope exit is safe in both cases:
+                //   - typical adoption: __ref_N's free is a no-op (already
+                //     freed via v's free that fires first).
+                //   - orphan (P150): __ref_N's free reclaims the placeholder.
+                // Mirrors the matching scopes.rs::scan_set change.
                 self.generate(value, stack, false);
-                // Suppress OpFreeRef for __ref_N to prevent double-free —
-                // the caller now owns this store.
-                if let Value::Call(_, args) = value {
-                    for arg in args {
-                        if let Value::Var(wv) = arg
-                            && stack.function.name(*wv).starts_with("__ref_")
-                        {
-                            stack.function.set_skip_free(*wv);
-                        }
-                    }
-                }
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
