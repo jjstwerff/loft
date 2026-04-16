@@ -8762,6 +8762,98 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P153 regression guard — vector ≥187 elements transferred to a struct
+/// field via construction USED to corrupt the field's storage.
+/// Root cause (closed): `vector_set_size` wrote the new length to the
+/// pre-resize rec after `Store::resize` relocated the block, and
+/// `vector_add` then byte-copied into the stale destination captured from
+/// `vector_append`.  Fix in `src/database/structures.rs`: track the
+/// relocated rec in `vector_set_size`; re-read the destination rec after
+/// `vector_set_size` in `vector_add`.
+#[test]
+fn p153_vec_field_transfer_relocation_from_var() {
+    code!(
+        "struct H { h_material: integer not null }
+struct C { ck_hexes: vector<H> }
+fn test() {
+    hexes: vector<H> = [];
+    for _ in 0..1024 { hexes += [H {}]; }
+    c = C { ck_hexes: hexes };
+    newh = H {};
+    newh.h_material = 42;
+    c.ck_hexes[167] = newh;
+    v = c.ck_hexes[167].h_material;
+    assert(v == 42, \"expected 42 got {v}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P153 regression guard — same bug, exposed via a function-call
+/// initializer instead of a bare variable.  Previously fell through
+/// `handle_field`'s else branch (no OpAppendVector emitted) and left the
+/// field empty.  Fix: widen the deep-copy check to any non-Insert vector
+/// expression.
+#[test]
+fn p153_vec_field_transfer_relocation_from_call() {
+    code!(
+        "struct H { h_material: integer not null }
+struct C { ck_hexes: vector<H> }
+fn build() -> vector<H> {
+    hexes: vector<H> = [];
+    for _ in 0..200 { hexes += [H {}]; }
+    hexes
+}
+fn test() {
+    c = C { ck_hexes: build() };
+    newh = H {};
+    newh.h_material = 42;
+    c.ck_hexes[100] = newh;
+    v = c.ck_hexes[100].h_material;
+    assert(v == 42, \"expected 42 got {v}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P153 regression guard — append after transfer must not heap-corrupt.
+/// Pre-fix this triggered libc `double free or corruption` and SIGABRT.
+#[test]
+fn p153_vec_field_append_after_transfer() {
+    code!(
+        "struct H { x: integer not null }
+struct C { items: vector<H> }
+fn test() {
+    hexes: vector<H> = [];
+    for _ in 0..200 { hexes += [H {}]; }
+    c = C { items: hexes };
+    c.items += [H {}];
+    assert(len(c.items) == 201, \"len {len(c.items)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P153 complement — direct-into-field pattern must still work (guard
+/// against over-fixing the transfer path).
+#[test]
+fn p153_vec_field_direct_into_field_still_works() {
+    code!(
+        "struct H { h_material: integer not null }
+struct C { ck_hexes: vector<H> }
+fn test() {
+    c = C { ck_hexes: [] };
+    for _ in 0..200 { c.ck_hexes += [H {}]; }
+    newh = H {};
+    newh.h_material = 42;
+    c.ck_hexes[100] = newh;
+    v = c.ck_hexes[100].h_material;
+    assert(v == 42, \"expected 42 got {v}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 #[test]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();

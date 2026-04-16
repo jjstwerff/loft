@@ -47,7 +47,8 @@ existing entry, not re-open it as a bug.
 | ~~149~~ | SIGSEGV in `OpCopyRecord` for nested struct construction (script 76) | — | **Fixed 2026-04-16** — closed as a side-effect of the P147 `Set(v, Var(src))` dep-stripping fix.  The SEGV was caused by a `__ref_*` work-ref's store being freed prematurely (scope analysis treated it as borrowed due to non-empty dep), then `OpCopyRecord` reading from the freed store.  With deps stripped on the deep-copy path, stores are properly managed and the SEGV disappears.  Tests: `tests/leak.rs::p149_script_76_nested_struct_segv`. |
 | ~~150~~ | Per-call leak: orphaned `__ref_*` placeholder when callee returns a fresh store | — | **Fixed 2026-04-16.**  When `m = user_fn(...)` with no visible Reference params, codegen pre-allocates a placeholder store via `OpConvRefFromNull` for the hidden `__ref_*` slot.  Both `src/scopes.rs:518-527` and `src/state/codegen.rs:1057-1064` marked `__ref_*` as `skip_free` to avoid double-free in the typical adoption case (callee writes into the placeholder, `m` and `__ref_*` alias).  When the callee instead returns a fresh store (early-return through a constructor call, or fall-through `T.parse(text)` — both shapes used by `lib/moros_map/src/moros_map.loft::map_from_json`), the placeholder was orphaned.  Severity was per-call (game loops at 60fps would saturate u16 store space in ~18 minutes).  Fix: drop both `set_skip_free` calls.  The runtime tolerates double-free as a no-op (`src/database/allocation.rs:103-105`'s `if store.free { return }`), so the typical adoption case is unaffected (both frees fire, second is no-op) and the orphan case now reclaims the placeholder via the existing `is_work_ref` check in `scopes.rs::get_free_vars`.  Tests: `tests/leak.rs::p150_*` (un-`#[ignore]`'d). |
 | ~~151~~ | Forward-reference to struct-returning fn + field mutation corrupts variable type inference | — | **Fixed 2026-04-16.**  `parser/fields.rs::field()` silently dropped the field-name token when the receiver had unknown type in pass-1 (returning the original `Value::Var(x)` unchanged), so `x.v = 99` collapsed to `x = 99` for downstream assignment processing.  `parse_assign_op` → `change_var` then set x's type to the RHS expression's type (integer for `x.v = 99`).  Pass-2 rejected the now-resolved `x = callee()` returning the struct.  Fix: wrap `code` in `Value::Drop` when `field()` returns early on an unknown receiver — `code != Value::Var(x)` ⇒ `assign_var_nr` returns `u16::MAX` ⇒ `change_var` skips the spurious type update.  Tests: `tests/issues.rs::p151_forward_ref_struct_call_with_mutation`. |
-| 152 | `s.vec_field = vec_var` silently dropped at runtime (data-loss); struct-field whole-replacement also breaks `&` mutation check | **High** (data loss) | Use append/element-set paths (`s.v += [...]`, `s.v[i] = x`) or a function-local rebuild; for struct fields, refactor as field-by-field assignment until fixed |
+| ~~152~~ | `s.vec_field = vec_var` silently dropped at runtime (data-loss); struct-field whole-replacement also breaks `&` mutation check | — | **Fixed 2026-04-16.** parse_assign_op now rewrites `field = vec_var` to OpClearVector + OpAppendVector (deep copy into the field) and `field = []` to OpClearVector alone; find_written_vars unifies first_arg_write so collection ops + OpCopyRecord count as writes through OpGetField destinations.  Tests: `tests/issues.rs::p152_*` (4 regression guards). |
+| ~~153~~ | Local vector ≥187 elements transferred to a struct field via construction → element rewrites read back as null / corrupt the heap | — | **Fixed 2026-04-16.** Two adjacent bugs in `src/database/structures.rs`: `vector_set_size` wrote the new length to the pre-resize rec after `Store::resize` relocated the block; `vector_add`'s byte-copy branches used `new_db` captured before `vector_set_size` ran, so writes landed in freed memory.  Fix: track the relocation in `vector_set_size` (update `vec_rec` after resize); re-read the destination rec in `vector_add` after `vector_set_size`.  Also widened `parser/objects.rs::handle_field` to emit the deep-copy OpAppendVector for any non-Insert vector initializer (not just bare Var), fixing `C { v: build() }`.  Tests: `tests/issues.rs::p153_*` (4 guards). |
 
 ---
 
@@ -984,6 +985,69 @@ silently failed.
 
 **Tests:** `tests/issues.rs::p152_*` (regression guards;
 `#[ignore]`'d until fixed).
+
+---
+
+### ~~153~~. Vector relocation during struct-construction transfer corrupts destination storage — FIXED
+
+**Severity:** High — silent data loss / libc `double free or corruption` abort.
+
+**Symptom:** Building a local vector past ~186 elements and transferring it
+to a struct field via `C { v_field: hexes }` corrupted the destination:
+
+```loft
+struct H { h_material: integer not null }
+struct C { ck_hexes: vector<H> }
+
+fn test() {
+  hexes: vector<H> = [];
+  for _ in 0..1024 { hexes += [H {}]; }   // build local vector
+  c = C { ck_hexes: hexes };               // transfer to struct field
+  newh = H {};
+  newh.h_material = 42;
+  c.ck_hexes[167] = newh;
+  assert(c.ck_hexes[167].h_material == 42, "got {...}");  // ← reads null
+}
+```
+
+Threshold: 187 elements (first growth past the initial-capacity block that
+required `Store::resize` to relocate instead of extend in place).  Appending
+after the transfer tripped `double free or corruption` in libc.
+
+**Root cause:**
+
+1. **`src/database/structures.rs::vector_set_size`**: after `store.resize`
+   relocated the vector's block, the local `vec_rec` was not updated.  The
+   final `store.set_int(vec_rec, 4, new_length)` wrote the length into the
+   OLD (just-deleted) record.  The relocated record kept the freshly-allocated
+   length of 0.
+2. **`src/database/structures.rs::vector_add`**: `new_db` was captured from
+   `vector_append`, then `vector_set_size` on the next line could relocate the
+   destination.  All three byte-copy branches used `new_db.rec`, which was the
+   old, freed rec.  Subsequent reads saw length 0 and returned defaults;
+   later heap touches of the corrupted block aborted the process.
+3. **`src/parser/objects.rs::handle_field`**: only bare-Var vector
+   initializers emitted `OpAppendVector` (deep-copy); function-call initializers
+   like `C { v: build() }` fell through to a plain push that left the field
+   empty.
+
+**Fix:**
+
+1. `vector_set_size`: `vec_rec = new_vec` after the field-pointer update,
+   so the length write lands in the current record.
+2. `vector_add`: re-read `dest_rec` from the field slot after
+   `vector_set_size`; rebuild `new_db` with the fresh rec (element offset
+   is layout-stable across relocation).
+3. `handle_field`: widen the deep-copy check from `matches!(value,
+   Value::Var(_))` to `!matches!(value, Value::Insert(_) | Value::Null)` so
+   any vector-typed expression (Var, Call, etc.) gets OpAppendVector.
+
+**Tests:** `tests/issues.rs::p153_*` — four guards (bare-var transfer,
+function-call transfer, append-after-transfer, direct-into-field control).
+
+**Discovered:** 2026-04-16, while wiring `lib/moros_editor`'s undo stack on
+top of `lib/moros_map` (whose `build_chunk` builds a 1024-element vector
+before struct construction).  Fixed: 2026-04-16.
 
 ---
 

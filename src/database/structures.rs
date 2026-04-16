@@ -174,8 +174,20 @@ impl Stores {
             Vec::new()
         };
         let new_db = vector::vector_append(db, size, &mut self.allocations);
+        let append_pos = new_db.pos;
         // Claim more than 1 record if needed for the actual copy.
         self.vector_set_size(db, o_length, size);
+        // P153: `vector_set_size` may have relocated the destination record.
+        // `new_db.rec` captured from `vector_append` is stale after relocation;
+        // re-read the current rec from the field slot (which `vector_set_size`
+        // keeps up to date) before we use it for the byte copy.  Element
+        // offset (`append_pos`) is layout-stable across relocation.
+        let dest_rec = keys::store(db, &self.allocations).get_int(db.rec, db.pos) as u32;
+        let new_db = DbRef {
+            store_nr: db.store_nr,
+            rec: dest_rec,
+            pos: append_pos,
+        };
         if same_vec {
             // Write from the pre-resize snapshot; `new_db.rec` is already the correct
             // (possibly reallocated) destination record after `vector_set_size`.
@@ -237,12 +249,15 @@ impl Stores {
 
     pub fn vector_set_size(&mut self, db: &DbRef, adding: u32, size: u32) {
         let store = keys::mut_store(db, &mut self.allocations);
-        let vec_rec = store.get_int(db.rec, db.pos) as u32;
+        let mut vec_rec = store.get_int(db.rec, db.pos) as u32;
         let length = store.get_int(vec_rec, 4) as u32;
         if adding > 1 {
             let new_vec = store.resize(vec_rec, ((length + adding) * size + 15) / 8);
             if new_vec != vec_rec {
                 store.set_int(db.rec, db.pos, new_vec as i32);
+                // P153: track the relocation so the length write below lands
+                // in the current record instead of the freed one.
+                vec_rec = new_vec;
             }
         }
         store.set_int(vec_rec, 4, length as i32 + adding as i32);
