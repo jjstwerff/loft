@@ -2758,20 +2758,24 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);
             let attrs = &def.attributes;
-            // Stack-text mutation operators (OpAppendStackText, OpAppendStackCharacter,
-            // OpClearStackText) write to their first argument via a const-u16 position.
-            // OpAppendVector mutates the vector pointed to by its first Var argument.
-            let stack_write = def.name.starts_with("OpAppendStack")
+            // Operators whose FIRST argument is mutated (collection / field writes).
+            // P152: vector ops folded in here so `c.items += other_vec` (where `c.items`
+            // is `OpGetField(Var(c), …)`) correctly marks `c` as written via
+            // collect_vars_in.  Previously the OpAppend*/OpClear* family only checked for
+            // a bare `Value::Var` arg, missing the field-access shape.
+            let first_arg_write = def.name.starts_with("OpSet")
+                || def.name.starts_with("OpAppendStack")
                 || def.name.starts_with("OpClearStack")
+                || def.name == "OpNewRecord"
+                || def.name == "OpAppendCopy"
                 || def.name == "OpAppendVector"
                 || def.name == "OpClearVector"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
-            // Field-write and vector-append operators: any Var appearing in the first
-            // argument is being mutated (e.g. v[idx].field = val, r += [x]).
-            let field_write = def.name.starts_with("OpSet")
-                || def.name == "OpNewRecord"
-                || def.name == "OpAppendCopy";
+            // P152.B: OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
+            // Used by struct field whole-replacement (`s.i = fresh`) where the
+            // destination is `OpGetField(s, …)`.
+            let second_arg_write = def.name == "OpCopyRecord";
             for (i, arg) in args.iter().enumerate() {
                 if i < attrs.len()
                     && matches!(attrs[i].typedef, Type::RefVar(_))
@@ -2779,13 +2783,10 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
                 {
                     written.insert(*v);
                 }
-                if i == 0
-                    && stack_write
-                    && let Value::Var(v) = arg
-                {
-                    written.insert(*v);
+                if i == 0 && first_arg_write {
+                    collect_vars_in(arg, written);
                 }
-                if i == 0 && field_write {
+                if i == 1 && second_arg_write {
                     collect_vars_in(arg, written);
                 }
                 find_written_vars(arg, data, written);

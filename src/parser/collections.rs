@@ -304,6 +304,13 @@ impl Parser {
                 }
                 return v_set(*nr, val.clone());
             }
+            // P152: LHS is a field access (e.g. `s.v = fresh`).  Pre-fix this
+            // returned bare `val` and the assignment was silently discarded.
+            // The full clear-then-append pair lives in parse_assign_op where
+            // the RHS type is in scope (so we can avoid emitting OpAppendVector
+            // when the RHS is not actually a vector — e.g. `b.data = f#read(...)`
+            // where f#read returns text — which would mismatch types in
+            // codegen).  Empty literal `[]` is also handled there.
             return val.clone();
         }
         if let Type::RefVar(tp) = f_type
