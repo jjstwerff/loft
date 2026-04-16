@@ -574,12 +574,36 @@ use a separate collection or add after the loop"
                 && rhs_is_vector
                 && let Type::Vector(elm_tp, _) = f_type
             {
+                // P154 self-identity guard: `s.v = s.v` is a no-op; don't
+                // emit a clear (which would wipe the field) + append (which
+                // would then see an empty source).
+                if *code == *to {
+                    *code = Value::Insert(Vec::new());
+                    return Type::Void;
+                }
                 let elm_tp_clone = (**elm_tp).clone();
                 let dn = self.data.type_def_nr(&elm_tp_clone);
                 let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
-                let clear = self.cl("OpClearVector", std::slice::from_ref(to));
-                let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
-                *code = Value::Insert(vec![clear, append]);
+                // P154: when the RHS is anything other than a plain Var read
+                // it may alias the destination (e.g.
+                // `s.v = pop_tail(s.v, 1)` where the helper reads the
+                // destination).  The OpClearVector that follows would wipe
+                // that data before OpAppendVector can copy it.  Capture the
+                // RHS into a fresh local first so its storage is independent
+                // of the clear.  For Var reads this is unnecessary —
+                // reading a Var doesn't re-execute anything.
+                if matches!(code, Value::Var(_)) {
+                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
+                    *code = Value::Insert(vec![clear, append]);
+                } else {
+                    let rhs_saved = code.clone();
+                    let tmp = self.vars.unique("_p154_rhs", f_type, &mut self.lexer);
+                    let set_tmp = v_set(tmp, rhs_saved);
+                    let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                    let append = self.cl("OpAppendVector", &[to.clone(), Value::Var(tmp), rec_tp]);
+                    *code = Value::Insert(vec![set_tmp, clear, append]);
+                }
                 return Type::Void;
             }
         }
