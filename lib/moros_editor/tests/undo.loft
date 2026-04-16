@@ -1,15 +1,18 @@
-// Tests for the moros_editor undo stack.
+// Tests for the moros_editor undo/redo/batch stack and recording editors.
 use moros_editor;
+
+// ── Core undo stack ───────────────────────────────────────────────
 
 fn test_undo_empty() {
   s = undo_empty();
   assert(undo_depth(s) == 0, "empty depth");
+  assert(redo_depth(s) == 0, "empty redo depth");
+  assert(!in_batch(s), "not in batch");
 }
 
 fn test_paint_then_undo() {
   m = map_empty();
   s = undo_empty();
-  // Initial state: hex (5, 7) has default material 0.
   before = map_get_hex(m, 5, 7, 0);
   assert(before.h_material == 0, "initial material");
 
@@ -23,6 +26,7 @@ fn test_paint_then_undo() {
   restored = map_get_hex(m, 5, 7, 0);
   assert(restored.h_material == 0, "material restored: {restored.h_material}");
   assert(undo_depth(s) == 0, "stack empty after undo");
+  assert(redo_depth(s) == 1, "redo has the undone edit");
 }
 
 fn test_multiple_undos() {
@@ -41,7 +45,184 @@ fn test_multiple_undos() {
   h2 = map_get_hex(m, 2, 2, 0);
   assert(h2.h_material == 0, "second undone: {h2.h_material}");
 
-  // First edit still in place.
   h1 = map_get_hex(m, 1, 1, 0);
   assert(h1.h_material == 10, "first still painted: {h1.h_material}");
+}
+
+// ── Redo ─────────────────────────────────────────────────────────
+
+fn test_redo_after_single_undo() {
+  m = map_empty();
+  s = undo_empty();
+  paint_material_with_undo(s, m, 4, 4, 0, 77);
+  undo_pop(s, m);
+  assert(map_get_hex(m, 4, 4, 0).h_material == 0, "reverted");
+  ok = redo(s, m);
+  assert(ok, "redo applied");
+  assert(map_get_hex(m, 4, 4, 0).h_material == 77, "redo reapplied");
+  assert(undo_depth(s) == 1, "undo depth back to 1");
+  assert(redo_depth(s) == 0, "redo drained");
+}
+
+fn test_redo_cleared_on_new_edit() {
+  m = map_empty();
+  s = undo_empty();
+  paint_material_with_undo(s, m, 1, 1, 0, 11);
+  undo_pop(s, m);
+  assert(redo_depth(s) == 1, "redo has 1");
+  // A fresh edit after undo must discard the redo history.
+  paint_material_with_undo(s, m, 2, 2, 0, 22);
+  assert(redo_depth(s) == 0, "redo cleared after new edit");
+}
+
+// ── Batch ────────────────────────────────────────────────────────
+
+fn test_batch_undo_reverts_all() {
+  m = map_empty();
+  s = undo_empty();
+  batch_begin(s);
+  assert(in_batch(s), "in batch");
+  paint_material_with_undo(s, m, 1, 0, 0, 10);
+  paint_material_with_undo(s, m, 2, 0, 0, 20);
+  paint_material_with_undo(s, m, 3, 0, 0, 30);
+  batch_end(s);
+  assert(!in_batch(s), "out of batch");
+  assert(undo_depth(s) == 3, "3 entries pushed");
+
+  // One undo reverts all 3.
+  ok = undo_pop(s, m);
+  assert(ok, "batch undo ok");
+  assert(map_get_hex(m, 1, 0, 0).h_material == 0, "hex1 reverted");
+  assert(map_get_hex(m, 2, 0, 0).h_material == 0, "hex2 reverted");
+  assert(map_get_hex(m, 3, 0, 0).h_material == 0, "hex3 reverted");
+  assert(undo_depth(s) == 0, "undo stack empty");
+  assert(redo_depth(s) == 3, "redo has 3 entries");
+}
+
+fn test_batch_redo_reapplies_all() {
+  m = map_empty();
+  s = undo_empty();
+  batch_begin(s);
+  paint_material_with_undo(s, m, 0, 0, 0, 5);
+  paint_material_with_undo(s, m, 0, 1, 0, 6);
+  batch_end(s);
+  undo_pop(s, m);
+  ok = redo(s, m);
+  assert(ok, "batch redo ok");
+  assert(map_get_hex(m, 0, 0, 0).h_material == 5, "hex00 reapplied");
+  assert(map_get_hex(m, 0, 1, 0).h_material == 6, "hex01 reapplied");
+  assert(undo_depth(s) == 2, "undo stack has batch back");
+}
+
+fn test_mixed_standalone_and_batch() {
+  m = map_empty();
+  s = undo_empty();
+  paint_material_with_undo(s, m, 0, 0, 0, 100);       // standalone
+  batch_begin(s);
+  paint_material_with_undo(s, m, 1, 0, 0, 200);       // batch edit 1
+  paint_material_with_undo(s, m, 2, 0, 0, 201);       // batch edit 2
+  batch_end(s);
+  paint_material_with_undo(s, m, 3, 0, 0, 300);       // standalone
+
+  // Undo standalone 300.
+  undo_pop(s, m);
+  assert(map_get_hex(m, 3, 0, 0).h_material == 0, "300 undone");
+  assert(map_get_hex(m, 2, 0, 0).h_material == 201, "batch still applied");
+
+  // Undo the whole batch.
+  undo_pop(s, m);
+  assert(map_get_hex(m, 1, 0, 0).h_material == 0, "batch hex1 undone");
+  assert(map_get_hex(m, 2, 0, 0).h_material == 0, "batch hex2 undone");
+
+  // Undo standalone 100.
+  undo_pop(s, m);
+  assert(map_get_hex(m, 0, 0, 0).h_material == 0, "100 undone");
+}
+
+// ── Recording editors ────────────────────────────────────────────
+
+fn test_set_height_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  set_height_with_undo(s, m, 2, 3, 0, 7);
+  assert(map_get_hex(m, 2, 3, 0).h_height == 7, "height set");
+  undo_pop(s, m);
+  assert(map_get_hex(m, 2, 3, 0).h_height == 0, "height undone");
+}
+
+fn test_adjust_height_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  set_height_with_undo(s, m, 0, 0, 0, 5);
+  adjust_height_with_undo(s, m, 0, 0, 0, 3);
+  assert(map_get_hex(m, 0, 0, 0).h_height == 8, "5+3=8 got {map_get_hex(m, 0, 0, 0).h_height}");
+  undo_pop(s, m);
+  assert(map_get_hex(m, 0, 0, 0).h_height == 5, "back to 5 got {map_get_hex(m, 0, 0, 0).h_height}");
+  adjust_height_with_undo(s, m, 0, 0, 0, -2);
+  assert(map_get_hex(m, 0, 0, 0).h_height == 3, "5-2=3");
+}
+
+fn test_place_and_remove_item_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  place_item_with_undo(s, m, 1, 1, 0, 5, 7);
+  h = map_get_hex(m, 1, 1, 0);
+  assert(h.h_item == 5, "item 5");
+  // rotation 7 (fits in 5 bits) plus no flags → h_item_rotation == 7
+  assert(hex_rotation(h) == 7, "rotation 7");
+
+  remove_item_with_undo(s, m, 1, 1, 0);
+  h2 = map_get_hex(m, 1, 1, 0);
+  assert(h2.h_item == 0, "item removed");
+
+  // Two undos restore the placed item.
+  undo_pop(s, m);
+  h3 = map_get_hex(m, 1, 1, 0);
+  assert(h3.h_item == 5, "place restored");
+}
+
+fn test_set_wall_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  set_wall_with_undo(s, m, 0, 0, 0, 0, 3);    // edge 0 (N) = wall 3
+  set_wall_with_undo(s, m, 0, 0, 0, 1, 4);    // edge 1 (NE) = wall 4
+  h = map_get_hex(m, 0, 0, 0);
+  assert(h.h_wall_n == 3, "wall_n 3");
+  assert(h.h_wall_ne == 4, "wall_ne 4");
+  undo_pop(s, m);
+  assert(map_get_hex(m, 0, 0, 0).h_wall_ne == 0, "wall_ne undone");
+  // wall_n still set.
+  assert(map_get_hex(m, 0, 0, 0).h_wall_n == 3, "wall_n preserved");
+}
+
+// ── Interaction: undo after heterogeneous edits ──────────────────
+
+fn test_mixed_edit_types_undo_in_reverse() {
+  m = map_empty();
+  s = undo_empty();
+  paint_material_with_undo(s, m, 4, 4, 0, 1);
+  set_height_with_undo(s, m, 4, 4, 0, 9);
+  place_item_with_undo(s, m, 4, 4, 0, 2, 0);
+
+  h = map_get_hex(m, 4, 4, 0);
+  assert(h.h_material == 1, "material");
+  assert(h.h_height == 9, "height");
+  assert(h.h_item == 2, "item");
+
+  // Undo item → height becomes unchanged, item cleared.
+  undo_pop(s, m);
+  h1 = map_get_hex(m, 4, 4, 0);
+  assert(h1.h_item == 0, "item undone");
+  assert(h1.h_height == 9, "height preserved");
+
+  // Undo height.
+  undo_pop(s, m);
+  h2 = map_get_hex(m, 4, 4, 0);
+  assert(h2.h_height == 0, "height undone");
+  assert(h2.h_material == 1, "material preserved");
+
+  // Undo material.
+  undo_pop(s, m);
+  h3 = map_get_hex(m, 4, 4, 0);
+  assert(h3.h_material == 0, "material undone");
 }
