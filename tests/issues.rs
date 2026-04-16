@@ -8934,21 +8934,22 @@ fn test() {
 /// so a prior parser error never panics the runtime.
 #[test]
 fn p156_vector_element_shadows_constant() {
+    let s = loft::platform::sep_str();
     code!(
         "struct E { x: integer }
 struct Big { v: vector<E> }
 fn test() { }"
     )
-    .error(
+    .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-at default/01_code.loft:383:24 — pick a different name \
-at p156_vector_element_shadows_constant:1:11",
-    )
-    .error(
+         at default{s}01_code.loft:383:24 — pick a different name \
+         at p156_vector_element_shadows_constant:1:11"
+    ))
+    .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-struct or enum (defined at default/01_code.loft:383:24) \
-at p156_vector_element_shadows_constant:2:26",
-    );
+         struct or enum (defined at default{s}01_code.loft:383:24) \
+         at p156_vector_element_shadows_constant:2:26"
+    ));
 }
 
 /// P155 regression guard — push/undo/mid-assert/redo/final-read used
