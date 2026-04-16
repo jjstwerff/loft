@@ -304,12 +304,19 @@ impl Stores {
                 self.walk_parsed_struct(parsed, tp, to, &object, path)
             }
             Parts::Enum(fields) => {
-                // Enum values serialise as a bare tag name
-                // (legacy scanner accepted either a quoted
-                // string OR a bare identifier; both collapse
-                // here to `Parsed::Str` / `Parsed::Ident`).
-                let name = match parsed {
-                    crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => s.as_str(),
+                // Three accepted shapes:
+                //   - `Parsed::Str("Tag")` / `Parsed::Ident(Tag)` — unit variant
+                //   - `Parsed::Object([("Tag", _, Object(payload))])` — variant
+                //     with payload, emitted by the Lenient parser for the
+                //     `Tag { field: value, ... }` input shape (matches the
+                //     legacy scanner's struct-enum-variant behaviour).
+                let (name, payload) = match parsed {
+                    crate::json::Parsed::Str(s) | crate::json::Parsed::Ident(s) => {
+                        (s.as_str(), None)
+                    }
+                    crate::json::Parsed::Object(entries) if entries.len() == 1 => {
+                        (entries[0].0.as_str(), Some(&entries[0].2))
+                    }
                     _ => {
                         return Err(WalkErr {
                             at: 0,
@@ -317,6 +324,7 @@ impl Stores {
                         });
                     }
                 };
+                let mut enum_tp = u16::MAX;
                 let val = if name == "null" {
                     0
                 } else {
@@ -324,16 +332,23 @@ impl Stores {
                     for (f_nr, f) in fields.iter().enumerate() {
                         if f.1 == name {
                             v = f_nr as i32 + 1;
+                            enum_tp = f.0;
                             break;
                         }
                     }
                     v
                 };
                 self.store_mut(to).set_byte(to.rec, to.pos, 0, val);
-                // Payload-carrying enums (typed variants) are not
-                // representable inside a bare tag — would require
-                // `["Tag", body]` / `{Tag: body}` shape support;
-                // tracked as P54-U follow-up once a test exercises it.
+                // Variant-with-payload: if the parser gave us an Object
+                // and the variant's EnumValue sub-type exists (size > 1),
+                // recurse into the walker so the payload fields land in
+                // the same slot as the discriminant byte.
+                if let Some(body) = payload
+                    && enum_tp != u16::MAX
+                    && self.types[enum_tp as usize].size > 1
+                {
+                    return self.walk_parsed_into(body, enum_tp, rec_tp, field, to, path);
+                }
                 Ok(())
             }
             Parts::Byte(from, _null) => {

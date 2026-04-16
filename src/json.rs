@@ -220,7 +220,21 @@ fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect)
         b'[' => parse_array(bytes, i, path, dialect),
         b'{' => parse_object(bytes, i, path, dialect),
         c if dialect == Dialect::Lenient && (c.is_ascii_alphabetic() || c == b'_') => {
-            Ok(parse_bare_identifier_value(bytes, i))
+            let (tag, j) = parse_bare_identifier_value(bytes, i);
+            // Struct-enum-variant-with-payload shape: `Tag { fields }`.
+            // Represented as `Object([(tag_name, ident_start, Object(fields))])`
+            // — a single-entry object whose key is the variant tag.  The
+            // schema walker's Parts::Enum arm detects this shape and
+            // dispatches to the variant's EnumValue struct.  Only applies
+            // when the identifier is NOT a reserved word (null/true/false).
+            if let Parsed::Ident(name) = &tag {
+                let k = skip_ws(bytes, j);
+                if k < bytes.len() && bytes[k] == b'{' {
+                    let (obj, end) = parse_object(bytes, k, path, dialect)?;
+                    return Ok((Parsed::Object(vec![(name.clone(), i, obj)]), end));
+                }
+            }
+            Ok((tag, j))
         }
         b'n' => parse_literal(bytes, i, b"null", Parsed::Null),
         b't' => parse_literal(bytes, i, b"true", Parsed::Bool(true)),
