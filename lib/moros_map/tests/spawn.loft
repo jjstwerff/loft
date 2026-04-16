@@ -1,0 +1,176 @@
+// Tests for the moros_map spawn + NPC routine + waypoint CRUD.
+use moros_map;
+
+// ── Spawn points ─────────────────────────────────────────────────
+
+fn test_spawn_empty() {
+  m = map_empty();
+  assert(spawn_count(m) == 0, "empty spawn count");
+}
+
+fn test_spawn_add_single() {
+  m = map_empty();
+  sp = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 5, ha_r: 7, ha_cy: 0 },
+    sp_kind:      "guard",
+    sp_creature:  1,
+    sp_npc_id:    100,
+    sp_count:     1,
+    sp_facing:    0,
+    sp_condition: "ALWAYS",
+  };
+  spawn_add(m, sp);
+  assert(spawn_count(m) == 1, "after add count=1");
+  // Hex flag bit 5 should be set.
+  h = map_get_hex(m, 5, 7, 0);
+  assert(hex_spawn_flag(h), "spawn flag on hex");
+}
+
+fn test_spawn_at() {
+  m = map_empty();
+  sp1 = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 5, ha_r: 7, ha_cy: 0 },
+    sp_kind:      "guard", sp_creature: 1, sp_npc_id: 100,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  sp2 = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 5, ha_r: 7, ha_cy: 0 },
+    sp_kind:      "merchant", sp_creature: 2, sp_npc_id: 101,
+    sp_count: 1, sp_facing: 0, sp_condition: "DAY_ONLY",
+  };
+  sp3 = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 9, ha_r: 9, ha_cy: 0 },
+    sp_kind:      "wolf", sp_creature: 3, sp_npc_id: 200,
+    sp_count: 4, sp_facing: 0, sp_condition: "NIGHT_ONLY",
+  };
+  spawn_add(m, sp1);
+  spawn_add(m, sp2);
+  spawn_add(m, sp3);
+  at_5_7 = spawn_at(m, 5, 7, 0);
+  assert(len(at_5_7) == 2, "2 spawns at (5,7,0)");
+  at_9_9 = spawn_at(m, 9, 9, 0);
+  assert(len(at_9_9) == 1, "1 spawn at (9,9,0)");
+  none = spawn_at(m, 0, 0, 0);
+  assert(len(none) == 0, "0 spawns at (0,0,0)");
+}
+
+fn test_spawn_remove() {
+  m = map_empty();
+  sp = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 1, ha_r: 2, ha_cy: 0 },
+    sp_kind:      "guard", sp_creature: 1, sp_npc_id: 100,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(m, sp);
+  assert(hex_spawn_flag(map_get_hex(m, 1, 2, 0)), "flag set pre-remove");
+
+  ok = spawn_remove(m, 1, 2, 0, 100);
+  assert(ok, "remove returns true");
+  assert(spawn_count(m) == 0, "count=0 after remove");
+  assert(!hex_spawn_flag(map_get_hex(m, 1, 2, 0)), "flag cleared when last spawn removed");
+
+  // Remove missing returns false.
+  ok2 = spawn_remove(m, 1, 2, 0, 999);
+  assert(!ok2, "remove missing returns false");
+}
+
+fn test_spawn_remove_preserves_flag_when_others_remain() {
+  m = map_empty();
+  sp1 = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 3, ha_r: 3, ha_cy: 0 },
+    sp_kind:      "guard", sp_creature: 1, sp_npc_id: 100,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  sp2 = SpawnPoint {
+    sp_hex:       HexAddress { ha_q: 3, ha_r: 3, ha_cy: 0 },
+    sp_kind:      "merchant", sp_creature: 2, sp_npc_id: 101,
+    sp_count: 1, sp_facing: 0, sp_condition: "DAY_ONLY",
+  };
+  spawn_add(m, sp1);
+  spawn_add(m, sp2);
+
+  spawn_remove(m, 3, 3, 0, 100);
+  assert(spawn_count(m) == 1, "one spawn remains");
+  assert(hex_spawn_flag(map_get_hex(m, 3, 3, 0)), "flag still set (sp2 on same hex)");
+}
+
+// ── NPC routines ─────────────────────────────────────────────────
+
+fn test_routine_add_and_lookup() {
+  m = map_empty();
+  routine_add(m, 100, "Guard Alpha", 1);
+  routine_add(m, 101, "Merchant Beta", 2);
+  assert(routine_count(m) == 2, "2 routines");
+  assert(routine_index(m, 100) == 0, "alpha at 0");
+  assert(routine_index(m, 101) == 1, "beta at 1");
+  assert(routine_index(m, 999) == -1, "missing returns -1");
+}
+
+fn test_routine_remove() {
+  m = map_empty();
+  routine_add(m, 100, "Alpha", 1);
+  routine_add(m, 101, "Beta", 2);
+  ok = routine_remove(m, 100);
+  assert(ok, "remove returned true");
+  assert(routine_count(m) == 1, "1 left");
+  assert(routine_index(m, 100) == -1, "alpha gone");
+  assert(routine_index(m, 101) == 0, "beta now at 0");
+}
+
+// ── Waypoints ────────────────────────────────────────────────────
+
+fn test_waypoint_add_to_routine() {
+  m = map_empty();
+  routine_add(m, 100, "Patrol", 1);
+  wp = NpcWaypoint {
+    wp_hex:        HexAddress { ha_q: 2, ha_r: 4, ha_cy: 0 },
+    wp_activity:   "PATROL",
+    wp_time_start: 8,
+    wp_time_end:   12,
+    wp_facing:     0,
+    wp_note:       "",
+  };
+  ok = waypoint_add(m, 100, wp);
+  assert(ok, "add returns true");
+  assert(waypoint_count(m, 100) == 1, "1 waypoint");
+  // Hex waypoint flag (bit 6) set.
+  h = map_get_hex(m, 2, 4, 0);
+  assert(hex_waypoint_flag(h), "waypoint flag on hex");
+}
+
+fn test_waypoint_add_to_missing_routine() {
+  m = map_empty();
+  wp = NpcWaypoint {
+    wp_hex:        HexAddress { ha_q: 2, ha_r: 4, ha_cy: 0 },
+    wp_activity:   "PATROL",
+    wp_time_start: 8, wp_time_end: 12,
+    wp_facing: 0, wp_note: "",
+  };
+  ok = waypoint_add(m, 999, wp);
+  assert(!ok, "missing routine returns false");
+  // Hex flag must NOT be set since no routine accepted the wp.
+  h = map_get_hex(m, 2, 4, 0);
+  assert(!hex_waypoint_flag(h), "no waypoint flag on hex");
+}
+
+fn test_waypoint_count_missing_routine() {
+  m = map_empty();
+  assert(waypoint_count(m, 999) == 0, "missing routine → 0 waypoints");
+}
+
+fn test_multiple_waypoints_per_routine() {
+  m = map_empty();
+  routine_add(m, 100, "Wander", 1);
+  for i in 0..5 {
+    wp = NpcWaypoint {
+      wp_hex:        HexAddress { ha_q: i, ha_r: i, ha_cy: 0 },
+      wp_activity:   "WANDER",
+      wp_time_start: i * 2,
+      wp_time_end:   (i + 1) * 2,
+      wp_facing:     0,
+      wp_note:       "",
+    };
+    waypoint_add(m, 100, wp);
+  }
+  assert(waypoint_count(m, 100) == 5, "5 waypoints got {waypoint_count(m, 100)}");
+}
