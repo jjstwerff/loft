@@ -1,0 +1,47 @@
+// Tests for the moros_editor undo stack.
+use moros_editor;
+
+fn test_undo_empty() {
+  s = undo_empty();
+  assert(undo_depth(s) == 0, "empty depth");
+}
+
+fn test_paint_then_undo() {
+  m = map_empty();
+  s = undo_empty();
+  // Initial state: hex (5, 7) has default material 0.
+  before = map_get_hex(m, 5, 7, 0);
+  assert(before.h_material == 0, "initial material");
+
+  paint_material_with_undo(s, m, 5, 7, 0, 42);
+  after = map_get_hex(m, 5, 7, 0);
+  assert(after.h_material == 42, "paint applied: {after.h_material}");
+  assert(undo_depth(s) == 1, "stack depth: {undo_depth(s)}");
+
+  ok = undo_pop(s, m);
+  assert(ok, "undo popped");
+  restored = map_get_hex(m, 5, 7, 0);
+  assert(restored.h_material == 0, "material restored: {restored.h_material}");
+  assert(undo_depth(s) == 0, "stack empty after undo");
+}
+
+fn test_multiple_undos() {
+  m = map_empty();
+  s = undo_empty();
+  paint_material_with_undo(s, m, 1, 1, 0, 10);
+  paint_material_with_undo(s, m, 2, 2, 0, 20);
+  paint_material_with_undo(s, m, 3, 3, 0, 30);
+  assert(undo_depth(s) == 3, "depth=3");
+
+  undo_pop(s, m);
+  h3 = map_get_hex(m, 3, 3, 0);
+  assert(h3.h_material == 0, "third undone: {h3.h_material}");
+
+  undo_pop(s, m);
+  h2 = map_get_hex(m, 2, 2, 0);
+  assert(h2.h_material == 0, "second undone: {h2.h_material}");
+
+  // First edit still in place.
+  h1 = map_get_hex(m, 1, 1, 0);
+  assert(h1.h_material == 10, "first still painted: {h1.h_material}");
+}

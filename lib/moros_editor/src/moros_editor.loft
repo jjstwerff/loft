@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// moros_editor — edit operations on top of moros_map.
+// Phase 4 per ../moros/doc/claude/SCENE_EDITOR_PLAN.md.
+
+use moros_map;
+
+// ── Undo stack ─────────────────────────────────────────────────────
+
+// One undo entry: snapshot of a hex BEFORE an edit.
+pub struct UndoEntry {
+  ue_q:    integer not null,
+  ue_r:    integer not null,
+  ue_cy:   integer not null,
+  ue_prev: Hex,
+}
+
+// LIFO undo stack.
+pub struct UndoStack {
+  us_entries: vector<UndoEntry>,
+}
+
+pub fn undo_empty() -> UndoStack {
+  UndoStack { us_entries: [] }
+}
+
+// Capture the hex at (q, r, cy) before mutating it.
+pub fn undo_push(s: &UndoStack, m: Map, q: integer, r: integer, cy: integer) {
+  prev = map_get_hex(m, q, r, cy);
+  s.us_entries += [UndoEntry { ue_q: q, ue_r: r, ue_cy: cy, ue_prev: prev }];
+}
+
+// Undo the most recent edit.  Returns true if anything was undone.
+pub fn undo_pop(s: &UndoStack, m: &Map) -> boolean {
+  n = len(s.us_entries);
+  if n == 0 { return false; }
+  e = s.us_entries[n - 1];
+  map_set_hex(m, e.ue_q, e.ue_r, e.ue_cy, e.ue_prev);
+  // Drop the last entry by shrinking the vector.
+  // (moros_map's vector mutation works element-wise; rebuild without the tail.)
+  rebuilt: vector<UndoEntry> = [];
+  for i in 0..(n - 1) {
+    rebuilt += [s.us_entries[i]];
+  }
+  s.us_entries = rebuilt;
+  true
+}
+
+pub fn undo_depth(s: UndoStack) -> integer { len(s.us_entries) }
+
+// ── Recording editors ─────────────────────────────────────────────
+
+// Like map_paint_material but also records the previous state for undo.
+pub fn paint_material_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, mat: integer) {
+  undo_push(s, m, q, r, cy);
+  map_paint_material(m, q, r, cy, mat);
+}
