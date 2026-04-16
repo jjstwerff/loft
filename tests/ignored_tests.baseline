@@ -6,5 +6,4 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
-p151_forward_ref_struct_call_with_mutation	P151 open — forward-ref struct call + field mutation breaks type inference
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

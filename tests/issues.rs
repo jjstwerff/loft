@@ -8644,24 +8644,26 @@ fn p144_ref_param_forward_native() {
 /// matched, bypassing the user body's `OpCall` path and
 /// corrupting the stack.  Fix: skip library_names lookup when
 /// `def.code != Value::Null`.
-/// P151: forward-reference to a struct-returning fn + field mutation
-/// on the result corrupts variable type inference.  Trigger:
+/// P151 regression guard: forward-reference to a struct-returning fn
+/// followed by field mutation USED to corrupt variable type inference.
+/// Trigger:
 /// ```
 /// fn one() { x = callee(); x.v = 99; }
 /// fn callee() -> H { H { v: 7 } }
 /// ```
-/// errors with `Variable 'x' cannot change type from integer to H`.
-/// Reordering `callee` BEFORE `one` works around it.
+/// errored with `Variable 'x' cannot change type from integer to H`.
 ///
-/// Hypothesis: pass-1 sees `x = callee()` with callee's return type
-/// unknown → x's type stays unset → the subsequent `x.v = 99`
-/// mutation infers x as integer (the field type) → pass-2 can't
-/// reset x to H.
+/// Root cause (closed): `parser/fields.rs::field()` silently dropped
+/// `.v` when called on an unknown-type receiver in pass-1 — leaving
+/// `code` as `Value::Var(x)`, which caused downstream assignment
+/// processing (`parse_assign_op` → `change_var`) to set x's type to
+/// the RHS expression's type (integer in `x.v = 99`).  Pass-2 then
+/// rejected the now-resolved `x = callee()` returning the struct.
 ///
-/// Workaround in `lib/moros_map/src/moros_map.loft`: define
-/// `map_get_hex` BEFORE `map_paint_material` etc.
+/// Fix: wrap `code` in `Value::Drop` when the field access is
+/// unresolvable in pass-1, so `code != Value::Var(x)` and the
+/// assignment processing skips the spurious type update.
 #[test]
-#[ignore = "P151 open — forward-ref struct call + field mutation breaks type inference"]
 fn p151_forward_ref_struct_call_with_mutation() {
     code!(
         "struct H { v: integer }
