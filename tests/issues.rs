@@ -8952,6 +8952,78 @@ fn test() { }"
     ));
 }
 
+/// P157 regression guard — native codegen's pre-eval path emitted
+/// `*var_m` for a `&Map` forwarded to another fn taking `&Map`,
+/// breaking rustc type-check.  P144 fixed this for the non-pre-eval
+/// path; the pre-eval arg re-emitter in `generation/pre_eval.rs::
+/// output_code_with_subst` had its own code that bypassed the check.
+/// Trigger: call a user fn that takes `&Struct` from inside another
+/// fn that also takes `&Struct`, AND the call has other args that
+/// need pre-evaluation (nested field reads, etc.).
+#[test]
+fn p157_native_refvar_forwarding_with_preeval() {
+    // Write the test program to a temp file; use the parser's file-
+    // loading entry point rather than an inline string.
+    let src_path = std::env::temp_dir().join("loft_p157_test.loft");
+    std::fs::write(
+        &src_path,
+        "struct Inner { val: integer not null }\n\
+         struct Outer { inner: Inner }\n\
+         fn helper(o: &Outer, n: integer) { o.inner.val = n; }\n\
+         fn caller(o: &Outer) { helper(o, o.inner.val + 1); }\n\
+         fn main() { o = Outer { inner: Inner { val: 5 } }; caller(o); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let rs_path = std::env::temp_dir().join("loft_p157_native.rs");
+    {
+        let mut f = std::fs::File::create(&rs_path).unwrap();
+        let main_nr = p.data.def_nr("n_main");
+        let mut out = loft::generation::Output {
+            data: &p.data,
+            stores: &state.database,
+            counter: 0,
+            indent: 0,
+            def_nr: 0,
+            declared: std::collections::HashSet::new(),
+            reachable: std::collections::HashSet::new(),
+            loop_stack: Vec::new(),
+            next_format_count: 0,
+            yield_collect: false,
+            fn_ref_context: false,
+            call_stack_prefix: None,
+            wasm_browser: false,
+        };
+        out.output_native_reachable(&mut f, 0, p.data.definitions(), &[main_nr])
+            .unwrap();
+    }
+    let source = std::fs::read_to_string(&rs_path).unwrap();
+    assert!(
+        !source.contains("n_helper(stores, *var_o"),
+        "P157 regression: pre-eval path still emits *var_o for & param forward.\n\
+         Generated: {}",
+        rs_path.display()
+    );
+    assert!(
+        source.contains("n_helper(stores, var_o"),
+        "P157 regression: expected direct var_o pass-through.\n\
+         Generated: {}",
+        rs_path.display()
+    );
+    let _ = std::fs::remove_file(&rs_path);
+    let _ = std::fs::remove_file(&src_path);
+}
+
 /// P155 regression guard — push/undo/mid-assert/redo/final-read used
 /// to SIGSEGV in OpGetVector.  Root cause: `state/codegen.rs::generate_set`
 /// (reassignment path, lines 891-932) emitted `OpCopyRecord` with the
