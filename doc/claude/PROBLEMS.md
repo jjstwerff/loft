@@ -46,6 +46,8 @@ existing entry, not re-open it as a bug.
 | ~~148~~ | Wrap-suite leak on script 45 (A10 field iteration) | — | **Fixed 2026-04-16** — removed `clean_work_refs(work_checkpoint)` call from `src/parser/collections.rs::parse_field_iteration` (line 1761).  The unrolled loop creates 2 work-refs per field (FvFloat/etc + StructField); the `clean_work_refs` call marked ALL of them `skip_free`, preventing scope-exit cleanup of the orphaned work-refs from prior iterations.  With skip_free removed, `get_free_vars`'s `is_work_ref` check emits `OpFreeRef` for each.  Tests: `tests/leak.rs::p148_script_45_field_iteration_leak`. |
 | ~~149~~ | SIGSEGV in `OpCopyRecord` for nested struct construction (script 76) | — | **Fixed 2026-04-16** — closed as a side-effect of the P147 `Set(v, Var(src))` dep-stripping fix.  The SEGV was caused by a `__ref_*` work-ref's store being freed prematurely (scope analysis treated it as borrowed due to non-empty dep), then `OpCopyRecord` reading from the freed store.  With deps stripped on the deep-copy path, stores are properly managed and the SEGV disappears.  Tests: `tests/leak.rs::p149_script_76_nested_struct_segv`. |
 | ~~150~~ | Per-call leak: orphaned `__ref_*` placeholder when callee returns a fresh store | — | **Fixed 2026-04-16.**  When `m = user_fn(...)` with no visible Reference params, codegen pre-allocates a placeholder store via `OpConvRefFromNull` for the hidden `__ref_*` slot.  Both `src/scopes.rs:518-527` and `src/state/codegen.rs:1057-1064` marked `__ref_*` as `skip_free` to avoid double-free in the typical adoption case (callee writes into the placeholder, `m` and `__ref_*` alias).  When the callee instead returns a fresh store (early-return through a constructor call, or fall-through `T.parse(text)` — both shapes used by `lib/moros_map/src/moros_map.loft::map_from_json`), the placeholder was orphaned.  Severity was per-call (game loops at 60fps would saturate u16 store space in ~18 minutes).  Fix: drop both `set_skip_free` calls.  The runtime tolerates double-free as a no-op (`src/database/allocation.rs:103-105`'s `if store.free { return }`), so the typical adoption case is unaffected (both frees fire, second is no-op) and the orphan case now reclaims the placeholder via the existing `is_work_ref` check in `scopes.rs::get_free_vars`.  Tests: `tests/leak.rs::p150_*` (un-`#[ignore]`'d). |
+| ~~151~~ | Forward-reference to struct-returning fn + field mutation corrupts variable type inference | — | **Fixed 2026-04-16.**  `parser/fields.rs::field()` silently dropped the field-name token when the receiver had unknown type in pass-1 (returning the original `Value::Var(x)` unchanged), so `x.v = 99` collapsed to `x = 99` for downstream assignment processing.  `parse_assign_op` → `change_var` then set x's type to the RHS expression's type (integer for `x.v = 99`).  Pass-2 rejected the now-resolved `x = callee()` returning the struct.  Fix: wrap `code` in `Value::Drop` when `field()` returns early on an unknown receiver — `code != Value::Var(x)` ⇒ `assign_var_nr` returns `u16::MAX` ⇒ `change_var` skips the spurious type update.  Tests: `tests/issues.rs::p151_forward_ref_struct_call_with_mutation`. |
+| 152 | `s.vec_field = vec_var` silently dropped at runtime (data-loss); struct-field whole-replacement also breaks `&` mutation check | **High** (data loss) | Use append/element-set paths (`s.v += [...]`, `s.v[i] = x`) or a function-local rebuild; for struct fields, refactor as field-by-field assignment until fixed |
 
 ---
 
@@ -872,6 +874,116 @@ bugs panic with diagnostics instead of SIGSEGVing.
 **Tests:** `tests/issues.rs::p145_text_return_multivec_struct_cross_file`
 
 **Discovered:** 2026-04-15.  Fixed: 2026-04-15.
+
+---
+
+### 152. Whole-replacement assignment to a struct field is silently dropped (vector field) or undetected as a write (struct field)
+
+**Severity:** High — silent data loss for vector/sorted/hash/index/spacial fields.
+
+**Symptom (vector field):**
+
+```loft
+struct S { v: vector<integer> }
+
+fn modify(s: S) {
+  fresh: vector<integer> = [1, 2, 3];
+  s.v = fresh;        // ← silently dropped at runtime
+}
+
+fn test() {
+  s = S { v: [] };
+  modify(s);
+  assert(len(s.v) == 3, "got {len(s.v)}");  // FAILS: got 0
+}
+```
+
+The same shape with `&S` instead of `S` is rejected at parse time as
+"Parameter 's' has & but is never modified" — exposing the same root
+cause from a different angle.
+
+**Symptom (struct field):**
+
+```loft
+struct Inner { x: integer not null }
+struct Outer { i: Inner }
+
+fn modify(s: &Outer) {        // error: parameter 's' has & but is never modified
+  fresh = Inner { x: 99 };
+  s.i = fresh;                // works at runtime via OpCopyRecord, but ...
+}                             // ... mutation detection misses OpCopyRecord
+```
+
+The struct case is a **compiler-side** false-negative on the `&` mutation
+check (the runtime OpCopyRecord does the right thing).  The vector case is
+**runtime data loss**.
+
+**Matrix of variants:**
+
+| RHS form | Result |
+|---|---|
+| `s.x = 99` (scalar integer) | works |
+| `s.t = fresh` (text variable) | works |
+| `s.i = Inner { x: 99 }` (struct inline literal) | works |
+| `s.v = [1, 2, 3]` (vector inline literal) | works |
+| `s.v = []` (empty vector literal) | **silent data loss** |
+| `s.v = fresh` (vector variable) | **silent data loss** |
+| `s.i = fresh` (struct variable) | works at runtime; `&` mutation check fails |
+| `s.v += [1]` (append) | works |
+| `s.v[0] = 99` (element assign) | works |
+
+**Root cause (vector field, runtime):**
+
+`src/parser/collections.rs::towards_set` (lines 287-308) handles
+`f_type` ∈ {Vector, Sorted, Hash, Index, Spacial} by emitting a proper
+`v_set` only when `to` is a plain `Value::Var`.  When `to` is a field
+access (`Value::Call(OpGetField, [base, pos, info])`) the function falls
+through to `return val.clone();` — returning the bare RHS with no
+assignment wrapper.  parse_assign_op then writes that bare value back
+into `code` and codegen runs it, evaluating the RHS but never writing
+it into the field.
+
+The same field-access shape for non-empty inline vector literals like
+`[1, 2, 3]` is handled by `create_vector` upstream (it returns a
+`Value::Insert` whose head builds the vector directly in the field's ref
+slot), so those paths don't hit the bug.  An empty literal `[]` and a
+bare `Var(vec)` both bypass `create_vector` and land in the buggy branch.
+
+**Root cause (struct field, mutation detection):**
+
+`src/parser/mod.rs::find_written_vars` (lines 2772-2774) marks the
+first arg of `OpSet*` / `OpNewRecord` / `OpAppendCopy` calls as written.
+Struct-field whole-replacement uses `OpCopyRecord` (via
+`towards_set`'s reference branch on line 281 → `copy_ref`), which is not
+in that list, so the `&` parameter's mutation goes undetected.
+
+**Fix path:**
+
+1. **Vector / sorted / hash / index / spacial field assignment**: in
+   `towards_set`, replace the `return val.clone()` fallback with an
+   emission of `OpSetInt(base, pos, val)` — mirroring
+   `set_field_check`'s vector branch (`src/parser/mod.rs:1492-1497`).
+   Detect the `OpGetField`-shaped LHS and lift its first two args.
+2. **Struct field whole-replacement mutation detection**: extend
+   `find_written_vars`'s `field_write` set to include `OpCopyRecord`,
+   matching how `OpSet*` already mark their first-arg vars as written.
+
+**Workarounds (until fixed):**
+
+- For vector fields: `s.v += new_elem;` to append; `s.v[i] = x;` to
+  replace an element.  To replace the whole vector, mutate elements in
+  a loop, or restructure the API so the field's owner builds the new
+  vector locally and returns it.
+- For struct fields (compile-time only): drop the `&` and rely on
+  by-reference semantics of struct args, or assign field-by-field
+  (`s.i.x = 99;`) to keep mutation detection happy.
+
+**Discovered:** 2026-04-16, while building `lib/moros_editor`'s undo
+stack — `s.us_entries = rebuilt;` (vector field whole-replacement)
+silently failed.
+
+**Tests:** `tests/issues.rs::p152_*` (regression guards;
+`#[ignore]`'d until fixed).
 
 ---
 

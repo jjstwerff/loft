@@ -541,6 +541,48 @@ use a separate collection or add after the loop"
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
+        // P152: vector-typed field whole-replacement.
+        // `s.v = fresh` (RHS is a vector variable/expr) used to silently drop
+        // the assignment because towards_set's vector branch returned bare
+        // `val`.  `s.v = []` likewise leaked through to the Insert bypass at
+        // the end of this function with no SET operator emitted.  Both cases
+        // are now rewritten to `OpClearVector(s.v)` (+ `OpAppendVector` when
+        // there is RHS data to copy in).
+        //
+        // Skipped:
+        // - `code` already a non-empty `Value::Insert` (vector literal built
+        //   inline by parse_vector — its statements construct elements
+        //   directly in the field's storage; wrapping in OpAppendVector would
+        //   double-build and break codegen).
+        // - RHS type is non-Vector (e.g. `b.data = f#read(...)` where f#read
+        //   returns text) — preserve the historical silent no-op rather than
+        //   emit a type-mismatched OpAppendVector.
+        if !self.first_pass
+            && op == "="
+            && var_nr == u16::MAX
+            && matches!(f_type, Type::Vector(_, _))
+            && self.is_field(to)
+        {
+            let is_empty_literal = matches!(code, Value::Insert(ls) if ls.is_empty());
+            let is_nonempty_literal = matches!(code, Value::Insert(ls) if !ls.is_empty());
+            let rhs_is_vector = matches!(s_type, Type::Vector(_, _));
+            if is_empty_literal {
+                *code = Value::Insert(vec![self.cl("OpClearVector", std::slice::from_ref(to))]);
+                return Type::Void;
+            }
+            if !is_nonempty_literal
+                && rhs_is_vector
+                && let Type::Vector(elm_tp, _) = f_type
+            {
+                let elm_tp_clone = (**elm_tp).clone();
+                let dn = self.data.type_def_nr(&elm_tp_clone);
+                let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
+                let clear = self.cl("OpClearVector", std::slice::from_ref(to));
+                let append = self.cl("OpAppendVector", &[to.clone(), code.clone(), rec_tp]);
+                *code = Value::Insert(vec![clear, append]);
+                return Type::Void;
+            }
+        }
         // `lhs += other_vec` where both sides are vectors: append all elements
         // in-place via OpAppendVector.
         if !self.first_pass

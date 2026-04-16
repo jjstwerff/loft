@@ -14,6 +14,19 @@ impl Parser {
             }
             // In the first pass, skip the field name token so parsing continues.
             self.lexer.has_identifier();
+            // P151: wrap `code` in Value::Drop so an unresolved field access
+            // (e.g. `x.v` where x's type is not yet known on pass 1) is no
+            // longer treated as a plain `Value::Var(x)` by downstream
+            // assignment processing.  Without this wrapping, `x.v = 99` in
+            // a function whose `x = callee()` references a struct-returning
+            // fn defined LATER in the file collapses to `x = 99` on pass 1
+            // (because `.v` is silently dropped) — which sets x's inferred
+            // type to integer.  Pass 2 then sees x = integer and rejects
+            // the now-resolved `x = callee()` returning the struct.
+            // Wrapping in Drop keeps `code != Value::Var(x)` so
+            // `assign_var_nr` returns u16::MAX and `change_var` skips the
+            // type update.
+            *code = Value::Drop(Box::new(code.clone()));
             return tp;
         }
         let mut t = tp;

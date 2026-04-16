@@ -8644,6 +8644,124 @@ fn p144_ref_param_forward_native() {
 /// matched, bypassing the user body's `OpCall` path and
 /// corrupting the stack.  Fix: skip library_names lookup when
 /// `def.code != Value::Null`.
+/// P151 regression guard: forward-reference to a struct-returning fn
+/// followed by field mutation USED to corrupt variable type inference.
+/// Trigger:
+/// ```
+/// fn one() { x = callee(); x.v = 99; }
+/// fn callee() -> H { H { v: 7 } }
+/// ```
+/// errored with `Variable 'x' cannot change type from integer to H`.
+///
+/// Root cause (closed): `parser/fields.rs::field()` silently dropped
+/// `.v` when called on an unknown-type receiver in pass-1 — leaving
+/// `code` as `Value::Var(x)`, which caused downstream assignment
+/// processing (`parse_assign_op` → `change_var`) to set x's type to
+/// the RHS expression's type (integer in `x.v = 99`).  Pass-2 then
+/// rejected the now-resolved `x = callee()` returning the struct.
+///
+/// Fix: wrap `code` in `Value::Drop` when the field access is
+/// unresolvable in pass-1, so `code != Value::Var(x)` and the
+/// assignment processing skips the spurious type update.
+#[test]
+fn p151_forward_ref_struct_call_with_mutation() {
+    code!(
+        "struct H { v: integer }
+fn one() {
+    x = callee();
+    x.v = 99;
+}
+fn callee() -> H { H { v: 7 } }
+fn test() { one(); }"
+    )
+    .result(Value::Null);
+}
+
+/// P152.A — vector field assignment from a variable used to be silently
+/// dropped at runtime (`s.v = fresh;` evaluated `fresh` but never wrote
+/// it into the field).  Fix: `towards_set` now emits
+/// `OpClearVector + OpAppendVector` when the LHS is a vector
+/// field-access, deep-copying the RHS into the field's storage.
+#[test]
+fn p152_vec_field_assign_from_var_dataloss() {
+    code!(
+        "struct S { v: vector<integer> }
+fn modify(s: S) {
+    fresh: vector<integer> = [1, 2, 3];
+    s.v = fresh;
+}
+fn test() {
+    s = S { v: [] };
+    modify(s);
+    assert(len(s.v) == 3, \"expected 3 got {len(s.v)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P152.A (variant) — `s.v = []` used to silently keep the existing
+/// vector contents.  Fix: parse_assign_op detects the empty-Insert
+/// + field LHS shape and emits OpClearVector(to).
+#[test]
+fn p152_vec_field_assign_from_empty_literal_dataloss() {
+    code!(
+        "struct S { v: vector<integer> }
+fn modify(s: S) {
+    s.v = [];
+}
+fn test() {
+    s = S { v: [1, 2, 3] };
+    modify(s);
+    assert(len(s.v) == 0, \"expected 0 got {len(s.v)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P152.A (& form) — `s.v = fresh` on a `&S` parameter used to parse-fail
+/// with "Parameter 's' has & but is never modified".  Fix: the same
+/// `towards_set` change emits a real OpClearVector+OpAppendVector pair,
+/// which `find_written_vars` now recognises (OpAppendVector folded into
+/// the unified first_arg_write set).
+#[test]
+fn p152_vec_field_ref_param_mutation_undetected() {
+    code!(
+        "struct S { v: vector<integer> }
+fn modify(s: &S) {
+    fresh: vector<integer> = [1, 2, 3];
+    s.v = fresh;
+}
+fn test() {
+    s = S { v: [] };
+    modify(s);
+    assert(len(s.v) == 3, \"expected 3 got {len(s.v)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P152.B — struct field whole-replacement (`s.i = fresh`) works at
+/// runtime via OpCopyRecord, but the `&` mutation check used to miss
+/// OpCopyRecord.  Fix: `find_written_vars` adds OpCopyRecord(src, dst)
+/// to the second_arg_write set, walking the OpGetField destination.
+#[test]
+fn p152_struct_field_ref_param_mutation_undetected() {
+    code!(
+        "struct Inner { x: integer not null }
+struct Outer { i: Inner }
+fn modify(s: &Outer) {
+    fresh = Inner { x: 99 };
+    s.i = fresh;
+}
+fn test() {
+    s = Outer { i: Inner { x: 7 } };
+    modify(s);
+    assert(s.i.x == 99, \"expected 99 got {s.i.x}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 #[test]
 fn p145_text_return_multivec_struct_cross_file() {
     let mut p = Parser::new();

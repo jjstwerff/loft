@@ -1489,19 +1489,7 @@ impl State {
     /// `execute_argv` to detect store leaks. Panics in debug builds
     /// if any stores are still alive (except the stack store).
     pub fn check_store_leaks(&self) {
-        let mut leaked = Vec::new();
-        for (s_nr, s) in self.database.allocations.iter().enumerate() {
-            if s_nr == 0 {
-                continue; // stack store — always alive
-            }
-            // Skip locked constant stores (program-lifetime, never freed).
-            if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {
-                continue;
-            }
-            if !s.free {
-                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
-            }
-        }
+        let leaked = self.collect_store_leaks();
         if !leaked.is_empty() {
             let count = leaked.len();
             let preview = if count <= 5 {
@@ -1512,6 +1500,30 @@ impl State {
             let msg = format!("{count} stores not freed at program exit: {preview}");
             eprintln!("Warning: {msg}");
         }
+    }
+
+    /// Collect a description for every leaked store at program exit
+    /// (same filtering as `check_store_leaks`: skip stack store 0,
+    /// locked constants, and `const_refs`).  Used by tests that need
+    /// to assert leak-free without driving `execute_log`'s full trace
+    /// machinery (which can hang on certain multi-fn iterations under
+    /// rustc 1.95.0+).  The leak warning's `eprintln!` path is built
+    /// on top of this helper.
+    #[must_use]
+    pub fn collect_store_leaks(&self) -> Vec<String> {
+        let mut leaked = Vec::new();
+        for (s_nr, s) in self.database.allocations.iter().enumerate() {
+            if s_nr == 0 {
+                continue; // stack store — always alive
+            }
+            if s.is_locked() || self.const_refs.iter().any(|cr| cr.store_nr == s_nr as u16) {
+                continue;
+            }
+            if !s.free {
+                leaked.push(format!("{}(bc:{})", s_nr, s.created_at));
+            }
+        }
+        leaked
     }
 
     /// FY.2: Resume execution after a frame yield.  Returns `true` while the

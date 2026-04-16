@@ -103,12 +103,6 @@ pub fn map_set_hex(m: &Map, q: integer, r: integer, cy: integer, h: Hex) {
   }
 }
 
-// P144: convenience functions (map_paint_material, map_set_height,
-// map_place_item, map_set_wall) cause infinite loops when multiple
-// &Map functions call each other in cross-file packages. Deferred
-// until the flat-namespace issue is resolved. Use map_set_hex with
-// a full Hex struct for now.
-
 // ── MO.2: Hex-address read helpers ──────────────────────────────────
 
 // Resolve global (q, r, cy) to the Hex at that address.
@@ -127,4 +121,40 @@ pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
     }
   }
   Hex {}
+}
+
+// MO.3 convenience editors.  Originally deferred under P144 (infinite
+// loop when multiple &Map fns called each other in cross-file packages),
+// now restored — P144 was closed by the cherry-pick fix in PR #173.
+
+// Paint a hex's material at (q, r, cy).
+pub fn map_paint_material(m: &Map, q: integer, r: integer, cy: integer, material: integer) {
+  cur = map_get_hex(m, q, r, cy);
+  cur.h_material = material;
+  map_set_hex(m, q, r, cy, cur);
+}
+
+// Set a hex's height at (q, r, cy).
+pub fn map_set_height(m: &Map, q: integer, r: integer, cy: integer, height: integer) {
+  cur = map_get_hex(m, q, r, cy);
+  cur.h_height = height;
+  map_set_hex(m, q, r, cy, cur);
+}
+
+// Place an item on a hex (item index + rotation, preserves spawn/waypoint flags).
+pub fn map_place_item(m: &Map, q: integer, r: integer, cy: integer, item: integer, rotation: integer) {
+  cur = map_get_hex(m, q, r, cy);
+  cur.h_item = item;
+  flags = cur.h_item_rotation & (32 | 64);  // bits 5+6 (spawn, waypoint)
+  cur.h_item_rotation = (rotation & 31) | flags;
+  map_set_hex(m, q, r, cy, cur);
+}
+
+// Set a wall on a hex edge.  edge: 0=N, 1=NE, 2=SE.
+pub fn map_set_wall(m: &Map, q: integer, r: integer, cy: integer, edge: integer, wall: integer) {
+  cur = map_get_hex(m, q, r, cy);
+  if edge == 0 { cur.h_wall_n = wall; }
+  if edge == 1 { cur.h_wall_ne = wall; }
+  if edge == 2 { cur.h_wall_se = wall; }
+  map_set_hex(m, q, r, cy, cur);
 }

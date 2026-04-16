@@ -388,23 +388,23 @@ pub fn test() {
     );
 }
 
-/// P150 file-level reproducer: `lib/moros_map/tests/serial.loft`
-/// USED to leak 1 store via interpreter (warning: `2(bc:0)`) when
+/// P150 file-level regression guard: `lib/moros_map/tests/serial.loft`
+/// used to leak 1 store via interpreter (warning: `2(bc:0)`) when
 /// `test_from_json_empty_string` called `map_from_json("")`, which has
 /// the early-return + fall-through `Struct.parse` shape that triggered
-/// the orphan placeholder alloc.  The minimal repro above is closed by
-/// the P150 fix (drop skip_free for `__ref_*` work-refs).
+/// the orphan placeholder alloc.  Closed by the P150 fix (drop
+/// `set_skip_free` for `__ref_*` work-refs in scopes.rs + codegen.rs).
 ///
-/// **However**: the cross-fn / file-level case under `execute_log` +
-/// `trace_alloc_free` HANGS in an infinite loop on rustc 1.95.0.
-/// Each test fn runs cleanly via the loft CLI, but iterating all 5
-/// through `execute_log` in one `State` enters a runtime loop.  The
-/// CLI path (interpret without trace) for `lib/moros_map/tests/serial.loft`
-/// is clean (0 leaks) on rustc 1.95.0 — so the leak IS closed for
-/// real programs; only the trace-instrumented diagnostic harness
-/// hangs.  Re-ignored 2026-04-16 pending narrower investigation.
+/// Uses `state.execute()` (no trace) + `state.collect_store_leaks()`
+/// instead of `execute_log + trace_alloc_free`.  The trace-instrumented
+/// path hangs on multi-fn loops under rustc 1.95.0 — likely a
+/// state-accumulation issue in the verbose log machinery, NOT in loft
+/// itself (every test fn passes standalone via the CLI).  Filed as
+/// out-of-scope for P150: the diagnostic-harness hang is unrelated to
+/// the language-correctness fix.  This test gives equivalent leak
+/// coverage (any unfreed store at end of run is a failure) without
+/// depending on the trace machinery.
 #[test]
-#[ignore = "P150 partial — hangs under execute_log+trace; CLI path is clean"]
 fn p150_moros_map_serial_leak() {
     loft::crash_report::install("leak");
     let mut p = Parser::new();
@@ -421,8 +421,6 @@ fn p150_moros_map_serial_leak() {
     scopes::check(&mut p.data);
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
-    let mut config = loft::log_config::LogConfig::full();
-    config.trace_alloc_free = true;
     for name in [
         "test_to_from_json_empty",
         "test_from_json_empty_string",
@@ -430,9 +428,15 @@ fn p150_moros_map_serial_leak() {
         "test_roundtrip_rotation_flags",
         "test_roundtrip_npc_waypoints",
     ] {
-        eprintln!("=== {name} ===");
-        let _ = state.execute_log(&mut std::io::stderr(), name, &config, &p.data);
+        state.execute(name, &p.data);
     }
+    let leaks = state.collect_store_leaks();
+    assert!(
+        leaks.is_empty(),
+        "P150 regression: {} store(s) leaked: {}",
+        leaks.len(),
+        leaks.join(", ")
+    );
 }
 
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.

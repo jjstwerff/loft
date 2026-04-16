@@ -40,6 +40,17 @@ impl Output<'_> {
             )?;
             return Ok(());
         }
+        // P152: vector field whole-replacement (e.g. `b.data = f#read(...)`)
+        // emits OpClearVector with a non-Var arg (typically OpGetField).
+        // Compute the DbRef inline and call vector::clear_vector.
+        if let [val] = vals {
+            let expr = self.generate_expr_buf(val)?;
+            write!(
+                w,
+                "{{ let _cv = {expr}; if _cv.rec != 0 {{ vector::clear_vector(&_cv, &mut stores.allocations); }} }}"
+            )?;
+            return Ok(());
+        }
         panic!("Could not parse {vals:?}");
     }
 
