@@ -338,6 +338,92 @@ fn p149_script_76_nested_struct_segv() {
     );
 }
 
+/// P150 minimal reproducer: a function with both an EARLY-RETURN
+/// constructor and a fall-through `Struct.parse(text)` path leaks 1
+/// placeholder store from the caller's hidden `__ref_*`
+/// ConvRefFromNull pre-alloc.
+///
+/// Diagnosis: codegen for `m = make(...)` pre-allocates a slot for
+/// the hidden return-ref via OpConvRefFromNull (creating a fresh
+/// "null" store).  When the callee's early-return returns a DbRef
+/// to a store created INSIDE the callee (not into the hidden
+/// return slot), the caller's pre-alloc store is orphaned —
+/// `__ref_*` is marked skip_free (`src/state/codegen.rs:1062` and
+/// `src/scopes.rs:523`) so the caller's variable owns the callee's
+/// store, and the original ConvRefFromNull store is never freed.
+///
+/// Fix attempt 2026-04-16 (reverted): removing the `set_skip_free`
+/// in both codegen + scopes paths closes this leak but causes the
+/// `lib/moros_map/tests/serial.loft` test to HANG (infinite loop)
+/// in `map_to_json` — the broader skip_free is load-bearing for
+/// the typical adoption case.  A narrower fix needs to detect
+/// callees that return a fresh store on at least one path (e.g.
+/// `return <call>` not at the tail position) and only drop
+/// skip_free for those.  Filed in PROBLEMS.md as P150.
+#[test]
+#[ignore = "P150 open — narrower fix needed; broad skip_free removal hangs"]
+fn p150_early_return_struct_orphans_caller_pre_alloc() {
+    // Minimal trigger: a user fn that has an EARLY-RETURN of a constructor
+    // call AND a fall-through `Struct.parse(text)` path.  The caller's
+    // `m = fn(...)` pre-allocates a hidden return slot via OpConvRefFromNull
+    // (creating a fresh "null" store).  When the early-return path runs,
+    // the returned DbRef points to a store created INSIDE the callee, not
+    // into the caller's pre-alloc; the pre-alloc store is orphaned.
+    // `__ref_*` is marked skip_free (so the caller's variable owns the
+    // callee's store), so the original ConvRefFromNull store leaks.
+    run_leak_check_str(
+        r#"
+struct M { name: text }
+fn make_empty() -> M { M { name: "untitled" } }
+fn make_or_default(t: text) -> M {
+  if t == "" { return make_empty(); }
+  result = M.parse(t);
+  result
+}
+pub fn test() {
+  m = make_or_default("");
+  assert(m.name == "untitled", "name");
+}
+"#,
+    );
+}
+
+/// P150 file-level reproducer: `lib/moros_map/tests/serial.loft` leaks 1 store
+/// when run via interpreter (warning: `2(bc:0)`).  Native run is clean.
+/// Triggered by `test_from_json_empty_string` calling map_from_json("")
+/// which has the early-return + fall-through Struct.parse shape.
+#[test]
+#[ignore = "P150 open — see p150_early_return_struct_orphans_caller_pre_alloc"]
+fn p150_moros_map_serial_leak() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.lib_dirs.push("lib".to_string());
+    p.parse("lib/moros_map/tests/serial.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    for name in [
+        "test_to_from_json_empty",
+        "test_from_json_empty_string",
+        "test_roundtrip_full_map",
+        "test_roundtrip_rotation_flags",
+        "test_roundtrip_npc_waypoints",
+    ] {
+        eprintln!("=== {name} ===");
+        let _ = state.execute_log(&mut std::io::stderr(), name, &config, &p.data);
+    }
+}
+
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
 ///
