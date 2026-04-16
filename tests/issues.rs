@@ -8926,12 +8926,13 @@ fn test() {
 /// OpGetVector dereferences.  See PROBLEMS.md P155 for the 22-line
 /// minimal reproducer.
 /// P156 regression guard — `vector<T>` with a T that shadows a stdlib
-/// constant (e.g. `E`, `PI`) panics `typedef.rs:309` instead of
-/// emitting the clean "struct conflicts with constant" diagnostic that
-/// fires for the same struct used in any other context (bare
-/// construction, `sorted<T[k]>`, `hash<T[k]>`).
+/// constant (e.g. `E`, `PI`) used to panic `typedef.rs:309` instead of
+/// emitting the clean "struct conflicts with constant" diagnostic.
+/// Fix: `parser/definitions.rs::sub_type` checks the resolved element
+/// def's DefType up-front and emits a proper diagnostic if it's not a
+/// type; `typedef.rs::fill_database` softened the assert to `continue`
+/// so a prior parser error never panics the runtime.
 #[test]
-#[ignore = "P156: parser panic instead of clean name-conflict error"]
 fn p156_vector_element_shadows_constant() {
     code!(
         "struct E { x: integer }
@@ -8942,11 +8943,25 @@ fn test() { }"
         "struct 'E' conflicts with a constant of the same name already defined \
 at default/01_code.loft:383:24 — pick a different name \
 at p156_vector_element_shadows_constant:1:11",
+    )
+    .error(
+        "'E' is a Constant, not a type — the element of vector<T> must be a \
+struct or enum (defined at default/01_code.loft:383:24) \
+at p156_vector_element_shadows_constant:2:26",
     );
 }
 
+/// P155 regression guard — push/undo/mid-assert/redo/final-read used
+/// to SIGSEGV in OpGetVector.  Root cause: `state/codegen.rs::generate_set`
+/// (reassignment path, lines 891-932) emitted `OpCopyRecord` with the
+/// 0x8000 "free source" flag around a user-fn call, but without the
+/// `n_set_store_lock` bracket.  When the callee returned a DbRef
+/// aliased with a caller arg — e.g. `read_at(c, idx)` returns into
+/// `c.items` — the free-source flag freed the caller's arg store.
+/// Later uses of that arg SIGSEGV'd.  Fix: mirror the
+/// `gen_set_first_ref_call_copy` lock/unlock bracket (which the P143
+/// fix added) onto the reassignment path.
 #[test]
-#[ignore = "P155: SIGSEGV in OpGetVector; root cause open"]
 fn p155_segv_undo_redo_midassert() {
     code!(
         "struct H { m: integer not null }

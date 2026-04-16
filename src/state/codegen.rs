@@ -927,7 +927,50 @@ impl State {
                         copy_nr,
                         vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
                     );
+                    // P155: bracket the call + deep-copy with n_set_store_lock
+                    // on every Ref/Vector/Enum arg (like gen_set_first_ref_call_copy
+                    // already does for first-assignments).  Without this, when the
+                    // callee returns a DbRef aliased with a caller arg, OpCopyRecord's
+                    // 0x8000 free-source flag frees the caller's arg store — later
+                    // uses of that arg SIGSEGV in OpGetVector.  The first-assignment
+                    // path hit this bug too until the P143 fix added the bracket;
+                    // the reassignment path needed the same treatment.
+                    let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value {
+                        let attrs = stack.data.def(*fn_nr).attributes.clone();
+                        args.iter()
+                            .enumerate()
+                            .filter_map(|(i, arg)| {
+                                let tp = attrs.get(i).map(|a| &a.typedef)?;
+                                if !matches!(
+                                    tp,
+                                    Type::Reference(_, _)
+                                        | Type::Vector(_, _)
+                                        | Type::Enum(_, true, _)
+                                ) {
+                                    return None;
+                                }
+                                if let Value::Var(av) = arg {
+                                    Some(*av)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let lock_fn = stack.data.def_nr("n_set_store_lock");
+                    for av in &ref_args {
+                        let lock =
+                            Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(true)]);
+                        self.generate(&lock, stack, false);
+                    }
                     self.generate(&copy_val, stack, false);
+                    for av in &ref_args {
+                        let unlock =
+                            Value::Call(lock_fn, vec![Value::Var(*av), Value::Boolean(false)]);
+                        self.generate(&unlock, stack, false);
+                    }
                     return;
                 }
             }

@@ -6,6 +6,4 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
-p155_segv_undo_redo_midassert	P155: SIGSEGV in OpGetVector; root cause open
-p156_vector_element_shadows_constant	P156: parser panic instead of clean name-conflict error
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes
