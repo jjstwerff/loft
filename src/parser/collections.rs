@@ -1719,7 +1719,8 @@ use #count instead"
         let num_attrs = self.data.attributes(struct_def_nr);
         let mut blocks: Vec<Value> = Vec::new();
 
-        let work_checkpoint = self.vars.work_ref();
+        // P148: work_checkpoint + clean_work_refs removed — see comment at the
+        // end of this loop explaining why skip_free must NOT be set here.
         for a in 0..num_attrs {
             let attr_name = self.data.attr_name(struct_def_nr, a);
             let attr_type = self.data.attr_type(struct_def_nr, a);
@@ -1757,8 +1758,16 @@ use #count instead"
             blocks.push(v_set(loop_var, Value::Var(sf_work)));
             blocks.push(body.clone());
         }
-        // Mark work refs as skip_free — they are consumed by the loop var assignment.
-        self.vars.clean_work_refs(work_checkpoint);
+        // P148: do NOT call clean_work_refs here.  The unrolled loop
+        // creates 2 work-refs per iteration (FvFloat/etc + StructField)
+        // and assigns the latter to loop_var via v_set.  Only the LAST
+        // iteration's work-refs feed loop_var; earlier ones are orphaned.
+        // Marking them all skip_free prevented get_free_vars from
+        // emitting OpFreeRef at scope exit, leaking 1 store per
+        // orphaned work-ref (8 stores for a 3-field + 4-field struct).
+        // The P147 scan_set companion (Set(v, Var(src)) path) already
+        // strips loop_var's deps so it gets its own OpFreeRef; the
+        // work-refs themselves pass get_free_vars's is_work_ref check.
 
         if blocks.is_empty() {
             *code = Value::Null;

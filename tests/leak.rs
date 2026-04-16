@@ -256,7 +256,6 @@ fn p146_script_95_alias_copy_leak() {
 /// using the I13 iterator protocol leak the constructor's alloc'd
 /// stores at scope exit.
 #[test]
-#[ignore = "P147 — investigating, un-ignore for sharp diagnostic"]
 fn p147_script_81_iterator_protocol_leak() {
     loft::crash_report::install("leak");
     let mut p = Parser::new();
@@ -281,7 +280,6 @@ fn p147_script_81_iterator_protocol_leak() {
 /// leaks 1 store per iteration (8 total: 3 from Point, 4 from Mixed,
 /// + 1 from the iterator itself).
 #[test]
-#[ignore = "P148 — investigating, un-ignore for sharp diagnostic"]
 fn p148_script_45_field_iteration_leak() {
     loft::crash_report::install("leak");
     let mut p = Parser::new();
@@ -315,7 +313,6 @@ fn p148_script_45_field_iteration_leak() {
 /// Distinct from P146/P147/P148 — this is a slot/lifetime mismatch
 /// in nested struct initialization, not a missing free.
 #[test]
-#[ignore = "P149 open — slot reuse SEGV under execute_log; un-ignore for sharp diagnostic"]
 fn p149_script_76_nested_struct_segv() {
     loft::crash_report::install("leak");
     let mut p = Parser::new();
