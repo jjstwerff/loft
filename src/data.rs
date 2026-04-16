@@ -1797,7 +1797,7 @@ impl Data {
             Value::Var(v) => write!(write, "{}({})", vars.name(*v), vars.scope(*v)),
             Value::Set(v, to) => {
                 if *v == u16::MAX {
-                    write!(write, "unknown(??):?? = ",)?;
+                    write!(write, "unknown(??):?? = ")?;
                 } else {
                     write!(
                         write,

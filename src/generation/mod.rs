@@ -69,16 +69,12 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
 /// fn-ref constants (e.g. inside `if`/`block` branches of a function-typed `Set`).
 fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
     match val {
-        Value::Int(n) => {
-            if *n >= 0 {
-                calls.insert((*n).cast_unsigned());
-            }
+        Value::Int(n) if *n >= 0 => {
+            calls.insert((*n).cast_unsigned());
         }
         // FnRef(d_nr, clos_var, _) is used for closure fn-refs.
-        Value::FnRef(d_nr, _, _) => {
-            if *d_nr >= 0 {
-                calls.insert((*d_nr).cast_unsigned());
-            }
+        Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
+            calls.insert((*d_nr).cast_unsigned());
         }
         Value::If(test, t, f) => {
             collect_int_fn_refs(test, calls);
@@ -153,10 +149,8 @@ fn collect_fn_ref_literals(
             collect_fn_ref_literals(extra, data, variables, calls);
         }
         // FnRef inside a Block result (closure allocation block).
-        Value::FnRef(d_nr, _, _) => {
-            if *d_nr >= 0 {
-                calls.insert((*d_nr).cast_unsigned());
-            }
+        Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
+            calls.insert((*d_nr).cast_unsigned());
         }
         _ => {}
     }
@@ -964,7 +958,7 @@ extern crate loft;"
         write!(w, "fn {}(stores: &mut Stores", def.name)?;
         for a in &def.attributes {
             let tp = rust_type(&a.typedef, &Context::Argument);
-            write!(w, ", mut var_{}: {tp}", sanitize(&a.name),)?;
+            write!(w, ", mut var_{}: {tp}", sanitize(&a.name))?;
         }
         write!(w, ") ")?;
         if def.returned != Type::Void {

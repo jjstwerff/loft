@@ -154,7 +154,7 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
         return;
     }
     if let Some(ref logger) = stores.logger {
-        let production = logger.lock().map(|l| l.config.production).unwrap_or(false);
+        let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
             if let Ok(mut lg) = logger.lock() {
                 lg.log(
@@ -178,7 +178,7 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger {
-        let production = logger.lock().map(|l| l.config.production).unwrap_or(false);
+        let production = logger.lock().is_ok_and(|l| l.config.production);
         if production {
             if let Ok(mut lg) = logger.lock() {
                 lg.log(
@@ -905,10 +905,8 @@ fn parallel_execute_and_collect(
             extra_args,
         );
         let store = stores.store_mut(&result_db);
-        let mut fld = 8u32;
-        for &raw in &results {
-            store.set_byte(vec_rec, fld, 0, raw as i32);
-            fld += 1;
+        for (i, &raw) in results.iter().enumerate() {
+            store.set_byte(vec_rec, 8u32 + i as u32, 0, raw as i32);
         }
     }
     DbRef {
@@ -2059,13 +2057,13 @@ fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: 
                     };
                     populate_struct_from_jsonvalue(stores, &nested_dest, content_kt, &sub);
                 }
-                Parts::EnumValue(_, _) | Parts::Enum(_) => {
+                Parts::EnumValue(_, _) | Parts::Enum(_)
                     // Mixed struct-enum field — only `JsonValue`
                     // passthrough is supported today.  Skip the copy
                     // when the source is absent (sub is a dummy
                     // pointing at the dest, copy would garble the
                     // dest's own bytes).
-                    if sub_jv.is_some() {
+                    if sub_jv.is_some() => {
                         let inner_name = stores.types[content_kt as usize].name.clone();
                         if inner_name == "JsonValue" {
                             let jv_size = u32::from(stores.size(content_kt));
@@ -2073,14 +2071,13 @@ fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: 
                         }
                     }
                     // Other struct-enum types: leave at default.
-                }
-                Parts::Vector(elem_kt) => {
+                Parts::Vector(elem_kt)
                     // Vector field: handle is a 4-byte rec-nr at
                     // `dest_field_pos`.  Iterate JArray items and
                     // append per element via the existing
                     // `vector_append` machinery.  Absent source →
                     // skip (handle stays at zero = empty vector).
-                    if sub_jv.is_some() {
+                    if sub_jv.is_some() => {
                         let dest_handle = DbRef {
                             store_nr: dest.store_nr,
                             rec: dest.rec,
@@ -2088,7 +2085,6 @@ fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: 
                         };
                         populate_vector_from_jarray(stores, &dest_handle, elem_kt, &sub);
                     }
-                }
                 _ => {
                     // Other field types (Hash, Sorted, Index, Spacial,
                     // Array, Base, Byte, Short) are not yet handled.

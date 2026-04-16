@@ -122,10 +122,8 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
                 }
                 data.definitions[d as usize].known_type = e_nr;
             }
-            DefType::EnumValue => {
-                if data.attributes(d) > 0 {
-                    copy_unknown_fields(data, d);
-                }
+            DefType::EnumValue if data.attributes(d) > 0 => {
+                copy_unknown_fields(data, d);
             }
             _ => {}
         }

@@ -1642,10 +1642,8 @@ impl State {
             Type::Enum(t, _, _) => {
                 self.types.insert(code, stack.data.def(t).known_type);
             }
-            Type::Reference(t, _) => {
-                if t < u32::from(u16::MAX) {
-                    self.types.insert(code, stack.data.def(t).known_type);
-                }
+            Type::Reference(t, _) if t < u32::from(u16::MAX) => {
+                self.types.insert(code, stack.data.def(t).known_type);
             }
             _ => (),
         }

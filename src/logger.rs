@@ -196,7 +196,7 @@ impl Logger {
         let now = Instant::now();
         let rate = self.config.rate_per_minute;
         if rate > 0 {
-            let window = Duration::from_secs(60);
+            let window = Duration::from_mins(1);
             // Compute the suppression notice (if any) and update state before any borrow
             let suppression_notice: Option<String> = {
                 let entry = self
@@ -342,7 +342,7 @@ impl Logger {
         }
         match OpenOptions::new().create(true).append(true).open(path) {
             Ok(f) => {
-                let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+                let size = f.metadata().map_or(0, |m| m.len());
                 self.current_size = size;
                 self.file = Some(BufWriter::new(f));
                 self.current_ymd = today_ymd();
