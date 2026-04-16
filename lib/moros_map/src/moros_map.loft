@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// moros_map — shared data model for the Moros hex scene system.
+// Re-exports all types and public functions.
+
+use types;
+use palette;
+use spawn;
+
+// Top-level map container. Holds chunks and palette definitions.
+pub struct Map {
+  m_name:             text,
+  m_chunks:           vector<Chunk>,
+  m_material_palette: vector<MaterialDef>,
+  m_wall_palette:     vector<WallDef>,
+  m_item_palette:     vector<ItemDef>,
+  m_spawn_points:     vector<SpawnPoint>,
+  m_npc_routines:     vector<NpcRoutine>,
+}
+
+// ── Constructors ────────────────────────────────────────────────────
+
+// Create a new empty map with default name and empty palettes.
+pub fn map_empty() -> Map {
+  Map {
+    m_name: "untitled",
+    m_chunks: [],
+    m_material_palette: [],
+    m_wall_palette: [],
+    m_item_palette: [],
+    m_spawn_points: [],
+    m_npc_routines: [],
+  }
+}
+
+// ── MO.2: Serialization ────────────────────────────────────────────
+
+// Serialise the entire map to a JSON string.
+pub fn map_to_json(m: Map) -> text {
+  "{m:j}"
+}
+
+// Deserialise a JSON string back to a Map.
+// Returns a default empty Map on parse failure.
+pub fn map_from_json(json: text) -> Map {
+  if json == "" { return map_empty(); }
+  result = Map.parse(json);
+  if json_errors() != "" { return map_empty(); }
+  result
+}
+
+// ── MO.2: Hex-address helpers ───────────────────────────────────────
+
+// Check whether a chunk exists at the given global coordinates.
+pub fn map_has_chunk(m: Map, q: integer, r: integer, cy: integer) -> boolean {
+  cx = q / 32;
+  cz = r / 32;
+  for hc_c in m.m_chunks {
+    if hc_c.ck_cx == cx && hc_c.ck_cy == cy && hc_c.ck_cz == cz {
+      return true;
+    }
+  }
+  false
+}
+
+// ── MO.3: Hex edit operations ───────────────────────────────────────
+
+// Build a 32x32 chunk of default hexes at the given chunk coordinates.
+fn build_chunk(cx: integer, cy: integer, cz: integer) -> Chunk {
+  hexes: vector<Hex> = [];
+  for _ in 0..4 {
+    hexes += [Hex {}];
+  }
+  Chunk { ck_cx: cx, ck_cy: cy, ck_cz: cz, ck_hexes: hexes }
+}
+
+// Ensure a chunk exists at the given global coordinates.
+// Creates a 32x32 chunk filled with default hexes if absent.
+pub fn map_ensure_chunk(m: &Map, q: integer, r: integer, cy: integer) {
+  cx = q / 32;
+  cz = r / 32;
+  for ec_c in m.m_chunks {
+    if ec_c.ck_cx == cx && ec_c.ck_cy == cy && ec_c.ck_cz == cz {
+      return;
+    }
+  }
+  m.m_chunks += [build_chunk(cx, cy, cz)];
+}
+
+// Write a Hex at global coordinates. Creates the chunk if needed.
+pub fn map_set_hex(m: &Map, q: integer, r: integer, cy: integer, h: Hex) {
+  map_ensure_chunk(m, q, r, cy);
+  cx = q / 32;
+  cz = r / 32;
+  hx = q % 32;
+  hz = r % 32;
+  idx = hx * 32 + hz;
+  for sh_c in m.m_chunks {
+    if sh_c.ck_cx == cx && sh_c.ck_cy == cy && sh_c.ck_cz == cz {
+      sh_c.ck_hexes[idx] = h;
+      return;
+    }
+  }
+}
+
+// P144: convenience functions (map_paint_material, map_set_height,
+// map_place_item, map_set_wall) cause infinite loops when multiple
+// &Map functions call each other in cross-file packages. Deferred
+// until the flat-namespace issue is resolved. Use map_set_hex with
+// a full Hex struct for now.
+
+// ── MO.2: Hex-address read helpers ──────────────────────────────────
+
+// Resolve global (q, r, cy) to the Hex at that address.
+// Returns a default Hex (all zeros) if chunk is missing or index out of bounds.
+pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
+  cx = q / 32;
+  cz = r / 32;
+  hx = q % 32;
+  hz = r % 32;
+  idx = hx * 32 + hz;
+  for gh_c in m.m_chunks {
+    if gh_c.ck_cx == cx && gh_c.ck_cy == cy && gh_c.ck_cz == cz {
+      if idx >= 0 && idx < len(gh_c.ck_hexes) {
+        return gh_c.ck_hexes[idx];
+      }
+    }
+  }
+  Hex {}
+}

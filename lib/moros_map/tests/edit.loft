@@ -1,0 +1,17 @@
+use moros_map;
+
+fn test_ensure_chunk() {
+  m = map_empty();
+  map_ensure_chunk(m, 0, 0, 0);
+  assert(len(m.m_chunks) > 0, "chunk created");
+  assert(len(m.m_chunks[0].ck_hexes) == 4, "hexes allocated");
+}
+
+fn test_set_hex() {
+  m = map_empty();
+  h = Hex { h_height: 42, h_material: 3 };
+  map_set_hex(m, 0, 0, 0, h);
+  got = map_get_hex(m, 0, 0, 0);
+  assert(got.h_height == 42, "height written");
+  assert(got.h_material == 3, "material written");
+}

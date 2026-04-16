@@ -661,10 +661,10 @@ impl Output<'_> {
                     return Ok(());
                 }
             }
-            "OpStep" => {
+            "OpStep"
                 // vals: [iter_var, data, on, arg]
                 // Emit: OpStep(stores, &mut var_iter, data, on, arg)
-                if vals.len() == 4 {
+                if vals.len() == 4 => {
                     write!(w, "OpStep(stores, &mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
@@ -681,12 +681,11 @@ impl Output<'_> {
                     write!(w, ")")?;
                     return Ok(());
                 }
-            }
-            "OpRemove" => {
+            "OpRemove"
                 // vals: [state_var, data, on, tp/arg]
                 // Emit: OpRemove(stores, &mut var_state, data, on, arg)
                 // The state may be i32 (plain vector) or i64 (sorted/tree iterator).
-                if vals.len() == 4 {
+                if vals.len() == 4 => {
                     write!(w, "OpRemove(stores, &mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
@@ -703,7 +702,6 @@ impl Output<'_> {
                     write!(w, ")")?;
                     return Ok(());
                 }
-            }
             "n_parallel_for" | "n_parallel_for_light" => {
                 // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr, extras..., n_extra)
                 // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm, extras...) as i64 }).

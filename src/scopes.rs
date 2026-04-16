@@ -484,16 +484,17 @@ impl Scopes {
             self.var_scope.insert(v, self.scope);
             self.var_order.push(v);
         }
-        // When a Reference variable is assigned from a user-function call with no
-        // visible Reference params (O-B2 adoption), the callee's __ref_N work-ref
-        // store IS the returned struct's store.  Suppress FreeRef on those __ref_N
-        // vars so native codegen doesn't free the store before the return value
-        // reaches the caller.  Mirrors the interpreter codegen skip_free at
-        // state/codegen.rs:1043-1050.
+        // When a Reference variable is assigned from a user-function call,
+        // codegen has two sub-paths (state/codegen.rs:1039-1066):
+        // - has_ref_params == true → gen_set_first_ref_call_copy deep-copy
+        // - has_ref_params == false → adoption (callee's __ref_N store IS
+        //   the returned struct's store, OR — P150 — the callee returned a
+        //   different fresh store and the caller's __ref_N pre-alloc is
+        //   orphaned).
         if matches!(
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Value::Call(fn_nr, args) = value
+        ) && let Value::Call(fn_nr, _) = value
             && data.def(*fn_nr).name.starts_with("n_")
             && data.def(*fn_nr).code != Value::Null
         {
@@ -508,23 +509,30 @@ impl Scopes {
                 // get_free_vars emits OpFreeRef at scope exit; otherwise
                 // the parser's "borrows from arg N" inference suppresses
                 // emission and the deep-copied store leaks (the
-                // `dep_empty=false` path in scopes.rs:906).  Mirrors the
-                // adoption-path skip_free below for symmetry with the
-                // codegen branches in state/codegen.rs:1048-1066.
+                // `dep_empty=false` path in scopes.rs:906).
                 let deps: Vec<u16> = function.tp(v).depend().clone();
                 for d in deps {
                     function.make_independent(v, d);
                 }
-            } else {
-                for arg in args {
-                    if let Value::Var(wv) = arg {
-                        let wv = *self.var_mapping.get(wv).unwrap_or(wv);
-                        if function.name(wv).starts_with("__ref_") {
-                            function.set_skip_free(wv);
-                        }
-                    }
-                }
             }
+            // P150: previously this `else` branch marked every __ref_*
+            // arg as skip_free under the assumption that the callee
+            // always wrote into the placeholder (so v and __ref_N
+            // shared the same store, freeing both = double-free).  But
+            // when the callee returns a fresh store (early-return
+            // through a constructor call, or T.parse(text) that
+            // allocates fresh — both shapes used by
+            // `lib/moros_map/src/moros_map.loft`'s `map_from_json`),
+            // the placeholder is orphaned.  The runtime tolerates
+            // double-free as a no-op (database/allocation.rs:103-105
+            // `Stores::free_named`'s "if store.free { return }"), so
+            // it's safe to let the existing is_work_ref check at
+            // scopes.rs:902 emit OpFreeRef for __ref_N at scope exit:
+            //   - shared-store case: __ref_N's free is a no-op
+            //     (already freed via v's free that fires first).
+            //   - fresh-store case: __ref_N's free reclaims the
+            //     orphaned placeholder.
+            // No skip_free needed in either subcase.
         }
         // P147: companion to the P146 fix above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and

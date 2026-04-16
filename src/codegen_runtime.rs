@@ -242,6 +242,18 @@ pub fn i_parse_error_push(stores: &mut Stores, msg: &str) {
     stores.last_parse_errors.push(msg.to_owned());
 }
 
+/// Return the JSON parse / schema-walk errors from the last `json_parse()`
+/// or `Struct.parse(JsonValue)` call as a single `|`-separated string.
+/// Mirrors the interpreter's `n_json_errors` (`src/native.rs`) which does
+/// NOT clear the buffer — errors persist across `json_errors()` reads
+/// until the next successful parse implicitly clears them.
+pub fn i_json_errors(stores: &mut Stores) -> Str {
+    let msg = stores.last_json_errors.join("|");
+    stores.scratch.clear();
+    stores.scratch.push(msg);
+    Str::new(&stores.scratch[0])
+}
+
 /// Deep-copy a database record: copies the raw bytes and duplicates
 /// all owned sub-structures (text fields, vectors, etc.).
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.

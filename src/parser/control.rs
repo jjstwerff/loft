@@ -1069,10 +1069,7 @@ impl Parser {
     ) {
         self.lexer.token("{");
         let mut seen_fields: HashSet<String> = HashSet::new();
-        loop {
-            let Some(field_name) = self.lexer.has_identifier() else {
-                break;
-            };
+        while let Some(field_name) = self.lexer.has_identifier() {
             if !self.first_pass && seen_fields.contains(&field_name) {
                 diagnostic!(
                     self.lexer,

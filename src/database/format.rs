@@ -491,7 +491,7 @@ impl ShowDb<'_> {
             if i != i32::MAX
                 && let Some(ch) = char::from_u32(i as u32)
             {
-                write!(s, "'{ch}'",).unwrap();
+                write!(s, "'{ch}'").unwrap();
             }
         } else if (self.known_type as usize) < self.stores.types.len() {
             match &self.stores.types[self.known_type as usize].parts {

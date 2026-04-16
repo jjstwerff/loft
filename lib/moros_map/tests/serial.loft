@@ -1,0 +1,113 @@
+// MO.2: tests for map_to_json / map_from_json.
+use moros_map;
+
+fn test_to_from_json_empty() {
+  m = map_empty();
+  j = map_to_json(m);
+  assert(j != "", "json not empty");
+  m2 = map_from_json(j);
+  assert(m2.m_name == "untitled", "name roundtrip");
+  assert(len(m2.m_chunks) == 0, "no chunks");
+}
+
+fn test_from_json_empty_string() {
+  m = map_from_json("");
+  assert(m.m_name == "untitled", "empty string fallback");
+}
+
+fn test_roundtrip_full_map() {
+  m = map_empty();
+  m.m_name = "dungeon_1";
+  hexes: vector<Hex> = [];
+  for rf_i in 0..4 {
+    hexes += [Hex { h_height: rf_i * 16, h_material: rf_i + 1 }];
+  }
+  m.m_chunks += [Chunk { ck_cx: 0, ck_cy: 0, ck_cz: 0, ck_hexes: hexes }];
+  m.m_material_palette += [MaterialDef {
+    md_name: "stone", md_category: "floor", md_stair_kind: "",
+    md_texture: 1, md_tint_r: 160, md_tint_g: 160, md_tint_b: 160,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 1,
+  }];
+  m.m_wall_palette += [WallDef {
+    wd_name: "brick", wd_body: "SOLID", wd_base: "BRICKS",
+    wd_thickness: 0.0, wd_texture: 0,
+    wd_tint_r: 178, wd_tint_g: 34, wd_tint_b: 34,
+  }];
+  m.m_item_palette += [ItemDef {
+    id_name: "torch", id_kind: "FURNITURE", id_model: 0,
+    id_symmetric: 1, id_arc_radius: 0.0,
+  }];
+  m.m_spawn_points += [SpawnPoint {
+    sp_hex: HexAddress { ha_q: 2, ha_r: 3, ha_cy: 0 },
+    sp_kind: "CREATURE", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 2, sp_facing: 0, sp_condition: "ALWAYS",
+  }];
+  wps: vector<NpcWaypoint> = [];
+  wps += [NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 1, ha_r: 1, ha_cy: 0 },
+    wp_activity: "GUARD", wp_time_start: 0, wp_time_end: 1440,
+    wp_facing: 3, wp_note: "main hall",
+  }];
+  m.m_npc_routines += [NpcRoutine {
+    nr_npc_id: 1, nr_name: "hall_guard", nr_creature: 5,
+    nr_waypoints: wps,
+  }];
+
+  j = map_to_json(m);
+  m2 = map_from_json(j);
+
+  assert(m2.m_name == "dungeon_1", "name");
+  assert(len(m2.m_chunks) == 1, "chunks");
+  assert(len(m2.m_chunks[0].ck_hexes) == 4, "hexes");
+  assert(m2.m_chunks[0].ck_hexes[2].h_height == 32, "hex height");
+  assert(m2.m_material_palette[0].md_name == "stone", "mat");
+  assert(m2.m_wall_palette[0].wd_base == "BRICKS", "wall");
+  assert(m2.m_item_palette[0].id_kind == "FURNITURE", "item");
+  assert(m2.m_spawn_points[0].sp_hex.ha_q == 2, "spawn q");
+  assert(m2.m_npc_routines[0].nr_waypoints[0].wp_note == "main hall", "wp note");
+}
+
+fn test_roundtrip_rotation_flags() {
+  m = map_empty();
+  hexes: vector<Hex> = [];
+  hexes += [Hex {
+    h_height: 50, h_material: 2, h_item: 5,
+    h_item_rotation: 7 | (1 << 5),
+    h_wall_n: 1, h_wall_ne: 0, h_wall_se: 3,
+  }];
+  m.m_chunks += [Chunk { ck_cx: 0, ck_cy: 0, ck_cz: 0, ck_hexes: hexes }];
+  j = map_to_json(m);
+  m2 = map_from_json(j);
+  h = m2.m_chunks[0].ck_hexes[0];
+  assert(hex_rotation(h) == 7, "rotation survives");
+  assert(hex_spawn_flag(h) == true, "spawn flag survives");
+  assert(hex_waypoint_flag(h) == false, "waypoint flag clear");
+  assert(h.h_wall_n == 1, "wall_n");
+  assert(h.h_wall_se == 3, "wall_se");
+}
+
+fn test_roundtrip_npc_waypoints() {
+  m = map_empty();
+  wps: vector<NpcWaypoint> = [];
+  wps += [NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 1, ha_r: 2, ha_cy: 0 },
+    wp_activity: "GUARD", wp_time_start: 600, wp_time_end: 1800,
+    wp_facing: 3, wp_note: "front gate",
+  }];
+  wps += [NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 5, ha_r: 5, ha_cy: 0 },
+    wp_activity: "PATROL", wp_time_start: 1800, wp_time_end: 2200,
+    wp_facing: 0, wp_note: "",
+  }];
+  m.m_npc_routines += [NpcRoutine {
+    nr_npc_id: 1, nr_name: "gate_guard", nr_creature: 3,
+    nr_waypoints: wps,
+  }];
+  j = map_to_json(m);
+  m2 = map_from_json(j);
+  assert(len(m2.m_npc_routines[0].nr_waypoints) == 2, "2 waypoints");
+  assert(m2.m_npc_routines[0].nr_waypoints[0].wp_activity == "GUARD", "wp0");
+  assert(m2.m_npc_routines[0].nr_waypoints[0].wp_note == "front gate", "wp0 note");
+  assert(m2.m_npc_routines[0].nr_waypoints[1].wp_activity == "PATROL", "wp1");
+}

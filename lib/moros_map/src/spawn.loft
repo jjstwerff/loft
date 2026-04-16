@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// MO.1c: Spawn points and NPC routines.
+
+use types;
+
+// A creature or NPC spawn location.
+// sp_condition: "ALWAYS", "NIGHT_ONLY", "DAY_ONLY", "TRIGGER", "RANDOM".
+pub struct SpawnPoint {
+  sp_hex:       HexAddress,
+  sp_kind:      text,
+  sp_creature:  integer not null,
+  sp_npc_id:    integer not null,
+  sp_count:     integer not null,
+  sp_facing:    integer not null,
+  sp_condition: text,
+}
+
+// A single waypoint in an NPC's daily routine.
+// wp_activity: "STAND", "SIT", "SLEEP", "WORK", "EAT", "PATROL",
+//              "WANDER", "TALK", "GUARD", "REQUISITION".
+pub struct NpcWaypoint {
+  wp_hex:        HexAddress,
+  wp_activity:   text,
+  wp_time_start: integer not null,
+  wp_time_end:   integer not null,
+  wp_facing:     integer not null,
+  wp_note:       text,
+}
+
+// An NPC's complete daily routine: name, creature template, waypoints.
+pub struct NpcRoutine {
+  nr_npc_id:    integer not null,
+  nr_name:      text,
+  nr_creature:  integer not null,
+  nr_waypoints: vector<NpcWaypoint>,
+}

@@ -338,6 +338,103 @@ fn p149_script_76_nested_struct_segv() {
     );
 }
 
+/// P150 regression guard: a function with both an EARLY-RETURN
+/// constructor and a fall-through `Struct.parse(text)` path used to
+/// leak 1 placeholder store per call from the caller's hidden
+/// `__ref_*` ConvRefFromNull pre-alloc.
+///
+/// Root cause (closed): codegen for `m = make(...)` pre-allocates a
+/// slot for the hidden return-ref via OpConvRefFromNull (creating a
+/// fresh "null" store).  When the callee's early-return returns a
+/// DbRef to a store created INSIDE the callee (not into the hidden
+/// return slot), the caller's pre-alloc store is orphaned —
+/// `__ref_*` was marked `skip_free` (`src/state/codegen.rs:1062` and
+/// `src/scopes.rs:523`) so the caller's variable would own the
+/// callee's store, and the original ConvRefFromNull store was never
+/// freed.  Severity was per-call (game loops at 60fps would saturate
+/// u16 store space in ~18 minutes).
+///
+/// Fix: drop the `set_skip_free` calls in both paths.  The runtime
+/// tolerates double-free as a no-op
+/// (`src/database/allocation.rs:103-105`'s `if store.free { return }`),
+/// so the typical-adoption case (where __ref_* aliases m's store)
+/// is unaffected — both frees fire, second is no-op.  The orphan
+/// case now reclaims the placeholder via the existing is_work_ref
+/// check in `scopes.rs::get_free_vars`.
+#[test]
+fn p150_early_return_struct_orphans_caller_pre_alloc() {
+    // Minimal trigger: a user fn that has an EARLY-RETURN of a constructor
+    // call AND a fall-through `Struct.parse(text)` path.  The caller's
+    // `m = fn(...)` pre-allocates a hidden return slot via OpConvRefFromNull
+    // (creating a fresh "null" store).  When the early-return path runs,
+    // the returned DbRef points to a store created INSIDE the callee, not
+    // into the caller's pre-alloc; the pre-alloc store is orphaned.
+    // `__ref_*` is marked skip_free (so the caller's variable owns the
+    // callee's store), so the original ConvRefFromNull store leaks.
+    run_leak_check_str(
+        r#"
+struct M { name: text }
+fn make_empty() -> M { M { name: "untitled" } }
+fn make_or_default(t: text) -> M {
+  if t == "" { return make_empty(); }
+  result = M.parse(t);
+  result
+}
+pub fn test() {
+  m = make_or_default("");
+  assert(m.name == "untitled", "name");
+}
+"#,
+    );
+}
+
+/// P150 file-level reproducer: `lib/moros_map/tests/serial.loft`
+/// USED to leak 1 store via interpreter (warning: `2(bc:0)`) when
+/// `test_from_json_empty_string` called `map_from_json("")`, which has
+/// the early-return + fall-through `Struct.parse` shape that triggered
+/// the orphan placeholder alloc.  The minimal repro above is closed by
+/// the P150 fix (drop skip_free for `__ref_*` work-refs).
+///
+/// **However**: the cross-fn / file-level case under `execute_log` +
+/// `trace_alloc_free` HANGS in an infinite loop on rustc 1.95.0.
+/// Each test fn runs cleanly via the loft CLI, but iterating all 5
+/// through `execute_log` in one `State` enters a runtime loop.  The
+/// CLI path (interpret without trace) for `lib/moros_map/tests/serial.loft`
+/// is clean (0 leaks) on rustc 1.95.0 — so the leak IS closed for
+/// real programs; only the trace-instrumented diagnostic harness
+/// hangs.  Re-ignored 2026-04-16 pending narrower investigation.
+#[test]
+#[ignore = "P150 partial — hangs under execute_log+trace; CLI path is clean"]
+fn p150_moros_map_serial_leak() {
+    loft::crash_report::install("leak");
+    let mut p = Parser::new();
+    let (data, db) = cached_default();
+    p.data = data;
+    p.database = db;
+    p.lib_dirs.push("lib".to_string());
+    p.parse("lib/moros_map/tests/serial.loft", false);
+    assert!(
+        p.diagnostics.is_empty(),
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let mut config = loft::log_config::LogConfig::full();
+    config.trace_alloc_free = true;
+    for name in [
+        "test_to_from_json_empty",
+        "test_from_json_empty_string",
+        "test_roundtrip_full_map",
+        "test_roundtrip_rotation_flags",
+        "test_roundtrip_npc_waypoints",
+    ] {
+        eprintln!("=== {name} ===");
+        let _ = state.execute_log(&mut std::io::stderr(), name, &config, &p.data);
+    }
+}
+
 /// Full Brick Buster pattern with yield/resume using real math + graphics libraries.
 /// Confirms the minimal reproduction above causes the real-world crash.
 ///
