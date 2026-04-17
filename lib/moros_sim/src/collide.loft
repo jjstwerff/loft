@@ -1,0 +1,149 @@
+// Direct-against-Map collision queries for the walkable editor.
+// No mesh readback, no geometry raycast — every query walks the
+// chunk / hex data via moros_map.
+//
+// This module is Player-agnostic: `resolve_move` works on raw
+// Vec3 positions + a vertical velocity, returning a MoveResult.
+// Player-layer wrapping lives in player.loft, which avoids an
+// intra-package import cycle.
+
+use graphics;
+use moros_map;
+use moros_render;
+
+pub STEP_UP_LIMIT = 0.5;   // auto-climb ceiling for walk moves
+
+// Which edge connects (from_q, from_r) → (to_q, to_r)?
+// Returns 0..5 for N/NE/SE/S/SW/NW or -1 if the two hexes are not
+// axially adjacent.
+pub fn edge_direction(from_q: integer, from_r: integer,
+                      to_q: integer,   to_r: integer) -> integer {
+  dq = to_q - from_q;
+  dr = to_r - from_r;
+  if dq == 0  && dr == -1 { return 0; }   // N
+  if dq == 1  && dr == -1 { return 1; }   // NE
+  if dq == 1  && dr == 0  { return 2; }   // SE
+  if dq == 0  && dr == 1  { return 3; }   // S
+  if dq == -1 && dr == 1  { return 4; }   // SW
+  if dq == -1 && dr == 0  { return 5; }   // NW
+  -1
+}
+
+// Wall palette index on the edge between two adjacent hexes.  For
+// N/NE/SE the flag lives on the source hex; for S/SW/NW it is
+// mirrored on the neighbour's opposite edge (matching the encoding
+// used by `map_set_wall_dir`).  Returns 0 (= open) when the hexes
+// are not adjacent or no wall is set.
+pub fn wall_value_on_edge(map: Map,
+                          from_q: integer, from_r: integer,
+                          to_q: integer,   to_r: integer,
+                          cy: integer) -> integer {
+  dir = edge_direction(from_q, from_r, to_q, to_r);
+  if dir == 0 {
+    hn = map_get_hex(map, from_q, from_r, cy);
+    return hn.h_wall_n;
+  }
+  if dir == 1 {
+    hne = map_get_hex(map, from_q, from_r, cy);
+    return hne.h_wall_ne;
+  }
+  if dir == 2 {
+    hse = map_get_hex(map, from_q, from_r, cy);
+    return hse.h_wall_se;
+  }
+  if dir == 3 {
+    hs = map_get_hex(map, from_q, from_r + 1, cy);
+    return hs.h_wall_n;
+  }
+  if dir == 4 {
+    hsw = map_get_hex(map, from_q - 1, from_r + 1, cy);
+    return hsw.h_wall_ne;
+  }
+  if dir == 5 {
+    hnw = map_get_hex(map, from_q - 1, from_r, cy);
+    return hnw.h_wall_se;
+  }
+  0
+}
+
+// A non-zero wall palette index on the crossed edge blocks motion.
+pub fn blocked_by_wall(map: Map,
+                       from_q: integer, from_r: integer,
+                       to_q: integer,   to_r: integer,
+                       cy: integer) -> boolean {
+  wall_value_on_edge(map, from_q, from_r, to_q, to_r, cy) != 0
+}
+
+// Floor height (world units) of the hex under the given world
+// (wx, wz).  `h_height` of a missing chunk defaults to 0, so
+// off-authored territory reads as a sea-level floor.
+pub fn floor_y_at(map: Map, wx: float, wz: float) -> float {
+  addr = world_to_hex(wx, wz);
+  hf = map_get_hex(map, addr.ha_q, addr.ha_r, 0);
+  hf.h_height as float * HEIGHT_SCALE
+}
+
+// Axial hex under a given world (wx, wz).
+pub fn hex_at(wx: float, wz: float) -> HexAddress {
+  world_to_hex(wx, wz)
+}
+
+// Internal: is the move from `fr` to `to` blocked by a wall or
+// an un-steppable height difference?
+fn move_blocked(map: Map, fr: Vec3, to: Vec3) -> boolean {
+  a = hex_at(fr.x, fr.z);
+  b = hex_at(to.x, to.z);
+  if a.ha_q == b.ha_q && a.ha_r == b.ha_r { return false; }
+  fy_to = floor_y_at(map, to.x, to.z);
+  fy_fr = floor_y_at(map, fr.x, fr.z);
+  if (fy_to - fy_fr) > STEP_UP_LIMIT { return true; }
+  blocked_by_wall(map, a.ha_q, a.ha_r, b.ha_q, b.ha_r, 0)
+}
+
+// Outcome of a resolved move: settled position, Y-velocity (cleared
+// to 0 on landing), and whether the actor is now on the ground.
+pub struct MoveResult {
+  mr_pos:       Vec3,
+  mr_vel_y:     float not null,
+  mr_on_ground: boolean,
+}
+
+// Axis-separated move resolver.  X, then Z (so the actor slides
+// along walls); Y is clamped to the floor at the final XZ.
+// `from` is the starting feet-position; `vel_y` is the current
+// vertical velocity; `dxyz` is the desired delta this step.
+pub fn resolve_move(map: Map, from: Vec3, vel_y: float, dxyz: Vec3) -> MoveResult {
+  new_x     = from.x;
+  new_y     = from.y;
+  new_z     = from.z;
+  on_ground = false;
+  vy        = vel_y;
+
+  // X axis
+  cand_x = from.x + dxyz.x;
+  to_x   = vec3(cand_x, from.y, from.z);
+  if !move_blocked(map, from, to_x) { new_x = cand_x; }
+
+  // Z axis (from the X-settled position)
+  cand_z = from.z + dxyz.z;
+  fr_z   = vec3(new_x, from.y, from.z);
+  to_z   = vec3(new_x, from.y, cand_z);
+  if !move_blocked(map, fr_z, to_z) { new_z = cand_z; }
+
+  // Y axis — clamp to floor at final XZ
+  cand_y = from.y + dxyz.y;
+  floor  = floor_y_at(map, new_x, new_z);
+  if cand_y <= floor {
+    new_y     = floor;
+    on_ground = true;
+    vy        = 0.0;
+  } else {
+    new_y = cand_y;
+  }
+
+  MoveResult {
+    mr_pos:       vec3(new_x, new_y, new_z),
+    mr_vel_y:     vy,
+    mr_on_ground: on_ground,
+  }
+}

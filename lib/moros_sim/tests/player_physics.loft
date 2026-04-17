@@ -1,0 +1,201 @@
+// Step 3 — player integrator tests.
+use moros_sim;
+use moros_map;
+use graphics;
+
+fn make_flat_map() -> Map {
+  fm = map_empty();
+  // Set floor = 0 explicitly for a 10x10 patch
+  for fq in 0..10 {
+    for fr in 0..10 {
+      map_set_height(fm, fq, fr, 0, 0);
+    }
+  }
+  fm
+}
+
+// ── Jump profile ──────────────────────────────────────────────────
+
+fn test_jump_rises_constant_speed() {
+  jp = player_default();
+  jp.pl_on_ground = true;
+  jm = make_flat_map();
+  jinp = input_empty();
+  jinp.in_jump_held = true;
+  jdt = 1.0 / 60.0;
+  // 0.5 s at 10 u/s = 5.0 world units
+  for _ in 0..30 { player_step(jp, jm, jdt, jinp); }
+  assert(jp.pl_pos.y > 4.9, "rose to {jp.pl_pos.y}");
+  assert(jp.pl_pos.y < 5.1, "not too high {jp.pl_pos.y}");
+  assert(jp.pl_holding_jump, "holding jump flag");
+  assert(!jp.pl_on_ground, "not on ground midair");
+}
+
+fn test_jump_unbounded_altitude() {
+  // Hold jump for 10 seconds: rise ~= 100 units (no altitude cap).
+  up = player_default();
+  up.pl_on_ground = true;
+  um = make_flat_map();
+  uinp = input_empty();
+  uinp.in_jump_held = true;
+  udt = 1.0 / 60.0;
+  for _ in 0..600 { player_step(up, um, udt, uinp); }
+  assert(up.pl_pos.y > 90.0, "rose unbounded to {up.pl_pos.y}");
+}
+
+// ── Fall profile ──────────────────────────────────────────────────
+
+fn test_fall_from_midair() {
+  // Drop from y=20, no jump.  After 1s: y = 20 - 0.5*g*t² = 14.
+  dp = player_default();
+  dp.pl_pos = vec3(0.0, 20.0, 0.0);
+  dm = make_flat_map();
+  dinp = input_empty();
+  ddt = 1.0 / 60.0;
+  for _ in 0..60 { player_step(dp, dm, ddt, dinp); }
+  assert(dp.pl_pos.y > 13.5, "fell to {dp.pl_pos.y}");
+  assert(dp.pl_pos.y < 14.5, "fell to {dp.pl_pos.y}");
+  assert(!dp.pl_on_ground, "still midair");
+}
+
+fn test_lands_on_ground() {
+  lp = player_default();
+  lp.pl_pos = vec3(0.0, 5.0, 0.0);
+  lm = make_flat_map();
+  linp = input_empty();
+  ldt = 1.0 / 60.0;
+  for _ in 0..120 { player_step(lp, lm, ldt, linp); }
+  assert(lp.pl_pos.y == 0.0, "landed at 0");
+  assert(lp.pl_on_ground, "on ground flag set");
+  assert(lp.pl_vel.y == 0.0, "vy cleared");
+}
+
+fn test_terminal_velocity_clamp() {
+  // Fall long enough that the integrator would exceed terminal
+  // velocity if unclamped.  10 s of -12 m/s² → -120 uncapped; we
+  // clamp at -60.
+  tp = player_default();
+  tp.pl_pos = vec3(0.0, 10000.0, 0.0);  // well above any floor
+  tm = map_empty();                     // no map → floor_y_at = 0
+  tinp = input_empty();
+  tdt = 1.0 / 60.0;
+  for _ in 0..600 { player_step(tp, tm, tdt, tinp); }
+  assert(tp.pl_vel.y >= 0.0 - TERMINAL_VELOCITY, "vy clamp lower bound");
+  assert(tp.pl_vel.y <= 0.0 - 60.0 + 1.0, "vy near terminal");
+}
+
+// ── Walk ──────────────────────────────────────────────────────────
+
+fn test_walk_forward_plus_z() {
+  wp = player_default();
+  wp.pl_on_ground = true;
+  wp.pl_facing = 0.0;                   // +Z
+  wm = make_flat_map();
+  winp = input_empty();
+  winp.in_fwd = true;
+  wdt = 1.0 / 60.0;
+  // 0.5 s at 6 u/s = 3.0
+  for _ in 0..30 { player_step(wp, wm, wdt, winp); }
+  assert(wp.pl_pos.z > 2.9, "walked forward to z={wp.pl_pos.z}");
+  assert(wp.pl_pos.z < 3.1, "not too far");
+  ax = wp.pl_pos.x;
+  if ax < 0.0 { ax = 0.0 - ax; }
+  assert(ax < 0.01, "no lateral drift ax={ax}");
+}
+
+fn test_walk_strafe_right_plus_x() {
+  sp = player_default();
+  sp.pl_on_ground = true;
+  sp.pl_facing = 0.0;
+  sm = make_flat_map();
+  sinp = input_empty();
+  sinp.in_strafe_right = true;
+  sdt = 1.0 / 60.0;
+  for _ in 0..30 { player_step(sp, sm, sdt, sinp); }
+  assert(sp.pl_pos.x > 2.9, "strafed right to x={sp.pl_pos.x}");
+  az = sp.pl_pos.z;
+  if az < 0.0 { az = 0.0 - az; }
+  assert(az < 0.01, "no forward drift az={az}");
+}
+
+fn test_walk_diagonal_normalised() {
+  // Fwd + strafe should not exceed WALK_SPEED in magnitude.
+  dp = player_default();
+  dp.pl_on_ground = true;
+  dm = make_flat_map();
+  dinp = input_empty();
+  dinp.in_fwd = true;
+  dinp.in_strafe_right = true;
+  ddt = 1.0 / 60.0;
+  for _ in 0..30 { player_step(dp, dm, ddt, dinp); }
+  mag = sqrt(dp.pl_pos.x * dp.pl_pos.x + dp.pl_pos.z * dp.pl_pos.z);
+  // 0.5 s at 6 u/s = 3.0 along the diagonal
+  assert(mag > 2.9, "diagonal walked {mag}");
+  assert(mag < 3.1, "diagonal not super-fast {mag}");
+}
+
+// ── Jump-then-fall ────────────────────────────────────────────────
+
+fn test_jump_release_falls_back() {
+  jrp = player_default();
+  jrp.pl_on_ground = true;
+  jrm = make_flat_map();
+  jrinp = input_empty();
+  jrdt = 1.0 / 60.0;
+
+  // Rise 0.5 s
+  jrinp.in_jump_held = true;
+  for _ in 0..30 { player_step(jrp, jrm, jrdt, jrinp); }
+  peak_rise = jrp.pl_pos.y;
+
+  // Release → gravity takes over.  At release vy is still +JUMP_RISE_SPEED,
+  // so the avatar coasts upward for ~0.83 s before gravity wins.  Run
+  // 5 s to guarantee a full fall-and-land in one test.
+  jrinp.in_jump_held = false;
+  for _ in 0..300 { player_step(jrp, jrm, jrdt, jrinp); }
+
+  assert(jrp.pl_pos.y < peak_rise, "came back down ({jrp.pl_pos.y} < {peak_rise})");
+  assert(jrp.pl_pos.y == 0.0, "landed at 0 got {jrp.pl_pos.y}");
+  assert(jrp.pl_on_ground, "on ground after fall");
+  assert(!jrp.pl_holding_jump, "jump flag cleared on release");
+}
+
+// ── Robustness ────────────────────────────────────────────────────
+
+fn test_thousand_random_frames_no_divergence() {
+  rp = player_default();
+  rp.pl_on_ground = true;
+  rm = make_flat_map();
+  rdt = 1.0 / 60.0;
+  for ri in 0..1000 {
+    rinp = input_empty();
+    if ri % 3 == 0 { rinp.in_fwd = true; }
+    if ri % 4 == 0 { rinp.in_strafe_right = true; }
+    if ri % 5 == 0 { rinp.in_jump_held = true; }
+    player_step(rp, rm, rdt, rinp);
+  }
+  assert(rp.pl_pos.y >= 0.0, "y not negative");
+  assert(rp.pl_pos.y < 1000.0, "y not diverged");
+}
+
+fn test_frame_rate_independence() {
+  // Same input, different dt → similar end position.
+  // Walk forward 1.0 s at two different step rates.
+  p60 = player_default();
+  p60.pl_on_ground = true;
+  m60 = make_flat_map();
+  inp60 = input_empty();
+  inp60.in_fwd = true;
+  for _ in 0..60 { player_step(p60, m60, 1.0/60.0, inp60); }
+
+  p120 = player_default();
+  p120.pl_on_ground = true;
+  m120 = make_flat_map();
+  inp120 = input_empty();
+  inp120.in_fwd = true;
+  for _ in 0..120 { player_step(p120, m120, 1.0/120.0, inp120); }
+
+  delta = p60.pl_pos.z - p120.pl_pos.z;
+  if delta < 0.0 { delta = 0.0 - delta; }
+  assert(delta < 0.05, "frame-rate drift {delta}");
+}
