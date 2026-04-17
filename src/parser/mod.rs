@@ -664,7 +664,33 @@ impl Parser {
                     );
                 }
             } else {
-                *code = self.cl("OpCreateStack", std::slice::from_ref(code));
+                let orig = std::mem::replace(code, Value::Null);
+                if matches!(orig, Value::Var(_)) {
+                    *code = self.cl("OpCreateStack", &[orig]);
+                } else {
+                    // P179: produce a `Value::Insert` so that scope
+                    // analysis (`scopes::scan_args`) hoists the
+                    // pre-call Set into the enclosing statement list.
+                    // Insert does not form a scope, so the work-ref
+                    // lives at function scope and its slot survives
+                    // the call.  Using `v_block` instead would create
+                    // a block scope whose exit FreeStack clobbers the
+                    // ref-target bytes and corrupts preceding args.
+                    //
+                    // The work-ref holds only a COPY of an existing
+                    // DbRef — it does not own a store — so tell
+                    // scopes to suppress the scope-exit `OpFreeRef`.
+                    // Without `skip_free`, the shared store would
+                    // be decremented once per call and eventually
+                    // reach ref_count 0, dangling the caller's
+                    // owning reference across loop iterations.
+                    let wv = self.vars.work_refs(is_type, &mut self.lexer);
+                    self.vars.set_skip_free(wv);
+                    *code = Value::Insert(vec![
+                        v_set(wv, orig),
+                        self.cl("OpCreateStack", &[Value::Var(wv)]),
+                    ]);
+                }
             }
             return true;
         }

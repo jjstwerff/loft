@@ -80,12 +80,7 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
     st.es_occlusion_on = !st.es_occlusion_on;
   }
   if input.in_undo {
-    // P179 workaround: passing `st.es_undo` / `st.es_map` inline to
-    // a fn with two `&` params silently corrupts both mutations.
-    // Aliasing to locals first restores the expected behaviour.
-    st_u = st.es_undo;
-    st_m = st.es_map;
-    undo_pop(st_u, st_m);
+    undo_pop(st.es_undo, st.es_map);
   }
   player_step(st.es_player, st.es_map, dt, input);
 }

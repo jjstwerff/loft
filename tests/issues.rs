@@ -9664,16 +9664,18 @@ fn test() {
 }
 
 /// P179 — passing `&struct.field` as a non-sole argument silently
-/// corrupts both the `&` destination and the preceding by-value arg.
-/// Narrow repro: `fn f(n: integer, r: &T) { r.x = n; }` called as
-/// `f(42, o.field)` sets `r.x = 3` (not 42) — the callee's `n` reads
-/// a fragment of the `&` arg's DbRef.  Aliasing each field to a local
-/// first works.  Two-`&`-siblings variant loses both mutations.
+/// corrupted both the `&` destination and the preceding by-value
+/// arg.  Fixed by routing non-Var `&T` sources through a work-ref
+/// local in `src/parser/mod.rs::convert()`, emitting a
+/// `Value::Insert([Set(__ref_N, expr), OpCreateStack(Var(__ref_N))])`
+/// that `src/scopes.rs::scan_args` hoists into the enclosing
+/// statement list (so the work-ref lives at function scope, not
+/// block scope), plus `set_skip_free` to keep the borrowed DbRef
+/// from freeing the owning store at scope exit.
 ///
-/// Gated `#[ignore]` until fixed.  Fixture lives at
+/// Fixture lives at
 /// `tests/lib/p179_ref_field_arg_corrupts_siblings.loft`.
 #[test]
-#[ignore]
 fn p179_ref_field_arg_corrupts_sibling() {
     code!(
         "struct P179Inner { pin_n: integer not null }
