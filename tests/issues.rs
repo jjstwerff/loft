@@ -8942,12 +8942,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:383:24 — pick a different name \
+         at default{s}01_code.loft:385:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:383:24) \
+         struct or enum (defined at default{s}01_code.loft:385:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -9022,6 +9022,55 @@ fn p157_native_refvar_forwarding_with_preeval() {
     );
     let _ = std::fs::remove_file(&rs_path);
     let _ = std::fs::remove_file(&src_path);
+}
+
+// ── Language enhancements ────────────────────────────────────────────
+
+/// Bitwise NOT operator `~` — desugars to OpBitNotSingleInt.
+#[test]
+fn enhancement_bitwise_not() {
+    expr!("~0").result(Value::Int(-1));
+}
+
+#[test]
+fn enhancement_bitwise_not_clear_bit() {
+    expr!("(32 | 64) & ~32").result(Value::Int(64));
+}
+
+/// `&vector<T>` mutation detection — for-loop variable field writes
+/// should propagate back to the iterated `&` collection parameter.
+#[test]
+fn enhancement_ref_vector_loop_mutation_detected() {
+    code!(
+        "struct Item { val: integer not null }
+fn double_all(items: &vector<Item>) {
+    for it in items { it.val = it.val * 2; }
+}
+fn test() {
+    v: vector<Item> = [Item { val: 5 }];
+    double_all(v);
+    assert(v[0].val == 10, \"doubled\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Read-only loop over `&vector<T>` should still flag the `&`.
+#[test]
+fn enhancement_ref_vector_readonly_loop_still_flags() {
+    code!(
+        "struct Item { val: integer not null }
+fn sum_vals(items: &vector<Item>) -> integer {
+    total = 0;
+    for it in items { total = total + it.val; }
+    total
+}
+fn test() { }"
+    )
+    .error(
+        "Parameter 'items' has & but is never modified; remove the & \
+at enhancement_ref_vector_readonly_loop_still_flags:2:47",
+    );
 }
 
 /// P161 regression guard — `for it in items` where items is

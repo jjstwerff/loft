@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 254] = &[
+pub const OPERATORS: &[fn(&mut State); 255] = &[
     goto,
     goto_word,
     goto_false,
@@ -38,6 +38,7 @@ pub const OPERATORS: &[fn(&mut State); 254] = &[
     cast_float_from_text,
     abs_int,
     min_single_int,
+    bit_not_single_int,
     conv_long_from_int,
     conv_float_from_int,
     conv_single_from_int,
@@ -440,6 +441,12 @@ fn abs_int(s: &mut State) {
 fn min_single_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i32>();
     let new_value = ops::op_negate_int(v_v1);
+    s.put_stack(new_value);
+}
+
+fn bit_not_single_int(s: &mut State) {
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = !v_v1;
     s.put_stack(new_value);
 }
 

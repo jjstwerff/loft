@@ -19,9 +19,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io::{Result, Write};
 
 static OPERATORS: &[&str] = &[
-    "OpAdd", "OpMin", "OpMul", "OpDiv", "OpRem", "OpPow", "OpNot", "OpLand", "OpLor", "OpEor",
-    "OpSLeft", "OpSRight", "OpEq", "OpNe", "OpLt", "OpLe", "OpGt", "OpGe", "OpAppend", "OpConv",
-    "OpCast",
+    "OpAdd", "OpMin", "OpMul", "OpDiv", "OpRem", "OpPow", "OpNot", "OpBitNot", "OpLand", "OpLor",
+    "OpEor", "OpSLeft", "OpSRight", "OpEq", "OpNe", "OpLt", "OpLe", "OpGt", "OpGe", "OpAppend",
+    "OpConv", "OpCast",
 ];
 
 pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);

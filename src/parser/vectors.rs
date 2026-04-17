@@ -186,6 +186,10 @@ impl Parser {
             let t = self.parse_part(var_tp, val, parent_tp);
             let arg = val.clone();
             self.call_op(val, "Not", &[arg], &[t])
+        } else if self.lexer.has_token("~") {
+            let t = self.parse_part(var_tp, val, parent_tp);
+            let arg = val.clone();
+            self.call_op(val, "BitNot", &[arg], &[t])
         } else if self.lexer.has_token("-") {
             let t = self.parse_part(var_tp, val, parent_tp);
             let arg = val.clone();
