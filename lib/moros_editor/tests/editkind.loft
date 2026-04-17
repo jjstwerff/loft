@@ -83,6 +83,26 @@ fn test_vector_of_editkind() {
   assert(labels[2] == "spawn_remove", "label[2]: {labels[2]}");
 }
 
+fn test_editkind_is_capture_dispatch() {
+  edits: vector<EditKind> = [
+    HexEdit { ek_q: 1, ek_r: 2, ek_cy: 0, ek_prev: Hex {} },
+    SpawnAdd { ek_q: 3, ek_r: 4, ek_cy: 0, ek_npc_id: 50 },
+    HexEdit { ek_q: 5, ek_r: 6, ek_cy: 1, ek_prev: Hex {} },
+  ];
+  hex_count = 0;
+  spawn_sum = 0;
+  for ek_e in edits {
+    if ek_e is HexEdit { ek_q, ek_r } {
+      hex_count += 1;
+    }
+    if ek_e is SpawnAdd { ek_npc_id } {
+      spawn_sum += ek_npc_id;
+    }
+  }
+  assert(hex_count == 2, "2 hex edits");
+  assert(spawn_sum == 50, "spawn npc sum");
+}
+
 fn test_undo_heterogeneous_edits_via_editkind() {
   m = map_empty();
   // Apply two different edit kinds, then undo both.

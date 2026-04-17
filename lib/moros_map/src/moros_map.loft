@@ -145,7 +145,7 @@ pub fn map_set_height(m: &Map, q: integer, r: integer, cy: integer, height: inte
 pub fn map_place_item(m: &Map, q: integer, r: integer, cy: integer, item: integer, rotation: integer) {
   cur = map_get_hex(m, q, r, cy);
   cur.h_item = item;
-  flags = cur.h_item_rotation & (32 | 64);  // bits 5+6 (spawn, waypoint)
+  flags = cur.h_item_rotation & ~31;  // preserve bits 5+ (spawn, waypoint)
   cur.h_item_rotation = (rotation & 31) | flags;
   map_set_hex(m, q, r, cy, cur);
 }
@@ -205,11 +205,7 @@ pub fn spawn_remove(m: &Map, q: integer, r: integer, cy: integer, npc_id: intege
   m.m_spawn_points = keepers;
   if removed && remaining_on_hex == 0 {
     cur = map_get_hex(m, q, r, cy);
-    // Clear bit 5 (spawn flag).  loft has no bitwise NOT, so subtract
-    // if the bit is set.
-    if (cur.h_item_rotation & 32) != 0 {
-      cur.h_item_rotation = cur.h_item_rotation - 32;
-    }
+    cur.h_item_rotation = cur.h_item_rotation & ~32;
     map_set_hex(m, q, r, cy, cur);
   }
   removed
@@ -233,7 +229,7 @@ pub fn routine_count(m: Map) -> integer { len(m.m_npc_routines) }
 // Look up a routine's index by npc_id.  Returns -1 if absent.
 pub fn routine_index(m: Map, npc_id: integer) -> integer {
   for ri_r in m.m_npc_routines {
-    if ri_r.nr_npc_id == npc_id { return ri_r#index; }
+    if ri_r.nr_npc_id == npc_id { break ri_r#index; }
   }
   -1
 }

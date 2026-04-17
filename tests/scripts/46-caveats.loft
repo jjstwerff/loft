@@ -27,9 +27,10 @@ enum TwoVal { TvInt { v: integer }, TvFloat { v: float } }
 
 fn test_s15_same_named_field_offset() {
   x = TvInt { v: 42 };
-  match x {
-    TvInt { v } => assert(v == 42, "S15: TvInt v should be 42, got {v}"),
-    _ => assert(false, "S15: wrong match arm")
+  if x is TvInt { v } {
+    assert(v == 42, "S15: TvInt v should be 42, got {v}");
+  } else {
+    assert(false, "S15: wrong match arm");
   }
 }
 
@@ -39,6 +40,21 @@ fn test_c11_while() {
   found = false;
   while !found { i += 1; found = i * i > 100; }
   assert(found, "C11: while loop works");
+}
+
+// C11b — while loop with break value.
+fn c11_first_square_above(limit: integer) -> integer {
+  i = 0;
+  while i < 1000 {
+    i += 1;
+    if i * i > limit { break i; }
+  }
+  -1
+}
+
+fn test_c11b_while_break_value() {
+  assert(c11_first_square_above(100) == 11, "C11b: first square > 100");
+  assert(c11_first_square_above(50) == 8, "C11b: first square > 50");
 }
 
 // C19 — Tuples work in interpreter (element access and assignment).
@@ -91,6 +107,7 @@ fn main() {
   test_p3_aggregates();
   test_s15_same_named_field_offset();
   test_c11_while();
+  test_c11b_while_break_value();
   test_c19_tuple_basics();
   test_c61_sequential_same_name();
   test_c61_renamed_loop_var_keeps_local();

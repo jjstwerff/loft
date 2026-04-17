@@ -376,10 +376,26 @@ impl Parser {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
         self.convert(&mut test, &tp, &Type::Boolean);
+        let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
+        let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
         let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
+        if !is_bindings.is_empty() {
+            if let Value::Block(bl) = &mut true_code {
+                let mut new_ops = is_bindings;
+                new_ops.append(&mut bl.operators);
+                bl.operators = new_ops;
+            }
+        }
+        for (name, old) in &is_aliases {
+            if let Some(old_nr) = old {
+                self.vars.set_name(name, *old_nr);
+            } else {
+                self.vars.remove_name(name);
+            }
+        }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
         if self.lexer.has_token("else") {
@@ -393,8 +409,6 @@ impl Parser {
                 }
                 false_type = self.parse_block("else", &mut false_code, &true_type);
                 if true_type == Type::Unknown(0) {
-                    // Only patch the true block with a null value if the last
-                    // expression is NOT a divergent expression (return/break/continue).
                     if let Value::Block(bl) = &mut true_code {
                         let p = bl.operators.len() - 1;
                         if !is_block_divergent(&bl.operators) {
@@ -2099,13 +2113,93 @@ impl Parser {
         } else {
             0
         };
+        let subject_clone = code.clone();
         let disc_expr = if is_struct {
             let get_enum = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
             self.cl("OpConvIntFromEnum", &[get_enum])
         } else {
             self.cl("OpConvIntFromEnum", std::slice::from_ref(code))
         };
-        *code = self.cl("OpEqInt", &[disc_expr, Value::Int(disc)]);
+        let disc_check = self.cl("OpEqInt", &[disc_expr, Value::Int(disc)]);
+        let is_field_capture = is_struct && self.lexer.peek_token("{") && {
+            let link = self.lexer.link();
+            self.lexer.token("{");
+            let is_capture = self.lexer.has_identifier().is_some()
+                && (self.lexer.peek_token(",") || self.lexer.peek_token("}"));
+            self.lexer.revert(link);
+            is_capture
+        };
+        if is_field_capture {
+            let mut condition: Vec<Value> = Vec::new();
+            let stable_subject = if matches!(subject_clone, Value::Var(_)) {
+                subject_clone
+            } else {
+                let tmp = self.create_unique("is_subj", subject_type);
+                if tmp != u16::MAX {
+                    self.vars.defined(tmp);
+                    condition.push(v_set(tmp, subject_clone));
+                }
+                Value::Var(tmp)
+            };
+            self.lexer.token("{");
+            let mut seen_fields: HashSet<String> = HashSet::new();
+            while let Some(field_name) = self.lexer.has_identifier() {
+                if !self.first_pass && seen_fields.contains(&field_name) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "duplicate field binding '{}' in is-capture",
+                        field_name
+                    );
+                }
+                seen_fields.insert(field_name.clone());
+                let attr_idx_and_type = {
+                    let variant_def = self.data.def(variant_def_nr);
+                    variant_def.attributes[1..]
+                        .iter()
+                        .enumerate()
+                        .find(|(_, a)| a.name == field_name)
+                        .map(|(i, a)| (i + 1, a.typedef.clone()))
+                };
+                match attr_idx_and_type {
+                    Some((attr_idx, field_type)) => {
+                        let field_read =
+                            self.get_field(variant_def_nr, attr_idx, stable_subject.clone());
+                        let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
+                        if v_nr != u16::MAX {
+                            self.vars.defined(v_nr);
+                            self.is_capture_bindings.push(v_set(v_nr, field_read));
+                            let old = self.vars.set_name(&field_name, v_nr);
+                            self.is_capture_aliases
+                                .push((field_name.clone(), old));
+                        }
+                    }
+                    None => {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "variant {} has no field '{}'",
+                                self.data.def(variant_def_nr).name,
+                                field_name
+                            );
+                        }
+                    }
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token("}");
+            if condition.is_empty() {
+                *code = disc_check;
+            } else {
+                condition.push(disc_check);
+                *code = Value::Insert(condition);
+            }
+        } else {
+            *code = disc_check;
+        }
         Type::Boolean
     }
 

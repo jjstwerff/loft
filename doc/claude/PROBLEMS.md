@@ -1175,6 +1175,79 @@ the currently-exposed constants (`default/01_code.loft:379`, `:383`).
 
 ---
 
+### P162 — native: `return match` with struct-enum field bindings emits `return let mut`
+
+**Status:** fixed (2026-04-17)
+
+**Reproducer:**
+
+```loft
+enum GShape {
+  GCircle { radius: float },
+  GRect { width: float, height: float }
+}
+
+fn garea(s: GShape) -> float {
+  match s {
+    GCircle { radius } if radius > 0.0 => PI * radius * radius,
+    GCircle { radius } => 0.0,
+    GRect { width, height } => width * height
+  }
+}
+```
+
+Native codegen produces `return let mut var__mv_radius_2: f64 = 0.0;` —
+`pre_declare_branch_vars` emits variable declarations between the `return`
+keyword and the if-chain.  Rust rejects `return let …` as an expression.
+
+**Root cause:** `output_if` calls `pre_declare_branch_vars` which writes
+`let mut` declarations.  When the caller already wrote `return `, the
+declarations land after `return` instead of before it.  The interpreter
+is unaffected; only native codegen is broken.
+
+**Fix path:** In `output_if`, detect when inside a return context (or in
+the `Value::Return` handler, hoist the if-expression into a temporary
+`let` binding before `return`).  Alternatively, move `pre_declare_branch_vars`
+output before the `return` keyword.
+
+**Discovered:** 2026-04-17, pre-existing in `tests/scripts/10-match.loft`.
+
+**Tests:** `tests/scripts/10-match.loft` native compilation (fails).
+
+---
+
+### P163 — `is` field capture SIGSEGV on mixed-variant loop iteration
+
+**Status:** fixed (2026-04-17)
+
+**Reproducer:**
+
+```loft
+enum V2 { VaText { vt: text }, VaBool { vb: boolean } }
+fn test() {
+  items: vector<V2> = [VaText { vt: "hi" }, VaBool { vb: true }];
+  r = "";
+  for it in items {
+    if it is VaText { vt } { r += vt; }
+    if it is VaBool { vb } { r += "{vb}"; }
+  }
+}
+```
+
+**Root cause:** `is`-capture bindings were placed in the condition
+Insert and executed unconditionally — before the discriminant check.
+When the variant didn't match, `OpGetText` on a `VaBool`'s memory
+read an invalid text pointer, causing SIGSEGV.
+
+**Fix:** Moved field-read bindings from the condition into the if-body
+(via `is_capture_bindings`).  The temp subject variable (for non-Var
+expressions) stays in the condition since reading the enum byte is
+always safe.  Field reads now only execute when the variant matches.
+
+**Discovered:** 2026-04-17, while converting `#fields` iteration tests.
+
+---
+
 ## See also
 - [PLANNING.md](PLANNING.md) — Priority-ordered enhancement backlog
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — Language design inconsistencies and asymmetries

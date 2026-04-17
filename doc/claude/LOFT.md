@@ -872,6 +872,56 @@ match v {
 **Match is an expression:** it produces a value that can be assigned or returned. All
 arms must produce the same type (or void).
 
+### `is` variant check
+
+The `is` operator tests whether an enum value is a specific variant:
+
+```loft
+d = North;
+if d is North { ... }       // true
+assert(!(d is South));       // negation
+```
+
+For struct-enums, `is` can also capture variant fields into local variables:
+
+```loft
+s = Circle { radius: 3.14 };
+if s is Circle { radius } {
+  area = PI * radius * radius;   // radius is in scope here
+}
+// radius is NOT in scope here
+```
+
+Multiple fields:
+```loft
+if shape is Rect { width, height } {
+  area = width * height;
+}
+```
+
+With else:
+```loft
+if shape is Circle { radius } {
+  area = PI * radius * radius;
+} else {
+  area = 0.0;
+}
+```
+
+In loops:
+```loft
+for item in shapes {
+  if item is Circle { radius } {
+    total += radius;
+  }
+}
+```
+
+**Disambiguation:** `if s is Circle { radius } { body }` — the parser
+uses lookahead to distinguish field capture `{ ident [, ident]* }` from
+an if-body `{ statements }`.  If the `{` is followed by an identifier
+then `,` or `}`, it is a field capture; otherwise it is the if-body.
+
 ---
 
 ## Variables

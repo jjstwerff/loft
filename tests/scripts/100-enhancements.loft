@@ -208,7 +208,10 @@ fn test_struct_enum_json_roundtrip() {
   c = Circle { radius: 2.5 };
   j = "{c:j}";
   p = Shape.parse(j);
-  r = match p { Circle { radius } => radius, _ => 0.0 };
+  r = 0.0;
+  if p is Circle { radius } {
+    r = radius;
+  }
   assert(r == 2.5, "circle radius round-tripped");
 }
 
@@ -216,7 +219,10 @@ fn test_struct_enum_json_roundtrip_rect() {
   r = Rect { width: 4.0, height: 6.0 };
   j = "{r:j}";
   p = Shape.parse(j);
-  area = match p { Rect { width, height } => width * height, _ => 0.0 };
+  area = 0.0;
+  if p is Rect { width, height } {
+    area = width * height;
+  }
   assert(area == 24.0, "rect area round-tripped");
 }
 
@@ -270,4 +276,81 @@ fn test_break_value_while_found() {
 
 fn test_break_value_while_not_found() {
   assert(find_bv_sqrt(3) == -1, "not reachable in 3");
+}
+
+// ── `is` with field capture ─────────────────────────────────────
+
+fn test_is_capture_single_field() {
+  s = Circle { radius: 3.14 };
+  result = 0.0;
+  if s is Circle { radius } {
+    result = radius;
+  }
+  assert(result == 3.14, "captured radius");
+}
+
+fn test_is_capture_multiple_fields() {
+  s = Rect { width: 5.0, height: 10.0 };
+  area = 0.0;
+  if s is Rect { width, height } {
+    area = width * height;
+  }
+  assert(area == 50.0, "captured both");
+}
+
+fn test_is_capture_wrong_variant() {
+  s = Circle { radius: 2.0 };
+  was_rect = false;
+  if s is Rect { width, height } {
+    was_rect = true;
+  }
+  assert(!was_rect, "not rect branch");
+}
+
+fn test_is_capture_with_else() {
+  s = Circle { radius: 4.0 };
+  area = 0.0;
+  if s is Circle { radius } {
+    area = 3.14 * radius * radius;
+  } else {
+    area = -1.0;
+  }
+  assert(area > 50.0, "circle area");
+  assert(area < 51.0, "circle area upper");
+}
+
+fn test_is_capture_else_taken() {
+  s = Tri { base: 3.0, side: 4.0 };
+  area = 0.0;
+  if s is Circle { radius } {
+    area = radius;
+  } else {
+    area = -1.0;
+  }
+  assert(area == -1.0, "else taken");
+}
+
+fn test_is_capture_in_loop() {
+  items: vector<Shape> = [
+    Circle { radius: 1.0 },
+    Rect { width: 2.0, height: 3.0 },
+    Circle { radius: 4.0 },
+    Tri { base: 5.0, side: 6.0 },
+  ];
+  total_radius = 0.0;
+  for it in items {
+    if it is Circle { radius } {
+      total_radius += radius;
+    }
+  }
+  assert(total_radius == 5.0, "sum of radii");
+}
+
+fn test_is_capture_scope_not_leaking() {
+  s = Circle { radius: 99.0 };
+  radius = 1.0;
+  if s is Rect { width, height } {
+    radius = width;
+  }
+  assert(radius == 1.0, "outer radius unchanged");
 }

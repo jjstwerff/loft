@@ -139,6 +139,13 @@ pub struct Parser {
     /// `yield` inside a `par()` body is illegal — the worker runs in a separate
     /// thread with its own store; there is no safe coroutine resumption path.
     pub(crate) in_par_body: bool,
+    /// Field-capture aliases created by `if expr is Variant { field } { body }`.
+    /// Drained by `parse_if` after the body to restore previous name mappings.
+    pub(crate) is_capture_aliases: Vec<(String, Option<u16>)>,
+    /// Field-binding Set nodes created by `if expr is Variant { field }`.
+    /// Drained by `parse_if` and prepended to the if-body so they only
+    /// execute when the discriminant matches (P163).
+    pub(crate) is_capture_bindings: Vec<Value>,
 }
 
 // Operators ordered on their precedence
@@ -298,6 +305,8 @@ impl Parser {
             init_field_tracking: false,
             init_field_deps: Vec::new(),
             in_par_body: false,
+            is_capture_aliases: Vec::new(),
+            is_capture_bindings: Vec::new(),
         }
     }
 

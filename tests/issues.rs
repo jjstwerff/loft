@@ -9122,6 +9122,97 @@ fn test() {
     .result(Value::Null);
 }
 
+/// `is` operator with field capture — single field.
+#[test]
+fn enhancement_is_capture_single_field() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Circle { radius: 3.14 };
+    result = 0.0;
+    if s is Circle { radius } {
+        result = radius;
+    }
+    assert(result == 3.14, \"captured radius\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator with field capture — multiple fields + else branch.
+#[test]
+fn enhancement_is_capture_multiple_fields_else() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Rect { width: 5.0, height: 10.0 };
+    area = 0.0;
+    if s is Rect { width, height } {
+        area = width * height;
+    } else {
+        area = -1.0;
+    }
+    assert(area == 50.0, \"captured both\");
+    c = Circle { radius: 2.0 };
+    if c is Rect { width, height } {
+        area = width * height;
+    } else {
+        area = -1.0;
+    }
+    assert(area == -1.0, \"else taken\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator with field capture in loop — sum radii from mixed vector.
+#[test]
+fn enhancement_is_capture_in_loop() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    items: vector<Shape> = [Circle { radius: 1.0 }, Rect { width: 2.0, height: 3.0 }, Circle { radius: 4.0 }];
+    total = 0.0;
+    for it in items {
+        if it is Circle { radius } {
+            total += radius;
+        }
+    }
+    assert(total == 5.0, \"sum of radii\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` capture scope doesn't leak into outer scope.
+#[test]
+fn enhancement_is_capture_scope_isolation() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Circle { radius: 99.0 };
+    radius = 1.0;
+    if s is Rect { width, height } {
+        radius = width;
+    }
+    assert(radius == 1.0, \"outer radius unchanged\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// Op table extension — emit_op handles ops >= 255 via escape prefix.
 /// No specific op to test yet (all 255 primary slots used), but verify
 /// the infrastructure doesn't break existing ops.
@@ -9309,4 +9400,31 @@ fn p145_text_return_multivec_struct_cross_file() {
         !state.database.had_fatal,
         "P145 regression: to_json on cross-file multi-vector struct crashed"
     );
+}
+
+/// P162 regression guard — native codegen emits `return let mut …` when
+/// a match expression with struct-enum field bindings + guard is returned
+/// directly.  `pre_declare_branch_vars` writes `let mut` declarations
+/// after the `return` keyword.  Interpreter works; native compilation fails.
+#[test]
+fn p162_return_match_struct_enum_native() {
+    code!(
+        "enum GShape {
+    GCircle { radius: float },
+    GRect { width: float, height: float }
+}
+fn garea(s: GShape) -> float {
+    match s {
+        GCircle { radius } if radius > 0.0 => 3.14 * radius * radius,
+        GCircle { radius } => 0.0,
+        GRect { width, height } => width * height
+    }
+}
+fn test() {
+    assert(garea(GCircle { radius: 2.0 }) > 12.0, \"circle area\");
+    assert(garea(GCircle { radius: -1.0 }) == 0.0, \"negative radius\");
+    assert(garea(GRect { width: 3.0, height: 4.0 }) == 12.0, \"rect area\");
+}"
+    )
+    .result(Value::Null);
 }

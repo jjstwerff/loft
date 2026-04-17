@@ -26,7 +26,10 @@ enum P85Val { P85Int { n: integer }, P85Text { t: text } }
 
 fn p85_extract() -> integer {
   p85_v = P85Int { n: 42 };
-  match p85_v { P85Int { n } => n, _ => 0 }
+  if p85_v is P85Int { n } {
+    return n;
+  }
+  0
 }
 
 fn test_p85_struct_enum_local() {
