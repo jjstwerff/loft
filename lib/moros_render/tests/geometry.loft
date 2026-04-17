@@ -644,6 +644,53 @@ fn test_emit_thick_curved_wall_full_loop() {
   assert(len(tcw_mesh.triangles) == 16 * 6, "16 × 6 tris");
 }
 
+// ── GLB export / scene-building tests (Phase 6a.14) ───────────────
+
+fn test_map_build_scene_empty() {
+  em = map_empty();
+  sc = map_build_scene(em);
+  // Empty map emits no meshes (no hexes to render).
+  assert(len(sc.meshes) == 0, "empty map → no meshes, got {len(sc.meshes)}");
+  // Default material is always added.
+  assert(len(sc.materials) == 1, "default material added");
+  assert(len(sc.nodes) == 0, "no nodes for empty map");
+}
+
+fn test_map_build_scene_painted() {
+  pm = map_empty();
+  map_paint_material(pm, 0, 0, 0, 1);
+  map_paint_material(pm, 1, 0, 0, 2);
+  sc = map_build_scene(pm);
+  // At least 2 materials used → at least 2 meshes + 2 nodes.
+  assert(len(sc.meshes) >= 2, "painted map has meshes, got {len(sc.meshes)}");
+  assert(len(sc.nodes) >= 2, "painted map has nodes");
+}
+
+fn test_map_build_scene_walls() {
+  wm = map_empty();
+  map_set_wall(wm, 0, 0, 0, 0, 1);
+  sc = map_build_scene(wm);
+  // One of the nodes should be named "walls".
+  has_walls_node = false;
+  for wn in sc.nodes {
+    if wn.name == "walls" { has_walls_node = true; }
+  }
+  assert(has_walls_node, "walls node present in scene");
+}
+
+fn test_map_export_glb_creates_file() {
+  xm = map_empty();
+  map_paint_material(xm, 0, 0, 0, 1);
+  xpath = "/tmp/moros_render_test.glb";
+  map_export_glb(xm, xpath);
+  // Binary content cannot be read via file().content() (which
+  // decodes as UTF-8 text); just verify the file exists.  A full
+  // GLB round-trip lives outside the loft test harness (Blender /
+  // gltf-validator).
+  f = file(xpath);
+  assert(f.exists(), "GLB file written at {xpath}");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

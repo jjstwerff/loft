@@ -798,3 +798,30 @@ pub fn scene_triangle_count(meshes: vector<Mesh>) -> integer {
   for sm in meshes { total = total + len(sm.triangles); }
   total
 }
+
+// ── GLB export (Phase 6a.14 / MO.10) ──────────────────────────────
+
+// Build a graphics::Scene from a Map, ready for GLB export or
+// other downstream rendering.  Each mesh from `build_hex_meshes`
+// becomes a Node with a default grey material — palette-driven
+// material assignment is a later enhancement (requires text→int
+// parsing on mesh.name or a parallel index tracked during build).
+pub fn map_build_scene(map: Map) -> Scene {
+  sc = scene("moros_map_{map.m_name}");
+  default_mat = material_color("default", 0.7, 0.7, 0.7);
+  default_mat_idx = add_material(sc, default_mat);
+  mbs_meshes = build_hex_meshes(map);
+  for mbs_m in mbs_meshes {
+    mbs_m_idx = add_mesh(sc, mbs_m);
+    add_node(sc, node(mbs_m.name, mbs_m_idx, default_mat_idx));
+  }
+  sc
+}
+
+// Export a Map to a GLB file on disk.  Uses the graphics::glb
+// writer, which produces a GLB 2.0 file readable by Blender,
+// three.js, gltf-validator, etc.
+pub fn map_export_glb(map: Map, path: text) {
+  sc = map_build_scene(map);
+  save_scene_glb(sc, path);
+}
