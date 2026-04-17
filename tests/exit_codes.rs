@@ -199,3 +199,101 @@ fn w1_1_html_export_produces_file() {
         html.len()
     );
 }
+
+// ── P166: file().content() on a binary file must surface a warning ────────
+//
+// Root-cause data-loss bug: prior to the 2026-04-17 fix,
+// `file("x.glb").content()` silently returned "" on any file whose bytes
+// failed UTF-8 decode — `src/state/io.rs::get_file_text`'s `read_to_string`
+// failure path called `buf.clear()` with no log.  Fix: emit an actionable
+// stderr warning on `ErrorKind::InvalidData` so the user sees the misuse
+// the first time it runs, with a pointer at the `#format = LittleEndian;
+// #read(n)` idiom.
+
+/// P166: reading a non-UTF-8 file via .content() must emit a stderr warning
+/// containing the phrase "non-UTF-8 bytes" along with the file size and a
+/// pointer at the binary-read idiom.
+#[test]
+fn p166_content_on_binary_file_warns() {
+    let dir = std::env::temp_dir();
+    let bin_path = dir.join("loft_p166_binary.bin");
+    // Non-UTF-8 bytes: 0xFF and 0xFE are invalid UTF-8 start bytes.
+    std::fs::write(&bin_path, [0xFFu8, 0xFE, 0xFD, 0xFC, 0xFB]).expect("write temp binary file");
+
+    let script_path = dir.join("loft_p166_script.loft");
+    let script = format!(
+        "fn main() {{\n  \
+            f = file(\"{}\");\n  \
+            c = f.content();\n  \
+            println(\"len={{len(c)}}\");\n  \
+            assert(len(c) == 0, \"content should be empty on binary\");\n\
+         }}\n",
+        bin_path.display()
+    );
+    std::fs::write(&script_path, &script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&bin_path);
+    let _ = std::fs::remove_file(&script_path);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "program should still exit 0 (empty string is valid); stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("non-UTF-8 bytes"),
+        "expected 'non-UTF-8 bytes' warning in stderr; got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("5 bytes in file"),
+        "warning should include the actual file size; got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("#format = LittleEndian"),
+        "warning should name the correct binary-read idiom; got stderr={stderr:?}"
+    );
+}
+
+/// P166: reading a valid UTF-8 text file via .content() must NOT emit the
+/// warning — the signal is strictly on decode failure, not on all binary
+/// opens.
+#[test]
+fn p166_content_on_text_file_no_warning() {
+    let dir = std::env::temp_dir();
+    let text_path = dir.join("loft_p166_text.txt");
+    std::fs::write(&text_path, "hello world\n").expect("write temp text file");
+
+    let script_path = dir.join("loft_p166_text_script.loft");
+    let script = format!(
+        "fn main() {{\n  \
+            f = file(\"{}\");\n  \
+            c = f.content();\n  \
+            assert(len(c) > 0, \"content should be non-empty\");\n\
+         }}\n",
+        text_path.display()
+    );
+    std::fs::write(&script_path, &script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&text_path);
+    let _ = std::fs::remove_file(&script_path);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "text-file read should succeed");
+    assert!(
+        !stderr.contains("non-UTF-8 bytes"),
+        "text file should not trigger the P166 warning; got stderr={stderr:?}"
+    );
+}
