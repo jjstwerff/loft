@@ -129,6 +129,62 @@ fn test_build_hex_meshes_with_walls() {
   assert(has_walls, "walls mesh present");
 }
 
+// ── Linear stair tests (MO.8a) ────────────────────────────────────
+
+fn test_stair_step_count_basic() {
+  // 2.0 world-units of climb at HEIGHT_SCALE=0.25 → 8 steps.
+  assert(stair_step_count(0.0, 2.0) == 8, "2.0 climb = 8 steps");
+}
+
+fn test_stair_step_count_minimum() {
+  // Zero climb still yields a 1-step minimum (keeps downstream
+  // arithmetic safe against divide-by-zero).
+  assert(stair_step_count(0.0, 0.0) == 1, "0 climb = 1 step (min)");
+}
+
+fn test_stair_step_count_descending() {
+  // Descending stair counts the same as ascending — sign is dropped.
+  assert(stair_step_count(5.0, 3.0) == 8, "descend 2.0 = 8 steps");
+}
+
+fn test_emit_linear_stair_vertex_and_triangle_count() {
+  ls_mesh = mesh("ls_count");
+  ls_lo = vec3(0.0, 0.0, 0.0);
+  ls_hi = vec3(2.0, 1.0, 0.0);
+  emit_linear_stair(ls_mesh, ls_lo, ls_hi, 1.0, 4);
+  // 4 steps × 8 verts (4 riser + 4 tread) = 32
+  // 4 steps × 4 triangles (2 riser + 2 tread) = 16
+  assert(len(ls_mesh.vertices) == 32, "expected 32 verts, got {len(ls_mesh.vertices)}");
+  assert(len(ls_mesh.triangles) == 16, "expected 16 tris, got {len(ls_mesh.triangles)}");
+}
+
+fn test_emit_linear_stair_step_heights() {
+  ls_mesh = mesh("ls_heights");
+  // 2 steps × 1.0 rise each → 2.0 total climb.
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 2.0, 0.0), 1.0, 2);
+  // First riser's top-left vertex (index 3) sits at step 0's top y = 1.0.
+  assert(ls_mesh.vertices[3].pos.y == 1.0, "first riser top y = 1.0");
+  // Second riser starts at vertex 8; its bottom y = 1.0 (step 1's floor).
+  assert(ls_mesh.vertices[8].pos.y == 1.0, "second riser bottom y = 1.0");
+  // Last tread sits at y = 2.0 (final climb height).
+  // Step 1 tread base index = 4 (step 0 occupies 0..7) + 4 (step 1 riser) = 12.
+  assert(ls_mesh.vertices[12].pos.y == 2.0, "second tread y = 2.0");
+}
+
+fn test_emit_linear_stair_zero_horizontal() {
+  // Degenerate: no horizontal travel → no geometry emitted.
+  ls_mesh = mesh("ls_zero_h");
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 4);
+  assert(len(ls_mesh.vertices) == 0, "zero horizontal → no verts");
+}
+
+fn test_emit_linear_stair_zero_steps() {
+  // Non-positive step count is a no-op.
+  ls_mesh = mesh("ls_zero_s");
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), 1.0, 0);
+  assert(len(ls_mesh.vertices) == 0, "zero steps → no verts");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

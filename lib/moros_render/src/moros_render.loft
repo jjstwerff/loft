@@ -175,6 +175,81 @@ fn neighbour_dr(dir: integer) -> integer {
   0
 }
 
+// ── Linear stair geometry (Phase 6a.9 / MO.8a) ────────────────────
+
+// Step count for a linear stair climbing from y_low to y_high.
+// Rule of thumb: one step per HEIGHT_SCALE world-units of climb.
+// Minimum 1 step (descending climbs count the same as ascending).
+pub fn stair_step_count(y_low: float, y_high: float) -> integer {
+  d = y_high - y_low;
+  if d < 0.0 { d = 0.0 - d; }
+  n = (d / HEIGHT_SCALE) as integer;
+  if n < 1 { 1 } else { n }
+}
+
+// Emit a linear stair with `step_count` uniform steps from `p_low`
+// (front-centre at the low end) to `p_high` (front-centre at the
+// high end).  `width` is the lateral size perpendicular to travel.
+// Each step contributes 8 vertices (4 riser + 4 tread) and 4
+// triangles (2 riser + 2 tread).  No geometry is emitted when the
+// step count is non-positive or the horizontal distance is zero.
+pub fn emit_linear_stair(
+  m: &Mesh, p_low: Vec3, p_high: Vec3, width: float, step_count: integer
+) {
+  if step_count <= 0 { return; }
+  ls_dx = p_high.x - p_low.x;
+  ls_dz = p_high.z - p_low.z;
+  ls_dy = p_high.y - p_low.y;
+  horiz = sqrt(ls_dx * ls_dx + ls_dz * ls_dz);
+  if horiz == 0.0 { return; }
+  fwd_x = ls_dx / horiz;
+  fwd_z = ls_dz / horiz;
+  // 90° rotation in XZ for the lateral direction.
+  side_x = 0.0 - fwd_z;
+  side_z = fwd_x;
+  stair_half_w = width / 2.0;
+  step_run  = horiz / step_count as float;
+  step_rise = ls_dy / step_count as float;
+  stair_up = vec3(0.0, 1.0, 0.0);
+  // Riser normal points backward (against travel direction).
+  riser_n = vec3(0.0 - fwd_x, 0.0, 0.0 - fwd_z);
+  for ls_i in 0..step_count {
+    i_f = ls_i as float;
+    fx = p_low.x + fwd_x * step_run * i_f;
+    fz = p_low.z + fwd_z * step_run * i_f;
+    y_bot = p_low.y + step_rise * i_f;
+    y_top = p_low.y + step_rise * (i_f + 1.0);
+    lx = side_x * stair_half_w;
+    lz = side_z * stair_half_w;
+    // Riser quad — vertical, faces backward.
+    r_bl = vec3(fx - lx, y_bot, fz - lz);
+    r_br = vec3(fx + lx, y_bot, fz + lz);
+    r_tr = vec3(fx + lx, y_top, fz + lz);
+    r_tl = vec3(fx - lx, y_top, fz - lz);
+    rb = len(m.vertices);
+    m.vertices += [vertex(r_bl, riser_n, vec2(0.0, 0.0))];
+    m.vertices += [vertex(r_br, riser_n, vec2(1.0, 0.0))];
+    m.vertices += [vertex(r_tr, riser_n, vec2(1.0, 1.0))];
+    m.vertices += [vertex(r_tl, riser_n, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: rb, b: rb + 1, c: rb + 2 }];
+    m.triangles += [Triangle { a: rb, b: rb + 2, c: rb + 3 }];
+    // Tread quad — horizontal, faces up.
+    bx = fx + fwd_x * step_run;
+    bz = fz + fwd_z * step_run;
+    t_fl = vec3(fx - lx, y_top, fz - lz);
+    t_fr = vec3(fx + lx, y_top, fz + lz);
+    t_br = vec3(bx + lx, y_top, bz + lz);
+    t_bl = vec3(bx - lx, y_top, bz - lz);
+    tb = len(m.vertices);
+    m.vertices += [vertex(t_fl, stair_up, vec2(0.0, 0.0))];
+    m.vertices += [vertex(t_fr, stair_up, vec2(1.0, 0.0))];
+    m.vertices += [vertex(t_br, stair_up, vec2(1.0, 1.0))];
+    m.vertices += [vertex(t_bl, stair_up, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: tb, b: tb + 1, c: tb + 2 }];
+    m.triangles += [Triangle { a: tb, b: tb + 2, c: tb + 3 }];
+  }
+}
+
 // ── Scene builder (Phase 6a.13) ───────────────────────────────────
 
 // Find or create a mesh by material name, emit a hex surface into it.
