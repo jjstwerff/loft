@@ -683,12 +683,48 @@ fn test_map_export_glb_creates_file() {
   map_paint_material(xm, 0, 0, 0, 1);
   xpath = "/tmp/moros_render_test.glb";
   map_export_glb(xm, xpath);
-  // Binary content cannot be read via file().content() (which
-  // decodes as UTF-8 text); just verify the file exists.  A full
-  // GLB round-trip lives outside the loft test harness (Blender /
-  // gltf-validator).
-  f = file(xpath);
-  assert(f.exists(), "GLB file written at {xpath}");
+  // Binary content can't be read via `file().content()` (UTF-8
+  // decode); use the `#format = LittleEndian` + `#read(n)` binary
+  // read pattern (same as lib/graphics/tests/glb.loft).
+  xf = file(xpath);
+  assert(xf.exists(), "GLB file written at {xpath}");
+  xsz = xf.size;
+  assert(xsz > 0l, "GLB file non-empty, got {xsz} bytes");
+}
+
+// Verify the 12-byte GLB header: magic 'glTF', version 2, total length.
+fn test_map_export_glb_header() {
+  hm = map_empty();
+  map_paint_material(hm, 0, 0, 0, 1);
+  hpath = "/tmp/moros_render_hdr_test.glb";
+  map_export_glb(hm, hpath);
+  hsz = file(hpath).size;
+  {
+    hf = file(hpath);
+    hf#format = LittleEndian;
+    assert(hf#read(4) as i32 == 0x46546C67, "magic 'glTF'");
+    assert(hf#read(4) as i32 == 2, "version 2");
+    htotal = hf#read(4) as i32;
+    assert(htotal as long == hsz, "total_len matches file size = {hsz}");
+  }
+}
+
+// Verify the JSON chunk type tag — confirms the first chunk past
+// the header is the glTF JSON chunk (0x4E4F534A = 'JSON' LE).
+fn test_map_export_glb_json_chunk() {
+  cm = map_empty();
+  map_paint_material(cm, 0, 0, 0, 1);
+  cpath = "/tmp/moros_render_chunk_test.glb";
+  map_export_glb(cm, cpath);
+  {
+    cf = file(cpath);
+    cf#format = LittleEndian;
+    cf#read(4) as i32;   // magic
+    cf#read(4) as i32;   // version
+    cf#read(4) as i32;   // total_len
+    cf#read(4) as i32;   // JSON chunk length
+    assert(cf#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
+  }
 }
 
 fn test_scene_stats() {
