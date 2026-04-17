@@ -390,3 +390,67 @@ pub fn stencil_flat() -> StencilDef {
     }],
   }
 }
+
+// 3-hex spiral stair: centre ramp + two side walls stepping up.
+pub fn stencil_spiral_stair() -> StencilDef {
+  StencilDef {
+    sd_name: "spiral_stair",
+    sd_category: "building",
+    sd_origin_q: 0,
+    sd_origin_r: 0,
+    sd_hexes: [
+      StencilHex { sh_dq: 0, sh_dr: 0, sh_height: 0, sh_material: 4, sh_item: 0, sh_item_rotation: 0, sh_wall_n: 0, sh_wall_ne: 0, sh_wall_se: 0 },
+      StencilHex { sh_dq: 1, sh_dr: 0, sh_height: 3, sh_material: 4, sh_item: 0, sh_item_rotation: 0, sh_wall_n: 2, sh_wall_ne: 0, sh_wall_se: 0 },
+      StencilHex { sh_dq: 0, sh_dr: 1, sh_height: 6, sh_material: 4, sh_item: 0, sh_item_rotation: 0, sh_wall_n: 0, sh_wall_ne: 2, sh_wall_se: 0 },
+    ],
+  }
+}
+
+// ── Stencil capture (Phase 4.17) ──────────────────────────────────
+
+// Capture a rectangular region of the map as a StencilDef.
+// All hexes in the q∈[q1,q2], r∈[r1,r2] range are read.
+// The origin is set to (q1, r1).
+pub fn stencil_save(m: Map, name: text, category: text, q1: integer, r1: integer, q2: integer, r2: integer, cy: integer) -> StencilDef {
+  hexes: vector<StencilHex> = [];
+  for q in q1..=q2 {
+    for r in r1..=r2 {
+      h = map_get_hex(m, q, r, cy);
+      hexes += [StencilHex {
+        sh_dq: q, sh_dr: r,
+        sh_height: h.h_height,
+        sh_material: h.h_material,
+        sh_item: h.h_item,
+        sh_item_rotation: h.h_item_rotation,
+        sh_wall_n: h.h_wall_n,
+        sh_wall_ne: h.h_wall_ne,
+        sh_wall_se: h.h_wall_se,
+      }];
+    }
+  }
+  StencilDef {
+    sd_name: name,
+    sd_category: category,
+    sd_origin_q: q1,
+    sd_origin_r: r1,
+    sd_hexes: hexes,
+  }
+}
+
+// ── Stencil JSON (Phase 4.17) ─────────────────────────────────────
+
+// Serialize a stencil to JSON for storage/transfer.
+pub fn stencil_to_json(st: StencilDef) -> text { "{st:j}" }
+
+// Deserialize a stencil from JSON.
+pub fn stencil_from_json(json: text) -> StencilDef { StencilDef.parse(json) }
+
+// ── Editor lifecycle (Phase 4.19) ─────────────────────────────────
+
+// Save the complete editor state as JSON.  Currently wraps
+// map_to_json — undo history is runtime-only and not persisted.
+pub fn editor_save(m: Map) -> text { map_to_json(m) }
+
+// Initialise the editor from a previously-saved JSON string.
+// Returns an empty map on parse failure.
+pub fn editor_init(json: text) -> Map { map_from_json(json) }
