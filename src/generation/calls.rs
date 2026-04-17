@@ -47,6 +47,16 @@ impl Output<'_> {
             if let Some(vr) = self.create_stack_var(v) {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
+            // P160: OpCreateStack wrapping an addressable expression
+            // (e.g. v[i] as & param).  Emit a temporary + &mut so the
+            // callee can write through the DbRef into the store.
+            } else if let Value::Call(d_nr, args) = v
+                && self.data.def(*d_nr).name == "OpCreateStack"
+                && args.len() == 1
+                && !matches!(&args[0], Value::Var(_))
+            {
+                let expr = self.generate_expr_buf(&args[0])?;
+                write!(w, "&mut ({expr})")?;
             } else if idx < def_fn.attributes.len()
                 && matches!(def_fn.attributes[idx].typedef, Type::RefVar(_))
                 && let Value::Var(nr) = v

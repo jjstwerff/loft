@@ -1,0 +1,221 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Language enhancements: bitwise NOT, `is` variant check, map/filter
+// on &vector, &vector loop-var mutation detection.
+
+// ── Bitwise NOT (~) ─────────────────────────────────────────────
+
+fn test_bitnot_zero() {
+  assert(~0 == -1, "~0 = -1");
+}
+
+fn test_bitnot_minus_one() {
+  assert(~(-1) == 0, "~-1 = 0");
+}
+
+fn test_bitnot_clear_bit() {
+  flags = 32 | 64;
+  cleared = flags & ~32;
+  assert(cleared == 64, "clear bit 5");
+}
+
+fn test_bitnot_in_expression() {
+  x = 255;
+  assert(~x == -256, "~255 = -256");
+  assert((x & ~15) == 240, "clear low nibble");
+}
+
+// ── `is` variant check ──────────────────────────────────────────
+
+enum Direction { North, East, South, West }
+
+fn test_is_plain_enum() {
+  d = North;
+  assert(d is North, "is North");
+  assert(!(d is South), "not South");
+  assert(!(d is East), "not East");
+}
+
+fn test_is_plain_enum_all_variants() {
+  assert(North is North, "N is N");
+  assert(East is East, "E is E");
+  assert(South is South, "S is S");
+  assert(West is West, "W is W");
+}
+
+enum Shape {
+  Circle { radius: float },
+  Rect { width: float, height: float },
+  Tri { base: float, side: float }
+}
+
+fn test_is_struct_enum() {
+  c = Circle { radius: 3.14 };
+  assert(c is Circle, "is Circle");
+  assert(!(c is Rect), "not Rect");
+  assert(!(c is Tri), "not Tri");
+}
+
+fn test_is_struct_enum_rect() {
+  r = Rect { width: 5.0, height: 10.0 };
+  assert(r is Rect, "is Rect");
+  assert(!(r is Circle), "not Circle");
+}
+
+fn test_is_in_if_condition() {
+  s = Circle { radius: 2.0 };
+  result = 0;
+  if s is Circle { result = 1; }
+  if s is Rect { result = 2; }
+  assert(result == 1, "if-is dispatched to Circle");
+}
+
+fn test_is_in_loop() {
+  items: vector<Shape> = [
+    Circle { radius: 1.0 },
+    Rect { width: 2.0, height: 3.0 },
+    Circle { radius: 4.0 },
+    Tri { base: 5.0, side: 6.0 },
+    Circle { radius: 7.0 },
+  ];
+  circle_count = 0;
+  rect_count = 0;
+  tri_count = 0;
+  for it in items {
+    if it is Circle { circle_count = circle_count + 1; }
+    if it is Rect { rect_count = rect_count + 1; }
+    if it is Tri { tri_count = tri_count + 1; }
+  }
+  assert(circle_count == 3, "3 circles");
+  assert(rect_count == 1, "1 rect");
+  assert(tri_count == 1, "1 tri");
+}
+
+fn test_is_with_negation() {
+  s = Tri { base: 1.0, side: 2.0 };
+  non_circle = !(s is Circle);
+  assert(non_circle, "negated is");
+}
+
+// ── &vector mutation detection ──────────────────────────────────
+
+struct MutItem { mv: integer not null }
+
+fn double_all_items(items: &vector<MutItem>) {
+  for it in items {
+    it.mv = it.mv * 2;
+  }
+}
+
+fn test_ref_vector_loop_mutation() {
+  v: vector<MutItem> = [MutItem { mv: 5 }, MutItem { mv: 10 }];
+  double_all_items(v);
+  assert(v[0].mv == 10, "doubled[0]");
+  assert(v[1].mv == 20, "doubled[1]");
+}
+
+fn add_and_double(items: &vector<MutItem>) {
+  items += [MutItem { mv: 99 }];
+  for it in items {
+    it.mv = it.mv * 2;
+  }
+}
+
+fn test_ref_vector_append_and_mutate() {
+  v: vector<MutItem> = [MutItem { mv: 1 }];
+  add_and_double(v);
+  assert(len(v) == 2, "appended");
+  assert(v[0].mv == 2, "first doubled");
+  assert(v[1].mv == 198, "appended doubled");
+}
+
+// ── v[i] as & parameter (P160) ──────────────────────────────────
+
+struct P160Item { px: integer not null }
+
+fn set_p160(item: &P160Item, val: integer) { item.px = val; }
+
+fn test_vec_element_as_ref_param() {
+  items: vector<P160Item> = [P160Item { px: 0 }, P160Item { px: 0 }, P160Item { px: 0 }];
+  set_p160(items[1], 42);
+  assert(items[1].px == 42, "v[1] modified via &");
+  set_p160(items[0], 100);
+  assert(items[0].px == 100, "v[0] modified via &");
+  assert(items[1].px == 42, "v[1] unchanged");
+}
+
+fn test_nested_field_as_ref_param() {
+  items: vector<P160Item> = [P160Item { px: 0 }, P160Item { px: 0 }];
+  idx = 1;
+  set_p160(items[idx], 77);
+  assert(items[1].px == 77, "v[expr] modified via &");
+}
+
+// ── map/filter on &vector<T> ────────────────────────────────────
+
+fn process_and_map(items: &vector<integer>) -> vector<integer> {
+  items += [99];
+  items.map(|x| { x * 2 })
+}
+
+fn test_map_on_ref_vector() {
+  v = [1, 2, 3];
+  d = process_and_map(v);
+  assert(len(v) == 4, "appended");
+  assert(len(d) == 4, "mapped all");
+  assert(d[0] == 2, "d[0]");
+  assert(d[3] == 198, "d[3] (99*2)");
+}
+
+fn filter_evens(items: &vector<integer>) -> vector<integer> {
+  items += [6];
+  items.filter(|x| { x % 2 == 0 })
+}
+
+fn test_filter_on_ref_vector() {
+  v = [1, 2, 3, 4, 5];
+  e = filter_evens(v);
+  assert(len(v) == 6, "appended");
+  assert(len(e) == 3, "3 evens (2, 4, 6)");
+  assert(e[0] == 2, "e[0]");
+  assert(e[1] == 4, "e[1]");
+  assert(e[2] == 6, "e[2]");
+}
+
+// ── for over &vector<T> (P161) ──────────────────────────────────
+
+struct P161Item { pv: integer not null }
+
+fn sum_p161(items: &vector<P161Item>) -> integer {
+  items += [P161Item { pv: 100 }];
+  total = 0;
+  for it in items {
+    total = total + it.pv;
+  }
+  total
+}
+
+fn test_for_over_ref_vector() {
+  v: vector<P161Item> = [P161Item { pv: 1 }, P161Item { pv: 2 }];
+  s = sum_p161(v);
+  assert(s == 103, "sum 1+2+100");
+  assert(len(v) == 3, "appended");
+}
+
+// ── struct-enum JSON round-trip (P159) ──────────────────────────
+
+fn test_struct_enum_json_roundtrip() {
+  c = Circle { radius: 2.5 };
+  j = "{c:j}";
+  p = Shape.parse(j);
+  r = match p { Circle { radius } => radius, _ => 0.0 };
+  assert(r == 2.5, "circle radius round-tripped");
+}
+
+fn test_struct_enum_json_roundtrip_rect() {
+  r = Rect { width: 4.0, height: 6.0 };
+  j = "{r:j}";
+  p = Shape.parse(j);
+  area = match p { Rect { width, height } => width * height, _ => 0.0 };
+  assert(area == 24.0, "rect area round-tripped");
+}
