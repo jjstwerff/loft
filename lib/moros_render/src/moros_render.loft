@@ -250,6 +250,54 @@ pub fn emit_linear_stair(
   }
 }
 
+// ── Spiral stair geometry (Phase 6a.10 / MO.8b) ───────────────────
+
+// Emit a spiral stair with `step_count` pie-slice treads fanning
+// around the Y-axis at `centre` (base).  Each tread covers
+// `angle_deg_per_step` of sweep and sits `rise_per_step` higher in
+// Y than the previous (so step i is at y = centre.y + rise_per_step
+// * (i + 1)).  `inner_r` is the newel-side radius; `outer_r` is the
+// rail-side radius.
+//
+// Each tread is a flat trapezoidal quad (inner-front, inner-back,
+// outer-back, outer-front) with an upward normal: 4 vertices + 2
+// triangles per step.  Non-positive step count, negative inner_r,
+// or outer_r <= inner_r emit nothing.  The central newel cylinder
+// is not drawn here — emit it separately (Phase 6a.8 cylinder post).
+pub fn emit_spiral_stair(
+  m: &Mesh, centre: Vec3, inner_r: float, outer_r: float,
+  rise_per_step: float, step_count: integer, angle_deg_per_step: float
+) {
+  if step_count <= 0 { return; }
+  if inner_r < 0.0 || outer_r <= inner_r { return; }
+  deg_to_rad = PI / 180.0;
+  up_ss = vec3(0.0, 1.0, 0.0);
+  for ss_i in 0..step_count {
+    i_ss = ss_i as float;
+    angle_start = (i_ss * angle_deg_per_step) * deg_to_rad;
+    angle_end = ((i_ss + 1.0) * angle_deg_per_step) * deg_to_rad;
+    tread_y = centre.y + rise_per_step * (i_ss + 1.0);
+    cos_s = cos(angle_start);
+    sin_s = sin(angle_start);
+    cos_e = cos(angle_end);
+    sin_e = sin(angle_end);
+    // Winding: inner-front → inner-back → outer-back → outer-front
+    // (clockwise from above → normal points +Y, matches the linear
+    // stair tread convention above).
+    i_front = vec3(centre.x + inner_r * cos_s, tread_y, centre.z + inner_r * sin_s);
+    i_back  = vec3(centre.x + inner_r * cos_e, tread_y, centre.z + inner_r * sin_e);
+    o_back  = vec3(centre.x + outer_r * cos_e, tread_y, centre.z + outer_r * sin_e);
+    o_front = vec3(centre.x + outer_r * cos_s, tread_y, centre.z + outer_r * sin_s);
+    ss_base = len(m.vertices);
+    m.vertices += [vertex(i_front, up_ss, vec2(0.0, 0.0))];
+    m.vertices += [vertex(i_back,  up_ss, vec2(0.0, 1.0))];
+    m.vertices += [vertex(o_back,  up_ss, vec2(1.0, 1.0))];
+    m.vertices += [vertex(o_front, up_ss, vec2(1.0, 0.0))];
+    m.triangles += [Triangle { a: ss_base, b: ss_base + 1, c: ss_base + 2 }];
+    m.triangles += [Triangle { a: ss_base, b: ss_base + 2, c: ss_base + 3 }];
+  }
+}
+
 // ── Scene builder (Phase 6a.13) ───────────────────────────────────
 
 // Find or create a mesh by material name, emit a hex surface into it.

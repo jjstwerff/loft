@@ -185,6 +185,49 @@ fn test_emit_linear_stair_zero_steps() {
   assert(len(ls_mesh.vertices) == 0, "zero steps → no verts");
 }
 
+// ── Spiral stair tests (MO.8b) ────────────────────────────────────
+
+fn test_emit_spiral_stair_vertex_and_triangle_count() {
+  ss_mesh = mesh("ss_count");
+  // 12 steps × 30° = 360° (one full revolution).
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 12, 30.0);
+  assert(len(ss_mesh.vertices) == 48, "expected 48 verts, got {len(ss_mesh.vertices)}");
+  assert(len(ss_mesh.triangles) == 24, "expected 24 tris, got {len(ss_mesh.triangles)}");
+}
+
+fn test_emit_spiral_stair_rise() {
+  ss_mesh = mesh("ss_rise");
+  // 4 steps of 0.5 rise each → final tread at y = 2.0.
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.5, 4, 90.0);
+  // Step 0's tread Y = centre.y + rise * 1 = 0.5.  All 4 step-0
+  // vertices share the same Y.
+  assert(ss_mesh.vertices[0].pos.y == 0.5, "step 0 tread y = 0.5");
+  // Step 3's vertices start at index 12 (3 steps × 4 verts each).
+  assert(ss_mesh.vertices[12].pos.y == 2.0, "step 3 tread y = 2.0");
+}
+
+fn test_emit_spiral_stair_zero_steps() {
+  ss_mesh = mesh("ss_zs");
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 0, 30.0);
+  assert(len(ss_mesh.vertices) == 0, "0 steps → no geometry");
+}
+
+fn test_emit_spiral_stair_degenerate_radii() {
+  ss_mesh = mesh("ss_dr");
+  // inner_r == outer_r is treated as degenerate.
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 1.0, 1.0, 0.25, 4, 30.0);
+  assert(len(ss_mesh.vertices) == 0, "inner_r == outer_r → no geometry");
+}
+
+fn test_emit_spiral_stair_normals_up() {
+  ss_mesh = mesh("ss_n");
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 4, 90.0);
+  // All tread normals point up.
+  for ss_v in ss_mesh.vertices {
+    assert(ss_v.normal.y == 1.0, "tread normal y = 1.0");
+  }
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);
