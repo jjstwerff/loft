@@ -1,0 +1,106 @@
+// Tests for EditKind struct-enum and match dispatch.
+use moros_editor;
+
+fn test_hex_edit_label() {
+  e = HexEdit { ek_q: 5, ek_r: 7, ek_cy: 0, ek_prev: Hex {} };
+  label = edit_kind_label(e);
+  assert(label == "hex(5,7,0)", "label: {label}");
+}
+
+fn test_spawn_add_label() {
+  e = SpawnAdd { ek_q: 1, ek_r: 2, ek_cy: 0, ek_npc_id: 100 };
+  label = edit_kind_label(e);
+  assert(label == "spawn_add(npc=100)", "label: {label}");
+}
+
+fn test_spawn_remove_label() {
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 1, ha_r: 2, ha_cy: 0 },
+    sp_kind: "x", sp_creature: 1, sp_npc_id: 200,
+    sp_count: 1, sp_facing: 0, sp_condition: "A",
+  };
+  e = SpawnRemove { ek_sp: sp };
+  label = edit_kind_label(e);
+  assert(label == "spawn_remove", "label: {label}");
+}
+
+fn test_hex_edit_undo() {
+  m = map_empty();
+  map_paint_material(m, 3, 3, 0, 42);
+  prev = Hex {};
+  e = HexEdit { ek_q: 3, ek_r: 3, ek_cy: 0, ek_prev: prev };
+  edit_kind_undo(e, m);
+  assert(map_get_hex(m, 3, 3, 0).h_material == 0, "hex undone");
+}
+
+fn test_spawn_add_undo() {
+  m = map_empty();
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 1, ha_r: 2, ha_cy: 0 },
+    sp_kind: "guard", sp_creature: 1, sp_npc_id: 100,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(m, sp);
+  assert(spawn_count(m) == 1, "spawn added");
+  e = SpawnAdd { ek_q: 1, ek_r: 2, ek_cy: 0, ek_npc_id: 100 };
+  edit_kind_undo(e, m);
+  assert(spawn_count(m) == 0, "spawn removed by undo");
+}
+
+fn test_spawn_remove_undo() {
+  m = map_empty();
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 4, ha_r: 5, ha_cy: 0 },
+    sp_kind: "merchant", sp_creature: 2, sp_npc_id: 200,
+    sp_count: 1, sp_facing: 0, sp_condition: "DAY_ONLY",
+  };
+  // Removing a spawn is undone by re-adding it.
+  e = SpawnRemove { ek_sp: sp };
+  edit_kind_undo(e, m);
+  assert(spawn_count(m) == 1, "spawn re-added by undo");
+  at = spawn_at(m, 4, 5, 0);
+  assert(len(at) == 1, "spawn at (4,5,0)");
+}
+
+fn test_vector_of_editkind() {
+  edits: vector<EditKind> = [];
+  edits += [HexEdit { ek_q: 0, ek_r: 0, ek_cy: 0, ek_prev: Hex {} }];
+  edits += [SpawnAdd { ek_q: 1, ek_r: 1, ek_cy: 0, ek_npc_id: 50 }];
+  edits += [SpawnRemove { ek_sp: SpawnPoint {
+    sp_hex: HexAddress { ha_q: 2, ha_r: 2, ha_cy: 0 },
+    sp_kind: "x", sp_creature: 1, sp_npc_id: 99,
+    sp_count: 1, sp_facing: 0, sp_condition: "A",
+  }}];
+  assert(len(edits) == 3, "3 edits");
+  // Iterate and label each.
+  labels: vector<text> = [];
+  for e in edits {
+    labels += [edit_kind_label(e)];
+  }
+  assert(len(labels) == 3, "3 labels");
+  assert(labels[0] == "hex(0,0,0)", "label[0]: {labels[0]}");
+  assert(labels[1] == "spawn_add(npc=50)", "label[1]: {labels[1]}");
+  assert(labels[2] == "spawn_remove", "label[2]: {labels[2]}");
+}
+
+fn test_undo_heterogeneous_edits_via_editkind() {
+  m = map_empty();
+  // Apply two different edit kinds, then undo both.
+  map_paint_material(m, 5, 5, 0, 42);
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 5, ha_r: 5, ha_cy: 0 },
+    sp_kind: "guard", sp_creature: 1, sp_npc_id: 300,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(m, sp);
+  // Build undo entries in reverse order.
+  edits: vector<EditKind> = [];
+  edits += [HexEdit { ek_q: 5, ek_r: 5, ek_cy: 0, ek_prev: Hex {} }];
+  edits += [SpawnAdd { ek_q: 5, ek_r: 5, ek_cy: 0, ek_npc_id: 300 }];
+  // Undo in reverse.
+  for i in rev(0..len(edits)) {
+    edit_kind_undo(edits[i], m);
+  }
+  assert(spawn_count(m) == 0, "spawn undone");
+  assert(map_get_hex(m, 5, 5, 0).h_material == 0, "hex undone");
+}

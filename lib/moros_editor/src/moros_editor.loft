@@ -204,6 +204,58 @@ pub fn slope_path_with_undo(s: &UndoStack, m: &Map, q1: integer, r1: integer, q2
   batch_end(s);
 }
 
+// ── EditKind enum (Phase 4.5) ─────────────────────────────────────
+// Typed undo entries — polymorphic enum with struct variants.
+// Used for spawn/waypoint undo where a hex snapshot isn't sufficient.
+
+pub enum EditKind {
+  HexEdit {
+    ek_q:    integer not null,
+    ek_r:    integer not null,
+    ek_cy:   integer not null,
+    ek_prev: Hex
+  },
+  SpawnAdd {
+    ek_q:      integer not null,
+    ek_r:      integer not null,
+    ek_cy:     integer not null,
+    ek_npc_id: integer not null
+  },
+  SpawnRemove {
+    ek_sp: SpawnPoint
+  }
+}
+
+// Describe an edit kind as text (for debug/logging).
+pub fn edit_kind_label(e: EditKind) -> text {
+  match e {
+    HexEdit { ek_q, ek_r, ek_cy } => "hex({ek_q},{ek_r},{ek_cy})",
+    SpawnAdd { ek_npc_id } => "spawn_add(npc={ek_npc_id})",
+    SpawnRemove => "spawn_remove"
+  }
+}
+
+// Apply an undo for an EditKind entry: reverse the recorded operation.
+fn undo_hex_edit(m: &Map, q: integer, r: integer, cy: integer, prev: Hex) {
+  map_set_hex(m, q, r, cy, prev);
+}
+
+fn undo_spawn_add(m: &Map, q: integer, r: integer, cy: integer, npc_id: integer) {
+  spawn_remove(m, q, r, cy, npc_id);
+}
+
+fn undo_spawn_remove(m: &Map, sp: SpawnPoint) {
+  spawn_add(m, sp);
+}
+
+pub fn edit_kind_undo(e: EditKind, m: &Map) {
+  match e {
+    HexEdit { ek_q, ek_r, ek_cy, ek_prev } => undo_hex_edit(m, ek_q, ek_r, ek_cy, ek_prev),
+    SpawnAdd { ek_q, ek_r, ek_cy, ek_npc_id } => undo_spawn_add(m, ek_q, ek_r, ek_cy, ek_npc_id),
+    SpawnRemove { ek_sp } => undo_spawn_remove(m, ek_sp)
+  }
+}
+
 // ── Stencils (Phase 4.13–4.16) ────────────────────────────────────
 
 // One hex inside a stencil template.  Offsets are relative to the
