@@ -50,6 +50,15 @@ impl Output<'_> {
                     write!(w, "break 'l{}", self.loop_stack[idx])?;
                 }
             }
+            Value::BreakWith(n, val) => {
+                if *n == 0 || self.loop_stack.is_empty() {
+                    write!(w, "break ")?;
+                } else {
+                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
+                    write!(w, "break 'l{} ", self.loop_stack[idx])?;
+                }
+                self.output_code_inner(w, val)?;
+            }
             Value::Continue(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "continue")?;
@@ -119,20 +128,28 @@ impl Output<'_> {
             }
             Value::Return(val) => {
                 let returned = &self.data.def(self.def_nr).returned;
-                // When returning null from a non-void function, emit the
-                // type-appropriate null sentinel instead of ().
                 if matches!(**val, Value::Null) && *returned != Type::Void {
                     write!(w, "return {}", super::default_native_value(returned))?;
+                } else if let Value::If(test, true_v, false_v) = &**val {
+                    self.pre_declare_branch_vars(w, true_v, false_v)?;
+                    let returns_text = matches!(returned, Type::Text(_));
+                    let narrow = narrow_int_cast(returned);
+                    let wrap_text = returns_text;
+                    write!(w, "return ")?;
+                    if wrap_text {
+                        write!(w, "Str::new(")?;
+                    } else if narrow.is_some() {
+                        write!(w, "(")?;
+                    }
+                    self.output_if_inner(w, test, true_v, false_v, true)?;
+                    if wrap_text {
+                        write!(w, ")")?;
+                    } else if let Some(cast) = narrow {
+                        write!(w, ") as {cast}")?;
+                    }
                 } else {
                     let returns_text = matches!(returned, Type::Text(_));
                     let narrow = narrow_int_cast(returned);
-                    // skip the `Str::new(...)` wrapper when the inner
-                    // expression is already a call to another text-returning
-                    // user function (returns `Str`) — wrapping would fail
-                    // type-checking as `Str::new(Str)`.  `#rust` template ops
-                    // (non-empty `rust`/`native`) and `Op*` special-cases
-                    // (dispatch.rs handles names beginning with `Op`) still
-                    // produce `&str` and need the wrap.
                     let inner_already_str = matches!(
                         &**val,
                         Value::Call(d, _) if (*d as usize) < self.data.definitions.len()
@@ -394,11 +411,36 @@ impl Output<'_> {
         true_v: &Value,
         false_v: &Value,
     ) -> std::io::Result<()> {
-        self.pre_declare_branch_vars(w, true_v, false_v)?;
-        write!(w, "if ")?;
+        self.output_if_inner(w, test, true_v, false_v, false)
+    }
+
+    fn output_if_inner(
+        &mut self,
+        w: &mut dyn Write,
+        test: &Value,
+        true_v: &Value,
+        false_v: &Value,
+        pre_declared: bool,
+    ) -> std::io::Result<()> {
+        if !pre_declared {
+            self.pre_declare_branch_vars(w, true_v, false_v)?;
+        }
+        if let Value::Insert(ops) = test
+            && ops.len() >= 2
+        {
+            for op in &ops[..ops.len() - 1] {
+                self.output_code_inner(w, op)?;
+                writeln!(w, ";")?;
+                self.indent(w)?;
+            }
+            write!(w, "if ")?;
+            self.output_code_inner(w, &ops[ops.len() - 1])?;
+        } else {
+            write!(w, "if ")?;
+            self.output_code_inner(w, test)?;
+        }
         let b_true = matches!(*true_v, Value::Block(_));
         let b_false = matches!(*false_v, Value::Block(_));
-        self.output_code_inner(w, test)?;
         if b_true {
             write!(w, " ")?;
         } else {

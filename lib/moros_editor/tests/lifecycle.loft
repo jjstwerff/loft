@@ -1,0 +1,110 @@
+// Tests for stencil save/load, stencil JSON round-trip, and editor lifecycle.
+use moros_editor;
+
+// ── Stencil capture ──────────────────────────────────────────────
+
+fn test_stencil_save_captures_painted_region() {
+  m = map_empty();
+  map_paint_material(m, 2, 2, 0, 10);
+  map_paint_material(m, 3, 2, 0, 20);
+  map_set_height(m, 2, 2, 0, 5);
+  st = stencil_save(m, "patch", "custom", 2, 2, 3, 2, 0);
+  assert(st.sd_name == "patch", "name");
+  assert(len(st.sd_hexes) == 2, "2 hexes captured");
+  assert(st.sd_hexes[0].sh_material == 10, "hex0 mat {st.sd_hexes[0].sh_material}");
+  assert(st.sd_hexes[0].sh_height == 5, "hex0 height");
+  assert(st.sd_hexes[1].sh_material == 20, "hex1 mat {st.sd_hexes[1].sh_material}");
+}
+
+fn test_stencil_save_then_stamp() {
+  m = map_empty();
+  map_paint_material(m, 0, 0, 0, 42);
+  map_set_height(m, 0, 0, 0, 7);
+  // Capture (0,0) as a stencil
+  st = stencil_save(m, "spot", "test", 0, 0, 0, 0, 0);
+  // Stamp it at a different location
+  stencil_stamp(m, st, 5, 5, 0, 0);
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_material == 42, "stamped material {h.h_material}");
+  assert(h.h_height == 7, "stamped height {h.h_height}");
+}
+
+fn test_stencil_save_multi_row() {
+  m = map_empty();
+  for q in 0..3 {
+    for r in 0..3 {
+      map_paint_material(m, q, r, 0, q * 10 + r);
+    }
+  }
+  st = stencil_save(m, "grid", "test", 0, 0, 2, 2, 0);
+  assert(len(st.sd_hexes) == 9, "3x3=9 hexes");
+  // Corner hex (2,2) should have material 22
+  last = st.sd_hexes[8];
+  assert(last.sh_material == 22, "corner mat {last.sh_material}");
+}
+
+// ── Stencil JSON round-trip ──────────────────────────────────────
+
+fn test_stencil_json_roundtrip() {
+  st = stencil_house_small();
+  j = stencil_to_json(st);
+  assert(len(j) > 0, "json not empty");
+  st2 = stencil_from_json(j);
+  assert(st2.sd_name == "house_small", "name rt: {st2.sd_name}");
+  assert(len(st2.sd_hexes) == 7, "hex count rt: {len(st2.sd_hexes)}");
+  // Check first hex preserved
+  assert(st2.sd_hexes[0].sh_material == 2, "centre mat rt");
+}
+
+fn test_stencil_json_roundtrip_spiral() {
+  st = stencil_spiral_stair();
+  j = stencil_to_json(st);
+  st2 = stencil_from_json(j);
+  assert(st2.sd_name == "spiral_stair", "name: {st2.sd_name}");
+  assert(len(st2.sd_hexes) == 3, "3 hexes");
+  assert(st2.sd_hexes[1].sh_height == 3, "step1 height");
+  assert(st2.sd_hexes[2].sh_height == 6, "step2 height");
+}
+
+fn test_stencil_save_json_roundtrip() {
+  m = map_empty();
+  map_paint_material(m, 1, 1, 0, 99);
+  map_set_height(m, 1, 1, 0, 33);
+  st = stencil_save(m, "saved", "custom", 1, 1, 1, 1, 0);
+  j = stencil_to_json(st);
+  st2 = stencil_from_json(j);
+  assert(st2.sd_hexes[0].sh_material == 99, "mat rt {st2.sd_hexes[0].sh_material}");
+  assert(st2.sd_hexes[0].sh_height == 33, "height rt {st2.sd_hexes[0].sh_height}");
+}
+
+// ── Editor lifecycle ─────────────────────────────────────────────
+
+fn test_editor_save_and_init() {
+  m = map_empty();
+  map_paint_material(m, 3, 3, 0, 77);
+  json = editor_save(m);
+  assert(len(json) > 0, "save not empty");
+  m2 = editor_init(json);
+  h = map_get_hex(m2, 3, 3, 0);
+  assert(h.h_material == 77, "material round-tripped {h.h_material}");
+}
+
+fn test_editor_init_empty_string() {
+  m = editor_init("");
+  assert(spawn_count(m) == 0, "empty map from empty string");
+}
+
+// ── Built-in stencils ────────────────────────────────────────────
+
+fn test_spiral_stair_stamp() {
+  m = map_empty();
+  st = stencil_spiral_stair();
+  stencil_stamp(m, st, 10, 10, 0, 0);
+  // Centre (10,10) height=0, material=4
+  assert(map_get_hex(m, 10, 10, 0).h_material == 4, "centre mat");
+  assert(map_get_hex(m, 10, 10, 0).h_height == 0, "centre height");
+  // Step 1 at (11,10) height=3
+  assert(map_get_hex(m, 11, 10, 0).h_height == 3, "step1 height");
+  // Step 2 at (10,11) height=6
+  assert(map_get_hex(m, 10, 11, 0).h_height == 6, "step2 height");
+}

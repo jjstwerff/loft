@@ -298,7 +298,10 @@ Listed by precedence (lowest to highest):
 | 9          | `*`, `/`, `%`                          | multiplication/division |
 | 10         | `as` (type cast/conversion)            |                         |
 
-Unary operators: `!` (logical not), `-` (negation).
+Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT).
+
+`~x` computes the bitwise complement (all bits flipped): `~0 == -1`, `flags & ~32` clears bit 5.
+Only defined for `integer`; use `as integer` to convert other types first.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 
@@ -383,9 +386,13 @@ text = reply.to_json();   // {{"ok":true,"count":3}}
 directly into a struct record; parse errors via `record#errors`.  `Type.parse(JsonValue)`
 is the preferred replacement (shipped).
 
+Works for plain structs AND struct-enums (P159).  Struct-enum JSON uses a
+discriminant wrapper: `{"Circle":{"radius":3.14}}`.
+
 ```
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
 scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
+shape = Shape.parse(`{{"Circle":{{"radius":3.14}}}}`);   // struct-enum round-trip
 for e in user#errors { log_warn(e); }
 ```
 
@@ -864,6 +871,56 @@ match v {
 
 **Match is an expression:** it produces a value that can be assigned or returned. All
 arms must produce the same type (or void).
+
+### `is` variant check
+
+The `is` operator tests whether an enum value is a specific variant:
+
+```loft
+d = North;
+if d is North { ... }       // true
+assert(!(d is South));       // negation
+```
+
+For struct-enums, `is` can also capture variant fields into local variables:
+
+```loft
+s = Circle { radius: 3.14 };
+if s is Circle { radius } {
+  area = PI * radius * radius;   // radius is in scope here
+}
+// radius is NOT in scope here
+```
+
+Multiple fields:
+```loft
+if shape is Rect { width, height } {
+  area = width * height;
+}
+```
+
+With else:
+```loft
+if shape is Circle { radius } {
+  area = PI * radius * radius;
+} else {
+  area = 0.0;
+}
+```
+
+In loops:
+```loft
+for item in shapes {
+  if item is Circle { radius } {
+    total += radius;
+  }
+}
+```
+
+**Disambiguation:** `if s is Circle { radius } { body }` — the parser
+uses lookahead to distinguish field capture `{ ident [, ident]* }` from
+an if-body `{ statements }`.  If the `{` is followed by an identifier
+then `,` or `}`, it is a field capture; otherwise it is the if-body.
 
 ---
 

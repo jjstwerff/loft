@@ -8942,14 +8942,406 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:383:24 — pick a different name \
+         at default{s}01_code.loft:385:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:383:24) \
+         struct or enum (defined at default{s}01_code.loft:385:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
+}
+
+/// P157 regression guard — native codegen's pre-eval path emitted
+/// `*var_m` for a `&Map` forwarded to another fn taking `&Map`,
+/// breaking rustc type-check.  P144 fixed this for the non-pre-eval
+/// path; the pre-eval arg re-emitter in `generation/pre_eval.rs::
+/// output_code_with_subst` had its own code that bypassed the check.
+/// Trigger: call a user fn that takes `&Struct` from inside another
+/// fn that also takes `&Struct`, AND the call has other args that
+/// need pre-evaluation (nested field reads, etc.).
+#[test]
+fn p157_native_refvar_forwarding_with_preeval() {
+    // Write the test program to a temp file; use the parser's file-
+    // loading entry point rather than an inline string.
+    let src_path = std::env::temp_dir().join("loft_p157_test.loft");
+    std::fs::write(
+        &src_path,
+        "struct Inner { val: integer not null }\n\
+         struct Outer { inner: Inner }\n\
+         fn helper(o: &Outer, n: integer) { o.inner.val = n; }\n\
+         fn caller(o: &Outer) { helper(o, o.inner.val + 1); }\n\
+         fn main() { o = Outer { inner: Inner { val: 5 } }; caller(o); }\n",
+    )
+    .unwrap();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse(src_path.to_str().unwrap(), false);
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    let rs_path = std::env::temp_dir().join("loft_p157_native.rs");
+    {
+        let mut f = std::fs::File::create(&rs_path).unwrap();
+        let main_nr = p.data.def_nr("n_main");
+        let mut out = loft::generation::Output {
+            data: &p.data,
+            stores: &state.database,
+            counter: 0,
+            indent: 0,
+            def_nr: 0,
+            declared: std::collections::HashSet::new(),
+            reachable: std::collections::HashSet::new(),
+            loop_stack: Vec::new(),
+            next_format_count: 0,
+            yield_collect: false,
+            fn_ref_context: false,
+            call_stack_prefix: None,
+            wasm_browser: false,
+        };
+        out.output_native_reachable(&mut f, 0, p.data.definitions(), &[main_nr])
+            .unwrap();
+    }
+    let source = std::fs::read_to_string(&rs_path).unwrap();
+    assert!(
+        !source.contains("n_helper(stores, *var_o"),
+        "P157 regression: pre-eval path still emits *var_o for & param forward.\n\
+         Generated: {}",
+        rs_path.display()
+    );
+    assert!(
+        source.contains("n_helper(stores, var_o"),
+        "P157 regression: expected direct var_o pass-through.\n\
+         Generated: {}",
+        rs_path.display()
+    );
+    let _ = std::fs::remove_file(&rs_path);
+    let _ = std::fs::remove_file(&src_path);
+}
+
+// ── Language enhancements ────────────────────────────────────────────
+
+/// Bitwise NOT operator `~` — desugars to OpBitNotSingleInt.
+#[test]
+fn enhancement_bitwise_not() {
+    expr!("~0").result(Value::Int(-1));
+}
+
+#[test]
+fn enhancement_bitwise_not_clear_bit() {
+    expr!("(32 | 64) & ~32").result(Value::Int(64));
+}
+
+/// `&vector<T>` mutation detection — for-loop variable field writes
+/// should propagate back to the iterated `&` collection parameter.
+#[test]
+fn enhancement_ref_vector_loop_mutation_detected() {
+    code!(
+        "struct Item { val: integer not null }
+fn double_all(items: &vector<Item>) {
+    for it in items { it.val = it.val * 2; }
+}
+fn test() {
+    v: vector<Item> = [Item { val: 5 }];
+    double_all(v);
+    assert(v[0].val == 10, \"doubled\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Read-only loop over `&vector<T>` should still flag the `&`.
+#[test]
+fn enhancement_ref_vector_readonly_loop_still_flags() {
+    code!(
+        "struct Item { val: integer not null }
+fn sum_vals(items: &vector<Item>) -> integer {
+    total = 0;
+    for it in items { total = total + it.val; }
+    total
+}
+fn test() { }"
+    )
+    .error(
+        "Parameter 'items' has & but is never modified; remove the & \
+at enhancement_ref_vector_readonly_loop_still_flags:2:47",
+    );
+}
+
+/// `break value` in void function → compile error.
+#[test]
+fn enhancement_break_value_in_void_function_errors() {
+    code!(
+        "fn test() {
+    for i in 0..10 {
+        if i == 5 { break i; }
+    }
+}"
+    )
+    .error(
+        "`break <value>` requires a non-void function — \
+the value is returned from the enclosing function \
+at enhancement_break_value_in_void_function_errors:3:29",
+    );
+}
+
+/// `is` operator — variant check on plain enum.
+#[test]
+fn enhancement_is_plain_enum() {
+    code!(
+        "enum Dir { North, South, East, West }
+fn test() {
+    d = North;
+    assert(d is North, \"is North\");
+    assert(!(d is South), \"not South\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator — variant check on struct-enum + loop counting.
+#[test]
+fn enhancement_is_struct_enum_in_loop() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    items: vector<Shape> = [Circle { radius: 1.0 }, Rect { width: 2.0, height: 3.0 }, Circle { radius: 4.0 }];
+    count = 0;
+    for it in items { if it is Circle { count = count + 1; } }
+    assert(count == 2, \"2 circles\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator with field capture — single field.
+#[test]
+fn enhancement_is_capture_single_field() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Circle { radius: 3.14 };
+    result = 0.0;
+    if s is Circle { radius } {
+        result = radius;
+    }
+    assert(result == 3.14, \"captured radius\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator with field capture — multiple fields + else branch.
+#[test]
+fn enhancement_is_capture_multiple_fields_else() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Rect { width: 5.0, height: 10.0 };
+    area = 0.0;
+    if s is Rect { width, height } {
+        area = width * height;
+    } else {
+        area = -1.0;
+    }
+    assert(area == 50.0, \"captured both\");
+    c = Circle { radius: 2.0 };
+    if c is Rect { width, height } {
+        area = width * height;
+    } else {
+        area = -1.0;
+    }
+    assert(area == -1.0, \"else taken\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator with field capture in loop — sum radii from mixed vector.
+#[test]
+fn enhancement_is_capture_in_loop() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    items: vector<Shape> = [Circle { radius: 1.0 }, Rect { width: 2.0, height: 3.0 }, Circle { radius: 4.0 }];
+    total = 0.0;
+    for it in items {
+        if it is Circle { radius } {
+            total += radius;
+        }
+    }
+    assert(total == 5.0, \"sum of radii\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` capture scope doesn't leak into outer scope.
+#[test]
+fn enhancement_is_capture_scope_isolation() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    s = Circle { radius: 99.0 };
+    radius = 1.0;
+    if s is Rect { width, height } {
+        radius = width;
+    }
+    assert(radius == 1.0, \"outer radius unchanged\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Op table extension — emit_op handles ops >= 255 via escape prefix.
+/// No specific op to test yet (all 255 primary slots used), but verify
+/// the infrastructure doesn't break existing ops.
+#[test]
+fn enhancement_op_extension_existing_ops_unaffected() {
+    expr!("~0").result(Value::Int(-1));
+}
+
+/// map/filter on &vector<T> parameter — method resolution unwraps RefVar.
+#[test]
+fn enhancement_map_filter_on_ref_vector() {
+    code!(
+        "fn process(items: &vector<integer>) {
+    items += [99];
+    d = items.map(|x| { x * 2 });
+    assert(d[0] == 2, \"mapped\");
+}
+fn test() {
+    v = [1, 2, 3];
+    process(v);
+    assert(len(v) == 4, \"appended\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P161 regression guard — `for it in items` where items is
+/// `&vector<Struct>` used to error "Unknown type null" (field access
+/// on the loop variable failed).  Root cause: `for_type` and
+/// `iterator` didn't unwrap `RefVar(Vector(...))` before matching.
+#[test]
+fn p161_for_over_ref_vector() {
+    code!(
+        "struct Item { val: integer not null }
+fn add_item(items: &vector<Item>, v: integer) {
+    items += [Item { val: v }];
+}
+fn test() {
+    v: vector<Item> = [];
+    add_item(v, 42);
+    assert(len(v) == 1, \"len {len(v)}\");
+    assert(v[0].val == 42, \"val {v[0].val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P160 regression guard — `modify(items[1], 42)` where `modify`
+/// takes `&S` used to error "Cannot pass a literal or expression
+/// to a '&' parameter".  Two fixes: (1) parser accepts "addressable"
+/// expressions (vector element, field access chains rooted in a Var);
+/// (2) codegen handles `OpCreateStack(non-Var expr)` by generating
+/// the expression first (pushes DbRef), then emitting OpCreateStack
+/// with the offset pointing at the just-pushed result.
+#[test]
+fn p160_vec_element_as_ref_param() {
+    code!(
+        "struct S { x: integer not null }
+fn modify(s: &S, val: integer) { s.x = val; }
+fn test() {
+    items: vector<S> = [S { x: 0 }, S { x: 10 }];
+    modify(items[1], 42);
+    assert(items[1].x == 42, \"got {items[1].x}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p160_nested_field_vec_element_as_ref_param() {
+    code!(
+        "struct Inner { val: integer not null }
+struct Outer { items: vector<Inner> }
+fn set_val(inner: &Inner, v: integer) { inner.val = v; }
+fn test() {
+    o = Outer { items: [Inner { val: 0 }, Inner { val: 0 }] };
+    set_val(o.items[1], 99);
+    assert(o.items[1].val == 99, \"got {o.items[1].val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P159 regression guard — `Shape.parse(json)` used to fail for
+/// struct-enums ("Unknown field Shape.parse").  Fix: added
+/// `DefType::Enum` branch in `parse_var` for `.parse(` detection,
+/// and added discriminant wrapper `{"Variant":{fields}}` to the
+/// JSON serializer in `format.rs`.
+#[test]
+fn p159_struct_enum_json_roundtrip() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    c = Circle { radius: 3.14 };
+    j = \"{c:j}\";
+    p = Shape.parse(j);
+    r = match p { Circle { radius } => radius, Rect => 0.0 };
+    assert(r == 3.14, \"circle rt\");
+    rect = Rect { width: 5.0, height: 10.0 };
+    j2 = \"{rect:j}\";
+    p2 = Shape.parse(j2);
+    r2 = match p2 { Circle => 0.0, Rect { width, height } => width * height };
+    assert(r2 == 50.0, \"rect rt\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P158 regression guard — trailing comma after the last field in a
+/// struct-enum variant used to trigger "Expect attribute".  Regular
+/// structs accepted trailing commas; enum variants didn't.  Fix:
+/// added `|| self.lexer.peek_token("}")` to the break condition in
+/// `parse_enum_values`, mirroring `parse_struct`.
+#[test]
+fn p158_trailing_comma_enum_variant() {
+    code!(
+        "enum K {
+    Alpha { x: integer not null, y: integer not null, },
+    Beta { z: integer not null }
+}
+fn test() {
+    a = Alpha { x: 1, y: 2 };
+    match a { Alpha { x, y } => assert(x + y == 3, \"sum\"), Beta => 0 };
+}"
+    )
+    .result(Value::Null);
 }
 
 /// P155 regression guard — push/undo/mid-assert/redo/final-read used
@@ -9008,4 +9400,31 @@ fn p145_text_return_multivec_struct_cross_file() {
         !state.database.had_fatal,
         "P145 regression: to_json on cross-file multi-vector struct crashed"
     );
+}
+
+/// P162 regression guard — native codegen emits `return let mut …` when
+/// a match expression with struct-enum field bindings + guard is returned
+/// directly.  `pre_declare_branch_vars` writes `let mut` declarations
+/// after the `return` keyword.  Interpreter works; native compilation fails.
+#[test]
+fn p162_return_match_struct_enum_native() {
+    code!(
+        "enum GShape {
+    GCircle { radius: float },
+    GRect { width: float, height: float }
+}
+fn garea(s: GShape) -> float {
+    match s {
+        GCircle { radius } if radius > 0.0 => 3.14 * radius * radius,
+        GCircle { radius } => 0.0,
+        GRect { width, height } => width * height
+    }
+}
+fn test() {
+    assert(garea(GCircle { radius: 2.0 }) > 12.0, \"circle area\");
+    assert(garea(GCircle { radius: -1.0 }) == 0.0, \"negative radius\");
+    assert(garea(GRect { width: 3.0, height: 4.0 }) == 12.0, \"rect area\");
+}"
+    )
+    .result(Value::Null);
 }

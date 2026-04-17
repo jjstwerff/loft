@@ -52,6 +52,11 @@ existing entry, not re-open it as a bug.
 | ~~154~~ | `s.v = helper_fn(s.v, …)` wipes the field; `s.v = s.v` clears to empty | — | **Fixed 2026-04-16.** Introduced by the P152 lowering: `s.v = rhs` expanded to `OpClearVector(s.v); OpAppendVector(s.v, rhs, tp)` but RHS was evaluated AFTER the clear, so any helper reading `s.v` saw empty.  Fix: detect non-Var RHS in `parser/expressions.rs::parse_assign_op`, capture it to a fresh local temp BEFORE the clear, then append from the temp.  Self-identity `s.v = s.v` (IR-equal LHS/RHS) collapses to a no-op.  Tests: `tests/issues.rs::p154_*` (3 guards). |
 | ~~155~~ | Push/mutate/undo/mid-assert/redo/final-read sequence SIGSEGVs in `OpGetVector` | — | **Fixed 2026-04-16.** `src/state/codegen.rs::generate_set` (reassignment path, lines 891-932) emitted `OpCopyRecord` with the 0x8000 "free source" flag around a user-fn call, but without the `n_set_store_lock` bracket that `gen_set_first_ref_call_copy` (first-assignment path) uses.  When the callee returned a DbRef aliased with a caller arg, the free-source flag freed the caller's arg store; later uses SIGSEGV'd in `OpGetVector`.  Fix: port the lock/unlock bracket onto the reassignment path (same pattern as P143).  Tests: `tests/issues.rs::p155_segv_undo_redo_midassert`. |
 | ~~156~~ | `struct X { v: vector<C> }` where C is the name of a stdlib constant (e.g. `E`, `PI`) panics in `typedef.rs:309` instead of emitting the "struct conflicts with constant" diagnostic | — | **Fixed 2026-04-16.** `parser/definitions.rs::sub_type` now checks the element def's DefType before descending into the collection branch — emits a proper diagnostic for Constant / Function / Routine.  `typedef.rs::fill_database` soft-continues on an unresolved vector content type so undefined-element-type programs (`vector<Undef>`) also diagnose cleanly instead of panicking.  Tests: `tests/issues.rs::p156_vector_element_shadows_constant`. |
+| ~~157~~ | Native codegen emits `*var_m` (dereference) instead of `var_m` for `&Struct` → `&Struct` forwarding when the call also triggers argument pre-evaluation | — | **Fixed 2026-04-16.** P144 added the RefVar → RefVar preserve-ref check to `generation/calls.rs::output_call_user_fn`, but the pre-eval re-emission in `generation/pre_eval.rs::output_code_with_subst` had its own arg-emitter that bypassed the check.  Any user-fn call whose args need pre-evaluation (nested field reads, side-effecting expressions) hit the bypassed path and failed `rustc` with `expected &mut DbRef, found DbRef`.  Fix: mirror the check into the pre-eval path.  Tests: `tests/issues.rs::p157_native_refvar_forwarding_with_preeval`. |
+| ~~159~~ | `Type.parse(json)` fails on struct-enums with "Unknown field Type.parse"; only plain structs supported | — | **Fixed 2026-04-17.** Two fixes: (1) `parser/objects.rs::parse_var` extended `DefType::Enum` detection for `.parse(` with link/revert so `Enum.Variant` qualified syntax isn't broken.  (2) `database/format.rs` `ShowDb::write` wraps EnumValue in JSON mode as `{"VariantName":{fields}}` so the JSON walker's existing discriminant-tag handler (line 332: single-key Object → variant name) can round-trip.  Tests: `tests/issues.rs::p159_struct_enum_json_roundtrip`. |
+| ~~161~~ | `for` loop over `&vector<Struct>` parameter → "Unknown type null" / "Unknown iterator type" | — | **Fixed 2026-04-17.** `parser/control.rs::for_type` and `parser/collections.rs::iterator` didn't unwrap `RefVar(Vector(...))` before matching, so the element type resolved to null and the iterator setup rejected the type.  Fix: add `RefVar` unwrap at the top of both functions.  Tests: `tests/issues.rs::p161_for_over_ref_vector`. |
+| ~~160~~ | Vector element `v[i]` cannot be passed as `&` parameter — "assign to a variable first" | — | **Fixed 2026-04-17.** Two changes: (1) `parser/mod.rs` accepts "addressable" expressions (vector element, field access chains rooted in a Var) in `&` parameter positions via `is_addressable()` helper.  (2) `state/codegen.rs::generate_call` handles `OpCreateStack(non-Var expr)` by generating the expression first (pushes its DbRef onto the stack), then emitting OpCreateStack with the u16 offset pointing at the just-pushed result — previously `add_const` wrote nothing for `Type::Reference` args, leaving garbage in the code stream.  Tests: `tests/issues.rs::p160_*` (2 guards). |
+| ~~158~~ | Trailing comma after last field in struct-enum variant triggers parse error | — | **Fixed 2026-04-17.** `parser/definitions.rs::parse_enum_values` (line 266) looped back on trailing comma instead of breaking.  Regular struct parsing (line 1380) already had `\|\| self.lexer.peek_token("}")` — ported the same guard.  Tests: `tests/issues.rs::p158_trailing_comma_enum_variant`. |
 
 ---
 
@@ -1167,6 +1172,79 @@ the currently-exposed constants (`default/01_code.loft:379`, `:383`).
 
 **Tests:** `tests/issues.rs::p156_vector_element_shadows_constant`
 (regression guard; `#[ignore]`'d until fixed).
+
+---
+
+### P162 — native: `return match` with struct-enum field bindings emits `return let mut`
+
+**Status:** fixed (2026-04-17)
+
+**Reproducer:**
+
+```loft
+enum GShape {
+  GCircle { radius: float },
+  GRect { width: float, height: float }
+}
+
+fn garea(s: GShape) -> float {
+  match s {
+    GCircle { radius } if radius > 0.0 => PI * radius * radius,
+    GCircle { radius } => 0.0,
+    GRect { width, height } => width * height
+  }
+}
+```
+
+Native codegen produces `return let mut var__mv_radius_2: f64 = 0.0;` —
+`pre_declare_branch_vars` emits variable declarations between the `return`
+keyword and the if-chain.  Rust rejects `return let …` as an expression.
+
+**Root cause:** `output_if` calls `pre_declare_branch_vars` which writes
+`let mut` declarations.  When the caller already wrote `return `, the
+declarations land after `return` instead of before it.  The interpreter
+is unaffected; only native codegen is broken.
+
+**Fix path:** In `output_if`, detect when inside a return context (or in
+the `Value::Return` handler, hoist the if-expression into a temporary
+`let` binding before `return`).  Alternatively, move `pre_declare_branch_vars`
+output before the `return` keyword.
+
+**Discovered:** 2026-04-17, pre-existing in `tests/scripts/10-match.loft`.
+
+**Tests:** `tests/scripts/10-match.loft` native compilation (fails).
+
+---
+
+### P163 — `is` field capture SIGSEGV on mixed-variant loop iteration
+
+**Status:** fixed (2026-04-17)
+
+**Reproducer:**
+
+```loft
+enum V2 { VaText { vt: text }, VaBool { vb: boolean } }
+fn test() {
+  items: vector<V2> = [VaText { vt: "hi" }, VaBool { vb: true }];
+  r = "";
+  for it in items {
+    if it is VaText { vt } { r += vt; }
+    if it is VaBool { vb } { r += "{vb}"; }
+  }
+}
+```
+
+**Root cause:** `is`-capture bindings were placed in the condition
+Insert and executed unconditionally — before the discriminant check.
+When the variant didn't match, `OpGetText` on a `VaBool`'s memory
+read an invalid text pointer, causing SIGSEGV.
+
+**Fix:** Moved field-read bindings from the condition into the if-body
+(via `is_capture_bindings`).  The temp subject variable (for non-Var
+expressions) stays in the condition since reading the enum byte is
+always safe.  Field reads now only execute when the variant matches.
+
+**Discovered:** 2026-04-17, while converting `#fields` iteration tests.
 
 ---
 

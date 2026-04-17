@@ -143,6 +143,8 @@ pub fn abs(both: integer) -> integer {
 
 fn OpMinSingleInt(v1: integer) -> integer;
 #rust"ops::op_negate_int(@v1)"
+fn OpBitNotSingleInt(v1: integer) -> integer;
+#rust"!@v1"
 fn OpConvLongFromInt(v1: integer) -> long;
 #rust"ops::op_conv_long_from_int(@v1)"
 fn OpConvFloatFromInt(v1: integer) -> float;

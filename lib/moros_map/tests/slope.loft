@@ -1,0 +1,108 @@
+// Tests for hex geometry, wall direction resolution, and slope operations.
+use moros_map;
+
+// ── Hex distance ─────────────────────────────────────────────────
+
+fn test_hex_distance_same() {
+  assert(hex_distance(5, 7, 5, 7) == 0, "same hex → 0");
+}
+
+fn test_hex_distance_adjacent() {
+  assert(hex_distance(0, 0, 1, 0) == 1, "adjacent q+1");
+  assert(hex_distance(0, 0, 0, 1) == 1, "adjacent r+1");
+  assert(hex_distance(0, 0, 1, -1) == 1, "adjacent q+1,r-1 (diagonal)");
+}
+
+fn test_hex_distance_far() {
+  assert(hex_distance(0, 0, 5, 5) == 10, "5,5 → dist 10");
+  assert(hex_distance(0, 0, 3, 0) == 3, "straight line q");
+  assert(hex_distance(0, 0, 0, 4) == 4, "straight line r");
+}
+
+// ── Wall direction resolution ────────────────────────────────────
+
+fn test_wall_dir_local() {
+  m = map_empty();
+  map_set_wall_dir(m, 3, 3, 0, 0, 10);   // N — local
+  map_set_wall_dir(m, 3, 3, 0, 1, 11);   // NE — local
+  map_set_wall_dir(m, 3, 3, 0, 2, 12);   // SE — local
+  h = map_get_hex(m, 3, 3, 0);
+  assert(h.h_wall_n == 10, "N wall");
+  assert(h.h_wall_ne == 11, "NE wall");
+  assert(h.h_wall_se == 12, "SE wall");
+}
+
+fn test_wall_dir_neighbour() {
+  m = map_empty();
+  // S wall (dir 3) → stored on (q, r+1) as wall_n
+  map_set_wall_dir(m, 3, 3, 0, 3, 20);
+  h_s = map_get_hex(m, 3, 4, 0);
+  assert(h_s.h_wall_n == 20, "S wall on southern neighbour's N");
+
+  // SW wall (dir 4) → stored on (q-1, r+1) as wall_ne
+  map_set_wall_dir(m, 3, 3, 0, 4, 21);
+  h_sw = map_get_hex(m, 2, 4, 0);
+  assert(h_sw.h_wall_ne == 21, "SW wall on SW neighbour's NE");
+
+  // NW wall (dir 5) → stored on (q-1, r) as wall_se
+  map_set_wall_dir(m, 3, 3, 0, 5, 22);
+  h_nw = map_get_hex(m, 2, 3, 0);
+  assert(h_nw.h_wall_se == 22, "NW wall on NW neighbour's SE");
+}
+
+// ── Slope path ───────────────────────────────────────────────────
+
+fn test_slope_path_single_hex() {
+  m = map_empty();
+  slope_path(m, 5, 5, 5, 5, 0, 100, 100);
+  assert(map_get_hex(m, 5, 5, 0).h_height == 100, "single hex height");
+}
+
+fn test_slope_path_straight_line() {
+  m = map_empty();
+  // Slope from (0,0) height 0 to (4,0) height 8 — 5 hexes, step = 2.
+  slope_path(m, 0, 0, 4, 0, 0, 0, 8);
+  assert(map_get_hex(m, 0, 0, 0).h_height == 0, "start=0");
+  assert(map_get_hex(m, 1, 0, 0).h_height == 2, "step1=2");
+  assert(map_get_hex(m, 2, 0, 0).h_height == 4, "step2=4");
+  assert(map_get_hex(m, 3, 0, 0).h_height == 6, "step3=6");
+  assert(map_get_hex(m, 4, 0, 0).h_height == 8, "end=8");
+}
+
+fn test_slope_path_along_r() {
+  m = map_empty();
+  // Straight slope along the r axis.
+  slope_path(m, 5, 0, 5, 3, 0, 0, 9);
+  assert(map_get_hex(m, 5, 0, 0).h_height == 0, "r-start=0");
+  assert(map_get_hex(m, 5, 1, 0).h_height == 3, "r-step1=3");
+  assert(map_get_hex(m, 5, 2, 0).h_height == 6, "r-step2=6");
+  assert(map_get_hex(m, 5, 3, 0).h_height == 9, "r-end=9");
+}
+
+fn test_slope_path_descending() {
+  m = map_empty();
+  slope_path(m, 0, 0, 3, 0, 0, 9, 0);
+  assert(map_get_hex(m, 0, 0, 0).h_height == 9, "desc start=9");
+  assert(map_get_hex(m, 1, 0, 0).h_height == 6, "desc step1=6");
+  assert(map_get_hex(m, 2, 0, 0).h_height == 3, "desc step2=3");
+  assert(map_get_hex(m, 3, 0, 0).h_height == 0, "desc end=0");
+}
+
+// ── Slope band ───────────────────────────────────────────────────
+
+fn test_slope_band_width_3() {
+  m = map_empty();
+  // Band along r axis: (5,0)→(5,2) with width 3, height 0→4.
+  // Width offsets in q: -1, 0, +1.
+  // At step 0 (r=0): hexes (4,0), (5,0), (6,0) all get h=0.
+  // At step 1 (r=1): hexes (4,1), (5,1), (6,1) all get h=2.
+  // At step 2 (r=2): hexes (4,2), (5,2), (6,2) all get h=4.
+  slope_band(m, 5, 0, 5, 2, 0, 0, 4, 3);
+  assert(map_get_hex(m, 5, 0, 0).h_height == 0, "centre r=0 h=0");
+  assert(map_get_hex(m, 5, 1, 0).h_height == 2, "centre r=1 h=2 got {map_get_hex(m, 5, 1, 0).h_height}");
+  assert(map_get_hex(m, 5, 2, 0).h_height == 4, "centre r=2 h=4");
+  // Side column at offset -1
+  assert(map_get_hex(m, 4, 1, 0).h_height == 2, "left r=1 h=2");
+  // Side column at offset +1
+  assert(map_get_hex(m, 6, 1, 0).h_height == 2, "right r=1 h=2");
+}

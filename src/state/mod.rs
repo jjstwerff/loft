@@ -142,6 +142,19 @@ pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
     }
 }
 
+/// Bytecode encoding: ops 0–254 are one byte.  Byte 255 is an escape
+/// prefix — the interpreter reads a second byte `ext` and dispatches
+/// `OPERATORS[255 + ext]`.  The OPERATORS table is flat; this function
+/// handles the encoding transparently for the codegen.
+pub fn emit_op(op_code: u16, state: &mut State) {
+    if op_code < 255 {
+        state.code_add(op_code as u8);
+    } else {
+        state.code_add(255u8);
+        state.code_add((op_code - 255) as u8);
+    }
+}
+
 impl State {
     /**
     Create a new interpreter state
@@ -1438,7 +1451,12 @@ impl State {
                 trail_op[trail_head] = op;
                 trail_head = (trail_head + 1) % 16;
             }
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             // FY.1: frame yield — return to caller (JS requestAnimationFrame).
             if self.database.frame_yield {
                 return;
@@ -1533,7 +1551,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             if self.database.frame_yield {
                 return true; // yielded again — still running
             }
@@ -1654,7 +1677,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             step += 1;
             debug_assert!(step < 10_000_000, "Worker: too many operations");
             if self.code_pos == u32::MAX {
@@ -1708,7 +1736,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             step += 1;
             debug_assert!(step < 10_000_000, "Worker: too many operations");
             if self.code_pos == u32::MAX {
@@ -1757,7 +1790,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             step += 1;
             debug_assert!(step < 10_000_000, "Worker: too many operations");
             if self.code_pos == u32::MAX {
@@ -1827,7 +1865,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             step += 1;
             debug_assert!(step < 10_000_000, "Worker: too many operations");
             if self.code_pos == u32::MAX {
@@ -1860,7 +1903,12 @@ impl State {
         let bytecode_len = self.bytecode.len() as u32;
         while self.code_pos < bytecode_len {
             let op = *self.code::<u8>();
-            OPERATORS[op as usize](self);
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
             if self.code_pos == u32::MAX {
                 break;
             }

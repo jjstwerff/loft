@@ -263,7 +263,9 @@ impl Parser {
                     }
                     self.lexer.token(":");
                     self.parse_field(v_nr, &a_name);
-                    if !self.lexer.has_token(",") {
+                    // P158: accept trailing comma after the last field,
+                    // matching struct parsing (line 1380).
+                    if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                         break;
                     }
                 }

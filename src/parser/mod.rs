@@ -139,6 +139,13 @@ pub struct Parser {
     /// `yield` inside a `par()` body is illegal — the worker runs in a separate
     /// thread with its own store; there is no safe coroutine resumption path.
     pub(crate) in_par_body: bool,
+    /// Field-capture aliases created by `if expr is Variant { field } { body }`.
+    /// Drained by `parse_if` after the body to restore previous name mappings.
+    pub(crate) is_capture_aliases: Vec<(String, Option<u16>)>,
+    /// Field-binding Set nodes created by `if expr is Variant { field }`.
+    /// Drained by `parse_if` and prepended to the if-body so they only
+    /// execute when the discriminant matches (P163).
+    pub(crate) is_capture_bindings: Vec<Value>,
 }
 
 // Operators ordered on their precedence
@@ -298,6 +305,8 @@ impl Parser {
             init_field_tracking: false,
             init_field_deps: Vec::new(),
             in_par_body: false,
+            is_capture_aliases: Vec::new(),
+            is_capture_bindings: Vec::new(),
         }
     }
 
@@ -1794,9 +1803,13 @@ impl Parser {
             // which has its own work-text copy handling in convert()).  The `&` modifier
             // means "mutations propagate back to the caller" — passing a literal means
             // the mutations are silently discarded, which is almost certainly a bug.
+            // P160: also accept "addressable" expressions — vector element access
+            // (`v[i]`), field access (`s.field`), and chains thereof — since these
+            // produce a DbRef into existing mutable storage.
             if let Type::RefVar(inner) = &tp
                 && !matches!(inner.as_ref(), Type::Text(_))
                 && !matches!(&actual_code, Value::Var(_))
+                && !Self::is_addressable(&actual_code, &self.data)
             {
                 diagnostic!(
                     self.lexer,
@@ -2572,6 +2585,24 @@ impl Parser {
         }
     }
 
+    /// P160: check whether a value is "addressable" — rooted in a Var and
+    /// reached through field access (OpGetField) or vector element access
+    /// (OpGetVector / OpVectorRef) chains.  Addressable values produce a
+    /// DbRef into existing mutable storage, so they are safe to pass as
+    /// `&` parameters.
+    fn is_addressable(val: &Value, data: &Data) -> bool {
+        match val {
+            Value::Var(_) => true,
+            Value::Call(d_nr, args) => {
+                let name = &data.def(*d_nr).name;
+                (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
+                    && !args.is_empty()
+                    && Self::is_addressable(&args[0], data)
+            }
+            _ => false,
+        }
+    }
+
     /// After parsing a function body, check that each `&` (`RefVar`) argument is actually
     /// mutated somewhere in the body. If not, emit a compile error suggesting to drop the `&`.
     /// Also check for redundant `const` annotations on primitive parameters that are never
@@ -2580,6 +2611,29 @@ impl Parser {
         let code = self.data.def(self.context).code.clone();
         let mut written: HashSet<u16> = HashSet::new();
         find_written_vars(&code, &self.data, &mut written);
+        // Enhancement: when a for-loop variable is FIELD-WRITTEN (OpSet*
+        // through the loop var, not just loop-advance Set), also mark the
+        // collection it iterates over as written.  The dep chain is:
+        //   it: ref(T)[_vector_1]  →  _vector_1: vector<T>[items]
+        // Only propagate for vars that have a field-level write (OpSet*,
+        // OpCopyRecord, OpNewRecord etc.) — not plain Set (which is just
+        // the loop-iterator advance).
+        let mut field_written: HashSet<u16> = HashSet::new();
+        find_field_written_vars(&code, &self.data, &mut field_written);
+        let mut propagated: HashSet<u16> = HashSet::new();
+        for &w in &field_written {
+            if w < self.vars.next_var() {
+                for dep in self.vars.tp(w).depend() {
+                    propagated.insert(dep);
+                    if dep < self.vars.next_var() {
+                        for dep2 in self.vars.tp(dep).depend() {
+                            propagated.insert(dep2);
+                        }
+                    }
+                }
+            }
+        }
+        written.extend(propagated);
         for (a_nr, a) in arguments.iter().enumerate() {
             if matches!(a.typedef, Type::RefVar(_))
                 && !a.constant
@@ -2824,6 +2878,59 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
     }
 }
 
+/// Like `find_written_vars` but only collects variables that are FIELD-written
+/// (OpSet*, OpCopyRecord, OpNewRecord first-arg).  Excludes plain `Value::Set`
+/// which includes loop-iterator advance — that's not a user-initiated mutation.
+/// Used by check_ref_mutations to detect when a for-loop variable's field
+/// writes should propagate back to the iterated `&` collection.
+fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
+    match code {
+        Value::Call(fn_nr, args) => {
+            let def = data.def(*fn_nr);
+            let first_arg_write = def.name.starts_with("OpSet")
+                || def.name == "OpNewRecord"
+                || def.name == "OpAppendCopy"
+                || def.name == "OpAppendVector"
+                || def.name == "OpClearVector"
+                || def.name == "OpInsertVector"
+                || def.name == "OpRemoveVector";
+            let second_arg_write = def.name == "OpCopyRecord";
+            for (i, arg) in args.iter().enumerate() {
+                if i == 0 && first_arg_write {
+                    collect_vars_in(arg, written);
+                }
+                if i == 1 && second_arg_write {
+                    collect_vars_in(arg, written);
+                }
+                find_field_written_vars(arg, data, written);
+            }
+        }
+        Value::Set(_, body) => find_field_written_vars(body, data, written),
+        Value::Block(block) | Value::Loop(block) => {
+            for item in &block.operators {
+                find_field_written_vars(item, data, written);
+            }
+        }
+        Value::Insert(list) => {
+            for item in list {
+                find_field_written_vars(item, data, written);
+            }
+        }
+        Value::If(cond, then, els) => {
+            find_field_written_vars(cond, data, written);
+            find_field_written_vars(then, data, written);
+            find_field_written_vars(els, data, written);
+        }
+        Value::Return(v) | Value::Drop(v) => find_field_written_vars(v, data, written),
+        Value::Iter(_, create, next, extra) => {
+            find_field_written_vars(create, data, written);
+            find_field_written_vars(next, data, written);
+            find_field_written_vars(extra, data, written);
+        }
+        _ => {}
+    }
+}
+
 /// Map an operator token to its CamelCase name suffix used in `OpCamelCase` identifiers.
 /// E.g. `"<"` → `"Lt"`, so the method name becomes `"OpLt"`.
 /// Also used by I3.1 (`op <token>` sugar in interface bodies).
@@ -2847,6 +2954,7 @@ pub(crate) fn rename(op: &str) -> &str {
         "%" => "Rem",
         "**" => "Pow",
         "!" => "Not",
+        "~" => "BitNot",
         "+=" => "Append",
         _ => op,
     }

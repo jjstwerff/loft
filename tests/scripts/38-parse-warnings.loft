@@ -1,5 +1,6 @@
 // Copyright (c) 2022-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// Error tests moved to 102-expected-errors.loft
 // Compile-time warning detection tests.
 
 // @EXPECT_WARNING: Not all code paths return
@@ -47,22 +48,6 @@ fn test_unreachable_after_continue() {
     continue;
     assert(false, "unreachable");
   }
-}
-
-// --- L9: Format specifier / type mismatch — now compile errors ---
-
-// @EXPECT_ERROR: Format specifier has no effect on text
-fn test_hex_on_text() {
-  fw_t = "hello";
-  fw_r = "{fw_t:x}";
-  assert(len(fw_r) > 0, "hex on text");
-}
-
-// @EXPECT_ERROR: Zero-padding has no effect on text
-fn test_zero_pad_on_text() {
-  fw_t2 = "hi";
-  fw_r2 = "{fw_t2:05}";
-  assert(len(fw_r2) > 0, "zero-pad text");
 }
 
 // --- Dead assignment: assert counts as a read ---

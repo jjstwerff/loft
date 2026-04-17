@@ -19,9 +19,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io::{Result, Write};
 
 static OPERATORS: &[&str] = &[
-    "OpAdd", "OpMin", "OpMul", "OpDiv", "OpRem", "OpPow", "OpNot", "OpLand", "OpLor", "OpEor",
-    "OpSLeft", "OpSRight", "OpEq", "OpNe", "OpLt", "OpLe", "OpGt", "OpGe", "OpAppend", "OpConv",
-    "OpCast",
+    "OpAdd", "OpMin", "OpMul", "OpDiv", "OpRem", "OpPow", "OpNot", "OpBitNot", "OpLand", "OpLor",
+    "OpEor", "OpSLeft", "OpSRight", "OpEq", "OpNe", "OpLt", "OpLe", "OpGt", "OpGe", "OpAppend",
+    "OpConv", "OpCast",
 ];
 
 pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
@@ -75,6 +75,8 @@ pub enum Value {
     Return(Box<Value>),
     /// Break out of the n-th loop
     Break(u16),
+    /// Break out of the n-th loop with a value
+    BreakWith(u16, Box<Value>),
     /// Continue the n-th loop
     Continue(u16),
     /// Conditional statement
@@ -1025,10 +1027,16 @@ impl Data {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
+        // Flat table: op_codes 0..N map to OPERATORS[0..N].
+        // Bytecode encoding is transparent via fill::emit_op:
+        // codes < 255 → 1 byte; codes >= 255 → 2 bytes (255 + offset).
+        let max_ops = crate::fill::OPERATORS.len();
         assert!(
-            (self.op_codes as usize) < crate::fill::OPERATORS.len(),
-            "Too many defined operators (max {})",
-            crate::fill::OPERATORS.len()
+            (self.op_codes as usize) < max_ops,
+            "Too many defined operators ({} of {max_ops} used). \
+             To add more, grow the OPERATORS array in src/fill.rs and regenerate \
+             with `cargo test --test issues regen_fill_rs -- --ignored`.",
+            self.op_codes
         );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes as u8, def_nr);
@@ -1815,6 +1823,10 @@ impl Data {
             }
             Value::Insert(i) => self.show_insert(write, vars, i, indent),
             Value::Break(v) => write!(write, "break({v})"),
+            Value::BreakWith(v, expr) => {
+                write!(write, "break({v}) ")?;
+                self.show_code(write, vars, expr, indent, false)
+            }
             Value::Continue(v) => write!(write, "continue({v})"),
             Value::If(test, t, f) => {
                 write!(write, "if ")?;

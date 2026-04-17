@@ -145,7 +145,7 @@ pub fn map_set_height(m: &Map, q: integer, r: integer, cy: integer, height: inte
 pub fn map_place_item(m: &Map, q: integer, r: integer, cy: integer, item: integer, rotation: integer) {
   cur = map_get_hex(m, q, r, cy);
   cur.h_item = item;
-  flags = cur.h_item_rotation & (32 | 64);  // bits 5+6 (spawn, waypoint)
+  flags = cur.h_item_rotation & ~31;  // preserve bits 5+ (spawn, waypoint)
   cur.h_item_rotation = (rotation & 31) | flags;
   map_set_hex(m, q, r, cy, cur);
 }
@@ -157,4 +157,195 @@ pub fn map_set_wall(m: &Map, q: integer, r: integer, cy: integer, edge: integer,
   if edge == 1 { cur.h_wall_ne = wall; }
   if edge == 2 { cur.h_wall_se = wall; }
   map_set_hex(m, q, r, cy, cur);
+}
+
+// ── Spawn point CRUD (Phase 4.10) ─────────────────────────────────
+
+// Add a spawn point to the map.  The spawn's hex flag (bit 5 of
+// h_item_rotation) is set as a side-effect so renderers can show a
+// spawn marker without scanning the whole spawn list.
+pub fn spawn_add(m: &Map, sp: SpawnPoint) {
+  m.m_spawn_points += [sp];
+  // Flag the hex: bit 5 = spawn, preserve other bits.
+  cur = map_get_hex(m, sp.sp_hex.ha_q, sp.sp_hex.ha_r, sp.sp_hex.ha_cy);
+  cur.h_item_rotation = cur.h_item_rotation | 32;
+  map_set_hex(m, sp.sp_hex.ha_q, sp.sp_hex.ha_r, sp.sp_hex.ha_cy, cur);
+}
+
+// Count spawns on the map.
+pub fn spawn_count(m: Map) -> integer { len(m.m_spawn_points) }
+
+// Find all spawns at a given hex address.
+pub fn spawn_at(m: Map, q: integer, r: integer, cy: integer) -> vector<SpawnPoint> {
+  result: vector<SpawnPoint> = [];
+  for sa_sp in m.m_spawn_points {
+    if sa_sp.sp_hex.ha_q == q && sa_sp.sp_hex.ha_r == r && sa_sp.sp_hex.ha_cy == cy {
+      result += [sa_sp];
+    }
+  }
+  result
+}
+
+// Remove the spawn matching (q, r, cy, npc_id).  Returns true if one was
+// removed.  Clears the hex flag if no spawns remain on that hex.
+pub fn spawn_remove(m: &Map, q: integer, r: integer, cy: integer, npc_id: integer) -> boolean {
+  keepers: vector<SpawnPoint> = [];
+  removed = false;
+  remaining_on_hex = 0;
+  for sr_sp in m.m_spawn_points {
+    if sr_sp.sp_hex.ha_q == q && sr_sp.sp_hex.ha_r == r && sr_sp.sp_hex.ha_cy == cy && sr_sp.sp_npc_id == npc_id && !removed {
+      removed = true;
+    } else {
+      keepers += [sr_sp];
+      if sr_sp.sp_hex.ha_q == q && sr_sp.sp_hex.ha_r == r && sr_sp.sp_hex.ha_cy == cy {
+        remaining_on_hex = remaining_on_hex + 1;
+      }
+    }
+  }
+  m.m_spawn_points = keepers;
+  if removed && remaining_on_hex == 0 {
+    cur = map_get_hex(m, q, r, cy);
+    cur.h_item_rotation = cur.h_item_rotation & ~32;
+    map_set_hex(m, q, r, cy, cur);
+  }
+  removed
+}
+
+// ── NPC routine CRUD (Phase 4.11) ─────────────────────────────────
+
+// Add a fresh NPC routine (no waypoints yet).
+pub fn routine_add(m: &Map, npc_id: integer, name: text, creature: integer) {
+  m.m_npc_routines += [NpcRoutine {
+    nr_npc_id:    npc_id,
+    nr_name:      name,
+    nr_creature:  creature,
+    nr_waypoints: [],
+  }];
+}
+
+// Count routines.
+pub fn routine_count(m: Map) -> integer { len(m.m_npc_routines) }
+
+// Look up a routine's index by npc_id.  Returns -1 if absent.
+pub fn routine_index(m: Map, npc_id: integer) -> integer {
+  for ri_r in m.m_npc_routines {
+    if ri_r.nr_npc_id == npc_id { break ri_r#index; }
+  }
+  -1
+}
+
+// Remove a routine by npc_id.  Returns true if one was removed.
+pub fn routine_remove(m: &Map, npc_id: integer) -> boolean {
+  keepers: vector<NpcRoutine> = [];
+  removed = false;
+  for rr_r in m.m_npc_routines {
+    if rr_r.nr_npc_id == npc_id && !removed {
+      removed = true;
+    } else {
+      keepers += [rr_r];
+    }
+  }
+  m.m_npc_routines = keepers;
+  removed
+}
+
+// ── Waypoint CRUD (Phase 4.11) ────────────────────────────────────
+
+// Add a waypoint to a routine identified by npc_id.  Flags the target
+// hex with the waypoint bit (bit 6).  Returns true if the routine was
+// found.
+pub fn waypoint_add(m: &Map, npc_id: integer, wp: NpcWaypoint) -> boolean {
+  found = false;
+  for wa_r in m.m_npc_routines {
+    if wa_r.nr_npc_id == npc_id {
+      wa_r.nr_waypoints += [wp];
+      found = true;
+    }
+  }
+  if found {
+    cur = map_get_hex(m, wp.wp_hex.ha_q, wp.wp_hex.ha_r, wp.wp_hex.ha_cy);
+    cur.h_item_rotation = cur.h_item_rotation | 64;  // bit 6
+    map_set_hex(m, wp.wp_hex.ha_q, wp.wp_hex.ha_r, wp.wp_hex.ha_cy, cur);
+  }
+  found
+}
+
+// Count a routine's waypoints.  Returns 0 if the routine is absent.
+pub fn waypoint_count(m: Map, npc_id: integer) -> integer {
+  for wc_r in m.m_npc_routines {
+    if wc_r.nr_npc_id == npc_id { return len(wc_r.nr_waypoints); }
+  }
+  0
+}
+
+// ── Wall direction resolution (Phase 4.4) ─────────────────────────
+
+// Set a wall in any of the 6 directions (0=N, 1=NE, 2=SE, 3=S, 4=SW,
+// 5=NW).  Directions 0–2 are stored on the target hex; directions 3–5
+// are stored as the opposite edge on the appropriate neighbour hex.
+// Uses axial-coordinate neighbour offsets.
+pub fn map_set_wall_dir(m: &Map, q: integer, r: integer, cy: integer, dir: integer, wall: integer) {
+  if dir == 0 { map_set_wall(m, q, r, cy, 0, wall); }
+  if dir == 1 { map_set_wall(m, q, r, cy, 1, wall); }
+  if dir == 2 { map_set_wall(m, q, r, cy, 2, wall); }
+  if dir == 3 { map_set_wall(m, q, r + 1, cy, 0, wall); }   // S = neighbour (q, r+1)'s N
+  if dir == 4 { map_set_wall(m, q - 1, r + 1, cy, 1, wall); } // SW = neighbour (q-1, r+1)'s NE
+  if dir == 5 { map_set_wall(m, q - 1, r, cy, 2, wall); }   // NW = neighbour (q-1, r)'s SE
+}
+
+// ── Hex-grid geometry (Phase 4.8) ─────────────────────────────────
+
+// Distance between two hexes in axial coordinates (cube-distance).
+pub fn hex_distance(q1: integer, r1: integer, q2: integer, r2: integer) -> integer {
+  dq = abs(q2 - q1);
+  dr = abs(r2 - r1);
+  ds = abs((q2 + r2) - (q1 + r1));
+  max(dq, max(dr, ds))
+}
+
+// Integer linear interpolation: a + (b - a) * i / n.
+pub fn lerp_int(a: integer, b: integer, i: integer, n: integer) -> integer {
+  if n == 0 { return a; }
+  a + (b - a) * i / n
+}
+
+// ── Slope operations (Phase 4.8–4.9) ──────────────────────────────
+
+// Linearly interpolate heights from h_start at (q1,r1) to h_end at
+// (q2,r2) along a straight hex-grid line.  All hexes on the path
+// (inclusive of both endpoints) have their height set.
+pub fn slope_path(m: &Map, q1: integer, r1: integer, q2: integer, r2: integer, cy: integer, h_start: integer, h_end: integer) {
+  dist = hex_distance(q1, r1, q2, r2);
+  if dist == 0 {
+    map_set_height(m, q1, r1, cy, h_start);
+    return;
+  }
+  for i in 0..=dist {
+    q = lerp_int(q1, q2, i, dist);
+    r = lerp_int(r1, r2, i, dist);
+    h = lerp_int(h_start, h_end, i, dist);
+    map_set_height(m, q, r, cy, h);
+  }
+}
+
+// Slope a band of hexes: for each step along the (q1,r1)→(q2,r2)
+// line, also set the `width` hexes perpendicular to the path
+// direction (centred on the path).  Only uniform height across the
+// band; no cross-section interpolation.
+pub fn slope_band(m: &Map, q1: integer, r1: integer, q2: integer, r2: integer, cy: integer, h_start: integer, h_end: integer, width: integer) {
+  dist = hex_distance(q1, r1, q2, r2);
+  if dist == 0 {
+    map_set_height(m, q1, r1, cy, h_start);
+    return;
+  }
+  half = width / 2;
+  for i in 0..=dist {
+    q = lerp_int(q1, q2, i, dist);
+    r = lerp_int(r1, r2, i, dist);
+    h = lerp_int(h_start, h_end, i, dist);
+    for w in 0..width {
+      offset = w - half;
+      map_set_height(m, q + offset, r, cy, h);
+    }
+  }
 }

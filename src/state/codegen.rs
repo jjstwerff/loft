@@ -235,6 +235,10 @@ impl State {
                 Type::Void
             }
             Value::Break(loop_nr) => self.gen_break(*loop_nr, stack),
+            Value::BreakWith(loop_nr, val) => {
+                self.generate(val, stack, false);
+                self.gen_break(*loop_nr, stack)
+            }
             Value::Continue(loop_nr) => self.gen_continue(*loop_nr, stack),
             Value::If(test, t_val, f_val) => self.gen_if(test, t_val, f_val, stack),
             Value::Return(v) => self.gen_return(v, stack),
@@ -1489,7 +1493,7 @@ impl State {
                 4 // fallback: integer
             };
             self.remember_stack(stack.position);
-            self.code_add(stack.data.def(op).op_code as u8);
+            super::emit_op(stack.data.def(op).op_code, self);
             self.code_add(value_size);
             // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
             stack.position -= super::size_ref() as u16;
@@ -1505,7 +1509,7 @@ impl State {
             // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
             self.generate(&parameters[0], stack, false);
             self.remember_stack(stack.position);
-            self.code_add(stack.data.def(op).op_code as u8);
+            super::emit_op(stack.data.def(op).op_code, self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).
             stack.position -= super::size_ref() as u16;
             stack.position += 1;
@@ -1532,6 +1536,21 @@ impl State {
         } else {
             self.library_names.get(lib_lookup).copied()
         };
+        // P160: OpCreateStack with a non-Var expression argument (e.g.
+        // OpGetVector result).  The runtime reads a u16 offset from the code
+        // stream, but add_const writes nothing for Type::Reference args.
+        // Handle here: generate the expression (pushes a 12-byte DbRef),
+        // then emit OpCreateStack with the offset pointing at the just-
+        // pushed result.
+        if name == "OpCreateStack"
+            && !parameters.is_empty()
+            && !matches!(&parameters[0], Value::Var(_))
+        {
+            self.generate(&parameters[0], stack, false);
+            stack.add_op("OpCreateStack", self);
+            self.code_add(size_of::<crate::keys::DbRef>() as u16);
+            return stack.data.def(op).returned.clone();
+        }
         if stack.data.def(op).is_operator() {
             // B7: OpAppendCharacter on a RefVar(Text) target must use
             // OpAppendStackCharacter — same pattern as OpAppendText →
@@ -1548,7 +1567,7 @@ impl State {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
-            self.code_add(stack.data.def(actual_op).op_code as u8);
+            super::emit_op(stack.data.def(actual_op).op_code, self);
             stack.operator(actual_op);
             if was_stack != u16::MAX {
                 stack.position = was_stack;
@@ -2183,7 +2202,7 @@ impl State {
 /// that never produces a value at the join point.
 fn is_divergent(val: &Value) -> bool {
     match val {
-        Value::Return(_) | Value::Break(_) | Value::Continue(_) => true,
+        Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.

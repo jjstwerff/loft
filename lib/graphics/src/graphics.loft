@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Graphics library — 2D pixel canvas with drawing primitives.
 
+use math;
+use mesh;
+use scene;
+use glb;
+
 // RGBA color packed as a single integer: 0xAARRGGBB.
 // Alpha: 255 = fully opaque, 0 = fully transparent.
 // Use rgba() to construct and r()/g()/b()/a() to extract channels.

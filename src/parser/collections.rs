@@ -45,6 +45,11 @@ impl Parser {
         iter_var: u16,
         pre_var: Option<u16>,
     ) -> Value {
+        // P161: unwrap &vector<T> / &sorted<T> so the iterator setup
+        // matches the underlying collection type.
+        if let Type::RefVar(inner) = is_type {
+            return self.iterator(code, inner, should, iter_var, pre_var);
+        }
         if let Value::Iter(_, start, next, _) = code.clone() {
             if matches!(*next, Value::Block(_)) {
                 *code = *start;

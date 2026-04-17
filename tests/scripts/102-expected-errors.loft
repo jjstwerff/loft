@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// Expected-error tests extracted from mixed files so normal tests
+// in those files can run.  Each error fn has @EXPECT_ERROR before it.
+
+// ── Shared definitions needed by error fns ──────────────────────
+
+enum Direction { North, East, South, West }
+
+enum Shape {
+  Circle { radius: float },
+  Rect { width: float, height: float },
+  Square { side: float }
+}
+
+fn vec_sum(r: vector<integer>) -> integer {
+  total = 0;
+  for vs_e in r { total += vs_e; }
+  total
+}
+
+// ── From 06-structs.loft ────────────────────────────────────────
+
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
+fn test_vector_argument() {
+  assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
+}
+
+// ── From 10-match.loft ──────────────────────────────────────────
+
+// @EXPECT_ERROR: match on Direction is not exhaustive
+fn test_plain_missing_arm() {
+  d = North;
+  match d { North => "N", East => "E", South => "S" };
+}
+
+// @EXPECT_ERROR: match on Shape is not exhaustive
+fn test_struct_missing_arm() {
+  s = Circle { radius: 1.0 };
+  match s { Circle { radius } => radius, Rect { width, height } => width * height };
+}
+
+// @EXPECT_ERROR: cannot unify: text and integer
+fn test_match_type_mismatch() {
+  d = North;
+  match d { North => "text", _ => 42 };
+}
+
+// @EXPECT_ERROR: match on Direction is not exhaustive
+fn test_match_duplicate_arm() {
+  d = North;
+  match d { North => "first", North => "second", _ => "other" };
+}
+
+// @EXPECT_ERROR: guard must be boolean, got integer
+fn test_guard_non_bool() {
+  s = Circle { radius: 3.0 };
+  match s { Circle { radius } if 42 => radius, _ => 0.0 };
+}
+
+// ── From 38-parse-warnings.loft ─────────────────────────────────
+
+// @EXPECT_ERROR: Format specifier has no effect on text
+fn test_hex_on_text() {
+  t = "hello";
+  assert("{t:x}" == "hello", "text with hex");
+}
+
+// @EXPECT_ERROR: Zero-padding has no effect on text
+fn test_zero_pad_on_text() {
+  t = "hello";
+  assert("{t:05}" == "hello", "text with zero-pad");
+}
+
+// ── From 70-struct-methods.loft ─────────────────────────────────
+
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
+// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
+fn smb_vec_sum(r: vector<integer>) -> integer {
+  total = 0;
+  for smb_e in r {
+    total += smb_e;
+  }
+  total
+}
+
+fn test_struct_method_vec() {
+  assert(smb_vec_sum([1,2] + [3]) + 100 * smb_vec_sum([1,2,3] + [4,5]) == 1506, "struct method vec");
+}
+
+// ── From 90-immutability.loft ───────────────────────────────────
+
+// @EXPECT_ERROR: Parameter 'a' has & but is never modified
+fn ref_read_only(a: &integer) -> integer { a }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'a'
+fn const_bad(a: const integer) { a = 42 }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'a'
+fn const_ref_bad(a: & const integer) { a = 42 }
+
+// @EXPECT_ERROR: Cannot modify const variable 'x'
+fn test_const_local_int_reassigned() {
+  const x = 5;
+  x = 10;
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 'x'
+fn test_const_local_int_augmented() {
+  const x = 5;
+  x += 1;
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 't'
+fn test_const_local_text_reassigned() {
+  const t = "hello";
+  t = "world";
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 't'
+fn test_const_local_text_appended() {
+  const t = "hello";
+  t += "!";
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 'v'
+fn test_const_local_vector_appended() {
+  const v = [1, 2, 3];
+  v += [4];
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 'c'
+fn test_const_local_ref_reassigned() {
+  const c = North;
+  c = South;
+}

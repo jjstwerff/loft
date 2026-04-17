@@ -4,7 +4,7 @@ fn test_ensure_chunk() {
   m = map_empty();
   map_ensure_chunk(m, 0, 0, 0);
   assert(len(m.m_chunks) > 0, "chunk created");
-  assert(len(m.m_chunks[0].ck_hexes) == 4, "hexes allocated");
+  assert(len(m.m_chunks[0].ck_hexes) == 1024, "hexes allocated (32x32 grid)");
 }
 
 fn test_set_hex() {

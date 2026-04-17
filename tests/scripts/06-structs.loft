@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// Error tests moved to 102-expected-errors.loft
 // Structs: field types, constructors, methods, virtual fields, null defaults.
 struct Pos {
   x: integer,
@@ -241,11 +242,6 @@ fn vec_sum(r: vector<integer>) -> integer {
     res += v;
   }
   res
-}
-
-// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
-fn test_vector_argument() {
-  assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
 }
 
 struct RTData {

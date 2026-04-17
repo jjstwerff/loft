@@ -97,7 +97,7 @@ impl<'a> Stack<'a> {
         let op_nr = self.data.def_nr(name);
         assert_ne!(op_nr, u32::MAX, "Unknown operator {name}");
         state.remember_stack(self.position);
-        state.code_add(self.data.def(op_nr).op_code as u8);
+        crate::state::emit_op(self.data.def(op_nr).op_code, state);
         self.operator(op_nr);
     }
 

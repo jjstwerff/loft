@@ -55,6 +55,7 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Var(_)
         | Value::Line(_)
         | Value::Break(_)
+        | Value::BreakWith(_, _)
         | Value::Continue(_)
         | Value::Keys(_)
         | Value::TupleGet(_, _)
@@ -207,7 +208,41 @@ impl Parser {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot break outside a loop");
             }
-            *val = Value::Break(0);
+            // `break expr` — break with a value.  Desugars to `return expr`
+            // since loft loops are currently void-typed.  Covers the common
+            // find/search pattern where break-with-value exits the function.
+            // TODO: implement for...else for the general case.
+            if !self.lexer.peek_token("}")
+                && !self.lexer.peek_token(";")
+                && !matches!(self.lexer.peek().has, crate::lexer::LexItem::None)
+            {
+                let mut break_val = Value::Null;
+                let break_tp = self.expression(&mut break_val);
+                let ret_tp = self.data.def(self.context).returned.clone();
+                if !self.first_pass && matches!(ret_tp, Type::Void) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`break <value>` requires a non-void function — \
+                         the value is returned from the enclosing function"
+                    );
+                } else if !self.first_pass
+                    && !matches!(ret_tp, Type::Void)
+                    && !break_tp.is_same(&ret_tp)
+                    && !break_tp.is_unknown()
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`break` value type {} does not match function return type {}",
+                        break_tp.name(&self.data),
+                        ret_tp.name(&self.data)
+                    );
+                }
+                *val = Value::Return(Box::new(break_val));
+            } else {
+                *val = Value::Break(0);
+            }
             Type::Never
         } else if self.lexer.has_token("return") {
             self.parse_return(val);

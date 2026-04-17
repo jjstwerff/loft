@@ -517,8 +517,21 @@ impl ShowDb<'_> {
                         self.write_struct(s, st, indent);
                     }
                 }
-                Parts::Struct(st) | Parts::EnumValue(_, st) => {
+                Parts::Struct(st) => {
                     self.write_struct(s, st, indent);
+                }
+                Parts::EnumValue(_, st) => {
+                    // P159: wrap struct-enum variant in a discriminant
+                    // object so JSON round-trip can identify the variant.
+                    // Output: {"VariantName":{fields}} in JSON mode.
+                    if self.json {
+                        let variant_name = &self.stores.types[self.known_type as usize].name;
+                        write!(s, "{{\"{variant_name}\":").unwrap();
+                        self.write_struct(s, st, indent);
+                        s.push('}');
+                    } else {
+                        self.write_struct(s, st, indent);
+                    }
                 }
                 Parts::Vector(tp)
                 | Parts::Sorted(tp, _)

@@ -37,7 +37,7 @@ The parser **rejects** code that violates these rules.
 
 **Integer sentinel warning:** Any arithmetic that produces exactly `i32::MIN` becomes `null`. Division by zero also returns `null`. Use `long` or `not null` fields for the full 32-bit range.
 
-**`text` vs `string`:** The canonical string type is `text`. `string` may appear in some contexts but `text` is the documented name — use `text` in struct definitions and signatures.
+**`text` vs `string`:** The canonical string type is `text`. Using `string` in struct fields causes errors.
 
 ---
 
@@ -45,11 +45,11 @@ The parser **rejects** code that violates these rules.
 
 ```loft
 struct Point {
-    x: float not null,               // disallows null; enables full numeric range in storage
+    x: float not null,
     y: float not null,
-    r: integer limit(0, 255),        // constrain range
-    label: text = "default",         // stored default (shorthand for default(...))
-    area: float virtual($.x * $.y),  // read-only computed field; $ = record being initialised
+    r: integer limit(0, 255),
+    label: text = "default",
+    area: float virtual($.x * $.y),
 }
 ```
 
@@ -62,19 +62,23 @@ Modifiers: `not null`, `limit(min, max)`, `default(expr)` / `= expr`, `virtual(e
 Variables declared by assignment — type is inferred from the initialiser.
 
 ```loft
-x = 5;               // integer
-s = "hello";         // text
-f = 3.14;            // float
+x = 5;
+s = "hello";
+f = 3.14;
 ```
 
-Explicit type annotations are **also** valid (and sometimes required for clarity):
-
+Explicit type annotations (sometimes required for empty collections):
 ```loft
 v: vector<integer> = [];
 n: integer = null;
 ```
 
-**However:** type annotations on local collection variables with generic parameters sometimes cause parse errors in certain interpreter versions. When in doubt, drop the annotation and let the type be inferred.
+### `const` variables
+
+```loft
+const x = 5;       // immutable local — reassignment is a compile error
+const t = "hello";  // works for any type
+```
 
 ---
 
@@ -137,7 +141,7 @@ item = Item { name: "foo", count: 0 };
 item.count += 1;
 ```
 
-**Field names may overlap across structs.** Field lookups are type-scoped, so two structs can share a field name even at different byte offsets. Confirmed by `tests/scripts/23-field-overlap-structs.loft` and `24-field-overlap-enum-struct.loft`.
+Field names may overlap across structs — lookups are type-scoped.
 
 ---
 
@@ -159,49 +163,40 @@ enum Shape {
 fn area(self: Circle) -> float { 3.14159 * self.radius * self.radius }
 fn area(self: Rect)   -> float { self.w * self.h }
 
-s = Shape.Circle { radius: 2.0 };
+s = Circle { radius: 2.0 };
 a = area(s);   // dispatches to correct variant
 ```
 
-**Plain enums cannot have methods** — use struct-enum variants for polymorphic dispatch.
+Plain enums cannot have methods — use struct-enum variants for polymorphic dispatch.
+
+Trailing commas in variant field lists are accepted: `Circle { radius: float, }`.
+
+JSON round-trip: `"{shape:j}"` produces `{"Circle":{"radius":3.14}}`; `Shape.parse(json)` reconstructs the correct variant.
 
 ---
 
 ## Vectors
 
 ```loft
-empty: vector<integer> = [];            // empty typed vector (preferred)
-nums  = [for i in 0..10 { i * 2 }];    // comprehension → vector
-items = [1, 2, 3];                       // literal
+empty: vector<integer> = [];
+nums  = [for i in 0..10 { i * 2 }];    // comprehension
+items = [1, 2, 3];
 
-v += [element];      // append one element
+v += [element];      // append
 v += other_vec;      // concatenate
 len(v);              // length
 v[i];                // index read
 ```
 
-**Empty vectors** need a type annotation so the compiler knows the element type:
-```loft
-buf: vector<single> = [];     // empty vector of f32
-names: vector<text> = [];     // empty vector of strings
-```
+**Empty vectors** need a type annotation so the compiler knows the element type.
 
-**Slices return iterators, not vectors.** `arr[lo..hi]` cannot be passed where a `vector<T>` is expected. Use index bounds instead:
-
-```loft
-// WRONG
-fn process(sub: const vector<integer>) { ... }
-process(arr[lo..hi]);   // type error — slice is an iterator
-
-// CORRECT — pass full array with bounds
-fn process(arr: const vector<integer>, lo: integer, hi: integer) { ... }
-```
+**Slices return iterators, not vectors.** `arr[lo..hi]` cannot be passed where a `vector<T>` is expected — pass the array with index bounds instead.
 
 ---
 
 ## Hash collections
 
-Hash **must be a struct field** — not a standalone local variable (causes errors):
+Hash **must be a struct field** — not a standalone local variable:
 
 ```loft
 struct Entry  { key: text, value: integer }
@@ -215,7 +210,9 @@ else { e.value += 1; }
 t.data["x"] = null;   // remove entry
 ```
 
-**Hash cannot be iterated directly** (`for kv in hash` is not supported in the interpreter). Track aggregates separately in a normal variable during the loop.
+**Hash cannot be iterated directly** — track aggregates separately.
+
+Never use `key` as a field name in a hash-value struct — it conflicts with hash iteration internals.
 
 ---
 
@@ -226,20 +223,12 @@ interface Comparable {
   fn less_than(self: Self, other: Self) -> boolean
 }
 
-// Bounded generic — T must satisfy Comparable
 fn find_min<T: Comparable>(v: vector<T>) -> T { ... }
-
-// Operator interfaces use 'op' syntax
-interface Summable {
-  op + (self: Self, other: Self) -> Self
-}
 ```
 
 Structural satisfaction: if the methods exist, the type satisfies the interface.
 No `impl` block needed. Built-in types satisfy `Ordered`, `Equatable`, `Addable`,
 `Numeric`, `Scalable`, `Printable` automatically.
-
-Bounded generics work with for-loops, method calls, and operator dispatch on all types.
 
 ---
 
@@ -260,37 +249,53 @@ pub fn exists(both: File) -> boolean { both.format != Format.NotExists }
 
 | Precedence | Operators | Notes |
 |-----------|-----------|-------|
-| 0 (lowest) | `??` | null-coalescing: `a ?? b` returns `a` if not null, else `b` |
+| 0 (lowest) | `??` | null-coalescing |
 | 1 | `\|\|`, `or` | logical OR |
 | 2 | `&&`, `and` | logical AND |
-| 3 | `==`, `!=`, `<`, `<=`, `>`, `>=` | comparison |
+| 3 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is` | comparison, variant check |
 | 4–7 | `\|`, `^`, `&`, `<<`, `>>` | bitwise |
 | 8 | `+`, `-` | |
 | 9 | `*`, `/`, `%` | |
 | 10 | `as` | type cast/conversion |
 
-Unary: `!` (logical not / null check), `-` (negation)
+Unary: `!` (logical not / null check), `-` (negation), `~` (bitwise NOT, integer only)
 Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=`
 
 ```loft
 name = record.field ?? "default"   // null-coalescing
 x as long                          // cast integer to long
-x as float                         // cast integer to float
-"json-text" as Program             // deserialize text as struct
+flags & ~32                        // bitwise NOT — clears bit 5
+```
+
+### `is` variant check
+
+```loft
+if d is North { ... }              // boolean check
+assert(!(shape is Rect));          // negation
+
+// field capture — binds variant fields as locals scoped to the if-body
+if shape is Circle { radius } {
+  area = PI * radius * radius;
+}
+
+// multiple fields + else
+if shape is Rect { width, height } {
+  area = width * height;
+} else {
+  area = 0.0;
+}
 ```
 
 ---
 
 ## String / text literals
 
-Loft has **two** string literal syntaxes:
-
 ### Double-quoted strings (`"..."`)
 
-Single-line only. Supports `{expr}` interpolation and `\n`, `\t`, `\\`, `\"` escapes.
+Single-line. Supports `{expr}` interpolation and `\n`, `\t`, `\\`, `\"` escapes.
 
 ```loft
-println("hello {name}");          // basic interpolation
+println("hello {name}");
 println("hex={n:#x}");            // hex with 0x prefix
 println("float={f:4.2}");         // width 4, 2 decimal places
 println("json={o:j}");            // JSON format
@@ -302,9 +307,8 @@ println("{{literal braces}}");    // escape { } by doubling
 
 ### Backtick strings (`` `...` ``)
 
-**Multi-line.** Supports `{expr}` interpolation. Bare `"` is literal (no escaping needed).
+**Multi-line.** Supports `{expr}` interpolation. Bare `"` is literal.
 Auto-strips common leading indentation (based on closing backtick column).
-First and last lines are trimmed if whitespace-only.
 
 ```loft
 SHADER = `
@@ -313,18 +317,9 @@ SHADER = `
       gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
   }
 `;
-
-greeting = `Hello, {name}!
-  You have {count} messages.`;
 ```
 
-**Use backtick strings for:**
-- GLSL shader source code
-- Multi-line templates (HTML, JSON, SQL)
-- Any text containing `"` characters
-- Heredoc-style blocks
-
-**Use `println()`** for line-oriented output and `print()` for output without a newline. The function `say()` does not exist in the stdlib — it appears in some older documentation examples but will produce a "not found" error at runtime.
+Use `println()` for line-oriented output and `print()` for output without a newline.
 
 ---
 
@@ -332,17 +327,16 @@ greeting = `Hello, {name}!
 
 ```loft
 if cond { } else if cond { } else { }
-
-// if as expression
-result = if x > 0 { x } else { -x }
+result = if x > 0 { x } else { -x }    // if as expression
 
 // null check
 if !x { }            // x is null (or false for boolean)
-if x != null { }
 val = a ?? b         // null-coalescing
 
+while cond { }
 return expr;
 break;
+break expr;          // break with value (requires non-void function)
 ```
 
 ---
@@ -353,11 +347,9 @@ break;
 for i in 0..n { }         // exclusive: 0 to n-1
 for i in 0..=n { }        // inclusive: 0 to n
 for item in collection { }
-for c in some_text { }    // character iteration; c is character
+for c in some_text { }    // character iteration
 for item in col if item.active { }   // filtered iteration
-
 for i in rev(0..n) { }    // reverse range
-for x in rev(sorted_col) { }  // reverse sorted/index collection
 ```
 
 ### Loop attributes
@@ -376,20 +368,23 @@ for v in collection {
 
 ---
 
-## CRITICAL — flat namespace (interpreter limitation)
+## Match
 
-**All variable names across every function in a file share one global namespace**, including parameters, locals, and loop variables. This is an interpreter limitation, not a language design goal.
+```loft
+match color {
+    Red   => println("red"),
+    Green | Blue => println("cool"),
+    _     => {},
+}
 
-Rules to avoid codegen panics:
-- Use **unique loop variable names** across all functions (e.g. `fib_i`, `mb_x`, `col_i`, `sort_j`)
-- Never reuse the same loop variable name in a different function
-- Descriptive parameter names help avoid parameter collisions
+match shape {
+    Circle { radius } => println("r={radius}"),
+    Rect { w, h } if w == h => println("square"),
+    _ => {},
+}
+```
 
-**Unused loop variable = exit 1.** If a loop variable is declared but never read, loft exits with code 1. Use `_` when the value is not needed. `_` can be reused across different element types within the same function — it automatically adapts its type.
-
-### `const vector<T>` recursive call bug
-
-When a function has `const vector<T>` parameters, calls itself recursively, **and** the function contains a `for` loop, the codegen can panic: *"Too few parameters on n_xxx"*. Workaround: implement the loop as recursion, or restructure to avoid the `for` loop inside the `const vector<T>` function.
+Match is an expression — all arms must produce the same type (or void).
 
 ---
 
@@ -397,150 +392,81 @@ When a function has `const vector<T>` parameters, calls itself recursively, **an
 
 ```loft
 fn double(x: integer) -> integer { x * 2 }
-fn is_pos(x: integer) -> boolean { x > 0 }
-fn add(a: integer, b: integer) -> integer { a + b }
 
-doubled  = map(nums, fn double);
-positive = filter(nums, fn is_pos);
-total    = reduce(nums, 0, fn add);
-
-// Lambda short form (types inferred from context)
-doubled  = map(nums, |x| { x * 2 });
-positive = filter(nums, |x| { x > 0 });
+doubled  = map(nums, fn double);          // named function ref
+positive = filter(nums, |x| { x > 0 });  // lambda
 total    = reduce(nums, 0, |a, b| { a + b });
 
-// Lambda long form (explicit types)
-f: fn(integer) -> integer = fn(x: integer) -> integer { x * 2 }
+// Method form on vectors
+doubled  = nums.map(|x| { x * 2 });
+evens    = nums.filter(|x| { x % 2 == 0 });
 ```
 
 ---
 
-## Match
+## CRITICAL — flat namespace (interpreter limitation)
 
-```loft
-match color {
-    Red   => say("red"),
-    Green | Blue => say("cool"),
-    _     => say("other"),
-}
+**All variable names across every function in a file share one global namespace.** This is an interpreter limitation.
 
-match shape {
-    Circle { radius } => say("r={radius}"),
-    Rect { w, h } if w == h => say("square"),
-    _ => {},
-}
-```
+Rules to avoid codegen panics:
+- Use **unique loop variable names** across all functions (e.g. `fib_i`, `mb_x`)
+- Never reuse the same loop variable name in a different function
+- Descriptive parameter names help avoid collisions
+
+**Unused loop variable = exit 1.** Use `_` when the value is not needed.
 
 ---
 
 ## Builtin names — do not shadow
 
-| Name | What it is |
-|------|-----------|
-| `len` | `len(collection) -> integer` |
-| `ticks` | `ticks() -> long` — microseconds |
-| `round` | `round(float) -> long` |
-| `sorted` | keyword |
-| `null` | null literal |
-| `map`, `filter`, `reduce` | higher-order stdlib functions |
-| `rev` | reverse-iteration modifier |
+`len`, `ticks`, `round`, `sorted`, `null`, `map`, `filter`, `reduce`, `rev`
 
 ---
 
-## Text assignment pitfalls
+## Text pitfalls
 
-**`t = t[3..]` clears t** — self-referencing text slice assignment clears the variable before reading the slice. Use a fresh variable:
-```loft
-// WRONG: produces empty string
-t = t[3..];
+**`character == text` is a compile error** — use `"{c}" == t` to compare as text.
 
-// CORRECT: intermediate variable
-s = t[3..];
-t = s;
-```
+**Cannot reassign text parameter** — copy to local first: `local = param; local = ...`
 
-**`h = h + expr` works (fixed)** — the parser detects this self-append pattern and skips the clear. But `h += expr` is always safe and preferred.
-
-**Text in function return accumulates** — in a text-returning function, `t = s` may APPEND instead of replace due to the text_return work buffer. Use early `return` instead of reassignment:
-```loft
-// WRONG: may produce "// hellohello" in text-returning function
-fn strip(line: text) -> text {
-  t = line;
-  if t.starts_with("// ") { s = t[3..]; t = s; }
-  t
-}
-
-// CORRECT: return directly, don't reassign
-fn strip(line: text) -> text {
-  if line.starts_with("// ") { return line[3..]; }
-  line
-}
-```
-
-**`character == text` always returns true** — the operator resolver falls through to `OpEqBool`. Workaround: format the character as text first:
-```loft
-// WRONG: always true
-if c == some_text { }
-
-// CORRECT
-if "{c}" == some_text { }
-```
+**Prefer `h += expr`** over `h = h + expr` for text building.
 
 ---
 
 ## File I/O patterns
 
 ```loft
-// Read a file
 f = file("path/to/file.txt");
 content = f.content();         // full text content
 lines = f.lines();             // vector<text> of lines
 
-// Write a file
 out = file("output.txt");
-out.write(content);            // overwrites entire file
+out.write(content);
 
-// List directory
 dir = file("some/directory");
 for ef in dir.files() {
-  path = ef.path;              // full path
-  // Extract filename from path (no .name field)
-  fname = path;
-  for c in path {
-    if c == '/' { fname = path[c#next..]; }
-  }
+  path = ef.path;
 }
 
-// Check existence
-f = file("test.txt");
 if f.exists() { }
 ```
 
 ---
 
-## Known error messages → causes → fixes
+## Known error messages → fixes
 
-| Error message | Cause | Fix |
-|--------------|-------|-----|
-| `Too few parameters on n_<fn>` | Flat namespace: `const vector<T>` param + recursive call + `for` loop in same function | Remove the `for` loop; implement as recursion |
-| `Variable <x> is never read` (exit 1) | Declared loop/local variable not used | Use it trivially, or name loop var `_` |
-| `Indexing a non vector` | Variable name conflicts with `sorted<>` keyword | Rename variable (e.g. `sorted` → `out`, `result`) |
-| `Not implemented operation = for type null` | Variable name shadows builtin (e.g. `len = 1`) | Rename variable |
-| `Unknown definition` / panic on `boolean` struct field | Some interpreter versions panic on `boolean` in structs | Use `integer` with 0/1 sentinel, or `not null` |
-| `Cannot iterate a hash directly` | `for kv in some_hash` | Track aggregate in a separate variable during the loop |
-| `Invalid index key` / `Undefined type string` | Using `string` type name in struct field | Use `text` — that is the canonical string type (see PROBLEMS.md #82) |
-| `Allocating a used store` (interpreter) | Struct field used as hash-value type is named `key` — conflicts with hash iteration pseudo-field | Rename the field (e.g. `word`, `name`, `label`) — never use `key` as a field name in a hash-value struct (see PROBLEMS.md #83) |
-| `Too few parameters on n_<fn>` (any params, not just const) | Any `for` loop in a function that is called from a recursive function — flat namespace corrupts parameter count for the recursive caller | Replace the `for` loop in the helper with recursion, or inline the loop into the recursive function (see PROBLEMS.md #84) |
-| `<fn> is not found` for `say(...)` | `say()` does not exist in stdlib | Use `println()` |
-| Parse error on local type annotation | Complex generic annotation on local var | Drop the annotation; let type be inferred |
-| `Unknown record N` on nested field access | `vec[i].struct_field.nested` — deep chained access on vector elements | Avoid deep chaining on vector elements (P105) |
-| `fl_validate: positive header` | Complex nested struct assignment (3+ levels) | Simplify nested struct operations (P106) |
-| `Variable 'x' cannot change type from text to null` | `x: text = null;` — typed null init rejected | Use `x = "";` or avoid initializing to null |
-| ~~Empty result from `t = t[3..]`~~ | ~~Text self-slice clears before read~~ | **Fixed** — work text for self-referencing assignments |
-| ~~Doubled text in function return~~ | ~~Text-returning fn accumulates~~ | **Fixed** — always clear RefVar(Text) before append |
-| `character == text` always true | Now a compile error | Use `"{c}" == t` to compare as text |
-| `Cannot reassign text parameter` | Text params are 12-byte Str, not 24-byte String | Copy to local first: `local = param; local = ...` |
-| `Cannot pass a literal or expression to a '&' parameter` | Passing `[]`, struct literal, or expression to `&vector<T>` / `&StructType` | Assign to a named variable first, then pass the variable |
+| Error message | Fix |
+|--------------|-----|
+| `Too few parameters on n_<fn>` | Flat namespace collision — unique loop variable names; avoid `for` in `const vector<T>` recursive fns |
+| `Variable <x> is never read` (exit 1) | Use the variable, or name loop var `_` |
+| `Indexing a non vector` | Variable name shadows `sorted` keyword — rename it |
+| `Not implemented operation = for type null` | Variable shadows builtin (e.g. `len = 1`) — rename |
+| `Cannot iterate a hash directly` | Track aggregate separately |
+| `Undefined type string` | Use `text`, not `string` |
+| `Allocating a used store` | Field named `key` in hash-value struct — rename the field |
+| `<fn> is not found` for `say(...)` | Use `println()` |
+| `Unknown record N` on nested field access | Avoid deep chaining on vector elements (P105) |
+| `Cannot pass a literal or expression to a '&' parameter` | Assign to a named variable first, then pass it. `v[i]` and `s.field` work directly (P160). |
 
 ---
 
@@ -552,24 +478,20 @@ loft --native --path /path/to/repo/ file.loft               # compile + run nati
 loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 ```
 
-**`--path` must end with a trailing slash** — loft concatenates `"default"` directly onto the string.
+**`--path` must end with a trailing slash.**
 
 ---
 
-## Pre-flight checklist before finishing a .loft file
+## Pre-flight checklist
 
 - [ ] All loop variables are unique across the entire file
-- [ ] No local variables have complex generic type annotations (drop them if unsure)
 - [ ] Hash collections are struct fields, not standalone locals
-- [ ] No `arr[lo..hi]` passed as `vector<T>` argument — use index bounds
+- [ ] No `arr[lo..hi]` passed as `vector<T>` argument
 - [ ] `len`, `sorted`, `ticks`, `round`, `map`, `filter`, `reduce` not used as variable names
 - [ ] All `use` imports appear before any other declarations
 - [ ] Long literals use `l` suffix where needed (`0l`, `1000l`)
 - [ ] `--path` ends with `/` in CLI calls
 - [ ] String type in struct fields is `text`, not `string`
-- [ ] ~~No `t = t[N..]` self-slice~~ — **fixed**, works directly now
-- [ ] No `character == text` comparisons — use `"{c}" == t` (compile error)
-- [ ] ~~Text-returning functions~~ — **fixed**, `t = expr; t` works now
-- [ ] Prefer `h += expr` over `h = h + expr` for text building
-- [ ] Never reassign or `+=` a text parameter — copy to local first
-- [ ] Struct params are passed by reference — mutations visible to caller
+- [ ] No `character == text` comparisons — use `"{c}" == t`
+- [ ] Never reassign a text parameter — copy to local first
+- [ ] `v[i]` and `s.field` can be passed directly as `&` parameters

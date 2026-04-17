@@ -10,9 +10,12 @@ use super::{
 
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
-    ops.iter()
-        .rev()
-        .any(|v| matches!(v, Value::Return(_) | Value::Break(_) | Value::Continue(_)))
+    ops.iter().rev().any(|v| {
+        matches!(
+            v,
+            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_)
+        )
+    })
 }
 
 /// Collected match arm data for enum/struct-enum match expressions.
@@ -176,7 +179,7 @@ impl Parser {
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
                 Value::Return(_) => terminated = Some("return"),
-                Value::Break(_) => terminated = Some("break"),
+                Value::Break(_) | Value::BreakWith(_, _) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
             }
@@ -373,10 +376,26 @@ impl Parser {
         let mut test = Value::Null;
         let tp = self.expression(&mut test);
         self.convert(&mut test, &tp, &Type::Boolean);
+        let is_aliases: Vec<(String, Option<u16>)> = self.is_capture_aliases.drain(..).collect();
+        let is_bindings: Vec<Value> = self.is_capture_bindings.drain(..).collect();
         let mut true_code = Value::Null;
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
         let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
+        if !is_bindings.is_empty()
+            && let Value::Block(bl) = &mut true_code
+        {
+            let mut new_ops = is_bindings;
+            new_ops.append(&mut bl.operators);
+            bl.operators = new_ops;
+        }
+        for (name, old) in &is_aliases {
+            if let Some(old_nr) = old {
+                self.vars.set_name(name, *old_nr);
+            } else {
+                self.vars.remove_name(name);
+            }
+        }
         let mut false_type = Type::Void;
         let mut false_code = Value::Null;
         if self.lexer.has_token("else") {
@@ -390,8 +409,6 @@ impl Parser {
                 }
                 false_type = self.parse_block("else", &mut false_code, &true_type);
                 if true_type == Type::Unknown(0) {
-                    // Only patch the true block with a null value if the last
-                    // expression is NOT a divergent expression (return/break/continue).
                     if let Value::Block(bl) = &mut true_code {
                         let p = bl.operators.len() - 1;
                         if !is_block_divergent(&bl.operators) {
@@ -2004,7 +2021,192 @@ impl Parser {
     // are supported — see `parse_parallel_for_loop` for details.
     /// Set up iterator variables for a for-loop header and return
     /// `(iter_var, pre_var, for_var, if_step, create_iter, iter_next)`.
+    /// `expr is VariantName` — generates a boolean discriminant check.
+    /// For plain enums: `OpConvIntFromEnum(expr) == disc`.
+    /// For struct-enums: `OpConvIntFromEnum(OpGetEnum(expr, 0)) == disc`.
+    pub(crate) fn parse_is_variant(
+        &mut self,
+        code: &mut Value,
+        subject_type: &Type,
+        variant_name: &str,
+    ) -> Type {
+        let (e_nr, is_struct) = match subject_type {
+            Type::Enum(nr, true, _) => (*nr, true),
+            Type::Enum(nr, false, _) => (*nr, false),
+            // EnumValue variant type (e.g. `s = Circle { ... }` has type
+            // Reference(Circle_def_nr) where Circle's parent is Shape).
+            Type::Reference(d_nr, _)
+                if self.data.def_type(*d_nr) == DefType::EnumValue
+                    && matches!(
+                        self.data.def(self.data.def(*d_nr).parent).returned,
+                        Type::Enum(_, true, _)
+                    ) =>
+            {
+                (self.data.def(*d_nr).parent, true)
+            }
+            // Reference to an Enum itself (e.g. loop variable from
+            // vector<Shape> iteration gets Type::Reference(Shape_nr, _)).
+            Type::Reference(d_nr, _)
+                if self.data.def_type(*d_nr) == DefType::Enum
+                    && matches!(self.data.def(*d_nr).returned, Type::Enum(_, true, _)) =>
+            {
+                (*d_nr, true)
+            }
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'is' requires an enum type, got {}",
+                        subject_type.name(&self.data)
+                    );
+                }
+                return Type::Boolean;
+            }
+        };
+        let mut variant_def_nr = self.data.def_nr(variant_name);
+        if (variant_def_nr == u32::MAX
+            || self.data.def_type(variant_def_nr) != DefType::EnumValue
+            || self.data.def(variant_def_nr).parent != e_nr)
+            && e_nr != u32::MAX
+        {
+            for child in self.data.children_of(e_nr) {
+                if self.data.def(child).name == variant_name {
+                    variant_def_nr = child;
+                    break;
+                }
+            }
+        }
+        if variant_def_nr == u32::MAX || self.data.def_type(variant_def_nr) != DefType::EnumValue {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' is not a variant of {}",
+                    variant_name,
+                    self.data.def(e_nr).name
+                );
+            }
+            return Type::Boolean;
+        }
+        let disc: i32 = if is_struct {
+            let variant_attrs = &self.data.def(variant_def_nr).attributes;
+            if let Some(first) = variant_attrs.first()
+                && let Value::Enum(nr, _) = first.value
+            {
+                i32::from(nr)
+            } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
+                if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                    i32::from(nr)
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
+            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                i32::from(nr)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let subject_clone = code.clone();
+        let disc_expr = if is_struct {
+            let get_enum = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
+            self.cl("OpConvIntFromEnum", &[get_enum])
+        } else {
+            self.cl("OpConvIntFromEnum", std::slice::from_ref(code))
+        };
+        let disc_check = self.cl("OpEqInt", &[disc_expr, Value::Int(disc)]);
+        let is_field_capture = is_struct && self.lexer.peek_token("{") && {
+            let link = self.lexer.link();
+            self.lexer.token("{");
+            let is_capture = self.lexer.has_identifier().is_some()
+                && (self.lexer.peek_token(",") || self.lexer.peek_token("}"));
+            self.lexer.revert(link);
+            is_capture
+        };
+        if is_field_capture {
+            let mut condition: Vec<Value> = Vec::new();
+            let stable_subject = if matches!(subject_clone, Value::Var(_)) {
+                subject_clone
+            } else {
+                let tmp = self.create_unique("is_subj", subject_type);
+                if tmp != u16::MAX {
+                    self.vars.defined(tmp);
+                    condition.push(v_set(tmp, subject_clone));
+                }
+                Value::Var(tmp)
+            };
+            self.lexer.token("{");
+            let mut seen_fields: HashSet<String> = HashSet::new();
+            while let Some(field_name) = self.lexer.has_identifier() {
+                if !self.first_pass && seen_fields.contains(&field_name) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "duplicate field binding '{}' in is-capture",
+                        field_name
+                    );
+                }
+                seen_fields.insert(field_name.clone());
+                let attr_idx_and_type = {
+                    let variant_def = self.data.def(variant_def_nr);
+                    variant_def.attributes[1..]
+                        .iter()
+                        .enumerate()
+                        .find(|(_, a)| a.name == field_name)
+                        .map(|(i, a)| (i + 1, a.typedef.clone()))
+                };
+                match attr_idx_and_type {
+                    Some((attr_idx, field_type)) => {
+                        let field_read =
+                            self.get_field(variant_def_nr, attr_idx, stable_subject.clone());
+                        let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
+                        if v_nr != u16::MAX {
+                            self.vars.defined(v_nr);
+                            self.is_capture_bindings.push(v_set(v_nr, field_read));
+                            let old = self.vars.set_name(&field_name, v_nr);
+                            self.is_capture_aliases.push((field_name.clone(), old));
+                        }
+                    }
+                    None => {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "variant {} has no field '{}'",
+                                self.data.def(variant_def_nr).name,
+                                field_name
+                            );
+                        }
+                    }
+                }
+                if !self.lexer.has_token(",") {
+                    break;
+                }
+            }
+            self.lexer.token("}");
+            if condition.is_empty() {
+                *code = disc_check;
+            } else {
+                condition.push(disc_check);
+                *code = Value::Insert(condition);
+            }
+        } else {
+            *code = disc_check;
+        }
+        Type::Boolean
+    }
+
     pub(crate) fn for_type(&mut self, in_type: &Type) -> Type {
+        // P161: unwrap &vector<T> so the element type resolves correctly.
+        if let Type::RefVar(inner) = in_type {
+            return self.for_type(inner);
+        }
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
             if let Type::Enum(nr, true, _) = t {

@@ -1,0 +1,11 @@
+[package]
+name    = "moros_render"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/moros_render.loft"
+
+[dependencies]
+moros_map = { path = "../moros_map" }
+graphics  = { path = "../graphics" }
