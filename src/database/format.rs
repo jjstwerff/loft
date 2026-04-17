@@ -242,16 +242,13 @@ impl Stores {
     */
     #[must_use]
     pub fn os_arguments(&mut self) -> DbRef {
-        if !self.user_args.is_empty() {
-            let args = self.user_args.clone();
-            return self.text_vector(&args);
-        }
-        #[cfg(not(feature = "wasm"))]
-        let args: Vec<String> = std::env::args_os()
-            .map(|a| a.to_str().unwrap().to_string())
-            .collect();
-        #[cfg(feature = "wasm")]
-        let args: Vec<String> = crate::wasm::host_arguments();
+        // P168: always return the curated script-level args.  The old
+        // `fallback to std::env::args_os()` leaked the binary path +
+        // loft CLI flags when `user_args` was empty (i.e. when the
+        // script was invoked with no arguments) — P131's filter only
+        // ran through the `user_args` path.  `user_args` is the
+        // authoritative list; an empty one is a correct result.
+        let args = self.user_args.clone();
         self.text_vector(&args)
     }
 

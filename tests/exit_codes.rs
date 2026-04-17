@@ -261,6 +261,96 @@ fn p166_content_on_binary_file_warns() {
     );
 }
 
+// ── P168: arguments() leaked argv when zero script-level args ────────────
+//
+// Prior to 2026-04-17, `src/database/format.rs::os_arguments` fell back
+// to `std::env::args_os()` when `user_args` was empty, returning the
+// binary path + loft CLI flags + script path.  P131's filter only ran
+// through the `user_args` path.  Fix: always return `user_args`
+// (an empty vector is a correct result).
+
+/// P168: running a loft script with no script-level args must produce
+/// `arguments()` == [] — no binary path, no `--interpret`, no script path.
+#[test]
+fn p168_arguments_empty_when_no_script_args() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("loft_p168_args_empty.loft");
+    // Script prints each argument; empty vector → no lines, just "count=0".
+    std::fs::write(
+        &path,
+        "fn main() {\n  \
+             a = arguments();\n  \
+             println(\"count={len(a)}\");\n  \
+             for s in a { println(\"  [{s#index}] {s}\"); }\n\
+         }\n",
+    )
+    .expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "expected exit 0; stderr={stderr:?}");
+    assert!(
+        stdout.contains("count=0"),
+        "arguments() should be empty when no script args given; got stdout={stdout:?}"
+    );
+    // Belt-and-suspenders: make sure the binary path isn't smuggled in.
+    assert!(
+        !stdout.contains("target/release/loft"),
+        "arguments() must not leak the loft binary path; got stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("--interpret"),
+        "arguments() must not leak loft CLI flags; got stdout={stdout:?}"
+    );
+}
+
+// ── P169: lambda-suggestion error message accuracy ───────────────────────
+//
+// The `|x: T| { ... }` form is rejected ("Type annotations are not
+// allowed in |x| lambdas").  The suggested alternative used to include
+// `-> <ret>` in the template, misleading users to try `-> void` which
+// fails with "Undefined type void" — loft omits the `->` clause for
+// void returns.  Fix: updated the suggestion in
+// `src/parser/vectors.rs` to make `<ret>` optional and explicitly
+// call out `-> void` as invalid.
+
+/// P169: the "Type annotations not allowed in |x|" diagnostic must
+/// suggest `fn(x: <type>) { ... }` (no mandatory `-> <ret>`) and warn
+/// that `-> void` is not a valid type.
+#[test]
+fn p169_lambda_suggestion_mentions_omitting_return_type() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("loft_p169_lambda_types.loft");
+    std::fs::write(&path, "fn main() {\n  _ = |x: integer| { x * 2 };\n}\n")
+        .expect("write temp script");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&path);
+    assert!(!out.status.success(), "expected parse error");
+    // Note: loft emits parse diagnostics to stdout (not stderr).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The new suggestion shows `fn(x: <type>) { ... }` without mandatory
+    // `-> <ret>`, and calls out `-> void` as invalid.
+    assert!(
+        stdout.contains("fn(x: <type>) { ... }"),
+        "suggestion should be `fn(x: <type>) {{ ... }}`; got stdout={stdout:?}"
+    );
+    assert!(
+        stdout.contains("`-> void` is not a valid type"),
+        "suggestion should warn about `-> void`; got stdout={stdout:?}"
+    );
+}
+
 // ── 6a.18: moros_glb CLI tool end-to-end ──────────────────────────────────
 
 /// Phase 6a.18 — the `moros_glb` CLI example reads a map JSON and writes
@@ -327,11 +417,7 @@ fn moros_glb_cli_end_to_end() {
         "GLB should have at least the 12-byte header; got {} bytes",
         bytes.len()
     );
-    assert_eq!(
-        &bytes[0..4],
-        b"glTF",
-        "GLB should start with 'glTF' magic"
-    );
+    assert_eq!(&bytes[0..4], b"glTF", "GLB should start with 'glTF' magic");
     // Version is bytes 4..8, little-endian u32; must be 2.
     let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
     assert_eq!(version, 2, "GLB version should be 2");

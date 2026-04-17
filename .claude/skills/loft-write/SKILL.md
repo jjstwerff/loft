@@ -390,17 +390,37 @@ Match is an expression — all arms must produce the same type (or void).
 
 ## Higher-order functions
 
+Two lambda syntaxes, each with a clear job:
+
+- **Shorthand `|x|`** — types inferred from the call-site context
+  (e.g. the `map`/`filter` signature).  Use inside higher-order
+  calls where the types flow in.
+- **Explicit `fn(...)`** — full type annotations.  Use when the
+  lambda is stored in a local variable, or anywhere types can't
+  be inferred.  Omit `->` for void-returning lambdas (`-> void`
+  is not valid syntax — there is no `void` type).
+
 ```loft
 fn double(x: integer) -> integer { x * 2 }
 
 doubled  = map(nums, fn double);          // named function ref
-positive = filter(nums, |x| { x > 0 });  // lambda
+positive = filter(nums, |x| { x > 0 });  // inferred lambda
 total    = reduce(nums, 0, |a, b| { a + b });
 
 // Method form on vectors
 doubled  = nums.map(|x| { x * 2 });
 evens    = nums.filter(|x| { x % 2 == 0 });
+
+// Typed lambda stored in a local: use the explicit fn(...) form.
+emit = fn(x: integer, y: integer) { total += x + y; };
+emit(1, 2);
 ```
+
+**Type annotations on `|x|` shorthand are rejected by design
+(see `doc/claude/DESIGN_DECISIONS.md § C62`).**  If you need
+types, switch to `fn(name: <type>) { ... }` — the shorthand
+exists specifically *because* the types are inferred; adding
+annotations collapses the distinction between the two forms.
 
 ---
 

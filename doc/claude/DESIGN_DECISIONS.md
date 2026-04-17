@@ -123,6 +123,49 @@ syntax.  "I wrote it in Rust that way" is not sufficient evidence.
 
 ---
 
+## C62 — No type annotations in `|x|` shorthand lambdas
+
+**Question.** Should loft accept type annotations on shorthand
+`|x|` lambda parameters (e.g. `|x: integer, y: integer| { x + y }`)?
+
+**Evaluation.** Loft already has two orthogonal function syntaxes:
+
+- `|x| { body }` — the **inferred** shorthand, designed for use
+  inside `map` / `filter` / `reduce` and other higher-order calls
+  where the expected parameter types flow in from the call site's
+  lambda hint.  Its whole reason to exist is visual compactness.
+- `fn(x: T, y: T) -> R { body }` — the **explicit** form, with
+  full type annotations and an optional return type (omit `->` for
+  void returns).  Use this when the types can't be inferred — for
+  example, when the lambda is stored in a local variable before it
+  reaches a call site.
+
+Adding types to the shorthand:
+- Collapses the distinction — the two forms now mean exactly the
+  same thing (one with `|` delimiters, one with `fn(` keyword) and
+  each style becomes a coin-flip.
+- Blurs the "where types flow from" mental model: users stop
+  asking "is this inferrable?" and start writing `|x: T|` by
+  habit, defeating the point.
+- Complicates the parser (currently `|x|` is unambiguous with
+  `|` as bitwise-or via lookahead on parameter shape; adding `: T`
+  introduces more disambiguation branches).
+
+Users who want types should use `fn(...)`.  There is no scenario
+where `|x: T| { ... }` is the only viable syntax — if types are
+wanted, `fn(x: T) { ... }` has every capability plus an explicit
+return type when needed.
+
+**Decision.** **Closed — declined.**  Dated 2026-04-17.  The
+compiler rejects `|x: T| { ... }` with an error that points at
+the `fn(x: <type>) { ... }` form (P169 updated the wording).
+
+**Revisit when.** Never, barring a language-level change that
+eliminates the inferred-shorthand / explicit-fn distinction
+altogether (i.e. a fundamental rewrite of the lambda story).
+
+---
+
 ## Adding a new entry
 
 When closing a question, append a new `##` section using the

@@ -492,7 +492,9 @@ impl Parser {
                         self.lexer,
                         Level::Error,
                         "Type annotations are not allowed in |x| lambdas — \
-                         use fn({pname}: <type>) -> <ret> {{ ... }} instead"
+                         use fn({pname}: <type>) {{ ... }} instead \
+                         (add `-> <ret>` only for non-void returns; \
+                         `-> void` is not a valid type)"
                     );
                     // Consume the type token so parsing can continue.
                     let _ = self.lexer.has_identifier();
@@ -530,7 +532,7 @@ impl Parser {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) -> <ret> {{{{ ... }}}}",
+                        "Cannot infer type for lambda parameter '{}'; pass the lambda where the expected type is known, or use fn(name: <type>) {{{{ ... }}}} (add `-> <ret>` only for non-void returns)",
                         a.name
                     );
                 }
