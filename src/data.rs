@@ -75,6 +75,8 @@ pub enum Value {
     Return(Box<Value>),
     /// Break out of the n-th loop
     Break(u16),
+    /// Break out of the n-th loop with a value
+    BreakValue(u16, Box<Value>),
     /// Continue the n-th loop
     Continue(u16),
     /// Conditional statement
@@ -1821,6 +1823,10 @@ impl Data {
             }
             Value::Insert(i) => self.show_insert(write, vars, i, indent),
             Value::Break(v) => write!(write, "break({v})"),
+            Value::BreakValue(v, expr) => {
+                write!(write, "break({v}) ")?;
+                self.show_code(write, vars, expr, indent, false)
+            }
             Value::Continue(v) => write!(write, "continue({v})"),
             Value::If(test, t, f) => {
                 write!(write, "if ")?;

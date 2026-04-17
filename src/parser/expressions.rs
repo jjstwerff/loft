@@ -55,6 +55,7 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Var(_)
         | Value::Line(_)
         | Value::Break(_)
+        | Value::BreakValue(_, _)
         | Value::Continue(_)
         | Value::Keys(_)
         | Value::TupleGet(_, _)
@@ -207,7 +208,20 @@ impl Parser {
             if !self.in_loop {
                 diagnostic!(self.lexer, Level::Error, "Cannot break outside a loop");
             }
-            *val = Value::Break(0);
+            // `break expr` — break with a value.  Desugars to `return expr`
+            // since loft loops are currently void-typed.  Covers the common
+            // find/search pattern where break-with-value exits the function.
+            // TODO: implement for...else for the general case.
+            if !self.lexer.peek_token("}")
+                && !self.lexer.peek_token(";")
+                && !matches!(self.lexer.peek().has, crate::lexer::LexItem::None)
+            {
+                let mut break_val = Value::Null;
+                self.expression(&mut break_val);
+                *val = Value::Return(Box::new(break_val));
+            } else {
+                *val = Value::Break(0);
+            }
             Type::Never
         } else if self.lexer.has_token("return") {
             self.parse_return(val);

@@ -291,6 +291,22 @@ impl Scopes {
                     Value::Insert(ls)
                 }
             }
+            Value::BreakValue(lv, val) => {
+                let scanned_val = self.scan(val, function, data);
+                let mut ls = self.get_free_vars(
+                    function,
+                    data,
+                    self.loops[self.loops.len() - *lv as usize - 1],
+                    &Type::Void,
+                    u16::MAX,
+                );
+                if ls.is_empty() {
+                    Value::BreakValue(*lv, Box::new(scanned_val))
+                } else {
+                    ls.push(Value::BreakValue(*lv, Box::new(scanned_val)));
+                    Value::Insert(ls)
+                }
+            }
             Value::Continue(lv) => {
                 let mut ls = self.get_free_vars(
                     function,

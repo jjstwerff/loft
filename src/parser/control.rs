@@ -10,9 +10,12 @@ use super::{
 
 /// Check if the last meaningful expression in a block is divergent.
 fn is_block_divergent(ops: &[Value]) -> bool {
-    ops.iter()
-        .rev()
-        .any(|v| matches!(v, Value::Return(_) | Value::Break(_) | Value::Continue(_)))
+    ops.iter().rev().any(|v| {
+        matches!(
+            v,
+            Value::Return(_) | Value::Break(_) | Value::BreakValue(_, _) | Value::Continue(_)
+        )
+    })
 }
 
 /// Collected match arm data for enum/struct-enum match expressions.
@@ -176,7 +179,7 @@ impl Parser {
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
                 Value::Return(_) => terminated = Some("return"),
-                Value::Break(_) => terminated = Some("break"),
+                Value::Break(_) | Value::BreakValue(_, _) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
             }

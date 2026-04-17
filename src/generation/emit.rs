@@ -50,6 +50,15 @@ impl Output<'_> {
                     write!(w, "break 'l{}", self.loop_stack[idx])?;
                 }
             }
+            Value::BreakValue(n, val) => {
+                if *n == 0 || self.loop_stack.is_empty() {
+                    write!(w, "break ")?;
+                } else {
+                    let idx = self.loop_stack.len().saturating_sub(*n as usize + 1);
+                    write!(w, "break 'l{} ", self.loop_stack[idx])?;
+                }
+                self.output_code_inner(w, val)?;
+            }
             Value::Continue(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "continue")?;

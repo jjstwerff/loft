@@ -219,3 +219,53 @@ fn test_struct_enum_json_roundtrip_rect() {
   area = match p { Rect { width, height } => width * height, _ => 0.0 };
   assert(area == 24.0, "rect area round-tripped");
 }
+
+// ── break value ─────────────────────────────────────────────────
+
+struct BVItem { bvn: text, bvv: integer not null }
+
+fn find_bv_val(items: vector<BVItem>, target: text) -> integer {
+  for it in items {
+    if it.bvn == target { break it.bvv; }
+  }
+  -1
+}
+
+fn first_bv_even(nums: vector<integer>) -> integer {
+  for n in nums {
+    if n % 2 == 0 { break n; }
+  }
+  0
+}
+
+fn test_break_value_found() {
+  items: vector<BVItem> = [BVItem { bvn: "a", bvv: 10 }, BVItem { bvn: "b", bvv: 20 }];
+  assert(find_bv_val(items, "b") == 20, "found b");
+}
+
+fn test_break_value_not_found() {
+  items: vector<BVItem> = [BVItem { bvn: "a", bvv: 10 }];
+  assert(find_bv_val(items, "x") == -1, "not found");
+}
+
+fn test_break_value_first_even() {
+  assert(first_bv_even([1, 3, 5, 4, 7]) == 4, "first even");
+  assert(first_bv_even([1, 3, 5]) == 0, "no even");
+}
+
+fn find_bv_sqrt(limit: integer) -> integer {
+  x = 0;
+  while x < limit {
+    x = x + 1;
+    if x * x > 50 { break x; }
+  }
+  -1
+}
+
+fn test_break_value_while_found() {
+  assert(find_bv_sqrt(100) == 8, "sqrt > 50 is 8");
+}
+
+fn test_break_value_while_not_found() {
+  assert(find_bv_sqrt(3) == -1, "not reachable in 3");
+}
