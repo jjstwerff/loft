@@ -21,3 +21,31 @@ final-status-level = "slow"
 
 [profile.ci.junit]
 path = "target/nextest/junit.xml"
+
+# P137 / html_wasm test serialisation.
+#
+# Every `--html` invocation writes the generated Rust to a fixed path
+# (`/tmp/loft_html.rs` / `/tmp/loft_html.wasm`) in the loft driver
+# (src/main.rs:1753, 1789).  The in-process `Mutex` in
+# tests/html_wasm.rs::build_lock guards parallel *threads* in one
+# cargo-test process, but nextest spawns a separate process per test
+# — each process has its own `OnceLock`-managed mutex, so the shared
+# temp files race and one test's rustc invocation reads the partially
+# overwritten intermediate source of another.  Symptoms were flaky
+# "loft --html failed for …" and mismatched stdout ("sum=45" vs
+# "total=60") across `p137_html_*` runs.
+#
+# Binding all html_wasm tests to a single-slot test-group serialises
+# them at the nextest dispatcher level, crossing the process boundary
+# the Rust Mutex can't.  The Mutex remains as belt-and-suspenders for
+# plain `cargo test` / developer loops.
+[test-groups]
+html-wasm-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(html_wasm)'
+test-group = 'html-wasm-serial'
+
+[[profile.ci.overrides]]
+filter = 'binary(html_wasm)'
+test-group = 'html-wasm-serial'

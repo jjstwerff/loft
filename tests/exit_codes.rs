@@ -200,6 +200,62 @@ fn w1_1_html_export_produces_file() {
     );
 }
 
+// ── P171: --native mode OpCopyRecord panicked on 0x8000-tagged tp ─────────
+//
+// Root cause: `src/codegen_runtime.rs::OpCopyRecord` was missing the 0x8000
+// "free source after copy" tag-bit masking that the bytecode equivalent
+// (`src/state/io.rs::copy_record`, line 1021) applies.  Any caller setting
+// the tag — e.g. `copy_ref` on a struct-returning call's result — caused
+// an out-of-bounds panic at `Types::size()` (index 0x805B = 32859 into a
+// 124-entry array).  Surfaced by running moros_render's `map_export_glb`
+// path under `--native`.  Fix: port the mask + `remove_claims` call +
+// free-source branch from the bytecode version.
+
+/// P171: compiling and running `isolated_stair.loft` under `--native` must
+/// complete without panic and produce the same output as the interpreter.
+/// Guards a native-mode run through `map_export_glb` → `map_build_scene`
+/// → OpCopyRecord with the 0x8000 tag set.
+#[test]
+fn p171_native_copy_record_high_bit_does_not_panic() {
+    let script = workspace_root().join("lib/moros_render/examples/isolated_stair.loft");
+    // The script writes to a fixed path; remove any stale output first.
+    let _ = std::fs::remove_file("/tmp/isolated_stair.glb");
+    let path_arg = format!("{}/", workspace_root().display());
+    let out = Command::new(loft_bin())
+        .arg("--native")
+        .arg("--path")
+        .arg(&path_arg)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Skip if rustc isn't available or the graphics native rlib isn't
+    // compiled against the current rustc — both are environment issues,
+    // not regressions.
+    if stderr.contains("rustc not found") || stderr.contains("E0514") {
+        eprintln!("SKIP: native toolchain not ready — {stderr}");
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "native run must exit 0; stdout={stdout:?}; stderr={stderr:?}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "native run must not panic; stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("mesh '1': 96 verts, 48 tris"),
+        "output must match interpreter (96-vert default-rise stair); \
+         stdout={stdout:?}"
+    );
+    // The script writes a GLB to /tmp; verify it has the glTF magic.
+    let glb = std::fs::read("/tmp/isolated_stair.glb").expect("GLB written");
+    assert_eq!(&glb[0..4], b"glTF", "GLB magic must be 'glTF'");
+}
+
 // ── P166: file().content() on a binary file must surface a warning ────────
 //
 // Root-cause data-loss bug: prior to the 2026-04-17 fix,
