@@ -261,6 +261,46 @@ fn test_emit_spiral_stair_normals_up() {
   }
 }
 
+// ── Grand arc stair tests (Phase 6a.11) ───────────────────────────
+
+fn test_emit_grand_arc_stair_vertex_count() {
+  ga_mesh = mesh("ga_count");
+  // 6 steps × 15° = 90° arc, arc_radius=5, width=1.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.25, 6, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 24, "6 × 4 = 24 verts");
+  assert(len(ga_mesh.triangles) == 12, "6 × 2 = 12 tris");
+}
+
+fn test_emit_grand_arc_stair_start_angle() {
+  ga_mesh = mesh("ga_start");
+  // Single step at 45° start, 10 unit arc radius, 1 unit width.
+  // i_front vertex at angle 45°, radius 9.5: x = z ≈ 6.72.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 10.0, 1.0, 0.25, 1, 45.0, 45.0);
+  assert(ga_mesh.vertices[0].pos.x > 6.0, "i_front x > 6");
+  assert(ga_mesh.vertices[0].pos.z > 6.0, "i_front z > 6");
+}
+
+fn test_emit_grand_arc_stair_zero_steps() {
+  ga_mesh = mesh("ga_zs");
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.25, 0, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 0, "zero steps → no geometry");
+}
+
+fn test_emit_grand_arc_stair_narrow_arc() {
+  // arc_radius < stair_width/2 → negative inner radius → no-op.
+  ga_mesh = mesh("ga_narrow");
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 0.3, 1.0, 0.25, 6, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 0, "arc too narrow for width → no geometry");
+}
+
+fn test_emit_grand_arc_stair_rise_accumulation() {
+  ga_mesh = mesh("ga_rise");
+  // 4 steps × 0.5 rise → final tread at y = 2.0.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.5, 4, 0.0, 20.0);
+  assert(ga_mesh.vertices[0].pos.y == 0.5, "step 0 tread y = 0.5");
+  assert(ga_mesh.vertices[12].pos.y == 2.0, "step 3 tread y = 2.0");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);
