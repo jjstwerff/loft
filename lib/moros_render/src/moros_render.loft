@@ -886,22 +886,42 @@ fn stair_target_dir(
   best_dir
 }
 
+// Default stair rise when a stair hex has no taller neighbor to
+// target.  12 height units × HEIGHT_SCALE (0.25) = 3.0 world units,
+// roughly one normal-house floor-to-ceiling height.
+pub DEFAULT_STAIR_RISE_UNITS = 12;
+
+// Default stair direction (0..5 = N/NE/SE/S/SW/NW) when there's no
+// taller neighbor to infer from.  North (+r) is a sensible default —
+// the stair ramps "forward" out of the hex.
+pub DEFAULT_STAIR_DIR = 0;
+
 // Emit the stair or flat-surface payload into `target`.  Split out so
 // both the "found existing mesh" and "just created a new one" paths
 // share the same geometry decision.
+//
+// If any adjacent hex is taller, the stair ramps from the current
+// hex's centre to the tallest neighbor's centre.  Otherwise it emits
+// a default-height stair rising `DEFAULT_STAIR_RISE_UNITS` in the
+// `DEFAULT_STAIR_DIR` direction — isolated stair hexes still render
+// as stairs rather than silently collapsing to flat surfaces.
 fn emit_stair_into(
   target: &Mesh, map: Map, q: integer, r: integer, cy: integer, h: integer
 ) {
   sh_dir = stair_target_dir(map, q, r, cy, h);
+  sh_dest_h = 0;
   if sh_dir < 0 {
-    emit_hex_surface(target, q, r, h);
-    return;
+    sh_dir = DEFAULT_STAIR_DIR;
+    sh_dest_h = h + DEFAULT_STAIR_RISE_UNITS;
+  } else {
+    sh_ddq = neighbour_dq(sh_dir);
+    sh_ddr = neighbour_dr(sh_dir);
+    sh_dest_h = map_get_hex(map, q + sh_ddq, r + sh_ddr, cy).h_height;
   }
   sh_dq = neighbour_dq(sh_dir);
   sh_dr = neighbour_dr(sh_dir);
-  sh_nh = map_get_hex(map, q + sh_dq, r + sh_dr, cy).h_height;
   sh_p_low = hex_to_world(q, r, h);
-  sh_p_high = hex_to_world(q + sh_dq, r + sh_dr, sh_nh);
+  sh_p_high = hex_to_world(q + sh_dq, r + sh_dr, sh_dest_h);
   sh_steps = stair_step_count(sh_p_low.y, sh_p_high.y);
   emit_linear_stair(target, sh_p_low, sh_p_high, HEX_WIDTH * 0.6, sh_steps);
 }

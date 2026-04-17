@@ -1071,19 +1071,20 @@ fn md_stair(n: text) -> MaterialDef {
   }
 }
 
-fn test_stair_dispatch_no_taller_neighbor_is_flat() {
+fn test_stair_dispatch_no_taller_neighbor_default_rise() {
   stn_m = map_empty();
   stn_m.m_material_palette += [md_stair("s")];
   map_paint_material(stn_m, 0, 0, 0, 1);
-  // No other hexes painted — all neighbors default to height 0,
-  // same as the stair hex itself → no taller neighbor → flat.
+  // No other hexes painted — stair falls back to a
+  // DEFAULT_STAIR_RISE_UNITS rise (12 units = 3.0 world units,
+  // one house-floor height).  stair_step_count(0, 3.0) = 12 steps.
+  // 12 steps × 8 verts per step = 96 verts.
   stn_ms = build_hex_meshes(stn_m);
   stn_verts = 0;
   for stm in stn_ms {
     if stm.name == "1" { stn_verts = len(stm.vertices); }
   }
-  // Flat hex surface = 7 verts (centre + 6 corners).
-  assert(stn_verts == 7, "no taller neighbor → flat surface (7 verts), got {stn_verts}");
+  assert(stn_verts == 96, "default-rise stair (12 steps × 8 verts = 96), got {stn_verts}");
 }
 
 fn test_stair_dispatch_taller_neighbor_emits_stair() {
