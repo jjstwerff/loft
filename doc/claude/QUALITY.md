@@ -476,13 +476,157 @@ optimisations, not register-width specific.  Tests:
 **C54.D — Rust-style literal suffixes.**  Closed by decision
 ([DESIGN_DECISIONS.md § C54.D](DESIGN_DECISIONS.md#c54d--rust-style-numeric-literal-suffixes)).
 
+**C54.G — Checked arithmetic across all backends (semantics fix).**
+Lands first, cheap, independent of A/B/C/E.  Addresses the *semantic*
+half of the C54 bite — silent-null from overflow or div/mod by zero
+— without any schema change, `.loftc` bump, or migration tool.
+
+*What changes.*  Interpreter and native codegen both emit checked
+arithmetic:
+
+- `Op{Add,Sub,Mul}{Int,Long}` use `checked_*`; overflow → runtime
+  error, not wrap-to-`MIN`.  Cost in the interpreter is sub-10 %:
+  one branch on top of 10–30 cycles of opcode dispatch in
+  `src/fill.rs`, well-predicted on non-overflow.
+- `OpDivInt` / `OpDivLong` / `OpMod*`: `a / 0` and `a % 0` → runtime
+  error, not sentinel.  Today they silently return `i32::MIN` /
+  `i64::MIN`.
+- Native codegen: emit `checked_*` + explicit div-by-zero guard.
+  Same semantics as interpreter; unified user-visible behaviour.
+
+*Why land before C54.A.*  Once C54.G is in, the only way arithmetic
+lands on `MIN` is an explicit literal — at which point it means what
+the user wrote.  The sentinel trap's *silent* failure mode is gone.
+C54.A's remaining value becomes pure headroom (timestamps, bitmasks,
+checksums on i64), no longer a safety argument.  Splitting the
+semantics fix from the width change makes each independently
+reviewable and keeps the `.loftc` / migration-tool risk isolated.
+
+*Why this is a uniform fix, not native-only.*  Rust's `checked_*` is
+one instruction + branch on both i32 and i64, on every target loft
+runs on.  There is no host width for which "trap on overflow" is
+more expensive than "widen to i64".  The interpreter should adopt
+the same rule regardless of what native codegen does on 32-bit
+small boards.
+
+*What this does not do.*  Does not change storage layout.  Does not
+touch `i32::MIN`-as-null in the Stores layer (`src/store.rs`,
+`get_int` / `set_int`, `.loftc` format) — that remains C54.A's
+problem on desktop and the tagged-null question for C54.F on small
+boards.
+
+Tests (`#[ignore]`'d initially): `c54g_checked_add_traps_on_overflow`,
+`c54g_checked_mul_traps_on_overflow`, `c54g_div_by_zero_traps`,
+`c54g_mod_by_zero_traps`, `c54g_interp_and_native_agree_on_trap`,
+`c54g_explicit_i32_min_literal_preserved`.
+
+**C54.G′ — Null-on-overflow (design alternative to C54.G).**  Instead
+of trapping, overflow and div/mod by zero produce a proper null — a
+typed, type-visible null that composes with loft's existing null
+handling (`??`, `?? return` / C56, `not null` contracts).  Program
+keeps running; wrong results are never produced because the null is
+caught either at compile time or when it hits a `not null` boundary.
+
+*Comparison with C54.G.*
+
+| | Silent sentinel (today) | Trap (C54.G) | Null-on-overflow (C54.G′) |
+|---|---|---|---|
+| Wrong results | yes | no | no |
+| Program halts | debug only | always | only at `not null` boundary |
+| Error location | far from cause | at operation | at the `not null` contract |
+| Composes with `??` / `?? return` | no | no — trap fires first | **yes** |
+
+The `??` composition is the decisive win.  `x = a * b ?? 0` does what
+the user wrote under G′; under G the trap fires before `??` runs.
+
+*Prerequisite — audit loft's `not null` enforcement.*  G′ is only as
+safe as the `not null` contract.  Before adopting, confirm:
+
+1. Every write of a nullable into a `not null` slot is either a
+   runtime error or requires explicit `?? <default>` / `?? return`
+   at the write site (struct field writes, function parameters,
+   return-type narrowing, array-index / store-key coercion).
+2. Compiler emits a diagnostic when overflow-producing arithmetic
+   flows into a `not null` slot without intervening null handling.
+   A warning is the minimum; an error is better.
+3. No silent coercion path exists where a nullable integer reaches a
+   non-null context without a checked narrowing op.
+
+If the audit finds holes, ship C54.G (trap) as the safe default and
+tighten the null contract separately.  Trap → null-on-overflow is a
+backward-compatible relaxation later; null → trap is breaking.
+
+*Secondary alternatives considered and rejected.*
+
+- **Saturating arithmetic** (`saturating_add(MAX, 1) = MAX`) — fails
+  "no incorrect results" test.  The clamped value is wrong and the
+  program uses it as if correct.  Rejected.
+- **Auto-widening at the type level** (`i32 + i32 → i64`, Python /
+  BigInt style) — C54.A is a capped instance (widen once to i64,
+  stop there).  Reduces overflow *probability* but does not
+  eliminate the three-way choice when the i64 range is exceeded.
+- **Poison-value propagation** (NaN-style non-null "invalid") —
+  functionally equivalent to null-on-overflow in loft, since null
+  already plays this role.  No separate design needed.
+
+Tests (`#[ignore]`'d until G′ is adopted): `c54gp_overflow_returns_null`,
+`c54gp_div_by_zero_returns_null`, `c54gp_null_result_coalesces_with_default`,
+`c54gp_null_into_not_null_slot_errors`, `c54gp_compile_warning_on_unhandled_overflow`,
+`c54gp_null_flow_audit_closes_all_holes`.
+
+*Status.*  Design alternative, not yet adopted.  Decision gated on
+the null-contract audit.
+
+**C54.F — Native 32-bit strict-arith path (small boards).**  Deferred
+design note; keeps a door open for Pi Zero / ARMv6-v7 / RV32 SBCs
+where i64 arithmetic is 2–4× slower per op and doubles storage for
+unbounded `integer` fields.  Builds on C54.G — the trap semantics
+are universal; C54.F only adds register-width and storage choices
+for 32-bit native targets.
+
+*Mitigation shape for `--target 32bit-native` (or equivalent cfg
+flag).*  With C54.G already in place, the incremental native-only
+changes are:
+
+- Keep i32 registers for `integer` locals and fields that are
+  declared `i32`, `not null`, or range-proven to fit.  No i64
+  promotion in the generated Rust.
+- C54.G's `checked_*` on i32: 1–2 extra instructions per op
+  (hardware V-flag on ARM; explicit compare on RV32).  Still far
+  cheaper than emulated i64.
+- Nullable storage: pick one — tagged `(i32 value, 1 null bit)`
+  inline or parallel bitmap, *or* promote nullable-integer storage
+  to i64 but keep registers i32.  `integer not null` fields stay a
+  clean 4 bytes either way.
+
+*Dependency on C54.E.*  C54.E deletes the `Op*Long` duplicate family
+to reclaim opcodes for O1 superinstructions.  If C54.F is taken
+seriously, either (a) preserve a width-specialised op family in
+native codegen only (bytecode stays i64-unified), or (b) reintroduce
+width specialisation later through the O1 peephole pass.  Flagging
+here so C54.E does not foreclose the option by accident.
+
+*Status.*  **Not scheduled.**  Revisit when: a real user deploys
+loft to a 32-bit SBC and reports measurable arithmetic-heavy
+slowdown, or when native code generation is stable enough to carry
+a second backend configuration.  Tests (all `#[ignore]` until
+scheduled): `c54f_nullable_tag_roundtrip`,
+`c54f_not_null_integer_stays_4_bytes`,
+`c54f_32bit_codegen_no_i64_ops`, `c54f_checked_i32_uses_v_flag_on_arm`.
+
 ### Ordering
 
-1. **C54.A** — runtime/schema widening (must land first).
-2. **C54.C** — `u32` type (depends on A's narrow-store machinery).
-3. **C54.B** — sweep stdlib/tests, deprecation warnings for users.
-4. **C54.E** — delete duplicate opcodes (requires B's sweep first or
-   build cascades).
+1. **C54.G** — checked arithmetic everywhere.  Lands first, cheap,
+   no schema change.  Closes the silent-null bite independently.
+2. **C54.A** — runtime/schema widening (now pure-headroom, no longer
+   safety-critical after G).
+3. **C54.C** — `u32` type (depends on A's narrow-store machinery).
+4. **C54.B** — sweep stdlib/tests, deprecation warnings for users.
+5. **C54.E** — delete duplicate opcodes (requires B's sweep first or
+   build cascades).  **Before landing, confirm C54.F's width-spec
+   path can be reintroduced through O1 peephole if needed.**
+6. **C54.F** — deferred; native 32-bit strict-arith path.  No
+   schedule; re-evaluate when a concrete small-board target appears.
 
 ### Migration cheat-sheet for users
 

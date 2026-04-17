@@ -227,6 +227,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PERFORMANCE.md](doc/claude/PERFORMANCE.md) | Benchmarks, optimisation plans, string alloc, const data, block copy analysis |
 | [PLANNING.md](doc/claude/PLANNING.md) | Priority-ordered enhancement backlog |
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
+| [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
+| [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
