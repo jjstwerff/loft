@@ -6,3 +6,4 @@
 use widgets;
 use panel;
 use font;
+use editor_click;

@@ -155,3 +155,46 @@ pub fn input_from_keys(
 
   out
 }
+
+// ── Edge detection (Step 12) ─────────────────────────────────────
+// The host typically samples held-key state each frame.  The
+// integrator needs the PRESSED subset (edges) for tool select /
+// toggles.  `keys_pressed_since` diffs two held snapshots and
+// returns keys that newly went down this frame.
+pub fn keys_pressed_since(
+  prev_held: vector<text>,
+  curr_held: vector<text>,
+) -> vector<text> {
+  kps_out: vector<text> = [];
+  for kp_k in curr_held {
+    kp_found = false;
+    for kp_p in prev_held {
+      if kp_p == kp_k { kp_found = true; }
+    }
+    if !kp_found {
+      kps_out += [kp_k];
+    }
+  }
+  kps_out
+}
+
+// Convenience: package the full per-frame decode from two
+// consecutive held snapshots.  The host passes (prev_held, held,
+// mouse, ctrl) — `keys_pressed_since` derives the edge set, then
+// `input_from_keys` builds the final `InputState`.
+pub fn input_from_snapshot(
+  prev_held:    vector<text>,
+  curr_held:    vector<text>,
+  mx:           integer, my:       integer,
+  mouse_dx:     integer, mouse_dy: integer,
+  wheel:        integer,
+  clicked:      boolean, rclicked: boolean,
+  ctrl_pressed: boolean,
+) -> InputState {
+  ifs_pressed = keys_pressed_since(prev_held, curr_held);
+  input_from_keys(
+    curr_held, ifs_pressed,
+    mx, my, mouse_dx, mouse_dy, wheel,
+    clicked, rclicked, ctrl_pressed,
+  )
+}

@@ -1,0 +1,132 @@
+// Step 11 — editor_click tests.  Exercise panel-side delegation and
+// world-click → tool_apply + undo flow without touching rendering.
+use moros_ui;
+use moros_sim;
+use moros_editor;
+use moros_map;
+use moros_render;
+use graphics;
+
+fn make_flat(cols: integer, rows: integer) -> Map {
+  fm = map_empty();
+  for fq in 0..cols {
+    for fr in 0..rows {
+      map_set_height(fm, fq, fr, 0, 0);
+    }
+  }
+  fm
+}
+
+fn build() -> EditorState {
+  bs = editor_default();
+  bs.es_map = make_flat(10, 10);
+  bs.es_player.pl_pos = vec3(0.0, 0.0, 0.0);
+  bs.es_player.pl_on_ground = true;
+  bs
+}
+
+fn build_panel(tools: ToolState) -> Panel {
+  panel_build(tools, 1280, 720, 0, 0, 0, 0.0, 60)
+}
+
+// ── Panel-side delegation ────────────────────────────────────────
+
+fn test_click_toolbar_button_selects_tool() {
+  tp = build();
+  tpp = build_panel(tp.es_tools);
+  // Button 1 (RaiseHex) at (8..224, 44..76).
+  hit = editor_click(tp, tpp, 20, 50);
+  assert(hit is UhToolButton, "toolbar hit");
+  assert(tp.es_tools.ts_current == ToolKind.RaiseHex, "current now Raise");
+  // World unchanged (no tool_apply on panel click).
+  assert(map_get_hex(tp.es_map, 0, 0, 0).h_height == 0, "height untouched");
+  assert(undo_depth(tp.es_undo) == 0, "no undo entry from panel click");
+}
+
+fn test_click_palette_item_updates_state() {
+  ti = build();
+  ti.es_tools.ts_current = ToolKind.RaiseHex;
+  tip = build_panel(ti.es_tools);
+  // Height-step item 3 (step=8) at y ≈ 234 + 3*20 = 294.
+  hit = editor_click(ti, tip, 50, 294);
+  assert(hit is UhListItem, "list item hit");
+  assert(ti.es_tools.ts_height_step == 8, "step 8 selected");
+}
+
+// ── World clicks trigger tool_apply + undo ──────────────────────
+
+fn test_world_click_with_none_tool_is_noop() {
+  tn = build();
+  // Default tool is None.
+  tnp = build_panel(tn.es_tools);
+  hit = editor_click(tn, tnp, 800, 400);
+  assert(hit is UhWorld, "world hit");
+  assert(undo_depth(tn.es_undo) == 0, "None tool skips undo push");
+  assert(map_get_hex(tn.es_map, 0, 0, 0).h_height == 0, "no edit");
+}
+
+fn test_world_click_raise_edits_under_avatar() {
+  tr = build();
+  tr.es_tools.ts_current = ToolKind.RaiseHex;
+  tr.es_tools.ts_height_step = 4;
+  // Avatar at (0, 0) → hex (0, 0).
+  trp = build_panel(tr.es_tools);
+  hit = editor_click(tr, trp, 900, 400);
+  assert(hit is UhWorld, "world hit");
+  assert(map_get_hex(tr.es_map, 0, 0, 0).h_height == 4, "raised +4");
+  assert(undo_depth(tr.es_undo) == 1, "one logical undo entry");
+  assert(!in_batch(tr.es_undo), "batch closed");
+}
+
+fn test_world_click_lower_clamps_at_zero() {
+  tl = build();
+  tl.es_tools.ts_current = ToolKind.LowerHex;
+  tl.es_tools.ts_height_step = 4;
+  tlp = build_panel(tl.es_tools);
+  editor_click(tl, tlp, 900, 400);
+  assert(map_get_hex(tl.es_map, 0, 0, 0).h_height == 0, "clamp at 0");
+}
+
+fn test_world_click_wall_places_edge() {
+  tw = build();
+  tw.es_tools.ts_current = ToolKind.PlaceWall;
+  tw.es_tools.ts_selected_wall = 1;
+  tw.es_tools.ts_wall_direction = 0;   // N
+  twp = build_panel(tw.es_tools);
+  editor_click(tw, twp, 900, 400);
+  assert(map_get_hex(tw.es_map, 0, 0, 0).h_wall_n == 1, "wall N = 1");
+}
+
+// ── Undo after world click restores the edit ────────────────────
+
+fn test_world_click_then_undo_round_trip() {
+  tu = build();
+  tu.es_tools.ts_current = ToolKind.RaiseHex;
+  tu.es_tools.ts_height_step = 2;
+  tup = build_panel(tu.es_tools);
+  editor_click(tu, tup, 900, 400);
+  assert(map_get_hex(tu.es_map, 0, 0, 0).h_height == 2, "raised +2");
+
+  // Simulate an undo via editor_tick (which calls undo_pop).
+  tui = input_empty();
+  tui.in_undo = true;
+  editor_tick(tu, tui, 1.0 / 60.0);
+  assert(map_get_hex(tu.es_map, 0, 0, 0).h_height == 0, "restored");
+  assert(undo_depth(tu.es_undo) == 0, "drained");
+}
+
+// ── Avatar position follows, not mouse ──────────────────────────
+
+fn test_world_click_edits_under_avatar_not_mouse() {
+  tav = build();
+  tav.es_tools.ts_current = ToolKind.RaiseHex;
+  tav.es_tools.ts_height_step = 1;
+  // Move avatar to hex (3, 2).
+  tav_pos = hex_to_world(3, 2, 0);
+  tav.es_player.pl_pos = vec3(tav_pos.x, 0.0, tav_pos.z);
+  tavp = build_panel(tav.es_tools);
+  // Click anywhere in world region; should edit avatar's hex, not (0, 0).
+  editor_click(tav, tavp, 1000, 500);
+  assert(map_get_hex(tav.es_map, 3, 2, 0).h_height == 1, "edited at avatar hex");
+  assert(map_get_hex(tav.es_map, 0, 0, 0).h_height == 0, "origin untouched");
+}
