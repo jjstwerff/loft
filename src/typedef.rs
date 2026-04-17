@@ -87,22 +87,17 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
     }
 }
 
-pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
-    actual_types_deferred(data, database, lexer, start_def, None);
-}
-
-/// Variant of [`actual_types`] that can defer "Undefined type" errors for
-/// `DefType::Unknown` stubs.  When `defer_unknown` is `Some`, every
-/// encountered Unknown stub is recorded as `(source, def_nr, position)` in
-/// the passed-in vec instead of being emitted as a diagnostic.
+/// Resolve forward type references accumulated during parsing.  When
+/// `defer_unknown` is `Some`, every `DefType::Unknown` stub is recorded
+/// as `(source, def_nr, position)` in the passed-in vec instead of being
+/// emitted as a diagnostic — the caller is then responsible for either
+/// patching the stub (via `Data::rewrite_unknown_refs`) or surfacing the
+/// final "Undefined type" error later.
 ///
-/// Used by Phase B of the P173 package-mode driver: cyclic intra-package
-/// `use` declarations legitimately produce Unknown stubs for cross-file
-/// types that will be resolved by Phase C's import propagation.  Deferring
-/// the error lets Phase C patch the stubs (via `Data::rewrite_unknown_refs`)
-/// before any "Undefined type" is surfaced.
-///
-/// Legacy callers pass `None` and see the original behavior unchanged.
+/// The P173 package-mode driver uses this: cyclic intra-package `use`
+/// declarations legitimately produce Unknown stubs for cross-file types
+/// that will be resolved by `resolve_deferred_unknowns` after both sides
+/// of the cycle have registered their definitions.
 pub fn actual_types_deferred(
     data: &mut Data,
     database: &mut Stores,

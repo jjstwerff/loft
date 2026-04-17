@@ -32,6 +32,7 @@ function.
 // reverse_iterator) that each track a distinct parse phase or context.  Combining them into
 // an enum or state machine would add complexity without benefit.
 /// Whether a `use lib::...` statement imports all names or a specific subset.
+#[derive(Clone)]
 enum ImportSpec {
     Wildcard,
     Names(Vec<String>),
@@ -39,6 +40,7 @@ enum ImportSpec {
 
 /// A pending import queued when `use lib::spec` is parsed.
 /// Applied after all definitions in `for_source` are fully parsed.
+#[derive(Clone)]
 struct PendingImport {
     for_source: u16,
     lib_source: u16,
@@ -108,6 +110,16 @@ pub struct Parser {
     line: u32,
     /// Wildcard and selective imports waiting to be applied once the target source is fully parsed.
     pending_imports: Vec<PendingImport>,
+    /// P173: every (for_source, lib_source, ImportSpec) pair that
+    /// `apply_pending_imports` applied during this parse pass.  Retained so
+    /// that `resolve_deferred_unknowns` can re-apply them with overwrite
+    /// semantics after cyclic `use` declarations have left Unknown stubs.
+    applied_imports: Vec<PendingImport>,
+    /// P173: `DefType::Unknown` stubs collected by `actual_types_deferred`
+    /// during each `parse_file` run.  Resolved (or finally reported) by
+    /// `resolve_deferred_unknowns` after all files in the recursion have
+    /// had their pass-1 / pass-2 definitions registered.
+    deferred_unknown: Vec<(u16, u32, Position)>,
     /// Whether the most recently parsed expression is from a `not null` field access.
     /// Set by `get_field`; consumed by `handle_operator` to warn on redundant null checks.
     expr_not_null: bool,
@@ -304,6 +316,8 @@ impl Parser {
             pending_native_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
             pending_imports: Vec::new(),
+            applied_imports: Vec::new(),
+            deferred_unknown: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
@@ -340,21 +354,107 @@ impl Parser {
         self.lexer.switch(filename);
         self.first_pass = true;
         self.pending_imports.clear();
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
             self.reverse_iterator = false;
+            self.applied_imports.clear();
+            self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);
             self.parse_file();
+            self.resolve_deferred_unknowns();
         }
         self.backfill_native_symbol_crates();
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// P173: after `parse_file` has run (and all `todo_files` have drained,
+    /// so every file in the recursion has had its definitions registered),
+    /// reconcile any `DefType::Unknown` stubs that `actual_types_deferred`
+    /// collected during parsing.
+    ///
+    /// The cyclic `use` case: file B references a type `Player` defined in
+    /// file A, but B's `use A;` fires while A is suspended mid-parse — so
+    /// B's body parsed with `Player` as a stub.  After the full recursion
+    /// returns, A's `Player` is registered; Phase C re-applies imports with
+    /// overwrite semantics (replacing B's stub binding with A's real def),
+    /// then rewrites every `Type::Unknown(stub_nr)` occurrence to the real
+    /// resolved type.
+    ///
+    /// Stubs that remain unresolved after this reconciliation surface as
+    /// the original "Undefined type" error at the stored `Position`.
+    fn resolve_deferred_unknowns(&mut self) {
+        // Step 1: re-apply all previously-applied imports with overwrite
+        // semantics.  This replaces any target-source `Unknown` stub with
+        // the now-registered real def in the library source.
+        let applied = std::mem::take(&mut self.applied_imports);
+        for pi in &applied {
+            match &pi.spec {
+                ImportSpec::Wildcard => {
+                    self.data.import_all_overwrite(pi.lib_source, pi.for_source);
+                }
+                ImportSpec::Names(names) => {
+                    for name in names {
+                        self.data
+                            .import_name_overwrite(pi.lib_source, pi.for_source, name);
+                    }
+                }
+            }
+        }
+        // Keep them on the list for any later pass (pass 2 re-populates).
+        self.applied_imports = applied;
+
+        // Step 2: for each deferred stub, resolve via the post-import
+        // def binding.  Three outcomes per stub:
+        //
+        //  (a) The stub def got UPGRADED in-place to a real type (most
+        //      common — `parse_struct` does this when it finds an
+        //      existing stub by name).  `def(stub_nr).def_type` is no
+        //      longer `Unknown`; call `rewrite_unknown_refs(stub, stub)`
+        //      so that `Type::Unknown(stub)` references resolve to
+        //      `def(stub).returned`.
+        //
+        //  (b) The stub's source has a DIFFERENT real def (e.g. when
+        //      `import_all_overwrite` just routed the source-level
+        //      binding to a real def from another source).  Rewrite
+        //      Unknown references to point at that real def.
+        //
+        //  (c) Still unresolved — emit the "Undefined type" error at
+        //      the stored `Position`.
+        let deferred = std::mem::take(&mut self.deferred_unknown);
+        for (source, stub_nr, pos) in deferred {
+            let stub_name = self.data.def(stub_nr).name.clone();
+            // Case (a): stub upgraded in place
+            if !matches!(self.data.def(stub_nr).def_type, DefType::Unknown) {
+                self.data.rewrite_unknown_refs(stub_nr, stub_nr);
+                continue;
+            }
+            // Case (b): lookup via post-import source binding
+            let resolved_nr = self.data.source_nr(source, &stub_name);
+            if resolved_nr != u32::MAX
+                && resolved_nr != stub_nr
+                && !matches!(self.data.def(resolved_nr).def_type, DefType::Unknown)
+            {
+                self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
+                continue;
+            }
+            // Case (c): emit the deferred error
+            let msg = if stub_name == "string" {
+                "Undefined type 'string' — did you mean 'text'?".to_string()
+            } else {
+                format!("Undefined type {stub_name}")
+            };
+            self.lexer.pos_diagnostic(Level::Error, &pos, &msg);
+        }
     }
 
     /// After both parse passes, every `#native "<sym>"` annotation should map
@@ -393,17 +493,23 @@ impl Parser {
         self.vars.logging = false;
         self.first_pass = true;
         self.pending_imports.clear();
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.lexer.parse_string(content, filename);
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            self.applied_imports.clear();
+            self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.parse_string(content, filename);
             self.parse_file();
+            self.resolve_deferred_unknowns();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -480,19 +586,25 @@ impl Parser {
         self.default = false;
         self.vars.logging = logging;
         self.lexer.parse_string(text, filename);
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
             return;
         }
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2231,11 +2343,15 @@ impl Parser {
                 diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
             }
         }
-        typedef::actual_types(
+        // P173: defer `Undefined type` errors to `resolve_deferred_unknowns`
+        // so forward-references across cyclic intra-package `use` declarations
+        // get a chance to resolve once both sides of the cycle are registered.
+        typedef::actual_types_deferred(
             &mut self.data,
             &mut self.database,
             &mut self.lexer,
             start_def,
+            Some(&mut self.deferred_unknown),
         );
         typedef::fill_all(
             &mut self.data,
@@ -2272,6 +2388,10 @@ impl Parser {
         }
         self.pending_imports = remaining;
         for pi in to_apply {
+            // P173: retain a copy so `resolve_deferred_unknowns` can re-apply
+            // with overwrite semantics after a cyclic `use` has finished
+            // registering the partner file's definitions.
+            self.applied_imports.push(pi.clone());
             match pi.spec {
                 ImportSpec::Wildcard => {
                     self.data.import_all(pi.lib_source, cur);
