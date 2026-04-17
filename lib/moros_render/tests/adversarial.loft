@@ -1,0 +1,160 @@
+// Adversarial probes for moros_render.  Each test here stacks a
+// feature the conservative code avoided (unary minus on float,
+// closure-over-&Mesh, iterator over vector<Vec3>, `is Variant { f }`
+// dispatch, match-on-struct-enum returning a value, deep chaining on
+// vector element fields).  If anything fails, the minimal reproducer
+// is exactly the test body.
+use moros_render;
+
+// ── Probe 1: unary `-f` on float in vertex coordinates ────────────
+
+fn test_adv_unary_neg_float_literal() {
+  // Unary minus on a literal float.
+  f_adv = 1.5;
+  p = vec3(-f_adv, 0.0, -f_adv);
+  assert(p.x == -1.5, "unary neg variable: {p.x}");
+  assert(p.z == -1.5, "unary neg variable z");
+}
+
+fn test_adv_unary_neg_in_arithmetic() {
+  a_adv = 2.0;
+  b_adv = 3.0;
+  r_adv = -a_adv * b_adv;
+  assert(r_adv == -6.0, "-a * b = {r_adv}");
+}
+
+fn test_adv_unary_neg_self_assign() {
+  d_adv = 2.5;
+  d_adv = -d_adv;
+  assert(d_adv == -2.5, "d = -d");
+}
+
+// ── Probe 2: struct-enum variant dispatch via `is Variant { f }` ──
+
+enum StairKind {
+  Linear { from: Vec3, to: Vec3, width: float not null, steps: integer not null },
+  Spiral {
+    centre:    Vec3,
+    inner_r:   float not null,
+    outer_r:   float not null,
+    rise:      float not null,
+    steps:     integer not null,
+    angle_deg: float not null
+  }
+}
+
+fn emit_any_stair(m: &Mesh, k: StairKind) {
+  if k is Linear { from, to, width, steps } {
+    emit_linear_stair(m, from, to, width, steps);
+    return;
+  }
+  if k is Spiral { centre, inner_r, outer_r, rise, steps, angle_deg } {
+    emit_spiral_stair(m, centre, inner_r, outer_r, rise, steps, angle_deg);
+  }
+}
+
+fn test_adv_is_variant_linear_dispatch() {
+  m_adv1 = mesh("adv_lin");
+  // P165 workaround: drop the `: StairKind` annotation.
+  k_adv1 = Linear {
+    from:  vec3(0.0, 0.0, 0.0),
+    to:    vec3(2.0, 1.0, 0.0),
+    width: 1.0,
+    steps: 4,
+  };
+  emit_any_stair(m_adv1, k_adv1);
+  // 4 steps × 8 verts = 32
+  assert(len(m_adv1.vertices) == 32, "linear dispatch vert count");
+}
+
+fn test_adv_is_variant_spiral_dispatch() {
+  m_adv2 = mesh("adv_sp");
+  k_adv2 = Spiral {
+    centre:    vec3(0.0, 0.0, 0.0),
+    inner_r:   0.5,
+    outer_r:   1.0,
+    rise:      0.25,
+    steps:     12,
+    angle_deg: 30.0,
+  };
+  emit_any_stair(m_adv2, k_adv2);
+  // 12 steps × 4 verts = 48
+  assert(len(m_adv2.vertices) == 48, "spiral dispatch vert count");
+}
+
+// ── Probe 3: lambda capturing `&Mesh`, mutating it ────────────────
+
+fn test_adv_lambda_mutates_mesh() {
+  m_adv3 = mesh("adv_lam");
+  up_adv = vec3(0.0, 1.0, 0.0);
+  uv_adv = vec2(0.0, 0.0);
+  // Lambdas stored in locals require `fn(..) -> ..` syntax
+  // (standalone lambdas have no call-site to pin param types).
+  emit_at = fn(x: float, y: float, z: float) {
+    m_adv3.vertices += [vertex(vec3(x, y, z), up_adv, uv_adv)];
+  };
+  emit_at(0.0, 0.0, 0.0);
+  emit_at(1.0, 0.0, 0.0);
+  emit_at(0.0, 1.0, 0.0);
+  assert(len(m_adv3.vertices) == 3, "closure emitted 3 verts");
+}
+
+// ── Probe 4: iterator over vector<Vec3> (struct elements) ─────────
+
+fn test_adv_iter_vec3_corners() {
+  m_adv4 = mesh("adv_corners");
+  corners_adv: vector<Vec3> = [
+    vec3(0.0, 0.0, 0.0),
+    vec3(1.0, 0.0, 0.0),
+    vec3(1.0, 1.0, 0.0),
+    vec3(0.0, 1.0, 0.0),
+  ];
+  up_adv4 = vec3(0.0, 1.0, 0.0);
+  for c_adv in corners_adv {
+    m_adv4.vertices += [vertex(c_adv, up_adv4, vec2(0.0, 0.0))];
+  }
+  assert(len(m_adv4.vertices) == 4, "iter emitted 4 verts");
+}
+
+// ── Probe 5: match-on-struct-enum returning an integer ────────────
+
+fn adv_expected_verts(k: StairKind) -> integer {
+  match k {
+    Linear { from, to, width, steps } => steps * 8,
+    Spiral { centre, inner_r, outer_r, rise, steps, angle_deg } => steps * 4,
+  }
+}
+
+fn test_adv_match_returning_integer() {
+  k_adv5a = Linear {
+    from:  vec3(0.0, 0.0, 0.0),
+    to:    vec3(2.0, 1.0, 0.0),
+    width: 1.0,
+    steps: 4,
+  };
+  k_adv5b = Spiral {
+    centre:    vec3(0.0, 0.0, 0.0),
+    inner_r:   0.5,
+    outer_r:   1.0,
+    rise:      0.25,
+    steps:     12,
+    angle_deg: 30.0,
+  };
+  assert(adv_expected_verts(k_adv5a) == 32, "match linear");
+  assert(adv_expected_verts(k_adv5b) == 48, "match spiral");
+}
+
+// ── Probe 6: deep chaining on vector element fields (P105 risk) ───
+
+fn test_adv_deep_chain_vector_element() {
+  m_adv6 = mesh("adv_chain");
+  emit_hex_surface(m_adv6, 0, 0, 0);
+  // Read nested field: mesh.vertices[0].pos.x (two levels of deref
+  // through a vector element).  P105 historically broke on this.
+  x0 = m_adv6.vertices[0].pos.x;
+  y0 = m_adv6.vertices[0].pos.y;
+  z0 = m_adv6.vertices[0].pos.z;
+  assert(x0 == 0.0, "deep chain x");
+  assert(y0 == 0.0, "deep chain y");
+  assert(z0 == 0.0, "deep chain z");
+}
