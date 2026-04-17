@@ -9024,6 +9024,26 @@ fn p157_native_refvar_forwarding_with_preeval() {
     let _ = std::fs::remove_file(&src_path);
 }
 
+/// P158 regression guard — trailing comma after the last field in a
+/// struct-enum variant used to trigger "Expect attribute".  Regular
+/// structs accepted trailing commas; enum variants didn't.  Fix:
+/// added `|| self.lexer.peek_token("}")` to the break condition in
+/// `parse_enum_values`, mirroring `parse_struct`.
+#[test]
+fn p158_trailing_comma_enum_variant() {
+    code!(
+        "enum K {
+    Alpha { x: integer not null, y: integer not null, },
+    Beta { z: integer not null }
+}
+fn test() {
+    a = Alpha { x: 1, y: 2 };
+    match a { Alpha { x, y } => assert(x + y == 3, \"sum\"), Beta => 0 };
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P155 regression guard — push/undo/mid-assert/redo/final-read used
 /// to SIGSEGV in OpGetVector.  Root cause: `state/codegen.rs::generate_set`
 /// (reassignment path, lines 891-932) emitted `OpCopyRecord` with the
