@@ -231,10 +231,16 @@ fn p171_native_copy_record_high_bit_does_not_panic() {
         .expect("invoke loft");
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Skip if rustc isn't available or the graphics native rlib isn't
-    // compiled against the current rustc — both are environment issues,
-    // not regressions.
-    if stderr.contains("rustc not found") || stderr.contains("E0514") {
+    // Skip if rustc isn't available, the graphics native rlib isn't
+    // compiled against the current rustc, or the rlib hasn't been
+    // built at all — all three are environment issues, not
+    // regressions.  E0514 = rustc version mismatch; E0463 = can't
+    // find crate (rlib missing / `auto_build_native` couldn't run on
+    // this runner, e.g. missing X11 headers for glutin).
+    if stderr.contains("rustc not found")
+        || stderr.contains("E0514")
+        || stderr.contains("E0463")
+    {
         eprintln!("SKIP: native toolchain not ready — {stderr}");
         return;
     }
