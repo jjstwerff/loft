@@ -301,6 +301,110 @@ fn test_emit_grand_arc_stair_rise_accumulation() {
   assert(ga_mesh.vertices[12].pos.y == 2.0, "step 3 tread y = 2.0");
 }
 
+// ── Camera tests (Phase 6a.15 / MO.9a) ────────────────────────────
+
+fn test_camera_default_values() {
+  cam = camera_default();
+  assert(cam.azimuth == 45.0, "default azimuth");
+  assert(cam.elevation == 30.0, "default elevation");
+  assert(cam.distance == 10.0, "default distance");
+  assert(cam.fov_y == 60.0, "default fov");
+  assert(cam.up.y == 1.0, "world up is +Y");
+}
+
+fn test_camera_eye_basic_orientation() {
+  // At azimuth=0, elevation=0: eye is at target + (distance, 0, 0).
+  cam = camera_default();
+  cam.azimuth = 0.0;
+  cam.elevation = 0.0;
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.distance = 5.0;
+  eye = camera_eye(cam);
+  // cos(0)=1, sin(0)=0 → eye = (5, 0, 0)
+  assert(eye.x == 5.0, "eye x = 5");
+  assert(eye.y == 0.0, "eye y = 0");
+  assert(eye.z == 0.0, "eye z = 0");
+}
+
+fn test_camera_eye_elevation_90() {
+  // Elevation 90° → eye directly above target.
+  cam = camera_default();
+  cam.azimuth = 0.0;
+  cam.elevation = 90.0;
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.distance = 3.0;
+  eye = camera_eye(cam);
+  // horiz = 3 * cos(90°) ≈ 0; y = 3 * sin(90°) = 3
+  assert(eye.y == 3.0, "eye directly above");
+  // x, z ≈ 0 (tiny fp residual is fine)
+  assert(eye.x < 0.001, "x close to 0");
+  assert(eye.z < 0.001, "z close to 0");
+  assert(eye.x > -0.001, "x close to 0 neg");
+  assert(eye.z > -0.001, "z close to 0 neg");
+}
+
+fn test_camera_orbit_adjusts_azimuth() {
+  cam = camera_default();
+  cam.azimuth = 10.0;
+  camera_orbit(cam, 20.0, 0.0);
+  assert(cam.azimuth == 30.0, "azimuth += 20");
+}
+
+fn test_camera_orbit_clamps_elevation_high() {
+  cam = camera_default();
+  cam.elevation = 80.0;
+  camera_orbit(cam, 0.0, 30.0);   // would go to 110°, clamp to 89°
+  assert(cam.elevation == 89.0, "elevation clamped at 89");
+}
+
+fn test_camera_orbit_clamps_elevation_low() {
+  cam = camera_default();
+  cam.elevation = -80.0;
+  camera_orbit(cam, 0.0, -30.0);   // would go to -110°, clamp to -89°
+  assert(cam.elevation == -89.0, "elevation clamped at -89");
+}
+
+fn test_camera_zoom_clamps_min() {
+  cam = camera_default();
+  cam.distance = 0.5;
+  camera_zoom(cam, -1.0);   // would go to -0.5, clamp to 0.1
+  assert(cam.distance == 0.1, "zoom clamped at 0.1");
+}
+
+fn test_camera_zoom_normal() {
+  cam = camera_default();
+  cam.distance = 10.0;
+  camera_zoom(cam, 5.0);
+  assert(cam.distance == 15.0, "zoom += 5");
+}
+
+fn test_camera_pan() {
+  cam = camera_default();
+  cam.target = vec3(1.0, 2.0, 3.0);
+  camera_pan(cam, 4.0, 5.0, 6.0);
+  assert(cam.target.x == 5.0, "target x shifted");
+  assert(cam.target.y == 7.0, "target y shifted");
+  assert(cam.target.z == 9.0, "target z shifted");
+}
+
+fn test_camera_view_matrix_shape() {
+  cam = camera_default();
+  vm = camera_view_matrix(cam);
+  // mat4 with 16 entries; bottom-right is 1.0 for affine.
+  assert(len(vm.m) == 16, "mat4 has 16 entries");
+  assert(vm.m[15] == 1.0, "[3,3] = 1.0 for view");
+}
+
+fn test_camera_projection_matrix_shape() {
+  cam = camera_default();
+  pm = camera_projection_matrix(cam, 16.0 / 9.0);
+  assert(len(pm.m) == 16, "mat4 has 16 entries");
+  // Perspective matrix [3,3] = 0.0 (homogeneous division).
+  assert(pm.m[15] == 0.0, "perspective [3,3] = 0");
+  // [2,3] should be -1.0 (standard perspective).
+  assert(pm.m[11] == -1.0, "perspective [2,3] = -1");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);
