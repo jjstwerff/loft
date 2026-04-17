@@ -175,6 +175,46 @@ fn neighbour_dr(dir: integer) -> integer {
   0
 }
 
+// ── Cylinder post (Phase 6a.8) ────────────────────────────────────
+
+// Emit a cylindrical post between `base` and `top` with `radius`
+// and `seg_count` angular segments around the Y-axis.  Assumes the
+// axis is vertical (base.y < top.y).  Only the side surface is
+// emitted — no top/bottom caps.  Vertex normals are the outward
+// radial (smooth shading); per-segment quad winding puts the normal
+// outward.  Each segment contributes 4 vertices + 2 triangles.
+//
+// Degenerate inputs (seg_count < 3 or radius <= 0) emit nothing.
+pub fn emit_cylinder_post(
+  m: &Mesh, base: Vec3, top: Vec3, radius: float, seg_count: integer
+) {
+  if seg_count < 3 { return; }
+  if radius <= 0.0 { return; }
+  cp_seg = 2.0 * PI / seg_count as float;
+  for cp_i in 0..seg_count {
+    i_cp = cp_i as float;
+    a0 = i_cp * cp_seg;
+    a1 = (i_cp + 1.0) * cp_seg;
+    cos0 = cos(a0);
+    sin0 = sin(a0);
+    cos1 = cos(a1);
+    sin1 = sin(a1);
+    n0 = vec3(cos0, 0.0, sin0);
+    n1 = vec3(cos1, 0.0, sin1);
+    cp_bl = vec3(base.x + radius * cos0, base.y, base.z + radius * sin0);
+    cp_br = vec3(base.x + radius * cos1, base.y, base.z + radius * sin1);
+    cp_tr = vec3(top.x + radius * cos1, top.y, top.z + radius * sin1);
+    cp_tl = vec3(top.x + radius * cos0, top.y, top.z + radius * sin0);
+    cp_base = len(m.vertices);
+    m.vertices += [vertex(cp_bl, n0, vec2(0.0, 0.0))];
+    m.vertices += [vertex(cp_br, n1, vec2(1.0, 0.0))];
+    m.vertices += [vertex(cp_tr, n1, vec2(1.0, 1.0))];
+    m.vertices += [vertex(cp_tl, n0, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: cp_base, b: cp_base + 1, c: cp_base + 2 }];
+    m.triangles += [Triangle { a: cp_base, b: cp_base + 2, c: cp_base + 3 }];
+  }
+}
+
 // ── Linear stair geometry (Phase 6a.9 / MO.8a) ────────────────────
 
 // Step count for a linear stair climbing from y_low to y_high.

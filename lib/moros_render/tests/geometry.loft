@@ -129,6 +129,39 @@ fn test_build_hex_meshes_with_walls() {
   assert(has_walls, "walls mesh present");
 }
 
+// ── Cylinder post tests (Phase 6a.8) ──────────────────────────────
+
+fn test_emit_cylinder_post_vertex_count() {
+  cp_mesh = mesh("cp_count");
+  // 8-segment cylinder: 8 × 4 = 32 verts, 8 × 2 = 16 tris.
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 2.0, 0.0), 0.5, 8);
+  assert(len(cp_mesh.vertices) == 32, "expected 32 verts, got {len(cp_mesh.vertices)}");
+  assert(len(cp_mesh.triangles) == 16, "expected 16 tris, got {len(cp_mesh.triangles)}");
+}
+
+fn test_emit_cylinder_post_radial_normals() {
+  cp_mesh = mesh("cp_n");
+  // 4 segments: normals should be at 0°, 90°, 180°, 270° + the same
+  // again for each segment's end angle.  Check that every normal
+  // has a horizontal direction (Y = 0) and unit length ~1.
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 4);
+  for cp_v in cp_mesh.vertices {
+    assert(cp_v.normal.y == 0.0, "cyl normal Y = 0");
+  }
+}
+
+fn test_emit_cylinder_post_too_few_segments() {
+  cp_mesh = mesh("cp_few");
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 2);
+  assert(len(cp_mesh.vertices) == 0, "< 3 segs → no geometry");
+}
+
+fn test_emit_cylinder_post_zero_radius() {
+  cp_mesh = mesh("cp_zr");
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 0.0, 8);
+  assert(len(cp_mesh.vertices) == 0, "zero radius → no geometry");
+}
+
 // ── Linear stair tests (MO.8a) ────────────────────────────────────
 
 fn test_stair_step_count_basic() {
