@@ -1,0 +1,162 @@
+// EditorState — aggregate for the walkable editor's logical state
+// (Step 9).  Bundles map, avatar, tool selection, undo stack, and
+// user-toggleable render flags so the host loop has one value to
+// pass into `editor_tick`.  No UI or panel dependency lives here —
+// that part stays in moros_ui's `editor_click` (Step 9b).
+//
+// Step 10 adds `input_from_keys`: pure decoder from a keyboard /
+// mouse snapshot to an `InputState`.  Pressed-vs-held edge detection
+// is the caller's responsibility: pass only keys that have just
+// transitioned this frame for edge-triggered fields (tool select,
+// toggles), and all currently-held keys for continuous fields
+// (WASD, Space).
+
+use moros_map;
+use moros_editor;
+use moros_render;
+use graphics;
+use player;
+use tools;
+
+// ── Aggregate state ──────────────────────────────────────────────
+pub struct EditorState {
+  es_map:          Map,
+  es_player:       Player,
+  es_tools:        ToolState,
+  es_undo:         UndoStack,
+  es_overlay_cy:   integer not null,   // vertical layer the next edit targets
+  es_occlusion_on: boolean,            // see-through toggle, honoured by renderer
+  es_camera_mode:  CameraMode,
+}
+
+pub fn editor_default() -> EditorState {
+  EditorState {
+    es_map:          map_empty(),
+    es_player:       player_default(),
+    es_tools:        tool_state_default(),
+    es_undo:         undo_empty(),
+    es_overlay_cy:   0,
+    es_occlusion_on: false,
+    es_camera_mode:  CameraMode.Follow,
+  }
+}
+
+// ── Per-frame update ─────────────────────────────────────────────
+// Advances physics, applies edge-triggered input mutations, and
+// returns control to the host.  Click dispatch lives in Step 9b
+// (moros_ui) because it needs panel hit-testing.
+//
+// Input fields consumed here (edge-triggered unless noted):
+//   in_tool_number:      0 = no change, 1..6 = select tool
+//   in_mode_toggle:      flip camera mode Follow ↔ Overview
+//   in_occlusion_toggle: flip see-through rendering
+//   in_undo:             pop one edit (or one batch) from undo
+//   in_fwd/back/…/jump:  consumed by player_step (held)
+// Keyboard hotkeys 1..6 mirror the panel toolbar labels (panel.loft):
+// "1" = None (deselect), "2" = Raise, "3" = Lower, "4" = Stencil,
+// "5" = Item, "6" = Wall.  Keep this aligned with `tool_of_id` there.
+fn tool_from_number(n: integer) -> ToolKind {
+  if n == 1 { return ToolKind.None; }
+  if n == 2 { return ToolKind.RaiseHex; }
+  if n == 3 { return ToolKind.LowerHex; }
+  if n == 4 { return ToolKind.PlaceStencil; }
+  if n == 5 { return ToolKind.PlaceItem; }
+  if n == 6 { return ToolKind.PlaceWall; }
+  ToolKind.None
+}
+
+pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
+  if input.in_tool_number >= 1 && input.in_tool_number <= 6 {
+    st.es_tools.ts_current = tool_from_number(input.in_tool_number);
+  }
+  if input.in_mode_toggle {
+    if st.es_camera_mode == CameraMode.Follow {
+      st.es_camera_mode = CameraMode.Overview;
+    } else {
+      st.es_camera_mode = CameraMode.Follow;
+    }
+  }
+  if input.in_occlusion_toggle {
+    st.es_occlusion_on = !st.es_occlusion_on;
+  }
+  if input.in_undo {
+    // P179 workaround: passing `st.es_undo` / `st.es_map` inline to
+    // a fn with two `&` params silently corrupts both mutations.
+    // Aliasing to locals first restores the expected behaviour.
+    st_u = st.es_undo;
+    st_m = st.es_map;
+    undo_pop(st_u, st_m);
+  }
+  player_step(st.es_player, st.es_map, dt, input);
+}
+
+// ── Input decoding (Step 10) ─────────────────────────────────────
+// Pure map from a keyboard / mouse snapshot to the InputState the
+// integrator understands.
+//
+//   held:    every key currently down this frame (WASD, Space, …)
+//   pressed: subset that went down *this frame* (edge trigger;
+//            callers deduplicate by diffing against the previous
+//            frame's held set).
+//   mx/my:   current mouse screen coords
+//   dx/dy:   delta since previous frame
+//   wheel:   scroll ticks, positive = up
+//   clicked: left-click down this frame
+//   rclicked: right-click down this frame
+//   ctrl_pressed: whether Ctrl is held — gates "z"/"s" meaning
+//                 between movement and undo/save.
+//
+// Key name convention (case-insensitive on the caller side; the
+// helper itself only pattern-matches on lower-case letters + a few
+// symbolic names):
+//   "w" "a" "s" "d"                  — WASD (s also doubles as back)
+//   "space"                          — jump
+//   "1".."6"                         — tool select
+//   "tab"                            — camera mode toggle
+//   "o"                              — occlusion toggle
+//   "z"  (requires ctrl_pressed)     — undo
+//   "ctrl_s"  (composite)            — save (avoids colliding with
+//                                      movement "s")
+pub fn input_from_keys(
+  held:           vector<text>,
+  pressed:        vector<text>,
+  mx:             integer, my:             integer,
+  mouse_dx:       integer, mouse_dy:       integer,
+  wheel:          integer,
+  clicked:        boolean, rclicked:       boolean,
+  ctrl_pressed:   boolean,
+) -> InputState {
+  out = input_empty();
+  out.in_mx       = mx;
+  out.in_my       = my;
+  out.in_mouse_dx = mouse_dx;
+  out.in_mouse_dy = mouse_dy;
+  out.in_wheel    = wheel;
+  out.in_click    = clicked;
+  out.in_rclick   = rclicked;
+
+  for hk in held {
+    if hk == "w"     { out.in_fwd          = true; }
+    if hk == "a"     { out.in_strafe_left  = true; }
+    if hk == "d"     { out.in_strafe_right = true; }
+    if hk == "space" { out.in_jump_held    = true; }
+    // "s" is WASD-back only when ctrl isn't held; ctrl+s is save
+    // (handled via the `ctrl_s` edge key below).
+    if hk == "s" && !ctrl_pressed { out.in_back = true; }
+  }
+
+  for pk in pressed {
+    if pk == "1" { out.in_tool_number = 1; }
+    if pk == "2" { out.in_tool_number = 2; }
+    if pk == "3" { out.in_tool_number = 3; }
+    if pk == "4" { out.in_tool_number = 4; }
+    if pk == "5" { out.in_tool_number = 5; }
+    if pk == "6" { out.in_tool_number = 6; }
+    if pk == "tab" { out.in_mode_toggle      = true; }
+    if pk == "o"   { out.in_occlusion_toggle = true; }
+    if pk == "z" && ctrl_pressed { out.in_undo = true; }
+    if pk == "ctrl_s"            { out.in_save = true; }
+  }
+
+  out
+}

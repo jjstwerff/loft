@@ -9662,3 +9662,28 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P179 — passing `&struct.field` as a non-sole argument silently
+/// corrupts both the `&` destination and the preceding by-value arg.
+/// Narrow repro: `fn f(n: integer, r: &T) { r.x = n; }` called as
+/// `f(42, o.field)` sets `r.x = 3` (not 42) — the callee's `n` reads
+/// a fragment of the `&` arg's DbRef.  Aliasing each field to a local
+/// first works.  Two-`&`-siblings variant loses both mutations.
+///
+/// Gated `#[ignore]` until fixed.  Fixture lives at
+/// `tests/lib/p179_ref_field_arg_corrupts_siblings.loft`.
+#[test]
+#[ignore]
+fn p179_ref_field_arg_corrupts_sibling() {
+    code!(
+        "struct P179Inner { pin_n: integer not null }
+struct P179Outer { po_x: P179Inner, po_q: integer not null }
+fn p179_int_ref(n: integer, r: &P179Inner) { r.pin_n = n; }
+fn test() {
+    o = P179Outer { po_x: P179Inner { pin_n: 0 }, po_q: 0 };
+    p179_int_ref(42, o.po_x);
+    assert(o.po_x.pin_n == 42, \"int+&field: expected 42, got {o.po_x.pin_n}\");
+}"
+    )
+    .result(Value::Null);
+}
