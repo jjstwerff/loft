@@ -923,6 +923,17 @@ impl Function {
             {
                 return self.is_new(var_nr);
             }
+            // P165: annotated LHS struct-enum accepts a variant of
+            // that enum as RHS.  `let k: Kind = Alpha { x: 1 };` is
+            // idiomatic — the struct-literal constructor types the
+            // variant as `Reference(variant_d, _)`, but the parent
+            // relationship (`def(variant_d).parent == enum_d`)
+            // proves subtype compatibility with `Enum(enum_d, true, _)`.
+            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) = (var_tp, type_def)
+                && data.def(*rhs_d).parent == *parent_d
+            {
+                return self.is_new(var_nr);
+            }
             diagnostic!(
                 lexer,
                 Level::Error,

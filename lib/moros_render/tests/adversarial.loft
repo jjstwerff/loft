@@ -55,8 +55,9 @@ fn emit_any_stair(m: &Mesh, k: StairKind) {
 
 fn test_adv_is_variant_linear_dispatch() {
   m_adv1 = mesh("adv_lin");
-  // P165 workaround: drop the `: StairKind` annotation.
-  k_adv1 = Linear {
+  // P165 fix (landed): enum-typed annotation with variant RHS
+  // now accepts the variant as a subtype of the enum.
+  k_adv1: StairKind = Linear {
     from:  vec3(0.0, 0.0, 0.0),
     to:    vec3(2.0, 1.0, 0.0),
     width: 1.0,
@@ -69,7 +70,7 @@ fn test_adv_is_variant_linear_dispatch() {
 
 fn test_adv_is_variant_spiral_dispatch() {
   m_adv2 = mesh("adv_sp");
-  k_adv2 = Spiral {
+  k_adv2: StairKind = Spiral {
     centre:    vec3(0.0, 0.0, 0.0),
     inner_r:   0.5,
     outer_r:   1.0,
@@ -126,13 +127,13 @@ fn adv_expected_verts(k: StairKind) -> integer {
 }
 
 fn test_adv_match_returning_integer() {
-  k_adv5a = Linear {
+  k_adv5a: StairKind = Linear {
     from:  vec3(0.0, 0.0, 0.0),
     to:    vec3(2.0, 1.0, 0.0),
     width: 1.0,
     steps: 4,
   };
-  k_adv5b = Spiral {
+  k_adv5b: StairKind = Spiral {
     centre:    vec3(0.0, 0.0, 0.0),
     inner_r:   0.5,
     outer_r:   1.0,

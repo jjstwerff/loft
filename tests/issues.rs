@@ -9428,3 +9428,71 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P164 regression guard — trailing comma after the LAST VARIANT of an
+/// enum declaration used to fail with `Expect name in type definition`.
+/// P158 fixed trailing commas inside a variant's field list; this is the
+/// sibling case on the variant list itself.  Fix: mirror the P158 guard
+/// (`|| self.lexer.peek_token("}")`) onto the outer variant-list break
+/// check in `parse_enum_values`.
+#[test]
+fn p164_trailing_comma_enum_variant_list() {
+    code!(
+        "enum P164Kind {
+    P164Alpha { x: integer not null },
+    P164Beta { y: integer not null },
+}
+fn test() {
+    a = P164Alpha { x: 1 };
+    assert(a is P164Alpha, \"alpha\");
+    b = P164Beta { y: 2 };
+    assert(b is P164Beta, \"beta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P164 also covers plain (non-struct-field) enum declarations.
+#[test]
+fn p164_trailing_comma_plain_enum() {
+    code!(
+        "enum P164Dir {
+    P164North,
+    P164East,
+    P164South,
+    P164West,
+}
+fn test() {
+    d = P164North;
+    assert(d is P164North, \"north\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P165 regression guard — `var: Enum = Variant { ... }` used to fail
+/// with "Variable 'var' cannot change type from Enum to Variant; use a
+/// new variable name or cast with 'as'".  The type-change check treated
+/// a struct-enum variant as a distinct type from its parent enum.
+/// Fix: in `Function::change_var_type`, accept `(Enum(p, true, _),
+/// Enum(v, true, _))` when `data.def(v).parent == p` — the parent
+/// relationship proves subtype compatibility.
+#[test]
+fn p165_enum_annotation_with_variant_rhs() {
+    code!(
+        "enum P165Kind {
+    P165Alpha { x: integer not null },
+    P165Beta { y: integer not null }
+}
+fn take_kind(k: P165Kind) -> boolean { k is P165Alpha }
+fn test() {
+    // Annotated LHS with variant RHS (the P165 shape).
+    k1: P165Kind = P165Alpha { x: 1 };
+    assert(take_kind(k1), \"annotated alpha\");
+    // Annotated LHS with the OTHER variant — also accepted.
+    k2: P165Kind = P165Beta { y: 2 };
+    assert(!take_kind(k2), \"annotated beta\");
+}"
+    )
+    .result(Value::Null);
+}
