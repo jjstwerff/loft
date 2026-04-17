@@ -405,6 +405,95 @@ fn test_camera_projection_matrix_shape() {
   assert(pm.m[11] == -1.0, "perspective [2,3] = -1");
 }
 
+// ── Picker tests (Phase 6a.16 / MO.9b) ────────────────────────────
+
+fn test_world_to_hex_origin() {
+  h = world_to_hex(0.0, 0.0);
+  assert(h.ha_q == 0, "origin q");
+  assert(h.ha_r == 0, "origin r");
+  assert(h.ha_cy == 0, "cy defaults to 0");
+}
+
+fn test_world_to_hex_column_one() {
+  // (HEX_WIDTH, 0) should snap to (1, 0).
+  h = world_to_hex(HEX_WIDTH, 0.0);
+  assert(h.ha_q == 1, "q = 1");
+  assert(h.ha_r == 0, "r = 0");
+}
+
+fn test_world_to_hex_row_one() {
+  // At r=1 the odd-row offset applies: world x = HEX_WIDTH/2, z = HEX_ROW_HEIGHT.
+  h = world_to_hex(HEX_WIDTH / 2.0, HEX_ROW_HEIGHT);
+  assert(h.ha_q == 0, "q = 0 (odd-row offset applied)");
+  assert(h.ha_r == 1, "r = 1");
+}
+
+fn test_world_to_hex_inverse_of_hex_to_world() {
+  // Round-trip a range of (q, r) through hex_to_world then world_to_hex.
+  wh_test_q = 3;
+  wh_test_r = 2;
+  w = hex_to_world(wh_test_q, wh_test_r, 0);
+  h = world_to_hex(w.x, w.z);
+  assert(h.ha_q == wh_test_q, "q round-trip");
+  assert(h.ha_r == wh_test_r, "r round-trip");
+}
+
+fn test_ray_plane_y_intersect_basic() {
+  // Ray from (0,5,0) straight down (0,-1,0), plane y=0 → (0,0,0).
+  origin = vec3(0.0, 5.0, 0.0);
+  down = vec3(0.0, -1.0, 0.0);
+  hit = ray_plane_y_intersect(origin, down, 0.0);
+  assert(hit.y == 0.0, "hit y = 0");
+  assert(hit.x == 0.0, "hit x = 0");
+  assert(hit.z == 0.0, "hit z = 0");
+}
+
+fn test_ray_plane_y_intersect_parallel() {
+  // Ray parallel to plane → returns the null sentinel (0,0,0).
+  origin = vec3(0.0, 5.0, 0.0);
+  horiz = vec3(1.0, 0.0, 0.0);
+  hit = ray_plane_y_intersect(origin, horiz, 0.0);
+  // dir.y == 0.0, returns vec3(0,0,0) as sentinel
+  assert(hit.x == 0.0, "parallel sentinel x");
+  assert(hit.y == 0.0, "parallel sentinel y");
+}
+
+fn test_ray_plane_y_intersect_behind() {
+  // Plane is behind the camera (looking up but plane below).
+  origin = vec3(0.0, 5.0, 0.0);
+  up_dir = vec3(0.0, 1.0, 0.0);
+  hit = ray_plane_y_intersect(origin, up_dir, 0.0);
+  // t would be negative (-5 / 1), returns sentinel.
+  assert(hit.x == 0.0, "behind sentinel");
+}
+
+fn test_camera_ray_dir_centre_of_view() {
+  // ndc=(0,0) should give the forward direction (camera → target).
+  cam = camera_default();
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.azimuth = 0.0;
+  cam.elevation = 0.0;
+  // Eye at (10, 0, 0); forward = (-1, 0, 0).
+  cam.distance = 10.0;
+  dir = camera_ray_dir(cam, 0.0, 0.0, 1.0);
+  assert(dir.x < -0.99, "ray x ≈ -1");
+  assert(dir.y < 0.01, "ray y ≈ 0");
+  assert(dir.y > -0.01, "ray y ≈ 0");
+}
+
+fn test_pick_hex_centre_of_screen_looks_at_origin() {
+  // Camera looks at origin from above-and-aside; clicking the
+  // screen centre (w/2, h/2) should pick hex (0, 0).
+  cam = camera_default();
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.azimuth = 45.0;
+  cam.elevation = 45.0;
+  cam.distance = 10.0;
+  hit = pick_hex(cam, 400.0, 300.0, 800.0, 600.0, 0.0);
+  assert(hit.ha_q == 0, "centre click → hex (0,0) q");
+  assert(hit.ha_r == 0, "centre click → hex (0,0) r");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

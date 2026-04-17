@@ -463,6 +463,69 @@ pub fn camera_pan(cam: &RenderCamera, dx: float, dy: float, dz: float) {
   cam.target.z = cam.target.z + dz;
 }
 
+// ── Picker (Phase 6a.16 / MO.9b) ──────────────────────────────────
+
+// Build a world-space ray direction from normalized device
+// coordinates (-1..1 on both axes, +y = up the screen).  The ray
+// origin is the camera eye; use together with
+// `ray_plane_y_intersect` to find the world-space pick point.
+pub fn camera_ray_dir(cam: RenderCamera, ndc_x: float, ndc_y: float, aspect: float) -> Vec3 {
+  eye = camera_eye(cam);
+  ray_fwd = normalize3(sub3(cam.target, eye));
+  ray_right = normalize3(cross(ray_fwd, cam.up));
+  ray_up = cross(ray_right, ray_fwd);
+  half_fov = cam.fov_y * PI / 180.0 / 2.0;
+  tan_half = tan(half_fov);
+  scale_x = ndc_x * tan_half * aspect;
+  scale_y = ndc_y * tan_half;
+  ray_d = add3(ray_fwd, add3(scale3(ray_right, scale_x), scale3(ray_up, scale_y)));
+  normalize3(ray_d)
+}
+
+// Intersect a ray (origin + t·dir) with the horizontal plane
+// y = plane_y.  Returns the world-space intersection, or null
+// (Vec3 with y=NaN marker represented here as (0,0,0) when
+// parallel / behind the origin).  Callers should check that the
+// y matches `plane_y` before using the result.
+pub fn ray_plane_y_intersect(origin: Vec3, dir: Vec3, plane_y: float) -> Vec3 {
+  if dir.y == 0.0 { return vec3(0.0, 0.0, 0.0); }
+  ray_t = (plane_y - origin.y) / dir.y;
+  if ray_t < 0.0 { return vec3(0.0, 0.0, 0.0); }
+  vec3(origin.x + ray_t * dir.x, plane_y, origin.z + ray_t * dir.z)
+}
+
+// Inverse of `hex_to_world`: snap a world-space (x, z) to the
+// nearest hex's axial (q, r).  Flat-top layout, odd-row offset.
+pub fn world_to_hex(wx: float, wz: float) -> HexAddress {
+  r_approx = round(wz / HEX_ROW_HEIGHT);
+  r_int = r_approx as integer;
+  wh_offset = if r_int % 2 == 0 { 0.0 } else { HEX_WIDTH / 2.0 };
+  q_float = round((wx - wh_offset) / HEX_WIDTH);
+  HexAddress {
+    ha_q:  q_float as integer,
+    ha_r:  r_int,
+    ha_cy: 0,
+  }
+}
+
+// Full pick: convert (screen_x, screen_y) in pixel coords to a
+// hex address on the plane y = hex_floor_y.  Returns ha_cy = 0
+// (single-layer pick); callers can overwrite for multi-layer.
+pub fn pick_hex(
+  cam: RenderCamera,
+  screen_x: float, screen_y: float,
+  viewport_w: float, viewport_h: float,
+  hex_floor_y: float
+) -> HexAddress {
+  ndc_x = (2.0 * screen_x / viewport_w) - 1.0;
+  ndc_y = 1.0 - (2.0 * screen_y / viewport_h);
+  pk_aspect = viewport_w / viewport_h;
+  pk_eye = camera_eye(cam);
+  pk_dir = camera_ray_dir(cam, ndc_x, ndc_y, pk_aspect);
+  world_pt = ray_plane_y_intersect(pk_eye, pk_dir, hex_floor_y);
+  world_to_hex(world_pt.x, world_pt.z)
+}
+
 // ── Scene builder (Phase 6a.13) ───────────────────────────────────
 
 // Find or create a mesh by material name, emit a hex surface into it.
