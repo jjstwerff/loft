@@ -927,6 +927,17 @@ pub fn map_build_scene(map: Map) -> Scene {
   sc = scene("moros_map_{map.m_name}");
   default_mat = material_color("default", 0.7, 0.7, 0.7);
   default_mat_idx = add_material(sc, default_mat);
+  // Default directional "sun" light + orbit-style camera so the
+  // exported GLB is immediately viewable in Blender / three.js /
+  // gltf-validator without per-map configuration.  Callers who
+  // want to override can build the scene by hand (call
+  // `build_hex_meshes` directly).
+  sun_dir = vec3(-0.3, -0.7, -0.2);
+  add_light(sc, directional_light("sun", 1.0, 0.95, 0.85, 3.0, sun_dir));
+  mbs_cam = camera("default");
+  mbs_cam.position = vec3(10.0, 10.0, 10.0);
+  mbs_cam.target = vec3(0.0, 0.0, 0.0);
+  add_camera(sc, mbs_cam);
   mbs_meshes = build_hex_meshes(map);
   for mbs_m in mbs_meshes {
     mbs_m_idx = add_mesh(sc, mbs_m);

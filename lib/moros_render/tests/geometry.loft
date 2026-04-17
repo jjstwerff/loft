@@ -678,6 +678,25 @@ fn test_map_build_scene_walls() {
   assert(has_walls_node, "walls node present in scene");
 }
 
+fn test_map_build_scene_default_camera() {
+  dcm = map_empty();
+  dcs = map_build_scene(dcm);
+  assert(len(dcs.cameras) == 1, "default scene has 1 camera");
+  assert(dcs.cameras[0].position.x == 10.0, "camera at (10, 10, 10)");
+  assert(dcs.cameras[0].position.y == 10.0, "camera y");
+  assert(dcs.cameras[0].position.z == 10.0, "camera z");
+  assert(dcs.cameras[0].target.x == 0.0, "camera targets origin");
+}
+
+fn test_map_build_scene_default_sun_light() {
+  dsm = map_empty();
+  dss = map_build_scene(dsm);
+  assert(len(dss.lights) == 1, "default scene has 1 light");
+  assert(dss.lights[0].name == "sun", "light named 'sun'");
+  // Direction is negative-y-dominant (light from above).
+  assert(dss.lights[0].direction.y < 0.0, "sun points downward");
+}
+
 fn test_map_export_glb_creates_file() {
   xm = map_empty();
   map_paint_material(xm, 0, 0, 0, 1);
