@@ -965,6 +965,90 @@ fn test_item_dispatch_out_of_range_ref() {
   }
 }
 
+// ── Spawn / waypoint marker tests ─────────────────────────────────
+
+fn test_spawn_marker_single() {
+  sm = map_empty();
+  // Ensure the chunk exists so the spawn's hex has a real height.
+  map_paint_material(sm, 0, 0, 0, 1);
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    sp_kind: "creature", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(sm, sp);
+  sms = build_hex_meshes(sm);
+  sm_verts = 0;
+  for smv in sms {
+    if smv.name == "spawn_markers" { sm_verts = len(smv.vertices); }
+  }
+  // 1 marker box = 24 verts.
+  assert(sm_verts == 24, "spawn marker → 24 verts, got {sm_verts}");
+}
+
+fn test_spawn_marker_none_no_mesh() {
+  sn = map_empty();
+  map_paint_material(sn, 0, 0, 0, 1);
+  sns = build_hex_meshes(sn);
+  sn_has = false;
+  for snv in sns {
+    if snv.name == "spawn_markers" { sn_has = true; }
+  }
+  assert(!sn_has, "no spawns → no spawn_markers mesh");
+}
+
+fn test_waypoint_marker_single() {
+  wm = map_empty();
+  map_paint_material(wm, 0, 0, 0, 1);
+  wp = NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    wp_activity: "STAND", wp_time_start: 6, wp_time_end: 22,
+    wp_facing: 0, wp_note: "",
+  };
+  rt = NpcRoutine {
+    nr_npc_id: 1, nr_name: "guard", nr_creature: 1,
+    nr_waypoints: [wp],
+  };
+  wm.m_npc_routines += [rt];
+  wms = build_hex_meshes(wm);
+  wm_verts = 0;
+  for wmv in wms {
+    if wmv.name == "waypoint_markers" { wm_verts = len(wmv.vertices); }
+  }
+  // 1 marker box = 24 verts.
+  assert(wm_verts == 24, "waypoint marker → 24 verts, got {wm_verts}");
+}
+
+fn test_spawn_and_waypoint_separate_meshes() {
+  swm = map_empty();
+  map_paint_material(swm, 0, 0, 0, 1);
+  swp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    sp_kind: "creature", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(swm, swp);
+  swwp = NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 1, ha_r: 0, ha_cy: 0 },
+    wp_activity: "STAND", wp_time_start: 6, wp_time_end: 22,
+    wp_facing: 0, wp_note: "",
+  };
+  swrt = NpcRoutine {
+    nr_npc_id: 1, nr_name: "guard", nr_creature: 1,
+    nr_waypoints: [swwp],
+  };
+  swm.m_npc_routines += [swrt];
+  swms = build_hex_meshes(swm);
+  sw_has_spawn = false;
+  sw_has_wp = false;
+  for swmv in swms {
+    if swmv.name == "spawn_markers" { sw_has_spawn = true; }
+    if swmv.name == "waypoint_markers" { sw_has_wp = true; }
+  }
+  assert(sw_has_spawn, "spawn_markers present");
+  assert(sw_has_wp, "waypoint_markers present");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

@@ -866,6 +866,18 @@ fn emit_hex_walls(
 // Build meshes for all visible hexes in a map.
 // Returns a vector of meshes grouped by material index.
 // Also includes a "walls" mesh for all wall geometry.
+// Emit a small axis-aligned marker box at `pos`, offset by
+// `y_offset` above the pos and of size × size × size.  Used for
+// spawn / waypoint markers in the scene builder.
+fn emit_marker(m: &Mesh, pos: Vec3, y_offset: float, size: float) {
+  mk_half = size / 2.0;
+  emit_box(
+    m,
+    vec3(pos.x - mk_half, pos.y + y_offset, pos.z - mk_half),
+    vec3(pos.x + mk_half, pos.y + y_offset + size, pos.z + mk_half)
+  );
+}
+
 // Resolve a 1-indexed item reference (`h.h_item`) and emit its
 // placeholder mesh at the hex's world-space centre.  `item_ref == 0`
 // means "no item"; out-of-range refs are a no-op.
@@ -894,11 +906,33 @@ pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
       emit_hex_item(items_mesh, q, r, bm_h.h_height, bm_h.h_item, map.m_item_palette);
     }
   }
+  // Spawn markers — small 0.3-unit cubes, offset 0.5 above the hex surface.
+  spawn_mesh = mesh("spawn_markers");
+  for mk_sp in map.m_spawn_points {
+    mk_sp_hex = map_get_hex(map, mk_sp.sp_hex.ha_q, mk_sp.sp_hex.ha_r, mk_sp.sp_hex.ha_cy);
+    mk_sp_pos = hex_to_world(mk_sp.sp_hex.ha_q, mk_sp.sp_hex.ha_r, mk_sp_hex.h_height);
+    emit_marker(spawn_mesh, mk_sp_pos, 0.5, 0.3);
+  }
+  // Waypoint markers — smaller 0.2-unit cubes, lower offset.
+  waypoint_mesh = mesh("waypoint_markers");
+  for mk_rt in map.m_npc_routines {
+    for mk_wp in mk_rt.nr_waypoints {
+      mk_wp_hex = map_get_hex(map, mk_wp.wp_hex.ha_q, mk_wp.wp_hex.ha_r, mk_wp.wp_hex.ha_cy);
+      mk_wp_pos = hex_to_world(mk_wp.wp_hex.ha_q, mk_wp.wp_hex.ha_r, mk_wp_hex.h_height);
+      emit_marker(waypoint_mesh, mk_wp_pos, 0.3, 0.2);
+    }
+  }
   if len(wall_mesh.vertices) > 0 {
     meshes += [wall_mesh];
   }
   if len(items_mesh.vertices) > 0 {
     meshes += [items_mesh];
+  }
+  if len(spawn_mesh.vertices) > 0 {
+    meshes += [spawn_mesh];
+  }
+  if len(waypoint_mesh.vertices) > 0 {
+    meshes += [waypoint_mesh];
   }
   meshes
 }
