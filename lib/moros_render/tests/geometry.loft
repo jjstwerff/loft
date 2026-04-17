@@ -888,6 +888,64 @@ fn test_wall_dispatch_out_of_range_ref_falls_back() {
   }
 }
 
+// ── Item dispatch tests (build_hex_meshes emits ItemDef placeholders) ─
+
+fn id_new(dk: text) -> ItemDef {
+  ItemDef {
+    id_name: dk, id_kind: dk, id_model: 0,
+    id_symmetric: 1, id_arc_radius: 0.0,
+  }
+}
+
+fn test_item_dispatch_none_no_items_mesh() {
+  dim = map_empty();
+  map_paint_material(dim, 0, 0, 0, 1);
+  dis = build_hex_meshes(dim);
+  dih_has_items = false;
+  for dimv in dis {
+    if dimv.name == "items" { dih_has_items = true; }
+  }
+  assert(!dih_has_items, "no items placed → no items mesh");
+}
+
+fn test_item_dispatch_pillar_is_cylinder() {
+  dip = map_empty();
+  dip.m_item_palette += [id_new("PILLAR")];
+  map_place_item(dip, 0, 0, 0, 1, 0);
+  dps = build_hex_meshes(dip);
+  dp_items_verts = 0;
+  for dpm in dps {
+    if dpm.name == "items" { dp_items_verts = len(dpm.vertices); }
+  }
+  // PILLAR → 8-seg cylinder = 32 verts.
+  assert(dp_items_verts == 32, "pillar → 32-vert cylinder, got {dp_items_verts}");
+}
+
+fn test_item_dispatch_container_is_box() {
+  dic = map_empty();
+  dic.m_item_palette += [id_new("CONTAINER")];
+  map_place_item(dic, 0, 0, 0, 1, 0);
+  dcs = build_hex_meshes(dic);
+  dc_items_verts = 0;
+  for dcm in dcs {
+    if dcm.name == "items" { dc_items_verts = len(dcm.vertices); }
+  }
+  // CONTAINER (non-PILLAR/TREE) → box = 24 verts.
+  assert(dc_items_verts == 24, "container → 24-vert box, got {dc_items_verts}");
+}
+
+fn test_item_dispatch_out_of_range_ref() {
+  dix = map_empty();
+  // Palette is empty; setting h_item to 5 points nowhere.
+  map_place_item(dix, 0, 0, 0, 5, 0);
+  dxs = build_hex_meshes(dix);
+  for dxm in dxs {
+    if dxm.name == "items" {
+      assert(len(dxm.vertices) == 0, "out-of-range item ref → no geometry");
+    }
+  }
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

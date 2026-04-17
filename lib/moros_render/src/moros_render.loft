@@ -866,19 +866,39 @@ fn emit_hex_walls(
 // Build meshes for all visible hexes in a map.
 // Returns a vector of meshes grouped by material index.
 // Also includes a "walls" mesh for all wall geometry.
+// Resolve a 1-indexed item reference (`h.h_item`) and emit its
+// placeholder mesh at the hex's world-space centre.  `item_ref == 0`
+// means "no item"; out-of-range refs are a no-op.
+fn emit_hex_item(
+  items_mesh: &Mesh, q: integer, r: integer, height: integer,
+  item_ref: integer, items: vector<ItemDef>
+) {
+  if item_ref <= 0 { return; }
+  hi_idx = item_ref - 1;
+  if hi_idx < 0 || hi_idx >= len(items) { return; }
+  hi_def = items[hi_idx];
+  hi_pos = hex_to_world(q, r, height);
+  emit_item_placeholder(items_mesh, hi_def.id_kind, hi_pos, 1.0);
+}
+
 pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
   meshes: vector<Mesh> = [];
   wall_mesh = mesh("walls");
+  items_mesh = mesh("items");
   for bm_c in map.m_chunks {
     for bm_h in bm_c.ck_hexes {
       q = bm_c.ck_cx * 32 + bm_h#index / 32;
       r = bm_c.ck_cz * 32 + bm_h#index % 32;
       emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
       emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h, map.m_wall_palette);
+      emit_hex_item(items_mesh, q, r, bm_h.h_height, bm_h.h_item, map.m_item_palette);
     }
   }
   if len(wall_mesh.vertices) > 0 {
     meshes += [wall_mesh];
+  }
+  if len(items_mesh.vertices) > 0 {
+    meshes += [items_mesh];
   }
   meshes
 }
