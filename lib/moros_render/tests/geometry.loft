@@ -604,6 +604,46 @@ fn test_emit_thick_flat_wall_zero_thickness() {
   assert(len(tw_mesh.vertices) == 0, "zero thickness → no geometry");
 }
 
+// ── Thick curved wall tests (Phase 6a.7) ──────────────────────────
+
+fn test_emit_thick_curved_wall_vertex_count() {
+  tcw_mesh = mesh("tcw_count");
+  // 8 segments × 3 quads × 4 verts = 96 verts, × 2 tris = 48.
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 8);
+  assert(len(tcw_mesh.vertices) == 96, "8 segs × 12 verts = 96");
+  assert(len(tcw_mesh.triangles) == 48, "8 segs × 6 tris = 48");
+}
+
+fn test_emit_thick_curved_wall_top_y() {
+  tcw_mesh = mesh("tcw_top");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 1);
+  // First segment's inner face starts at index 0 (base-y verts).
+  // Top-face of segment 1 starts at index 8 (3rd quad in the segment).
+  // All top-face verts should be at y = height = 3.0.
+  assert(tcw_mesh.vertices[8].pos.y == 3.0, "top face y");
+  assert(tcw_mesh.vertices[9].pos.y == 3.0, "top face y (2)");
+}
+
+fn test_emit_thick_curved_wall_zero_segs() {
+  tcw_mesh = mesh("tcw_zs");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 0);
+  assert(len(tcw_mesh.vertices) == 0, "zero segs → no geometry");
+}
+
+fn test_emit_thick_curved_wall_degenerate_radii() {
+  tcw_mesh = mesh("tcw_dr");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 2.0, 2.0, 0.0, 3.0, 0.0, 90.0, 8);
+  assert(len(tcw_mesh.vertices) == 0, "inner_r == outer_r → no geometry");
+}
+
+fn test_emit_thick_curved_wall_full_loop() {
+  tcw_mesh = mesh("tcw_full");
+  // Full 360° with 16 segments — closed ring of walls.
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 3.0, 3.5, 0.0, 2.0, 0.0, 360.0, 16);
+  assert(len(tcw_mesh.vertices) == 16 * 12, "16 × 12 verts");
+  assert(len(tcw_mesh.triangles) == 16 * 6, "16 × 6 tris");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

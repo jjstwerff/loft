@@ -292,6 +292,70 @@ pub fn emit_thick_flat_wall(
   }
 }
 
+// ── Thick curved wall (Phase 6a.7) ────────────────────────────────
+
+// Emit a thick curved wall — arc-segmented vertical slab curving
+// around the Y-axis at `centre`.  Sweeps `angle_sweep_deg` from
+// `start_angle_deg`, subdivided into `seg_count` segments.  The
+// wall has inner face at `inner_r`, outer face at `outer_r`, base
+// at `base_y`, top at `base_y + height`.
+//
+// Per segment: 3 quads (inner face -radial, outer face +radial,
+// top face +Y) — 12 verts + 6 tris.  End caps (radial faces at
+// the sweep boundaries) are the caller's responsibility; most
+// curved walls meet other walls at their ends.
+//
+// Guards: non-positive seg_count / height, negative inner_r, or
+// outer_r <= inner_r emit nothing.  Per-segment normals use the
+// midpoint angle (flat shading across the segment).
+pub fn emit_thick_curved_wall(
+  m: &Mesh, centre: Vec3,
+  inner_r: float, outer_r: float,
+  base_y: float, height: float,
+  start_angle_deg: float, angle_sweep_deg: float,
+  seg_count: integer
+) {
+  if seg_count <= 0 { return; }
+  if inner_r < 0.0 || outer_r <= inner_r { return; }
+  if height <= 0.0 { return; }
+  tcw_d2r = PI / 180.0;
+  tcw_seg = angle_sweep_deg / seg_count as float;
+  tcw_y0 = base_y;
+  tcw_y1 = base_y + height;
+  tcw_up = vec3(0.0, 1.0, 0.0);
+  for tcw_i in 0..seg_count {
+    i_tcw = tcw_i as float;
+    a_s = (start_angle_deg + i_tcw * tcw_seg) * tcw_d2r;
+    a_e = (start_angle_deg + (i_tcw + 1.0) * tcw_seg) * tcw_d2r;
+    cs_s = cos(a_s);
+    sn_s = sin(a_s);
+    cs_e = cos(a_e);
+    sn_e = sin(a_e);
+    // 8 corners of this segment's slab: inner/outer × start/end × bottom/top.
+    i_s_b = vec3(centre.x + inner_r * cs_s, tcw_y0, centre.z + inner_r * sn_s);
+    i_e_b = vec3(centre.x + inner_r * cs_e, tcw_y0, centre.z + inner_r * sn_e);
+    o_e_b = vec3(centre.x + outer_r * cs_e, tcw_y0, centre.z + outer_r * sn_e);
+    o_s_b = vec3(centre.x + outer_r * cs_s, tcw_y0, centre.z + outer_r * sn_s);
+    i_s_t = vec3(i_s_b.x, tcw_y1, i_s_b.z);
+    i_e_t = vec3(i_e_b.x, tcw_y1, i_e_b.z);
+    o_e_t = vec3(o_e_b.x, tcw_y1, o_e_b.z);
+    o_s_t = vec3(o_s_b.x, tcw_y1, o_s_b.z);
+    // Segment midpoint angle for flat-shaded normals.
+    a_m = (a_s + a_e) / 2.0;
+    cos_m = cos(a_m);
+    sin_m = sin(a_m);
+    n_inner = vec3(-cos_m, 0.0, -sin_m);
+    n_outer = vec3(cos_m, 0.0, sin_m);
+    // Inner face (faces toward centre) — winding verified via cross
+    // product to give -radial normal.
+    emit_box_face(m, i_s_b, i_e_b, i_e_t, i_s_t, n_inner);
+    // Outer face (faces away from centre).
+    emit_box_face(m, o_e_b, o_s_b, o_s_t, o_e_t, n_outer);
+    // Top face (+Y).
+    emit_box_face(m, i_e_t, o_e_t, o_s_t, i_s_t, tcw_up);
+  }
+}
+
 // ── Item placeholder geometry (Phase 6a.12) ───────────────────────
 
 // Emit a placeholder mesh for a map item at `pos` with nominal
