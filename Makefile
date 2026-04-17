@@ -62,7 +62,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -394,6 +394,14 @@ wasm-html-test:
 
 clean:
 	-rm -rf result.txt tests/dumps/*.txt tests/generated/* pkg target/* perf.data perf.data.old profiler.svg
+
+# Nuke only the wasm32 build trees + the browser bundle.  Run when a
+# rustc bump leaves a stale rlib that masks real wasm regressions
+# (pre-existing failures silently pass until a full rebuild).  Keep
+# this OUT of `make ci` — the fast gate stays fast.  Use before
+# `make wasm-html-test` or `make gallery` when you suspect staleness.
+clean-wasm:
+	-rm -rf target/wasm32-unknown-unknown target/wasm32-wasip2 doc/pkg
 
 wasm-mt:
 	RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
