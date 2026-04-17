@@ -2005,6 +2005,10 @@ impl Parser {
     /// Set up iterator variables for a for-loop header and return
     /// `(iter_var, pre_var, for_var, if_step, create_iter, iter_next)`.
     pub(crate) fn for_type(&mut self, in_type: &Type) -> Type {
+        // P161: unwrap &vector<T> so the element type resolves correctly.
+        if let Type::RefVar(inner) = in_type {
+            return self.for_type(inner);
+        }
         if let Type::Vector(t_nr, dep) = &in_type {
             let mut t = *t_nr.clone();
             if let Type::Enum(nr, true, _) = t {

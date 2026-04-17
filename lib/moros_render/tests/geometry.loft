@@ -77,6 +77,24 @@ fn test_emit_wall_quad() {
   assert(tr.y == 2.0, "top-right y");
 }
 
+fn test_emit_slope_face() {
+  m = mesh("slope");
+  c1 = vec3(0.0, 0.0, 0.0);
+  c2 = vec3(1.0, 0.0, 0.0);
+  emit_slope_face(m, c1, c2, 0.0, 3.0);
+  assert(len(m.vertices) == 4, "4 slope verts");
+  assert(len(m.triangles) == 2, "2 slope tris");
+  assert(m.vertices[3].pos.y == 3.0, "high-left y");
+}
+
+fn test_hex_corner_world() {
+  // Corner 0 (top) should be at centre + (0, 1)
+  c = hex_corner_world(0, 0, 0, 0);
+  assert(c.x == 0.0, "corner0 x");
+  assert(c.z == 1.0, "corner0 z");
+  assert(c.y == 0.0, "corner0 y");
+}
+
 fn test_build_hex_meshes_empty_map() {
   map = map_empty();
   meshes = build_hex_meshes(map);
@@ -88,6 +106,35 @@ fn test_build_hex_meshes_painted_map() {
   map_paint_material(map, 0, 0, 0, 1);
   map_paint_material(map, 1, 0, 0, 2);
   meshes = build_hex_meshes(map);
-  // At least 2 material groups (mat 0 for unpainted hexes + mat 1 + mat 2)
   assert(len(meshes) >= 2, "at least 2 material groups, got {len(meshes)}");
+  total_v = scene_vertex_count(meshes);
+  total_t = scene_triangle_count(meshes);
+  assert(total_v > 0, "has vertices");
+  assert(total_t > 0, "has triangles");
+}
+
+fn test_build_hex_meshes_with_walls() {
+  map = map_empty();
+  map_set_wall(map, 0, 0, 0, 0, 1);   // N wall on hex (0,0)
+  meshes = build_hex_meshes(map);
+  // Should have at least one mesh for hex surfaces + "walls" mesh
+  has_walls = false;
+  for wm in meshes {
+    if wm.name == "walls" {
+      has_walls = true;
+      assert(len(wm.vertices) == 4, "wall quad 4 verts");
+      assert(len(wm.triangles) == 2, "wall quad 2 tris");
+    }
+  }
+  assert(has_walls, "walls mesh present");
+}
+
+fn test_scene_stats() {
+  map = map_empty();
+  map_paint_material(map, 0, 0, 0, 1);
+  meshes = build_hex_meshes(map);
+  // 1 painted hex but chunk has 1024 hexes total.
+  // Each hex = 7 verts, 6 tris.
+  assert(scene_vertex_count(meshes) > 0, "vertex count > 0");
+  assert(scene_triangle_count(meshes) > 0, "triangle count > 0");
 }

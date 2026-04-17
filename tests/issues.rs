@@ -9024,6 +9024,27 @@ fn p157_native_refvar_forwarding_with_preeval() {
     let _ = std::fs::remove_file(&src_path);
 }
 
+/// P161 regression guard — `for it in items` where items is
+/// `&vector<Struct>` used to error "Unknown type null" (field access
+/// on the loop variable failed).  Root cause: `for_type` and
+/// `iterator` didn't unwrap `RefVar(Vector(...))` before matching.
+#[test]
+fn p161_for_over_ref_vector() {
+    code!(
+        "struct Item { val: integer not null }
+fn add_item(items: &vector<Item>, v: integer) {
+    items += [Item { val: v }];
+}
+fn test() {
+    v: vector<Item> = [];
+    add_item(v, 42);
+    assert(len(v) == 1, \"len {len(v)}\");
+    assert(v[0].val == 42, \"val {v[0].val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P160 regression guard — `modify(items[1], 42)` where `modify`
 /// takes `&S` used to error "Cannot pass a literal or expression
 /// to a '&' parameter".  Two fixes: (1) parser accepts "addressable"

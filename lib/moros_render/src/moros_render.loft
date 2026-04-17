@@ -125,31 +125,123 @@ pub fn emit_wall_quad(m: &Mesh, c1: Vec3, c2: Vec3, floor_y: float, ceil_y: floa
   m.triangles += [Triangle { a: base, b: base + 2, c: base + 3 }];
 }
 
+// ── Slope face geometry (Phase 6a.4) ──────────────────────────────
+
+// Emit a slope triangle between two adjacent hex corners at different
+// heights.  Used for terrain cliffs between hexes of different height.
+pub fn emit_slope_face(m: &Mesh, c1: Vec3, c2: Vec3, y_low: float, y_high: float) {
+  // Slope normal: approximate as the average of horizontal and vertical.
+  dx = c2.x - c1.x;
+  dz = c2.z - c1.z;
+  len_xz = sqrt(dx * dx + dz * dz);
+  nx = 0.0 - dz / len_xz;
+  nz = dx / len_xz;
+  dy = y_high - y_low;
+  len_slope = sqrt(len_xz * len_xz + dy * dy);
+  ny = len_xz / len_slope;
+  normal = vec3(nx * dy / len_slope, ny, nz * dy / len_slope);
+  base = len(m.vertices);
+  // Quad: low-left, low-right, high-right, high-left
+  m.vertices += [vertex(vec3(c1.x, y_low, c1.z), normal, vec2(0.0, 0.0))];
+  m.vertices += [vertex(vec3(c2.x, y_low, c2.z), normal, vec2(1.0, 0.0))];
+  m.vertices += [vertex(vec3(c2.x, y_high, c2.z), normal, vec2(1.0, 1.0))];
+  m.vertices += [vertex(vec3(c1.x, y_high, c1.z), normal, vec2(0.0, 1.0))];
+  tri1 = Triangle { a: base, b: base + 1, c: base + 2 };
+  tri2 = Triangle { a: base, b: base + 2, c: base + 3 };
+  m.triangles += [tri1];
+  m.triangles += [tri2];
+}
+
+// ── Hex neighbour helpers ─────────────────────────────────────────
+
+// Get the world-space position of hex corner `ci` (0-5) for hex (q,r,h).
+pub fn hex_corner_world(q: integer, r: integer, height: integer, ci: integer) -> Vec3 {
+  centre = hex_to_world(q, r, height);
+  off = hex_corner_offset(ci);
+  vec3(centre.x + off.x, centre.y, centre.z + off.y)
+}
+
+// Axial neighbour offsets for the 6 hex directions (flat-top).
+// dir 0=N(+r), 1=NE(+q), 2=SE(+q,-r), 3=S(-r), 4=SW(-q), 5=NW(-q,+r)
+fn neighbour_dq(dir: integer) -> integer {
+  if dir == 1 || dir == 2 { return 1; }
+  if dir == 4 || dir == 5 { return -1; }
+  0
+}
+
+fn neighbour_dr(dir: integer) -> integer {
+  if dir == 0 || dir == 5 { return -1; }
+  if dir == 3 || dir == 2 { return 1; }
+  0
+}
+
 // ── Scene builder (Phase 6a.13) ───────────────────────────────────
+
+// Find or create a mesh by material name, emit a hex surface into it.
+// Uses the map's material index as the mesh name for grouping.
+fn emit_to_material(meshes: vector<Mesh>, mat: integer, q: integer, r: integer, height: integer) {
+  mat_name = "{mat}";
+  for em in meshes {
+    if em.name == mat_name {
+      emit_hex_surface(em, q, r, height);
+      return;
+    }
+  }
+  meshes += [mesh(mat_name)];
+  nm = meshes[len(meshes) - 1];
+  emit_hex_surface(nm, q, r, height);
+}
+
+// Emit wall geometry for a hex's 3 stored edges (N, NE, SE).
+fn emit_hex_walls(wall_mesh: &Mesh, q: integer, r: integer, height: integer, h: Hex) {
+  floor_y = height as float * HEIGHT_SCALE;
+  ceil_y = floor_y + 1.0;   // 1 unit tall walls
+  if h.h_wall_n != 0 {
+    c1 = hex_corner_world(q, r, height, 5);   // top-left
+    c2 = hex_corner_world(q, r, height, 0);   // top
+    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+  }
+  if h.h_wall_ne != 0 {
+    c1 = hex_corner_world(q, r, height, 0);   // top
+    c2 = hex_corner_world(q, r, height, 1);   // top-right
+    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+  }
+  if h.h_wall_se != 0 {
+    c1 = hex_corner_world(q, r, height, 1);   // top-right
+    c2 = hex_corner_world(q, r, height, 2);   // bottom-right
+    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+  }
+}
 
 // Build meshes for all visible hexes in a map.
 // Returns a vector of meshes grouped by material index.
+// Also includes a "walls" mesh for all wall geometry.
 pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
   meshes: vector<Mesh> = [];
+  wall_mesh = mesh("walls");
   for bm_c in map.m_chunks {
     for bm_h in bm_c.ck_hexes {
       q = bm_c.ck_cx * 32 + bm_h#index / 32;
       r = bm_c.ck_cz * 32 + bm_h#index % 32;
-      // Find or create mesh for this material
-      mat = bm_h.h_material;
-      found = false;
-      for em in meshes {
-        if em.name == "{mat}" {
-          emit_hex_surface(em, q, r, bm_h.h_height);
-          found = true;
-        }
-      }
-      if !found {
-        meshes += [mesh("{mat}")];
-        nm = meshes[len(meshes) - 1];
-        emit_hex_surface(nm, q, r, bm_h.h_height);
-      }
+      emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
+      emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h);
     }
   }
+  if len(wall_mesh.vertices) > 0 {
+    meshes += [wall_mesh];
+  }
   meshes
+}
+
+// Summary statistics for a built scene.
+pub fn scene_vertex_count(meshes: vector<Mesh>) -> integer {
+  total = 0;
+  for sm in meshes { total = total + len(sm.vertices); }
+  total
+}
+
+pub fn scene_triangle_count(meshes: vector<Mesh>) -> integer {
+  total = 0;
+  for sm in meshes { total = total + len(sm.triangles); }
+  total
 }
