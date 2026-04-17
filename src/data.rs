@@ -12,7 +12,12 @@
 
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
 use crate::keys::Key;
-use crate::lexer::{Lexer, Position};
+use crate::lexer::Lexer;
+
+// Re-export Position so external consumers (tests, integrations) can
+// construct / pattern-match positions without depending on the private
+// `lexer` module.
+pub use crate::lexer::Position;
 use crate::variables::Function;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -1510,6 +1515,180 @@ impl Data {
                 .or_insert(def_nr);
         }
         true
+    }
+
+    /// Variant of [`import_all`] that **overwrites** forward-reference stubs
+    /// in the target source.  Real local definitions still win (local
+    /// precedence), but bindings that currently point to a `DefType::Unknown`
+    /// stub are replaced by the imported real definition.
+    ///
+    /// Used by the P173 package-mode driver's Phase C: when file B creates an
+    /// Unknown stub for a type that will come from file A's re-exported
+    /// namespace, this variant is what makes B's later references resolve
+    /// to A's real definition.
+    pub fn import_all_overwrite(&mut self, lib_source: u16, into_source: u16) {
+        let names: Vec<(String, u32)> = self
+            .def_names
+            .iter()
+            .filter(|((_, src), def_nr)| {
+                *src == lib_source && self.definitions[**def_nr as usize].pub_visible
+            })
+            .map(|((name, _), &def_nr)| (name.clone(), def_nr))
+            .collect();
+        for (name, def_nr) in names {
+            self.insert_or_replace_stub((name, into_source), def_nr);
+        }
+    }
+
+    /// Variant of [`import_name`] that overwrites forward-reference stubs.
+    /// See [`import_all_overwrite`] for the rationale.  Returns the same
+    /// `false` on lookup miss as [`import_name`].
+    pub fn import_name_overwrite(&mut self, lib_source: u16, into_source: u16, name: &str) -> bool {
+        let fn_key = format!("n_{name}");
+        let found_plain = self
+            .def_names
+            .get(&(name.to_string(), lib_source))
+            .copied()
+            .filter(|&d| self.definitions[d as usize].pub_visible);
+        let found_fn = self
+            .def_names
+            .get(&(fn_key.clone(), lib_source))
+            .copied()
+            .filter(|&d| self.definitions[d as usize].pub_visible);
+        if found_plain.is_none() && found_fn.is_none() {
+            return false;
+        }
+        if let Some(def_nr) = found_plain {
+            self.insert_or_replace_stub((name.to_string(), into_source), def_nr);
+        }
+        if let Some(def_nr) = found_fn {
+            self.insert_or_replace_stub((fn_key, into_source), def_nr);
+        }
+        true
+    }
+
+    /// Insert `def_nr` at `key`, or replace an existing binding when the
+    /// existing binding points to a `DefType::Unknown` stub.  Real local
+    /// bindings are preserved (local wins over imports).
+    fn insert_or_replace_stub(&mut self, key: (String, u16), def_nr: u32) {
+        match self.def_names.get(&key) {
+            Some(&existing)
+                if matches!(
+                    self.definitions[existing as usize].def_type,
+                    DefType::Unknown
+                ) =>
+            {
+                self.def_names.insert(key, def_nr);
+            }
+            None => {
+                self.def_names.insert(key, def_nr);
+            }
+            _ => {}
+        }
+    }
+
+    /// Rewrite every `Type::Unknown(stub_nr)` occurrence in any definition's
+    /// `returned` type or attribute typedefs to the resolved type from
+    /// `target_def_nr`.  Walks compound types (`Vector`, `RefVar`, `Iterator`,
+    /// `Tuple`, `Function`, `Rewritten`) recursively.
+    ///
+    /// Used by the P173 package-mode driver's Phase C after imports have been
+    /// propagated: stub def_nrs created during Phase B's deferred parsing
+    /// become resolvable once the real definition is reachable via
+    /// `def_names`, and this helper patches every `Type::Unknown(stub_nr)`
+    /// pointer to the real type.  Direct mutation of the stored type bypasses
+    /// `set_attr_type`'s panic guard, which only accepts replacement when the
+    /// outer type is already `Unknown` — we need to patch `Vector<Unknown>`,
+    /// `RefVar<Unknown>`, etc., where the outer wrapper is not `Unknown`.
+    pub fn rewrite_unknown_refs(&mut self, stub_nr: u32, target_def_nr: u32) {
+        let target_type = self.definitions[target_def_nr as usize].returned.clone();
+        for d_nr in 0..self.definitions.len() {
+            if let Some(new_ret) =
+                Self::rewrite_type_opt(&self.definitions[d_nr].returned, stub_nr, &target_type)
+            {
+                self.definitions[d_nr].returned = new_ret;
+            }
+            let n_attrs = self.definitions[d_nr].attributes.len();
+            for a_nr in 0..n_attrs {
+                if let Some(new_ty) = Self::rewrite_type_opt(
+                    &self.definitions[d_nr].attributes[a_nr].typedef,
+                    stub_nr,
+                    &target_type,
+                ) {
+                    self.definitions[d_nr].attributes[a_nr].typedef = new_ty;
+                }
+            }
+        }
+    }
+
+    /// Recursive helper for [`rewrite_unknown_refs`].  Returns
+    /// `Some(new_type)` when the subtree contained `Type::Unknown(stub)`
+    /// and was rewritten, or `None` when the subtree is unchanged.
+    #[allow(clippy::only_used_in_recursion)] // kept as associated fn for clarity
+    fn rewrite_type_opt(t: &Type, stub: u32, target: &Type) -> Option<Type> {
+        match t {
+            Type::Unknown(n) if *n == stub => Some(target.clone()),
+            Type::Vector(inner, deps) => Self::rewrite_type_opt(inner, stub, target)
+                .map(|new_inner| Type::Vector(Box::new(new_inner), deps.clone())),
+            Type::RefVar(inner) => Self::rewrite_type_opt(inner, stub, target)
+                .map(|new_inner| Type::RefVar(Box::new(new_inner))),
+            Type::Rewritten(inner) => Self::rewrite_type_opt(inner, stub, target)
+                .map(|new_inner| Type::Rewritten(Box::new(new_inner))),
+            Type::Iterator(step, internal) => {
+                let new_step = Self::rewrite_type_opt(step, stub, target);
+                let new_internal = Self::rewrite_type_opt(internal, stub, target);
+                if new_step.is_none() && new_internal.is_none() {
+                    None
+                } else {
+                    Some(Type::Iterator(
+                        Box::new(new_step.unwrap_or_else(|| (**step).clone())),
+                        Box::new(new_internal.unwrap_or_else(|| (**internal).clone())),
+                    ))
+                }
+            }
+            Type::Tuple(elems) => {
+                let mut changed = false;
+                let new_elems: Vec<Type> = elems
+                    .iter()
+                    .map(|e| match Self::rewrite_type_opt(e, stub, target) {
+                        Some(new_e) => {
+                            changed = true;
+                            new_e
+                        }
+                        None => e.clone(),
+                    })
+                    .collect();
+                if changed {
+                    Some(Type::Tuple(new_elems))
+                } else {
+                    None
+                }
+            }
+            Type::Function(args, ret, deps) => {
+                let mut changed = false;
+                let new_args: Vec<Type> = args
+                    .iter()
+                    .map(|a| match Self::rewrite_type_opt(a, stub, target) {
+                        Some(new_a) => {
+                            changed = true;
+                            new_a
+                        }
+                        None => a.clone(),
+                    })
+                    .collect();
+                let new_ret_opt = Self::rewrite_type_opt(ret, stub, target);
+                if changed || new_ret_opt.is_some() {
+                    Some(Type::Function(
+                        new_args,
+                        Box::new(new_ret_opt.unwrap_or_else(|| (**ret).clone())),
+                        deps.clone(),
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /** Get a definition.
