@@ -1,0 +1,12 @@
+[package]
+name    = "moros_ui"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/moros_ui.loft"
+
+[dependencies]
+moros_map    = { path = "../moros_map" }
+moros_editor = { path = "../moros_editor" }
+moros_sim    = { path = "../moros_sim" }

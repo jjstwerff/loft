@@ -1,0 +1,129 @@
+// Step 8 — hit-test + click routing tests.  Exercise every arm of
+// `panel_hit_test` and `route_click` without touching rendering.
+use moros_ui;
+use moros_sim;
+
+fn build_test_panel(tools: ToolState) -> Panel {
+  panel_build(tools, 1280, 720, 0, 0, 0, 0.0, 60)
+}
+
+// ── Outside the panel ────────────────────────────────────────────
+
+fn test_click_right_of_panel_is_world() {
+  p = build_test_panel(tool_state_default());
+  hit = panel_hit_test(p, 500, 300);
+  assert(hit is UhWorld, "x=500 (> 240) → world hit");
+}
+
+// ── Toolbar buttons ─────────────────────────────────────────────-
+
+fn test_click_on_toolbar_button_zero() {
+  p = build_test_panel(tool_state_default());
+  // First button at (8, 8) → (224, 32).
+  hit = panel_hit_test(p, 20, 15);
+  assert(hit is UhToolButton, "expected ToolButton hit");
+  if hit is UhToolButton { tb_id } {
+    assert(tb_id == 0, "button 0 got id {tb_id}");
+  }
+}
+
+fn test_click_on_toolbar_button_five() {
+  p = build_test_panel(tool_state_default());
+  // Button 5 at (8, 8 + 5*(32+4)) = (8, 188); h=32 → y in [188, 220).
+  hit = panel_hit_test(p, 100, 200);
+  assert(hit is UhToolButton, "expected ToolButton hit");
+  if hit is UhToolButton { tb_id } {
+    assert(tb_id == 5, "button 5 got id {tb_id}");
+  }
+}
+
+fn test_gap_between_buttons_is_none() {
+  p = build_test_panel(tool_state_default());
+  // Gap between button 0 (ends y=40) and button 1 (starts y=44) is y in [40, 44).
+  hit = panel_hit_test(p, 100, 42);
+  assert(hit is UhNone, "gap between buttons → UhNone");
+}
+
+// ── Palette list ────────────────────────────────────────────────-
+
+fn test_click_on_palette_item() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.RaiseHex;
+  p = build_test_panel(t);
+  // list_rect top is ~ 8 + 6*(32+4) + 2 + 8 = 234.  Click on item 0.
+  hit = panel_hit_test(p, 50, 240);
+  assert(hit is UhListItem, "expected ListItem hit");
+  if hit is UhListItem { li_idx } {
+    assert(li_idx == 0, "list item 0 got idx {li_idx}");
+  }
+}
+
+fn test_click_on_palette_item_two() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.RaiseHex;
+  p = build_test_panel(t);
+  // Item 2 starts at list_top + 2*20 = 234 + 40 = 274.
+  hit = panel_hit_test(p, 50, 280);
+  assert(hit is UhListItem, "expected ListItem hit");
+  if hit is UhListItem { li_idx } {
+    assert(li_idx == 2, "list item 2 got idx {li_idx}");
+  }
+}
+
+fn test_click_beyond_palette_items() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.RaiseHex;      // only 4 items
+  p = build_test_panel(t);
+  // Item index 10 would be at 234 + 10*20 = 434.  Out of item range.
+  hit = panel_hit_test(p, 50, 434);
+  assert(hit is UhNone, "past-last-item is UhNone (falls through)");
+}
+
+// ── route_click mutates ToolState ────────────────────────────────
+
+fn test_route_click_tool_button_sets_current() {
+  t = tool_state_default();
+  p = build_test_panel(t);
+  // Click button 2 (Lower) at (100, ~80).
+  rc_hit = route_click(p, t, 100, 80);
+  assert(t.ts_current == ToolKind.LowerHex, "tool now LowerHex");
+  assert(rc_hit is UhToolButton, "hit kind");
+}
+
+fn test_route_click_list_item_sets_height_step() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.RaiseHex;
+  p = build_test_panel(t);
+  // Click item 3 (height_step 8) at y = 234 + 3*20 = 294.
+  route_click(p, t, 50, 294);
+  assert(t.ts_height_step == 8, "step 8 got {t.ts_height_step}");
+}
+
+fn test_route_click_stencil_updates_index() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.PlaceStencil;
+  p = build_test_panel(t);
+  // Click item 2 at list_top + 2*20 = 274.
+  route_click(p, t, 50, 280);
+  assert(t.ts_selected_stencil == 2, "stencil idx 2");
+}
+
+fn test_route_click_world_preserves_tool_state() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.PlaceItem;
+  t.ts_selected_item = 7;
+  p = build_test_panel(t);
+  rc = route_click(p, t, 800, 400);
+  assert(rc is UhWorld, "world hit");
+  assert(t.ts_current == ToolKind.PlaceItem, "tool preserved");
+  assert(t.ts_selected_item == 7, "item idx preserved");
+}
+
+// ── Tool dispatch helpers ────────────────────────────────────────
+
+fn test_tool_of_id_cardinal() {
+  assert(tool_of_id(0) == ToolKind.None,         "0 = None");
+  assert(tool_of_id(1) == ToolKind.RaiseHex,     "1 = RaiseHex");
+  assert(tool_of_id(5) == ToolKind.PlaceWall,    "5 = PlaceWall");
+  assert(tool_of_id(99) == ToolKind.None,        "OOB → None");
+}

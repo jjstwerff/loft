@@ -1,0 +1,18 @@
+// Placeholder for the walkable editor's 8x8 bitmap font.
+//
+// The full font (ASCII 32..127, 96 glyphs × 8 rows) will land
+// alongside the loft_gl text bridge in Step 9.  Until then this
+// file only exposes the glyph size — enough for `panel_render`'s
+// layout math (advance-width, baseline) to be written and tested
+// without the glyph data.
+
+pub GLYPH_W = 8;
+pub GLYPH_H = 8;
+
+// Pixel width of a rendered text string at default scale.
+pub fn text_width(s: text) -> integer {
+  len(s) * GLYPH_W
+}
+
+// Pixel height of a single line of text.
+pub fn text_height() -> integer { GLYPH_H }

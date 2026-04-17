@@ -1,0 +1,111 @@
+// Step 8 — panel layout tests.  Exercise `panel_rect`,
+// `toolbar_button_rect`, `list_rect`, `status_rect`, and
+// `panel_build` without touching real rendering.
+use moros_ui;
+use moros_sim;
+use graphics;
+
+// ── Rect helpers ──────────────────────────────────────────────────
+
+fn test_rect_contains_inside() {
+  r = rect(10, 10, 100, 50);
+  assert(rect_contains(r, 50, 30), "centre inside");
+}
+
+fn test_rect_contains_boundaries() {
+  r = rect(10, 10, 100, 50);
+  assert(rect_contains(r, 10, 10), "top-left corner inside");
+  assert(!rect_contains(r, 110, 10), "right edge exclusive");
+  assert(!rect_contains(r, 10, 60), "bottom edge exclusive");
+  assert(!rect_contains(r, 9, 10), "just-left outside");
+  assert(!rect_contains(r, 10, 9), "just-above outside");
+}
+
+// ── Panel layout at standard resolution ──────────────────────────
+
+fn test_panel_rect_standard() {
+  r = panel_rect(1280, 720);
+  assert(r.r_x == 0, "panel x");
+  assert(r.r_y == 0, "panel y");
+  assert(r.r_w == 240, "panel w = 240");
+  assert(r.r_h == 720, "panel h spans window");
+}
+
+fn test_toolbar_buttons_fit_six_within_240() {
+  // All six buttons must fit above the separator + list area.
+  b0 = toolbar_button_rect(0);
+  b5 = toolbar_button_rect(5);
+  assert(b0.r_y == 8, "first button starts at top margin");
+  assert(b5.r_y + b5.r_h < 240, "last button ends before panel mid-point");
+}
+
+fn test_toolbar_button_width() {
+  b = toolbar_button_rect(2);
+  // Panel 240 wide, 8px margins each side → 224px.
+  assert(b.r_w == 224, "button w = panel - 16");
+}
+
+fn test_list_rect_non_empty_at_common_sizes() {
+  l720 = list_rect(720);
+  l1080 = list_rect(1080);
+  assert(l720.r_h > 100, "list h > 100 at 720p");
+  assert(l1080.r_h > l720.r_h, "list grows with window");
+}
+
+fn test_status_rect_anchored_bottom() {
+  s = status_rect(720);
+  assert(s.r_y == 720 - 24, "status anchored to bottom");
+  assert(s.r_h == 24, "status h fixed");
+  assert(s.r_x == 0, "status spans panel x");
+}
+
+// ── panel_build produces a complete panel ─────────────────────────
+
+fn test_panel_build_has_six_toolbar_buttons() {
+  t = tool_state_default();
+  p = panel_build(t, 1280, 720, 0, 0, 0, 0.0, 60);
+  assert(len(p.p_toolbar) == 6, "toolbar has 6 buttons got {len(p.p_toolbar)}");
+}
+
+fn test_panel_build_selects_current_tool() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.PlaceItem;            // id = 4
+  p = panel_build(t, 1280, 720, 0, 0, 0, 0.0, 60);
+  assert(p.p_toolbar[0].btn_selected == false, "None not selected");
+  assert(p.p_toolbar[4].btn_selected == true,  "Item selected");
+}
+
+fn test_panel_build_height_step_palette() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.RaiseHex;
+  t.ts_height_step = 4;                         // list idx 2
+  p = panel_build(t, 1280, 720, 0, 0, 0, 0.0, 60);
+  assert(len(p.p_list.lb_items) == 4, "4 height-step labels");
+  assert(p.p_list.lb_selected == 2, "step=4 selects idx 2");
+}
+
+fn test_panel_build_stencil_palette() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.PlaceStencil;
+  t.ts_selected_stencil = 1;                    // house_small
+  p = panel_build(t, 1280, 720, 0, 0, 0, 0.0, 60);
+  assert(len(p.p_list.lb_items) == stencil_palette_size(), "stencil count matches");
+  assert(p.p_list.lb_selected == 1, "selected stencil idx preserved");
+  assert(p.p_list.lb_items[1] == "house_small", "stencil name 1");
+}
+
+fn test_panel_build_none_tool_empty_palette() {
+  t = tool_state_default();
+  t.ts_current = ToolKind.None;
+  p = panel_build(t, 1280, 720, 0, 0, 0, 0.0, 60);
+  assert(len(p.p_list.lb_items) == 0, "None → empty palette");
+  assert(p.p_list.lb_selected == -1, "no selection");
+}
+
+fn test_tool_id_round_trip() {
+  for ti_i in 0..6 {
+    tk = tool_of_id(ti_i);
+    back = id_of_tool(tk);
+    assert(back == ti_i, "round-trip id {ti_i} → {back}");
+  }
+}
