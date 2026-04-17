@@ -1,0 +1,148 @@
+// Step 7 — see-through cone occlusion tests.
+use moros_render;
+use graphics;
+
+// ── Aabb helpers ──────────────────────────────────────────────────
+
+fn test_aabb_from_sphere() {
+  b = aabb_from_sphere(vec3(1.0, 2.0, 3.0), 0.5);
+  assert(b.aabb_min.x == 0.5, "min x");
+  assert(b.aabb_min.y == 1.5, "min y");
+  assert(b.aabb_min.z == 2.5, "min z");
+  assert(b.aabb_max.x == 1.5, "max x");
+  assert(b.aabb_max.y == 2.5, "max y");
+  assert(b.aabb_max.z == 3.5, "max z");
+}
+
+fn test_aabb_from_points_normalises() {
+  // Swapped inputs: min-based componentwise.
+  b = aabb_from_points(vec3(3.0, 2.0, 1.0), vec3(1.0, 5.0, 4.0));
+  assert(b.aabb_min.x == 1.0, "min x");
+  assert(b.aabb_min.y == 2.0, "min y");
+  assert(b.aabb_min.z == 1.0, "min z");
+  assert(b.aabb_max.x == 3.0, "max x");
+  assert(b.aabb_max.y == 5.0, "max y");
+  assert(b.aabb_max.z == 4.0, "max z");
+}
+
+fn test_mesh_aabb_empty_is_origin() {
+  m = mesh("empty");
+  b = mesh_aabb(m);
+  assert(b.aabb_min.x == 0.0, "empty min");
+  assert(b.aabb_max.x == 0.0, "empty max");
+}
+
+fn test_mesh_aabb_tracks_extents() {
+  // Avatar at (0, 0, 0) radius 0.3 → bounds (-0.3, 0, -0.3) to (0.3, 0.6, 0.3).
+  m = mesh("t");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  b = mesh_aabb(m);
+  assert(b.aabb_min.x == -0.3, "min x");
+  assert(b.aabb_min.y == 0.0, "min y feet");
+  assert(b.aabb_max.x == 0.3, "max x");
+  assert(b.aabb_max.y == 0.6, "max y head");
+}
+
+// ── view_cone ─────────────────────────────────────────────────────
+
+fn test_view_cone_axis_and_length() {
+  c = view_cone(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 10.0), 15.0);
+  assert(c.vc_length == 10.0, "length");
+  assert(c.vc_axis.z > 0.999, "axis z ~ 1");
+  axi_x = c.vc_axis.x;
+  if axi_x < 0.0 { axi_x = 0.0 - axi_x; }
+  assert(axi_x < 0.001, "axis x ~ 0");
+}
+
+fn test_view_cone_degenerate_zero_length() {
+  // eye == target: fallback axis doesn't NaN.
+  c = view_cone(vec3(1.0, 1.0, 1.0), vec3(1.0, 1.0, 1.0), 15.0);
+  assert(c.vc_length == 0.0, "zero len");
+  // axis should be a unit vector (our fallback is (0,0,1))
+  axm = c.vc_axis.z;
+  if axm < 0.0 { axm = 0.0 - axm; }
+  assert(axm > 0.999, "fallback axis unit");
+}
+
+// ── aabb_vs_cone ──────────────────────────────────────────────────
+
+fn make_zcone() -> ViewCone {
+  view_cone(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 10.0), 15.0)
+}
+
+fn test_cone_sees_on_axis_aabb() {
+  c = make_zcone();
+  // tiny box at z=5 (midway) — well inside the cone.
+  b = aabb_from_points(vec3(-0.05, -0.05, 4.95), vec3(0.05, 0.05, 5.05));
+  assert(aabb_vs_cone(b, c), "on-axis at midpoint");
+}
+
+fn test_cone_misses_far_off_axis() {
+  c = make_zcone();
+  // Box 5 units off-axis at z=5 — way outside 15° cone (radius ~1.34).
+  b = aabb_from_points(vec3(4.95, -0.05, 4.95), vec3(5.05, 0.05, 5.05));
+  assert(!aabb_vs_cone(b, c), "5 units off-axis misses");
+}
+
+fn test_cone_near_margin_excludes() {
+  c = make_zcone();
+  // Box at z=1.5 — below NEAR_MARGIN × 10 = 2.0
+  b = aabb_from_points(vec3(-0.05, -0.05, 1.4), vec3(0.05, 0.05, 1.5));
+  assert(!aabb_vs_cone(b, c), "near-margin excludes close");
+}
+
+fn test_cone_far_margin_excludes() {
+  c = make_zcone();
+  // Box at z=9 — beyond FAR = 0.7 × 10 = 7.0.
+  b = aabb_from_points(vec3(-0.05, -0.05, 8.95), vec3(0.05, 0.05, 9.05));
+  assert(!aabb_vs_cone(b, c), "far-margin excludes near-target");
+}
+
+fn test_cone_rotated_axis() {
+  // Cone aimed +X instead of +Z.
+  c = view_cone(vec3(0.0, 0.0, 0.0), vec3(10.0, 0.0, 0.0), 15.0);
+  // Box on +X axis at x=5 — inside cone.
+  bx = aabb_from_points(vec3(4.95, -0.05, -0.05), vec3(5.05, 0.05, 0.05));
+  assert(aabb_vs_cone(bx, c), "+X cone sees on-axis");
+  // Box on +Z axis at z=5 — off-axis, outside.
+  bz = aabb_from_points(vec3(-0.05, -0.05, 4.95), vec3(0.05, 0.05, 5.05));
+  assert(!aabb_vs_cone(bz, c), "+X cone misses +Z box");
+}
+
+fn test_cone_corner_hit() {
+  // Big box whose centre is outside but a corner pokes into the cone.
+  c = make_zcone();
+  // Box from (0.3, -0.5, 4.5) to (2.0, 0.5, 5.5).  Centre at (1.15, 0, 5).
+  // At z=5 the cone radius is 5 * tan(15°) ≈ 1.34 — centre x=1.15 inside.
+  b = aabb_from_points(vec3(0.3, -0.5, 4.5), vec3(2.0, 0.5, 5.5));
+  assert(aabb_vs_cone(b, c), "cone sees large box whose corner is inside");
+}
+
+// ── flag_occluders ────────────────────────────────────────────────
+
+fn test_flag_occluders_parallel_to_nodes() {
+  sc = scene("t");
+  // Two meshes: one at z=5 (on axis of cone pointing +Z), one at x=20 (far off).
+  m1 = mesh("close");
+  emit_box(m1, vec3(-0.1, -0.1, 4.9), vec3(0.1, 0.1, 5.1));
+  m1_i = add_mesh(sc, m1);
+  m2 = mesh("far_offaxis");
+  emit_box(m2, vec3(19.9, -0.1, -0.1), vec3(20.1, 0.1, 0.1));
+  m2_i = add_mesh(sc, m2);
+  dm = add_material(sc, material("dm"));
+  add_node(sc, node("close", m1_i, dm));
+  add_node(sc, node("far", m2_i, dm));
+
+  c = view_cone(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 10.0), 15.0);
+  flags = flag_occluders(sc, c);
+  assert(len(flags) == 2, "flags parallel to nodes");
+  assert(flags[0], "close box flagged as occluder");
+  assert(!flags[1], "far-off-axis not an occluder");
+}
+
+fn test_flag_occluders_all_clear_when_scene_empty() {
+  sc = scene("empty");
+  c = make_zcone();
+  flags = flag_occluders(sc, c);
+  assert(len(flags) == 0, "no nodes → no flags");
+}

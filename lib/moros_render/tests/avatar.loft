@@ -1,0 +1,121 @@
+// Step 5 — avatar mesh + scene wiring tests.
+use moros_render;
+use graphics;
+
+// ── Mesh shape ────────────────────────────────────────────────────
+
+fn test_avatar_vertex_count() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  assert(len(m.vertices) == 6, "6 vertices, got {len(m.vertices)}");
+}
+
+fn test_avatar_triangle_count() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  assert(len(m.triangles) == 8, "8 triangles, got {len(m.triangles)}");
+}
+
+// ── Geometry at origin ────────────────────────────────────────────
+
+fn test_avatar_centered_above_feet() {
+  // feet at y=0, radius=0.3 → ball centre at y=0.3 → +Y vertex at y=0.6.
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  // Vertex 2 is +Y.
+  v_py = m.vertices[2];
+  assert(v_py.pos.y == 0.6, "+Y at y=0.6 got {v_py.pos.y}");
+  v_my = m.vertices[3];
+  assert(v_my.pos.y == 0.0, "-Y at y=0.0 (feet) got {v_my.pos.y}");
+}
+
+fn test_avatar_horizontal_extents() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  // +X vertex at (0.3, 0.3, 0.0)
+  v_px = m.vertices[0];
+  assert(v_px.pos.x == 0.3, "+X at x=0.3 got {v_px.pos.x}");
+  // -X at (-0.3, 0.3, 0.0)
+  v_mx = m.vertices[1];
+  assert(v_mx.pos.x == -0.3, "-X at x=-0.3 got {v_mx.pos.x}");
+  // +Z at (0, 0.3, 0.3)
+  v_pz = m.vertices[4];
+  assert(v_pz.pos.z == 0.3, "+Z at z=0.3 got {v_pz.pos.z}");
+}
+
+fn test_avatar_normals_point_outward() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 0.3);
+  assert(m.vertices[0].normal.x == 1.0, "+X normal");
+  assert(m.vertices[1].normal.x == -1.0, "-X normal");
+  assert(m.vertices[2].normal.y == 1.0, "+Y normal");
+  assert(m.vertices[5].normal.z == -1.0, "-Z normal");
+}
+
+// ── Offset placement ──────────────────────────────────────────────
+
+fn test_avatar_offset_position() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(5.0, 2.0, -3.0), 0.3);
+  // Ball centre = (5, 2.3, -3), so +Y = (5, 2.6, -3)
+  v_py = m.vertices[2];
+  assert(v_py.pos.x == 5.0, "centre x {v_py.pos.x}");
+  assert(v_py.pos.y == 2.6, "+Y y {v_py.pos.y}");
+  assert(v_py.pos.z == -3.0, "centre z {v_py.pos.z}");
+}
+
+fn test_avatar_custom_radius() {
+  m = mesh("avatar");
+  emit_player_avatar(m, vec3(0.0, 0.0, 0.0), 1.5);
+  v_px = m.vertices[0];
+  assert(v_px.pos.x == 1.5, "+X at custom radius got {v_px.pos.x}");
+}
+
+// ── Scene integration ────────────────────────────────────────────
+
+fn test_avatar_add_to_scene_registers_everything() {
+  sc = scene("test");
+  node_idx = avatar_add_to_scene(sc, vec3(0.0, 0.0, 0.0), 0.3);
+  assert(len(sc.meshes) == 1, "one mesh");
+  assert(len(sc.materials) == 1, "one material");
+  assert(len(sc.nodes) == 1, "one node");
+  assert(node_idx == 0, "returned first node idx got {node_idx}");
+}
+
+fn test_avatar_material_is_red() {
+  sc = scene("test");
+  avatar_add_to_scene(sc, vec3(0.0, 0.0, 0.0), 0.3);
+  mat = sc.materials[0];
+  assert(mat.base_color_r > 0.8, "red channel high");
+  assert(mat.base_color_g < 0.3, "green channel low");
+  assert(mat.base_color_b < 0.3, "blue channel low");
+  assert(mat.base_color_a == 1.0, "opaque");
+}
+
+fn test_avatar_node_name() {
+  sc = scene("test");
+  avatar_add_to_scene(sc, vec3(0.0, 0.0, 0.0), 0.3);
+  n = sc.nodes[0];
+  assert(n.name == "avatar", "node named avatar got {n.name}");
+}
+
+fn test_avatar_coexists_with_map_scene() {
+  // Add avatar alongside an existing scene built from a map.
+  m = map_empty();
+  map_set_height(m, 0, 0, 0, 4);
+  sc = map_build_scene(m);
+  meshes_before = len(sc.meshes);
+  mats_before = len(sc.materials);
+  avatar_add_to_scene(sc, vec3(0.0, 1.0, 0.0), 0.3);
+  assert(len(sc.meshes) == meshes_before + 1, "avatar mesh added");
+  assert(len(sc.materials) == mats_before + 1, "avatar material added");
+}
+
+// ── Convenience helper ────────────────────────────────────────────
+
+fn test_avatar_mesh_helper_populates_vertices() {
+  m = avatar_mesh(vec3(0.0, 0.0, 0.0), 0.3);
+  assert(len(m.vertices) == 6, "6 verts");
+  assert(len(m.triangles) == 8, "8 tris");
+  assert(m.name == "avatar", "mesh named avatar");
+}

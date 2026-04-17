@@ -712,6 +712,47 @@ pub fn camera_pan(cam: &RenderCamera, dx: float, dy: float, dz: float) {
   cam.target.z = cam.target.z + dz;
 }
 
+// ── Camera modes (walkable editor) ─────────────────────────────────
+//
+// Two presets for third-person follow and top-down overview, plus an
+// unbounded-zoom variant of camera_zoom for "whole map from orbit".
+// Signatures take primitives (Vec3 + facing radians) so moros_render
+// stays free of a moros_sim dependency.
+
+pub enum CameraMode { Follow, Overview }
+
+pub CAMERA_ZOOM_MAX_UNBOUNDED = 50000.0;
+
+// Third-person follow: target the avatar's head, azimuth set so the
+// camera orbits behind the avatar's facing direction.  Elevation and
+// distance stay under user control (defaults: 30°, 10 units).
+//
+// Facing convention: 0 rad = looking down +Z.  Camera sits on the
+// opposite side along the facing vector.
+pub fn camera_follow(head_pos: Vec3, facing_rad: float, cam: &RenderCamera) {
+  cam.target = head_pos;
+  facing_deg = facing_rad * 180.0 / PI;
+  cam.azimuth = 270.0 - facing_deg;
+}
+
+// Top-down overview: pin elevation near vertical (89° avoids the
+// gimbal-flip clamp).  Auto-expands distance if it was zoomed in too
+// close for an overview to be useful.
+pub fn camera_overview(ground_pos: Vec3, cam: &RenderCamera) {
+  cam.target = ground_pos;
+  cam.elevation = 89.0;
+  if cam.distance < 20.0 { cam.distance = 80.0; }
+}
+
+// Like camera_zoom but caps at CAMERA_ZOOM_MAX_UNBOUNDED (50 000) so
+// the camera can back out far enough to see a full 32×32 chunk.
+pub fn camera_zoom_unbounded(cam: &RenderCamera, delta: float) {
+  zoom_d = cam.distance + delta;
+  if zoom_d < 0.1 { zoom_d = 0.1; }
+  if zoom_d > CAMERA_ZOOM_MAX_UNBOUNDED { zoom_d = CAMERA_ZOOM_MAX_UNBOUNDED; }
+  cam.distance = zoom_d;
+}
+
 // ── Picker (Phase 6a.16 / MO.9b) ──────────────────────────────────
 
 // Build a world-space ray direction from normalized device
@@ -1081,4 +1122,220 @@ pub fn map_build_scene(map: Map) -> Scene {
 pub fn map_export_glb(map: Map, path: text) {
   sc = map_build_scene(map);
   save_scene_glb(sc, path);
+}
+
+// ── Avatar mesh (walkable editor — Step 5) ─────────────────────────
+//
+// An octahedron centred on `pos + (0, radius, 0)` with 6 vertices
+// and 8 triangles.  Low-poly on purpose: it's a placeholder "red
+// ball" for the walkable editor avatar.  Takes primitives rather
+// than `Player` so moros_render keeps its one-way dependency on
+// moros_sim (P173 covers the full two-way story, but keeping the
+// primitive surface matches camera_follow / camera_overview).
+
+pub fn emit_player_avatar(m: &Mesh, pos: Vec3, radius: float) {
+  // Centre the ball on the avatar's head — caller supplies feet pos.
+  cx = pos.x;
+  cy = pos.y + radius;
+  cz = pos.z;
+  r = radius;
+  av_uv = vec2(0.0, 0.0);
+  av_base = len(m.vertices);
+  // 6 axis-aligned vertices with outward normals, added directly
+  // to the mesh to match the other emit_* functions' mutation
+  // pattern (add_vertex takes self by value; direct += on the
+  // vector field threads the mutation through the &Mesh ref).
+  m.vertices += [vertex(vec3(cx + r, cy,     cz    ), vec3( 1.0,  0.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx - r, cy,     cz    ), vec3(-1.0,  0.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy + r, cz    ), vec3( 0.0,  1.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy - r, cz    ), vec3( 0.0, -1.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy,     cz + r), vec3( 0.0,  0.0,  1.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy,     cz - r), vec3( 0.0,  0.0, -1.0), av_uv)];
+  av_vpx = av_base;
+  av_vmx = av_base + 1;
+  av_vpy = av_base + 2;
+  av_vmy = av_base + 3;
+  av_vpz = av_base + 4;
+  av_vmz = av_base + 5;
+  // Top half: four triangles around +Y (CCW from outside).
+  m.triangles += [Triangle { a: av_vpy, b: av_vpx, c: av_vpz }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vpz, c: av_vmx }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vmx, c: av_vmz }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vmz, c: av_vpx }];
+  // Bottom half: four triangles around -Y (reversed winding).
+  m.triangles += [Triangle { a: av_vmy, b: av_vpz, c: av_vpx }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vmx, c: av_vpz }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vmz, c: av_vmx }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vpx, c: av_vmz }];
+}
+
+// Convenience: produce a fresh mesh named "avatar" containing just
+// the avatar geometry.  Callers typically add this + a red material
+// + a node to a Scene (see `avatar_add_to_scene`).
+pub fn avatar_mesh(pos: Vec3, radius: float) -> Mesh {
+  av_m = mesh("avatar");
+  emit_player_avatar(av_m, pos, radius);
+  av_m
+}
+
+// Add the avatar mesh + red material + corresponding node to `scene`.
+// Returns the node index.  The material has PBR roughness 0.4 /
+// metallic 0.0 — matte red consistent with the "placeholder red ball"
+// brief.
+pub fn avatar_add_to_scene(scene: Scene, pos: Vec3, radius: float) -> integer {
+  av_m_idx = add_mesh(scene, avatar_mesh(pos, radius));
+  av_mat = material_color("avatar_red", 0.95, 0.15, 0.15);
+  av_mat.roughness = 0.4;
+  av_mat_idx = add_material(scene, av_mat);
+  av_n_idx = len(scene.nodes);
+  add_node(scene, node("avatar", av_m_idx, av_mat_idx));
+  av_n_idx
+}
+
+// ── See-through occlusion (walkable editor — Step 7) ───────────────
+//
+// CPU-side AABB-vs-cone test for "everything between camera and
+// player within 30° of the view axis renders as wireframe".  No
+// stencil/depth-peel GPU tricks — identical logic runs under the
+// interpreter, native OpenGL, and WebGL.
+
+pub struct Aabb {
+  aabb_min: Vec3,
+  aabb_max: Vec3,
+}
+
+pub fn aabb_from_sphere(centre: Vec3, radius: float) -> Aabb {
+  Aabb {
+    aabb_min: vec3(centre.x - radius, centre.y - radius, centre.z - radius),
+    aabb_max: vec3(centre.x + radius, centre.y + radius, centre.z + radius),
+  }
+}
+
+// AABB from two arbitrary corner points (doesn't assume min/max
+// ordering — computes componentwise min and max).
+pub fn aabb_from_points(a: Vec3, b: Vec3) -> Aabb {
+  ap_min_x = if a.x < b.x { a.x } else { b.x };
+  ap_min_y = if a.y < b.y { a.y } else { b.y };
+  ap_min_z = if a.z < b.z { a.z } else { b.z };
+  ap_max_x = if a.x > b.x { a.x } else { b.x };
+  ap_max_y = if a.y > b.y { a.y } else { b.y };
+  ap_max_z = if a.z > b.z { a.z } else { b.z };
+  Aabb {
+    aabb_min: vec3(ap_min_x, ap_min_y, ap_min_z),
+    aabb_max: vec3(ap_max_x, ap_max_y, ap_max_z),
+  }
+}
+
+// Bounding box of every vertex in a mesh.  O(vertices) — cache at
+// mesh-build time if this shows up in frame profiles.
+pub fn mesh_aabb(m: Mesh) -> Aabb {
+  if len(m.vertices) == 0 {
+    return Aabb {
+      aabb_min: vec3(0.0, 0.0, 0.0),
+      aabb_max: vec3(0.0, 0.0, 0.0),
+    };
+  }
+  ma_mn_x = m.vertices[0].pos.x;
+  ma_mn_y = m.vertices[0].pos.y;
+  ma_mn_z = m.vertices[0].pos.z;
+  ma_mx_x = ma_mn_x;
+  ma_mx_y = ma_mn_y;
+  ma_mx_z = ma_mn_z;
+  for ma_mv in m.vertices {
+    if ma_mv.pos.x < ma_mn_x { ma_mn_x = ma_mv.pos.x; }
+    if ma_mv.pos.y < ma_mn_y { ma_mn_y = ma_mv.pos.y; }
+    if ma_mv.pos.z < ma_mn_z { ma_mn_z = ma_mv.pos.z; }
+    if ma_mv.pos.x > ma_mx_x { ma_mx_x = ma_mv.pos.x; }
+    if ma_mv.pos.y > ma_mx_y { ma_mx_y = ma_mv.pos.y; }
+    if ma_mv.pos.z > ma_mx_z { ma_mx_z = ma_mv.pos.z; }
+  }
+  Aabb {
+    aabb_min: vec3(ma_mn_x, ma_mn_y, ma_mn_z),
+    aabb_max: vec3(ma_mx_x, ma_mx_y, ma_mx_z),
+  }
+}
+
+pub OCCLUSION_HALF_ANGLE_DEG = 15.0;    // 30° full cone
+pub OCCLUSION_NEAR_MARGIN = 0.2;        // skip first 20% of axis
+pub OCCLUSION_FAR_MARGIN = 0.3;         // skip last 30% near target
+
+pub struct ViewCone {
+  vc_apex:       Vec3,
+  vc_axis:       Vec3,              // unit vector
+  vc_length:     float not null,    // |eye → target|
+  vc_tan_half:   float not null,    // tan(half-angle)
+  vc_t_near:     float not null,    // normalised axis position [0, 1]
+  vc_t_far:      float not null,
+}
+
+pub fn view_cone(eye: Vec3, target: Vec3, half_angle_deg: float) -> ViewCone {
+  vc_diff = sub3(target, eye);
+  vc_len  = length3(vc_diff);
+  vc_axis = if vc_len > 0.000001 {
+    scale3(vc_diff, 1.0 / vc_len)
+  } else {
+    vec3(0.0, 0.0, 1.0)
+  };
+  vc_rad = half_angle_deg * PI / 180.0;
+  ViewCone {
+    vc_apex:     eye,
+    vc_axis:     vc_axis,
+    vc_length:   vc_len,
+    vc_tan_half: tan(vc_rad),
+    vc_t_near:   OCCLUSION_NEAR_MARGIN,
+    vc_t_far:    1.0 - OCCLUSION_FAR_MARGIN,
+  }
+}
+
+// Internal: is the point `p` inside the truncated cone `c`?
+fn point_in_cone(p: Vec3, c: ViewCone) -> boolean {
+  pic_v = sub3(p, c.vc_apex);
+  pic_t_proj = dot3(pic_v, c.vc_axis);
+  pic_t = pic_t_proj / c.vc_length;
+  if pic_t < c.vc_t_near { return false; }
+  if pic_t > c.vc_t_far { return false; }
+  pic_axial = scale3(c.vc_axis, pic_t_proj);
+  pic_lateral = sub3(pic_v, pic_axial);
+  pic_radius = pic_t_proj * c.vc_tan_half;
+  dot3(pic_lateral, pic_lateral) <= pic_radius * pic_radius
+}
+
+// AABB vs cone — centre test + 8 corner tests.  Conservative on
+// the false-negative side (tiny geometry inside the cone with no
+// vertex or centre inside may be missed), acceptable for hex /
+// wall AABBs at the walkable editor's scale.
+pub fn aabb_vs_cone(b: Aabb, c: ViewCone) -> boolean {
+  avc_centre = vec3(
+    (b.aabb_min.x + b.aabb_max.x) * 0.5,
+    (b.aabb_min.y + b.aabb_max.y) * 0.5,
+    (b.aabb_min.z + b.aabb_max.z) * 0.5,
+  );
+  if point_in_cone(avc_centre, c) { return true; }
+  for avc_ci in 0..8 {
+    avc_cx = if avc_ci & 1 != 0 { b.aabb_max.x } else { b.aabb_min.x };
+    avc_cy = if avc_ci & 2 != 0 { b.aabb_max.y } else { b.aabb_min.y };
+    avc_cz = if avc_ci & 4 != 0 { b.aabb_max.z } else { b.aabb_min.z };
+    if point_in_cone(vec3(avc_cx, avc_cy, avc_cz), c) { return true; }
+  }
+  false
+}
+
+// Flag each scene node for wireframe vs solid render based on
+// whether its mesh's AABB intersects the cone.  Returns a vector
+// parallel to `scene.nodes` (true = wireframe / occluder).  Nodes
+// whose mesh_idx is out of range flag as false (safe default).
+// The avatar node is NOT special-cased here; callers who render
+// the avatar should either draw it last or exclude it by name.
+pub fn flag_occluders(scene: Scene, cone: ViewCone) -> vector<boolean> {
+  fo_flags: vector<boolean> = [];
+  for fo_n in scene.nodes {
+    fo_mi = fo_n.mesh_idx;
+    if fo_mi < 0 || fo_mi >= len(scene.meshes) {
+      fo_flags += [false];
+    } else {
+      fo_box = mesh_aabb(scene.meshes[fo_mi]);
+      fo_flags += [aabb_vs_cone(fo_box, cone)];
+    }
+  }
+  fo_flags
 }
