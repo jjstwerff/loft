@@ -435,9 +435,11 @@ Rules to avoid codegen panics:
 
 ## File I/O patterns
 
+### Text files (UTF-8)
+
 ```loft
 f = file("path/to/file.txt");
-content = f.content();         // full text content
+content = f.content();         // full text content (UTF-8)
 lines = f.lines();             // vector<text> of lines
 
 out = file("output.txt");
@@ -449,7 +451,62 @@ for ef in dir.files() {
 }
 
 if f.exists() { }
+size_bytes = f.size;            // long — works for any file
 ```
+
+**`f.content()` is UTF-8-only.**  It silently returns `""` on a
+binary file.  For non-text data, use the binary idiom below.
+
+### Binary files (structured reads and writes)
+
+Set `f#format` to `LittleEndian` or `BigEndian`, then use `#read(n)`
+for reads and `f += value` for writes.  `#next` seeks to an
+absolute byte offset.  All file-handle operations should live
+inside a `{ ... }` scope block so the handle flushes/closes at
+block exit:
+
+```loft
+// --- Read a 12-byte GLB header ---
+{
+  f = file("model.glb");
+  f#format = LittleEndian;
+  magic   = f#read(4) as i32;         // 0x46546C67 = 'glTF'
+  version = f#read(4) as i32;         // 2
+  total   = f#read(4) as i32;         // declared file length
+  // Seek past the header + JSON data to a later chunk:
+  f#next = (20 + json_len) as long;
+  bin_len = f#read(4) as i32;
+}
+
+// --- Write a binary chunk-structured file ---
+{
+  f = file("model.glb");
+  f#format = LittleEndian;
+  f += 0x46546C67;          // 4 bytes: i32 magic
+  f += 2;                   // 4 bytes: i32 version
+  f += (32 as u8);          // single byte (ASCII space)
+  f += "chunk of text";     // raw UTF-8 bytes
+  f += my_float_vector;     // vector<single> → 4 bytes per element
+}
+```
+
+Notes:
+- `f#read(n)` reads `n` bytes and returns the value in the format's
+  byte order.  Cast to `i32` / `long` / `single` / `u8` as needed.
+- `f += expr` appends `expr` to the file, respecting the `#format`
+  endianness.  `integer` → 4 bytes, `long` → 8 bytes, `single` → 4,
+  `text` → raw bytes, `vector<T>` → each element in sequence.
+- `f.size` returns a `long`; compare with `0l` not `0`.
+- `f#next = offset as long` seeks.  Reading position advances
+  automatically after each `#read(n)` — don't manually advance it
+  between sequential reads.
+- **No `f.bytes()` API** — there's no "read all N bytes into a
+  vector" helper.  If you need the whole buffer, call `#read(n)`
+  in a loop or read into a typed record via `OpReadFile`.
+
+Example binary reader/writer patterns live in
+`lib/graphics/src/glb.loft` (writer) and
+`lib/graphics/tests/glb.loft` (reader).
 
 ---
 
