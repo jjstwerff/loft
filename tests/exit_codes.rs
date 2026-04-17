@@ -261,6 +261,82 @@ fn p166_content_on_binary_file_warns() {
     );
 }
 
+// ── 6a.18: moros_glb CLI tool end-to-end ──────────────────────────────────
+
+/// Phase 6a.18 — the `moros_glb` CLI example reads a map JSON and writes
+/// a GLB.  This verifies the full loft-level pipeline: JSON parse → Map →
+/// build_hex_meshes → save_scene_glb, driven from a standalone script via
+/// `arguments()`.
+#[test]
+fn moros_glb_cli_end_to_end() {
+    let dir = std::env::temp_dir();
+    let json_path = dir.join("loft_moros_glb_input.json");
+    let glb_path = dir.join("loft_moros_glb_output.glb");
+    // Minimal map with one material in the palette.
+    let map_json = r#"{
+        "m_name": "cli_test",
+        "m_chunks": [],
+        "m_material_palette": [
+            {"md_name": "stone", "md_category": "terrain", "md_stair_kind": "",
+             "md_texture": 0, "md_tint_r": 120, "md_tint_g": 120, "md_tint_b": 120,
+             "md_walkable": 1, "md_swimmable": 0, "md_climbable": 0,
+             "md_slippery": 0, "md_loud": 0}
+        ],
+        "m_wall_palette": [],
+        "m_item_palette": [],
+        "m_spawns": [],
+        "m_routines": []
+    }"#;
+    std::fs::write(&json_path, map_json).expect("write map JSON");
+    let _ = std::fs::remove_file(&glb_path);
+
+    let script = workspace_root().join("lib/moros_render/examples/moros_glb.loft");
+    let path_flag = format!("{}/", workspace_root().display());
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg("--path")
+        .arg(&path_flag)
+        .arg(&script)
+        .arg(&json_path)
+        .arg(&glb_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "CLI should exit 0; stdout={stdout:?}; stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("wrote"),
+        "CLI should print 'wrote <path>'; got stdout={stdout:?}"
+    );
+    assert!(
+        glb_path.exists(),
+        "GLB file should be written at {}",
+        glb_path.display()
+    );
+    // Read the first 4 bytes and verify 'glTF' magic (LE bytes).
+    let bytes = std::fs::read(&glb_path).expect("read GLB");
+    let _ = std::fs::remove_file(&json_path);
+    let _ = std::fs::remove_file(&glb_path);
+    assert!(
+        bytes.len() >= 12,
+        "GLB should have at least the 12-byte header; got {} bytes",
+        bytes.len()
+    );
+    assert_eq!(
+        &bytes[0..4],
+        b"glTF",
+        "GLB should start with 'glTF' magic"
+    );
+    // Version is bytes 4..8, little-endian u32; must be 2.
+    let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    assert_eq!(version, 2, "GLB version should be 2");
+}
+
 /// P166: reading a valid UTF-8 text file via .content() must NOT emit the
 /// warning — the signal is strictly on decode failure, not on all binary
 /// opens.
