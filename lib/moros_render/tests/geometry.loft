@@ -1,0 +1,93 @@
+// Tests for moros_render hex geometry generation.
+use moros_render;
+
+fn test_hex_to_world_origin() {
+  w = hex_to_world(0, 0, 0);
+  assert(w.x == 0.0, "origin x {w.x}");
+  assert(w.y == 0.0, "origin y {w.y}");
+  assert(w.z == 0.0, "origin z {w.z}");
+}
+
+fn test_hex_to_world_q1() {
+  w = hex_to_world(1, 0, 0);
+  assert(w.x == HEX_WIDTH, "q=1 x");
+  assert(w.z == 0.0, "q=1 z");
+}
+
+fn test_hex_to_world_r1() {
+  w = hex_to_world(0, 1, 0);
+  // Odd row offset: x = hex_width / 2
+  assert(w.x == HEX_WIDTH / 2.0, "r=1 x");
+  assert(w.z == HEX_ROW_HEIGHT, "r=1 z");
+}
+
+fn test_hex_to_world_height() {
+  w = hex_to_world(0, 0, 10);
+  assert(w.y == 10.0 * HEIGHT_SCALE, "height 10 y");
+}
+
+fn test_dev_art_color_grass() {
+  c = dev_art_color(0);
+  assert(color_r(c) == 128, "grass r");
+  assert(color_g(c) == 160, "grass g");
+  assert(color_b(c) == 80, "grass b");
+}
+
+fn test_dev_art_color_default() {
+  c = dev_art_color(999);   // unmapped → light grey
+  assert(color_r(c) == 200, "default r");
+}
+
+fn test_emit_hex_surface_vertex_count() {
+  m = mesh("test");
+  emit_hex_surface(m, 0, 0, 0);
+  assert(len(m.vertices) == 7, "7 verts (centre + 6 corners)");
+  assert(len(m.triangles) == 6, "6 triangles (hex fan)");
+}
+
+fn test_emit_hex_surface_centre_position() {
+  m = mesh("test");
+  emit_hex_surface(m, 3, 2, 5);
+  centre = m.vertices[0].pos;
+  expected = hex_to_world(3, 2, 5);
+  assert(centre.x == expected.x, "centre x");
+  assert(centre.y == expected.y, "centre y");
+  assert(centre.z == expected.z, "centre z");
+}
+
+fn test_emit_hex_surface_normal_up() {
+  m = mesh("test");
+  emit_hex_surface(m, 0, 0, 0);
+  // All normals should point up (0, 1, 0)
+  for gv in m.vertices {
+    assert(gv.normal.y == 1.0, "normal up y={gv.normal.y}");
+  }
+}
+
+fn test_emit_wall_quad() {
+  m = mesh("wall");
+  c1 = vec3(0.0, 0.0, 0.0);
+  c2 = vec3(1.0, 0.0, 0.0);
+  emit_wall_quad(m, c1, c2, 0.0, 2.0);
+  assert(len(m.vertices) == 4, "4 wall verts");
+  assert(len(m.triangles) == 2, "2 wall tris");
+  // Top-right vertex should be at (1, 2, 0)
+  tr = m.vertices[2].pos;
+  assert(tr.x == 1.0, "top-right x");
+  assert(tr.y == 2.0, "top-right y");
+}
+
+fn test_build_hex_meshes_empty_map() {
+  map = map_empty();
+  meshes = build_hex_meshes(map);
+  assert(len(meshes) == 0, "empty map → no meshes");
+}
+
+fn test_build_hex_meshes_painted_map() {
+  map = map_empty();
+  map_paint_material(map, 0, 0, 0, 1);
+  map_paint_material(map, 1, 0, 0, 2);
+  meshes = build_hex_meshes(map);
+  // At least 2 material groups (mat 0 for unpainted hexes + mat 1 + mat 2)
+  assert(len(meshes) >= 2, "at least 2 material groups, got {len(meshes)}");
+}

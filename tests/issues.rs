@@ -9024,6 +9024,42 @@ fn p157_native_refvar_forwarding_with_preeval() {
     let _ = std::fs::remove_file(&src_path);
 }
 
+/// P160 regression guard — `modify(items[1], 42)` where `modify`
+/// takes `&S` used to error "Cannot pass a literal or expression
+/// to a '&' parameter".  Two fixes: (1) parser accepts "addressable"
+/// expressions (vector element, field access chains rooted in a Var);
+/// (2) codegen handles `OpCreateStack(non-Var expr)` by generating
+/// the expression first (pushes DbRef), then emitting OpCreateStack
+/// with the offset pointing at the just-pushed result.
+#[test]
+fn p160_vec_element_as_ref_param() {
+    code!(
+        "struct S { x: integer not null }
+fn modify(s: &S, val: integer) { s.x = val; }
+fn test() {
+    items: vector<S> = [S { x: 0 }, S { x: 10 }];
+    modify(items[1], 42);
+    assert(items[1].x == 42, \"got {items[1].x}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p160_nested_field_vec_element_as_ref_param() {
+    code!(
+        "struct Inner { val: integer not null }
+struct Outer { items: vector<Inner> }
+fn set_val(inner: &Inner, v: integer) { inner.val = v; }
+fn test() {
+    o = Outer { items: [Inner { val: 0 }, Inner { val: 0 }] };
+    set_val(o.items[1], 99);
+    assert(o.items[1].val == 99, \"got {o.items[1].val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P159 regression guard — `Shape.parse(json)` used to fail for
 /// struct-enums ("Unknown field Shape.parse").  Fix: added
 /// `DefType::Enum` branch in `parse_var` for `.parse(` detection,

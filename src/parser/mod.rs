@@ -1794,9 +1794,13 @@ impl Parser {
             // which has its own work-text copy handling in convert()).  The `&` modifier
             // means "mutations propagate back to the caller" — passing a literal means
             // the mutations are silently discarded, which is almost certainly a bug.
+            // P160: also accept "addressable" expressions — vector element access
+            // (`v[i]`), field access (`s.field`), and chains thereof — since these
+            // produce a DbRef into existing mutable storage.
             if let Type::RefVar(inner) = &tp
                 && !matches!(inner.as_ref(), Type::Text(_))
                 && !matches!(&actual_code, Value::Var(_))
+                && !Self::is_addressable(&actual_code, &self.data)
             {
                 diagnostic!(
                     self.lexer,
@@ -2569,6 +2573,24 @@ impl Parser {
             self.vars.in_use(vnr, true);
         } else if self.vars.uses(vnr) > 0 {
             self.vars.in_use(vnr, false);
+        }
+    }
+
+    /// P160: check whether a value is "addressable" — rooted in a Var and
+    /// reached through field access (OpGetField) or vector element access
+    /// (OpGetVector / OpVectorRef) chains.  Addressable values produce a
+    /// DbRef into existing mutable storage, so they are safe to pass as
+    /// `&` parameters.
+    fn is_addressable(val: &Value, data: &Data) -> bool {
+        match val {
+            Value::Var(_) => true,
+            Value::Call(d_nr, args) => {
+                let name = &data.def(*d_nr).name;
+                (name == "OpGetField" || name == "OpGetVector" || name == "OpVectorRef")
+                    && !args.is_empty()
+                    && Self::is_addressable(&args[0], data)
+            }
+            _ => false,
         }
     }
 

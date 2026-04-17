@@ -1532,6 +1532,21 @@ impl State {
         } else {
             self.library_names.get(lib_lookup).copied()
         };
+        // P160: OpCreateStack with a non-Var expression argument (e.g.
+        // OpGetVector result).  The runtime reads a u16 offset from the code
+        // stream, but add_const writes nothing for Type::Reference args.
+        // Handle here: generate the expression (pushes a 12-byte DbRef),
+        // then emit OpCreateStack with the offset pointing at the just-
+        // pushed result.
+        if name == "OpCreateStack"
+            && !parameters.is_empty()
+            && !matches!(&parameters[0], Value::Var(_))
+        {
+            self.generate(&parameters[0], stack, false);
+            stack.add_op("OpCreateStack", self);
+            self.code_add(size_of::<crate::keys::DbRef>() as u16);
+            return stack.data.def(op).returned.clone();
+        }
         if stack.data.def(op).is_operator() {
             // B7: OpAppendCharacter on a RefVar(Text) target must use
             // OpAppendStackCharacter — same pattern as OpAppendText →

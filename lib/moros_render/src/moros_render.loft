@@ -1,0 +1,155 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// moros_render — 3D geometry generation from moros_map data.
+// Phase 6a per ../moros/doc/claude/SCENE_EDITOR_PLAN.md.
+
+use moros_map;
+use graphics;
+
+// ── Constants ─────────────────────────────────────────────────────
+
+// Hex grid geometry (flat-top orientation, unit size = 1.0).
+// Hex width  = sqrt(3) ≈ 1.732
+// Row height = 1.5
+
+pub HEX_SIZE = 1.0;
+
+// sqrt(3) approximation — loft has no sqrt() for floats yet.
+pub HEX_WIDTH = 1.7320508;
+
+// Vertical spacing between hex rows.
+pub HEX_ROW_HEIGHT = 1.5;
+
+// Height units to world-space Y scale.
+pub HEIGHT_SCALE = 0.25;
+
+// ── Hex coordinate → world position ──────────────────────────────
+
+// Convert hex axial (q, r) + height to a 3D world position (centre).
+// Flat-top hex layout:
+//   x = q * hex_width + (r % 2) * (hex_width / 2)
+//   y = height * HEIGHT_SCALE
+//   z = r * HEX_ROW_HEIGHT
+pub fn hex_to_world(q: integer, r: integer, height: integer) -> Vec3 {
+  x = q as float * HEX_WIDTH + (r % 2) as float * (HEX_WIDTH / 2.0);
+  y = height as float * HEIGHT_SCALE;
+  z = r as float * HEX_ROW_HEIGHT;
+  vec3(x, y, z)
+}
+
+// The 6 corner offsets of a flat-top unit hex (clockwise from top).
+// Corner i has angle = 60° * i, measured from 12-o'clock.
+// Using pre-computed sin/cos:
+//   corner 0: (0, +1)           top
+//   corner 1: (+√3/2, +0.5)    top-right
+//   corner 2: (+√3/2, -0.5)    bottom-right
+//   corner 3: (0, -1)           bottom
+//   corner 4: (-√3/2, -0.5)    bottom-left
+//   corner 5: (-√3/2, +0.5)    top-left
+fn hex_corner_offset(i: integer) -> Vec2 {
+  half_w = HEX_WIDTH / 2.0;
+  if i == 0 { return vec2(0.0, 1.0); }
+  if i == 1 { return vec2(half_w, 0.5); }
+  if i == 2 { return vec2(half_w, -0.5); }
+  if i == 3 { return vec2(0.0, -1.0); }
+  if i == 4 { return vec2(0.0 - half_w, -0.5); }
+  vec2(0.0 - half_w, 0.5)   // i == 5
+}
+
+// ── Dev-art material colours (Phase 6a.2) ─────────────────────────
+
+// Map material index to an RGBA dev-art colour.
+// Index 0 = default (grey grass), other indices from DEVELOPER_ART.md.
+pub fn dev_art_color(mat: integer) -> integer {
+  if mat == 0 { return rgb(128, 160, 80); }     // grass
+  if mat == 1 { return rgb(160, 140, 120); }     // stone wall
+  if mat == 2 { return rgb(180, 150, 100); }     // wood floor
+  if mat == 3 { return rgb(100, 180, 60); }      // bright grass
+  if mat == 4 { return rgb(140, 130, 125); }     // stone stair
+  if mat == 5 { return rgb(200, 180, 140); }     // sand
+  if mat == 6 { return rgb(60, 100, 180); }      // water
+  if mat == 7 { return rgb(80, 80, 80); }        // dark rock
+  if mat == 8 { return rgb(220, 200, 160); }     // plaster
+  if mat == 9 { return rgb(100, 60, 40); }       // dirt
+  rgb(200, 200, 200)                             // default: light grey
+}
+
+// ── Hex surface geometry (Phase 6a.3) ─────────────────────────────
+
+// Emit a flat hex surface into a mesh.  Produces 7 vertices (centre +
+// 6 corners) and 6 triangles (fan from centre).  Returns the base
+// vertex index so callers can reference the vertices.
+pub fn emit_hex_surface(m: &Mesh, q: integer, r: integer, height: integer) -> integer {
+  centre = hex_to_world(q, r, height);
+  up = vec3(0.0, 1.0, 0.0);   // flat surface normal
+  base = len(m.vertices);
+  // Centre vertex
+  m.vertices += [vertex(centre, up, vec2(0.5, 0.5))];
+  // 6 corner vertices
+  for ci in 0..6 {
+    off = hex_corner_offset(ci);
+    pos = vec3(centre.x + off.x, centre.y, centre.z + off.y);
+    u = (off.x / HEX_WIDTH) + 0.5;
+    v = (off.y / 1.0) * 0.5 + 0.5;
+    m.vertices += [vertex(pos, up, vec2(u, v))];
+  }
+  // 6 triangles: fan from centre to each edge
+  for ti in 0..6 {
+    next = (ti + 1) % 6;
+    tri = Triangle { a: base, b: base + 1 + ti, c: base + 1 + next };
+    m.triangles += [tri];
+  }
+  base
+}
+
+// ── Wall geometry (Phase 6a.5) ────────────────────────────────────
+
+// Emit a wall quad between two hex corners at floor_y and ceil_y.
+// c1/c2 are 3D positions of the wall's bottom-left and bottom-right.
+pub fn emit_wall_quad(m: &Mesh, c1: Vec3, c2: Vec3, floor_y: float, ceil_y: float) {
+  // Normal: cross product of (c2-c1) × (up).
+  dx = c2.x - c1.x;
+  dz = c2.z - c1.z;
+  len_xz = sqrt(dx * dx + dz * dz);
+  nx = 0.0 - dz / len_xz;  // perpendicular in XZ plane
+  nz = dx / len_xz;
+  normal = vec3(nx, 0.0, nz);
+  base = len(m.vertices);
+  // 4 corners: bottom-left, bottom-right, top-right, top-left
+  m.vertices += [vertex(vec3(c1.x, floor_y, c1.z), normal, vec2(0.0, 0.0))];
+  m.vertices += [vertex(vec3(c2.x, floor_y, c2.z), normal, vec2(1.0, 0.0))];
+  m.vertices += [vertex(vec3(c2.x, ceil_y, c2.z), normal, vec2(1.0, 1.0))];
+  m.vertices += [vertex(vec3(c1.x, ceil_y, c1.z), normal, vec2(0.0, 1.0))];
+  // Two triangles: (0,1,2) + (0,2,3)
+  m.triangles += [Triangle { a: base, b: base + 1, c: base + 2 }];
+  m.triangles += [Triangle { a: base, b: base + 2, c: base + 3 }];
+}
+
+// ── Scene builder (Phase 6a.13) ───────────────────────────────────
+
+// Build meshes for all visible hexes in a map.
+// Returns a vector of meshes grouped by material index.
+pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
+  meshes: vector<Mesh> = [];
+  for bm_c in map.m_chunks {
+    for bm_h in bm_c.ck_hexes {
+      q = bm_c.ck_cx * 32 + bm_h#index / 32;
+      r = bm_c.ck_cz * 32 + bm_h#index % 32;
+      // Find or create mesh for this material
+      mat = bm_h.h_material;
+      found = false;
+      for em in meshes {
+        if em.name == "{mat}" {
+          emit_hex_surface(em, q, r, bm_h.h_height);
+          found = true;
+        }
+      }
+      if !found {
+        meshes += [mesh("{mat}")];
+        nm = meshes[len(meshes) - 1];
+        emit_hex_surface(nm, q, r, bm_h.h_height);
+      }
+    }
+  }
+  meshes
+}
