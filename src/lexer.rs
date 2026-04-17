@@ -1329,14 +1329,10 @@ mod test {
         assert_eq!(lexer.count_links(), nr);
     }
 
-    #[allow(unreachable_code)]
     fn array(lexer: &mut Lexer) -> Vec<LexItem> {
         let mut rest = Vec::new();
         rest.push(lexer.peek().has);
-        loop {
-            let Some(res) = lexer.next() else {
-                break;
-            };
+        while let Some(res) = lexer.next() {
             rest.push(res.has);
         }
         rest
