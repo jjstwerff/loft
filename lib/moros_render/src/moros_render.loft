@@ -793,23 +793,73 @@ fn emit_to_material(meshes: vector<Mesh>, mat: integer, q: integer, r: integer, 
 }
 
 // Emit wall geometry for a hex's 3 stored edges (N, NE, SE).
-fn emit_hex_walls(wall_mesh: &Mesh, q: integer, r: integer, height: integer, h: Hex) {
+// Dispatch a single wall edge by `WallDef.wd_body`:
+// - "SOLID" (default)         → full-height `emit_wall_quad`
+// - "HALF_HEIGHT" / "FENCE"   → half-height `emit_wall_quad`
+// - "BATTLEMENT"              → 3/4-height `emit_wall_quad`
+// - "THICK_FLAT"              → `emit_thick_flat_wall` with corner posts
+// - "THICK_CURVED"            → thick flat fallback (centre/radius data
+//                               isn't recoverable from a single edge)
+// Unknown bodies fall back to a solid quad so geometry is always emitted.
+fn dispatch_wall_edge(
+  m: &Mesh, w: WallDef, c1: Vec3, c2: Vec3, floor_y: float, ceil_y: float
+) {
+  dw_body = w.wd_body;
+  if dw_body == "HALF_HEIGHT" || dw_body == "FENCE" {
+    emit_wall_quad(m, c1, c2, floor_y, floor_y + (ceil_y - floor_y) * 0.5);
+    return;
+  }
+  if dw_body == "BATTLEMENT" {
+    emit_wall_quad(m, c1, c2, floor_y, floor_y + (ceil_y - floor_y) * 0.75);
+    return;
+  }
+  if dw_body == "THICK_FLAT" || dw_body == "THICK_CURVED" {
+    dw_thick = if w.wd_thickness > 0.0 { w.wd_thickness } else { 0.3 };
+    dw_height = ceil_y - floor_y;
+    dw_p1 = vec3(c1.x, floor_y, c1.z);
+    dw_p2 = vec3(c2.x, floor_y, c2.z);
+    emit_thick_flat_wall(m, dw_p1, dw_p2, dw_thick, dw_height, dw_thick * 0.5, 6);
+    return;
+  }
+  emit_wall_quad(m, c1, c2, floor_y, ceil_y);
+}
+
+// Resolve a 1-indexed wall reference (`h.h_wall_*`) against the
+// palette and dispatch.  `wall_ref == 0` means "no wall".
+// Out-of-range refs fall back to a plain solid quad.
+fn emit_hex_wall_edge(
+  m: &Mesh, walls: vector<WallDef>, wall_ref: integer,
+  c1: Vec3, c2: Vec3, floor_y: float, ceil_y: float
+) {
+  if wall_ref <= 0 { return; }
+  hw_idx = wall_ref - 1;
+  if hw_idx >= 0 && hw_idx < len(walls) {
+    dispatch_wall_edge(m, walls[hw_idx], c1, c2, floor_y, ceil_y);
+  } else {
+    emit_wall_quad(m, c1, c2, floor_y, ceil_y);
+  }
+}
+
+fn emit_hex_walls(
+  wall_mesh: &Mesh, q: integer, r: integer, height: integer, h: Hex,
+  walls: vector<WallDef>
+) {
   floor_y = height as float * HEIGHT_SCALE;
   ceil_y = floor_y + 1.0;   // 1 unit tall walls
   if h.h_wall_n != 0 {
     c1 = hex_corner_world(q, r, height, 5);   // top-left
     c2 = hex_corner_world(q, r, height, 0);   // top
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_n, c1, c2, floor_y, ceil_y);
   }
   if h.h_wall_ne != 0 {
     c1 = hex_corner_world(q, r, height, 0);   // top
     c2 = hex_corner_world(q, r, height, 1);   // top-right
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_ne, c1, c2, floor_y, ceil_y);
   }
   if h.h_wall_se != 0 {
     c1 = hex_corner_world(q, r, height, 1);   // top-right
     c2 = hex_corner_world(q, r, height, 2);   // bottom-right
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_se, c1, c2, floor_y, ceil_y);
   }
 }
 
@@ -824,7 +874,7 @@ pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
       q = bm_c.ck_cx * 32 + bm_h#index / 32;
       r = bm_c.ck_cz * 32 + bm_h#index % 32;
       emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
-      emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h);
+      emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h, map.m_wall_palette);
     }
   }
   if len(wall_mesh.vertices) > 0 {

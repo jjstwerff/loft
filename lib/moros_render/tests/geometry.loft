@@ -798,6 +798,96 @@ fn test_material_swatch_degenerate_size() {
   assert(ms_sw5.height == 1, "size 0 → 1×1 height");
 }
 
+// ── Wall dispatch tests (build_hex_meshes routes WallDef.wd_body) ─
+
+fn wd_new(dw_body: text, dw_thickness: float) -> WallDef {
+  WallDef {
+    wd_name: dw_body, wd_body: dw_body, wd_base: "",
+    wd_thickness: dw_thickness,
+    wd_texture: 0, wd_tint_r: 128, wd_tint_g: 128, wd_tint_b: 128,
+  }
+}
+
+fn test_wall_dispatch_solid() {
+  dm = map_empty();
+  dm.m_wall_palette += [wd_new("SOLID", 0.0)];
+  map_set_wall(dm, 0, 0, 0, 0, 1);  // N wall, palette index 1 (= palette[0])
+  ds = build_hex_meshes(dm);
+  for dwm in ds {
+    if dwm.name == "walls" {
+      // Solid full-height quad: 4 verts, 2 tris.
+      assert(len(dwm.vertices) == 4, "solid → 4 verts");
+      assert(len(dwm.triangles) == 2, "solid → 2 tris");
+    }
+  }
+}
+
+fn test_wall_dispatch_fence_is_half_height() {
+  dfm = map_empty();
+  dfm.m_wall_palette += [wd_new("FENCE", 0.0)];
+  map_set_wall(dfm, 0, 0, 0, 0, 1);
+  dfs = build_hex_meshes(dfm);
+  for dfw in dfs {
+    if dfw.name == "walls" {
+      assert(len(dfw.vertices) == 4, "fence → 4 verts");
+      // Top-right vertex (index 2) should sit at half height (0.5).
+      assert(dfw.vertices[2].pos.y == 0.5, "fence top y = 0.5 (half of 1.0)");
+    }
+  }
+}
+
+fn test_wall_dispatch_battlement_is_three_quarter() {
+  dbm = map_empty();
+  dbm.m_wall_palette += [wd_new("BATTLEMENT", 0.0)];
+  map_set_wall(dbm, 0, 0, 0, 0, 1);
+  dbs = build_hex_meshes(dbm);
+  for dbw in dbs {
+    if dbw.name == "walls" {
+      assert(dbw.vertices[2].pos.y == 0.75, "battlement top y = 0.75");
+    }
+  }
+}
+
+fn test_wall_dispatch_thick_flat_adds_volume() {
+  dtm = map_empty();
+  dtm.m_wall_palette += [wd_new("THICK_FLAT", 0.2)];
+  map_set_wall(dtm, 0, 0, 0, 0, 1);
+  dts = build_hex_meshes(dtm);
+  for dtw in dts {
+    if dtw.name == "walls" {
+      // Thick wall: 12 verts (3 quads) + 2 × 6-seg posts (48 verts) = 60.
+      assert(len(dtw.vertices) == 60, "thick flat → 60 verts, got {len(dtw.vertices)}");
+      assert(len(dtw.triangles) == 30, "thick flat → 30 tris, got {len(dtw.triangles)}");
+    }
+  }
+}
+
+fn test_wall_dispatch_unknown_body_falls_back() {
+  dum = map_empty();
+  dum.m_wall_palette += [wd_new("MYSTERY_BODY", 0.0)];
+  map_set_wall(dum, 0, 0, 0, 0, 1);
+  dus = build_hex_meshes(dum);
+  for duw in dus {
+    if duw.name == "walls" {
+      // Unknown body → solid quad fallback.
+      assert(len(duw.vertices) == 4, "unknown → 4-vert solid fallback");
+    }
+  }
+}
+
+fn test_wall_dispatch_out_of_range_ref_falls_back() {
+  dxm = map_empty();
+  // Palette is empty; h_wall_n = 5 points nowhere.
+  map_set_wall(dxm, 0, 0, 0, 0, 5);
+  dxs = build_hex_meshes(dxm);
+  for dxw in dxs {
+    if dxw.name == "walls" {
+      // Out-of-range ref → solid quad fallback.
+      assert(len(dxw.vertices) == 4, "out-of-range → 4-vert fallback");
+    }
+  }
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);
