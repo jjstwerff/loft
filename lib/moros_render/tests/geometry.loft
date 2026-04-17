@@ -1049,6 +1049,97 @@ fn test_spawn_and_waypoint_separate_meshes() {
   assert(sw_has_wp, "waypoint_markers present");
 }
 
+// ── Stair dispatch tests (md_category routes to emit_linear_stair) ─
+
+// Convenience: a terrain MaterialDef.
+fn md_terrain(n: text) -> MaterialDef {
+  MaterialDef {
+    md_name: n, md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 128, md_tint_g: 128, md_tint_b: 128,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  }
+}
+
+// Convenience: a stair MaterialDef.
+fn md_stair(n: text) -> MaterialDef {
+  MaterialDef {
+    md_name: n, md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 140, md_tint_g: 120, md_tint_b: 100,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  }
+}
+
+fn test_stair_dispatch_no_taller_neighbor_is_flat() {
+  stn_m = map_empty();
+  stn_m.m_material_palette += [md_stair("s")];
+  map_paint_material(stn_m, 0, 0, 0, 1);
+  // No other hexes painted — all neighbors default to height 0,
+  // same as the stair hex itself → no taller neighbor → flat.
+  stn_ms = build_hex_meshes(stn_m);
+  stn_verts = 0;
+  for stm in stn_ms {
+    if stm.name == "1" { stn_verts = len(stm.vertices); }
+  }
+  // Flat hex surface = 7 verts (centre + 6 corners).
+  assert(stn_verts == 7, "no taller neighbor → flat surface (7 verts), got {stn_verts}");
+}
+
+fn test_stair_dispatch_taller_neighbor_emits_stair() {
+  stt_m = map_empty();
+  stt_m.m_material_palette += [md_stair("s")];        // index 1 (stair)
+  stt_m.m_material_palette += [md_terrain("floor")];  // index 2 (terrain)
+  // Stair at (0,0,0) height 0, terrain at (1,0,0) height 4.
+  map_paint_material(stt_m, 0, 0, 0, 1);
+  map_paint_material(stt_m, 1, 0, 0, 2);
+  map_set_height(stt_m, 1, 0, 0, 4);
+  stt_ms = build_hex_meshes(stt_m);
+  // Material mesh "1" should contain the linear stair geometry.
+  // 4 height units × HEIGHT_SCALE = 1.0 world-unit climb.
+  // stair_step_count(0.0, 1.0) = 4 steps → 4 × 8 = 32 verts.
+  stt_stair_verts = 0;
+  for stm2 in stt_ms {
+    if stm2.name == "1" { stt_stair_verts = len(stm2.vertices); }
+  }
+  assert(stt_stair_verts == 32, "stair → 32 verts (4 steps), got {stt_stair_verts}");
+}
+
+fn test_stair_dispatch_leaves_terrain_flat() {
+  stf_m = map_empty();
+  stf_m.m_material_palette += [md_terrain("floor")];
+  map_paint_material(stf_m, 0, 0, 0, 1);
+  map_paint_material(stf_m, 1, 0, 0, 1);
+  map_set_height(stf_m, 1, 0, 0, 4);
+  stf_ms = build_hex_meshes(stf_m);
+  // Both hexes are non-stair material 1 — both should emit flat
+  // hex surfaces.  2 hexes × 7 verts = 14.
+  stf_terrain_verts = 0;
+  for stm3 in stf_ms {
+    if stm3.name == "1" { stf_terrain_verts = len(stm3.vertices); }
+  }
+  assert(stf_terrain_verts == 14, "terrain → 2 × 7 = 14 verts, got {stf_terrain_verts}");
+}
+
+fn test_stair_dispatch_mixed_map() {
+  stx_m = map_empty();
+  stx_m.m_material_palette += [md_stair("s")];        // 1
+  stx_m.m_material_palette += [md_terrain("floor")];  // 2
+  // One stair hex with a taller terrain neighbor.
+  map_paint_material(stx_m, 0, 0, 0, 1);              // stair at height 0
+  map_paint_material(stx_m, 1, 0, 0, 2);              // terrain at height 4
+  map_set_height(stx_m, 1, 0, 0, 4);
+  stx_ms = build_hex_meshes(stx_m);
+  stx_s_verts = 0;
+  stx_t_verts = 0;
+  for stm4 in stx_ms {
+    if stm4.name == "1" { stx_s_verts = len(stm4.vertices); }
+    if stm4.name == "2" { stx_t_verts = len(stm4.vertices); }
+  }
+  assert(stx_s_verts == 32, "stair material → 32 verts");
+  assert(stx_t_verts == 7, "terrain material → 7 verts (one hex)");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

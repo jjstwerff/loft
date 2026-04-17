@@ -866,6 +866,68 @@ fn emit_hex_walls(
 // Build meshes for all visible hexes in a map.
 // Returns a vector of meshes grouped by material index.
 // Also includes a "walls" mesh for all wall geometry.
+// Direction of the tallest adjacent hex (0..5 for N/NE/SE/S/SW/NW),
+// or -1 if no neighbor has a height strictly greater than `curr_h`.
+// Missing chunks count as height 0 per `map_get_hex`'s default.
+fn stair_target_dir(
+  map: Map, q: integer, r: integer, cy: integer, curr_h: integer
+) -> integer {
+  best_dir = -1;
+  best_h = curr_h;
+  for sd_d in 0..6 {
+    sd_nq = q + neighbour_dq(sd_d);
+    sd_nr = r + neighbour_dr(sd_d);
+    sd_nh = map_get_hex(map, sd_nq, sd_nr, cy).h_height;
+    if sd_nh > best_h {
+      best_dir = sd_d;
+      best_h = sd_nh;
+    }
+  }
+  best_dir
+}
+
+// Emit the stair or flat-surface payload into `target`.  Split out so
+// both the "found existing mesh" and "just created a new one" paths
+// share the same geometry decision.
+fn emit_stair_into(
+  target: &Mesh, map: Map, q: integer, r: integer, cy: integer, h: integer
+) {
+  sh_dir = stair_target_dir(map, q, r, cy, h);
+  if sh_dir < 0 {
+    emit_hex_surface(target, q, r, h);
+    return;
+  }
+  sh_dq = neighbour_dq(sh_dir);
+  sh_dr = neighbour_dr(sh_dir);
+  sh_nh = map_get_hex(map, q + sh_dq, r + sh_dr, cy).h_height;
+  sh_p_low = hex_to_world(q, r, h);
+  sh_p_high = hex_to_world(q + sh_dq, r + sh_dr, sh_nh);
+  sh_steps = stair_step_count(sh_p_low.y, sh_p_high.y);
+  emit_linear_stair(target, sh_p_low, sh_p_high, HEX_WIDTH * 0.6, sh_steps);
+}
+
+// Emit a stair-category hex: a linear stair from the current hex
+// centre (at `h`) to the tallest adjacent neighbor's centre (at its
+// `h_height`).  Falls back to a flat hex surface if no neighbor is
+// taller.  Spiral and grand-arc categories currently share the
+// linear-stair emission — centre/arc metadata isn't encoded at the
+// hex level yet.
+fn emit_stair_hex(
+  meshes: vector<Mesh>, mat: integer, map: Map,
+  q: integer, r: integer, cy: integer, h: integer
+) {
+  sh_mat_name = "{mat}";
+  for sh_em in meshes {
+    if sh_em.name == sh_mat_name {
+      emit_stair_into(sh_em, map, q, r, cy, h);
+      return;
+    }
+  }
+  meshes += [mesh(sh_mat_name)];
+  sh_nm = meshes[len(meshes) - 1];
+  emit_stair_into(sh_nm, map, q, r, cy, h);
+}
+
 // Emit a small axis-aligned marker box at `pos`, offset by
 // `y_offset` above the pos and of size × size × size.  Used for
 // spawn / waypoint markers in the scene builder.
@@ -901,7 +963,20 @@ pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
     for bm_h in bm_c.ck_hexes {
       q = bm_c.ck_cx * 32 + bm_h#index / 32;
       r = bm_c.ck_cz * 32 + bm_h#index % 32;
-      emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
+      // Check if the hex's material category is a stair variant;
+      // route to stair emission instead of a flat surface.
+      bm_is_stair = false;
+      if bm_h.h_material > 0 {
+        bm_mat_idx = bm_h.h_material - 1;
+        if bm_mat_idx < len(map.m_material_palette) {
+          bm_is_stair = is_stair_category(map.m_material_palette[bm_mat_idx].md_category);
+        }
+      }
+      if bm_is_stair {
+        emit_stair_hex(meshes, bm_h.h_material, map, q, r, bm_c.ck_cy, bm_h.h_height);
+      } else {
+        emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
+      }
       emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h, map.m_wall_palette);
       emit_hex_item(items_mesh, q, r, bm_h.h_height, bm_h.h_item, map.m_item_palette);
     }
