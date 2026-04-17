@@ -526,7 +526,7 @@ impl ShowDb<'_> {
                     // Output: {"VariantName":{fields}} in JSON mode.
                     if self.json {
                         let variant_name = &self.stores.types[self.known_type as usize].name;
-                        write!(s, "{{\"{}\":", variant_name).unwrap();
+                        write!(s, "{{\"{variant_name}\":").unwrap();
                         self.write_struct(s, st, indent);
                         s.push('}');
                     } else {

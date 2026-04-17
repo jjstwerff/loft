@@ -291,7 +291,7 @@ impl Scopes {
                     Value::Insert(ls)
                 }
             }
-            Value::BreakValue(lv, val) => {
+            Value::BreakWith(lv, val) => {
                 let scanned_val = self.scan(val, function, data);
                 let mut ls = self.get_free_vars(
                     function,
@@ -301,9 +301,9 @@ impl Scopes {
                     u16::MAX,
                 );
                 if ls.is_empty() {
-                    Value::BreakValue(*lv, Box::new(scanned_val))
+                    Value::BreakWith(*lv, Box::new(scanned_val))
                 } else {
-                    ls.push(Value::BreakValue(*lv, Box::new(scanned_val)));
+                    ls.push(Value::BreakWith(*lv, Box::new(scanned_val)));
                     Value::Insert(ls)
                 }
             }

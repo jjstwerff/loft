@@ -13,7 +13,7 @@ fn is_block_divergent(ops: &[Value]) -> bool {
     ops.iter().rev().any(|v| {
         matches!(
             v,
-            Value::Return(_) | Value::Break(_) | Value::BreakValue(_, _) | Value::Continue(_)
+            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_)
         )
     })
 }
@@ -179,7 +179,7 @@ impl Parser {
             // if/else/loop/match contain terminators inside branches — not unconditional.
             match &n {
                 Value::Return(_) => terminated = Some("return"),
-                Value::Break(_) | Value::BreakValue(_, _) => terminated = Some("break"),
+                Value::Break(_) | Value::BreakWith(_, _) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
             }
@@ -382,12 +382,12 @@ impl Parser {
         let write_state = self.vars.save_and_clear_write_state();
         self.vars.clear_write_state();
         let mut true_type = self.parse_block("if", &mut true_code, &Type::Unknown(0));
-        if !is_bindings.is_empty() {
-            if let Value::Block(bl) = &mut true_code {
-                let mut new_ops = is_bindings;
-                new_ops.append(&mut bl.operators);
-                bl.operators = new_ops;
-            }
+        if !is_bindings.is_empty()
+            && let Value::Block(bl) = &mut true_code
+        {
+            let mut new_ops = is_bindings;
+            new_ops.append(&mut bl.operators);
+            bl.operators = new_ops;
         }
         for (name, old) in &is_aliases {
             if let Some(old_nr) = old {
@@ -2170,8 +2170,7 @@ impl Parser {
                             self.vars.defined(v_nr);
                             self.is_capture_bindings.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
-                            self.is_capture_aliases
-                                .push((field_name.clone(), old));
+                            self.is_capture_aliases.push((field_name.clone(), old));
                         }
                     }
                     None => {

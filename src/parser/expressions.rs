@@ -55,7 +55,7 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Var(_)
         | Value::Line(_)
         | Value::Break(_)
-        | Value::BreakValue(_, _)
+        | Value::BreakWith(_, _)
         | Value::Continue(_)
         | Value::Keys(_)
         | Value::TupleGet(_, _)

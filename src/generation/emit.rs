@@ -50,7 +50,7 @@ impl Output<'_> {
                     write!(w, "break 'l{}", self.loop_stack[idx])?;
                 }
             }
-            Value::BreakValue(n, val) => {
+            Value::BreakWith(n, val) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break ")?;
                 } else {

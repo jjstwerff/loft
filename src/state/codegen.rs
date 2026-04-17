@@ -235,7 +235,7 @@ impl State {
                 Type::Void
             }
             Value::Break(loop_nr) => self.gen_break(*loop_nr, stack),
-            Value::BreakValue(loop_nr, val) => {
+            Value::BreakWith(loop_nr, val) => {
                 self.generate(val, stack, false);
                 self.gen_break(*loop_nr, stack)
             }
@@ -2202,7 +2202,7 @@ impl State {
 /// that never produces a value at the join point.
 fn is_divergent(val: &Value) -> bool {
     match val {
-        Value::Return(_) | Value::Break(_) | Value::BreakValue(_, _) | Value::Continue(_) => true,
+        Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => true,
         // scopes.rs wraps `return` in `Insert([free_ops..., Return(...)])` so the
         // raw-Return check misses it. Walk the last op of Insert/Block to recover
         // divergence for these wrappers.
