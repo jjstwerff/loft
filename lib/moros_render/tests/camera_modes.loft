@@ -1,0 +1,133 @@
+// Step 6 — camera mode tests (Follow / Overview / unbounded zoom).
+use moros_render;
+use graphics;
+
+// ── Follow ────────────────────────────────────────────────────────
+
+fn test_follow_targets_head() {
+  cam = camera_default();
+  head = vec3(3.0, 1.8, 5.0);
+  camera_follow(head, 0.0, cam);
+  assert(cam.target.x == 3.0, "target.x");
+  assert(cam.target.y == 1.8, "target.y");
+  assert(cam.target.z == 5.0, "target.z");
+}
+
+fn test_follow_facing_zero_puts_eye_behind_on_minus_z() {
+  // facing=0 means avatar looks down +Z; camera should sit on -Z side.
+  cam = camera_default();   // default elevation=30°, distance=10
+  head = vec3(0.0, 0.0, 0.0);
+  camera_follow(head, 0.0, cam);
+  // azimuth should be 270° — which puts the eye at target + horiz * (cos(270°), ..., sin(270°))
+  // cos(270°) = 0, sin(270°) = -1 → eye.z < 0
+  eye = camera_eye(cam);
+  ax = eye.x;
+  if ax < 0.0 { ax = 0.0 - ax; }
+  assert(ax < 0.001, "eye on X-axis close to 0 got {eye.x}");
+  assert(eye.z < 0.0, "eye at -Z (behind +Z facing) got {eye.z}");
+}
+
+fn test_follow_facing_pi_over_2_puts_eye_on_minus_x() {
+  // facing=π/2 means avatar looks down +X; camera should sit on -X side.
+  cam = camera_default();
+  head = vec3(0.0, 0.0, 0.0);
+  camera_follow(head, PI / 2.0, cam);
+  eye = camera_eye(cam);
+  assert(eye.x < 0.0, "eye at -X got {eye.x}");
+  az = eye.z;
+  if az < 0.0 { az = 0.0 - az; }
+  assert(az < 0.001, "eye close to z=0 got {eye.z}");
+}
+
+fn test_follow_does_not_clobber_distance() {
+  cam = camera_default();
+  cam.distance = 500.0;
+  camera_follow(vec3(0.0, 0.0, 0.0), 0.0, cam);
+  assert(cam.distance == 500.0, "distance preserved");
+}
+
+fn test_follow_does_not_clobber_elevation() {
+  cam = camera_default();
+  cam.elevation = 60.0;
+  camera_follow(vec3(0.0, 0.0, 0.0), 0.0, cam);
+  assert(cam.elevation == 60.0, "elevation preserved");
+}
+
+// ── Overview ─────────────────────────────────────────────────────
+
+fn test_overview_pins_elevation_vertical() {
+  cam = camera_default();
+  camera_overview(vec3(0.0, 0.0, 0.0), cam);
+  assert(cam.elevation == 89.0, "elevation pinned");
+}
+
+fn test_overview_targets_ground() {
+  cam = camera_default();
+  gp = vec3(7.0, 0.0, 9.0);
+  camera_overview(gp, cam);
+  assert(cam.target.x == 7.0, "target.x");
+  assert(cam.target.z == 9.0, "target.z");
+}
+
+fn test_overview_auto_expands_tight_zoom() {
+  cam = camera_default();
+  cam.distance = 5.0;   // too close for overview
+  camera_overview(vec3(0.0, 0.0, 0.0), cam);
+  assert(cam.distance == 80.0, "auto-expanded");
+}
+
+fn test_overview_keeps_far_zoom() {
+  cam = camera_default();
+  cam.distance = 2000.0;
+  camera_overview(vec3(0.0, 0.0, 0.0), cam);
+  assert(cam.distance == 2000.0, "kept far zoom");
+}
+
+// ── Unbounded zoom ───────────────────────────────────────────────
+
+fn test_zoom_unbounded_past_old_cap() {
+  cam = camera_default();
+  cam.distance = 9000.0;
+  camera_zoom_unbounded(cam, 5000.0);  // old camera_zoom would clamp at 10 000
+  assert(cam.distance == 14000.0, "past old 10 000 cap got {cam.distance}");
+}
+
+fn test_zoom_unbounded_clamps_at_new_cap() {
+  cam = camera_default();
+  cam.distance = 49000.0;
+  camera_zoom_unbounded(cam, 100000.0);
+  assert(cam.distance == CAMERA_ZOOM_MAX_UNBOUNDED, "clamped at 50 000");
+}
+
+fn test_zoom_unbounded_clamps_at_lower_bound() {
+  cam = camera_default();
+  cam.distance = 1.0;
+  camera_zoom_unbounded(cam, -100.0);
+  assert(cam.distance == 0.1, "clamped at 0.1");
+}
+
+fn test_zoom_unbounded_delta_zero_noop() {
+  cam = camera_default();
+  cam.distance = 42.0;
+  camera_zoom_unbounded(cam, 0.0);
+  assert(cam.distance == 42.0, "no-op on 0 delta");
+}
+
+// ── Round-trip ────────────────────────────────────────────────────
+
+fn test_follow_then_overview_switch() {
+  cam = camera_default();
+  head = vec3(10.0, 2.0, 10.0);
+  camera_follow(head, 0.0, cam);
+  prior_distance = cam.distance;
+  // Switch to overview at ground
+  camera_overview(vec3(10.0, 0.0, 10.0), cam);
+  assert(cam.elevation == 89.0, "vertical");
+  assert(cam.target.y == 0.0, "ground target");
+  // Now switch back to follow — elevation should reset via user input,
+  // but target should update
+  camera_follow(head, 0.0, cam);
+  assert(cam.target.y == 2.0, "head target after switch back");
+  // Distance carried across modes (consistent with user zoom control)
+  assert(cam.distance >= prior_distance, "distance not shrunk");
+}

@@ -1,0 +1,13 @@
+[package]
+name    = "moros_sim"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/moros_sim.loft"
+
+[dependencies]
+moros_map    = { path = "../moros_map" }
+moros_editor = { path = "../moros_editor" }
+moros_render = { path = "../moros_render" }
+graphics     = { path = "../graphics" }

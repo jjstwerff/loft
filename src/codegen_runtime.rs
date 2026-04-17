@@ -258,10 +258,31 @@ pub fn i_json_errors(stores: &mut Stores) -> Str {
 /// all owned sub-structures (text fields, vectors, etc.).
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
 pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
-    let tp = tp as u16;
+    // P171: mirror `state/io.rs::copy_record`'s tag handling and
+    // cleanup.  The bytecode form masks the high bit of `tp` before
+    // indexing into `stores.types` (Issue #120 / P143 use 0x8000 as
+    // "free source after copy"); native codegen was missing both the
+    // mask and the free, so any caller that set the flag — e.g.
+    // `copy_ref` on a struct-returning call's result — panicked at
+    // `Types::size()` with an out-of-bounds index.  Also missing:
+    // `remove_claims` before the overwrite, which the bytecode form
+    // uses to free the destination's nested vectors/strings so a
+    // reassignment doesn't double-free on scope exit.
+    let raw_tp = tp as u16;
+    let free_source = raw_tp & 0x8000 != 0;
+    let tp = raw_tp & 0x7FFF;
     let size = u32::from(stores.size(tp));
+    stores.remove_claims(&to, tp);
     stores.copy_block(&data, &to, size);
     stores.copy_claims(&data, &to, tp);
+    if free_source
+        && data.store_nr != to.store_nr
+        && data.store_nr != 0
+        && !stores.allocations[data.store_nr as usize].free
+        && !stores.allocations[data.store_nr as usize].locked
+    {
+        stores.free(&data);
+    }
 }
 
 /// Sort a vector in-place using the element type's natural ordering.

@@ -287,7 +287,9 @@ impl Parser {
                 self.data.definitions[v_nr as usize].returned =
                     self.data.def(d_nr).returned.clone();
             }
-            if !self.lexer.has_token(",") {
+            // P164: accept trailing comma after the last variant,
+            // matching the P158 guard on the field-list loop above.
+            if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
             if nr == 255 {

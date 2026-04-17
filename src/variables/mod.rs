@@ -923,6 +923,17 @@ impl Function {
             {
                 return self.is_new(var_nr);
             }
+            // P165: annotated LHS struct-enum accepts a variant of
+            // that enum as RHS.  `let k: Kind = Alpha { x: 1 };` is
+            // idiomatic — the struct-literal constructor types the
+            // variant as `Reference(variant_d, _)`, but the parent
+            // relationship (`def(variant_d).parent == enum_d`)
+            // proves subtype compatibility with `Enum(enum_d, true, _)`.
+            if let (Type::Enum(parent_d, true, _), Type::Reference(rhs_d, _)) = (var_tp, type_def)
+                && data.def(*rhs_d).parent == *parent_d
+            {
+                return self.is_new(var_nr);
+            }
             diagnostic!(
                 lexer,
                 Level::Error,
@@ -1144,6 +1155,19 @@ impl Function {
     /// in the outer scope, ensuring its frame slot survives inner-block FreeStack.
     pub fn add_to_work_refs(&mut self, v: u16) {
         self.work_refs.insert(v);
+    }
+
+    /// Return true if `v` is a compiler-generated temporary — its
+    /// name starts with `_`, which `Function::unique` reserves for
+    /// the `_<kind>_<counter>` prefix (e.g. `_elm_N`, `_for_result_N`,
+    /// `_vector_N`, `__ref_N`, `__vdb_N`).  User-declared loft
+    /// variables cannot start with `_` (parser rejects such names),
+    /// so this reliably distinguishes owned user locals from aliases
+    /// and internal scratch slots that borrow storage from an
+    /// enclosing container.
+    #[must_use]
+    pub fn is_compiler_generated(&self, v: u16) -> bool {
+        self.variables[v as usize].name.starts_with('_')
     }
 
     /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.

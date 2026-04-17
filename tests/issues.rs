@@ -1873,7 +1873,7 @@ fn s10_short_lambda_type_annotation_rejected() {
     r = map(v, |x: integer| { x * 2 });
 }"
     )
-    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) -> <ret> { ... } instead at s10_short_lambda_type_annotation_rejected:3:27");
+    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) { ... } instead (add `-> <ret>` only for non-void returns; `-> void` is not a valid type) at s10_short_lambda_type_annotation_rejected:3:27");
 }
 
 // ── S11 — Bare function references (no fn prefix) ────────────────────────────
@@ -9424,6 +9424,240 @@ fn test() {
     assert(garea(GCircle { radius: 2.0 }) > 12.0, \"circle area\");
     assert(garea(GCircle { radius: -1.0 }) == 0.0, \"negative radius\");
     assert(garea(GRect { width: 3.0, height: 4.0 }) == 12.0, \"rect area\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P164 regression guard — trailing comma after the LAST VARIANT of an
+/// enum declaration used to fail with `Expect name in type definition`.
+/// P158 fixed trailing commas inside a variant's field list; this is the
+/// sibling case on the variant list itself.  Fix: mirror the P158 guard
+/// (`|| self.lexer.peek_token("}")`) onto the outer variant-list break
+/// check in `parse_enum_values`.
+#[test]
+fn p164_trailing_comma_enum_variant_list() {
+    code!(
+        "enum P164Kind {
+    P164Alpha { x: integer not null },
+    P164Beta { y: integer not null },
+}
+fn test() {
+    a = P164Alpha { x: 1 };
+    assert(a is P164Alpha, \"alpha\");
+    b = P164Beta { y: 2 };
+    assert(b is P164Beta, \"beta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P164 also covers plain (non-struct-field) enum declarations.
+#[test]
+fn p164_trailing_comma_plain_enum() {
+    code!(
+        "enum P164Dir {
+    P164North,
+    P164East,
+    P164South,
+    P164West,
+}
+fn test() {
+    d = P164North;
+    assert(d is P164North, \"north\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P170 regression guard — `x = Struct{}; x = vec[i]; mutate(x)` used to
+/// fail with `Incorrect var x[N] versus M on n_<fn>` at codegen.
+///
+/// Root cause: `parser/objects.rs::parse_object` had a gap in the
+/// in-place struct-literal path.  When the LHS variable's type was
+/// already inferred with dependencies (because a later assignment in
+/// the same function did `x = bs[i]`, giving x type
+/// `Reference(Bag, [bs])`), `is_independent(x)` returned false.  The
+/// in-place `v_set(x, Null) + OpDatabase(x)` init branch required both
+/// `is_independent` AND `type_matches` — with `type_matches=true` and
+/// `is_independent=false`, neither the if-branch nor the else-if
+/// (which required `!type_matches`) fired.  The struct-literal
+/// statement emitted only field-init calls into uninitialised storage,
+/// codegen never saw a Set for x's first assignment, and later
+/// `generate_var(x)` asserted since x's slot sat above TOS.
+///
+/// Fix: extend the `else if` to also fire when
+/// `!is_independent && !first_pass` — routes the construction through
+/// a fresh work-ref (existing "new_object" path), which emits the
+/// required `v_set + OpDatabase` prelude and yields a `Block`-shaped
+/// RHS that the outer assignment can then copy/alias via the normal
+/// Set path.
+#[test]
+fn p170_struct_placeholder_then_vec_elem_reassign() {
+    code!(
+        "struct P170Bag { items: vector<integer> }
+fn p170_mutate_bag(b: &P170Bag, v: integer) { b.items += [v]; }
+fn test() {
+    p170_bs: vector<P170Bag> = [];
+    p170_x = P170Bag {};
+    p170_bs += [P170Bag {}];
+    p170_x = p170_bs[len(p170_bs) - 1];
+    p170_mutate_bag(p170_x, 1);
+    assert(len(p170_bs[0].items) == 1, \"mutated through alias\");
+}"
+    )
+    .warning("Dead assignment — 'p170_x' is overwritten before being read at p170_struct_placeholder_then_vec_elem_reassign:5:25")
+    .result(Value::Null);
+}
+
+/// P170 guard — three-way: the same shape but with a conditional
+/// assignment between the placeholder and the vec-elem reassign.
+#[test]
+fn p170_placeholder_conditional_then_reassign() {
+    code!(
+        "struct P170CBag { val: integer not null }
+fn p170c_bump(b: &P170CBag) { b.val = b.val + 1; }
+fn test() {
+    p170c_v: vector<P170CBag> = [P170CBag { val: 5 }];
+    p170c_x = P170CBag { val: 0 };
+    p170c_x = p170c_v[0];
+    p170c_bump(p170c_x);
+    assert(p170c_v[0].val == 6, \"bumped first elem\");
+}"
+    )
+    .warning("Dead assignment — 'p170c_x' is overwritten before being read at p170_placeholder_conditional_then_reassign:5:35")
+    .result(Value::Null);
+}
+
+/// P167 regression guard — trailing comma in a function-call argument
+/// list used to fail with "Too many parameters for n_<fn>".  P158 fixed
+/// trailing commas in struct-enum variant field lists; P164 fixed
+/// trailing commas in enum variant lists; P167 covers function-call
+/// argument lists (the third and final trailing-comma site).  Fix:
+/// mirror the P158 guard in `parser/control.rs::parse_call` — for both
+/// the positional and named argument loops.
+#[test]
+fn p167_trailing_comma_function_call_positional() {
+    code!(
+        "fn p167_add3(a: integer, b: integer, c: integer) -> integer { a + b + c }
+fn test() {
+    r = p167_add3(1, 2, 3,);
+    assert(r == 6, \"trailing comma positional\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p167_trailing_comma_function_call_multiline() {
+    // The shape that actually caught it in the wild — multi-line
+    // call (rgb/vec3-style) with a trailing comma.
+    code!(
+        "fn p167_mix(r: integer, g: integer, b: integer) -> integer {
+    (r * 65536) + (g * 256) + b
+}
+fn test() {
+    c = p167_mix(
+        10,
+        20,
+        30,
+    );
+    assert(c == 10 * 65536 + 20 * 256 + 30, \"multiline trailing comma\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P165 regression guard — `var: Enum = Variant { ... }` used to fail
+/// with "Variable 'var' cannot change type from Enum to Variant; use a
+/// new variable name or cast with 'as'".  The type-change check treated
+/// a struct-enum variant as a distinct type from its parent enum.
+/// Fix: in `Function::change_var_type`, accept `(Enum(p, true, _),
+/// Enum(v, true, _))` when `data.def(v).parent == p` — the parent
+/// relationship proves subtype compatibility.
+#[test]
+fn p165_enum_annotation_with_variant_rhs() {
+    code!(
+        "enum P165Kind {
+    P165Alpha { x: integer not null },
+    P165Beta { y: integer not null }
+}
+fn take_kind(k: P165Kind) -> boolean { k is P165Alpha }
+fn test() {
+    // Annotated LHS with variant RHS (the P165 shape).
+    k1: P165Kind = P165Alpha { x: 1 };
+    assert(take_kind(k1), \"annotated alpha\");
+    // Annotated LHS with the OTHER variant — also accepted.
+    k2: P165Kind = P165Beta { y: 2 };
+    assert(!take_kind(k2), \"annotated beta\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P175 — file-scope `pub NAME: vector<T> = [...]` constants of
+/// textual element types were materialised as empty vectors at
+/// runtime (`len == 0`).  `vector<integer>` / `vector<float>` /
+/// `vector<single>` / `vector<long>` already worked because
+/// `compile::extract_literal_values` matched `OpSetInt/Float/Single/Long`
+/// calls.  `vector<text>` missed the `OpSetText` branch + the
+/// `Value::Text` arm in `build_const_vectors`'s per-element match,
+/// so the pre-built constant was registered with zero values and the
+/// OpConstRef runtime copy produced an empty vector.  Fix: add
+/// `OpSetText` to the extractor's allow-list and handle `Value::Text(s)`
+/// in the build loop via `store.set_str(s)` + `set_int` (mirroring
+/// runtime `OpSetText` in `src/fill.rs::set_text`).
+#[test]
+fn p175_vector_of_text_constant_populates() {
+    code!(
+        "pub P175_INTS: vector<integer> = [10, 20, 30];
+pub P175_TEXTS: vector<text> = [\"aa\", \"bb\", \"cc\"];
+fn test() {
+    assert(len(P175_INTS) == 3, \"int vec len\");
+    assert(P175_INTS[0] == 10, \"int vec [0]\");
+    assert(len(P175_TEXTS) == 3, \"text vec len = {len(P175_TEXTS)}\");
+    assert(P175_TEXTS[0] == \"aa\", \"text vec [0]\");
+    assert(P175_TEXTS[2] == \"cc\", \"text vec [2]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P178 — slot-aliasing in `is`-capture body.  When a function body's
+/// IR root is a `Value::Insert` (not a `Block`/`Loop`), `assign_slots`
+/// would return early from `process_scope` without placing any locals.
+/// Orphans then flowed into `place_orphaned_vars`, which started
+/// candidate slots at 0 — the argument area.  Arguments have
+/// `stack_pos == u16::MAX` during `assign_slots` (codegen assigns
+/// their positions later), so the per-var conflict check couldn't
+/// see them; orphans happily claimed slot 0, 4, 12, ..., overlapping
+/// the args at runtime.  Writing to the captured `tb_id` slot
+/// corrupted the caller-owned `&tools` ref bytes sharing those
+/// offsets; the downstream `SetInt` on a now-null ref silently wrote
+/// to store 0 (observed as `ft_cur == 0` instead of the expected
+/// captured value).
+///
+/// Fix: `place_orphaned_vars` now takes `local_start` and starts the
+/// candidate slot there, so orphan locals can't overlap the
+/// argument + return-address region.
+#[test]
+fn p178_is_capture_slot_alias() {
+    code!(
+        "enum P178Ui { P178UhToolButton { tb_id: integer not null } }
+struct P178Tools { ft_cur: integer not null }
+fn p178_hit() -> P178Ui { P178UhToolButton { tb_id: 2 } }
+fn p178_router(dummy: integer, tools: &P178Tools) -> P178Ui {
+    _ = dummy;
+    rc = p178_hit();
+    if rc is P178UhToolButton { tb_id } {
+        tools.ft_cur = tb_id;
+    }
+    rc
+}
+fn test() {
+    ft = P178Tools { ft_cur: 0 };
+    p178_router(99, ft);
+    assert(ft.ft_cur == 2, \"captured was {ft.ft_cur} (expected 2)\");
 }"
     )
     .result(Value::Null);

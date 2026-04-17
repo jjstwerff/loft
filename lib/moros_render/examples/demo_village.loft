@@ -1,0 +1,132 @@
+// Build a small demo map programmatically and export to GLB.
+// Usage: loft --interpret --path <repo>/ .../demo_village.loft <out.glb>
+use moros_map;
+use moros_render;
+
+fn main() {
+  dv_args = arguments();
+  if len(dv_args) < 1 {
+    println("usage: demo_village <output.glb>");
+    return;
+  }
+  dv_out = dv_args[0];
+
+  // Build map.
+  dv_m = map_empty();
+  dv_m.m_name = "demo_village";
+
+  // Palettes.
+  dv_m.m_material_palette += [MaterialDef {
+    md_name: "grass", md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 100, md_tint_g: 160, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0, md_slippery: 0, md_loud: 0,
+  }];
+  dv_m.m_material_palette += [MaterialDef {
+    md_name: "stone", md_category: "floor", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 140, md_tint_g: 140, md_tint_b: 140,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0, md_slippery: 0, md_loud: 0,
+  }];
+  dv_m.m_material_palette += [MaterialDef {
+    md_name: "wood_stair", md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 160, md_tint_g: 120, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0, md_slippery: 0, md_loud: 0,
+  }];
+
+  dv_m.m_wall_palette += [WallDef {
+    wd_name: "brick", wd_body: "SOLID", wd_base: "",
+    wd_thickness: 0.0, wd_texture: 0,
+    wd_tint_r: 160, wd_tint_g: 80, wd_tint_b: 60,
+  }];
+  dv_m.m_wall_palette += [WallDef {
+    wd_name: "thick_stone", wd_body: "THICK_FLAT", wd_base: "",
+    wd_thickness: 0.3, wd_texture: 0,
+    wd_tint_r: 140, wd_tint_g: 140, wd_tint_b: 140,
+  }];
+
+  dv_m.m_item_palette += [ItemDef {
+    id_name: "pillar", id_kind: "PILLAR",
+    id_model: 0, id_symmetric: 1, id_arc_radius: 0.0,
+  }];
+  dv_m.m_item_palette += [ItemDef {
+    id_name: "crate", id_kind: "CONTAINER",
+    id_model: 0, id_symmetric: 1, id_arc_radius: 0.0,
+  }];
+  dv_m.m_item_palette += [ItemDef {
+    id_name: "oak", id_kind: "TREE",
+    id_model: 0, id_symmetric: 1, id_arc_radius: 0.0,
+  }];
+
+  // Paint a 5x5 grass courtyard.
+  for cy_r in 0..5 {
+    for cy_q in 0..5 {
+      map_paint_material(dv_m, cy_q, cy_r, 0, 1);
+    }
+  }
+
+  // Stone floor in the centre 3x3, height 4.
+  for sf_r in 1..4 {
+    for sf_q in 1..4 {
+      map_paint_material(dv_m, sf_q, sf_r, 0, 2);
+      map_set_height(dv_m, sf_q, sf_r, 0, 4);
+    }
+  }
+
+  // Stair tiles at the edges (lower courtyard → upper stone).
+  map_paint_material(dv_m, 0, 2, 0, 3);
+  map_paint_material(dv_m, 4, 2, 0, 3);
+  map_paint_material(dv_m, 2, 0, 0, 3);
+  map_paint_material(dv_m, 2, 4, 0, 3);
+
+  // Thick-flat walls around the stone floor.
+  map_set_wall(dv_m, 1, 1, 0, 0, 2);  // N wall, thick_stone
+  map_set_wall(dv_m, 2, 1, 0, 0, 2);
+  map_set_wall(dv_m, 3, 1, 0, 0, 2);
+  map_set_wall(dv_m, 3, 3, 0, 2, 2);  // SE walls
+
+  // Pillars at the 4 corners of the stone floor.
+  map_place_item(dv_m, 1, 1, 0, 1, 0);
+  map_place_item(dv_m, 3, 1, 0, 1, 0);
+  map_place_item(dv_m, 1, 3, 0, 1, 0);
+  map_place_item(dv_m, 3, 3, 0, 1, 0);
+  // Crate in the middle of the courtyard.
+  map_place_item(dv_m, 2, 2, 0, 2, 0);
+  // Trees scattered around.
+  map_place_item(dv_m, 0, 0, 0, 3, 0);
+  map_place_item(dv_m, 4, 4, 0, 3, 0);
+
+  // Spawn point.
+  dv_sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 2, ha_r: 2, ha_cy: 0 },
+    sp_kind: "creature", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(dv_m, dv_sp);
+
+  // NPC routine with two waypoints.
+  dv_rt = NpcRoutine {
+    nr_npc_id: 1, nr_name: "guard", nr_creature: 3,
+    nr_waypoints: [
+      NpcWaypoint {
+        wp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+        wp_activity: "GUARD", wp_time_start: 600, wp_time_end: 1800,
+        wp_facing: 0, wp_note: "gate",
+      },
+      NpcWaypoint {
+        wp_hex: HexAddress { ha_q: 4, ha_r: 4, ha_cy: 0 },
+        wp_activity: "PATROL", wp_time_start: 1800, wp_time_end: 2200,
+        wp_facing: 0, wp_note: "",
+      }
+    ],
+  };
+  dv_m.m_npc_routines += [dv_rt];
+
+  // Export.
+  map_export_glb(dv_m, dv_out);
+
+  // Summary.
+  dv_meshes = build_hex_meshes(dv_m);
+  println("wrote {dv_out}");
+  println("  meshes: {len(dv_meshes)}");
+  println("  total vertices: {scene_vertex_count(dv_meshes)}");
+  println("  total triangles: {scene_triangle_count(dv_meshes)}");
+}

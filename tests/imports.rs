@@ -73,3 +73,28 @@ fn match_accepts_library_enum_variants() {
         p.diagnostics.lines()
     );
 }
+
+/// P173: two files that `use` each other (cyclic intra-package import)
+/// must resolve both sides' public types so every cross-file reference
+/// links to the real definition.  Before the P173 fix this failed with
+/// "Undefined type TypeA" / "Undefined type TypeB" because `use X;` queued
+/// an import that was applied before X's definitions were registered.
+///
+/// The fix: `parse_file` runs `actual_types_deferred` with a buffer that
+/// collects unresolved stubs; after the full recursion (and a round of
+/// `import_all_overwrite`), `resolve_deferred_unknowns` patches the stubs
+/// to their real definitions via `rewrite_unknown_refs`.
+#[test]
+fn p173_intra_cycle_resolves_cross_file_types() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}p173_cycle_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "Expected cyclic `use` to resolve; got: {:?}",
+        p.diagnostics.lines()
+    );
+}

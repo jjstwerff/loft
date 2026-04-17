@@ -53,11 +53,30 @@ impl State {
         {
             let store = self.database.store(&file);
             let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+            let path_string = file_path.to_owned();
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
-            if let Ok(mut f) = File::open(file_path)
-                && f.read_to_string(buf).is_err()
-            {
-                buf.clear();
+            if let Ok(mut f) = File::open(&path_string) {
+                match f.read_to_string(buf) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                        // P166: non-UTF-8 bytes.  Silently clearing
+                        // the buffer masks real data — write a loud
+                        // actionable warning to stderr so the user
+                        // sees the misuse the first time the call
+                        // fires.  Return "" for backwards-compat
+                        // (callers that guarded on "" as "could
+                        // not read" still work).
+                        buf.clear();
+                        let size = std::fs::metadata(&path_string).map_or(0, |m| m.len());
+                        eprintln!(
+                            "warning: file({path_string:?}).content() got non-UTF-8 \
+                             bytes ({size} bytes in file) — returning empty text. \
+                             For binary files use `f#format = LittleEndian; f#read(n)` \
+                             (or `BigEndian`); see the loft-write skill § File I/O."
+                        );
+                    }
+                    Err(_) => buf.clear(),
+                }
             }
         }
     }

@@ -51,10 +51,26 @@ pub fn map_from_json(json: text) -> Map {
 
 // ── MO.2: Hex-address helpers ───────────────────────────────────────
 
+// Euclidean-division helpers for chunk / intra-chunk indexing on a
+// 32-wide chunk grid (P172).  C-style `q / 32` and `q % 32` produce
+// negative quotients and remainders for negative axial coordinates,
+// which silently maps (-1, 1) etc. to a wrong cell.  These helpers
+// always return `chunk_idx_32 = floor(v / 32)` and
+// `hex_idx_32 ∈ [0, 31]` so adjacent hexes across the origin
+// behave consistently.
+fn chunk_idx_32(v: integer) -> integer {
+  vr = v % 32;
+  if vr < 0 { (v - vr - 32) / 32 } else { (v - vr) / 32 }
+}
+fn hex_idx_32(v: integer) -> integer {
+  vr = v % 32;
+  if vr < 0 { vr + 32 } else { vr }
+}
+
 // Check whether a chunk exists at the given global coordinates.
 pub fn map_has_chunk(m: Map, q: integer, r: integer, cy: integer) -> boolean {
-  cx = q / 32;
-  cz = r / 32;
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
   for hc_c in m.m_chunks {
     if hc_c.ck_cx == cx && hc_c.ck_cy == cy && hc_c.ck_cz == cz {
       return true;
@@ -77,8 +93,8 @@ fn build_chunk(cx: integer, cy: integer, cz: integer) -> Chunk {
 // Ensure a chunk exists at the given global coordinates.
 // Creates a 32x32 chunk filled with default hexes if absent.
 pub fn map_ensure_chunk(m: &Map, q: integer, r: integer, cy: integer) {
-  cx = q / 32;
-  cz = r / 32;
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
   for ec_c in m.m_chunks {
     if ec_c.ck_cx == cx && ec_c.ck_cy == cy && ec_c.ck_cz == cz {
       return;
@@ -90,10 +106,10 @@ pub fn map_ensure_chunk(m: &Map, q: integer, r: integer, cy: integer) {
 // Write a Hex at global coordinates. Creates the chunk if needed.
 pub fn map_set_hex(m: &Map, q: integer, r: integer, cy: integer, h: Hex) {
   map_ensure_chunk(m, q, r, cy);
-  cx = q / 32;
-  cz = r / 32;
-  hx = q % 32;
-  hz = r % 32;
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  hx = hex_idx_32(q);
+  hz = hex_idx_32(r);
   idx = hx * 32 + hz;
   for sh_c in m.m_chunks {
     if sh_c.ck_cx == cx && sh_c.ck_cy == cy && sh_c.ck_cz == cz {
@@ -108,10 +124,10 @@ pub fn map_set_hex(m: &Map, q: integer, r: integer, cy: integer, h: Hex) {
 // Resolve global (q, r, cy) to the Hex at that address.
 // Returns a default Hex (all zeros) if chunk is missing or index out of bounds.
 pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
-  cx = q / 32;
-  cz = r / 32;
-  hx = q % 32;
-  hz = r % 32;
+  cx = chunk_idx_32(q);
+  cz = chunk_idx_32(r);
+  hx = hex_idx_32(q);
+  hz = hex_idx_32(r);
   idx = hx * 32 + hz;
   for gh_c in m.m_chunks {
     if gh_c.ck_cx == cx && gh_c.ck_cy == cy && gh_c.ck_cz == cz {

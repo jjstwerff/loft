@@ -1,0 +1,10 @@
+// P173 regression fixture — file A of an intra-package `use` cycle.
+// A's `consumes_b` references TypeB, which is defined in B.  B's
+// `consumes_a` references TypeA.  Each file needs the other's pub
+// definitions.  Before P173 this failed with "Undefined type TypeB"
+// (or TypeA).
+use p173_b;
+
+pub struct TypeA { x: integer not null }
+
+pub fn consumes_b(b: TypeB) -> integer { b.y }

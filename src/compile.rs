@@ -217,6 +217,15 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
                         .store_mut(&rec)
                         .set_long(rec.rec, rec.pos, *v);
                 }
+                Value::Text(v) => {
+                    // Mirror the runtime OpSetText path (src/fill.rs::set_text):
+                    // store the string in the same store as the vector record
+                    // via set_str(), then write the returned record number
+                    // into the text field as an int pointer.
+                    let store = state.database.store_mut(&rec);
+                    let s_pos = store.set_str(v);
+                    store.set_int(rec.rec, rec.pos, s_pos as i32);
+                }
                 _ => {}
             }
             state.database.record_finish(&vec_ref, &rec, vec_tp, 0);
@@ -236,11 +245,12 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
         return vec![];
     };
     let mut values = Vec::new();
-    // Look for patterns: Call(OpSetInt/Float/Single, [_, Int(0), literal_value])
+    // Look for patterns: Call(OpSetInt/Float/Single/Long/Text, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
     let set_long_nr = data.def_nr("OpSetLong");
+    let set_text_nr = data.def_nr("OpSetText");
     for op in &block.operators {
         let Value::Call(fn_nr, args) = op else {
             continue;
@@ -252,9 +262,14 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
             || *fn_nr == set_float_nr
             || *fn_nr == set_single_nr
             || *fn_nr == set_long_nr
+            || *fn_nr == set_text_nr
         {
             match &args[2] {
-                v @ (Value::Int(_) | Value::Float(_) | Value::Single(_) | Value::Long(_)) => {
+                v @ (Value::Int(_)
+                | Value::Float(_)
+                | Value::Single(_)
+                | Value::Long(_)
+                | Value::Text(_)) => {
                     values.push(v.clone());
                 }
                 _ => return vec![], // non-literal value — can't pre-build

@@ -1,0 +1,104 @@
+// Tool dispatch for the walkable editor.  tool_apply reads the
+// avatar's world position + current tool state, looks up the hex
+// under the feet, and performs the edit via moros_map / moros_editor.
+//
+// Takes `pos: Vec3` instead of `Player` so that this file stays
+// free of an intra-package dependency on player.loft (player.loft
+// depends on tools.loft for ToolKind — keeping tools.loft Player-
+// agnostic breaks the cycle).
+
+use graphics;
+use moros_map;
+use moros_editor;
+use moros_render;
+
+// ── Tool enum + state ────────────────────────────────────────────
+
+pub enum ToolKind {
+  None,
+  RaiseHex,
+  LowerHex,
+  PlaceStencil,
+  PlaceItem,
+  PlaceWall,
+}
+
+pub struct ToolState {
+  ts_current:          ToolKind,
+  ts_selected_stencil: integer not null,
+  ts_selected_item:    integer not null,
+  ts_selected_wall:    integer not null,
+  ts_wall_direction:   integer not null,   // 0..5 = N NE SE S SW NW
+  ts_height_step:      integer not null,   // 1 | 2 | 4 | 8 height-units
+}
+
+pub fn tool_state_default() -> ToolState {
+  ToolState {
+    ts_current:          ToolKind.None,
+    ts_selected_stencil: 0,
+    ts_selected_item:    0,
+    ts_selected_wall:    0,
+    ts_wall_direction:   0,
+    ts_height_step:      4,
+  }
+}
+
+// ── Stencil palette ─────────────────────────────────────────────
+// The walkable editor exposes a small integer-indexed palette
+// over the moros_editor built-in stencil constructors.  Out-of-
+// range indices fall back to stencil_flat (a safe no-op stamp).
+pub fn stencil_palette_size() -> integer { 3 }
+
+pub fn stencil_palette_name(i: integer) -> text {
+  if i == 0 { return "flat"; }
+  if i == 1 { return "house_small"; }
+  if i == 2 { return "spiral_stair"; }
+  "flat"
+}
+
+fn stencil_by_index(i: integer) -> StencilDef {
+  if i == 1 { return stencil_house_small(); }
+  if i == 2 { return stencil_spiral_stair(); }
+  stencil_flat()
+}
+
+// ── Dispatch ────────────────────────────────────────────────────
+// Applies the currently-selected tool at the hex under (pos.x, pos.z),
+// at vertical layer cy.  Mutates the map in-place.
+pub fn tool_apply(pos: Vec3, cy: integer, m: &Map, t: ToolState) {
+  addr = world_to_hex(pos.x, pos.z);
+  q = addr.ha_q;
+  r = addr.ha_r;
+
+  if t.ts_current == ToolKind.None { return; }
+
+  if t.ts_current == ToolKind.RaiseHex {
+    h = map_get_hex(m, q, r, cy);
+    map_set_height(m, q, r, cy, h.h_height + t.ts_height_step);
+    return;
+  }
+
+  if t.ts_current == ToolKind.LowerHex {
+    h = map_get_hex(m, q, r, cy);
+    new_h = h.h_height - t.ts_height_step;
+    if new_h < 0 { new_h = 0; }
+    map_set_height(m, q, r, cy, new_h);
+    return;
+  }
+
+  if t.ts_current == ToolKind.PlaceStencil {
+    st = stencil_by_index(t.ts_selected_stencil);
+    stencil_stamp(m, st, q, r, cy, 0);   // mode 0 = Replace
+    return;
+  }
+
+  if t.ts_current == ToolKind.PlaceItem {
+    map_place_item(m, q, r, cy, t.ts_selected_item, 0);
+    return;
+  }
+
+  if t.ts_current == ToolKind.PlaceWall {
+    map_set_wall_dir(m, q, r, cy, t.ts_wall_direction, t.ts_selected_wall);
+    return;
+  }
+}

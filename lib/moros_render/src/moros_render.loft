@@ -175,6 +175,647 @@ fn neighbour_dr(dir: integer) -> integer {
   0
 }
 
+// ── Box primitive (Phase 6a.12 prereq) ────────────────────────────
+
+// Emit a single face of a box: 4 outward vertices a → b → c → d
+// (CCW from outside) with shared flat normal `n`.  4 verts + 2
+// triangles.
+fn emit_box_face(m: &Mesh, a: Vec3, b: Vec3, c: Vec3, d: Vec3, n: Vec3) {
+  bf_base = len(m.vertices);
+  m.vertices += [vertex(a, n, vec2(0.0, 0.0))];
+  m.vertices += [vertex(b, n, vec2(1.0, 0.0))];
+  m.vertices += [vertex(c, n, vec2(1.0, 1.0))];
+  m.vertices += [vertex(d, n, vec2(0.0, 1.0))];
+  m.triangles += [Triangle { a: bf_base, b: bf_base + 1, c: bf_base + 2 }];
+  m.triangles += [Triangle { a: bf_base, b: bf_base + 2, c: bf_base + 3 }];
+}
+
+// Emit an axis-aligned rectangular box between `min_corner` and
+// `max_corner`.  6 faces (flat-shaded, outward normals), 24 verts
+// + 12 triangles total.  Degenerate inputs (any axis where max <=
+// min) emit nothing.
+pub fn emit_box(m: &Mesh, min_corner: Vec3, max_corner: Vec3) {
+  bx0 = min_corner.x; by0 = min_corner.y; bz0 = min_corner.z;
+  bx1 = max_corner.x; by1 = max_corner.y; bz1 = max_corner.z;
+  if bx1 <= bx0 || by1 <= by0 || bz1 <= bz0 { return; }
+  // +X face
+  emit_box_face(m,
+    vec3(bx1, by0, bz1), vec3(bx1, by0, bz0),
+    vec3(bx1, by1, bz0), vec3(bx1, by1, bz1),
+    vec3(1.0, 0.0, 0.0));
+  // -X face
+  emit_box_face(m,
+    vec3(bx0, by0, bz0), vec3(bx0, by0, bz1),
+    vec3(bx0, by1, bz1), vec3(bx0, by1, bz0),
+    vec3(-1.0, 0.0, 0.0));
+  // +Y face (top)
+  emit_box_face(m,
+    vec3(bx0, by1, bz1), vec3(bx1, by1, bz1),
+    vec3(bx1, by1, bz0), vec3(bx0, by1, bz0),
+    vec3(0.0, 1.0, 0.0));
+  // -Y face (bottom)
+  emit_box_face(m,
+    vec3(bx0, by0, bz0), vec3(bx1, by0, bz0),
+    vec3(bx1, by0, bz1), vec3(bx0, by0, bz1),
+    vec3(0.0, -1.0, 0.0));
+  // +Z face (front)
+  emit_box_face(m,
+    vec3(bx0, by0, bz1), vec3(bx1, by0, bz1),
+    vec3(bx1, by1, bz1), vec3(bx0, by1, bz1),
+    vec3(0.0, 0.0, 1.0));
+  // -Z face (back)
+  emit_box_face(m,
+    vec3(bx1, by0, bz0), vec3(bx0, by0, bz0),
+    vec3(bx0, by1, bz0), vec3(bx1, by1, bz0),
+    vec3(0.0, 0.0, -1.0));
+}
+
+// ── Thick flat wall (Phase 6a.6) ──────────────────────────────────
+
+// Emit a thick flat wall between `p1` and `p2` (base centreline,
+// y=ground) with cylindrical corner posts at each end.  The wall
+// has `thickness` perpendicular to its direction (in XZ) and
+// `height` in Y.  Front and back faces + a top cap are emitted;
+// end caps are omitted since the posts cover them.
+//
+// 3 quads × (4 verts + 2 tris) = 12 verts + 6 tris for the wall,
+// plus two cylinder posts (4 × post_segs verts + 2 × post_segs
+// tris each).  Non-positive thickness/height, coincident p1 == p2,
+// or non-positive post_radius / post_segs < 3 skip the posts.
+pub fn emit_thick_flat_wall(
+  m: &Mesh, p1: Vec3, p2: Vec3,
+  thickness: float, height: float,
+  post_radius: float, post_segs: integer
+) {
+  if thickness <= 0.0 || height <= 0.0 { return; }
+  tw_dx = p2.x - p1.x;
+  tw_dz = p2.z - p1.z;
+  tw_len = sqrt(tw_dx * tw_dx + tw_dz * tw_dz);
+  if tw_len == 0.0 { return; }
+  tw_fx = tw_dx / tw_len;
+  tw_fz = tw_dz / tw_len;
+  // Perpendicular in XZ (90° rotation, points "front").
+  tw_px = -tw_fz;
+  tw_pz = tw_fx;
+  tw_half = thickness / 2.0;
+  tw_ox = tw_px * tw_half;
+  tw_oz = tw_pz * tw_half;
+  tw_y0 = p1.y;
+  tw_y1 = p1.y + height;
+  // Eight corners of the wall slab.
+  p1_front     = vec3(p1.x + tw_ox, tw_y0, p1.z + tw_oz);
+  p2_front     = vec3(p2.x + tw_ox, tw_y0, p2.z + tw_oz);
+  p1_back      = vec3(p1.x - tw_ox, tw_y0, p1.z - tw_oz);
+  p2_back      = vec3(p2.x - tw_ox, tw_y0, p2.z - tw_oz);
+  p1_front_top = vec3(p1_front.x, tw_y1, p1_front.z);
+  p2_front_top = vec3(p2_front.x, tw_y1, p2_front.z);
+  p1_back_top  = vec3(p1_back.x,  tw_y1, p1_back.z);
+  p2_back_top  = vec3(p2_back.x,  tw_y1, p2_back.z);
+  // Front normal points +perp.
+  tw_n_front = vec3(tw_px, 0.0, tw_pz);
+  // Back normal points -perp.
+  tw_n_back  = vec3(-tw_px, 0.0, -tw_pz);
+  tw_n_top   = vec3(0.0, 1.0, 0.0);
+  // Winding (CCW from the outward side → correct normal):
+  // front: p1_front → p2_front → p2_front_top → p1_front_top
+  emit_box_face(m, p1_front, p2_front, p2_front_top, p1_front_top, tw_n_front);
+  // back: reversed to flip CCW direction vs front.
+  emit_box_face(m, p2_back, p1_back, p1_back_top, p2_back_top, tw_n_back);
+  // top: (p1_back_top, p1_front_top, p2_front_top, p2_back_top) → normal +Y.
+  emit_box_face(m, p1_back_top, p1_front_top, p2_front_top, p2_back_top, tw_n_top);
+  // Corner posts — skip if degenerate.
+  if post_radius > 0.0 && post_segs >= 3 {
+    post_top_1 = vec3(p1.x, tw_y1, p1.z);
+    post_top_2 = vec3(p2.x, tw_y1, p2.z);
+    emit_cylinder_post(m, p1, post_top_1, post_radius, post_segs);
+    emit_cylinder_post(m, p2, post_top_2, post_radius, post_segs);
+  }
+}
+
+// ── Thick curved wall (Phase 6a.7) ────────────────────────────────
+
+// Emit a thick curved wall — arc-segmented vertical slab curving
+// around the Y-axis at `centre`.  Sweeps `angle_sweep_deg` from
+// `start_angle_deg`, subdivided into `seg_count` segments.  The
+// wall has inner face at `inner_r`, outer face at `outer_r`, base
+// at `base_y`, top at `base_y + height`.
+//
+// Per segment: 3 quads (inner face -radial, outer face +radial,
+// top face +Y) — 12 verts + 6 tris.  End caps (radial faces at
+// the sweep boundaries) are the caller's responsibility; most
+// curved walls meet other walls at their ends.
+//
+// Guards: non-positive seg_count / height, negative inner_r, or
+// outer_r <= inner_r emit nothing.  Per-segment normals use the
+// midpoint angle (flat shading across the segment).
+pub fn emit_thick_curved_wall(
+  m: &Mesh, centre: Vec3,
+  inner_r: float, outer_r: float,
+  base_y: float, height: float,
+  start_angle_deg: float, angle_sweep_deg: float,
+  seg_count: integer
+) {
+  if seg_count <= 0 { return; }
+  if inner_r < 0.0 || outer_r <= inner_r { return; }
+  if height <= 0.0 { return; }
+  tcw_d2r = PI / 180.0;
+  tcw_seg = angle_sweep_deg / seg_count as float;
+  tcw_y0 = base_y;
+  tcw_y1 = base_y + height;
+  tcw_up = vec3(0.0, 1.0, 0.0);
+  for tcw_i in 0..seg_count {
+    i_tcw = tcw_i as float;
+    a_s = (start_angle_deg + i_tcw * tcw_seg) * tcw_d2r;
+    a_e = (start_angle_deg + (i_tcw + 1.0) * tcw_seg) * tcw_d2r;
+    cs_s = cos(a_s);
+    sn_s = sin(a_s);
+    cs_e = cos(a_e);
+    sn_e = sin(a_e);
+    // 8 corners of this segment's slab: inner/outer × start/end × bottom/top.
+    i_s_b = vec3(centre.x + inner_r * cs_s, tcw_y0, centre.z + inner_r * sn_s);
+    i_e_b = vec3(centre.x + inner_r * cs_e, tcw_y0, centre.z + inner_r * sn_e);
+    o_e_b = vec3(centre.x + outer_r * cs_e, tcw_y0, centre.z + outer_r * sn_e);
+    o_s_b = vec3(centre.x + outer_r * cs_s, tcw_y0, centre.z + outer_r * sn_s);
+    i_s_t = vec3(i_s_b.x, tcw_y1, i_s_b.z);
+    i_e_t = vec3(i_e_b.x, tcw_y1, i_e_b.z);
+    o_e_t = vec3(o_e_b.x, tcw_y1, o_e_b.z);
+    o_s_t = vec3(o_s_b.x, tcw_y1, o_s_b.z);
+    // Segment midpoint angle for flat-shaded normals.
+    a_m = (a_s + a_e) / 2.0;
+    cos_m = cos(a_m);
+    sin_m = sin(a_m);
+    n_inner = vec3(-cos_m, 0.0, -sin_m);
+    n_outer = vec3(cos_m, 0.0, sin_m);
+    // Inner face (faces toward centre) — winding verified via cross
+    // product to give -radial normal.
+    emit_box_face(m, i_s_b, i_e_b, i_e_t, i_s_t, n_inner);
+    // Outer face (faces away from centre).
+    emit_box_face(m, o_e_b, o_s_b, o_s_t, o_e_t, n_outer);
+    // Top face (+Y).
+    emit_box_face(m, i_e_t, o_e_t, o_s_t, i_s_t, tcw_up);
+  }
+}
+
+// ── Material swatch (Phase 6a.17) ─────────────────────────────────
+
+// Whether a material category is one of the stair variants.
+fn is_stair_category(c: text) -> boolean {
+  c == "stair" || c == "spiral_stair" || c == "grand_arc_stair"
+}
+
+// Render a small procedural swatch for a MaterialDef — a
+// `swatch_size × swatch_size` Canvas filled with the material's
+// tint, bordered with a darker shade, and (for stair categories)
+// striped horizontally so the category is recognisable in the
+// editor palette at a glance.
+//
+// Graceful with degenerate inputs: `swatch_size <= 0` returns a
+// 1×1 solid-tint canvas; `swatch_size == 1` returns a 1×1 tint
+// with no border drawn (no room for one).
+pub fn material_swatch(mat: MaterialDef, swatch_size: integer) -> Canvas {
+  sw_tint = rgb(mat.md_tint_r, mat.md_tint_g, mat.md_tint_b);
+  sw_sz = if swatch_size < 1 { 1 } else { swatch_size };
+  sw = canvas(sw_sz, sw_sz, sw_tint);
+  if sw_sz < 2 { return sw; }
+  // Darker border: 50% of each tint channel.
+  sw_border = rgb(mat.md_tint_r / 2, mat.md_tint_g / 2, mat.md_tint_b / 2);
+  for sw_i in 0..sw_sz {
+    set_pixel(sw, sw_i, 0, sw_border);
+    set_pixel(sw, sw_i, sw_sz - 1, sw_border);
+    set_pixel(sw, 0, sw_i, sw_border);
+    set_pixel(sw, sw_sz - 1, sw_i, sw_border);
+  }
+  // Stair categories get horizontal stripes every 4 rows.
+  if is_stair_category(mat.md_category) {
+    sw_stripe = rgb(
+      (mat.md_tint_r * 3) / 4,
+      (mat.md_tint_g * 3) / 4,
+      (mat.md_tint_b * 3) / 4
+    );
+    for sw_y in 0..sw_sz {
+      if sw_y % 4 == 2 {
+        for sw_x in 1..sw_sz - 1 {
+          set_pixel(sw, sw_x, sw_y, sw_stripe);
+        }
+      }
+    }
+  }
+  sw
+}
+
+// ── Item placeholder geometry (Phase 6a.12) ───────────────────────
+
+// Emit a placeholder mesh for a map item at `pos` with nominal
+// `scale` (typical: 1.0 = one hex width).  Dispatches on
+// `kind_name` (values from ItemDef.id_kind): tall cylindrical
+// shapes for PILLAR / TREE, box for everything else.  Geometry is
+// cheap / illustrative — the real assets are baked by the artist
+// pipeline.  Non-positive scale is a no-op.
+pub fn emit_item_placeholder(m: &Mesh, kind_name: text, pos: Vec3, scale: float) {
+  if scale <= 0.0 { return; }
+  if kind_name == "PILLAR" || kind_name == "TREE" {
+    cyl_top = vec3(pos.x, pos.y + scale * 2.0, pos.z);
+    emit_cylinder_post(m, pos, cyl_top, scale * 0.3, 8);
+    return;
+  }
+  bp_half = scale / 2.0;
+  bp_min = vec3(pos.x - bp_half, pos.y, pos.z - bp_half);
+  bp_max = vec3(pos.x + bp_half, pos.y + scale, pos.z + bp_half);
+  emit_box(m, bp_min, bp_max);
+}
+
+// ── Cylinder post (Phase 6a.8) ────────────────────────────────────
+
+// Emit a cylindrical post between `base` and `top` with `radius`
+// and `seg_count` angular segments around the Y-axis.  Assumes the
+// axis is vertical (base.y < top.y).  Only the side surface is
+// emitted — no top/bottom caps.  Vertex normals are the outward
+// radial (smooth shading); per-segment quad winding puts the normal
+// outward.  Each segment contributes 4 vertices + 2 triangles.
+//
+// Degenerate inputs (seg_count < 3 or radius <= 0) emit nothing.
+pub fn emit_cylinder_post(
+  m: &Mesh, base: Vec3, top: Vec3, radius: float, seg_count: integer
+) {
+  if seg_count < 3 { return; }
+  if radius <= 0.0 { return; }
+  cp_seg = 2.0 * PI / seg_count as float;
+  for cp_i in 0..seg_count {
+    i_cp = cp_i as float;
+    a0 = i_cp * cp_seg;
+    a1 = (i_cp + 1.0) * cp_seg;
+    cos0 = cos(a0);
+    sin0 = sin(a0);
+    cos1 = cos(a1);
+    sin1 = sin(a1);
+    n0 = vec3(cos0, 0.0, sin0);
+    n1 = vec3(cos1, 0.0, sin1);
+    cp_bl = vec3(base.x + radius * cos0, base.y, base.z + radius * sin0);
+    cp_br = vec3(base.x + radius * cos1, base.y, base.z + radius * sin1);
+    cp_tr = vec3(top.x + radius * cos1, top.y, top.z + radius * sin1);
+    cp_tl = vec3(top.x + radius * cos0, top.y, top.z + radius * sin0);
+    cp_base = len(m.vertices);
+    m.vertices += [vertex(cp_bl, n0, vec2(0.0, 0.0))];
+    m.vertices += [vertex(cp_br, n1, vec2(1.0, 0.0))];
+    m.vertices += [vertex(cp_tr, n1, vec2(1.0, 1.0))];
+    m.vertices += [vertex(cp_tl, n0, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: cp_base, b: cp_base + 1, c: cp_base + 2 }];
+    m.triangles += [Triangle { a: cp_base, b: cp_base + 2, c: cp_base + 3 }];
+  }
+}
+
+// ── Linear stair geometry (Phase 6a.9 / MO.8a) ────────────────────
+
+// Step count for a linear stair climbing from y_low to y_high.
+// Rule of thumb: one step per HEIGHT_SCALE world-units of climb.
+// Minimum 1 step (descending climbs count the same as ascending).
+pub fn stair_step_count(y_low: float, y_high: float) -> integer {
+  d = y_high - y_low;
+  if d < 0.0 { d = 0.0 - d; }
+  n = (d / HEIGHT_SCALE) as integer;
+  if n < 1 { 1 } else { n }
+}
+
+// Emit a linear stair with `step_count` uniform steps from `p_low`
+// (front-centre at the low end) to `p_high` (front-centre at the
+// high end).  `width` is the lateral size perpendicular to travel.
+// Each step contributes 8 vertices (4 riser + 4 tread) and 4
+// triangles (2 riser + 2 tread).  No geometry is emitted when the
+// step count is non-positive or the horizontal distance is zero.
+pub fn emit_linear_stair(
+  m: &Mesh, p_low: Vec3, p_high: Vec3, width: float, step_count: integer
+) {
+  if step_count <= 0 { return; }
+  ls_dx = p_high.x - p_low.x;
+  ls_dz = p_high.z - p_low.z;
+  ls_dy = p_high.y - p_low.y;
+  horiz = sqrt(ls_dx * ls_dx + ls_dz * ls_dz);
+  if horiz == 0.0 { return; }
+  fwd_x = ls_dx / horiz;
+  fwd_z = ls_dz / horiz;
+  // 90° rotation in XZ for the lateral direction.
+  side_x = 0.0 - fwd_z;
+  side_z = fwd_x;
+  stair_half_w = width / 2.0;
+  step_run  = horiz / step_count as float;
+  step_rise = ls_dy / step_count as float;
+  stair_up = vec3(0.0, 1.0, 0.0);
+  // Riser normal points backward (against travel direction).
+  riser_n = vec3(0.0 - fwd_x, 0.0, 0.0 - fwd_z);
+  for ls_i in 0..step_count {
+    i_f = ls_i as float;
+    fx = p_low.x + fwd_x * step_run * i_f;
+    fz = p_low.z + fwd_z * step_run * i_f;
+    y_bot = p_low.y + step_rise * i_f;
+    y_top = p_low.y + step_rise * (i_f + 1.0);
+    lx = side_x * stair_half_w;
+    lz = side_z * stair_half_w;
+    // Riser quad — vertical, faces backward.
+    r_bl = vec3(fx - lx, y_bot, fz - lz);
+    r_br = vec3(fx + lx, y_bot, fz + lz);
+    r_tr = vec3(fx + lx, y_top, fz + lz);
+    r_tl = vec3(fx - lx, y_top, fz - lz);
+    rb = len(m.vertices);
+    m.vertices += [vertex(r_bl, riser_n, vec2(0.0, 0.0))];
+    m.vertices += [vertex(r_br, riser_n, vec2(1.0, 0.0))];
+    m.vertices += [vertex(r_tr, riser_n, vec2(1.0, 1.0))];
+    m.vertices += [vertex(r_tl, riser_n, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: rb, b: rb + 1, c: rb + 2 }];
+    m.triangles += [Triangle { a: rb, b: rb + 2, c: rb + 3 }];
+    // Tread quad — horizontal, faces up.
+    bx = fx + fwd_x * step_run;
+    bz = fz + fwd_z * step_run;
+    t_fl = vec3(fx - lx, y_top, fz - lz);
+    t_fr = vec3(fx + lx, y_top, fz + lz);
+    t_br = vec3(bx + lx, y_top, bz + lz);
+    t_bl = vec3(bx - lx, y_top, bz - lz);
+    tb = len(m.vertices);
+    m.vertices += [vertex(t_fl, stair_up, vec2(0.0, 0.0))];
+    m.vertices += [vertex(t_fr, stair_up, vec2(1.0, 0.0))];
+    m.vertices += [vertex(t_br, stair_up, vec2(1.0, 1.0))];
+    m.vertices += [vertex(t_bl, stair_up, vec2(0.0, 1.0))];
+    m.triangles += [Triangle { a: tb, b: tb + 1, c: tb + 2 }];
+    m.triangles += [Triangle { a: tb, b: tb + 2, c: tb + 3 }];
+  }
+}
+
+// ── Arc-tread helper (shared by spiral + grand-arc stairs) ────────
+
+// Emit `step_count` pie-slice treads sweeping around the Y-axis at
+// `centre`.  Each tread covers `angle_deg_per_step` of sweep
+// starting at `start_angle_deg`, sits `rise_per_step` higher in Y
+// than the previous, and is bounded radially by `inner_r` and
+// `outer_r`.  4 vertices + 2 triangles per step; winding is
+// inner-front → inner-back → outer-back → outer-front (CW from
+// above → normal points +Y, matches the linear stair tread).
+//
+// Guards: non-positive step count, negative inner_r, or outer_r
+// <= inner_r emit nothing.
+fn emit_arc_treads(
+  m: &Mesh, centre: Vec3, inner_r: float, outer_r: float,
+  rise_per_step: float, step_count: integer,
+  start_angle_deg: float, angle_deg_per_step: float
+) {
+  if step_count <= 0 { return; }
+  if inner_r < 0.0 || outer_r <= inner_r { return; }
+  deg_to_rad = PI / 180.0;
+  up_at = vec3(0.0, 1.0, 0.0);
+  for at_i in 0..step_count {
+    i_at = at_i as float;
+    angle_start = (start_angle_deg + i_at * angle_deg_per_step) * deg_to_rad;
+    angle_end = (start_angle_deg + (i_at + 1.0) * angle_deg_per_step) * deg_to_rad;
+    tread_y = centre.y + rise_per_step * (i_at + 1.0);
+    cos_s = cos(angle_start);
+    sin_s = sin(angle_start);
+    cos_e = cos(angle_end);
+    sin_e = sin(angle_end);
+    i_front = vec3(centre.x + inner_r * cos_s, tread_y, centre.z + inner_r * sin_s);
+    i_back  = vec3(centre.x + inner_r * cos_e, tread_y, centre.z + inner_r * sin_e);
+    o_back  = vec3(centre.x + outer_r * cos_e, tread_y, centre.z + outer_r * sin_e);
+    o_front = vec3(centre.x + outer_r * cos_s, tread_y, centre.z + outer_r * sin_s);
+    at_base = len(m.vertices);
+    m.vertices += [vertex(i_front, up_at, vec2(0.0, 0.0))];
+    m.vertices += [vertex(i_back,  up_at, vec2(0.0, 1.0))];
+    m.vertices += [vertex(o_back,  up_at, vec2(1.0, 1.0))];
+    m.vertices += [vertex(o_front, up_at, vec2(1.0, 0.0))];
+    m.triangles += [Triangle { a: at_base, b: at_base + 1, c: at_base + 2 }];
+    m.triangles += [Triangle { a: at_base, b: at_base + 2, c: at_base + 3 }];
+  }
+}
+
+// ── Spiral stair geometry (Phase 6a.10 / MO.8b) ───────────────────
+
+// Emit a spiral stair with `step_count` pie-slice treads fanning
+// around the Y-axis at `centre` (base).  Each tread covers
+// `angle_deg_per_step` of sweep and sits `rise_per_step` higher in
+// Y than the previous (so step i is at y = centre.y + rise_per_step
+// * (i + 1)).  `inner_r` is the newel-side radius; `outer_r` is the
+// rail-side radius.
+//
+// Each tread is a flat trapezoidal quad with an upward normal:
+// 4 vertices + 2 triangles per step.  Non-positive step count,
+// negative inner_r, or outer_r <= inner_r emit nothing.  The
+// central newel cylinder is not drawn here — emit it separately
+// (see `emit_cylinder_post` above).
+pub fn emit_spiral_stair(
+  m: &Mesh, centre: Vec3, inner_r: float, outer_r: float,
+  rise_per_step: float, step_count: integer, angle_deg_per_step: float
+) {
+  emit_arc_treads(m, centre, inner_r, outer_r, rise_per_step,
+                  step_count, 0.0, angle_deg_per_step);
+}
+
+// ── Grand arc stair geometry (Phase 6a.11) ────────────────────────
+
+// Emit a grand-arc stair — treads sweeping along a large-radius
+// arc, used for monumental curved staircases (e.g. around a tower
+// or hall).  Unlike `emit_spiral_stair`, the stair path has a
+// specific centreline at `arc_radius` from `centre`, and the
+// inner/outer radii are derived from the `stair_width`.
+//
+// `start_angle_deg` places the first step's leading edge; each
+// step sweeps `angle_deg_per_step` and rises `rise_per_step` above
+// the previous.  4 vertices + 2 triangles per step.
+//
+// Guards: non-positive step count, non-positive stair width, or
+// `arc_radius < stair_width / 2.0` (which would give a negative
+// inner radius) emit nothing.
+pub fn emit_grand_arc_stair(
+  m: &Mesh, centre: Vec3, arc_radius: float, stair_width: float,
+  rise_per_step: float, step_count: integer,
+  start_angle_deg: float, angle_deg_per_step: float
+) {
+  if stair_width <= 0.0 { return; }
+  ga_half_w = stair_width / 2.0;
+  if arc_radius < ga_half_w { return; }
+  emit_arc_treads(m, centre, arc_radius - ga_half_w, arc_radius + ga_half_w,
+                  rise_per_step, step_count, start_angle_deg, angle_deg_per_step);
+}
+
+// ── Camera (Phase 6a.15 / MO.9a) ──────────────────────────────────
+
+// Orbit camera: a viewpoint that pivots around a target point.
+// Azimuth sweeps around the world Y axis (0° = looking along +X);
+// elevation lifts above the horizontal plane (0° = ground level,
+// 90° = straight down from above).  `distance` is the radial
+// separation between eye and target.  `fov_y`, `near`, `far` are
+// the usual perspective-projection knobs.  `up` is world up.
+pub struct RenderCamera {
+  target:    Vec3,
+  azimuth:   float not null,
+  elevation: float not null,
+  distance:  float not null,
+  fov_y:     float not null,
+  near:      float not null,
+  far:       float not null,
+  up:        Vec3,
+}
+
+// Sensible defaults: orbit at (0,0,0), 45° azimuth, 30° elevation,
+// 10 world units out, 60° vertical FOV, near/far 0.1 / 1000.
+pub fn camera_default() -> RenderCamera {
+  RenderCamera {
+    target:    vec3(0.0, 0.0, 0.0),
+    azimuth:   45.0,
+    elevation: 30.0,
+    distance:  10.0,
+    fov_y:     60.0,
+    near:      0.1,
+    far:       1000.0,
+    up:        vec3(0.0, 1.0, 0.0),
+  }
+}
+
+// Eye position computed from spherical coordinates around target.
+pub fn camera_eye(cam: RenderCamera) -> Vec3 {
+  cam_d2r = PI / 180.0;
+  az = cam.azimuth * cam_d2r;
+  el = cam.elevation * cam_d2r;
+  horiz = cam.distance * cos(el);
+  ex = cam.target.x + horiz * cos(az);
+  ey = cam.target.y + cam.distance * sin(el);
+  ez = cam.target.z + horiz * sin(az);
+  vec3(ex, ey, ez)
+}
+
+pub fn camera_view_matrix(cam: RenderCamera) -> Mat4 {
+  mat4_look_at(camera_eye(cam), cam.target, cam.up)
+}
+
+pub fn camera_projection_matrix(cam: RenderCamera, aspect: float) -> Mat4 {
+  cam_fov_rad = cam.fov_y * PI / 180.0;
+  mat4_perspective(cam_fov_rad, aspect, cam.near, cam.far)
+}
+
+// Orbit: add deltas to azimuth and elevation.  Elevation is clamped
+// to (-89°, 89°) to avoid gimbal flip at the poles.
+pub fn camera_orbit(cam: &RenderCamera, d_azimuth_deg: float, d_elevation_deg: float) {
+  cam.azimuth = cam.azimuth + d_azimuth_deg;
+  new_el = cam.elevation + d_elevation_deg;
+  if new_el > 89.0 { new_el = 89.0; }
+  if new_el < -89.0 { new_el = -89.0; }
+  cam.elevation = new_el;
+}
+
+// Zoom: add delta to distance, clamped to [0.1, 10000].
+pub fn camera_zoom(cam: &RenderCamera, delta: float) {
+  d_new = cam.distance + delta;
+  if d_new < 0.1 { d_new = 0.1; }
+  if d_new > 10000.0 { d_new = 10000.0; }
+  cam.distance = d_new;
+}
+
+// Pan: shift target in world space.
+pub fn camera_pan(cam: &RenderCamera, dx: float, dy: float, dz: float) {
+  cam.target.x = cam.target.x + dx;
+  cam.target.y = cam.target.y + dy;
+  cam.target.z = cam.target.z + dz;
+}
+
+// ── Camera modes (walkable editor) ─────────────────────────────────
+//
+// Two presets for third-person follow and top-down overview, plus an
+// unbounded-zoom variant of camera_zoom for "whole map from orbit".
+// Signatures take primitives (Vec3 + facing radians) so moros_render
+// stays free of a moros_sim dependency.
+
+pub enum CameraMode { Follow, Overview }
+
+pub CAMERA_ZOOM_MAX_UNBOUNDED = 50000.0;
+
+// Third-person follow: target the avatar's head, azimuth set so the
+// camera orbits behind the avatar's facing direction.  Elevation and
+// distance stay under user control (defaults: 30°, 10 units).
+//
+// Facing convention: 0 rad = looking down +Z.  Camera sits on the
+// opposite side along the facing vector.
+pub fn camera_follow(head_pos: Vec3, facing_rad: float, cam: &RenderCamera) {
+  cam.target = head_pos;
+  facing_deg = facing_rad * 180.0 / PI;
+  cam.azimuth = 270.0 - facing_deg;
+}
+
+// Top-down overview: pin elevation near vertical (89° avoids the
+// gimbal-flip clamp).  Auto-expands distance if it was zoomed in too
+// close for an overview to be useful.
+pub fn camera_overview(ground_pos: Vec3, cam: &RenderCamera) {
+  cam.target = ground_pos;
+  cam.elevation = 89.0;
+  if cam.distance < 20.0 { cam.distance = 80.0; }
+}
+
+// Like camera_zoom but caps at CAMERA_ZOOM_MAX_UNBOUNDED (50 000) so
+// the camera can back out far enough to see a full 32×32 chunk.
+pub fn camera_zoom_unbounded(cam: &RenderCamera, delta: float) {
+  zoom_d = cam.distance + delta;
+  if zoom_d < 0.1 { zoom_d = 0.1; }
+  if zoom_d > CAMERA_ZOOM_MAX_UNBOUNDED { zoom_d = CAMERA_ZOOM_MAX_UNBOUNDED; }
+  cam.distance = zoom_d;
+}
+
+// ── Picker (Phase 6a.16 / MO.9b) ──────────────────────────────────
+
+// Build a world-space ray direction from normalized device
+// coordinates (-1..1 on both axes, +y = up the screen).  The ray
+// origin is the camera eye; use together with
+// `ray_plane_y_intersect` to find the world-space pick point.
+pub fn camera_ray_dir(cam: RenderCamera, ndc_x: float, ndc_y: float, aspect: float) -> Vec3 {
+  eye = camera_eye(cam);
+  ray_fwd = normalize3(sub3(cam.target, eye));
+  ray_right = normalize3(cross(ray_fwd, cam.up));
+  ray_up = cross(ray_right, ray_fwd);
+  half_fov = cam.fov_y * PI / 180.0 / 2.0;
+  tan_half = tan(half_fov);
+  scale_x = ndc_x * tan_half * aspect;
+  scale_y = ndc_y * tan_half;
+  ray_d = add3(ray_fwd, add3(scale3(ray_right, scale_x), scale3(ray_up, scale_y)));
+  normalize3(ray_d)
+}
+
+// Intersect a ray (origin + t·dir) with the horizontal plane
+// y = plane_y.  Returns the world-space intersection, or null
+// (Vec3 with y=NaN marker represented here as (0,0,0) when
+// parallel / behind the origin).  Callers should check that the
+// y matches `plane_y` before using the result.
+pub fn ray_plane_y_intersect(origin: Vec3, dir: Vec3, plane_y: float) -> Vec3 {
+  if dir.y == 0.0 { return vec3(0.0, 0.0, 0.0); }
+  ray_t = (plane_y - origin.y) / dir.y;
+  if ray_t < 0.0 { return vec3(0.0, 0.0, 0.0); }
+  vec3(origin.x + ray_t * dir.x, plane_y, origin.z + ray_t * dir.z)
+}
+
+// Inverse of `hex_to_world`: snap a world-space (x, z) to the
+// nearest hex's axial (q, r).  Flat-top layout, odd-row offset.
+pub fn world_to_hex(wx: float, wz: float) -> HexAddress {
+  r_approx = round(wz / HEX_ROW_HEIGHT);
+  r_int = r_approx as integer;
+  wh_offset = if r_int % 2 == 0 { 0.0 } else { HEX_WIDTH / 2.0 };
+  q_float = round((wx - wh_offset) / HEX_WIDTH);
+  HexAddress {
+    ha_q:  q_float as integer,
+    ha_r:  r_int,
+    ha_cy: 0,
+  }
+}
+
+// Full pick: convert (screen_x, screen_y) in pixel coords to a
+// hex address on the plane y = hex_floor_y.  Returns ha_cy = 0
+// (single-layer pick); callers can overwrite for multi-layer.
+pub fn pick_hex(
+  cam: RenderCamera,
+  screen_x: float, screen_y: float,
+  viewport_w: float, viewport_h: float,
+  hex_floor_y: float
+) -> HexAddress {
+  ndc_x = (2.0 * screen_x / viewport_w) - 1.0;
+  ndc_y = 1.0 - (2.0 * screen_y / viewport_h);
+  pk_aspect = viewport_w / viewport_h;
+  pk_eye = camera_eye(cam);
+  pk_dir = camera_ray_dir(cam, ndc_x, ndc_y, pk_aspect);
+  world_pt = ray_plane_y_intersect(pk_eye, pk_dir, hex_floor_y);
+  world_to_hex(world_pt.x, world_pt.z)
+}
+
 // ── Scene builder (Phase 6a.13) ───────────────────────────────────
 
 // Find or create a mesh by material name, emit a hex surface into it.
@@ -193,42 +834,241 @@ fn emit_to_material(meshes: vector<Mesh>, mat: integer, q: integer, r: integer, 
 }
 
 // Emit wall geometry for a hex's 3 stored edges (N, NE, SE).
-fn emit_hex_walls(wall_mesh: &Mesh, q: integer, r: integer, height: integer, h: Hex) {
+// Dispatch a single wall edge by `WallDef.wd_body`:
+// - "SOLID" (default)         → full-height `emit_wall_quad`
+// - "HALF_HEIGHT" / "FENCE"   → half-height `emit_wall_quad`
+// - "BATTLEMENT"              → 3/4-height `emit_wall_quad`
+// - "THICK_FLAT"              → `emit_thick_flat_wall` with corner posts
+// - "THICK_CURVED"            → thick flat fallback (centre/radius data
+//                               isn't recoverable from a single edge)
+// Unknown bodies fall back to a solid quad so geometry is always emitted.
+fn dispatch_wall_edge(
+  m: &Mesh, w: WallDef, c1: Vec3, c2: Vec3, floor_y: float, ceil_y: float
+) {
+  dw_body = w.wd_body;
+  if dw_body == "HALF_HEIGHT" || dw_body == "FENCE" {
+    emit_wall_quad(m, c1, c2, floor_y, floor_y + (ceil_y - floor_y) * 0.5);
+    return;
+  }
+  if dw_body == "BATTLEMENT" {
+    emit_wall_quad(m, c1, c2, floor_y, floor_y + (ceil_y - floor_y) * 0.75);
+    return;
+  }
+  if dw_body == "THICK_FLAT" || dw_body == "THICK_CURVED" {
+    dw_thick = if w.wd_thickness > 0.0 { w.wd_thickness } else { 0.3 };
+    dw_height = ceil_y - floor_y;
+    dw_p1 = vec3(c1.x, floor_y, c1.z);
+    dw_p2 = vec3(c2.x, floor_y, c2.z);
+    emit_thick_flat_wall(m, dw_p1, dw_p2, dw_thick, dw_height, dw_thick * 0.5, 6);
+    return;
+  }
+  emit_wall_quad(m, c1, c2, floor_y, ceil_y);
+}
+
+// Resolve a 1-indexed wall reference (`h.h_wall_*`) against the
+// palette and dispatch.  `wall_ref == 0` means "no wall".
+// Out-of-range refs fall back to a plain solid quad.
+fn emit_hex_wall_edge(
+  m: &Mesh, walls: vector<WallDef>, wall_ref: integer,
+  c1: Vec3, c2: Vec3, floor_y: float, ceil_y: float
+) {
+  if wall_ref <= 0 { return; }
+  hw_idx = wall_ref - 1;
+  if hw_idx >= 0 && hw_idx < len(walls) {
+    dispatch_wall_edge(m, walls[hw_idx], c1, c2, floor_y, ceil_y);
+  } else {
+    emit_wall_quad(m, c1, c2, floor_y, ceil_y);
+  }
+}
+
+fn emit_hex_walls(
+  wall_mesh: &Mesh, q: integer, r: integer, height: integer, h: Hex,
+  walls: vector<WallDef>
+) {
   floor_y = height as float * HEIGHT_SCALE;
   ceil_y = floor_y + 1.0;   // 1 unit tall walls
   if h.h_wall_n != 0 {
     c1 = hex_corner_world(q, r, height, 5);   // top-left
     c2 = hex_corner_world(q, r, height, 0);   // top
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_n, c1, c2, floor_y, ceil_y);
   }
   if h.h_wall_ne != 0 {
     c1 = hex_corner_world(q, r, height, 0);   // top
     c2 = hex_corner_world(q, r, height, 1);   // top-right
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_ne, c1, c2, floor_y, ceil_y);
   }
   if h.h_wall_se != 0 {
     c1 = hex_corner_world(q, r, height, 1);   // top-right
     c2 = hex_corner_world(q, r, height, 2);   // bottom-right
-    emit_wall_quad(wall_mesh, c1, c2, floor_y, ceil_y);
+    emit_hex_wall_edge(wall_mesh, walls, h.h_wall_se, c1, c2, floor_y, ceil_y);
   }
 }
 
 // Build meshes for all visible hexes in a map.
 // Returns a vector of meshes grouped by material index.
 // Also includes a "walls" mesh for all wall geometry.
+// Direction of the tallest adjacent hex (0..5 for N/NE/SE/S/SW/NW),
+// or -1 if no neighbor has a height strictly greater than `curr_h`.
+// Missing chunks count as height 0 per `map_get_hex`'s default.
+fn stair_target_dir(
+  map: Map, q: integer, r: integer, cy: integer, curr_h: integer
+) -> integer {
+  best_dir = -1;
+  best_h = curr_h;
+  for sd_d in 0..6 {
+    sd_nq = q + neighbour_dq(sd_d);
+    sd_nr = r + neighbour_dr(sd_d);
+    sd_nh = map_get_hex(map, sd_nq, sd_nr, cy).h_height;
+    if sd_nh > best_h {
+      best_dir = sd_d;
+      best_h = sd_nh;
+    }
+  }
+  best_dir
+}
+
+// Default stair rise when a stair hex has no taller neighbor to
+// target.  12 height units × HEIGHT_SCALE (0.25) = 3.0 world units,
+// roughly one normal-house floor-to-ceiling height.
+pub DEFAULT_STAIR_RISE_UNITS = 12;
+
+// Default stair direction (0..5 = N/NE/SE/S/SW/NW) when there's no
+// taller neighbor to infer from.  North (+r) is a sensible default —
+// the stair ramps "forward" out of the hex.
+pub DEFAULT_STAIR_DIR = 0;
+
+// Emit the stair or flat-surface payload into `target`.  Split out so
+// both the "found existing mesh" and "just created a new one" paths
+// share the same geometry decision.
+//
+// If any adjacent hex is taller, the stair ramps from the current
+// hex's centre to the tallest neighbor's centre.  Otherwise it emits
+// a default-height stair rising `DEFAULT_STAIR_RISE_UNITS` in the
+// `DEFAULT_STAIR_DIR` direction — isolated stair hexes still render
+// as stairs rather than silently collapsing to flat surfaces.
+fn emit_stair_into(
+  target: &Mesh, map: Map, q: integer, r: integer, cy: integer, h: integer
+) {
+  sh_dir = stair_target_dir(map, q, r, cy, h);
+  sh_dest_h = 0;
+  if sh_dir < 0 {
+    sh_dir = DEFAULT_STAIR_DIR;
+    sh_dest_h = h + DEFAULT_STAIR_RISE_UNITS;
+  } else {
+    sh_ddq = neighbour_dq(sh_dir);
+    sh_ddr = neighbour_dr(sh_dir);
+    sh_dest_h = map_get_hex(map, q + sh_ddq, r + sh_ddr, cy).h_height;
+  }
+  sh_dq = neighbour_dq(sh_dir);
+  sh_dr = neighbour_dr(sh_dir);
+  sh_p_low = hex_to_world(q, r, h);
+  sh_p_high = hex_to_world(q + sh_dq, r + sh_dr, sh_dest_h);
+  sh_steps = stair_step_count(sh_p_low.y, sh_p_high.y);
+  emit_linear_stair(target, sh_p_low, sh_p_high, HEX_WIDTH * 0.6, sh_steps);
+}
+
+// Emit a stair-category hex: a linear stair from the current hex
+// centre (at `h`) to the tallest adjacent neighbor's centre (at its
+// `h_height`).  Falls back to a flat hex surface if no neighbor is
+// taller.  Spiral and grand-arc categories currently share the
+// linear-stair emission — centre/arc metadata isn't encoded at the
+// hex level yet.
+fn emit_stair_hex(
+  meshes: vector<Mesh>, mat: integer, map: Map,
+  q: integer, r: integer, cy: integer, h: integer
+) {
+  sh_mat_name = "{mat}";
+  for sh_em in meshes {
+    if sh_em.name == sh_mat_name {
+      emit_stair_into(sh_em, map, q, r, cy, h);
+      return;
+    }
+  }
+  meshes += [mesh(sh_mat_name)];
+  sh_nm = meshes[len(meshes) - 1];
+  emit_stair_into(sh_nm, map, q, r, cy, h);
+}
+
+// Emit a small axis-aligned marker box at `pos`, offset by
+// `y_offset` above the pos and of size × size × size.  Used for
+// spawn / waypoint markers in the scene builder.
+fn emit_marker(m: &Mesh, pos: Vec3, y_offset: float, size: float) {
+  mk_half = size / 2.0;
+  emit_box(
+    m,
+    vec3(pos.x - mk_half, pos.y + y_offset, pos.z - mk_half),
+    vec3(pos.x + mk_half, pos.y + y_offset + size, pos.z + mk_half)
+  );
+}
+
+// Resolve a 1-indexed item reference (`h.h_item`) and emit its
+// placeholder mesh at the hex's world-space centre.  `item_ref == 0`
+// means "no item"; out-of-range refs are a no-op.
+fn emit_hex_item(
+  items_mesh: &Mesh, q: integer, r: integer, height: integer,
+  item_ref: integer, items: vector<ItemDef>
+) {
+  if item_ref <= 0 { return; }
+  hi_idx = item_ref - 1;
+  if hi_idx < 0 || hi_idx >= len(items) { return; }
+  hi_def = items[hi_idx];
+  hi_pos = hex_to_world(q, r, height);
+  emit_item_placeholder(items_mesh, hi_def.id_kind, hi_pos, 1.0);
+}
+
 pub fn build_hex_meshes(map: Map) -> vector<Mesh> {
   meshes: vector<Mesh> = [];
   wall_mesh = mesh("walls");
+  items_mesh = mesh("items");
   for bm_c in map.m_chunks {
     for bm_h in bm_c.ck_hexes {
       q = bm_c.ck_cx * 32 + bm_h#index / 32;
       r = bm_c.ck_cz * 32 + bm_h#index % 32;
-      emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
-      emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h);
+      // Check if the hex's material category is a stair variant;
+      // route to stair emission instead of a flat surface.
+      bm_is_stair = false;
+      if bm_h.h_material > 0 {
+        bm_mat_idx = bm_h.h_material - 1;
+        if bm_mat_idx < len(map.m_material_palette) {
+          bm_is_stair = is_stair_category(map.m_material_palette[bm_mat_idx].md_category);
+        }
+      }
+      if bm_is_stair {
+        emit_stair_hex(meshes, bm_h.h_material, map, q, r, bm_c.ck_cy, bm_h.h_height);
+      } else {
+        emit_to_material(meshes, bm_h.h_material, q, r, bm_h.h_height);
+      }
+      emit_hex_walls(wall_mesh, q, r, bm_h.h_height, bm_h, map.m_wall_palette);
+      emit_hex_item(items_mesh, q, r, bm_h.h_height, bm_h.h_item, map.m_item_palette);
+    }
+  }
+  // Spawn markers — small 0.3-unit cubes, offset 0.5 above the hex surface.
+  spawn_mesh = mesh("spawn_markers");
+  for mk_sp in map.m_spawn_points {
+    mk_sp_hex = map_get_hex(map, mk_sp.sp_hex.ha_q, mk_sp.sp_hex.ha_r, mk_sp.sp_hex.ha_cy);
+    mk_sp_pos = hex_to_world(mk_sp.sp_hex.ha_q, mk_sp.sp_hex.ha_r, mk_sp_hex.h_height);
+    emit_marker(spawn_mesh, mk_sp_pos, 0.5, 0.3);
+  }
+  // Waypoint markers — smaller 0.2-unit cubes, lower offset.
+  waypoint_mesh = mesh("waypoint_markers");
+  for mk_rt in map.m_npc_routines {
+    for mk_wp in mk_rt.nr_waypoints {
+      mk_wp_hex = map_get_hex(map, mk_wp.wp_hex.ha_q, mk_wp.wp_hex.ha_r, mk_wp.wp_hex.ha_cy);
+      mk_wp_pos = hex_to_world(mk_wp.wp_hex.ha_q, mk_wp.wp_hex.ha_r, mk_wp_hex.h_height);
+      emit_marker(waypoint_mesh, mk_wp_pos, 0.3, 0.2);
     }
   }
   if len(wall_mesh.vertices) > 0 {
     meshes += [wall_mesh];
+  }
+  if len(items_mesh.vertices) > 0 {
+    meshes += [items_mesh];
+  }
+  if len(spawn_mesh.vertices) > 0 {
+    meshes += [spawn_mesh];
+  }
+  if len(waypoint_mesh.vertices) > 0 {
+    meshes += [waypoint_mesh];
   }
   meshes
 }
@@ -244,4 +1084,258 @@ pub fn scene_triangle_count(meshes: vector<Mesh>) -> integer {
   total = 0;
   for sm in meshes { total = total + len(sm.triangles); }
   total
+}
+
+// ── GLB export (Phase 6a.14 / MO.10) ──────────────────────────────
+
+// Build a graphics::Scene from a Map, ready for GLB export or
+// other downstream rendering.  Each mesh from `build_hex_meshes`
+// becomes a Node with a default grey material — palette-driven
+// material assignment is a later enhancement (requires text→int
+// parsing on mesh.name or a parallel index tracked during build).
+pub fn map_build_scene(map: Map) -> Scene {
+  sc = scene("moros_map_{map.m_name}");
+  default_mat = material_color("default", 0.7, 0.7, 0.7);
+  default_mat_idx = add_material(sc, default_mat);
+  // Default directional "sun" light + orbit-style camera so the
+  // exported GLB is immediately viewable in Blender / three.js /
+  // gltf-validator without per-map configuration.  Callers who
+  // want to override can build the scene by hand (call
+  // `build_hex_meshes` directly).
+  sun_dir = vec3(-0.3, -0.7, -0.2);
+  add_light(sc, directional_light("sun", 1.0, 0.95, 0.85, 3.0, sun_dir));
+  mbs_cam = camera("default");
+  mbs_cam.position = vec3(10.0, 10.0, 10.0);
+  mbs_cam.target = vec3(0.0, 0.0, 0.0);
+  add_camera(sc, mbs_cam);
+  mbs_meshes = build_hex_meshes(map);
+  for mbs_m in mbs_meshes {
+    mbs_m_idx = add_mesh(sc, mbs_m);
+    add_node(sc, node(mbs_m.name, mbs_m_idx, default_mat_idx));
+  }
+  sc
+}
+
+// Export a Map to a GLB file on disk.  Uses the graphics::glb
+// writer, which produces a GLB 2.0 file readable by Blender,
+// three.js, gltf-validator, etc.
+pub fn map_export_glb(map: Map, path: text) {
+  sc = map_build_scene(map);
+  save_scene_glb(sc, path);
+}
+
+// ── Avatar mesh (walkable editor — Step 5) ─────────────────────────
+//
+// An octahedron centred on `pos + (0, radius, 0)` with 6 vertices
+// and 8 triangles.  Low-poly on purpose: it's a placeholder "red
+// ball" for the walkable editor avatar.  Takes primitives rather
+// than `Player` so moros_render keeps its one-way dependency on
+// moros_sim (P173 covers the full two-way story, but keeping the
+// primitive surface matches camera_follow / camera_overview).
+
+pub fn emit_player_avatar(m: &Mesh, pos: Vec3, radius: float) {
+  // Centre the ball on the avatar's head — caller supplies feet pos.
+  cx = pos.x;
+  cy = pos.y + radius;
+  cz = pos.z;
+  r = radius;
+  av_uv = vec2(0.0, 0.0);
+  av_base = len(m.vertices);
+  // 6 axis-aligned vertices with outward normals, added directly
+  // to the mesh to match the other emit_* functions' mutation
+  // pattern (add_vertex takes self by value; direct += on the
+  // vector field threads the mutation through the &Mesh ref).
+  m.vertices += [vertex(vec3(cx + r, cy,     cz    ), vec3( 1.0,  0.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx - r, cy,     cz    ), vec3(-1.0,  0.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy + r, cz    ), vec3( 0.0,  1.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy - r, cz    ), vec3( 0.0, -1.0,  0.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy,     cz + r), vec3( 0.0,  0.0,  1.0), av_uv)];
+  m.vertices += [vertex(vec3(cx,     cy,     cz - r), vec3( 0.0,  0.0, -1.0), av_uv)];
+  av_vpx = av_base;
+  av_vmx = av_base + 1;
+  av_vpy = av_base + 2;
+  av_vmy = av_base + 3;
+  av_vpz = av_base + 4;
+  av_vmz = av_base + 5;
+  // Top half: four triangles around +Y (CCW from outside).
+  m.triangles += [Triangle { a: av_vpy, b: av_vpx, c: av_vpz }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vpz, c: av_vmx }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vmx, c: av_vmz }];
+  m.triangles += [Triangle { a: av_vpy, b: av_vmz, c: av_vpx }];
+  // Bottom half: four triangles around -Y (reversed winding).
+  m.triangles += [Triangle { a: av_vmy, b: av_vpz, c: av_vpx }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vmx, c: av_vpz }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vmz, c: av_vmx }];
+  m.triangles += [Triangle { a: av_vmy, b: av_vpx, c: av_vmz }];
+}
+
+// Convenience: produce a fresh mesh named "avatar" containing just
+// the avatar geometry.  Callers typically add this + a red material
+// + a node to a Scene (see `avatar_add_to_scene`).
+pub fn avatar_mesh(pos: Vec3, radius: float) -> Mesh {
+  av_m = mesh("avatar");
+  emit_player_avatar(av_m, pos, radius);
+  av_m
+}
+
+// Add the avatar mesh + red material + corresponding node to `scene`.
+// Returns the node index.  The material has PBR roughness 0.4 /
+// metallic 0.0 — matte red consistent with the "placeholder red ball"
+// brief.
+pub fn avatar_add_to_scene(scene: Scene, pos: Vec3, radius: float) -> integer {
+  av_m_idx = add_mesh(scene, avatar_mesh(pos, radius));
+  av_mat = material_color("avatar_red", 0.95, 0.15, 0.15);
+  av_mat.roughness = 0.4;
+  av_mat_idx = add_material(scene, av_mat);
+  av_n_idx = len(scene.nodes);
+  add_node(scene, node("avatar", av_m_idx, av_mat_idx));
+  av_n_idx
+}
+
+// ── See-through occlusion (walkable editor — Step 7) ───────────────
+//
+// CPU-side AABB-vs-cone test for "everything between camera and
+// player within 30° of the view axis renders as wireframe".  No
+// stencil/depth-peel GPU tricks — identical logic runs under the
+// interpreter, native OpenGL, and WebGL.
+
+pub struct Aabb {
+  aabb_min: Vec3,
+  aabb_max: Vec3,
+}
+
+pub fn aabb_from_sphere(centre: Vec3, radius: float) -> Aabb {
+  Aabb {
+    aabb_min: vec3(centre.x - radius, centre.y - radius, centre.z - radius),
+    aabb_max: vec3(centre.x + radius, centre.y + radius, centre.z + radius),
+  }
+}
+
+// AABB from two arbitrary corner points (doesn't assume min/max
+// ordering — computes componentwise min and max).
+pub fn aabb_from_points(a: Vec3, b: Vec3) -> Aabb {
+  ap_min_x = if a.x < b.x { a.x } else { b.x };
+  ap_min_y = if a.y < b.y { a.y } else { b.y };
+  ap_min_z = if a.z < b.z { a.z } else { b.z };
+  ap_max_x = if a.x > b.x { a.x } else { b.x };
+  ap_max_y = if a.y > b.y { a.y } else { b.y };
+  ap_max_z = if a.z > b.z { a.z } else { b.z };
+  Aabb {
+    aabb_min: vec3(ap_min_x, ap_min_y, ap_min_z),
+    aabb_max: vec3(ap_max_x, ap_max_y, ap_max_z),
+  }
+}
+
+// Bounding box of every vertex in a mesh.  O(vertices) — cache at
+// mesh-build time if this shows up in frame profiles.
+pub fn mesh_aabb(m: Mesh) -> Aabb {
+  if len(m.vertices) == 0 {
+    return Aabb {
+      aabb_min: vec3(0.0, 0.0, 0.0),
+      aabb_max: vec3(0.0, 0.0, 0.0),
+    };
+  }
+  ma_mn_x = m.vertices[0].pos.x;
+  ma_mn_y = m.vertices[0].pos.y;
+  ma_mn_z = m.vertices[0].pos.z;
+  ma_mx_x = ma_mn_x;
+  ma_mx_y = ma_mn_y;
+  ma_mx_z = ma_mn_z;
+  for ma_mv in m.vertices {
+    if ma_mv.pos.x < ma_mn_x { ma_mn_x = ma_mv.pos.x; }
+    if ma_mv.pos.y < ma_mn_y { ma_mn_y = ma_mv.pos.y; }
+    if ma_mv.pos.z < ma_mn_z { ma_mn_z = ma_mv.pos.z; }
+    if ma_mv.pos.x > ma_mx_x { ma_mx_x = ma_mv.pos.x; }
+    if ma_mv.pos.y > ma_mx_y { ma_mx_y = ma_mv.pos.y; }
+    if ma_mv.pos.z > ma_mx_z { ma_mx_z = ma_mv.pos.z; }
+  }
+  Aabb {
+    aabb_min: vec3(ma_mn_x, ma_mn_y, ma_mn_z),
+    aabb_max: vec3(ma_mx_x, ma_mx_y, ma_mx_z),
+  }
+}
+
+pub OCCLUSION_HALF_ANGLE_DEG = 15.0;    // 30° full cone
+pub OCCLUSION_NEAR_MARGIN = 0.2;        // skip first 20% of axis
+pub OCCLUSION_FAR_MARGIN = 0.3;         // skip last 30% near target
+
+pub struct ViewCone {
+  vc_apex:       Vec3,
+  vc_axis:       Vec3,              // unit vector
+  vc_length:     float not null,    // |eye → target|
+  vc_tan_half:   float not null,    // tan(half-angle)
+  vc_t_near:     float not null,    // normalised axis position [0, 1]
+  vc_t_far:      float not null,
+}
+
+pub fn view_cone(eye: Vec3, target: Vec3, half_angle_deg: float) -> ViewCone {
+  vc_diff = sub3(target, eye);
+  vc_len  = length3(vc_diff);
+  vc_axis = if vc_len > 0.000001 {
+    scale3(vc_diff, 1.0 / vc_len)
+  } else {
+    vec3(0.0, 0.0, 1.0)
+  };
+  vc_rad = half_angle_deg * PI / 180.0;
+  ViewCone {
+    vc_apex:     eye,
+    vc_axis:     vc_axis,
+    vc_length:   vc_len,
+    vc_tan_half: tan(vc_rad),
+    vc_t_near:   OCCLUSION_NEAR_MARGIN,
+    vc_t_far:    1.0 - OCCLUSION_FAR_MARGIN,
+  }
+}
+
+// Internal: is the point `p` inside the truncated cone `c`?
+fn point_in_cone(p: Vec3, c: ViewCone) -> boolean {
+  pic_v = sub3(p, c.vc_apex);
+  pic_t_proj = dot3(pic_v, c.vc_axis);
+  pic_t = pic_t_proj / c.vc_length;
+  if pic_t < c.vc_t_near { return false; }
+  if pic_t > c.vc_t_far { return false; }
+  pic_axial = scale3(c.vc_axis, pic_t_proj);
+  pic_lateral = sub3(pic_v, pic_axial);
+  pic_radius = pic_t_proj * c.vc_tan_half;
+  dot3(pic_lateral, pic_lateral) <= pic_radius * pic_radius
+}
+
+// AABB vs cone — centre test + 8 corner tests.  Conservative on
+// the false-negative side (tiny geometry inside the cone with no
+// vertex or centre inside may be missed), acceptable for hex /
+// wall AABBs at the walkable editor's scale.
+pub fn aabb_vs_cone(b: Aabb, c: ViewCone) -> boolean {
+  avc_centre = vec3(
+    (b.aabb_min.x + b.aabb_max.x) * 0.5,
+    (b.aabb_min.y + b.aabb_max.y) * 0.5,
+    (b.aabb_min.z + b.aabb_max.z) * 0.5,
+  );
+  if point_in_cone(avc_centre, c) { return true; }
+  for avc_ci in 0..8 {
+    avc_cx = if avc_ci & 1 != 0 { b.aabb_max.x } else { b.aabb_min.x };
+    avc_cy = if avc_ci & 2 != 0 { b.aabb_max.y } else { b.aabb_min.y };
+    avc_cz = if avc_ci & 4 != 0 { b.aabb_max.z } else { b.aabb_min.z };
+    if point_in_cone(vec3(avc_cx, avc_cy, avc_cz), c) { return true; }
+  }
+  false
+}
+
+// Flag each scene node for wireframe vs solid render based on
+// whether its mesh's AABB intersects the cone.  Returns a vector
+// parallel to `scene.nodes` (true = wireframe / occluder).  Nodes
+// whose mesh_idx is out of range flag as false (safe default).
+// The avatar node is NOT special-cased here; callers who render
+// the avatar should either draw it last or exclude it by name.
+pub fn flag_occluders(scene: Scene, cone: ViewCone) -> vector<boolean> {
+  fo_flags: vector<boolean> = [];
+  for fo_n in scene.nodes {
+    fo_mi = fo_n.mesh_idx;
+    if fo_mi < 0 || fo_mi >= len(scene.meshes) {
+      fo_flags += [false];
+    } else {
+      fo_box = mesh_aabb(scene.meshes[fo_mi]);
+      fo_flags += [aabb_vs_cone(fo_box, cone)];
+    }
+  }
+  fo_flags
 }

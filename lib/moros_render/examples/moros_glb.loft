@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// moros_glb — Phase 6a.18 CLI tool.
+//
+// Converts a Moros map JSON file into a GLB 2.0 binary mesh file
+// viewable in Blender, three.js, gltf-validator, etc.
+//
+// Usage:
+//   loft --path <repo>/ lib/moros_render/examples/moros_glb.loft <map.json> <out.glb>
+use moros_map;
+use moros_render;
+
+fn main() {
+  cli_args = arguments();
+  if len(cli_args) < 2 {
+    println("usage: moros_glb <input.json> <output.glb>");
+    return;
+  }
+  cli_in = cli_args[0];
+  cli_out = cli_args[1];
+  cli_in_file = file(cli_in);
+  if !cli_in_file.exists() {
+    println("error: input file not found: {cli_in}");
+    return;
+  }
+  cli_json = cli_in_file.content();
+  if len(cli_json) == 0 {
+    println("error: input file is empty or non-UTF-8: {cli_in}");
+    return;
+  }
+  cli_map = map_from_json(cli_json);
+  map_export_glb(cli_map, cli_out);
+  println("wrote {cli_out}");
+}

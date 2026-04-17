@@ -1,0 +1,118 @@
+// Player — walkable avatar state, input envelope, and physics
+// integrator.  Uses collide.loft's primitive-typed `resolve_move`
+// so we avoid an intra-package import cycle (collide.loft does not
+// depend on Player).
+
+use graphics;
+use moros_map;
+use tools;
+use collide;
+
+// ── Constants ────────────────────────────────────────────────────
+// All velocities are world-units / second.  Gravity is world-units / s².
+pub WALK_SPEED        = 6.0;
+pub JUMP_RISE_SPEED   = 10.0;
+pub GRAVITY           = 12.0;
+pub TERMINAL_VELOCITY = 60.0;
+pub AVATAR_RADIUS     = 0.3;
+pub AVATAR_HEIGHT     = 1.8;
+
+// ── Avatar state ─────────────────────────────────────────────────
+pub struct Player {
+  pl_pos:          Vec3,                // feet position, world units
+  pl_vel:          Vec3,                // world units / second
+  pl_facing:       float not null,      // yaw in radians
+  pl_pitch:        float not null,      // camera pitch (avatar body upright)
+  pl_holding_jump: boolean,
+  pl_on_ground:    boolean,
+  pl_current_tool: ToolKind,
+}
+
+pub fn player_default() -> Player {
+  Player {
+    pl_pos:          vec3(0.0, 0.0, 0.0),
+    pl_vel:          vec3(0.0, 0.0, 0.0),
+    pl_facing:       0.0,
+    pl_pitch:        0.0,
+    pl_holding_jump: false,
+    pl_on_ground:    false,
+    pl_current_tool: ToolKind.None,
+  }
+}
+
+// ── Input envelope passed from the host each frame ──────────────
+pub struct InputState {
+  in_fwd:              boolean,
+  in_back:             boolean,
+  in_strafe_left:      boolean,
+  in_strafe_right:     boolean,
+  in_jump_held:        boolean,
+
+  in_mx:               integer not null,
+  in_my:               integer not null,
+  in_mouse_dx:         integer not null,
+  in_mouse_dy:         integer not null,
+  in_wheel:            integer not null,
+  in_click:            boolean,
+  in_rclick:           boolean,
+
+  in_tool_number:      integer not null,   // 0 = none, 1..6 = select tool
+  in_mode_toggle:      boolean,
+  in_occlusion_toggle: boolean,
+  in_undo:             boolean,
+  in_save:             boolean,
+}
+
+pub fn input_empty() -> InputState {
+  InputState {
+    in_fwd: false, in_back: false, in_strafe_left: false, in_strafe_right: false,
+    in_jump_held: false,
+    in_mx: 0, in_my: 0, in_mouse_dx: 0, in_mouse_dy: 0,
+    in_wheel: 0, in_click: false, in_rclick: false,
+    in_tool_number: 0, in_mode_toggle: false, in_occlusion_toggle: false,
+    in_undo: false, in_save: false,
+  }
+}
+
+// ── Integrator ───────────────────────────────────────────────────
+// Walks + jumps + resolves against map geometry.  Fixed-timestep —
+// the caller should pass a clamped dt (≤ 1/30 s) to avoid tunnelling.
+//
+// Facing convention: `pl_facing = 0` = looking down +Z.
+//   forward = ( sin(f), 0,  cos(f))
+//   right   = ( cos(f), 0, -sin(f))
+pub fn player_step(p: &Player, map: Map, dt: float, input: InputState) {
+  // 1. Horizontal input in local axes
+  lwx = 0.0;
+  lwz = 0.0;
+  if input.in_fwd          { lwz += 1.0; }
+  if input.in_back         { lwz -= 1.0; }
+  if input.in_strafe_right { lwx += 1.0; }
+  if input.in_strafe_left  { lwx -= 1.0; }
+  mag = sqrt(lwx * lwx + lwz * lwz);
+  wx = 0.0;
+  wz = 0.0;
+  if mag > 0.0 {
+    cf = cos(p.pl_facing);
+    sf = sin(p.pl_facing);
+    wx = (lwx * cf + lwz * sf) / mag * WALK_SPEED;
+    wz = (0.0 - lwx * sf + lwz * cf) / mag * WALK_SPEED;
+  }
+
+  // 2. Vertical velocity — hold-to-rise, release-for-gravity
+  p.pl_holding_jump = input.in_jump_held;
+  vy = p.pl_vel.y;
+  if input.in_jump_held {
+    vy = JUMP_RISE_SPEED;
+  } else {
+    vy = vy - GRAVITY * dt;
+    if vy < 0.0 - TERMINAL_VELOCITY { vy = 0.0 - TERMINAL_VELOCITY; }
+  }
+
+  // 3. Resolve desired delta against the map
+  dxyz = vec3(wx * dt, vy * dt, wz * dt);
+  r = resolve_move(map, p.pl_pos, vy, dxyz);
+  p.pl_pos       = r.mr_pos;
+  p.pl_vel       = vec3(p.pl_vel.x, r.mr_vel_y, p.pl_vel.z);
+  p.pl_on_ground = r.mr_on_ground;
+}

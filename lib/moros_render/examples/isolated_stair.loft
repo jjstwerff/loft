@@ -1,0 +1,31 @@
+use moros_map;
+use moros_render;
+
+fn main() {
+  m = map_empty();
+  m.m_material_palette += [MaterialDef {
+    md_name: "wood_stair", md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 160, md_tint_g: 120, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0, md_slippery: 0, md_loud: 0,
+  }];
+  // Single isolated stair hex at origin, no neighbors painted.
+  map_paint_material(m, 0, 0, 0, 1);
+  meshes = build_hex_meshes(m);
+  println("meshes: {len(meshes)}");
+  println("total vertices: {scene_vertex_count(meshes)}");
+  println("total triangles: {scene_triangle_count(meshes)}");
+  for mm in meshes {
+    println("  mesh '{mm.name}': {len(mm.vertices)} verts, {len(mm.triangles)} tris");
+    if len(mm.vertices) > 0 {
+      // Report the Y-range so we can see the stair rises.
+      y_min = mm.vertices[0].pos.y;
+      y_max = mm.vertices[0].pos.y;
+      for v in mm.vertices {
+        if v.pos.y < y_min { y_min = v.pos.y; }
+        if v.pos.y > y_max { y_max = v.pos.y; }
+      }
+      println("    y range: {y_min} → {y_max} (world units)");
+    }
+  }
+  map_export_glb(m, "/tmp/isolated_stair.glb");
+}

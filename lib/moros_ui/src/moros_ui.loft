@@ -1,0 +1,8 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// moros_ui — in-engine UI for the walkable editor.  Widgets, panel
+// layout, and mouse-hit routing, rendered via loft_gl's sprite +
+// text bridges (plumbed in Step 9, not part of this file).
+use widgets;
+use panel;
+use font;

@@ -1,0 +1,178 @@
+// Step 2 — direct-against-Map collision tests.
+use moros_sim;
+use moros_map;
+use moros_render;
+use graphics;
+
+// ── edge_direction ────────────────────────────────────────────────
+
+fn test_edge_direction_all_six() {
+  assert(edge_direction(0, 0, 0, -1) == 0, "N");
+  assert(edge_direction(0, 0, 1, -1) == 1, "NE");
+  assert(edge_direction(0, 0, 1,  0) == 2, "SE");
+  assert(edge_direction(0, 0, 0,  1) == 3, "S");
+  assert(edge_direction(0, 0, -1, 1) == 4, "SW");
+  assert(edge_direction(0, 0, -1, 0) == 5, "NW");
+}
+
+fn test_edge_direction_non_adjacent() {
+  assert(edge_direction(0, 0, 2, 0)  == -1, "two hexes away");
+  assert(edge_direction(0, 0, 0, 0)  == -1, "same hex");
+  assert(edge_direction(0, 0, 1, 1)  == -1, "not axial neighbour");
+}
+
+// ── floor_y_at ────────────────────────────────────────────────────
+
+fn test_floor_empty_map() {
+  em = map_empty();
+  fy = floor_y_at(em, 0.0, 0.0);
+  assert(fy == 0.0, "empty floor is 0.0");
+}
+
+fn test_floor_raised_hex() {
+  rm = map_empty();
+  map_set_height(rm, 0, 0, 0, 8);   // 8 * HEIGHT_SCALE = 2.0
+  fy = floor_y_at(rm, 0.0, 0.0);
+  assert(fy == 2.0, "height 8 → 2.0 world units");
+}
+
+fn test_floor_at_hex_centre() {
+  cm = map_empty();
+  map_set_height(cm, 1, 0, 0, 4);   // 4 * 0.25 = 1.0
+  centre = hex_to_world(1, 0, 0);
+  fy = floor_y_at(cm, centre.x, centre.z);
+  assert(fy == 1.0, "height 4 at hex centre → 1.0");
+}
+
+// ── wall_value_on_edge ────────────────────────────────────────────
+
+fn test_wall_open_by_default() {
+  om = map_empty();
+  wv = wall_value_on_edge(om, 0, 0, 0, -1, 0);
+  assert(wv == 0, "no wall means open");
+}
+
+fn test_wall_direct_n() {
+  nm = map_empty();
+  map_set_wall_dir(nm, 0, 0, 0, 0, 5);  // N wall value 5
+  wv = wall_value_on_edge(nm, 0, 0, 0, -1, 0);
+  assert(wv == 5, "N edge value 5");
+}
+
+fn test_wall_direct_ne() {
+  nem = map_empty();
+  map_set_wall_dir(nem, 0, 0, 0, 1, 3);
+  wv = wall_value_on_edge(nem, 0, 0, 1, -1, 0);
+  assert(wv == 3, "NE edge value 3");
+}
+
+fn test_wall_direct_se() {
+  sem = map_empty();
+  map_set_wall_dir(sem, 0, 0, 0, 2, 9);
+  wv = wall_value_on_edge(sem, 0, 0, 1, 0, 0);
+  assert(wv == 9, "SE edge value 9");
+}
+
+fn test_wall_mirror_s() {
+  sm = map_empty();
+  map_set_wall_dir(sm, 0, 0, 0, 3, 7);  // S from (0,0) → N on (0,1)
+  wv = wall_value_on_edge(sm, 0, 0, 0, 1, 0);
+  assert(wv == 7, "S via neighbour mirror");
+}
+
+fn test_wall_mirror_sw() {
+  // Origin (0,0) now works thanks to P172 — Euclidean chunk indexing
+  // handles the SW neighbour (-1, 1) correctly.
+  swm = map_empty();
+  map_set_wall_dir(swm, 0, 0, 0, 4, 4);   // SW from (0,0) → NE on (-1,1)
+  wv = wall_value_on_edge(swm, 0, 0, -1, 1, 0);
+  assert(wv == 4, "SW via mirror");
+}
+
+fn test_wall_mirror_nw() {
+  nwm = map_empty();
+  map_set_wall_dir(nwm, 0, 0, 0, 5, 2);   // NW from (0,0) → SE on (-1,0)
+  wv = wall_value_on_edge(nwm, 0, 0, -1, 0, 0);
+  assert(wv == 2, "NW via mirror");
+}
+
+// ── blocked_by_wall ───────────────────────────────────────────────
+
+fn test_blocked_true_when_wall() {
+  bm = map_empty();
+  map_set_wall_dir(bm, 0, 0, 0, 0, 1);
+  assert(blocked_by_wall(bm, 0, 0, 0, -1, 0), "wall blocks");
+}
+
+fn test_blocked_false_when_open() {
+  bm2 = map_empty();
+  assert(!blocked_by_wall(bm2, 0, 0, 0, -1, 0), "open edge passes");
+}
+
+fn test_blocked_false_when_not_adjacent() {
+  bm3 = map_empty();
+  map_set_wall_dir(bm3, 0, 0, 0, 0, 1);
+  assert(!blocked_by_wall(bm3, 0, 0, 5, 0, 0), "far hexes not considered");
+}
+
+// ── resolve_move ──────────────────────────────────────────────────
+
+fn test_resolve_flat_x() {
+  rm = map_empty();
+  rfrom = vec3(0.0, 0.0, 0.0);
+  rdx = vec3(0.1, 0.0, 0.0);
+  ro = resolve_move(rm, rfrom, 0.0, rdx);
+  assert(ro.mr_pos.x == 0.1, "X moved within hex");
+  assert(ro.mr_pos.z == 0.0, "Z unchanged");
+}
+
+fn test_resolve_gravity_midair() {
+  gm = map_empty();
+  gfrom = vec3(0.0, 5.0, 0.0);
+  gdy = vec3(0.0, -0.1, 0.0);
+  go = resolve_move(gm, gfrom, 0.0, gdy);
+  // Floor at (0,0) is 0; we fall to 4.9, not on_ground yet
+  assert(go.mr_pos.y > 4.89, "fell");
+  assert(go.mr_pos.y < 4.91, "not too far");
+  assert(!go.mr_on_ground, "still midair");
+}
+
+fn test_resolve_lands_on_floor() {
+  lm = map_empty();
+  map_set_height(lm, 0, 0, 0, 4);   // floor = 1.0
+  lfrom = vec3(0.0, 1.05, 0.0);
+  ldy = vec3(0.0, -0.2, 0.0);
+  lo = resolve_move(lm, lfrom, -0.2, ldy);
+  assert(lo.mr_pos.y == 1.0, "clamped to floor");
+  assert(lo.mr_on_ground, "on ground");
+  assert(lo.mr_vel_y == 0.0, "vy cleared on landing");
+}
+
+fn test_resolve_step_up_blocked() {
+  sm4 = map_empty();
+  map_set_height(sm4, 1, 0, 0, 4);   // neighbour floor = 1.0 > STEP_UP_LIMIT
+  sfrom = vec3(0.0, 0.0, 0.0);
+  sdx = vec3(HEX_WIDTH, 0.0, 0.0);   // move to hex (1, 0)
+  so4 = resolve_move(sm4, sfrom, 0.0, sdx);
+  assert(so4.mr_pos.x == 0.0, "un-steppable height blocks");
+}
+
+fn test_resolve_step_down_ok() {
+  dm = map_empty();
+  map_set_height(dm, 0, 0, 0, 4);    // start floor 1.0
+  map_set_height(dm, 1, 0, 0, 0);    // target floor 0.0 (step down)
+  dfrom = vec3(0.0, 1.0, 0.0);
+  ddx = vec3(HEX_WIDTH, 0.0, 0.0);
+  do4 = resolve_move(dm, dfrom, 0.0, ddx);
+  assert(do4.mr_pos.x == HEX_WIDTH, "step-down passes");
+}
+
+fn test_resolve_wall_blocks_xz() {
+  wm = map_empty();
+  // Wall on SE edge of (0,0) stops motion into hex (1, 0)
+  map_set_wall_dir(wm, 0, 0, 0, 2, 1);
+  wfrom = vec3(0.0, 0.0, 0.0);
+  wdx = vec3(HEX_WIDTH, 0.0, 0.0);
+  wo = resolve_move(wm, wfrom, 0.0, wdx);
+  assert(wo.mr_pos.x == 0.0, "wall blocks X");
+}

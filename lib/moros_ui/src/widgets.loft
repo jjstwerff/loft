@@ -1,0 +1,44 @@
+// Widget primitives for the walkable-editor in-engine UI.
+// Pure data + hit-test helpers; no rendering (that lives in
+// panel_render once loft_gl's sprite / text bridges are wired).
+
+pub struct Rect {
+  r_x: integer not null,
+  r_y: integer not null,
+  r_w: integer not null,
+  r_h: integer not null,
+}
+
+pub fn rect(x: integer, y: integer, w: integer, h: integer) -> Rect {
+  Rect { r_x: x, r_y: y, r_w: w, r_h: h }
+}
+
+pub fn rect_contains(r: Rect, mx: integer, my: integer) -> boolean {
+  mx >= r.r_x && mx < r.r_x + r.r_w && my >= r.r_y && my < r.r_y + r.r_h
+}
+
+// A clickable button in the toolbar.  `btn_id` is the integer
+// identity the panel uses in hit-test results (0..5 = ToolKind).
+pub struct Button {
+  btn_id:           integer not null,
+  btn_rect:         Rect,
+  btn_label:        text,
+  btn_hotkey_label: text,      // e.g. "1" shown left of the label
+  btn_selected:     boolean,
+}
+
+// Scrollable list of text entries.  `lb_selected` is the currently
+// highlighted index, or -1 for no selection.
+pub struct ListBox {
+  lb_rect:        Rect,
+  lb_items:       vector<text>,
+  lb_selected:    integer not null,
+  lb_scroll:      integer not null,   // pixel scroll offset
+  lb_item_height: integer not null,
+}
+
+// Single-line status strip at the bottom of the side panel.
+pub struct StatusStrip {
+  ss_rect: Rect,
+  ss_text: text,
+}

@@ -1,0 +1,41 @@
+// Step 1 — package skeleton smoke tests.
+use moros_sim;
+
+fn test_player_default() {
+  p = player_default();
+  assert(p.pl_pos.x == 0.0, "pos.x zero");
+  assert(p.pl_pos.y == 0.0, "pos.y zero");
+  assert(p.pl_pos.z == 0.0, "pos.z zero");
+  assert(p.pl_current_tool == ToolKind.None, "tool none");
+  assert(!p.pl_on_ground, "not on ground");
+  assert(!p.pl_holding_jump, "not jumping");
+  assert(p.pl_facing == 0.0, "facing zero");
+}
+
+fn test_tool_state_default() {
+  t = tool_state_default();
+  assert(t.ts_current == ToolKind.None, "current none");
+  assert(t.ts_height_step == 4, "height step 4");
+  assert(t.ts_wall_direction == 0, "wall dir 0");
+  assert(t.ts_selected_stencil == 0, "stencil 0");
+  assert(t.ts_selected_item == 0, "item 0");
+  assert(t.ts_selected_wall == 0, "wall 0");
+}
+
+fn test_constants() {
+  assert(WALK_SPEED == 6.0, "walk speed");
+  assert(JUMP_RISE_SPEED == 10.0, "jump rise");
+  assert(GRAVITY == 12.0, "gravity");
+  assert(AVATAR_RADIUS == 0.3, "radius");
+  assert(AVATAR_HEIGHT == 1.8, "height");
+  assert(STEP_UP_LIMIT == 0.5, "step-up limit");
+}
+
+fn test_input_empty() {
+  i = input_empty();
+  assert(!i.in_fwd, "no fwd");
+  assert(!i.in_jump_held, "no jump");
+  assert(i.in_tool_number == 0, "no tool pressed");
+  assert(!i.in_click, "no click");
+  assert(i.in_wheel == 0, "no wheel");
+}

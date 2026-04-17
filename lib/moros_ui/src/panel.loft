@@ -1,0 +1,230 @@
+// Panel layout + hit-test + build for the walkable-editor side UI.
+//
+// The panel takes a fixed 240-pixel strip on the left of the
+// window.  Toolbar (6 tool buttons) goes at the top; scrollable
+// palette list below; single-line status strip at the bottom.
+//
+// See WALKABLE_EDITOR_STEPS.md §Step 8 for the layout diagram and
+// keybind design.  This file is Player-agnostic (takes primitive
+// hex coords + altitude + fps in `panel_build`), so moros_ui
+// doesn't drag a Player dependency through downstream packages.
+
+use moros_sim;
+use moros_editor;
+use widgets;
+use font;
+
+// ── Layout constants ─────────────────────────────────────────────
+pub PANEL_WIDTH        = 240;
+pub TOOLBAR_ROW_HEIGHT = 32;
+pub TOOLBAR_GAP        = 4;
+pub TOOLBAR_TOP        = 8;
+pub SEPARATOR_HEIGHT   = 2;
+pub LIST_ITEM_HEIGHT   = 20;
+pub STATUS_HEIGHT      = 24;
+pub TOOLBAR_BUTTONS    = 6;      // None / Raise / Lower / Stencil / Item / Wall
+
+// ── Panel struct ─────────────────────────────────────────────────
+pub struct Panel {
+  p_rect:    Rect,
+  p_toolbar: vector<Button>,
+  p_list:    ListBox,
+  p_status:  StatusStrip,
+}
+
+// ── Layout helpers ───────────────────────────────────────────────
+
+pub fn panel_rect(window_w: integer, window_h: integer) -> Rect {
+  // window_w is present in the signature so callers don't have to
+  // special-case the single-fixed-strip panel; if the panel ever
+  // grows optional right-aligned variants, the dimension is here.
+  _ = window_w;
+  rect(0, 0, PANEL_WIDTH, window_h)
+}
+
+pub fn toolbar_button_rect(idx: integer) -> Rect {
+  tbr_y = TOOLBAR_TOP + idx * (TOOLBAR_ROW_HEIGHT + TOOLBAR_GAP);
+  rect(8, tbr_y, PANEL_WIDTH - 16, TOOLBAR_ROW_HEIGHT)
+}
+
+pub fn list_rect(window_h: integer) -> Rect {
+  lr_top = TOOLBAR_TOP
+    + TOOLBAR_BUTTONS * (TOOLBAR_ROW_HEIGHT + TOOLBAR_GAP)
+    + SEPARATOR_HEIGHT + 8;
+  lr_bottom = window_h - STATUS_HEIGHT - 4;
+  rect(8, lr_top, PANEL_WIDTH - 16, lr_bottom - lr_top)
+}
+
+pub fn status_rect(window_h: integer) -> Rect {
+  rect(0, window_h - STATUS_HEIGHT, PANEL_WIDTH, STATUS_HEIGHT)
+}
+
+// ── Tool ↔ integer id dispatch ───────────────────────────────────
+
+pub fn tool_of_id(id: integer) -> ToolKind {
+  if id == 0 { return ToolKind.None; }
+  if id == 1 { return ToolKind.RaiseHex; }
+  if id == 2 { return ToolKind.LowerHex; }
+  if id == 3 { return ToolKind.PlaceStencil; }
+  if id == 4 { return ToolKind.PlaceItem; }
+  if id == 5 { return ToolKind.PlaceWall; }
+  ToolKind.None
+}
+
+pub fn id_of_tool(t: ToolKind) -> integer {
+  if t == ToolKind.None         { return 0; }
+  if t == ToolKind.RaiseHex     { return 1; }
+  if t == ToolKind.LowerHex     { return 2; }
+  if t == ToolKind.PlaceStencil { return 3; }
+  if t == ToolKind.PlaceItem    { return 4; }
+  if t == ToolKind.PlaceWall    { return 5; }
+  0
+}
+
+// ── Palette contents contextual to the current tool ──────────────
+
+// Palette contents per tool.  File-scope `vector<text>` constants
+// are now populated by the compiler (P175 fix), so we can use them
+// directly instead of wrapping in zero-arg functions.
+pub WALL_PALETTE_NAMES: vector<text> = ["none", "solid", "half", "thick_flat", "thick_curved"];
+pub ITEM_PALETTE_NAMES_PLACEHOLDER: vector<text> = ["item_0", "item_1", "item_2", "item_3"];
+pub HEIGHT_STEP_LABELS: vector<text> = ["1", "2", "4", "8"];
+
+pub fn palette_items_for_tool(tools: ToolState) -> vector<text> {
+  if tools.ts_current == ToolKind.RaiseHex || tools.ts_current == ToolKind.LowerHex {
+    return HEIGHT_STEP_LABELS;
+  }
+  if tools.ts_current == ToolKind.PlaceStencil {
+    pi_list: vector<text> = [];
+    for pi_i in 0..stencil_palette_size() {
+      pi_list += [stencil_palette_name(pi_i)];
+    }
+    return pi_list;
+  }
+  if tools.ts_current == ToolKind.PlaceItem { return ITEM_PALETTE_NAMES_PLACEHOLDER; }
+  if tools.ts_current == ToolKind.PlaceWall { return WALL_PALETTE_NAMES; }
+  empty: vector<text> = [];
+  empty
+}
+
+pub fn current_palette_selection(tools: ToolState) -> integer {
+  if tools.ts_current == ToolKind.RaiseHex || tools.ts_current == ToolKind.LowerHex {
+    if tools.ts_height_step == 1 { return 0; }
+    if tools.ts_height_step == 2 { return 1; }
+    if tools.ts_height_step == 4 { return 2; }
+    if tools.ts_height_step == 8 { return 3; }
+    return -1;
+  }
+  if tools.ts_current == ToolKind.PlaceStencil { return tools.ts_selected_stencil; }
+  if tools.ts_current == ToolKind.PlaceItem    { return tools.ts_selected_item; }
+  if tools.ts_current == ToolKind.PlaceWall    { return tools.ts_selected_wall; }
+  -1
+}
+
+fn set_palette_selection(tools: &ToolState, idx: integer) {
+  if tools.ts_current == ToolKind.RaiseHex || tools.ts_current == ToolKind.LowerHex {
+    if idx == 0 { tools.ts_height_step = 1; }
+    if idx == 1 { tools.ts_height_step = 2; }
+    if idx == 2 { tools.ts_height_step = 4; }
+    if idx == 3 { tools.ts_height_step = 8; }
+    return;
+  }
+  if tools.ts_current == ToolKind.PlaceStencil { tools.ts_selected_stencil = idx; return; }
+  if tools.ts_current == ToolKind.PlaceItem    { tools.ts_selected_item    = idx; return; }
+  if tools.ts_current == ToolKind.PlaceWall    { tools.ts_selected_wall    = idx; return; }
+}
+
+// ── Panel build ──────────────────────────────────────────────────
+
+fn make_button(id: integer, label: text, hotkey: text, selected: boolean) -> Button {
+  Button {
+    btn_id: id,
+    btn_rect: toolbar_button_rect(id),
+    btn_label: label,
+    btn_hotkey_label: hotkey,
+    btn_selected: selected,
+  }
+}
+
+pub fn panel_build(
+  tools: ToolState,
+  window_w: integer, window_h: integer,
+  hex_q: integer, hex_r: integer, hex_cy: integer,
+  altitude: float, fps: integer,
+) -> Panel {
+  pb_buttons: vector<Button> = [];
+  pb_buttons += [make_button(0, "None",    "1", tools.ts_current == ToolKind.None)];
+  pb_buttons += [make_button(1, "Raise",   "2", tools.ts_current == ToolKind.RaiseHex)];
+  pb_buttons += [make_button(2, "Lower",   "3", tools.ts_current == ToolKind.LowerHex)];
+  pb_buttons += [make_button(3, "Stencil", "4", tools.ts_current == ToolKind.PlaceStencil)];
+  pb_buttons += [make_button(4, "Item",    "5", tools.ts_current == ToolKind.PlaceItem)];
+  pb_buttons += [make_button(5, "Wall",    "6", tools.ts_current == ToolKind.PlaceWall)];
+
+  pb_lb = ListBox {
+    lb_rect:        list_rect(window_h),
+    lb_items:       palette_items_for_tool(tools),
+    lb_selected:    current_palette_selection(tools),
+    lb_scroll:      0,
+    lb_item_height: LIST_ITEM_HEIGHT,
+  };
+
+  pb_ss = StatusStrip {
+    ss_rect: status_rect(window_h),
+    ss_text: "q={hex_q} r={hex_r} cy={hex_cy}  y={altitude:4.1}  FPS{fps:3}",
+  };
+
+  Panel {
+    p_rect:    panel_rect(window_w, window_h),
+    p_toolbar: pb_buttons,
+    p_list:    pb_lb,
+    p_status:  pb_ss,
+  }
+}
+
+// ── Hit-test ─────────────────────────────────────────────────────
+//
+// Struct-enum with field-bearing variants.  Originally switched to a
+// plain `enum Kind + struct Hit` pair when is-capture was reading
+// garbage for `tb_id`, but P178 (fixed 2026-04-17) resolved the
+// underlying slot-allocator issue so the natural struct-enum form
+// works now.
+pub enum UiHit {
+  UhWorld,
+  UhToolButton { tb_id: integer not null },
+  UhListItem   { li_idx: integer not null },
+  UhNone,
+}
+
+pub fn panel_hit_test(p: Panel, mx: integer, my: integer) -> UiHit {
+  // Outside panel x-range → world hit (caller dispatches to tool_apply).
+  if mx >= p.p_rect.r_x + p.p_rect.r_w {
+    return UhWorld;
+  }
+  for pht_b in p.p_toolbar {
+    if rect_contains(pht_b.btn_rect, mx, my) {
+      return UhToolButton { tb_id: pht_b.btn_id };
+    }
+  }
+  if rect_contains(p.p_list.lb_rect, mx, my) {
+    pht_local_y = my - p.p_list.lb_rect.r_y + p.p_list.lb_scroll;
+    pht_idx = pht_local_y / p.p_list.lb_item_height;
+    if pht_idx >= 0 && pht_idx < len(p.p_list.lb_items) {
+      return UhListItem { li_idx: pht_idx };
+    }
+  }
+  UhNone
+}
+
+// Route a mouse click: panel widgets update `tools` in place;
+// world clicks leave `tools` unchanged.  Returns the hit so the
+// frame loop can decide whether to dispatch to `tool_apply`.
+pub fn route_click(p: Panel, tools: &ToolState, mx: integer, my: integer) -> UiHit {
+  rc_hit = panel_hit_test(p, mx, my);
+  if rc_hit is UhToolButton { tb_id } {
+    tools.ts_current = tool_of_id(tb_id);
+  }
+  if rc_hit is UhListItem { li_idx } {
+    set_palette_selection(tools, li_idx);
+  }
+  rc_hit
+}

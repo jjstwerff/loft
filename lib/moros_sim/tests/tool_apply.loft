@@ -1,0 +1,191 @@
+// Step 4 — tool dispatch tests.
+use moros_sim;
+use moros_map;
+use moros_editor;
+use graphics;
+
+// ── Stencil palette ───────────────────────────────────────────────
+
+fn test_palette_size() {
+  assert(stencil_palette_size() == 3, "three stencils in palette");
+}
+
+fn test_palette_names() {
+  assert(stencil_palette_name(0) == "flat", "idx 0 flat");
+  assert(stencil_palette_name(1) == "house_small", "idx 1 house");
+  assert(stencil_palette_name(2) == "spiral_stair", "idx 2 stair");
+  assert(stencil_palette_name(99) == "flat", "OOB falls back");
+}
+
+// ── None → no-op ──────────────────────────────────────────────────
+
+fn test_none_does_nothing() {
+  nm = map_empty();
+  nt = tool_state_default();   // current = None
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, nm, nt);
+  hn = map_get_hex(nm, 0, 0, 0);
+  assert(hn.h_height == 0, "height unchanged");
+  assert(hn.h_item == 0, "item unchanged");
+}
+
+// ── RaiseHex ──────────────────────────────────────────────────────
+
+fn test_raise_from_flat() {
+  rm = map_empty();
+  rt = tool_state_default();
+  rt.ts_current = ToolKind.RaiseHex;   // step = 4 default
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, rm, rt);
+  hr = map_get_hex(rm, 0, 0, 0);
+  assert(hr.h_height == 4, "raised to 4");
+}
+
+fn test_raise_custom_step() {
+  rm2 = map_empty();
+  rt2 = tool_state_default();
+  rt2.ts_current = ToolKind.RaiseHex;
+  rt2.ts_height_step = 8;
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, rm2, rt2);
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, rm2, rt2);
+  hr2 = map_get_hex(rm2, 0, 0, 0);
+  assert(hr2.h_height == 16, "raised twice with step 8");
+}
+
+fn test_raise_off_hex() {
+  // Avatar standing at a non-origin world position → raises that hex
+  om = map_empty();
+  ot = tool_state_default();
+  ot.ts_current = ToolKind.RaiseHex;
+  centre = hex_to_world(3, 2, 0);
+  tool_apply(centre, 0, om, ot);
+  ho = map_get_hex(om, 3, 2, 0);
+  assert(ho.h_height == 4, "raised hex (3,2)");
+}
+
+// ── LowerHex ──────────────────────────────────────────────────────
+
+fn test_lower_from_raised() {
+  lm = map_empty();
+  map_set_height(lm, 0, 0, 0, 10);
+  lt = tool_state_default();
+  lt.ts_current = ToolKind.LowerHex;
+  lt.ts_height_step = 4;
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, lm, lt);
+  hl = map_get_hex(lm, 0, 0, 0);
+  assert(hl.h_height == 6, "lowered 10→6");
+}
+
+fn test_lower_clamps_at_zero() {
+  lm2 = map_empty();
+  map_set_height(lm2, 0, 0, 0, 2);
+  lt2 = tool_state_default();
+  lt2.ts_current = ToolKind.LowerHex;
+  lt2.ts_height_step = 4;   // would go to -2 unclamped
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, lm2, lt2);
+  hl2 = map_get_hex(lm2, 0, 0, 0);
+  assert(hl2.h_height == 0, "clamped at 0");
+}
+
+// ── PlaceItem ────────────────────────────────────────────────────
+
+fn test_place_item() {
+  im = map_empty();
+  it = tool_state_default();
+  it.ts_current = ToolKind.PlaceItem;
+  it.ts_selected_item = 7;
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, im, it);
+  hi = map_get_hex(im, 0, 0, 0);
+  assert(hi.h_item == 7, "item 7 placed");
+}
+
+fn test_place_item_overwrites() {
+  im2 = map_empty();
+  map_place_item(im2, 0, 0, 0, 3, 0);
+  it2 = tool_state_default();
+  it2.ts_current = ToolKind.PlaceItem;
+  it2.ts_selected_item = 9;
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, im2, it2);
+  hi2 = map_get_hex(im2, 0, 0, 0);
+  assert(hi2.h_item == 9, "item overwritten");
+}
+
+// ── PlaceWall ────────────────────────────────────────────────────
+
+fn test_place_wall_n() {
+  wm = map_empty();
+  wt = tool_state_default();
+  wt.ts_current = ToolKind.PlaceWall;
+  wt.ts_selected_wall = 5;
+  wt.ts_wall_direction = 0;   // N
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, wm, wt);
+  hw = map_get_hex(wm, 0, 0, 0);
+  assert(hw.h_wall_n == 5, "N wall placed");
+  assert(hw.h_wall_ne == 0, "NE unaffected");
+  assert(hw.h_wall_se == 0, "SE unaffected");
+}
+
+fn test_place_wall_se() {
+  wm2 = map_empty();
+  wt2 = tool_state_default();
+  wt2.ts_current = ToolKind.PlaceWall;
+  wt2.ts_selected_wall = 2;
+  wt2.ts_wall_direction = 2;   // SE
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, wm2, wt2);
+  hw2 = map_get_hex(wm2, 0, 0, 0);
+  assert(hw2.h_wall_se == 2, "SE wall placed");
+}
+
+fn test_place_wall_mirrored_s() {
+  // S direction is stored on the neighbour (0, 1)
+  wm3 = map_empty();
+  wt3 = tool_state_default();
+  wt3.ts_current = ToolKind.PlaceWall;
+  wt3.ts_selected_wall = 3;
+  wt3.ts_wall_direction = 3;   // S
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, wm3, wt3);
+  hw3 = map_get_hex(wm3, 0, 1, 0);
+  assert(hw3.h_wall_n == 3, "S mirror → (0,1).N");
+}
+
+// ── PlaceStencil ──────────────────────────────────────────────────
+
+fn test_place_stencil_flat() {
+  sm = map_empty();
+  st = tool_state_default();
+  st.ts_current = ToolKind.PlaceStencil;
+  st.ts_selected_stencil = 0;   // flat
+  // Apply at a non-origin hex to verify the stamp coords are used.
+  centre = hex_to_world(4, 4, 0);
+  tool_apply(centre, 0, sm, st);
+  // flat stencil should leave at least one hex touched — exact contents
+  // are defined by moros_editor's stencil_flat() constructor.
+  ss = map_get_hex(sm, 4, 4, 0);
+  // Flat stencil sets a floor; exact height depends on stencil
+  // definition, we just assert that SOMETHING was written so we
+  // know dispatch reached stencil_stamp.
+  assert(ss.h_material != 0 || ss.h_height != 0, "stencil touched hex");
+}
+
+fn test_place_stencil_oob_index_safe() {
+  // Out-of-range stencil index falls back to flat — no panic.
+  sm2 = map_empty();
+  st2 = tool_state_default();
+  st2.ts_current = ToolKind.PlaceStencil;
+  st2.ts_selected_stencil = 999;
+  tool_apply(vec3(0.0, 0.0, 0.0), 0, sm2, st2);
+  // No assertion on map state — just that we didn't crash.
+  assert(true, "oob stencil safe");
+}
+
+// ── Layer awareness ───────────────────────────────────────────────
+
+fn test_cy_parameter_honoured() {
+  cm = map_empty();
+  ct = tool_state_default();
+  ct.ts_current = ToolKind.RaiseHex;
+  tool_apply(vec3(0.0, 0.0, 0.0), 2, cm, ct);
+  // Raised on cy=2, not cy=0.
+  h0 = map_get_hex(cm, 0, 0, 0);
+  h2 = map_get_hex(cm, 0, 0, 2);
+  assert(h0.h_height == 0, "cy=0 untouched");
+  assert(h2.h_height == 4, "cy=2 raised");
+}

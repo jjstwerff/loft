@@ -32,6 +32,7 @@ function.
 // reverse_iterator) that each track a distinct parse phase or context.  Combining them into
 // an enum or state machine would add complexity without benefit.
 /// Whether a `use lib::...` statement imports all names or a specific subset.
+#[derive(Clone)]
 enum ImportSpec {
     Wildcard,
     Names(Vec<String>),
@@ -39,10 +40,25 @@ enum ImportSpec {
 
 /// A pending import queued when `use lib::spec` is parsed.
 /// Applied after all definitions in `for_source` are fully parsed.
+#[derive(Clone)]
 struct PendingImport {
     for_source: u16,
     lib_source: u16,
     spec: ImportSpec,
+}
+
+/// Pure-resolution result from [`Parser::lib_path_manifest_resolve`].
+/// Callers decide when to apply side effects (native-lib registration,
+/// dependency queueing, etc.).  The legacy `lib_path_manifest` adapter
+/// applies them immediately; Phase A of the P173 package-mode driver
+/// consults the manifest to build its package graph, then defers
+/// side-effect application until after pass-1 parsing.
+struct ResolvedPkg {
+    pkg_dir: String,
+    entry: String,
+    /// `None` when the package directory exists but has no `loft.toml`
+    /// (pure multi-file package without a manifest).
+    manifest: Option<manifest::Manifest>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -94,6 +110,16 @@ pub struct Parser {
     line: u32,
     /// Wildcard and selective imports waiting to be applied once the target source is fully parsed.
     pending_imports: Vec<PendingImport>,
+    /// P173: every (for_source, lib_source, ImportSpec) pair that
+    /// `apply_pending_imports` applied during this parse pass.  Retained so
+    /// that `resolve_deferred_unknowns` can re-apply them with overwrite
+    /// semantics after cyclic `use` declarations have left Unknown stubs.
+    applied_imports: Vec<PendingImport>,
+    /// P173: `DefType::Unknown` stubs collected by `actual_types_deferred`
+    /// during each `parse_file` run.  Resolved (or finally reported) by
+    /// `resolve_deferred_unknowns` after all files in the recursion have
+    /// had their pass-1 / pass-2 definitions registered.
+    deferred_unknown: Vec<(u16, u32, Position)>,
     /// Whether the most recently parsed expression is from a `not null` field access.
     /// Set by `get_field`; consumed by `handle_operator` to warn on redundant null checks.
     expr_not_null: bool,
@@ -290,6 +316,8 @@ impl Parser {
             pending_native_libs: Vec::new(),
             pending_pkg_deps: Vec::new(),
             pending_imports: Vec::new(),
+            applied_imports: Vec::new(),
+            deferred_unknown: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
@@ -326,21 +354,107 @@ impl Parser {
         self.lexer.switch(filename);
         self.first_pass = true;
         self.pending_imports.clear();
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
             self.reverse_iterator = false;
+            self.applied_imports.clear();
+            self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.switch(filename);
             self.parse_file();
+            self.resolve_deferred_unknowns();
         }
         self.backfill_native_symbol_crates();
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
+    }
+
+    /// P173: after `parse_file` has run (and all `todo_files` have drained,
+    /// so every file in the recursion has had its definitions registered),
+    /// reconcile any `DefType::Unknown` stubs that `actual_types_deferred`
+    /// collected during parsing.
+    ///
+    /// The cyclic `use` case: file B references a type `Player` defined in
+    /// file A, but B's `use A;` fires while A is suspended mid-parse — so
+    /// B's body parsed with `Player` as a stub.  After the full recursion
+    /// returns, A's `Player` is registered; Phase C re-applies imports with
+    /// overwrite semantics (replacing B's stub binding with A's real def),
+    /// then rewrites every `Type::Unknown(stub_nr)` occurrence to the real
+    /// resolved type.
+    ///
+    /// Stubs that remain unresolved after this reconciliation surface as
+    /// the original "Undefined type" error at the stored `Position`.
+    fn resolve_deferred_unknowns(&mut self) {
+        // Step 1: re-apply all previously-applied imports with overwrite
+        // semantics.  This replaces any target-source `Unknown` stub with
+        // the now-registered real def in the library source.
+        let applied = std::mem::take(&mut self.applied_imports);
+        for pi in &applied {
+            match &pi.spec {
+                ImportSpec::Wildcard => {
+                    self.data.import_all_overwrite(pi.lib_source, pi.for_source);
+                }
+                ImportSpec::Names(names) => {
+                    for name in names {
+                        self.data
+                            .import_name_overwrite(pi.lib_source, pi.for_source, name);
+                    }
+                }
+            }
+        }
+        // Keep them on the list for any later pass (pass 2 re-populates).
+        self.applied_imports = applied;
+
+        // Step 2: for each deferred stub, resolve via the post-import
+        // def binding.  Three outcomes per stub:
+        //
+        //  (a) The stub def got UPGRADED in-place to a real type (most
+        //      common — `parse_struct` does this when it finds an
+        //      existing stub by name).  `def(stub_nr).def_type` is no
+        //      longer `Unknown`; call `rewrite_unknown_refs(stub, stub)`
+        //      so that `Type::Unknown(stub)` references resolve to
+        //      `def(stub).returned`.
+        //
+        //  (b) The stub's source has a DIFFERENT real def (e.g. when
+        //      `import_all_overwrite` just routed the source-level
+        //      binding to a real def from another source).  Rewrite
+        //      Unknown references to point at that real def.
+        //
+        //  (c) Still unresolved — emit the "Undefined type" error at
+        //      the stored `Position`.
+        let deferred = std::mem::take(&mut self.deferred_unknown);
+        for (source, stub_nr, pos) in deferred {
+            let stub_name = self.data.def(stub_nr).name.clone();
+            // Case (a): stub upgraded in place
+            if !matches!(self.data.def(stub_nr).def_type, DefType::Unknown) {
+                self.data.rewrite_unknown_refs(stub_nr, stub_nr);
+                continue;
+            }
+            // Case (b): lookup via post-import source binding
+            let resolved_nr = self.data.source_nr(source, &stub_name);
+            if resolved_nr != u32::MAX
+                && resolved_nr != stub_nr
+                && !matches!(self.data.def(resolved_nr).def_type, DefType::Unknown)
+            {
+                self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
+                continue;
+            }
+            // Case (c): emit the deferred error
+            let msg = if stub_name == "string" {
+                "Undefined type 'string' — did you mean 'text'?".to_string()
+            } else {
+                format!("Undefined type {stub_name}")
+            };
+            self.lexer.pos_diagnostic(Level::Error, &pos, &msg);
+        }
     }
 
     /// After both parse passes, every `#native "<sym>"` annotation should map
@@ -379,17 +493,23 @@ impl Parser {
         self.vars.logging = false;
         self.first_pass = true;
         self.pending_imports.clear();
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.lexer.parse_string(content, filename);
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
+            self.applied_imports.clear();
+            self.deferred_unknown.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.lexer.parse_string(content, filename);
             self.parse_file();
+            self.resolve_deferred_unknowns();
         }
         self.diagnostics.fill(self.lexer.diagnostics());
         self.diagnostics.is_empty()
@@ -466,19 +586,25 @@ impl Parser {
         self.default = false;
         self.vars.logging = logging;
         self.lexer.parse_string(text, filename);
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
             self.diagnostics.fill(self.lexer.diagnostics());
             return;
         }
+        self.applied_imports.clear();
+        self.deferred_unknown.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
         self.parse_file();
+        self.resolve_deferred_unknowns();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
@@ -2217,11 +2343,15 @@ impl Parser {
                 diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
             }
         }
-        typedef::actual_types(
+        // P173: defer `Undefined type` errors to `resolve_deferred_unknowns`
+        // so forward-references across cyclic intra-package `use` declarations
+        // get a chance to resolve once both sides of the cycle are registered.
+        typedef::actual_types_deferred(
             &mut self.data,
             &mut self.database,
             &mut self.lexer,
             start_def,
+            Some(&mut self.deferred_unknown),
         );
         typedef::fill_all(
             &mut self.data,
@@ -2258,6 +2388,10 @@ impl Parser {
         }
         self.pending_imports = remaining;
         for pi in to_apply {
+            // P173: retain a copy so `resolve_deferred_unknowns` can re-apply
+            // with overwrite semantics after a cyclic `use` has finished
+            // registering the partner file's definitions.
+            self.applied_imports.push(pi.clone());
             match pi.spec {
                 ImportSpec::Wildcard => {
                     self.data.import_all(pi.lib_source, cur);
@@ -2284,7 +2418,7 @@ impl Parser {
             return format!("{id}.loft");
         }
         // - a source file, the lib directory in the project (project-supplied)
-        let mut f = format!("lib/{id}.loft");
+        let mut f = format!("lib{0}{id}.loft", sep_str());
         if !std::path::Path::new(&f).exists() {
             f = format!("{id}.loft");
         }
@@ -2305,12 +2439,13 @@ impl Parser {
             ""
         };
         // - a lib directory relative to the current directory
+        let s = sep_str();
         if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}/lib/{id}.loft");
+            f = format!("{cur_dir}{s}lib{s}{id}.loft");
         }
         // - a lib directory relative to the base directory when inside /tests/
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}/lib/{id}.loft");
+            f = format!("{base_dir}{s}lib{s}{id}.loft");
         }
         // - walk up from the script directory looking for a loft.toml; if found,
         //   the package's parent directory contains sibling packages.
@@ -2352,12 +2487,12 @@ impl Parser {
         }
         // - a directory with the same name of the current script (strip the .loft suffix)
         if !std::path::Path::new(&f).exists() && cur_script.len() >= 5 {
-            f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);
+            f = format!("{}{s}{id}.loft", &cur_script[0..cur_script.len() - 5]);
         }
         // - extra library directories from --lib / --project command-line flags (single-file)
         if !std::path::Path::new(&f).exists() {
             for l in &self.lib_dirs {
-                let candidate = format!("{l}/{id}.loft");
+                let candidate = format!("{l}{s}{id}.loft");
                 if std::path::Path::new(&candidate).exists() {
                     f.clone_from(&candidate);
                     // Check for loft.toml in ancestor directories to register
@@ -2426,11 +2561,11 @@ impl Parser {
         }
         // - the current directory (beside the parsed file)
         if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}/{id}.loft");
+            f = format!("{cur_dir}{s}{id}.loft");
         }
         // - the base directory when inside /tests/
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}/{id}.loft");
+            f = format!("{base_dir}{s}{id}.loft");
         }
         f
     }
@@ -2477,13 +2612,33 @@ impl Parser {
     /// requirement.  Emits a fatal diagnostic on version mismatch.
     /// Returns `Some(entry_path)` when the layout exists and the version passes,
     /// `None` otherwise.
+    ///
+    /// Legacy path: delegates to [`lib_path_manifest_resolve`] for pure
+    /// resolution, then applies side-effects via [`apply_manifest_side_effects`].
+    /// Phase A (P173 package-mode driver) calls `lib_path_manifest_resolve`
+    /// directly and builds the package graph explicitly.
     fn lib_path_manifest(&mut self, dir: &str, id: &str) -> Option<String> {
+        let resolved = self.lib_path_manifest_resolve(dir, id)?;
+        if let Some(m) = resolved.manifest.as_ref() {
+            self.apply_manifest_side_effects(dir, &resolved.pkg_dir, m);
+        }
+        Some(resolved.entry)
+    }
+
+    /// Pure resolution of `<dir>/<id>` against disk + manifest.  No side
+    /// effects on `self.data` / `self.lib_dirs` / `self.pending_*`; the only
+    /// state touched is `self.lexer.diagnostics` on a version-mismatch fatal.
+    ///
+    /// This is the entry point used by Phase A of the package-mode driver
+    /// (P173), which needs to enumerate files + package edges without
+    /// spilling symbol-table side-effects before pass-1 parsing begins.
+    fn lib_path_manifest_resolve(&mut self, dir: &str, id: &str) -> Option<ResolvedPkg> {
         let pkg_dir = format!("{dir}/{id}");
         if !std::path::Path::new(&pkg_dir).is_dir() {
             return None;
         }
         let manifest_path = format!("{pkg_dir}/loft.toml");
-        let entry = if std::path::Path::new(&manifest_path).exists() {
+        let (entry, manifest) = if std::path::Path::new(&manifest_path).exists() {
             let m = manifest::read_manifest(&manifest_path)?;
             if let Some(ref req) = m.loft_version {
                 let current = env!("CARGO_PKG_VERSION");
@@ -2496,69 +2651,82 @@ impl Parser {
                     return None;
                 }
             }
-            // register native shared library path for loading after byte_code().
-            // Try pre-built location first, then auto-build from source.
-            if let Some(ref stem) = m.native {
-                let filename = crate::extensions::platform_lib_name(stem);
-                let prebuilt = format!("{pkg_dir}/native/{filename}");
-                if std::path::Path::new(&prebuilt).exists() {
-                    self.pending_native_libs.push(prebuilt);
-                } else if let Some(built) = crate::extensions::auto_build_native(&pkg_dir, stem) {
-                    self.pending_native_libs.push(built);
-                }
-            }
-            // PKG.4: register native function symbols and package crate info.
-            if let Some(ref crate_name) = m.native_crate {
-                let rust_crate = crate_name.replace('-', "_");
-                if !self
-                    .data
-                    .native_packages
-                    .iter()
-                    .any(|(c, _)| c == crate_name)
-                {
-                    self.data
-                        .native_packages
-                        .push((crate_name.clone(), pkg_dir.clone()));
-                }
-                for (loft_name, rust_symbol) in &m.native_functions {
-                    self.data
-                        .native_symbols
-                        .insert(loft_name.clone(), rust_symbol.clone());
-                }
-                // Map all #native symbols from this package to their crate.
-                // Definitions parsed so far include this package's functions.
-                for d_nr in 0..self.data.definitions() {
-                    let sym = &self.data.def(d_nr).native;
-                    if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
-                        self.data
-                            .native_symbol_crates
-                            .insert(sym.clone(), rust_crate.clone());
-                    }
-                }
-            }
-            // PKG.3: register the package's parent directory so that
-            // dependencies declared in [dependencies] can be found as sibling
-            // packages during normal `use` resolution.
-            if !m.dependencies.is_empty() && !self.lib_dirs.contains(&dir.to_string()) {
-                self.lib_dirs.push(dir.to_string());
-            }
-            for (dep_name, _dep_version) in &m.dependencies {
-                if !self.data.use_exists(dep_name) {
-                    self.pending_pkg_deps
-                        .push((dep_name.clone(), dir.to_string()));
-                }
-            }
-            m.entry.map_or_else(
+            let entry = m.entry.as_ref().map_or_else(
                 || format!("{pkg_dir}/src/{id}.loft"),
                 |e| format!("{pkg_dir}/{e}"),
-            )
+            );
+            (entry, Some(m))
         } else {
-            format!("{pkg_dir}/src/{id}.loft")
+            (format!("{pkg_dir}/src/{id}.loft"), None)
         };
         if std::path::Path::new(&entry).exists() {
-            Some(entry)
+            Some(ResolvedPkg {
+                pkg_dir,
+                entry,
+                manifest,
+            })
         } else {
             None
+        }
+    }
+
+    /// Apply the parser-state side effects that the legacy `lib_path_manifest`
+    /// performs for a resolved package: native-lib registration,
+    /// native-symbol / native-crate bookkeeping, sibling-dependency search
+    /// paths (`lib_dirs`), and queued transitive package loads
+    /// (`pending_pkg_deps`).
+    fn apply_manifest_side_effects(&mut self, dir: &str, pkg_dir: &str, m: &manifest::Manifest) {
+        // register native shared library path for loading after byte_code().
+        // Try pre-built location first, then auto-build from source.
+        if let Some(ref stem) = m.native {
+            let filename = crate::extensions::platform_lib_name(stem);
+            let prebuilt = format!("{pkg_dir}/native/{filename}");
+            if std::path::Path::new(&prebuilt).exists() {
+                self.pending_native_libs.push(prebuilt);
+            } else if let Some(built) = crate::extensions::auto_build_native(pkg_dir, stem) {
+                self.pending_native_libs.push(built);
+            }
+        }
+        // PKG.4: register native function symbols and package crate info.
+        if let Some(ref crate_name) = m.native_crate {
+            let rust_crate = crate_name.replace('-', "_");
+            if !self
+                .data
+                .native_packages
+                .iter()
+                .any(|(c, _)| c == crate_name)
+            {
+                self.data
+                    .native_packages
+                    .push((crate_name.clone(), pkg_dir.to_string()));
+            }
+            for (loft_name, rust_symbol) in &m.native_functions {
+                self.data
+                    .native_symbols
+                    .insert(loft_name.clone(), rust_symbol.clone());
+            }
+            // Map all #native symbols from this package to their crate.
+            // Definitions parsed so far include this package's functions.
+            for d_nr in 0..self.data.definitions() {
+                let sym = &self.data.def(d_nr).native;
+                if !sym.is_empty() && !self.data.native_symbol_crates.contains_key(sym) {
+                    self.data
+                        .native_symbol_crates
+                        .insert(sym.clone(), rust_crate.clone());
+                }
+            }
+        }
+        // PKG.3: register the package's parent directory so that
+        // dependencies declared in [dependencies] can be found as sibling
+        // packages during normal `use` resolution.
+        if !m.dependencies.is_empty() && !self.lib_dirs.contains(&dir.to_string()) {
+            self.lib_dirs.push(dir.to_string());
+        }
+        for (dep_name, _dep_version) in &m.dependencies {
+            if !self.data.use_exists(dep_name) {
+                self.pending_pkg_deps
+                    .push((dep_name.clone(), dir.to_string()));
+            }
         }
     }
 

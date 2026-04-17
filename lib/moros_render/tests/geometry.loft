@@ -129,6 +129,1018 @@ fn test_build_hex_meshes_with_walls() {
   assert(has_walls, "walls mesh present");
 }
 
+// ── Cylinder post tests (Phase 6a.8) ──────────────────────────────
+
+fn test_emit_cylinder_post_vertex_count() {
+  cp_mesh = mesh("cp_count");
+  // 8-segment cylinder: 8 × 4 = 32 verts, 8 × 2 = 16 tris.
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 2.0, 0.0), 0.5, 8);
+  assert(len(cp_mesh.vertices) == 32, "expected 32 verts, got {len(cp_mesh.vertices)}");
+  assert(len(cp_mesh.triangles) == 16, "expected 16 tris, got {len(cp_mesh.triangles)}");
+}
+
+fn test_emit_cylinder_post_radial_normals() {
+  cp_mesh = mesh("cp_n");
+  // 4 segments: normals should be at 0°, 90°, 180°, 270° + the same
+  // again for each segment's end angle.  Check that every normal
+  // has a horizontal direction (Y = 0) and unit length ~1.
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 4);
+  for cp_v in cp_mesh.vertices {
+    assert(cp_v.normal.y == 0.0, "cyl normal Y = 0");
+  }
+}
+
+fn test_emit_cylinder_post_too_few_segments() {
+  cp_mesh = mesh("cp_few");
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 2);
+  assert(len(cp_mesh.vertices) == 0, "< 3 segs → no geometry");
+}
+
+fn test_emit_cylinder_post_zero_radius() {
+  cp_mesh = mesh("cp_zr");
+  emit_cylinder_post(cp_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 0.0, 8);
+  assert(len(cp_mesh.vertices) == 0, "zero radius → no geometry");
+}
+
+// ── Linear stair tests (MO.8a) ────────────────────────────────────
+
+fn test_stair_step_count_basic() {
+  // 2.0 world-units of climb at HEIGHT_SCALE=0.25 → 8 steps.
+  assert(stair_step_count(0.0, 2.0) == 8, "2.0 climb = 8 steps");
+}
+
+fn test_stair_step_count_minimum() {
+  // Zero climb still yields a 1-step minimum (keeps downstream
+  // arithmetic safe against divide-by-zero).
+  assert(stair_step_count(0.0, 0.0) == 1, "0 climb = 1 step (min)");
+}
+
+fn test_stair_step_count_descending() {
+  // Descending stair counts the same as ascending — sign is dropped.
+  assert(stair_step_count(5.0, 3.0) == 8, "descend 2.0 = 8 steps");
+}
+
+fn test_emit_linear_stair_vertex_and_triangle_count() {
+  ls_mesh = mesh("ls_count");
+  ls_lo = vec3(0.0, 0.0, 0.0);
+  ls_hi = vec3(2.0, 1.0, 0.0);
+  emit_linear_stair(ls_mesh, ls_lo, ls_hi, 1.0, 4);
+  // 4 steps × 8 verts (4 riser + 4 tread) = 32
+  // 4 steps × 4 triangles (2 riser + 2 tread) = 16
+  assert(len(ls_mesh.vertices) == 32, "expected 32 verts, got {len(ls_mesh.vertices)}");
+  assert(len(ls_mesh.triangles) == 16, "expected 16 tris, got {len(ls_mesh.triangles)}");
+}
+
+fn test_emit_linear_stair_step_heights() {
+  ls_mesh = mesh("ls_heights");
+  // 2 steps × 1.0 rise each → 2.0 total climb.
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 2.0, 0.0), 1.0, 2);
+  // First riser's top-left vertex (index 3) sits at step 0's top y = 1.0.
+  assert(ls_mesh.vertices[3].pos.y == 1.0, "first riser top y = 1.0");
+  // Second riser starts at vertex 8; its bottom y = 1.0 (step 1's floor).
+  assert(ls_mesh.vertices[8].pos.y == 1.0, "second riser bottom y = 1.0");
+  // Last tread sits at y = 2.0 (final climb height).
+  // Step 1 tread base index = 4 (step 0 occupies 0..7) + 4 (step 1 riser) = 12.
+  assert(ls_mesh.vertices[12].pos.y == 2.0, "second tread y = 2.0");
+}
+
+fn test_emit_linear_stair_zero_horizontal() {
+  // Degenerate: no horizontal travel → no geometry emitted.
+  ls_mesh = mesh("ls_zero_h");
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), 1.0, 4);
+  assert(len(ls_mesh.vertices) == 0, "zero horizontal → no verts");
+}
+
+fn test_emit_linear_stair_zero_steps() {
+  // Non-positive step count is a no-op.
+  ls_mesh = mesh("ls_zero_s");
+  emit_linear_stair(ls_mesh, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), 1.0, 0);
+  assert(len(ls_mesh.vertices) == 0, "zero steps → no verts");
+}
+
+// ── Spiral stair tests (MO.8b) ────────────────────────────────────
+
+fn test_emit_spiral_stair_vertex_and_triangle_count() {
+  ss_mesh = mesh("ss_count");
+  // 12 steps × 30° = 360° (one full revolution).
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 12, 30.0);
+  assert(len(ss_mesh.vertices) == 48, "expected 48 verts, got {len(ss_mesh.vertices)}");
+  assert(len(ss_mesh.triangles) == 24, "expected 24 tris, got {len(ss_mesh.triangles)}");
+}
+
+fn test_emit_spiral_stair_rise() {
+  ss_mesh = mesh("ss_rise");
+  // 4 steps of 0.5 rise each → final tread at y = 2.0.
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.5, 4, 90.0);
+  // Step 0's tread Y = centre.y + rise * 1 = 0.5.  All 4 step-0
+  // vertices share the same Y.
+  assert(ss_mesh.vertices[0].pos.y == 0.5, "step 0 tread y = 0.5");
+  // Step 3's vertices start at index 12 (3 steps × 4 verts each).
+  assert(ss_mesh.vertices[12].pos.y == 2.0, "step 3 tread y = 2.0");
+}
+
+fn test_emit_spiral_stair_zero_steps() {
+  ss_mesh = mesh("ss_zs");
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 0, 30.0);
+  assert(len(ss_mesh.vertices) == 0, "0 steps → no geometry");
+}
+
+fn test_emit_spiral_stair_degenerate_radii() {
+  ss_mesh = mesh("ss_dr");
+  // inner_r == outer_r is treated as degenerate.
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 1.0, 1.0, 0.25, 4, 30.0);
+  assert(len(ss_mesh.vertices) == 0, "inner_r == outer_r → no geometry");
+}
+
+fn test_emit_spiral_stair_normals_up() {
+  ss_mesh = mesh("ss_n");
+  emit_spiral_stair(ss_mesh, vec3(0.0, 0.0, 0.0), 0.5, 1.0, 0.25, 4, 90.0);
+  // All tread normals point up.
+  for ss_v in ss_mesh.vertices {
+    assert(ss_v.normal.y == 1.0, "tread normal y = 1.0");
+  }
+}
+
+// ── Grand arc stair tests (Phase 6a.11) ───────────────────────────
+
+fn test_emit_grand_arc_stair_vertex_count() {
+  ga_mesh = mesh("ga_count");
+  // 6 steps × 15° = 90° arc, arc_radius=5, width=1.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.25, 6, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 24, "6 × 4 = 24 verts");
+  assert(len(ga_mesh.triangles) == 12, "6 × 2 = 12 tris");
+}
+
+fn test_emit_grand_arc_stair_start_angle() {
+  ga_mesh = mesh("ga_start");
+  // Single step at 45° start, 10 unit arc radius, 1 unit width.
+  // i_front vertex at angle 45°, radius 9.5: x = z ≈ 6.72.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 10.0, 1.0, 0.25, 1, 45.0, 45.0);
+  assert(ga_mesh.vertices[0].pos.x > 6.0, "i_front x > 6");
+  assert(ga_mesh.vertices[0].pos.z > 6.0, "i_front z > 6");
+}
+
+fn test_emit_grand_arc_stair_zero_steps() {
+  ga_mesh = mesh("ga_zs");
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.25, 0, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 0, "zero steps → no geometry");
+}
+
+fn test_emit_grand_arc_stair_narrow_arc() {
+  // arc_radius < stair_width/2 → negative inner radius → no-op.
+  ga_mesh = mesh("ga_narrow");
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 0.3, 1.0, 0.25, 6, 0.0, 15.0);
+  assert(len(ga_mesh.vertices) == 0, "arc too narrow for width → no geometry");
+}
+
+fn test_emit_grand_arc_stair_rise_accumulation() {
+  ga_mesh = mesh("ga_rise");
+  // 4 steps × 0.5 rise → final tread at y = 2.0.
+  emit_grand_arc_stair(ga_mesh, vec3(0.0, 0.0, 0.0), 5.0, 1.0, 0.5, 4, 0.0, 20.0);
+  assert(ga_mesh.vertices[0].pos.y == 0.5, "step 0 tread y = 0.5");
+  assert(ga_mesh.vertices[12].pos.y == 2.0, "step 3 tread y = 2.0");
+}
+
+// ── Camera tests (Phase 6a.15 / MO.9a) ────────────────────────────
+
+fn test_camera_default_values() {
+  cam = camera_default();
+  assert(cam.azimuth == 45.0, "default azimuth");
+  assert(cam.elevation == 30.0, "default elevation");
+  assert(cam.distance == 10.0, "default distance");
+  assert(cam.fov_y == 60.0, "default fov");
+  assert(cam.up.y == 1.0, "world up is +Y");
+}
+
+fn test_camera_eye_basic_orientation() {
+  // At azimuth=0, elevation=0: eye is at target + (distance, 0, 0).
+  cam = camera_default();
+  cam.azimuth = 0.0;
+  cam.elevation = 0.0;
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.distance = 5.0;
+  eye = camera_eye(cam);
+  // cos(0)=1, sin(0)=0 → eye = (5, 0, 0)
+  assert(eye.x == 5.0, "eye x = 5");
+  assert(eye.y == 0.0, "eye y = 0");
+  assert(eye.z == 0.0, "eye z = 0");
+}
+
+fn test_camera_eye_elevation_90() {
+  // Elevation 90° → eye directly above target.
+  cam = camera_default();
+  cam.azimuth = 0.0;
+  cam.elevation = 90.0;
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.distance = 3.0;
+  eye = camera_eye(cam);
+  // horiz = 3 * cos(90°) ≈ 0; y = 3 * sin(90°) = 3
+  assert(eye.y == 3.0, "eye directly above");
+  // x, z ≈ 0 (tiny fp residual is fine)
+  assert(eye.x < 0.001, "x close to 0");
+  assert(eye.z < 0.001, "z close to 0");
+  assert(eye.x > -0.001, "x close to 0 neg");
+  assert(eye.z > -0.001, "z close to 0 neg");
+}
+
+fn test_camera_orbit_adjusts_azimuth() {
+  cam = camera_default();
+  cam.azimuth = 10.0;
+  camera_orbit(cam, 20.0, 0.0);
+  assert(cam.azimuth == 30.0, "azimuth += 20");
+}
+
+fn test_camera_orbit_clamps_elevation_high() {
+  cam = camera_default();
+  cam.elevation = 80.0;
+  camera_orbit(cam, 0.0, 30.0);   // would go to 110°, clamp to 89°
+  assert(cam.elevation == 89.0, "elevation clamped at 89");
+}
+
+fn test_camera_orbit_clamps_elevation_low() {
+  cam = camera_default();
+  cam.elevation = -80.0;
+  camera_orbit(cam, 0.0, -30.0);   // would go to -110°, clamp to -89°
+  assert(cam.elevation == -89.0, "elevation clamped at -89");
+}
+
+fn test_camera_zoom_clamps_min() {
+  cam = camera_default();
+  cam.distance = 0.5;
+  camera_zoom(cam, -1.0);   // would go to -0.5, clamp to 0.1
+  assert(cam.distance == 0.1, "zoom clamped at 0.1");
+}
+
+fn test_camera_zoom_normal() {
+  cam = camera_default();
+  cam.distance = 10.0;
+  camera_zoom(cam, 5.0);
+  assert(cam.distance == 15.0, "zoom += 5");
+}
+
+fn test_camera_pan() {
+  cam = camera_default();
+  cam.target = vec3(1.0, 2.0, 3.0);
+  camera_pan(cam, 4.0, 5.0, 6.0);
+  assert(cam.target.x == 5.0, "target x shifted");
+  assert(cam.target.y == 7.0, "target y shifted");
+  assert(cam.target.z == 9.0, "target z shifted");
+}
+
+fn test_camera_view_matrix_shape() {
+  cam = camera_default();
+  vm = camera_view_matrix(cam);
+  // mat4 with 16 entries; bottom-right is 1.0 for affine.
+  assert(len(vm.m) == 16, "mat4 has 16 entries");
+  assert(vm.m[15] == 1.0, "[3,3] = 1.0 for view");
+}
+
+fn test_camera_projection_matrix_shape() {
+  cam = camera_default();
+  pm = camera_projection_matrix(cam, 16.0 / 9.0);
+  assert(len(pm.m) == 16, "mat4 has 16 entries");
+  // Perspective matrix [3,3] = 0.0 (homogeneous division).
+  assert(pm.m[15] == 0.0, "perspective [3,3] = 0");
+  // [2,3] should be -1.0 (standard perspective).
+  assert(pm.m[11] == -1.0, "perspective [2,3] = -1");
+}
+
+// ── Picker tests (Phase 6a.16 / MO.9b) ────────────────────────────
+
+fn test_world_to_hex_origin() {
+  h = world_to_hex(0.0, 0.0);
+  assert(h.ha_q == 0, "origin q");
+  assert(h.ha_r == 0, "origin r");
+  assert(h.ha_cy == 0, "cy defaults to 0");
+}
+
+fn test_world_to_hex_column_one() {
+  // (HEX_WIDTH, 0) should snap to (1, 0).
+  h = world_to_hex(HEX_WIDTH, 0.0);
+  assert(h.ha_q == 1, "q = 1");
+  assert(h.ha_r == 0, "r = 0");
+}
+
+fn test_world_to_hex_row_one() {
+  // At r=1 the odd-row offset applies: world x = HEX_WIDTH/2, z = HEX_ROW_HEIGHT.
+  h = world_to_hex(HEX_WIDTH / 2.0, HEX_ROW_HEIGHT);
+  assert(h.ha_q == 0, "q = 0 (odd-row offset applied)");
+  assert(h.ha_r == 1, "r = 1");
+}
+
+fn test_world_to_hex_inverse_of_hex_to_world() {
+  // Round-trip a range of (q, r) through hex_to_world then world_to_hex.
+  wh_test_q = 3;
+  wh_test_r = 2;
+  w = hex_to_world(wh_test_q, wh_test_r, 0);
+  h = world_to_hex(w.x, w.z);
+  assert(h.ha_q == wh_test_q, "q round-trip");
+  assert(h.ha_r == wh_test_r, "r round-trip");
+}
+
+fn test_ray_plane_y_intersect_basic() {
+  // Ray from (0,5,0) straight down (0,-1,0), plane y=0 → (0,0,0).
+  origin = vec3(0.0, 5.0, 0.0);
+  down = vec3(0.0, -1.0, 0.0);
+  hit = ray_plane_y_intersect(origin, down, 0.0);
+  assert(hit.y == 0.0, "hit y = 0");
+  assert(hit.x == 0.0, "hit x = 0");
+  assert(hit.z == 0.0, "hit z = 0");
+}
+
+fn test_ray_plane_y_intersect_parallel() {
+  // Ray parallel to plane → returns the null sentinel (0,0,0).
+  origin = vec3(0.0, 5.0, 0.0);
+  horiz = vec3(1.0, 0.0, 0.0);
+  hit = ray_plane_y_intersect(origin, horiz, 0.0);
+  // dir.y == 0.0, returns vec3(0,0,0) as sentinel
+  assert(hit.x == 0.0, "parallel sentinel x");
+  assert(hit.y == 0.0, "parallel sentinel y");
+}
+
+fn test_ray_plane_y_intersect_behind() {
+  // Plane is behind the camera (looking up but plane below).
+  origin = vec3(0.0, 5.0, 0.0);
+  up_dir = vec3(0.0, 1.0, 0.0);
+  hit = ray_plane_y_intersect(origin, up_dir, 0.0);
+  // t would be negative (-5 / 1), returns sentinel.
+  assert(hit.x == 0.0, "behind sentinel");
+}
+
+fn test_camera_ray_dir_centre_of_view() {
+  // ndc=(0,0) should give the forward direction (camera → target).
+  cam = camera_default();
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.azimuth = 0.0;
+  cam.elevation = 0.0;
+  // Eye at (10, 0, 0); forward = (-1, 0, 0).
+  cam.distance = 10.0;
+  dir = camera_ray_dir(cam, 0.0, 0.0, 1.0);
+  assert(dir.x < -0.99, "ray x ≈ -1");
+  assert(dir.y < 0.01, "ray y ≈ 0");
+  assert(dir.y > -0.01, "ray y ≈ 0");
+}
+
+fn test_pick_hex_centre_of_screen_looks_at_origin() {
+  // Camera looks at origin from above-and-aside; clicking the
+  // screen centre (w/2, h/2) should pick hex (0, 0).
+  cam = camera_default();
+  cam.target = vec3(0.0, 0.0, 0.0);
+  cam.azimuth = 45.0;
+  cam.elevation = 45.0;
+  cam.distance = 10.0;
+  hit = pick_hex(cam, 400.0, 300.0, 800.0, 600.0, 0.0);
+  assert(hit.ha_q == 0, "centre click → hex (0,0) q");
+  assert(hit.ha_r == 0, "centre click → hex (0,0) r");
+}
+
+// ── Box primitive tests (Phase 6a.12 prereq) ──────────────────────
+
+fn test_emit_box_vertex_and_triangle_count() {
+  bx_mesh = mesh("box_count");
+  emit_box(bx_mesh, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+  // 6 faces × 4 verts = 24 verts, × 2 tris = 12 tris.
+  assert(len(bx_mesh.vertices) == 24, "24 verts, got {len(bx_mesh.vertices)}");
+  assert(len(bx_mesh.triangles) == 12, "12 tris, got {len(bx_mesh.triangles)}");
+}
+
+fn test_emit_box_face_normals() {
+  bx_mesh = mesh("box_n");
+  emit_box(bx_mesh, vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0));
+  // The first 4 verts are the +X face — all should have normal.x = 1.
+  assert(bx_mesh.vertices[0].normal.x == 1.0, "+X face normal");
+  assert(bx_mesh.vertices[0].normal.y == 0.0, "+X face y");
+  assert(bx_mesh.vertices[0].normal.z == 0.0, "+X face z");
+  // Verts 4-7 are the -X face.
+  assert(bx_mesh.vertices[4].normal.x == -1.0, "-X face normal");
+  // Verts 8-11 are +Y (top).
+  assert(bx_mesh.vertices[8].normal.y == 1.0, "+Y face normal");
+}
+
+fn test_emit_box_degenerate() {
+  bx_mesh = mesh("box_deg");
+  // max <= min on X → no geometry.
+  emit_box(bx_mesh, vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+  assert(len(bx_mesh.vertices) == 0, "degenerate X → no geometry");
+  // max < min on Y.
+  emit_box(bx_mesh, vec3(0.0, 5.0, 0.0), vec3(1.0, 1.0, 1.0));
+  assert(len(bx_mesh.vertices) == 0, "degenerate Y → no geometry");
+}
+
+// ── Item placeholder tests (Phase 6a.12) ──────────────────────────
+
+fn test_emit_item_placeholder_pillar_is_cylinder() {
+  ip_mesh = mesh("ip_pillar");
+  emit_item_placeholder(ip_mesh, "PILLAR", vec3(0.0, 0.0, 0.0), 1.0);
+  // 8-segment cylinder = 32 verts + 16 tris.
+  assert(len(ip_mesh.vertices) == 32, "pillar → 8-seg cylinder");
+  assert(len(ip_mesh.triangles) == 16, "pillar tris");
+}
+
+fn test_emit_item_placeholder_tree_is_cylinder() {
+  ip_mesh = mesh("ip_tree");
+  emit_item_placeholder(ip_mesh, "TREE", vec3(5.0, 0.0, 5.0), 1.5);
+  assert(len(ip_mesh.vertices) == 32, "tree → 8-seg cylinder");
+}
+
+fn test_emit_item_placeholder_container_is_box() {
+  ip_mesh = mesh("ip_box");
+  emit_item_placeholder(ip_mesh, "CONTAINER", vec3(0.0, 0.0, 0.0), 1.0);
+  // Box = 24 verts + 12 tris.
+  assert(len(ip_mesh.vertices) == 24, "container → box");
+  assert(len(ip_mesh.triangles) == 12, "container tris");
+}
+
+fn test_emit_item_placeholder_zero_scale() {
+  ip_mesh = mesh("ip_zero");
+  emit_item_placeholder(ip_mesh, "PILLAR", vec3(0.0, 0.0, 0.0), 0.0);
+  assert(len(ip_mesh.vertices) == 0, "zero scale → no geometry");
+}
+
+// ── Thick flat wall tests (Phase 6a.6) ────────────────────────────
+
+fn test_emit_thick_flat_wall_vertex_count() {
+  tw_mesh = mesh("tw_count");
+  // Wall from origin to (4, 0, 0), thickness 0.5, height 2, posts
+  // radius 0.3 with 8 segments.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.3, 8);
+  // 3 quads (12 verts, 6 tris) + 2 × 8-seg cylinders (64 verts, 32 tris)
+  assert(len(tw_mesh.vertices) == 76, "12 + 64 = 76 verts");
+  assert(len(tw_mesh.triangles) == 38, "6 + 32 = 38 tris");
+}
+
+fn test_emit_thick_flat_wall_no_posts() {
+  tw_mesh = mesh("tw_no_post");
+  // post_radius = 0 → no posts.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.0, 8);
+  assert(len(tw_mesh.vertices) == 12, "just 3 quads = 12 verts");
+  assert(len(tw_mesh.triangles) == 6, "6 tris");
+}
+
+fn test_emit_thick_flat_wall_front_normal() {
+  tw_mesh = mesh("tw_n_front");
+  // Wall along +X with forward = (+1,0,0), perpendicular = (0,0,1).
+  // Front face is on +Z side with normal +Z.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.0, 8);
+  // Front face is the first emitted quad (verts 0-3).
+  assert(tw_mesh.vertices[0].normal.z == 1.0, "front normal +Z");
+  assert(tw_mesh.vertices[0].normal.x == 0.0, "front x 0");
+  // Back face is the second quad (verts 4-7).
+  assert(tw_mesh.vertices[4].normal.z == -1.0, "back normal -Z");
+  // Top face (verts 8-11) normal +Y.
+  assert(tw_mesh.vertices[8].normal.y == 1.0, "top normal +Y");
+}
+
+fn test_emit_thick_flat_wall_coincident_endpoints() {
+  tw_mesh = mesh("tw_coinc");
+  // p1 == p2 → no geometry (zero-length wall).
+  emit_thick_flat_wall(tw_mesh, vec3(1.0, 0.0, 1.0), vec3(1.0, 0.0, 1.0), 0.5, 2.0, 0.3, 8);
+  assert(len(tw_mesh.vertices) == 0, "zero-length wall → no geometry");
+}
+
+fn test_emit_thick_flat_wall_zero_thickness() {
+  tw_mesh = mesh("tw_zt");
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.0, 2.0, 0.3, 8);
+  assert(len(tw_mesh.vertices) == 0, "zero thickness → no geometry");
+}
+
+// ── Thick curved wall tests (Phase 6a.7) ──────────────────────────
+
+fn test_emit_thick_curved_wall_vertex_count() {
+  tcw_mesh = mesh("tcw_count");
+  // 8 segments × 3 quads × 4 verts = 96 verts, × 2 tris = 48.
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 8);
+  assert(len(tcw_mesh.vertices) == 96, "8 segs × 12 verts = 96");
+  assert(len(tcw_mesh.triangles) == 48, "8 segs × 6 tris = 48");
+}
+
+fn test_emit_thick_curved_wall_top_y() {
+  tcw_mesh = mesh("tcw_top");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 1);
+  // First segment's inner face starts at index 0 (base-y verts).
+  // Top-face of segment 1 starts at index 8 (3rd quad in the segment).
+  // All top-face verts should be at y = height = 3.0.
+  assert(tcw_mesh.vertices[8].pos.y == 3.0, "top face y");
+  assert(tcw_mesh.vertices[9].pos.y == 3.0, "top face y (2)");
+}
+
+fn test_emit_thick_curved_wall_zero_segs() {
+  tcw_mesh = mesh("tcw_zs");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 1.0, 2.0, 0.0, 3.0, 0.0, 90.0, 0);
+  assert(len(tcw_mesh.vertices) == 0, "zero segs → no geometry");
+}
+
+fn test_emit_thick_curved_wall_degenerate_radii() {
+  tcw_mesh = mesh("tcw_dr");
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 2.0, 2.0, 0.0, 3.0, 0.0, 90.0, 8);
+  assert(len(tcw_mesh.vertices) == 0, "inner_r == outer_r → no geometry");
+}
+
+fn test_emit_thick_curved_wall_full_loop() {
+  tcw_mesh = mesh("tcw_full");
+  // Full 360° with 16 segments — closed ring of walls.
+  emit_thick_curved_wall(tcw_mesh, vec3(0.0, 0.0, 0.0), 3.0, 3.5, 0.0, 2.0, 0.0, 360.0, 16);
+  assert(len(tcw_mesh.vertices) == 16 * 12, "16 × 12 verts");
+  assert(len(tcw_mesh.triangles) == 16 * 6, "16 × 6 tris");
+}
+
+// ── GLB export / scene-building tests (Phase 6a.14) ───────────────
+
+fn test_map_build_scene_empty() {
+  em = map_empty();
+  sc = map_build_scene(em);
+  // Empty map emits no meshes (no hexes to render).
+  assert(len(sc.meshes) == 0, "empty map → no meshes, got {len(sc.meshes)}");
+  // Default material is always added.
+  assert(len(sc.materials) == 1, "default material added");
+  assert(len(sc.nodes) == 0, "no nodes for empty map");
+}
+
+fn test_map_build_scene_painted() {
+  pm = map_empty();
+  map_paint_material(pm, 0, 0, 0, 1);
+  map_paint_material(pm, 1, 0, 0, 2);
+  sc = map_build_scene(pm);
+  // At least 2 materials used → at least 2 meshes + 2 nodes.
+  assert(len(sc.meshes) >= 2, "painted map has meshes, got {len(sc.meshes)}");
+  assert(len(sc.nodes) >= 2, "painted map has nodes");
+}
+
+fn test_map_build_scene_walls() {
+  wm = map_empty();
+  map_set_wall(wm, 0, 0, 0, 0, 1);
+  sc = map_build_scene(wm);
+  // One of the nodes should be named "walls".
+  has_walls_node = false;
+  for wn in sc.nodes {
+    if wn.name == "walls" { has_walls_node = true; }
+  }
+  assert(has_walls_node, "walls node present in scene");
+}
+
+fn test_map_build_scene_default_camera() {
+  dcm = map_empty();
+  dcs = map_build_scene(dcm);
+  assert(len(dcs.cameras) == 1, "default scene has 1 camera");
+  assert(dcs.cameras[0].position.x == 10.0, "camera at (10, 10, 10)");
+  assert(dcs.cameras[0].position.y == 10.0, "camera y");
+  assert(dcs.cameras[0].position.z == 10.0, "camera z");
+  assert(dcs.cameras[0].target.x == 0.0, "camera targets origin");
+}
+
+fn test_map_build_scene_default_sun_light() {
+  dsm = map_empty();
+  dss = map_build_scene(dsm);
+  assert(len(dss.lights) == 1, "default scene has 1 light");
+  assert(dss.lights[0].name == "sun", "light named 'sun'");
+  // Direction is negative-y-dominant (light from above).
+  assert(dss.lights[0].direction.y < 0.0, "sun points downward");
+}
+
+fn test_map_export_glb_creates_file() {
+  xm = map_empty();
+  map_paint_material(xm, 0, 0, 0, 1);
+  xpath = "/tmp/moros_render_test.glb";
+  map_export_glb(xm, xpath);
+  // Binary content can't be read via `file().content()` (UTF-8
+  // decode); use the `#format = LittleEndian` + `#read(n)` binary
+  // read pattern (same as lib/graphics/tests/glb.loft).
+  xf = file(xpath);
+  assert(xf.exists(), "GLB file written at {xpath}");
+  xsz = xf.size;
+  assert(xsz > 0l, "GLB file non-empty, got {xsz} bytes");
+}
+
+// Verify the 12-byte GLB header: magic 'glTF', version 2, total length.
+fn test_map_export_glb_header() {
+  hm = map_empty();
+  map_paint_material(hm, 0, 0, 0, 1);
+  hpath = "/tmp/moros_render_hdr_test.glb";
+  map_export_glb(hm, hpath);
+  hsz = file(hpath).size;
+  {
+    hf = file(hpath);
+    hf#format = LittleEndian;
+    assert(hf#read(4) as i32 == 0x46546C67, "magic 'glTF'");
+    assert(hf#read(4) as i32 == 2, "version 2");
+    htotal = hf#read(4) as i32;
+    assert(htotal as long == hsz, "total_len matches file size = {hsz}");
+  }
+}
+
+// Verify the JSON chunk type tag — confirms the first chunk past
+// the header is the glTF JSON chunk (0x4E4F534A = 'JSON' LE).
+fn test_map_export_glb_json_chunk() {
+  cm = map_empty();
+  map_paint_material(cm, 0, 0, 0, 1);
+  cpath = "/tmp/moros_render_chunk_test.glb";
+  map_export_glb(cm, cpath);
+  {
+    cf = file(cpath);
+    cf#format = LittleEndian;
+    cf#read(4) as i32;   // magic
+    cf#read(4) as i32;   // version
+    cf#read(4) as i32;   // total_len
+    cf#read(4) as i32;   // JSON chunk length
+    assert(cf#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
+  }
+}
+
+// ── Material swatch tests (Phase 6a.17) ───────────────────────────
+
+fn test_material_swatch_size() {
+  ms_mat = MaterialDef {
+    md_name: "stone", md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 100, md_tint_g: 120, md_tint_b: 140,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw = material_swatch(ms_mat, 32);
+  assert(ms_sw.width == 32, "swatch width");
+  assert(ms_sw.height == 32, "swatch height");
+}
+
+fn test_material_swatch_tint_interior() {
+  ms_mat2 = MaterialDef {
+    md_name: "grass", md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 120, md_tint_g: 180, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw2 = material_swatch(ms_mat2, 16);
+  // Interior pixel (center) should be the tint.
+  ms_centre = get_pixel(ms_sw2, 8, 8);
+  ms_expected_tint = rgb(120, 180, 80);
+  assert(ms_centre == ms_expected_tint, "centre tinted");
+}
+
+fn test_material_swatch_border_darker() {
+  ms_mat3 = MaterialDef {
+    md_name: "brick", md_category: "floor", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 200, md_tint_g: 120, md_tint_b: 100,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw3 = material_swatch(ms_mat3, 8);
+  // Top-left corner is the border color = rgb(100, 60, 50).
+  ms_corner = get_pixel(ms_sw3, 0, 0);
+  ms_expected_border = rgb(100, 60, 50);
+  assert(ms_corner == ms_expected_border, "corner is darker border");
+}
+
+fn test_material_swatch_stair_has_stripes() {
+  ms_mat4 = MaterialDef {
+    md_name: "wood_stair", md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 180, md_tint_g: 120, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw4 = material_swatch(ms_mat4, 16);
+  // Row 2 (y = 2) is a stripe row (y % 4 == 2).  Interior pixel
+  // on that row should be the stripe color (3/4 of tint), not
+  // the pure tint.
+  ms_stripe_px = get_pixel(ms_sw4, 5, 2);
+  ms_tint4 = rgb(180, 120, 80);
+  assert(ms_stripe_px != ms_tint4, "stair stripe visible");
+}
+
+fn test_material_swatch_degenerate_size() {
+  ms_mat5 = MaterialDef {
+    md_name: "x", md_category: "void", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 0, md_tint_g: 0, md_tint_b: 0,
+    md_walkable: 0, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  // Size 0 clamps to 1.
+  ms_sw5 = material_swatch(ms_mat5, 0);
+  assert(ms_sw5.width == 1, "size 0 → 1×1");
+  assert(ms_sw5.height == 1, "size 0 → 1×1 height");
+}
+
+// ── Wall dispatch tests (build_hex_meshes routes WallDef.wd_body) ─
+
+fn wd_new(dw_body: text, dw_thickness: float) -> WallDef {
+  WallDef {
+    wd_name: dw_body, wd_body: dw_body, wd_base: "",
+    wd_thickness: dw_thickness,
+    wd_texture: 0, wd_tint_r: 128, wd_tint_g: 128, wd_tint_b: 128,
+  }
+}
+
+fn test_wall_dispatch_solid() {
+  dm = map_empty();
+  dm.m_wall_palette += [wd_new("SOLID", 0.0)];
+  map_set_wall(dm, 0, 0, 0, 0, 1);  // N wall, palette index 1 (= palette[0])
+  ds = build_hex_meshes(dm);
+  for dwm in ds {
+    if dwm.name == "walls" {
+      // Solid full-height quad: 4 verts, 2 tris.
+      assert(len(dwm.vertices) == 4, "solid → 4 verts");
+      assert(len(dwm.triangles) == 2, "solid → 2 tris");
+    }
+  }
+}
+
+fn test_wall_dispatch_fence_is_half_height() {
+  dfm = map_empty();
+  dfm.m_wall_palette += [wd_new("FENCE", 0.0)];
+  map_set_wall(dfm, 0, 0, 0, 0, 1);
+  dfs = build_hex_meshes(dfm);
+  for dfw in dfs {
+    if dfw.name == "walls" {
+      assert(len(dfw.vertices) == 4, "fence → 4 verts");
+      // Top-right vertex (index 2) should sit at half height (0.5).
+      assert(dfw.vertices[2].pos.y == 0.5, "fence top y = 0.5 (half of 1.0)");
+    }
+  }
+}
+
+fn test_wall_dispatch_battlement_is_three_quarter() {
+  dbm = map_empty();
+  dbm.m_wall_palette += [wd_new("BATTLEMENT", 0.0)];
+  map_set_wall(dbm, 0, 0, 0, 0, 1);
+  dbs = build_hex_meshes(dbm);
+  for dbw in dbs {
+    if dbw.name == "walls" {
+      assert(dbw.vertices[2].pos.y == 0.75, "battlement top y = 0.75");
+    }
+  }
+}
+
+fn test_wall_dispatch_thick_flat_adds_volume() {
+  dtm = map_empty();
+  dtm.m_wall_palette += [wd_new("THICK_FLAT", 0.2)];
+  map_set_wall(dtm, 0, 0, 0, 0, 1);
+  dts = build_hex_meshes(dtm);
+  for dtw in dts {
+    if dtw.name == "walls" {
+      // Thick wall: 12 verts (3 quads) + 2 × 6-seg posts (48 verts) = 60.
+      assert(len(dtw.vertices) == 60, "thick flat → 60 verts, got {len(dtw.vertices)}");
+      assert(len(dtw.triangles) == 30, "thick flat → 30 tris, got {len(dtw.triangles)}");
+    }
+  }
+}
+
+fn test_wall_dispatch_unknown_body_falls_back() {
+  dum = map_empty();
+  dum.m_wall_palette += [wd_new("MYSTERY_BODY", 0.0)];
+  map_set_wall(dum, 0, 0, 0, 0, 1);
+  dus = build_hex_meshes(dum);
+  for duw in dus {
+    if duw.name == "walls" {
+      // Unknown body → solid quad fallback.
+      assert(len(duw.vertices) == 4, "unknown → 4-vert solid fallback");
+    }
+  }
+}
+
+fn test_wall_dispatch_out_of_range_ref_falls_back() {
+  dxm = map_empty();
+  // Palette is empty; h_wall_n = 5 points nowhere.
+  map_set_wall(dxm, 0, 0, 0, 0, 5);
+  dxs = build_hex_meshes(dxm);
+  for dxw in dxs {
+    if dxw.name == "walls" {
+      // Out-of-range ref → solid quad fallback.
+      assert(len(dxw.vertices) == 4, "out-of-range → 4-vert fallback");
+    }
+  }
+}
+
+// ── Item dispatch tests (build_hex_meshes emits ItemDef placeholders) ─
+
+fn id_new(dk: text) -> ItemDef {
+  ItemDef {
+    id_name: dk, id_kind: dk, id_model: 0,
+    id_symmetric: 1, id_arc_radius: 0.0,
+  }
+}
+
+fn test_item_dispatch_none_no_items_mesh() {
+  dim = map_empty();
+  map_paint_material(dim, 0, 0, 0, 1);
+  dis = build_hex_meshes(dim);
+  dih_has_items = false;
+  for dimv in dis {
+    if dimv.name == "items" { dih_has_items = true; }
+  }
+  assert(!dih_has_items, "no items placed → no items mesh");
+}
+
+fn test_item_dispatch_pillar_is_cylinder() {
+  dip = map_empty();
+  dip.m_item_palette += [id_new("PILLAR")];
+  map_place_item(dip, 0, 0, 0, 1, 0);
+  dps = build_hex_meshes(dip);
+  dp_items_verts = 0;
+  for dpm in dps {
+    if dpm.name == "items" { dp_items_verts = len(dpm.vertices); }
+  }
+  // PILLAR → 8-seg cylinder = 32 verts.
+  assert(dp_items_verts == 32, "pillar → 32-vert cylinder, got {dp_items_verts}");
+}
+
+fn test_item_dispatch_container_is_box() {
+  dic = map_empty();
+  dic.m_item_palette += [id_new("CONTAINER")];
+  map_place_item(dic, 0, 0, 0, 1, 0);
+  dcs = build_hex_meshes(dic);
+  dc_items_verts = 0;
+  for dcm in dcs {
+    if dcm.name == "items" { dc_items_verts = len(dcm.vertices); }
+  }
+  // CONTAINER (non-PILLAR/TREE) → box = 24 verts.
+  assert(dc_items_verts == 24, "container → 24-vert box, got {dc_items_verts}");
+}
+
+fn test_item_dispatch_out_of_range_ref() {
+  dix = map_empty();
+  // Palette is empty; setting h_item to 5 points nowhere.
+  map_place_item(dix, 0, 0, 0, 5, 0);
+  dxs = build_hex_meshes(dix);
+  for dxm in dxs {
+    if dxm.name == "items" {
+      assert(len(dxm.vertices) == 0, "out-of-range item ref → no geometry");
+    }
+  }
+}
+
+// ── Spawn / waypoint marker tests ─────────────────────────────────
+
+fn test_spawn_marker_single() {
+  sm = map_empty();
+  // Ensure the chunk exists so the spawn's hex has a real height.
+  map_paint_material(sm, 0, 0, 0, 1);
+  sp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    sp_kind: "creature", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(sm, sp);
+  sms = build_hex_meshes(sm);
+  sm_verts = 0;
+  for smv in sms {
+    if smv.name == "spawn_markers" { sm_verts = len(smv.vertices); }
+  }
+  // 1 marker box = 24 verts.
+  assert(sm_verts == 24, "spawn marker → 24 verts, got {sm_verts}");
+}
+
+fn test_spawn_marker_none_no_mesh() {
+  sn = map_empty();
+  map_paint_material(sn, 0, 0, 0, 1);
+  sns = build_hex_meshes(sn);
+  sn_has = false;
+  for snv in sns {
+    if snv.name == "spawn_markers" { sn_has = true; }
+  }
+  assert(!sn_has, "no spawns → no spawn_markers mesh");
+}
+
+fn test_waypoint_marker_single() {
+  wm = map_empty();
+  map_paint_material(wm, 0, 0, 0, 1);
+  wp = NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    wp_activity: "STAND", wp_time_start: 6, wp_time_end: 22,
+    wp_facing: 0, wp_note: "",
+  };
+  rt = NpcRoutine {
+    nr_npc_id: 1, nr_name: "guard", nr_creature: 1,
+    nr_waypoints: [wp],
+  };
+  wm.m_npc_routines += [rt];
+  wms = build_hex_meshes(wm);
+  wm_verts = 0;
+  for wmv in wms {
+    if wmv.name == "waypoint_markers" { wm_verts = len(wmv.vertices); }
+  }
+  // 1 marker box = 24 verts.
+  assert(wm_verts == 24, "waypoint marker → 24 verts, got {wm_verts}");
+}
+
+fn test_spawn_and_waypoint_separate_meshes() {
+  swm = map_empty();
+  map_paint_material(swm, 0, 0, 0, 1);
+  swp = SpawnPoint {
+    sp_hex: HexAddress { ha_q: 0, ha_r: 0, ha_cy: 0 },
+    sp_kind: "creature", sp_creature: 1, sp_npc_id: 0,
+    sp_count: 1, sp_facing: 0, sp_condition: "ALWAYS",
+  };
+  spawn_add(swm, swp);
+  swwp = NpcWaypoint {
+    wp_hex: HexAddress { ha_q: 1, ha_r: 0, ha_cy: 0 },
+    wp_activity: "STAND", wp_time_start: 6, wp_time_end: 22,
+    wp_facing: 0, wp_note: "",
+  };
+  swrt = NpcRoutine {
+    nr_npc_id: 1, nr_name: "guard", nr_creature: 1,
+    nr_waypoints: [swwp],
+  };
+  swm.m_npc_routines += [swrt];
+  swms = build_hex_meshes(swm);
+  sw_has_spawn = false;
+  sw_has_wp = false;
+  for swmv in swms {
+    if swmv.name == "spawn_markers" { sw_has_spawn = true; }
+    if swmv.name == "waypoint_markers" { sw_has_wp = true; }
+  }
+  assert(sw_has_spawn, "spawn_markers present");
+  assert(sw_has_wp, "waypoint_markers present");
+}
+
+// ── Stair dispatch tests (md_category routes to emit_linear_stair) ─
+
+// Convenience: a terrain MaterialDef.
+fn md_terrain(n: text) -> MaterialDef {
+  MaterialDef {
+    md_name: n, md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 128, md_tint_g: 128, md_tint_b: 128,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  }
+}
+
+// Convenience: a stair MaterialDef.
+fn md_stair(n: text) -> MaterialDef {
+  MaterialDef {
+    md_name: n, md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 140, md_tint_g: 120, md_tint_b: 100,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  }
+}
+
+fn test_stair_dispatch_no_taller_neighbor_default_rise() {
+  stn_m = map_empty();
+  stn_m.m_material_palette += [md_stair("s")];
+  map_paint_material(stn_m, 0, 0, 0, 1);
+  // No other hexes painted — stair falls back to a
+  // DEFAULT_STAIR_RISE_UNITS rise (12 units = 3.0 world units,
+  // one house-floor height).  stair_step_count(0, 3.0) = 12 steps.
+  // 12 steps × 8 verts per step = 96 verts.
+  stn_ms = build_hex_meshes(stn_m);
+  stn_verts = 0;
+  for stm in stn_ms {
+    if stm.name == "1" { stn_verts = len(stm.vertices); }
+  }
+  assert(stn_verts == 96, "default-rise stair (12 steps × 8 verts = 96), got {stn_verts}");
+}
+
+fn test_stair_dispatch_taller_neighbor_emits_stair() {
+  stt_m = map_empty();
+  stt_m.m_material_palette += [md_stair("s")];        // index 1 (stair)
+  stt_m.m_material_palette += [md_terrain("floor")];  // index 2 (terrain)
+  // Stair at (0,0,0) height 0, terrain at (1,0,0) height 4.
+  map_paint_material(stt_m, 0, 0, 0, 1);
+  map_paint_material(stt_m, 1, 0, 0, 2);
+  map_set_height(stt_m, 1, 0, 0, 4);
+  stt_ms = build_hex_meshes(stt_m);
+  // Material mesh "1" should contain the linear stair geometry.
+  // 4 height units × HEIGHT_SCALE = 1.0 world-unit climb.
+  // stair_step_count(0.0, 1.0) = 4 steps → 4 × 8 = 32 verts.
+  stt_stair_verts = 0;
+  for stm2 in stt_ms {
+    if stm2.name == "1" { stt_stair_verts = len(stm2.vertices); }
+  }
+  assert(stt_stair_verts == 32, "stair → 32 verts (4 steps), got {stt_stair_verts}");
+}
+
+fn test_stair_dispatch_leaves_terrain_flat() {
+  stf_m = map_empty();
+  stf_m.m_material_palette += [md_terrain("floor")];
+  map_paint_material(stf_m, 0, 0, 0, 1);
+  map_paint_material(stf_m, 1, 0, 0, 1);
+  map_set_height(stf_m, 1, 0, 0, 4);
+  stf_ms = build_hex_meshes(stf_m);
+  // Both hexes are non-stair material 1 — both should emit flat
+  // hex surfaces.  2 hexes × 7 verts = 14.
+  stf_terrain_verts = 0;
+  for stm3 in stf_ms {
+    if stm3.name == "1" { stf_terrain_verts = len(stm3.vertices); }
+  }
+  assert(stf_terrain_verts == 14, "terrain → 2 × 7 = 14 verts, got {stf_terrain_verts}");
+}
+
+fn test_stair_dispatch_mixed_map() {
+  stx_m = map_empty();
+  stx_m.m_material_palette += [md_stair("s")];        // 1
+  stx_m.m_material_palette += [md_terrain("floor")];  // 2
+  // One stair hex with a taller terrain neighbor.
+  map_paint_material(stx_m, 0, 0, 0, 1);              // stair at height 0
+  map_paint_material(stx_m, 1, 0, 0, 2);              // terrain at height 4
+  map_set_height(stx_m, 1, 0, 0, 4);
+  stx_ms = build_hex_meshes(stx_m);
+  stx_s_verts = 0;
+  stx_t_verts = 0;
+  for stm4 in stx_ms {
+    if stm4.name == "1" { stx_s_verts = len(stm4.vertices); }
+    if stm4.name == "2" { stx_t_verts = len(stm4.vertices); }
+  }
+  assert(stx_s_verts == 32, "stair material → 32 verts");
+  assert(stx_t_verts == 7, "terrain material → 7 verts (one hex)");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);
