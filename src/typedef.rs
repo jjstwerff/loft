@@ -88,6 +88,28 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
 }
 
 pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start_def: u32) {
+    actual_types_deferred(data, database, lexer, start_def, None);
+}
+
+/// Variant of [`actual_types`] that can defer "Undefined type" errors for
+/// `DefType::Unknown` stubs.  When `defer_unknown` is `Some`, every
+/// encountered Unknown stub is recorded as `(source, def_nr, position)` in
+/// the passed-in vec instead of being emitted as a diagnostic.
+///
+/// Used by Phase B of the P173 package-mode driver: cyclic intra-package
+/// `use` declarations legitimately produce Unknown stubs for cross-file
+/// types that will be resolved by Phase C's import propagation.  Deferring
+/// the error lets Phase C patch the stubs (via `Data::rewrite_unknown_refs`)
+/// before any "Undefined type" is surfaced.
+///
+/// Legacy callers pass `None` and see the original behavior unchanged.
+pub fn actual_types_deferred(
+    data: &mut Data,
+    database: &mut Stores,
+    lexer: &mut Lexer,
+    start_def: u32,
+    mut defer_unknown: Option<&mut Vec<(u16, u32, crate::data::Position)>>,
+) {
     // Determine the actual type of structs regarding their use
     for d in start_def..data.definitions() {
         if matches!(data.def_type(d), DefType::Struct) {
@@ -97,6 +119,11 @@ pub fn actual_types(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, s
     for d in start_def..data.definitions() {
         match data.def_type(d) {
             DefType::Unknown => {
+                if let Some(buf) = defer_unknown.as_deref_mut() {
+                    let def = data.def(d);
+                    buf.push((def.source, d, def.position.clone()));
+                    continue;
+                }
                 let name = &data.def(d).name;
                 let msg = if name == "string" {
                     "Undefined type 'string' — did you mean 'text'?".to_string()
