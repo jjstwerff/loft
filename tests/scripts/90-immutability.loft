@@ -1,5 +1,6 @@
 // Copyright (c) 2025-2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// Error tests moved to 102-expected-errors.loft
 // Immutability checks: & parameters, const parameters, const locals.
 
 // --- & parameter tests ---
@@ -11,25 +12,6 @@ fn test_ref_param_is_modified() {
   increment(x);
   assert(x == 6, "x={x}");
 }
-
-// @EXPECT_ERROR: Parameter 'a' has & but is never modified
-fn ref_read_only(a: &integer) -> integer { a }
-
-// @EXPECT_WARNING: const' has no effect on an unmodified primitive
-fn p_double(a: const integer) -> integer { a * 2 }
-
-fn test_const_param_read_only() {
-  assert(p_double(5) == 10, "double");
-}
-
-// --- const parameter mutation errors ---
-
-// @EXPECT_ERROR: Cannot modify const parameter 'a'
-// @EXPECT_WARNING: Parameter a is never read
-fn const_bad(a: const integer) { a = 42 }
-
-// @EXPECT_ERROR: Cannot modify const parameter 'a'
-fn const_ref_bad(a: & const integer) { a = 42 }
 
 // --- & parameter transitive mutation ---
 
@@ -61,32 +43,6 @@ fn test_const_local_read_only() {
   assert(x == 42, "ok");
 }
 
-// @EXPECT_ERROR: Cannot modify const variable 'x'
-// @EXPECT_WARNING: Variable x is never read
-fn test_const_local_int_reassigned() {
-  const x = 5;
-  x = 10;
-}
-
-// @EXPECT_ERROR: Cannot modify const variable 'x'
-// @EXPECT_WARNING: Variable x is never read
-fn test_const_local_int_augmented() {
-  const x = 5;
-  x += 1;
-}
-
-// @EXPECT_ERROR: Cannot modify const variable 't'
-fn test_const_local_text_reassigned() {
-  const t = "hello";
-  t = "world";
-}
-
-// @EXPECT_ERROR: Cannot modify const variable 't'
-fn test_const_local_text_appended() {
-  const t = "hello";
-  t += "!";
-}
-
 struct CLP { x: integer }
 
 fn test_const_local_vector_read_only() {
@@ -94,21 +50,9 @@ fn test_const_local_vector_read_only() {
   assert(v[0].x == 1, "ok");
 }
 
-// @EXPECT_ERROR: Cannot modify const variable 'v'
-fn test_const_local_vector_appended() {
-  const v = [CLP { x: 1 }];
-  v += [CLP { x: 2 }];
-}
-
 struct CLCounter { value: integer }
 
 fn test_const_local_ref_read_only() {
   const c = CLCounter { value: 7 };
   assert(c.value == 7, "ok");
-}
-
-// @EXPECT_ERROR: Cannot modify const variable 'c'
-fn test_const_local_ref_reassigned() {
-  const c = CLCounter { value: 7 };
-  c = CLCounter { value: 9 };
 }

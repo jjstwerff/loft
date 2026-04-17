@@ -1,9 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// Error tests moved to 102-expected-errors.loft
 // P103: Inline vector concat as function argument produces wrong results
 // in compound assignment expressions. Now an error instead of warning.
-// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
-// @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 
 fn smb_vec_sum(r: vector<integer>) -> integer {
   total = 0;
@@ -16,14 +15,4 @@ fn smb_vec_sum(r: vector<integer>) -> integer {
 // Guard: simple inline vector arguments work.
 fn test_vector_simple_argument_ok() {
   assert(smb_vec_sum([1,2,3,4,5]) == 15, "simple vector argument");
-}
-
-// P103: inline vector concatenation as argument is now a compile error.
-fn test_vector_inline_concat_argument() {
-  assert(smb_vec_sum([1,2,3] + [4,5]) == 15, "concat vector argument");
-}
-
-// P103: combined expression with inline concat is now a compile error.
-fn test_vector_combined_expression() {
-  assert(smb_vec_sum([1,2,3,4,5]) + 100 * smb_vec_sum([1,2,3] + [4,5]) == 1515, "combined vector expression");
 }

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// Error tests moved to 102-expected-errors.loft
 // Match expressions: plain enums, struct enums, scalars, guards, patterns.
 
 // ── Plain enum ──────────────────────────────────────────────────────────────
@@ -22,12 +23,6 @@ fn test_plain_wildcard_first() {
   d = North;
   r = match d { South => "south", _ => "not south" };
   assert(r == "not south", "wildcard first");
-}
-
-// @EXPECT_ERROR: match on Direction is not exhaustive
-fn test_plain_missing_arm() {
-  d = North;
-  match d { North => "N", East => "E", South => "S" };
 }
 
 fn label(d: Direction) -> text {
@@ -105,12 +100,6 @@ fn test_struct_all_variants() {
   assert("{c} {r} {s}" == "3.141592653589793 12 25", "all variants");
 }
 
-// @EXPECT_ERROR: match on Shape is not exhaustive
-fn test_struct_missing_arm() {
-  s = Circle { radius: 1.0 };
-  match s { Circle { radius } => radius, Rect { width, height } => width * height };
-}
-
 // ── Nesting and composition ─────────────────────────────────────────────────
 
 enum NX { NA, NB }
@@ -137,18 +126,6 @@ fn test_match_non_enum() {
   v = [1, 2, 3];
   r = match v { _ => 0 };
   assert(r == 0, "wildcard");
-}
-
-// @EXPECT_ERROR: cannot unify: text and integer
-fn test_match_type_mismatch() {
-  d = North;
-  match d { North => "text", _ => 42 };
-}
-
-// @EXPECT_WARNING: unreachable arm: North already matched
-fn test_match_duplicate_arm() {
-  d = North;
-  match d { North => "first", North => "second", _ => "other" };
 }
 
 struct MPoint { x: float, y: float }
@@ -266,12 +243,6 @@ fn garea(s: GShape) -> float {
 
 fn test_guard_with_binding() {
   assert(garea(GCircle { radius: -1.0 }) == 0.0, "guard with binding");
-}
-
-// @EXPECT_ERROR: guard must be boolean, got integer
-fn test_guard_non_bool() {
-  x = NA;
-  match x { NA if 42 => 1, _ => 0 };
 }
 
 enum GDir { GNorth, GSouth }
