@@ -298,7 +298,10 @@ Listed by precedence (lowest to highest):
 | 9          | `*`, `/`, `%`                          | multiplication/division |
 | 10         | `as` (type cast/conversion)            |                         |
 
-Unary operators: `!` (logical not), `-` (negation).
+Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT).
+
+`~x` computes the bitwise complement (all bits flipped): `~0 == -1`, `flags & ~32` clears bit 5.
+Only defined for `integer`; use `as integer` to convert other types first.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 
@@ -383,9 +386,13 @@ text = reply.to_json();   // {{"ok":true,"count":3}}
 directly into a struct record; parse errors via `record#errors`.  `Type.parse(JsonValue)`
 is the preferred replacement (shipped).
 
+Works for plain structs AND struct-enums (P159).  Struct-enum JSON uses a
+discriminant wrapper: `{"Circle":{"radius":3.14}}`.
+
 ```
 user = User.parse(`{{"id":42,"name":"Alice"}}`);
 scores = vector<Score>.parse(`[{{"value":10}},{{"value":20}}]`);
+shape = Shape.parse(`{{"Circle":{{"radius":3.14}}}}`);   // struct-enum round-trip
 for e in user#errors { log_warn(e); }
 ```
 

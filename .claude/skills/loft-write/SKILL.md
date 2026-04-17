@@ -165,6 +165,10 @@ a = area(s);   // dispatches to correct variant
 
 **Plain enums cannot have methods** — use struct-enum variants for polymorphic dispatch.
 
+Trailing commas in variant field lists are accepted: `Circle { radius: float, }` is valid (P158).
+
+JSON round-trip for struct-enums: `"{shape:j}"` produces `{"Circle":{"radius":3.14}}`; `Shape.parse(json)` reconstructs the correct variant (P159).
+
 ---
 
 ## Vectors
@@ -269,8 +273,10 @@ pub fn exists(both: File) -> boolean { both.format != Format.NotExists }
 | 9 | `*`, `/`, `%` | |
 | 10 | `as` | type cast/conversion |
 
-Unary: `!` (logical not / null check), `-` (negation)
+Unary: `!` (logical not / null check), `-` (negation), `~` (bitwise NOT, integer only)
 Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=`
+
+Bitwise NOT: `~0 == -1`, `flags & ~32` clears bit 5.
 
 ```loft
 name = record.field ?? "default"   // null-coalescing
@@ -540,7 +546,7 @@ if f.exists() { }
 | ~~Doubled text in function return~~ | ~~Text-returning fn accumulates~~ | **Fixed** — always clear RefVar(Text) before append |
 | `character == text` always true | Now a compile error | Use `"{c}" == t` to compare as text |
 | `Cannot reassign text parameter` | Text params are 12-byte Str, not 24-byte String | Copy to local first: `local = param; local = ...` |
-| `Cannot pass a literal or expression to a '&' parameter` | Passing `[]`, struct literal, or expression to `&vector<T>` / `&StructType` | Assign to a named variable first, then pass the variable |
+| `Cannot pass a literal or expression to a '&' parameter` | Passing `[]`, struct literal, or non-addressable expression to `&vector<T>` / `&StructType` | Assign to a named variable first, then pass the variable.  **Note:** `v[i]` and `s.field` chains now work directly as `&` arguments (P160 fix). |
 
 ---
 
@@ -573,3 +579,7 @@ loft --native-wasm out.wasm --path /path/to/repo/ file.loft # compile to wasm
 - [ ] Prefer `h += expr` over `h = h + expr` for text building
 - [ ] Never reassign or `+=` a text parameter — copy to local first
 - [ ] Struct params are passed by reference — mutations visible to caller
+- [ ] `v[i]` and `s.field` can be passed directly as `&` parameters (P160)
+- [ ] `for` loops over `&vector<T>` parameters work correctly (P161)
+- [ ] `Type.parse(json)` works for struct-enums — JSON format: `{"Variant":{fields}}` (P159)
+- [ ] Bitwise NOT uses `~` operator: `flags & ~32` clears bit 5
