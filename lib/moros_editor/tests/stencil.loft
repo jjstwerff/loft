@@ -1,0 +1,109 @@
+// Tests for stencil stamp operations and merge modes.
+use moros_editor;
+
+// ── Basic stamp ──────────────────────────────────────────────────
+
+fn test_flat_stencil_replace() {
+  m = map_empty();
+  st = stencil_flat();
+  stencil_stamp(m, st, 5, 5, 0, 0);   // mode 0 = REPLACE
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_height == 5, "height {h.h_height}");
+  assert(h.h_material == 3, "material {h.h_material}");
+}
+
+fn test_house_small_stamp() {
+  m = map_empty();
+  st = stencil_house_small();
+  assert(len(st.sd_hexes) == 7, "house has 7 hexes");
+  stencil_stamp(m, st, 10, 10, 0, 0);
+  // Centre should have material 2 (floor).
+  centre = map_get_hex(m, 10, 10, 0);
+  assert(centre.h_material == 2, "centre floor material {centre.h_material}");
+  // A ring hex (10+1, 10+0) should have material 1 + wall_n = 1.
+  ring = map_get_hex(m, 11, 10, 0);
+  assert(ring.h_material == 1, "ring material {ring.h_material}");
+  assert(ring.h_wall_n == 1, "ring wall_n {ring.h_wall_n}");
+}
+
+// ── Merge modes ──────────────────────────────────────────────────
+
+fn test_overlay_skips_zeros() {
+  m = map_empty();
+  // Pre-paint hex (5,5) with material 42.
+  map_paint_material(m, 5, 5, 0, 42);
+  // Stamp flat stencil in OVERLAY mode (1).  flat has material=3.
+  stencil_stamp(m, stencil_flat(), 5, 5, 0, 1);
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_material == 3, "overlay wrote material {h.h_material}");
+  assert(h.h_height == 5, "overlay wrote height {h.h_height}");
+}
+
+fn test_overlay_preserves_nonzero_existing() {
+  m = map_empty();
+  // Pre-set wall_n = 99 on (5,5).
+  map_set_wall(m, 5, 5, 0, 0, 99);
+  // flat stencil has wall_n = 0 → overlay should leave 99 intact.
+  stencil_stamp(m, stencil_flat(), 5, 5, 0, 1);
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_wall_n == 99, "wall_n preserved {h.h_wall_n}");
+}
+
+fn test_heights_only_mode() {
+  m = map_empty();
+  map_paint_material(m, 3, 3, 0, 50);
+  stencil_stamp(m, stencil_flat(), 3, 3, 0, 2);   // mode 2 = HEIGHTS
+  h = map_get_hex(m, 3, 3, 0);
+  assert(h.h_height == 5, "height written {h.h_height}");
+  assert(h.h_material == 50, "material preserved {h.h_material}");
+}
+
+fn test_structure_only_mode() {
+  m = map_empty();
+  map_set_height(m, 3, 3, 0, 77);
+  stencil_stamp(m, stencil_flat(), 3, 3, 0, 3);   // mode 3 = STRUCTURE
+  h = map_get_hex(m, 3, 3, 0);
+  assert(h.h_height == 77, "height preserved {h.h_height}");
+  assert(h.h_material == 3, "material written {h.h_material}");
+}
+
+// ── Stencil with undo ────────────────────────────────────────────
+
+fn test_stencil_stamp_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  stencil_stamp_with_undo(s, m, stencil_house_small(), 10, 10, 0, 0);
+  // 7 hexes pushed as one batch.
+  assert(undo_depth(s) == 7, "7 entries in batch");
+  // Undo reverts all 7 in one pop.
+  undo_pop(s, m);
+  assert(undo_depth(s) == 0, "all undone");
+  // Centre should be back to default.
+  assert(map_get_hex(m, 10, 10, 0).h_material == 0, "centre reverted");
+  assert(map_get_hex(m, 11, 10, 0).h_material == 0, "ring reverted");
+}
+
+fn test_stencil_stamp_undo_redo() {
+  m = map_empty();
+  s = undo_empty();
+  stencil_stamp_with_undo(s, m, stencil_flat(), 5, 5, 0, 0);
+  undo_pop(s, m);
+  assert(map_get_hex(m, 5, 5, 0).h_material == 0, "reverted");
+  redo(s, m);
+  assert(map_get_hex(m, 5, 5, 0).h_material == 3, "reapplied");
+}
+
+// ── Multi-stencil + mixed ops ────────────────────────────────────
+
+fn test_two_stencils_then_undo_each() {
+  m = map_empty();
+  s = undo_empty();
+  stencil_stamp_with_undo(s, m, stencil_flat(), 1, 1, 0, 0);
+  stencil_stamp_with_undo(s, m, stencil_flat(), 2, 2, 0, 0);
+  assert(map_get_hex(m, 1, 1, 0).h_material == 3, "first stamped");
+  assert(map_get_hex(m, 2, 2, 0).h_material == 3, "second stamped");
+  // Undo second stamp only.
+  undo_pop(s, m);
+  assert(map_get_hex(m, 2, 2, 0).h_material == 0, "second undone");
+  assert(map_get_hex(m, 1, 1, 0).h_material == 3, "first still present");
+}

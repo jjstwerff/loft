@@ -187,6 +187,7 @@ pub fn set_wall_dir_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy
 // Slope path with batch undo — all hexes in the slope are one
 // logical undo step.
 pub fn slope_path_with_undo(s: &UndoStack, m: &Map, q1: integer, r1: integer, q2: integer, r2: integer, cy: integer, h_start: integer, h_end: integer) {
+  // Note: lerp_int and hex_distance are imported from moros_map.
   batch_begin(s);
   dist = hex_distance(q1, r1, q2, r2);
   if dist == 0 {
@@ -201,4 +202,139 @@ pub fn slope_path_with_undo(s: &UndoStack, m: &Map, q1: integer, r1: integer, q2
     set_height_with_undo(s, m, q, r, cy, h);
   }
   batch_end(s);
+}
+
+// ── Stencils (Phase 4.13–4.16) ────────────────────────────────────
+
+// One hex inside a stencil template.  Offsets are relative to the
+// stencil origin.  A value of 0 means "leave unchanged" for material,
+// item, and walls in overlay mode.
+pub struct StencilHex {
+  sh_dq:            integer not null,
+  sh_dr:            integer not null,
+  sh_height:        integer not null,
+  sh_material:      integer not null,
+  sh_item:          integer not null,
+  sh_item_rotation: integer not null,
+  sh_wall_n:        integer not null,
+  sh_wall_ne:       integer not null,
+  sh_wall_se:       integer not null,
+}
+
+// A named stamp template.
+pub struct StencilDef {
+  sd_name:     text,
+  sd_category: text,
+  sd_origin_q: integer not null,
+  sd_origin_r: integer not null,
+  sd_hexes:    vector<StencilHex>,
+}
+
+// Merge modes for stencil_stamp.
+// 0 = REPLACE   — overwrite every field.
+// 1 = OVERLAY   — skip fields where the stencil value is 0.
+// 2 = HEIGHTS   — only write height; ignore material/item/walls.
+// 3 = STRUCTURE — only write material/item/walls; ignore height.
+
+// Apply a stencil to the map at position (q, r, cy) with the given
+// merge mode (0–3).  Each stencil hex's offsets are added to (q, r).
+pub fn stencil_stamp(m: &Map, stencil: StencilDef, q: integer, r: integer, cy: integer, mode: integer) {
+  for ss_sh in stencil.sd_hexes {
+    tq = q + ss_sh.sh_dq - stencil.sd_origin_q;
+    tr = r + ss_sh.sh_dr - stencil.sd_origin_r;
+    cur = map_get_hex(m, tq, tr, cy);
+    if mode == 0 {
+      // REPLACE — overwrite everything.
+      cur.h_height = ss_sh.sh_height;
+      cur.h_material = ss_sh.sh_material;
+      cur.h_item = ss_sh.sh_item;
+      cur.h_item_rotation = ss_sh.sh_item_rotation;
+      cur.h_wall_n = ss_sh.sh_wall_n;
+      cur.h_wall_ne = ss_sh.sh_wall_ne;
+      cur.h_wall_se = ss_sh.sh_wall_se;
+    }
+    if mode == 1 {
+      // OVERLAY — skip zero values (leave map hex unchanged for those).
+      if ss_sh.sh_height != 0 { cur.h_height = ss_sh.sh_height; }
+      if ss_sh.sh_material != 0 { cur.h_material = ss_sh.sh_material; }
+      if ss_sh.sh_item != 0 { cur.h_item = ss_sh.sh_item; }
+      if ss_sh.sh_item_rotation != 0 { cur.h_item_rotation = ss_sh.sh_item_rotation; }
+      if ss_sh.sh_wall_n != 0 { cur.h_wall_n = ss_sh.sh_wall_n; }
+      if ss_sh.sh_wall_ne != 0 { cur.h_wall_ne = ss_sh.sh_wall_ne; }
+      if ss_sh.sh_wall_se != 0 { cur.h_wall_se = ss_sh.sh_wall_se; }
+    }
+    if mode == 2 {
+      // HEIGHTS only.
+      cur.h_height = ss_sh.sh_height;
+    }
+    if mode == 3 {
+      // STRUCTURE only — material, item, walls.
+      cur.h_material = ss_sh.sh_material;
+      cur.h_item = ss_sh.sh_item;
+      cur.h_item_rotation = ss_sh.sh_item_rotation;
+      cur.h_wall_n = ss_sh.sh_wall_n;
+      cur.h_wall_ne = ss_sh.sh_wall_ne;
+      cur.h_wall_se = ss_sh.sh_wall_se;
+    }
+    map_set_hex(m, tq, tr, cy, cur);
+  }
+}
+
+// Stamp with undo — all hex writes are one batch.
+pub fn stencil_stamp_with_undo(s: &UndoStack, m: &Map, stencil: StencilDef, q: integer, r: integer, cy: integer, mode: integer) {
+  batch_begin(s);
+  for su_sh in stencil.sd_hexes {
+    tq = q + su_sh.sh_dq - stencil.sd_origin_q;
+    tr = r + su_sh.sh_dr - stencil.sd_origin_r;
+    undo_push(s, m, tq, tr, cy);
+  }
+  stencil_stamp(m, stencil, q, r, cy, mode);
+  batch_end(s);
+}
+
+// ── Built-in stencils ─────────────────────────────────────────────
+
+// 7-hex "small house" stencil: centre + 6 surrounding hexes.
+// Centre is floor (material 2), ring is walls (material 1, wall_n/ne/se = 1).
+pub fn stencil_house_small() -> StencilDef {
+  hexes: vector<StencilHex> = [];
+  // Centre hex — floor only.
+  hexes += [StencilHex {
+    sh_dq: 0, sh_dr: 0,
+    sh_height: 0, sh_material: 2, sh_item: 0, sh_item_rotation: 0,
+    sh_wall_n: 0, sh_wall_ne: 0, sh_wall_se: 0,
+  }];
+  // Ring of 6 — axial neighbours with walls.
+  neighbours: vector<integer> = [1, 0, 0, 1, -1, 1, -1, 0, 0, -1, 1, -1];
+  for i in 0..6 {
+    dq = neighbours[i * 2];
+    dr = neighbours[i * 2 + 1];
+    hexes += [StencilHex {
+      sh_dq: dq, sh_dr: dr,
+      sh_height: 0, sh_material: 1, sh_item: 0, sh_item_rotation: 0,
+      sh_wall_n: 1, sh_wall_ne: 1, sh_wall_se: 1,
+    }];
+  }
+  StencilDef {
+    sd_name: "house_small",
+    sd_category: "building",
+    sd_origin_q: 0,
+    sd_origin_r: 0,
+    sd_hexes: hexes,
+  }
+}
+
+// 1-hex flat terrain stencil — useful for testing.
+pub fn stencil_flat() -> StencilDef {
+  StencilDef {
+    sd_name: "flat",
+    sd_category: "terrain",
+    sd_origin_q: 0,
+    sd_origin_r: 0,
+    sd_hexes: [StencilHex {
+      sh_dq: 0, sh_dr: 0,
+      sh_height: 5, sh_material: 3, sh_item: 0, sh_item_rotation: 0,
+      sh_wall_n: 0, sh_wall_ne: 0, sh_wall_se: 0,
+    }],
+  }
 }
