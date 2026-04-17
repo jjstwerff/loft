@@ -1159,9 +1159,31 @@ impl Parser {
                 self.data.set_referenced(td_nr, self.context, Value::Null);
                 let tp = i32::from(self.data.def(td_nr).known_type);
                 list.push(self.cl("OpDatabase", &[Value::Var(*v_nr), Value::Int(tp)]));
-            } else if !type_matches && !self.first_pass {
-                // LHS variable already has an incompatible type (e.g. integer from a prior
-                // pass). Fall through to new_object so the struct gets a fresh work ref and
+            } else if (!type_matches
+                || (!self.vars.is_independent(*v_nr) && !self.vars.is_compiler_generated(*v_nr)))
+                && !self.first_pass
+            {
+                // Two shapes route here:
+                // - LHS variable already has an incompatible type (e.g. integer from a
+                //   prior pass) — `!type_matches`.
+                // - P170: LHS variable is a user-declared local whose type was inferred
+                //   as dependent on some other variable (e.g. `x` had `x = bs[i]` in a
+                //   later statement, giving x type `Reference(T, [bs])`), so
+                //   `is_independent` returns false even though `type_matches` is true
+                //   for this struct-literal assignment.  Without this branch, the
+                //   in-place `v_set(x, Null) + OpDatabase` init above was skipped,
+                //   leaving only field-init calls that wrote into uninitialised storage
+                //   — the subsequent codegen then asserted
+                //   `Incorrect var x[N] versus M` when x's slot was read later.
+                //
+                // The `is_compiler_generated` guard excludes internal aliases like
+                // `_elm_N` / `__ref_N` / `_vector_N` (created by parser helpers via
+                // `Function::unique`) whose storage is already allocated by the
+                // enclosing vector slot or struct field — they correctly receive
+                // field-inits without v_set/OpDatabase, so routing them through
+                // new_object would break the aliasing and create an orphan allocation.
+                //
+                // Falls through to new_object so the struct gets a fresh work ref and
                 // the result is a proper Value::Block — not a Value::Insert — which can be
                 // used safely as a method-call argument.
                 new_object = true;

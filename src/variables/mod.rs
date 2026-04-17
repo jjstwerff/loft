@@ -1157,6 +1157,19 @@ impl Function {
         self.work_refs.insert(v);
     }
 
+    /// Return true if `v` is a compiler-generated temporary — its
+    /// name starts with `_`, which `Function::unique` reserves for
+    /// the `_<kind>_<counter>` prefix (e.g. `_elm_N`, `_for_result_N`,
+    /// `_vector_N`, `__ref_N`, `__vdb_N`).  User-declared loft
+    /// variables cannot start with `_` (parser rejects such names),
+    /// so this reliably distinguishes owned user locals from aliases
+    /// and internal scratch slots that borrow storage from an
+    /// enclosing container.
+    #[must_use]
+    pub fn is_compiler_generated(&self, v: u16) -> bool {
+        self.variables[v as usize].name.starts_with('_')
+    }
+
     /// Record that fn_ref variable `fn_ref` has its closure stored in `clos`.
     pub fn set_closure_var_of(&mut self, fn_ref: u16, clos: u16) {
         self.closure_var_map.insert(fn_ref, clos);

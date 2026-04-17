@@ -1873,7 +1873,7 @@ fn s10_short_lambda_type_annotation_rejected() {
     r = map(v, |x: integer| { x * 2 });
 }"
     )
-    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) -> <ret> { ... } instead at s10_short_lambda_type_annotation_rejected:3:27");
+    .error("Type annotations are not allowed in |x| lambdas — use fn(x: <type>) { ... } instead (add `-> <ret>` only for non-void returns; `-> void` is not a valid type) at s10_short_lambda_type_annotation_rejected:3:27");
 }
 
 // ── S11 — Bare function references (no fn prefix) ────────────────────────────
@@ -9467,6 +9467,65 @@ fn test() {
     assert(d is P164North, \"north\");
 }"
     )
+    .result(Value::Null);
+}
+
+/// P170 regression guard — `x = Struct{}; x = vec[i]; mutate(x)` used to
+/// fail with `Incorrect var x[N] versus M on n_<fn>` at codegen.
+///
+/// Root cause: `parser/objects.rs::parse_object` had a gap in the
+/// in-place struct-literal path.  When the LHS variable's type was
+/// already inferred with dependencies (because a later assignment in
+/// the same function did `x = bs[i]`, giving x type
+/// `Reference(Bag, [bs])`), `is_independent(x)` returned false.  The
+/// in-place `v_set(x, Null) + OpDatabase(x)` init branch required both
+/// `is_independent` AND `type_matches` — with `type_matches=true` and
+/// `is_independent=false`, neither the if-branch nor the else-if
+/// (which required `!type_matches`) fired.  The struct-literal
+/// statement emitted only field-init calls into uninitialised storage,
+/// codegen never saw a Set for x's first assignment, and later
+/// `generate_var(x)` asserted since x's slot sat above TOS.
+///
+/// Fix: extend the `else if` to also fire when
+/// `!is_independent && !first_pass` — routes the construction through
+/// a fresh work-ref (existing "new_object" path), which emits the
+/// required `v_set + OpDatabase` prelude and yields a `Block`-shaped
+/// RHS that the outer assignment can then copy/alias via the normal
+/// Set path.
+#[test]
+fn p170_struct_placeholder_then_vec_elem_reassign() {
+    code!(
+        "struct P170Bag { items: vector<integer> }
+fn p170_mutate_bag(b: &P170Bag, v: integer) { b.items += [v]; }
+fn test() {
+    p170_bs: vector<P170Bag> = [];
+    p170_x = P170Bag {};
+    p170_bs += [P170Bag {}];
+    p170_x = p170_bs[len(p170_bs) - 1];
+    p170_mutate_bag(p170_x, 1);
+    assert(len(p170_bs[0].items) == 1, \"mutated through alias\");
+}"
+    )
+    .warning("Dead assignment — 'p170_x' is overwritten before being read at p170_struct_placeholder_then_vec_elem_reassign:5:25")
+    .result(Value::Null);
+}
+
+/// P170 guard — three-way: the same shape but with a conditional
+/// assignment between the placeholder and the vec-elem reassign.
+#[test]
+fn p170_placeholder_conditional_then_reassign() {
+    code!(
+        "struct P170CBag { val: integer not null }
+fn p170c_bump(b: &P170CBag) { b.val = b.val + 1; }
+fn test() {
+    p170c_v: vector<P170CBag> = [P170CBag { val: 5 }];
+    p170c_x = P170CBag { val: 0 };
+    p170c_x = p170c_v[0];
+    p170c_bump(p170c_x);
+    assert(p170c_v[0].val == 6, \"bumped first elem\");
+}"
+    )
+    .warning("Dead assignment — 'p170c_x' is overwritten before being read at p170_placeholder_conditional_then_reassign:5:35")
     .result(Value::Null);
 }
 
