@@ -1489,7 +1489,7 @@ impl State {
                 4 // fallback: integer
             };
             self.remember_stack(stack.position);
-            self.code_add(stack.data.def(op).op_code as u8);
+            super::emit_op(stack.data.def(op).op_code, self);
             self.code_add(value_size);
             // Stack: -12 (DbRef consumed) + value_size (yielded value pushed).
             stack.position -= super::size_ref() as u16;
@@ -1505,7 +1505,7 @@ impl State {
             // parameters[0] is the gen expression — generate it (pushes DbRef, +12).
             self.generate(&parameters[0], stack, false);
             self.remember_stack(stack.position);
-            self.code_add(stack.data.def(op).op_code as u8);
+            super::emit_op(stack.data.def(op).op_code, self);
             // Stack: -12 (DbRef consumed) + 1 (bool pushed).
             stack.position -= super::size_ref() as u16;
             stack.position += 1;
@@ -1563,7 +1563,7 @@ impl State {
             let before_stack = stack.position;
             self.remember_stack(stack.position);
             let code = self.code_pos;
-            self.code_add(stack.data.def(actual_op).op_code as u8);
+            super::emit_op(stack.data.def(actual_op).op_code, self);
             stack.operator(actual_op);
             if was_stack != u16::MAX {
                 stack.position = was_stack;

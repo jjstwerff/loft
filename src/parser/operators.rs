@@ -299,6 +299,16 @@ impl Parser {
                 }
             }
             if operator.is_empty() {
+                // `expr is VariantName` — variant check at comparison precedence.
+                // Returns boolean: true if the enum value matches the named variant.
+                if precedence == 3 && self.lexer.has_token("is") {
+                    if let Some(variant_name) = self.lexer.has_identifier() {
+                        current_type = self.parse_is_variant(code, &current_type, &variant_name);
+                    } else if !self.first_pass {
+                        diagnostic!(self.lexer, Level::Error, "expect variant name after 'is'");
+                    }
+                    continue;
+                }
                 if !ls.is_empty() {
                     // Unwrap RefVar(Text) for text_return work buffer loop variables
                     let effective_type = if let Type::RefVar(inner) = &current_type {

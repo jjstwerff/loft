@@ -9073,6 +9073,64 @@ at enhancement_ref_vector_readonly_loop_still_flags:2:47",
     );
 }
 
+/// `is` operator — variant check on plain enum.
+#[test]
+fn enhancement_is_plain_enum() {
+    code!(
+        "enum Dir { North, South, East, West }
+fn test() {
+    d = North;
+    assert(d is North, \"is North\");
+    assert(!(d is South), \"not South\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// `is` operator — variant check on struct-enum + loop counting.
+#[test]
+fn enhancement_is_struct_enum_in_loop() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    items: vector<Shape> = [Circle { radius: 1.0 }, Rect { width: 2.0, height: 3.0 }, Circle { radius: 4.0 }];
+    count = 0;
+    for it in items { if it is Circle { count = count + 1; } }
+    assert(count == 2, \"2 circles\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Op table extension — emit_op handles ops >= 255 via escape prefix.
+/// No specific op to test yet (all 255 primary slots used), but verify
+/// the infrastructure doesn't break existing ops.
+#[test]
+fn enhancement_op_extension_existing_ops_unaffected() {
+    expr!("~0").result(Value::Int(-1));
+}
+
+/// map/filter on &vector<T> parameter — method resolution unwraps RefVar.
+#[test]
+fn enhancement_map_filter_on_ref_vector() {
+    code!(
+        "fn process(items: &vector<integer>) {
+    items += [99];
+    d = items.map(|x| { x * 2 });
+    assert(d[0] == 2, \"mapped\");
+}
+fn test() {
+    v = [1, 2, 3];
+    process(v);
+    assert(len(v) == 4, \"appended\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P161 regression guard — `for it in items` where items is
 /// `&vector<Struct>` used to error "Unknown type null" (field access
 /// on the loop variable failed).  Root cause: `for_type` and

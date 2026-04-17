@@ -76,11 +76,17 @@ impl Parser {
                 }
                 // map/filter/reduce as method syntax on vectors:
                 // v.map(fn) → map(v, fn)
-                if matches!(t, Type::Vector(_, _))
+                // Unwrap &vector<T> so map/filter/reduce work on ref params.
+                let vec_t = if let Type::RefVar(inner) = &t {
+                    inner.as_ref().clone()
+                } else {
+                    t.clone()
+                };
+                if matches!(vec_t, Type::Vector(_, _))
                     && matches!(field.as_str(), "map" | "filter" | "reduce")
                     && self.lexer.has_token("(")
                 {
-                    return self.parse_vector_method(code, &t, &field);
+                    return self.parse_vector_method(code, &vec_t, &field);
                 }
                 // I7: bounded method call on generic T — look for a T-stub.
                 // Verify the current function's bounds declare this method to

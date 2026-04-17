@@ -2004,6 +2004,108 @@ impl Parser {
     // are supported — see `parse_parallel_for_loop` for details.
     /// Set up iterator variables for a for-loop header and return
     /// `(iter_var, pre_var, for_var, if_step, create_iter, iter_next)`.
+    /// `expr is VariantName` — generates a boolean discriminant check.
+    /// For plain enums: `OpConvIntFromEnum(expr) == disc`.
+    /// For struct-enums: `OpConvIntFromEnum(OpGetEnum(expr, 0)) == disc`.
+    pub(crate) fn parse_is_variant(
+        &mut self,
+        code: &mut Value,
+        subject_type: &Type,
+        variant_name: &str,
+    ) -> Type {
+        let (e_nr, is_struct) = match subject_type {
+            Type::Enum(nr, true, _) => (*nr, true),
+            Type::Enum(nr, false, _) => (*nr, false),
+            // EnumValue variant type (e.g. `s = Circle { ... }` has type
+            // Reference(Circle_def_nr) where Circle's parent is Shape).
+            Type::Reference(d_nr, _)
+                if self.data.def_type(*d_nr) == DefType::EnumValue
+                    && matches!(
+                        self.data.def(self.data.def(*d_nr).parent).returned,
+                        Type::Enum(_, true, _)
+                    ) =>
+            {
+                (self.data.def(*d_nr).parent, true)
+            }
+            // Reference to an Enum itself (e.g. loop variable from
+            // vector<Shape> iteration gets Type::Reference(Shape_nr, _)).
+            Type::Reference(d_nr, _)
+                if self.data.def_type(*d_nr) == DefType::Enum
+                    && matches!(self.data.def(*d_nr).returned, Type::Enum(_, true, _)) =>
+            {
+                (*d_nr, true)
+            }
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'is' requires an enum type, got {}",
+                        subject_type.name(&self.data)
+                    );
+                }
+                return Type::Boolean;
+            }
+        };
+        let mut variant_def_nr = self.data.def_nr(variant_name);
+        if (variant_def_nr == u32::MAX
+            || self.data.def_type(variant_def_nr) != DefType::EnumValue
+            || self.data.def(variant_def_nr).parent != e_nr)
+            && e_nr != u32::MAX
+        {
+            for child in self.data.children_of(e_nr) {
+                if self.data.def(child).name == variant_name {
+                    variant_def_nr = child;
+                    break;
+                }
+            }
+        }
+        if variant_def_nr == u32::MAX || self.data.def_type(variant_def_nr) != DefType::EnumValue {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' is not a variant of {}",
+                    variant_name,
+                    self.data.def(e_nr).name
+                );
+            }
+            return Type::Boolean;
+        }
+        let disc: i32 = if is_struct {
+            let variant_attrs = &self.data.def(variant_def_nr).attributes;
+            if let Some(first) = variant_attrs.first()
+                && let Value::Enum(nr, _) = first.value
+            {
+                i32::from(nr)
+            } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
+                if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                    i32::from(nr)
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        } else if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name) {
+            if let Value::Enum(nr, _) = self.data.def(e_nr).attributes[*a_nr].value {
+                i32::from(nr)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let disc_expr = if is_struct {
+            let get_enum = self.cl("OpGetEnum", &[code.clone(), Value::Int(0)]);
+            self.cl("OpConvIntFromEnum", &[get_enum])
+        } else {
+            self.cl("OpConvIntFromEnum", std::slice::from_ref(code))
+        };
+        *code = self.cl("OpEqInt", &[disc_expr, Value::Int(disc)]);
+        Type::Boolean
+    }
+
     pub(crate) fn for_type(&mut self, in_type: &Type) -> Type {
         // P161: unwrap &vector<T> so the element type resolves correctly.
         if let Type::RefVar(inner) = in_type {

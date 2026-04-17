@@ -1025,10 +1025,16 @@ impl Data {
         if !self.def(def_nr).is_operator() || self.def(def_nr).op_code != u16::MAX {
             return;
         }
+        // Flat table: op_codes 0..N map to OPERATORS[0..N].
+        // Bytecode encoding is transparent via fill::emit_op:
+        // codes < 255 → 1 byte; codes >= 255 → 2 bytes (255 + offset).
+        let max_ops = crate::fill::OPERATORS.len();
         assert!(
-            (self.op_codes as usize) < crate::fill::OPERATORS.len(),
-            "Too many defined operators (max {})",
-            crate::fill::OPERATORS.len()
+            (self.op_codes as usize) < max_ops,
+            "Too many defined operators ({} of {max_ops} used). \
+             To add more, grow the OPERATORS array in src/fill.rs and regenerate \
+             with `cargo test --test issues regen_fill_rs -- --ignored`.",
+            self.op_codes
         );
         self.definitions[def_nr as usize].op_code = self.op_codes;
         self.operators.insert(self.op_codes as u8, def_nr);
