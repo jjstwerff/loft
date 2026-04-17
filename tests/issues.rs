@@ -9594,3 +9594,71 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P175 — file-scope `pub NAME: vector<T> = [...]` constants of
+/// textual element types were materialised as empty vectors at
+/// runtime (`len == 0`).  `vector<integer>` / `vector<float>` /
+/// `vector<single>` / `vector<long>` already worked because
+/// `compile::extract_literal_values` matched `OpSetInt/Float/Single/Long`
+/// calls.  `vector<text>` missed the `OpSetText` branch + the
+/// `Value::Text` arm in `build_const_vectors`'s per-element match,
+/// so the pre-built constant was registered with zero values and the
+/// OpConstRef runtime copy produced an empty vector.  Fix: add
+/// `OpSetText` to the extractor's allow-list and handle `Value::Text(s)`
+/// in the build loop via `store.set_str(s)` + `set_int` (mirroring
+/// runtime `OpSetText` in `src/fill.rs::set_text`).
+#[test]
+fn p175_vector_of_text_constant_populates() {
+    code!(
+        "pub P175_INTS: vector<integer> = [10, 20, 30];
+pub P175_TEXTS: vector<text> = [\"aa\", \"bb\", \"cc\"];
+fn test() {
+    assert(len(P175_INTS) == 3, \"int vec len\");
+    assert(P175_INTS[0] == 10, \"int vec [0]\");
+    assert(len(P175_TEXTS) == 3, \"text vec len = {len(P175_TEXTS)}\");
+    assert(P175_TEXTS[0] == \"aa\", \"text vec [0]\");
+    assert(P175_TEXTS[2] == \"cc\", \"text vec [2]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P178 — slot-aliasing in `is`-capture body.  When a function body's
+/// IR root is a `Value::Insert` (not a `Block`/`Loop`), `assign_slots`
+/// would return early from `process_scope` without placing any locals.
+/// Orphans then flowed into `place_orphaned_vars`, which started
+/// candidate slots at 0 — the argument area.  Arguments have
+/// `stack_pos == u16::MAX` during `assign_slots` (codegen assigns
+/// their positions later), so the per-var conflict check couldn't
+/// see them; orphans happily claimed slot 0, 4, 12, ..., overlapping
+/// the args at runtime.  Writing to the captured `tb_id` slot
+/// corrupted the caller-owned `&tools` ref bytes sharing those
+/// offsets; the downstream `SetInt` on a now-null ref silently wrote
+/// to store 0 (observed as `ft_cur == 0` instead of the expected
+/// captured value).
+///
+/// Fix: `place_orphaned_vars` now takes `local_start` and starts the
+/// candidate slot there, so orphan locals can't overlap the
+/// argument + return-address region.
+#[test]
+fn p178_is_capture_slot_alias() {
+    code!(
+        "enum P178Ui { P178UhToolButton { tb_id: integer not null } }
+struct P178Tools { ft_cur: integer not null }
+fn p178_hit() -> P178Ui { P178UhToolButton { tb_id: 2 } }
+fn p178_router(dummy: integer, tools: &P178Tools) -> P178Ui {
+    _ = dummy;
+    rc = p178_hit();
+    if rc is P178UhToolButton { tb_id } {
+        tools.ft_cur = tb_id;
+    }
+    rc
+}
+fn test() {
+    ft = P178Tools { ft_cur: 0 };
+    p178_router(99, ft);
+    assert(ft.ft_cur == 2, \"captured was {ft.ft_cur} (expected 2)\");
+}"
+    )
+    .result(Value::Null);
+}

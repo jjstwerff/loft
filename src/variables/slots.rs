@@ -48,7 +48,14 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     // Walk the IR tree, assigning slots scope-by-scope.
     process_scope(function, code, local_start, 0);
     // Place any variables that the IR walk missed (scope has no Block/Loop in IR).
-    place_orphaned_vars(function);
+    //
+    // P178: pass `local_start` so orphan locals never collide with the
+    // argument / return-address region.  Arguments have stack_pos ==
+    // u16::MAX during assign_slots (set by codegen later), so the
+    // orphan-placer's conflict check can't see them — without a floor,
+    // orphans would happily claim slot 0 / 4 / 12 / ..., overlapping
+    // the arg slots at runtime.
+    place_orphaned_vars(function, local_start);
     #[cfg(debug_assertions)]
     {
         function.logging = false;
@@ -344,7 +351,7 @@ fn inner_has_pre_assignments(val: &Value) -> bool {
 }
 
 /// Place variables that the IR walk missed (scope has no Block/Loop in IR).
-fn place_orphaned_vars(function: &mut Function) {
+fn place_orphaned_vars(function: &mut Function, local_start: u16) {
     let mut orphans: Vec<usize> = function
         .variables
         .iter()
@@ -364,7 +371,12 @@ fn place_orphaned_vars(function: &mut Function) {
         let v_size = size(&function.variables[i].type_def, &Context::Variable);
         let v_first = function.variables[i].first_def;
         let v_last = function.variables[i].last_use;
-        let mut candidate = 0u16;
+        // P178: start above the argument + return-address region so
+        // orphan locals can't overlap the arg slots at runtime.  (Args
+        // have stack_pos == u16::MAX during assign_slots because codegen
+        // assigns their positions later, so the per-var conflict check
+        // below can't see them — the floor is the only protection.)
+        let mut candidate = local_start;
         loop {
             let end = candidate + v_size;
             let conflict = function.variables.iter().enumerate().any(|(j, jv)| {

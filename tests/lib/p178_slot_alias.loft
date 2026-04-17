@@ -1,0 +1,40 @@
+// Semi-minimal repro for P178 (slot-aliasing in `is`-capture body).
+//
+// Trigger set (removing any line makes the bug disappear):
+//   1. Function signature has a by-value param BEFORE the `&T` ref
+//      param: `fn router(dummy: integer, tools: &T) -> ReturnT`.
+//   2. The function returns a struct-enum.
+//   3. `rc = helper()` where helper returns that struct-enum (inline
+//      construction `rc = Variant { ... }` does NOT trigger).
+//   4. `if rc is Variant { field } { ... }` — is-capture on rc.
+//   5. Body mutates the ref-param using the captured integer:
+//      `tools.field = captured_local`.
+//
+// Symptom: the captured integer reads as 0 (or garbage, depending on
+// exactly what's in the slot that got aliased) instead of the
+// variant's actual field value.
+
+pub enum P178Ui {
+  P178UhToolButton { tb_id: integer not null },
+}
+
+struct P178FakeTools { ft_cur: integer not null }
+
+pub fn p178_hit_test() -> P178Ui {
+  P178UhToolButton { tb_id: 2 }
+}
+
+pub fn p178_router(dummy: integer, tools: &P178FakeTools) -> P178Ui {
+  _ = dummy;
+  rc = p178_hit_test();
+  if rc is P178UhToolButton { tb_id } {
+    tools.ft_cur = tb_id;
+  }
+  rc
+}
+
+fn test_captures_correctly() {
+  ft = P178FakeTools { ft_cur: 0 };
+  p178_router(99, ft);
+  assert(ft.ft_cur == 2, "captured tb_id was {ft.ft_cur} (expected 2) — P178");
+}

@@ -2168,6 +2168,12 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
+                            // P178 / B5: the capture binds a borrowed view
+                            // into the subject's record — scope cleanup
+                            // must not emit OpFreeRef for it (see the same
+                            // note at parse_match_enum_field_bindings in
+                            // this file for the match-arm path).
+                            self.vars.set_skip_free(v_nr);
                             self.is_capture_bindings.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             self.is_capture_aliases.push((field_name.clone(), old));
