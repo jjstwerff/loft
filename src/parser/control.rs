@@ -2715,7 +2715,8 @@ impl Parser {
                 let mut p = Value::Null;
                 let t = self.expression(&mut p);
                 named_args.push((arg_name, p, t));
-                if !self.lexer.has_token(",") {
+                // P167: accept trailing comma on the last named arg.
+                if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
                     break;
                 }
                 continue;
@@ -2767,7 +2768,10 @@ impl Parser {
             types.push(t);
             list.push(p);
             arg_idx += 1;
-            if !self.lexer.has_token(",") {
+            // P167: accept trailing comma on the last positional arg —
+            // sibling of P158 (struct-enum field list) and P164 (enum
+            // variant list).
+            if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
                 break;
             }
         }

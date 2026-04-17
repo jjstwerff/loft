@@ -9470,6 +9470,45 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P167 regression guard — trailing comma in a function-call argument
+/// list used to fail with "Too many parameters for n_<fn>".  P158 fixed
+/// trailing commas in struct-enum variant field lists; P164 fixed
+/// trailing commas in enum variant lists; P167 covers function-call
+/// argument lists (the third and final trailing-comma site).  Fix:
+/// mirror the P158 guard in `parser/control.rs::parse_call` — for both
+/// the positional and named argument loops.
+#[test]
+fn p167_trailing_comma_function_call_positional() {
+    code!(
+        "fn p167_add3(a: integer, b: integer, c: integer) -> integer { a + b + c }
+fn test() {
+    r = p167_add3(1, 2, 3,);
+    assert(r == 6, \"trailing comma positional\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p167_trailing_comma_function_call_multiline() {
+    // The shape that actually caught it in the wild — multi-line
+    // call (rgb/vec3-style) with a trailing comma.
+    code!(
+        "fn p167_mix(r: integer, g: integer, b: integer) -> integer {
+    (r * 65536) + (g * 256) + b
+}
+fn test() {
+    c = p167_mix(
+        10,
+        20,
+        30,
+    );
+    assert(c == 10 * 65536 + 20 * 256 + 30, \"multiline trailing comma\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P165 regression guard — `var: Enum = Variant { ... }` used to fail
 /// with "Variable 'var' cannot change type from Enum to Variant; use a
 /// new variable name or cast with 'as'".  The type-change check treated
