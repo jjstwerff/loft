@@ -9024,6 +9024,34 @@ fn p157_native_refvar_forwarding_with_preeval() {
     let _ = std::fs::remove_file(&src_path);
 }
 
+/// P159 regression guard — `Shape.parse(json)` used to fail for
+/// struct-enums ("Unknown field Shape.parse").  Fix: added
+/// `DefType::Enum` branch in `parse_var` for `.parse(` detection,
+/// and added discriminant wrapper `{"Variant":{fields}}` to the
+/// JSON serializer in `format.rs`.
+#[test]
+fn p159_struct_enum_json_roundtrip() {
+    code!(
+        "enum Shape {
+    Circle { radius: float },
+    Rect { width: float, height: float }
+}
+fn test() {
+    c = Circle { radius: 3.14 };
+    j = \"{c:j}\";
+    p = Shape.parse(j);
+    r = match p { Circle { radius } => radius, Rect => 0.0 };
+    assert(r == 3.14, \"circle rt\");
+    rect = Rect { width: 5.0, height: 10.0 };
+    j2 = \"{rect:j}\";
+    p2 = Shape.parse(j2);
+    r2 = match p2 { Circle => 0.0, Rect { width, height } => width * height };
+    assert(r2 == 50.0, \"rect rt\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P158 regression guard — trailing comma after the last field in a
 /// struct-enum variant used to trigger "Expect attribute".  Regular
 /// structs accepted trailing commas; enum variants didn't.  Fix:

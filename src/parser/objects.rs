@@ -451,15 +451,25 @@ impl Parser {
                         return tp;
                     }
                 } else if self.lexer.peek_token(".") {
-                    // Check for Type.parse(text) without consuming the dot
-                    // unless we confirm it's ".parse(".
-                    // Consume "." — if parse follows, continue; otherwise this
-                    // will fall through to normal parsing which handles Struct.field.
                     self.lexer.cont();
                     if self.lexer.has_keyword("parse") {
                         return self.parse_type_parse(d_nr, code);
                     }
                 }
+            // P159: Type.parse() for struct-enums.  Must not consume the
+            // "." unless "parse" follows — `Enum.Variant` is a qualified
+            // variant reference, not a method call.  Save a link and
+            // revert if "parse" doesn't follow.
+            } else if self.data.def_type(d_nr) == DefType::Enum
+                && matches!(self.data.def(d_nr).returned, Type::Enum(_, true, _))
+                && self.lexer.peek_token(".")
+            {
+                let link = self.lexer.link();
+                self.lexer.cont();
+                if self.lexer.has_keyword("parse") {
+                    return self.parse_type_parse(d_nr, code);
+                }
+                self.lexer.revert(link);
             } else if self.data.def_type(d_nr) == DefType::Constant {
                 let const_code = self.data.def(d_nr).code.clone();
                 let const_tp = self.data.def(d_nr).returned.clone();
