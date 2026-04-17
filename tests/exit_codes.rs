@@ -237,10 +237,7 @@ fn p171_native_copy_record_high_bit_does_not_panic() {
     // regressions.  E0514 = rustc version mismatch; E0463 = can't
     // find crate (rlib missing / `auto_build_native` couldn't run on
     // this runner, e.g. missing X11 headers for glutin).
-    if stderr.contains("rustc not found")
-        || stderr.contains("E0514")
-        || stderr.contains("E0463")
-    {
+    if stderr.contains("rustc not found") || stderr.contains("E0514") || stderr.contains("E0463") {
         eprintln!("SKIP: native toolchain not ready — {stderr}");
         return;
     }
@@ -283,14 +280,16 @@ fn p166_content_on_binary_file_warns() {
     std::fs::write(&bin_path, [0xFFu8, 0xFE, 0xFD, 0xFC, 0xFB]).expect("write temp binary file");
 
     let script_path = dir.join("loft_p166_script.loft");
+    // Use forward slashes in the embedded path so the loft lexer doesn't
+    // treat Windows backslashes as escape sequences (`\U`, `\R`, …).
+    let path_in_script = bin_path.display().to_string().replace('\\', "/");
     let script = format!(
         "fn main() {{\n  \
-            f = file(\"{}\");\n  \
+            f = file(\"{path_in_script}\");\n  \
             c = f.content();\n  \
             println(\"len={{len(c)}}\");\n  \
             assert(len(c) == 0, \"content should be empty on binary\");\n\
-         }}\n",
-        bin_path.display()
+         }}\n"
     );
     std::fs::write(&script_path, &script).expect("write temp script");
 
@@ -495,13 +494,14 @@ fn p166_content_on_text_file_no_warning() {
     std::fs::write(&text_path, "hello world\n").expect("write temp text file");
 
     let script_path = dir.join("loft_p166_text_script.loft");
+    // Forward slashes so Windows backslashes don't become lexer escapes.
+    let path_in_script = text_path.display().to_string().replace('\\', "/");
     let script = format!(
         "fn main() {{\n  \
-            f = file(\"{}\");\n  \
+            f = file(\"{path_in_script}\");\n  \
             c = f.content();\n  \
             assert(len(c) > 0, \"content should be non-empty\");\n\
-         }}\n",
-        text_path.display()
+         }}\n"
     );
     std::fs::write(&script_path, &script).expect("write temp script");
 

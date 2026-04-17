@@ -2418,7 +2418,7 @@ impl Parser {
             return format!("{id}.loft");
         }
         // - a source file, the lib directory in the project (project-supplied)
-        let mut f = format!("lib/{id}.loft");
+        let mut f = format!("lib{0}{id}.loft", sep_str());
         if !std::path::Path::new(&f).exists() {
             f = format!("{id}.loft");
         }
@@ -2439,12 +2439,13 @@ impl Parser {
             ""
         };
         // - a lib directory relative to the current directory
+        let s = sep_str();
         if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}/lib/{id}.loft");
+            f = format!("{cur_dir}{s}lib{s}{id}.loft");
         }
         // - a lib directory relative to the base directory when inside /tests/
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}/lib/{id}.loft");
+            f = format!("{base_dir}{s}lib{s}{id}.loft");
         }
         // - walk up from the script directory looking for a loft.toml; if found,
         //   the package's parent directory contains sibling packages.
@@ -2486,12 +2487,12 @@ impl Parser {
         }
         // - a directory with the same name of the current script (strip the .loft suffix)
         if !std::path::Path::new(&f).exists() && cur_script.len() >= 5 {
-            f = format!("{}/{id}.loft", &cur_script[0..cur_script.len() - 5]);
+            f = format!("{}{s}{id}.loft", &cur_script[0..cur_script.len() - 5]);
         }
         // - extra library directories from --lib / --project command-line flags (single-file)
         if !std::path::Path::new(&f).exists() {
             for l in &self.lib_dirs {
-                let candidate = format!("{l}/{id}.loft");
+                let candidate = format!("{l}{s}{id}.loft");
                 if std::path::Path::new(&candidate).exists() {
                     f.clone_from(&candidate);
                     // Check for loft.toml in ancestor directories to register
@@ -2560,11 +2561,11 @@ impl Parser {
         }
         // - the current directory (beside the parsed file)
         if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}/{id}.loft");
+            f = format!("{cur_dir}{s}{id}.loft");
         }
         // - the base directory when inside /tests/
         if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}/{id}.loft");
+            f = format!("{base_dir}{s}{id}.loft");
         }
         f
     }
