@@ -175,6 +175,82 @@ fn neighbour_dr(dir: integer) -> integer {
   0
 }
 
+// ── Box primitive (Phase 6a.12 prereq) ────────────────────────────
+
+// Emit a single face of a box: 4 outward vertices a → b → c → d
+// (CCW from outside) with shared flat normal `n`.  4 verts + 2
+// triangles.
+fn emit_box_face(m: &Mesh, a: Vec3, b: Vec3, c: Vec3, d: Vec3, n: Vec3) {
+  bf_base = len(m.vertices);
+  m.vertices += [vertex(a, n, vec2(0.0, 0.0))];
+  m.vertices += [vertex(b, n, vec2(1.0, 0.0))];
+  m.vertices += [vertex(c, n, vec2(1.0, 1.0))];
+  m.vertices += [vertex(d, n, vec2(0.0, 1.0))];
+  m.triangles += [Triangle { a: bf_base, b: bf_base + 1, c: bf_base + 2 }];
+  m.triangles += [Triangle { a: bf_base, b: bf_base + 2, c: bf_base + 3 }];
+}
+
+// Emit an axis-aligned rectangular box between `min_corner` and
+// `max_corner`.  6 faces (flat-shaded, outward normals), 24 verts
+// + 12 triangles total.  Degenerate inputs (any axis where max <=
+// min) emit nothing.
+pub fn emit_box(m: &Mesh, min_corner: Vec3, max_corner: Vec3) {
+  bx0 = min_corner.x; by0 = min_corner.y; bz0 = min_corner.z;
+  bx1 = max_corner.x; by1 = max_corner.y; bz1 = max_corner.z;
+  if bx1 <= bx0 || by1 <= by0 || bz1 <= bz0 { return; }
+  // +X face
+  emit_box_face(m,
+    vec3(bx1, by0, bz1), vec3(bx1, by0, bz0),
+    vec3(bx1, by1, bz0), vec3(bx1, by1, bz1),
+    vec3(1.0, 0.0, 0.0));
+  // -X face
+  emit_box_face(m,
+    vec3(bx0, by0, bz0), vec3(bx0, by0, bz1),
+    vec3(bx0, by1, bz1), vec3(bx0, by1, bz0),
+    vec3(-1.0, 0.0, 0.0));
+  // +Y face (top)
+  emit_box_face(m,
+    vec3(bx0, by1, bz1), vec3(bx1, by1, bz1),
+    vec3(bx1, by1, bz0), vec3(bx0, by1, bz0),
+    vec3(0.0, 1.0, 0.0));
+  // -Y face (bottom)
+  emit_box_face(m,
+    vec3(bx0, by0, bz0), vec3(bx1, by0, bz0),
+    vec3(bx1, by0, bz1), vec3(bx0, by0, bz1),
+    vec3(0.0, -1.0, 0.0));
+  // +Z face (front)
+  emit_box_face(m,
+    vec3(bx0, by0, bz1), vec3(bx1, by0, bz1),
+    vec3(bx1, by1, bz1), vec3(bx0, by1, bz1),
+    vec3(0.0, 0.0, 1.0));
+  // -Z face (back)
+  emit_box_face(m,
+    vec3(bx1, by0, bz0), vec3(bx0, by0, bz0),
+    vec3(bx0, by1, bz0), vec3(bx1, by1, bz0),
+    vec3(0.0, 0.0, -1.0));
+}
+
+// ── Item placeholder geometry (Phase 6a.12) ───────────────────────
+
+// Emit a placeholder mesh for a map item at `pos` with nominal
+// `scale` (typical: 1.0 = one hex width).  Dispatches on
+// `kind_name` (values from ItemDef.id_kind): tall cylindrical
+// shapes for PILLAR / TREE, box for everything else.  Geometry is
+// cheap / illustrative — the real assets are baked by the artist
+// pipeline.  Non-positive scale is a no-op.
+pub fn emit_item_placeholder(m: &Mesh, kind_name: text, pos: Vec3, scale: float) {
+  if scale <= 0.0 { return; }
+  if kind_name == "PILLAR" || kind_name == "TREE" {
+    cyl_top = vec3(pos.x, pos.y + scale * 2.0, pos.z);
+    emit_cylinder_post(m, pos, cyl_top, scale * 0.3, 8);
+    return;
+  }
+  bp_half = scale / 2.0;
+  bp_min = vec3(pos.x - bp_half, pos.y, pos.z - bp_half);
+  bp_max = vec3(pos.x + bp_half, pos.y + scale, pos.z + bp_half);
+  emit_box(m, bp_min, bp_max);
+}
+
 // ── Cylinder post (Phase 6a.8) ────────────────────────────────────
 
 // Emit a cylindrical post between `base` and `top` with `radius`
