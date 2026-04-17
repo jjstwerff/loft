@@ -557,6 +557,53 @@ fn test_emit_item_placeholder_zero_scale() {
   assert(len(ip_mesh.vertices) == 0, "zero scale → no geometry");
 }
 
+// ── Thick flat wall tests (Phase 6a.6) ────────────────────────────
+
+fn test_emit_thick_flat_wall_vertex_count() {
+  tw_mesh = mesh("tw_count");
+  // Wall from origin to (4, 0, 0), thickness 0.5, height 2, posts
+  // radius 0.3 with 8 segments.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.3, 8);
+  // 3 quads (12 verts, 6 tris) + 2 × 8-seg cylinders (64 verts, 32 tris)
+  assert(len(tw_mesh.vertices) == 76, "12 + 64 = 76 verts");
+  assert(len(tw_mesh.triangles) == 38, "6 + 32 = 38 tris");
+}
+
+fn test_emit_thick_flat_wall_no_posts() {
+  tw_mesh = mesh("tw_no_post");
+  // post_radius = 0 → no posts.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.0, 8);
+  assert(len(tw_mesh.vertices) == 12, "just 3 quads = 12 verts");
+  assert(len(tw_mesh.triangles) == 6, "6 tris");
+}
+
+fn test_emit_thick_flat_wall_front_normal() {
+  tw_mesh = mesh("tw_n_front");
+  // Wall along +X with forward = (+1,0,0), perpendicular = (0,0,1).
+  // Front face is on +Z side with normal +Z.
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.5, 2.0, 0.0, 8);
+  // Front face is the first emitted quad (verts 0-3).
+  assert(tw_mesh.vertices[0].normal.z == 1.0, "front normal +Z");
+  assert(tw_mesh.vertices[0].normal.x == 0.0, "front x 0");
+  // Back face is the second quad (verts 4-7).
+  assert(tw_mesh.vertices[4].normal.z == -1.0, "back normal -Z");
+  // Top face (verts 8-11) normal +Y.
+  assert(tw_mesh.vertices[8].normal.y == 1.0, "top normal +Y");
+}
+
+fn test_emit_thick_flat_wall_coincident_endpoints() {
+  tw_mesh = mesh("tw_coinc");
+  // p1 == p2 → no geometry (zero-length wall).
+  emit_thick_flat_wall(tw_mesh, vec3(1.0, 0.0, 1.0), vec3(1.0, 0.0, 1.0), 0.5, 2.0, 0.3, 8);
+  assert(len(tw_mesh.vertices) == 0, "zero-length wall → no geometry");
+}
+
+fn test_emit_thick_flat_wall_zero_thickness() {
+  tw_mesh = mesh("tw_zt");
+  emit_thick_flat_wall(tw_mesh, vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 0.0), 0.0, 2.0, 0.3, 8);
+  assert(len(tw_mesh.vertices) == 0, "zero thickness → no geometry");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

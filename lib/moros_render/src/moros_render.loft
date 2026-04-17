@@ -230,6 +230,68 @@ pub fn emit_box(m: &Mesh, min_corner: Vec3, max_corner: Vec3) {
     vec3(0.0, 0.0, -1.0));
 }
 
+// ── Thick flat wall (Phase 6a.6) ──────────────────────────────────
+
+// Emit a thick flat wall between `p1` and `p2` (base centreline,
+// y=ground) with cylindrical corner posts at each end.  The wall
+// has `thickness` perpendicular to its direction (in XZ) and
+// `height` in Y.  Front and back faces + a top cap are emitted;
+// end caps are omitted since the posts cover them.
+//
+// 3 quads × (4 verts + 2 tris) = 12 verts + 6 tris for the wall,
+// plus two cylinder posts (4 × post_segs verts + 2 × post_segs
+// tris each).  Non-positive thickness/height, coincident p1 == p2,
+// or non-positive post_radius / post_segs < 3 skip the posts.
+pub fn emit_thick_flat_wall(
+  m: &Mesh, p1: Vec3, p2: Vec3,
+  thickness: float, height: float,
+  post_radius: float, post_segs: integer
+) {
+  if thickness <= 0.0 || height <= 0.0 { return; }
+  tw_dx = p2.x - p1.x;
+  tw_dz = p2.z - p1.z;
+  tw_len = sqrt(tw_dx * tw_dx + tw_dz * tw_dz);
+  if tw_len == 0.0 { return; }
+  tw_fx = tw_dx / tw_len;
+  tw_fz = tw_dz / tw_len;
+  // Perpendicular in XZ (90° rotation, points "front").
+  tw_px = -tw_fz;
+  tw_pz = tw_fx;
+  tw_half = thickness / 2.0;
+  tw_ox = tw_px * tw_half;
+  tw_oz = tw_pz * tw_half;
+  tw_y0 = p1.y;
+  tw_y1 = p1.y + height;
+  // Eight corners of the wall slab.
+  p1_front     = vec3(p1.x + tw_ox, tw_y0, p1.z + tw_oz);
+  p2_front     = vec3(p2.x + tw_ox, tw_y0, p2.z + tw_oz);
+  p1_back      = vec3(p1.x - tw_ox, tw_y0, p1.z - tw_oz);
+  p2_back      = vec3(p2.x - tw_ox, tw_y0, p2.z - tw_oz);
+  p1_front_top = vec3(p1_front.x, tw_y1, p1_front.z);
+  p2_front_top = vec3(p2_front.x, tw_y1, p2_front.z);
+  p1_back_top  = vec3(p1_back.x,  tw_y1, p1_back.z);
+  p2_back_top  = vec3(p2_back.x,  tw_y1, p2_back.z);
+  // Front normal points +perp.
+  tw_n_front = vec3(tw_px, 0.0, tw_pz);
+  // Back normal points -perp.
+  tw_n_back  = vec3(-tw_px, 0.0, -tw_pz);
+  tw_n_top   = vec3(0.0, 1.0, 0.0);
+  // Winding (CCW from the outward side → correct normal):
+  // front: p1_front → p2_front → p2_front_top → p1_front_top
+  emit_box_face(m, p1_front, p2_front, p2_front_top, p1_front_top, tw_n_front);
+  // back: reversed to flip CCW direction vs front.
+  emit_box_face(m, p2_back, p1_back, p1_back_top, p2_back_top, tw_n_back);
+  // top: (p1_back_top, p1_front_top, p2_front_top, p2_back_top) → normal +Y.
+  emit_box_face(m, p1_back_top, p1_front_top, p2_front_top, p2_back_top, tw_n_top);
+  // Corner posts — skip if degenerate.
+  if post_radius > 0.0 && post_segs >= 3 {
+    post_top_1 = vec3(p1.x, tw_y1, p1.z);
+    post_top_2 = vec3(p2.x, tw_y1, p2.z);
+    emit_cylinder_post(m, p1, post_top_1, post_radius, post_segs);
+    emit_cylinder_post(m, p2, post_top_2, post_radius, post_segs);
+  }
+}
+
 // ── Item placeholder geometry (Phase 6a.12) ───────────────────────
 
 // Emit a placeholder mesh for a map item at `pos` with nominal
