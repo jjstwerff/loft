@@ -138,13 +138,20 @@ pub(crate) fn run_tests(
                 continue;
             }
 
-            // Only process // comments.
+            // Only process // comments.  Blank lines are preserved —
+            // they must NOT clear pending annotations so that:
+            //   // @EXPECT_ERROR: msg
+            //
+            //   fn test_foo() { ... }
+            // still binds the annotation to test_foo.
             let Some(comment) = trimmed.strip_prefix("//") else {
-                // Non-comment, non-blank line.
-                pending_fail.clear();
-                pending_error.clear();
-                pending_warning.clear();
-                pending_ignore = false;
+                if !trimmed.is_empty() {
+                    // Non-comment, non-blank line — clear pending.
+                    pending_fail.clear();
+                    pending_error.clear();
+                    pending_warning.clear();
+                    pending_ignore = false;
+                }
                 continue;
             };
             let comment = comment.trim();
