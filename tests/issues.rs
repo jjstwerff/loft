@@ -9073,6 +9073,23 @@ at enhancement_ref_vector_readonly_loop_still_flags:2:47",
     );
 }
 
+/// `break value` in void function → compile error.
+#[test]
+fn enhancement_break_value_in_void_function_errors() {
+    code!(
+        "fn test() {
+    for i in 0..10 {
+        if i == 5 { break i; }
+    }
+}"
+    )
+    .error(
+        "`break <value>` requires a non-void function — \
+the value is returned from the enclosing function \
+at enhancement_break_value_in_void_function_errors:3:29",
+    );
+}
+
 /// `is` operator — variant check on plain enum.
 #[test]
 fn enhancement_is_plain_enum() {

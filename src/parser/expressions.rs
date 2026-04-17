@@ -217,7 +217,28 @@ impl Parser {
                 && !matches!(self.lexer.peek().has, crate::lexer::LexItem::None)
             {
                 let mut break_val = Value::Null;
-                self.expression(&mut break_val);
+                let break_tp = self.expression(&mut break_val);
+                let ret_tp = self.data.def(self.context).returned.clone();
+                if !self.first_pass && matches!(ret_tp, Type::Void) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`break <value>` requires a non-void function — \
+                         the value is returned from the enclosing function"
+                    );
+                } else if !self.first_pass
+                    && !matches!(ret_tp, Type::Void)
+                    && !break_tp.is_same(&ret_tp)
+                    && !break_tp.is_unknown()
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "`break` value type {} does not match function return type {}",
+                        break_tp.name(&self.data),
+                        ret_tp.name(&self.data)
+                    );
+                }
                 *val = Value::Return(Box::new(break_val));
             } else {
                 *val = Value::Break(0);

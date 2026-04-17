@@ -221,6 +221,8 @@ fn test_struct_enum_json_roundtrip_rect() {
 }
 
 // ── break value ─────────────────────────────────────────────────
+// Note: `break value` in a void function is a compile error — tested
+// in tests/issues.rs::enhancement_break_value_in_void_function_errors.
 
 struct BVItem { bvn: text, bvv: integer not null }
 
