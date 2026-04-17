@@ -173,3 +173,32 @@ pub fn set_wall_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: in
   undo_push(s, m, q, r, cy);
   map_set_wall(m, q, r, cy, edge, wall);
 }
+
+// Wall with direction resolution (0-5) + undo.  Directions 3-5 store
+// the wall on a neighbour hex, so we snapshot THAT hex instead.
+pub fn set_wall_dir_with_undo(s: &UndoStack, m: &Map, q: integer, r: integer, cy: integer, dir: integer, wall: integer) {
+  if dir == 3 { undo_push(s, m, q, r + 1, cy); }
+  if dir == 4 { undo_push(s, m, q - 1, r + 1, cy); }
+  if dir == 5 { undo_push(s, m, q - 1, r, cy); }
+  if dir < 3 { undo_push(s, m, q, r, cy); }
+  map_set_wall_dir(m, q, r, cy, dir, wall);
+}
+
+// Slope path with batch undo — all hexes in the slope are one
+// logical undo step.
+pub fn slope_path_with_undo(s: &UndoStack, m: &Map, q1: integer, r1: integer, q2: integer, r2: integer, cy: integer, h_start: integer, h_end: integer) {
+  batch_begin(s);
+  dist = hex_distance(q1, r1, q2, r2);
+  if dist == 0 {
+    set_height_with_undo(s, m, q1, r1, cy, h_start);
+    batch_end(s);
+    return;
+  }
+  for i in 0..=dist {
+    q = lerp_int(q1, q2, i, dist);
+    r = lerp_int(r1, r2, i, dist);
+    h = lerp_int(h_start, h_end, i, dist);
+    set_height_with_undo(s, m, q, r, cy, h);
+  }
+  batch_end(s);
+}

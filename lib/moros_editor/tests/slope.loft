@@ -1,0 +1,49 @@
+// Tests for slope + wall-direction recording editors.
+use moros_editor;
+
+fn test_wall_dir_with_undo_local() {
+  m = map_empty();
+  s = undo_empty();
+  set_wall_dir_with_undo(s, m, 5, 5, 0, 1, 42);   // NE — local
+  h = map_get_hex(m, 5, 5, 0);
+  assert(h.h_wall_ne == 42, "NE wall set {h.h_wall_ne}");
+  assert(undo_depth(s) == 1, "1 entry");
+  undo_pop(s, m);
+  assert(map_get_hex(m, 5, 5, 0).h_wall_ne == 0, "NE wall undone");
+}
+
+fn test_wall_dir_with_undo_neighbour() {
+  m = map_empty();
+  s = undo_empty();
+  // Dir 3 (S) stores on neighbour (5, 6).
+  set_wall_dir_with_undo(s, m, 5, 5, 0, 3, 99);
+  h = map_get_hex(m, 5, 6, 0);
+  assert(h.h_wall_n == 99, "S wall on neighbour N {h.h_wall_n}");
+  undo_pop(s, m);
+  assert(map_get_hex(m, 5, 6, 0).h_wall_n == 0, "S wall undone on neighbour");
+}
+
+fn test_slope_path_with_undo() {
+  m = map_empty();
+  s = undo_empty();
+  slope_path_with_undo(s, m, 0, 0, 3, 0, 0, 0, 9);
+  // Should have painted 4 hexes: (0,0)=0, (1,0)=3, (2,0)=6, (3,0)=9.
+  assert(map_get_hex(m, 1, 0, 0).h_height == 3, "step 1 h=3");
+  assert(map_get_hex(m, 3, 0, 0).h_height == 9, "step 3 h=9");
+  // All 4 pushes are one batch → single undo reverts all.
+  undo_pop(s, m);
+  assert(map_get_hex(m, 1, 0, 0).h_height == 0, "step 1 reverted");
+  assert(map_get_hex(m, 3, 0, 0).h_height == 0, "step 3 reverted");
+  assert(undo_depth(s) == 0, "all undone");
+}
+
+fn test_slope_path_with_undo_redo() {
+  m = map_empty();
+  s = undo_empty();
+  slope_path_with_undo(s, m, 0, 0, 2, 0, 0, 0, 4);
+  undo_pop(s, m);
+  assert(map_get_hex(m, 1, 0, 0).h_height == 0, "reverted");
+  redo(s, m);
+  assert(map_get_hex(m, 1, 0, 0).h_height == 2, "reapplied h=2");
+  assert(map_get_hex(m, 2, 0, 0).h_height == 4, "reapplied h=4");
+}
