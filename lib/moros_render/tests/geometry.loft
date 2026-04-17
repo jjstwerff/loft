@@ -727,6 +727,77 @@ fn test_map_export_glb_json_chunk() {
   }
 }
 
+// ── Material swatch tests (Phase 6a.17) ───────────────────────────
+
+fn test_material_swatch_size() {
+  ms_mat = MaterialDef {
+    md_name: "stone", md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 100, md_tint_g: 120, md_tint_b: 140,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw = material_swatch(ms_mat, 32);
+  assert(ms_sw.width == 32, "swatch width");
+  assert(ms_sw.height == 32, "swatch height");
+}
+
+fn test_material_swatch_tint_interior() {
+  ms_mat2 = MaterialDef {
+    md_name: "grass", md_category: "terrain", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 120, md_tint_g: 180, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw2 = material_swatch(ms_mat2, 16);
+  // Interior pixel (center) should be the tint.
+  ms_centre = get_pixel(ms_sw2, 8, 8);
+  ms_expected_tint = rgb(120, 180, 80);
+  assert(ms_centre == ms_expected_tint, "centre tinted");
+}
+
+fn test_material_swatch_border_darker() {
+  ms_mat3 = MaterialDef {
+    md_name: "brick", md_category: "floor", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 200, md_tint_g: 120, md_tint_b: 100,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw3 = material_swatch(ms_mat3, 8);
+  // Top-left corner is the border color = rgb(100, 60, 50).
+  ms_corner = get_pixel(ms_sw3, 0, 0);
+  ms_expected_border = rgb(100, 60, 50);
+  assert(ms_corner == ms_expected_border, "corner is darker border");
+}
+
+fn test_material_swatch_stair_has_stripes() {
+  ms_mat4 = MaterialDef {
+    md_name: "wood_stair", md_category: "stair", md_stair_kind: "linear",
+    md_texture: 0, md_tint_r: 180, md_tint_g: 120, md_tint_b: 80,
+    md_walkable: 1, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  ms_sw4 = material_swatch(ms_mat4, 16);
+  // Row 2 (y = 2) is a stripe row (y % 4 == 2).  Interior pixel
+  // on that row should be the stripe color (3/4 of tint), not
+  // the pure tint.
+  ms_stripe_px = get_pixel(ms_sw4, 5, 2);
+  ms_tint4 = rgb(180, 120, 80);
+  assert(ms_stripe_px != ms_tint4, "stair stripe visible");
+}
+
+fn test_material_swatch_degenerate_size() {
+  ms_mat5 = MaterialDef {
+    md_name: "x", md_category: "void", md_stair_kind: "",
+    md_texture: 0, md_tint_r: 0, md_tint_g: 0, md_tint_b: 0,
+    md_walkable: 0, md_swimmable: 0, md_climbable: 0,
+    md_slippery: 0, md_loud: 0,
+  };
+  // Size 0 clamps to 1.
+  ms_sw5 = material_swatch(ms_mat5, 0);
+  assert(ms_sw5.width == 1, "size 0 → 1×1");
+  assert(ms_sw5.height == 1, "size 0 → 1×1 height");
+}
+
 fn test_scene_stats() {
   map = map_empty();
   map_paint_material(map, 0, 0, 0, 1);

@@ -356,6 +356,53 @@ pub fn emit_thick_curved_wall(
   }
 }
 
+// ── Material swatch (Phase 6a.17) ─────────────────────────────────
+
+// Whether a material category is one of the stair variants.
+fn is_stair_category(c: text) -> boolean {
+  c == "stair" || c == "spiral_stair" || c == "grand_arc_stair"
+}
+
+// Render a small procedural swatch for a MaterialDef — a
+// `swatch_size × swatch_size` Canvas filled with the material's
+// tint, bordered with a darker shade, and (for stair categories)
+// striped horizontally so the category is recognisable in the
+// editor palette at a glance.
+//
+// Graceful with degenerate inputs: `swatch_size <= 0` returns a
+// 1×1 solid-tint canvas; `swatch_size == 1` returns a 1×1 tint
+// with no border drawn (no room for one).
+pub fn material_swatch(mat: MaterialDef, swatch_size: integer) -> Canvas {
+  sw_tint = rgb(mat.md_tint_r, mat.md_tint_g, mat.md_tint_b);
+  sw_sz = if swatch_size < 1 { 1 } else { swatch_size };
+  sw = canvas(sw_sz, sw_sz, sw_tint);
+  if sw_sz < 2 { return sw; }
+  // Darker border: 50% of each tint channel.
+  sw_border = rgb(mat.md_tint_r / 2, mat.md_tint_g / 2, mat.md_tint_b / 2);
+  for sw_i in 0..sw_sz {
+    set_pixel(sw, sw_i, 0, sw_border);
+    set_pixel(sw, sw_i, sw_sz - 1, sw_border);
+    set_pixel(sw, 0, sw_i, sw_border);
+    set_pixel(sw, sw_sz - 1, sw_i, sw_border);
+  }
+  // Stair categories get horizontal stripes every 4 rows.
+  if is_stair_category(mat.md_category) {
+    sw_stripe = rgb(
+      (mat.md_tint_r * 3) / 4,
+      (mat.md_tint_g * 3) / 4,
+      (mat.md_tint_b * 3) / 4
+    );
+    for sw_y in 0..sw_sz {
+      if sw_y % 4 == 2 {
+        for sw_x in 1..sw_sz - 1 {
+          set_pixel(sw, sw_x, sw_y, sw_stripe);
+        }
+      }
+    }
+  }
+  sw
+}
+
 // ── Item placeholder geometry (Phase 6a.12) ───────────────────────
 
 // Emit a placeholder mesh for a map item at `pos` with nominal
