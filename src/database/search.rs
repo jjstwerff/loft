@@ -68,8 +68,9 @@ impl Stores {
         {
             let f = &fields[key as usize];
             return match f.content {
-                0 | 6 => Content::Long(i64::from(
-                    store.get_int(rec.rec, rec.pos + u32::from(f.position)),
+                0 => Content::Long(store.get_int(rec.rec, rec.pos + u32::from(f.position))),
+                6 => Content::Long(i64::from(
+                    store.get_u32_raw(rec.rec, rec.pos + u32::from(f.position)),
                 )),
                 1 => Content::Long(store.get_long(rec.rec, rec.pos + u32::from(f.position))),
                 2 => Content::Single(store.get_single(rec.rec, rec.pos + u32::from(f.position))),
@@ -80,7 +81,7 @@ impl Stores {
                     0,
                 ))),
                 5 => Content::Str(crate::keys::Str::new(
-                    store.get_str(store.get_int(rec.rec, rec.pos + u32::from(f.position)) as u32),
+                    store.get_str(store.get_u32_raw(rec.rec, rec.pos + u32::from(f.position))),
                 )),
                 _ => {
                     if let Parts::Enum(_) = self.types[f.content as usize].parts {
@@ -143,7 +144,7 @@ impl Stores {
                 rec: if res.rec == 0 {
                     0
                 } else {
-                    self.store(&res).get_int(res.rec, res.pos) as u32
+                    self.store(&res).get_u32_raw(res.rec, res.pos)
                 },
                 pos: 8,
             }
@@ -154,7 +155,7 @@ impl Stores {
                     0
                 } else {
                     let rec = self.store(data).get_u32_raw(data.rec, 0);
-                    self.store(data).get_int(rec, 8) as u32
+                    self.store(data).get_u32_raw(rec, 8)
                 },
                 pos: 8,
             }
@@ -183,7 +184,7 @@ impl Stores {
                 if found {
                     DbRef {
                         store_nr: data.store_nr,
-                        rec: self.store(data).get_int(data.rec, data.pos) as u32,
+                        rec: self.store(data).get_u32_raw(data.rec, data.pos),
                         pos: 8 + pos * u32::from(self.types[*c as usize].size),
                     }
                 } else {
@@ -195,7 +196,7 @@ impl Stores {
                 }
             }
             Parts::Ordered(_, _) => {
-                let sorted_rec = self.store(data).get_int(data.rec, data.pos) as u32;
+                let sorted_rec = self.store(data).get_u32_raw(data.rec, data.pos);
                 let (pos, found) = vector::ordered_find(
                     data,
                     true,
@@ -206,7 +207,7 @@ impl Stores {
                 if found {
                     DbRef {
                         store_nr: data.store_nr,
-                        rec: self.store(data).get_int(sorted_rec, 8 + pos * 4) as u32,
+                        rec: self.store(data).get_u32_raw(sorted_rec, 8 + pos * 4),
                         pos: 8,
                     }
                 } else {
@@ -363,7 +364,7 @@ impl Stores {
             }
             Parts::Array(_) => {
                 vector::vector_next(data, pos, 4, &self.allocations);
-                let r = self.store(data).get_int(data.rec, data.pos) as u32;
+                let r = self.store(data).get_u32_raw(data.rec, data.pos);
                 self.db_ref(data, *pos, r)
             }
             Parts::Ordered(_, _) => {
@@ -375,10 +376,10 @@ impl Stores {
                         pos: 0,
                     };
                 }
-                let r = self.store(data).get_int(data.rec, data.pos) as u32;
+                let r = self.store(data).get_u32_raw(data.rec, data.pos);
                 DbRef {
                     store_nr: data.store_nr,
-                    rec: self.store(data).get_int(r, *pos as u32) as u32,
+                    rec: self.store(data).get_u32_raw(r, *pos as u32),
                     pos: 8,
                 }
             }
@@ -427,7 +428,7 @@ impl Stores {
             rec: if pos == i32::MAX {
                 0
             } else {
-                self.store(data).get_int(r, pos as u32) as u32
+                self.store(data).get_u32_raw(r, pos as u32)
             },
             pos: 8,
         }
@@ -440,7 +441,7 @@ impl Stores {
             rec: if pos == i32::MAX {
                 0
             } else {
-                self.store(data).get_int(data.rec, data.pos) as u32
+                self.store(data).get_u32_raw(data.rec, data.pos)
             },
             pos: pos as u32,
         }
@@ -487,9 +488,9 @@ impl Stores {
     // Output the hash content and validate its content.
     #[allow(dead_code)]
     pub(super) fn hash_dump(&mut self, hash_ref: &DbRef, db: u16, keys: &[u16]) {
-        let claim = self.store(hash_ref).get_int(hash_ref.rec, hash_ref.pos) as u32;
-        let length = self.store(hash_ref).get_int(claim, 4) as u32;
-        let room = self.store(hash_ref).get_int(claim, 0) as u32;
+        let claim = self.store(hash_ref).get_u32_raw(hash_ref.rec, hash_ref.pos);
+        let length = self.store(hash_ref).get_u32_raw(claim, 4);
+        let room = self.store(hash_ref).get_i32_raw(claim, 0) as u32;
         let elms = (room - 1) * 2;
         println!(
             "dump hash length:{length} elms:{elms} {:.2}%",
@@ -502,7 +503,7 @@ impl Stores {
         };
         let mut l = 0;
         for i in 0..elms {
-            let rec = self.store(hash_ref).get_int(claim, 8 + i * 4) as u32;
+            let rec = self.store(hash_ref).get_u32_raw(claim, 8 + i * 4);
             if rec != 0 {
                 let mut s = String::new();
                 record.rec = rec;
