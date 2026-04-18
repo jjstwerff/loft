@@ -18,6 +18,28 @@ use graphics;
 use player;
 use tools;
 
+// ── Camera control (Step 21, P181 refactor) ─────────────────────
+// User's persistent orbit delta on top of the current camera
+// mode's default pose.  Accumulated by right-drag; reset on
+// camera-mode toggle so each mode opens at its canonical pose.
+// Applied via `camera_orbit` every frame AFTER `camera_follow` /
+// `camera_overview` compute the base pose.
+//
+// Lives in its own struct (not as two floats inline on
+// `EditorState`) as a P181 workaround — the inline-float tail
+// shape tripped a slot-allocator interaction that silently dropped
+// `undo_push` mutations from a sibling `&UndoStack` arg.  Using a
+// nested `Reference`-typed sub-struct as the tail restores the
+// previous layout behaviour while keeping the same semantics.
+pub struct CameraControl {
+  cc_az_offset: float not null,
+  cc_el_offset: float not null,
+}
+
+pub fn camera_control_default() -> CameraControl {
+  CameraControl { cc_az_offset: 0.0, cc_el_offset: 0.0 }
+}
+
 // ── Aggregate state ──────────────────────────────────────────────
 pub struct EditorState {
   es_map:          Map,
@@ -28,13 +50,7 @@ pub struct EditorState {
   es_occlusion_on: boolean,            // see-through toggle, honoured by renderer
   es_camera_mode:  CameraMode,
   es_camera:       RenderCamera,       // Step 17 — live camera state
-  // Step 21 — user's persistent orbit delta on top of the mode's
-  // default pose.  Accumulated by right-drag; reset on camera-mode
-  // toggle so the new mode starts from its canonical pose.  Applied
-  // via `camera_orbit` every frame AFTER `camera_follow` /
-  // `camera_overview` compute the base pose.
-  es_cam_az_offset: float not null,
-  es_cam_el_offset: float not null,
+  es_camera_ctrl:  CameraControl,      // Step 21 — orbit offsets (see above)
 }
 
 pub fn editor_default() -> EditorState {
@@ -47,8 +63,7 @@ pub fn editor_default() -> EditorState {
     es_occlusion_on: false,
     es_camera_mode:  CameraMode.Follow,
     es_camera:       camera_default(),
-    es_cam_az_offset: 0.0,
-    es_cam_el_offset: 0.0,
+    es_camera_ctrl:  camera_control_default(),
   }
 }
 
@@ -116,10 +131,10 @@ pub fn camera_apply_input(st: &EditorState, input: InputState) {
   }
   // Right-drag accumulates into persistent offsets.
   if input.in_rclick && (input.in_mouse_dx != 0 || input.in_mouse_dy != 0) {
-    st.es_cam_az_offset =
-      st.es_cam_az_offset + (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
-    st.es_cam_el_offset =
-      st.es_cam_el_offset + (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
+    st.es_camera_ctrl.cc_az_offset =
+      st.es_camera_ctrl.cc_az_offset + (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
+    st.es_camera_ctrl.cc_el_offset =
+      st.es_camera_ctrl.cc_el_offset + (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
   }
   // Mode-driven base pose — target tracks avatar in Follow, pins
   // to a high overview otherwise.  Both calls RESET the camera's
@@ -131,8 +146,8 @@ pub fn camera_apply_input(st: &EditorState, input: InputState) {
   }
   // Re-apply the user's orbit offset AFTER the base pose.  `camera_orbit`
   // clamps elevation internally to keep the view sane.
-  if st.es_cam_az_offset != 0.0 || st.es_cam_el_offset != 0.0 {
-    camera_orbit(st.es_camera, st.es_cam_az_offset, st.es_cam_el_offset);
+  if st.es_camera_ctrl.cc_az_offset != 0.0 || st.es_camera_ctrl.cc_el_offset != 0.0 {
+    camera_orbit(st.es_camera, st.es_camera_ctrl.cc_az_offset, st.es_camera_ctrl.cc_el_offset);
   }
 }
 
@@ -168,8 +183,8 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
     // mode opens with its canonical pose (user may have spun the
     // camera in the old mode; carrying that into the other would be
     // disorienting).
-    st.es_cam_az_offset = 0.0;
-    st.es_cam_el_offset = 0.0;
+    st.es_camera_ctrl.cc_az_offset = 0.0;
+    st.es_camera_ctrl.cc_el_offset = 0.0;
   }
   if input.in_occlusion_toggle {
     st.es_occlusion_on = !st.es_occlusion_on;
