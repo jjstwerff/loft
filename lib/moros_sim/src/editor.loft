@@ -65,6 +65,12 @@ fn tool_from_number(n: integer) -> ToolKind {
   ToolKind.None
 }
 
+// Overlay layer clamp.  The editor currently exposes a fixed
+// 8-level stack (cy 0..7) — chunks themselves can hold more, but
+// the walkable-editor UI keeps the range bounded so the user can't
+// drift into untextured space by accident.
+pub MAX_OVERLAY_CY = 7;
+
 pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   if input.in_tool_number >= 1 && input.in_tool_number <= 6 {
     st.es_tools.ts_current = tool_from_number(input.in_tool_number);
@@ -81,6 +87,15 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   }
   if input.in_undo {
     undo_pop(st.es_undo, st.es_map);
+  }
+  if input.in_redo {
+    redo(st.es_undo, st.es_map);
+  }
+  if input.in_layer_up && st.es_overlay_cy < MAX_OVERLAY_CY {
+    st.es_overlay_cy = st.es_overlay_cy + 1;
+  }
+  if input.in_layer_down && st.es_overlay_cy > 0 {
+    st.es_overlay_cy = st.es_overlay_cy - 1;
   }
   player_step(st.es_player, st.es_map, dt, input);
 }
@@ -109,7 +124,9 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
 //   "1".."6"                         — tool select
 //   "tab"                            — camera mode toggle
 //   "o"                              — occlusion toggle
+//   "r" "f"                          — overlay layer up / down
 //   "z"  (requires ctrl_pressed)     — undo
+//   "y"  (requires ctrl_pressed)     — redo
 //   "ctrl_s"  (composite)            — save (avoids colliding with
 //                                      movement "s")
 pub fn input_from_keys(
@@ -149,7 +166,10 @@ pub fn input_from_keys(
     if pk == "6" { out.in_tool_number = 6; }
     if pk == "tab" { out.in_mode_toggle      = true; }
     if pk == "o"   { out.in_occlusion_toggle = true; }
+    if pk == "r"   { out.in_layer_up   = true; }
+    if pk == "f"   { out.in_layer_down = true; }
     if pk == "z" && ctrl_pressed { out.in_undo = true; }
+    if pk == "y" && ctrl_pressed { out.in_redo = true; }
     if pk == "ctrl_s"            { out.in_save = true; }
   }
 

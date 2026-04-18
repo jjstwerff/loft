@@ -134,3 +134,86 @@ fn test_tick_advances_physics_walk_forward() {
   assert(et_wf.es_player.pl_pos.z > 5.5, "walked to z={et_wf.es_player.pl_pos.z}");
   assert(et_wf.es_player.pl_pos.z < 6.5, "not too far z={et_wf.es_player.pl_pos.z}");
 }
+
+// ── Redo (Step 13) ───────────────────────────────────────────────
+
+fn test_tick_redo_reapplies_undone_edit() {
+  et_r = build_state();
+  // Capture the pre-edit snapshot, edit, then undo via tick.
+  undo_push(et_r.es_undo, et_r.es_map, 0, 0, 0);
+  map_set_height(et_r.es_map, 0, 0, 0, 5);
+  et_ri = input_empty();
+  et_ri.in_undo = true;
+  editor_tick(et_r, et_ri, 1.0 / 60.0);
+  assert(map_get_hex(et_r.es_map, 0, 0, 0).h_height == 0, "undone to 0");
+  assert(redo_depth(et_r.es_undo) == 1, "one redo entry pending");
+
+  // Now redo.
+  et_rri = input_empty();
+  et_rri.in_redo = true;
+  editor_tick(et_r, et_rri, 1.0 / 60.0);
+  assert(map_get_hex(et_r.es_map, 0, 0, 0).h_height == 5, "redo reapplied");
+  assert(redo_depth(et_r.es_undo) == 0, "redo drained");
+}
+
+fn test_tick_redo_empty_is_noop() {
+  et_re = build_state();
+  et_rei = input_empty();
+  et_rei.in_redo = true;
+  editor_tick(et_re, et_rei, 1.0 / 60.0);
+  // No edits ever made; no redo entries; map unchanged.
+  assert(map_get_hex(et_re.es_map, 0, 0, 0).h_height == 0, "untouched");
+  assert(redo_depth(et_re.es_undo) == 0, "still empty");
+}
+
+// ── Overlay layer navigation (Step 14) ──────────────────────────
+
+fn test_tick_layer_up_increments() {
+  et_lu = build_state();
+  assert(et_lu.es_overlay_cy == 0, "start cy=0");
+  et_lui = input_empty();
+  et_lui.in_layer_up = true;
+  editor_tick(et_lu, et_lui, 1.0 / 60.0);
+  assert(et_lu.es_overlay_cy == 1, "→ 1");
+  editor_tick(et_lu, et_lui, 1.0 / 60.0);
+  assert(et_lu.es_overlay_cy == 2, "→ 2");
+}
+
+fn test_tick_layer_up_clamps_at_max() {
+  et_cm = build_state();
+  et_cm.es_overlay_cy = MAX_OVERLAY_CY;
+  et_cmi = input_empty();
+  et_cmi.in_layer_up = true;
+  editor_tick(et_cm, et_cmi, 1.0 / 60.0);
+  assert(et_cm.es_overlay_cy == MAX_OVERLAY_CY,
+         "clamp at {MAX_OVERLAY_CY}, got {et_cm.es_overlay_cy}");
+}
+
+fn test_tick_layer_down_decrements() {
+  et_ld = build_state();
+  et_ld.es_overlay_cy = 3;
+  et_ldi = input_empty();
+  et_ldi.in_layer_down = true;
+  editor_tick(et_ld, et_ldi, 1.0 / 60.0);
+  assert(et_ld.es_overlay_cy == 2, "→ 2");
+}
+
+fn test_tick_layer_down_clamps_at_zero() {
+  et_lz = build_state();
+  assert(et_lz.es_overlay_cy == 0, "start 0");
+  et_lzi = input_empty();
+  et_lzi.in_layer_down = true;
+  editor_tick(et_lz, et_lzi, 1.0 / 60.0);
+  assert(et_lz.es_overlay_cy == 0, "clamp at 0");
+}
+
+fn test_tick_layer_up_and_down_same_frame_net_zero() {
+  // Both flags true in one frame: up then down — cy unchanged.
+  et_both = build_state();
+  et_both.es_overlay_cy = 4;
+  et_bi = input_empty();
+  et_bi.in_layer_up = true;
+  et_bi.in_layer_down = true;
+  editor_tick(et_both, et_bi, 1.0 / 60.0);
+  assert(et_both.es_overlay_cy == 4, "up+down net zero, got {et_both.es_overlay_cy}");
+}

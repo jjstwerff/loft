@@ -128,3 +128,45 @@ fn test_combined_walk_jump_and_tool_select() {
   assert(ic.in_click, "clicked");
   assert(ic.in_mx == 400 && ic.in_my == 300, "mx/my");
 }
+
+// ── Overlay layer hotkeys (Step 14) ──────────────────────────────
+
+fn test_pressed_r_sets_layer_up() {
+  ir_held: vector<text> = [];
+  ir_pressed: vector<text> = ["r"];
+  ir = input_from_keys(ir_held, ir_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ir.in_layer_up, "r → layer_up");
+  assert(!ir.in_layer_down, "not layer_down");
+}
+
+fn test_pressed_f_sets_layer_down() {
+  ifk_held: vector<text> = [];
+  ifk_pressed: vector<text> = ["f"];
+  ifk = input_from_keys(ifk_held, ifk_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ifk.in_layer_down, "f → layer_down");
+  assert(!ifk.in_layer_up, "not layer_up");
+}
+
+fn test_held_r_does_not_repeat_layer_up() {
+  // Holding r without pressing this frame: NOT an edge → no layer-up.
+  ihr_held: vector<text> = ["r"];
+  ihr_pressed: vector<text> = [];
+  ihr = input_from_keys(ihr_held, ihr_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!ihr.in_layer_up, "held r without press: no edge");
+}
+
+// ── Redo hotkey (Step 13) ───────────────────────────────────────
+
+fn test_pressed_ctrl_y_is_redo() {
+  iry_held: vector<text> = [];
+  iry_pressed: vector<text> = ["y"];
+  iry = input_from_keys(iry_held, iry_pressed, 0, 0, 0, 0, 0, false, false, true);
+  assert(iry.in_redo, "ctrl+y → redo");
+}
+
+fn test_pressed_y_without_ctrl_is_not_redo() {
+  iny_held: vector<text> = [];
+  iny_pressed: vector<text> = ["y"];
+  iny = input_from_keys(iny_held, iny_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!iny.in_redo, "plain y (no ctrl) is NOT redo");
+}
