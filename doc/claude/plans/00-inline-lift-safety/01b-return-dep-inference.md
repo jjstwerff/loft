@@ -1,133 +1,107 @@
-# Phase 1b — return-dep inference for mixed-return callees
+# Phase 1b — return-dep inference for mid-body `return` statements
 
-Status: **open** (follow-up to Phase 1).
+Status: **Done** — Reference + Enum(struct-enum) arms landed.  Vector arm
+intentionally deferred (see "Scope trimmed").
 
-## Problem
+## Root cause
 
-The Phase 1 gate on `0x8000` only fires when the callee's
-`returned` type carries a non-empty `dep` chain.  Return-dep
-inference populates this correctly for callees whose body has
-ONE return path that's a view:
+The Phase 1 gate at `src/state/codegen.rs:918` / `~1295` reads
+`def.returned.depend()`.  That chain is populated by two helpers in the parser's
+second pass:
 
+| Helper | What it merges | Called from |
+|---|---|---|
+| `text_return(ls)` (`control.rs:2264`) | deps of `Type::Text` returns | `block_result` (tail) AND `parse_return` (mid-body) |
+| `ref_return(ls)` (`control.rs:2351`) | deps of `Type::Reference` / `Vector` / `Enum(struct-enum)` returns | **only** `block_result` (tail) |
+
+Asymmetry: Text was handled everywhere; Reference/Vector/Enum only via the
+tail path.  A function like
 ```loft
-fn first_inner(c: Container) -> Inner {
-  c.items[0]           // always a view
-}
-// Inferred as: Inner["c"]  ← dep non-empty, gate fires, safe.
-```
-
-But it FAILS for callees with mixed return paths:
-
-```loft
-pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
-  for gh_c in m.m_chunks {
-    if ... {
-      return gh_c.ck_hexes[idx];   // view into m
-    }
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];   // view — mid-body return
   }
-  Hex {}                             // owned-fresh fallback
+  Inner { n: 0 }           // owned — tail
 }
-// Inferred as: Hex  ← dep EMPTY, gate misses, still crashes.
+```
+lost the `[c]` dep from the mid-body path.  `block_result`'s tail was owned so
+`ref_return([])` was a no-op.  `def.returned` stayed `Reference(Inner, [])`.
+Gate missed.  `OpCopyRecord | 0x8000` fired.  SIGSEGV.
+
+## Fix
+
+`src/parser/control.rs::parse_return` — after the existing `convert` /
+`validate_convert` block, added a ref-merge that mirrors the same arms
+`block_result` has at line 340.
+
+```rust
+if self.data.def_type(self.context) != DefType::Generic {
+    if let Type::Reference(_, ls) = &t {
+        if ls.is_empty() {
+            let extra = Self::collect_hidden_ref_args(&v, &self.data);
+            if !extra.is_empty() {
+                self.ref_return(&extra);
+            }
+        } else {
+            self.ref_return(ls);
+        }
+    } else if let Type::Enum(_, true, ls) = &t {
+        self.ref_return(ls);
+    }
+}
 ```
 
-Both returns go through the same return slot, but one is a view
-and one is owned.  The inferencer appears to take the
-intersection (both paths must share the dep) instead of the union
-(any path with a dep tags the return as borrowed).
+The existing `text_return` and `!self.first_pass` vector-writeback branches
+remain unchanged.
 
-Demonstrated by:
-- Variant 01 (consistent-view `first_inner`) → correctly tagged,
-  Phase 1 gate fires, fixture passes.
-- `lib/moros_sim/src/moros_map.loft::map_get_hex` → mixed return,
-  tagged `Hex`, Phase 1 gate misses, `test_edit_at_hex_raise`
-  still needs the hoist-to-local workaround.
+## Verification
 
-## Goal
+1. `LOFT_LOG=static` on `snippets/07_mixed_return.loft`:
+   - Pre-fix: `fn n_first_or_empty(...) -> Inner { ... -> ref(Inner)` (no dep).
+   - Post-fix: `-> ref(Inner)["c"]` (dep merged from mid-body `return c.items[idx]`).
+2. OpCopyRecord emissions at call sites:
+   - Pre-fix: `tp=0x803f` (0x8000 ON) → frees caller's store → SIGSEGV.
+   - Post-fix: `tp=0x3f` (OFF) → gate fires → no free → correct.
+3. All 16 snippet variants pass (01-04, 07-17).
+4. `lib/moros_sim/tests/picking.loft::test_edit_at_hex_raise` passes WITHOUT
+   the `h = map_get_hex(...)` hoist workaround.  Workaround removed.
+5. moros_sim full suite: 137 passes across 12 files.
+6. moros_ui full suite: 41 passes across 4 files.
+7. 8 P120 leak regressions stay green.
 
-Make return-dep inference conservative: if ANY return path
-produces a borrowed-view type, the declared return type's `dep`
-chain should contain (at least) that view's deps.  Over-tagging
-is fine — tagging a truly-owned return as borrowed merely leaves
-the caller responsible for freeing (the caller already is, via
-scope analysis).
+## Scope trimmed: Vector arm deferred
 
-## Fix path candidates
+My initial fix also mirrored the Vector arm (`Type::Vector(_, ls) => ref_return(ls)`).
+That broke moros_ui's layout tests with
+`Incorrect var __ref_2[65535] versus 516 on n_panel_build`.
 
-1. **Inference-level union.**  Find the pass that resolves
-   declared-without-annotation return types.  When walking
-   `return expr` statements, take `expr.type().depend()` at each
-   return and merge into the function's return dep.  Keep the
-   existing intersection as the "the return is owned" signal
-   only if EVERY path is owned.
-2. **Syntax-level explicit annotation.**  Provide a way to write
-   `-> Hex[m]` in source so authors of accessor-style functions
-   can hand-annotate.  Rename or extend an existing annotation
-   syntax; don't invent a new one unless needed.  This is a
-   language-surface change and probably belongs in Phase 3 (spec)
-   rather than here.
-3. **Callee-side audit + fix.**  For each known accessor in the
-   ecosystem with mixed returns, rewrite the body so every return
-   is a view (e.g. pre-allocate an "empty Hex" in a well-known
-   location of the map and return a view to IT for the not-found
-   case).  Invasive per-call-site work, doesn't fix the core
-   compiler issue.
+Cause: `palette_items_for_tool` has mid-body returns like
+`return HEIGHT_STEP_LABELS;` (global const) and `return pi_list;` (local), and
+their Vector types' dep chains reference these non-argument variables.  When
+`ref_return` tried to promote them to hidden ref-args, the resulting signature
+added hidden args for constants and otherwise-local variables that callers
+have no way to supply.  Reference/Enum returns don't hit this because their
+typical dep vars (e.g. `c` in `return c.items[idx]`) are already function
+parameters — `ref_return`'s `attr_names.get(n)` idempotency branch triggers
+and no new hidden arg is created.
 
-Prefer Option 1.  Option 2 is a possible follow-up that reduces
-reliance on inference for tricky cases.  Option 3 is a last resort.
+Deferring the Vector arm is fine for now because no SIGSEGV variant has been
+observed for Vector returns; the problem is specific to Reference/Enum.  A
+future Phase 1c could tackle Vector safely by:
+1. filtering `ls` to include only function-parameter vars, OR
+2. extending `ref_return` to refuse to promote globals/consts, OR
+3. a separate copy-into-caller-buffer mechanism for mixed-return Vectors.
 
-## Suspected inference site
+Open as follow-up only when a concrete Vector SIGSEGV variant appears.
 
-Look for the pass that computes `def.returned` after parsing a
-function body without an explicit return-type dep annotation.
-Candidates:
+## Known consequence: owned-fallback leak
 
-- `src/parser/definitions.rs` — function-parsing, type capture.
-- `src/typedef.rs` / `src/parser/mod.rs::actual_types` — type
-  resolution passes.
-- `src/scopes.rs` — scope analysis may adjust types with inferred
-  deps.
+For `first_or_empty`'s owned-fallback path (`Inner { n: 0 }`), the fresh store
+is no longer freed by 0x8000.  One small struct leaks per fallback call.
+Not corruption — just a leak.  Rare error-path for `map_get_hex`-style
+accessors.  Not a show-stopper.  A future Phase 1c could promote Reference
+returns to a caller-provided scratch buffer similar to the `__ref_1` vector
+mechanism.
 
-Use `LOFT_LOG=static` on variant 01 and map_get_hex side-by-side;
-the render-level display of `fn <name> … -> X[dep]` tells us what
-the pass has already inferred.  If the render shows `-> Hex` for
-map_get_hex even when the body contains `return gh_c.ck_hexes[idx]`,
-the inference pass isn't propagating the dep for that return — find
-the code that walks return statements and fix it.
-
-## Variants to add
-
-Create these in `snippets/` and promote to `tests/lib/` post-fix:
-
-- `07_mixed_return.loft` — callee with `if ... return view; else
-  return owned` shape.  Pre-fix: inline-lift crashes.  Post-fix:
-  passes.
-- `08_all_owned_return.loft` — control: every path is owned.
-  Gate doesn't fire, flag stays on, no regression.
-- `09_all_view_return.loft` — control: every path is a view (this
-  is variant 01's shape, already covered).
-
-## Success criteria
-
-1. `lib/moros_sim/src/moros_map.loft::map_get_hex`'s return shows
-   `-> Hex[m]` in the LOFT_LOG=static dump after the fix.
-2. `test_edit_at_hex_raise` in `picking.loft` can use the
-   natural inline form: `assert(map_get_hex(e.es_map, 3, 2, 0).h_height
-   == 4, "... {map_get_hex(…).h_height}")` — without the hoist
-   workaround.
-3. The `07_mixed_return.loft` regression passes.
-4. No new failures in the full workspace suite.
-
-## Non-goals
-
-- Eliminating the need for `0x8000` entirely.  Owned-return
-  callees still use it.
-- Adding new syntax for return-dep.  Option 2 is deferred until
-  the inference-based fix proves insufficient.
-
-## Budget
-
-90-120 minutes for the inference fix + verification.  Bail out if
-the inference pass turns out to be more intricate than it looks;
-in that case, fall back to Option 3 (patch `map_get_hex` body to
-return a view in the not-found case too — e.g. store an "empty
-hex" sentinel in each chunk and return a view to it).
+P120 leak regressions (all 8) stay green because they cover
+tail-only / consistent-return cases, not mixed returns.

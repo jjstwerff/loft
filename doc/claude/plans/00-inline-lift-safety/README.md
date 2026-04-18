@@ -52,11 +52,11 @@ budget.
 | `README.md` | Goal + index (this file) | — |
 | `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | **Done** — Option B chosen |
 | `01-p181-fix.md` | Phase 1 — gate `0x8000` on callee return-dep (two codegen sites) | **Done-partial** — covers consistent-view callees |
-| `01b-return-dep-inference.md` | Phase 1b — teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed (blocks `map_get_hex`) | **Open — primary live gap** |
+| `01b-return-dep-inference.md` | Phase 1b — teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed (blocks `map_get_hex`) | **Done** — Reference + Enum arms; Vector deferred |
 | `01c-dynamic-dispatch.md` | Phase 1c — CallRef (fn-ref / interface-method) safe default when the callee isn't statically knowable | **Likely-closed** — variant 08 passes; revisit only if Phase 2 finds a case |
 | `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Likely-closed** — variant 09 probe passes; revisit if a real shape surfaces |
 | `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | Not started |
-| `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Open** — depends on Phase 1b outcome |
+| `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Likely-closed** — variant 17 passes after Phase 1b; revisit only if a new multi-call shape surfaces |
 | `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | Not started |
 | `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | Not started |
 
@@ -149,7 +149,7 @@ any snippet to re-confirm.
 | 01c | `01c_inline_only.loft`         | Minimal: one inline-lift line                         | **PASS** (was SIGSEGV pre-Phase-1) | 0 / 1 |
 | 01d | `01d_var_arg_inline.loft`      | Inline-lift, Var arg (control)                        | PASS | 0 |
 | 04  | `04_owned_control.loft`        | Owned-result callee, inline-lift (control)            | PASS | 0 |
-| 07  | `07_mixed_return.loft`         | Mixed-return callee (view + owned fallback)           | **SIGSEGV** | 1b |
+| 07  | `07_mixed_return.loft`         | Mixed-return callee (view + owned fallback)           | **PASS** (was SIGSEGV pre-Phase-1b) | 1b |
 | 08  | `08_dynamic_dispatch.loft`     | fn-ref call with borrowed-view result                 | PASS | 1c probe (no hole found) |
 | 09  | `09_owned_with_aliasing.loft`  | Owned-return callee mutating an expression arg        | PASS | 1d probe (no hole found) |
 | 10  | `10_inline_in_condition.loft`  | Single inline-lift in `if` condition                  | PASS | 2a (consistent view) |
@@ -159,21 +159,19 @@ any snippet to re-confirm.
 | 14  | `14_mixed_return_various_contexts.loft` | Mixed-return in condition / assign (single calls)  | PASS | 2a / 1b interaction |
 | 15  | `15_println_format.loft`       | SINGLE mixed-return inline in `println` format        | PASS | 2a |
 | 16  | `16_single_call_assert.loft`   | SINGLE mixed-return in assert cond, literal msg       | PASS | 2a |
-| 17  | `17_println_two_calls.loft`    | TWO mixed-return inline calls in one `println` fmt    | **SIGSEGV** | 2a — the real multi-call target |
+| 17  | `17_println_two_calls.loft`    | TWO mixed-return inline calls in one `println` fmt    | **PASS** (was SIGSEGV pre-Phase-1b) | 2a — closed by Phase 1b |
 
 Key findings from the inventory:
-- All passing variants confirm Phase 1's gate is working.
-- Only TWO shapes reproduce the crash today:
-  1. Mixed-return callee in a single context (variant 07) — fixed
-     by Phase 1b.
-  2. Multiple inline-lift calls to the mixed-return callee in one
-     expression (variant 17) — should also be fixed by Phase 1b
-     (same root cause: the first call's `0x8000` free corrupts
-     source, second call walks freed memory).  If Phase 1b
-     doesn't automatically cover 17, Phase 2a activates.
-- The "non-format context" hypothesis (Phase 2a in its original
-  framing) is likely moot — all single-call non-format variants
-  pass.
+- Phase 1b (Reference + Enum arms in `parse_return`) closes both
+  SIGSEGV shapes.  Variant 07 and 17 both PASS post-fix.
+- The Vector arm was deliberately NOT added — doing so promoted
+  globals and locals (e.g. `HEIGHT_STEP_LABELS`, `pi_list` in
+  `palette_items_for_tool`) to hidden ref-args, breaking callers
+  with `Incorrect var __ref_2[65535]`.  See 01b for details.
+- The "non-format context" hypothesis is moot — all single-call
+  non-format variants pass, and all mixed-return variants pass
+  after Phase 1b.  Phase 2a remains open only as a safety net if
+  a new multi-call shape ever surfaces.
 
 ## Provenance
 

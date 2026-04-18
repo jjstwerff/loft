@@ -70,18 +70,10 @@ fn test_edit_at_hex_raise() {
   e.es_tools.ts_current = ToolKind.RaiseHex;
   e.es_tools.ts_height_step = 4;
   edit_at_hex(e, 3, 2);
-  // P181 workaround still needed (phase-1 gate doesn't cover this
-  // shape): hoist `map_get_hex` into a local.  Root cause: the
-  // callee has a MIXED-return body (view from `ck_hexes[idx]` AND
-  // owned-fresh `Hex {}` fallback).  Return-dep inference tags the
-  // function as owned, so the `0x8000` free-source flag is set.
-  // Gate doesn't fire → crash / corruption.  Tracked in phase
-  // `01b-return-dep-inference.md` of the inline-lift-safety
-  // initiative.
-  h = map_get_hex(e.es_map, 3, 2, 0);
-  assert(h.h_height == 4, "hex raised; got {h.h_height}");
-  d = undo_depth(e.es_undo);
-  assert(d == 1, "one logical undo entry; got {d}");
+  assert(map_get_hex(e.es_map, 3, 2, 0).h_height == 4,
+         "hex raised; got {map_get_hex(e.es_map, 3, 2, 0).h_height}");
+  assert(undo_depth(e.es_undo) == 1,
+         "one logical undo entry; got {undo_depth(e.es_undo)}");
   assert(!in_batch(e.es_undo), "batch closed");
 }
 

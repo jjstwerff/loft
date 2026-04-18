@@ -2438,6 +2438,30 @@ impl Parser {
             } else if !self.convert(&mut v, &t, &r_type) {
                 self.validate_convert("return", &t, &r_type);
             }
+            // Phase 1b (inline-lift-safety): mirror block_result's ref/enum
+            // merge for mid-body `return` statements.  Without this, a function
+            // like `fn f(c) -> Inner { if ... return c.items[i]; Inner{} }` loses
+            // the `[c]` dep from the mid-body return path (only the owned-fresh
+            // tail reaches block_result), and codegen's 0x8000 gate misses at
+            // the call site → caller store corruption.  Skip for generic
+            // templates (same I9-var rationale as block_result line 340).
+            // Vector arm deliberately not mirrored: mid-body Vector returns can
+            // reference globals/locals which ref_return would promote to hidden
+            // ref args, breaking callers (see 01b for full analysis).
+            if self.data.def_type(self.context) != DefType::Generic {
+                if let Type::Reference(_, ls) = &t {
+                    if ls.is_empty() {
+                        let extra = Self::collect_hidden_ref_args(&v, &self.data);
+                        if !extra.is_empty() {
+                            self.ref_return(&extra);
+                        }
+                    } else {
+                        self.ref_return(ls);
+                    }
+                } else if let Type::Enum(_, true, ls) = &t {
+                    self.ref_return(ls);
+                }
+            }
             if let Type::Text(ls) = &t {
                 self.text_return(ls);
             } else if !self.first_pass {
