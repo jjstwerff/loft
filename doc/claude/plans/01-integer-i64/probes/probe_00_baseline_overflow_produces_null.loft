@@ -1,0 +1,15 @@
+// Probe 00 — baseline: confirm i32::MAX + 1 produces the null sentinel.
+// Expected: the arithmetic overflow silently produces null / i32::MIN.
+// This verifies that the sentinel mechanism is indeed live in the
+// release interpreter (the `checked_int!` macro's release branch).
+
+fn test_probe_00_baseline_overflow() {
+  p00_max = 2147483647;     // i32::MAX
+  p00_result = p00_max + 1;  // overflow
+  // If the sentinel channel is live, p00_result is null.
+  if p00_result == null {
+    println("VERDICT: baseline overflow → null (sentinel mechanism live)");
+  } else {
+    println("VERDICT: unexpected value {p00_result} (sentinel NOT live?)");
+  }
+}

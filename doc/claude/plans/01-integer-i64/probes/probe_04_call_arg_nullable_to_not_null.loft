@@ -1,0 +1,12 @@
+// Probe 04 — function parameter: `fn foo(x: integer not null)` called
+// with an overflow expression.  Tests whether call-site null-check
+// happens at compile time or runtime.
+
+fn p04_takes_not_null(x: integer not null) {
+  println("VERDICT: probe_04 received x = {x}");
+}
+
+fn test_probe_04_call_arg_nullable() {
+  p04_a = 2147483647;
+  p04_takes_not_null(p04_a + 1);
+}

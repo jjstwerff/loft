@@ -1,0 +1,11 @@
+// Probe 09 — array indexing with a nullable key.  `v[null]` or
+// `v[i32::MIN]` — does the vector read validate the index?
+
+fn test_probe_09_index_key_null() {
+  p09_v = [10, 20, 30];
+  p09_a = 2147483647;
+  p09_null_idx = p09_a + 1;   // null
+  // Accessing a vector with a null index — expected runtime behaviour?
+  p09_r = p09_v[p09_null_idx];
+  println("VERDICT: probe_09 v[null_idx] = {p09_r}");
+}

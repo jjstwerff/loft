@@ -1,6 +1,9 @@
 # Phase 0 — `not null` enforcement audit + G/G′ decision
 
-Status: **open** — gating every subsequent phase.
+Status: **done** — 11 probes run, 7 holes, 1 major surprise (`??` already
+catches arithmetic overflow).  Decision: **ship C54.G (trap) as default**
+with a possible **G-hybrid** extension captured as a Phase 1 design
+choice.  See "Audit result" at the end.
 
 ## Why this is Phase 0
 
@@ -137,3 +140,125 @@ an inventory past diminishing returns.
 2. Each probe classified with a committed verdict.
 3. Audit-result appendix committed.
 4. Phase 1 opens with the chosen option named in its file + title.
+
+---
+
+## Audit result (2026-04-18)
+
+All 11 probes built as `.loft` fixtures under
+`doc/claude/plans/01-integer-i64/probes/`.  Each ran via
+`./target/release/loft --tests <probe>.loft`; output parsed for the
+`VERDICT: ...` line the probe prints.
+
+### Per-probe verdicts
+
+| # | Probe | Verdict | Observed |
+|---|---|---|---|
+| 00 | baseline overflow | **CONFIRMED** | `i32::MAX + 1` produces null — sentinel mechanism is live in release interpreter |
+| 01 | field write nullable → not null | **HOLE** | `s.v = a + 1` (overflow) silently writes null into the `integer not null` field |
+| 02 | field write default-initialised | **HOLE** | same silent write on a field declared `integer not null = 0` |
+| 03 | field write nested path | **HOLE** | `a.b.v = overflow_expr` silently stores null at depth |
+| 04 | call arg nullable → not null | **HOLE** | `fn foo(x: integer not null); foo(a+1)` passes null silently |
+| 05 | chained call returning nullable | **HOLE** | `foo(bar())` where `bar` returns nullable and `foo` takes `not null` — null propagates |
+| 06 | return narrowing | **HOLE** | `fn passthrough(x) -> integer not null { x }` returns null when x is null |
+| 07 | happy-case `??` | **CLEAN** | `?? 0` correctly discharges null |
+| 08 | `??` on arithmetic | **CLEAN** (unexpected) | `(i32::MAX * 2) ?? 42` returns 42 — `??` DOES catch arithmetic overflow null |
+| 09 | array index null | **HOLE** | `v[null_idx]` silently returns null (no diagnostic, no bounds trap) |
+| 10 | `&` forwarding not-null | **CLEAN** | `fn inner(x: &integer); fn outer(y: &integer not null) { inner(y); }` preserves and mutates correctly |
+
+**Hole count: 7** (probes 01, 02, 03, 04, 05, 06, 09).
+**Clean count: 4** (probes 00, 07, 08, 10).
+
+### The decisive surprise — probe 08
+
+The pre-audit analysis assumed the `??` operator only discharged
+field-marked `not null` (based on the `self.expr_not_null` check at
+`src/parser/operators.rs:597`).  Probe 08 disproves that: `(a * b) ??
+42` returns 42 when `a * b` overflows.
+
+Conclusion: `??` uses a runtime null-check — it evaluates the LHS and
+if the result equals the type's null sentinel (`i32::MIN` for `integer`)
+it returns the RHS.  This is orthogonal to the compile-time
+`expr_not_null` tracking, which drives the deprecation warning for
+non-null inputs, not the runtime behaviour.
+
+**Implication for G vs G′.**  The design's G′ argument
+(QUALITY.md § 537) — "the `??` composition is the decisive win" — is
+already available *today* on overflow.  G would BREAK this idiom by
+trapping before `??` runs.
+
+### Decision: ship C54.G, but flag the `??` idiom regression
+
+Per the design's fallback rule (§ 555), 7 holes require G.  However,
+G introduces a user-visible regression: today `x = (a * b) ?? default`
+works; under G it traps.  To preserve that idiom without giving up
+G's safety, Phase 1 should consider a **G-hybrid** variant:
+
+- **Bare arithmetic overflow traps** (the 7-hole safety argument).
+- **Overflow inside a `?? default` context produces null instead of
+  trapping**, so `??` can catch.
+
+Compile-time detection: when codegen sees an arithmetic op whose
+result is *immediately* consumed by a `??`, emit the
+null-on-overflow variant.  Everywhere else, emit the trap variant.
+
+This is a third option not spelled out in QUALITY.md.  The Phase 1
+plan must decide between:
+
+1. **Pure G** — trap everywhere, including inside `??`.  Simplest.
+   Breaks the `?? default` idiom.  Users must write explicit guards
+   (`if a > 0 && b > 0 && a < i32::MAX / b { a * b } else { default }`).
+2. **G-hybrid** — trap by default, null-propagate inside `??`.
+   More implementation.  Preserves the idiom.
+
+Phase 1 opens on the G-hybrid option (path 2) as the primary
+candidate, with pure G as the fallback if the compile-time
+detection of the `OP ?? default` shape proves invasive.
+
+### Follow-up holes (not blocking Phase 1)
+
+Each of the 7 holes is a pre-existing null-enforcement gap,
+orthogonal to C54.  Filed as a list for a future tightening effort
+(probably Phase 7+ of this initiative or a sibling initiative):
+
+- **H1 — field writes**.  Emit a runtime null-check when assigning
+  into a `not null` field.  Covers probes 01, 02, 03.
+- **H2 — function parameters**.  Emit a runtime null-check at call
+  entry for `not null` parameters.  Covers probes 04, 05.
+- **H3 — return narrowing**.  Emit a runtime null-check on return
+  from a function declared `-> T not null`.  Covers probe 06.
+- **H4 — array indexing**.  Emit a runtime null-check or bounds
+  check on index before `OpGetVector`.  Covers probe 09.
+
+These do not block Phase 1 — they are tighter-net-null-contract work
+that can land incrementally.  They DO block a future G′ migration.
+
+### Rationale
+
+- **Why not ship G′ now?**  Probe 08 made G′'s case compelling
+  (the `??` idiom works today), but probes 01-06 + 09 show that
+  null can silently reach `not null` slots through 4 independent
+  paths.  G′ under those conditions means overflow nulls flow into
+  the same traps.  Safer to trap at the source until holes close.
+- **Why G-hybrid instead of pure G?**  Pure G breaks an idiom that
+  works today.  Migration pain without corresponding safety win
+  (the holes are H1-H4, not `??`).  G-hybrid preserves the idiom
+  at the cost of slightly more codegen complexity.  Phase 1's
+  first task: confirm the compile-time detection is tractable.
+- **What makes G-hybrid safe?**  Arithmetic WITHOUT `??` always
+  traps.  Arithmetic WITH `??` produces a null that's immediately
+  caught by the `??`.  No silent propagation either way.  The holes
+  H1-H4 are the null-reaching-contract issues, but they are
+  triggered by explicit null values (literals, explicit function
+  returns), not by arithmetic overflow anymore.
+
+### Phase 0 close
+
+- `Status: open` → `Status: done` (this file header updated).
+- 11 probe fixtures committed.
+- Phase 1 plan file (`01-checked-arith.md`) to be updated with
+  G-hybrid as primary, pure G as fallback, compile-time detection
+  design sketched.
+- H1-H4 hole list filed in the initiative README as future
+  sub-phases (`07-enforcement-H1-field-writes.md` etc., opened only
+  when prioritised).

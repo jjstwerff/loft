@@ -1,168 +1,188 @@
-# Phase 1 — Checked arithmetic (C54.G / G′)
+# Phase 1 — Checked arithmetic (C54.G-hybrid primary, pure G fallback)
 
-Status: **not started** — blocked by Phase 0 decision.  Title and
-content update once Phase 0 commits the G / G′ choice.
+Status: **not started** — unblocked by Phase 0.  Phase 0 audit result:
+ship G (trap on overflow), but preserve the `??`-discharge idiom via
+a compile-time-detected **G-hybrid** variant.  Pure G is the fallback
+if the detection proves invasive.
 
-## The surprise that makes this cheap
+## Phase 0's gift
 
-Loft already uses `checked_*` everywhere internally.  Look at
-`src/ops.rs::checked_int!` (lines 33–52):
+`src/ops.rs::checked_int!` (lines 33–52) and `checked_long!` (54–73)
+already gate every arithmetic handler through `checked_add` /
+`checked_mul` / `checked_sub` / `checked_div` / `checked_rem`.  Only
+the macro's **fallback arm** needs to change.
+
+`src/parser/operators.rs::??` (lines 592–670) already recognises the
+null sentinel at runtime and returns the RHS — probe 08 proved this
+works for arithmetic overflow today without any change.  The G-hybrid
+build benefits from this: inside a `??` context, null-propagate and
+let `??` discharge; outside, trap.
+
+## G-hybrid design
+
+### The distinction
+
+Every arithmetic op emits either:
+
+- **`Op{Add,Mul,…}IntTrap`** — the default.  Overflow / div-zero
+  → runtime trap with `file:line:col` diagnostic.
+- **`Op{Add,Mul,…}IntNullable`** — emitted only when the op's
+  result is immediately consumed by `??`.  Overflow / div-zero
+  → produce `i32::MIN` (the null sentinel).  `??` then catches.
+
+`_long` siblings mirror this pattern.
+
+Today's `Op{Add,Mul,…}Int` (the nullable-by-default variants) stay
+around as the Nullable version; we rename them for clarity and add
+the new Trap variants.
+
+### Compile-time detection
+
+At codegen for an arithmetic op, look UP the expression tree for the
+immediate parent node.  If the parent is `??`, emit the Nullable
+variant; else emit the Trap variant.
+
+Critical site: `src/parser/operators.rs` (binary-op codegen for `+`,
+`-`, `*`, `/`, `%`).  Around the dispatch to `OpAddInt` / `OpMulInt`
+/ etc., check the enclosing context.  The parser's context stack
+already tracks ancestor operators (`??` = `OpNullCoalesce` or
+similar).  When the enclosing op is `??` AND the current arithmetic
+op is the LHS of that `??`, pick Nullable.
+
+If the detection is ambiguous (e.g. `a * b + c ?? default` — does
+only `+` get Nullable, or does `*` too?), fall back to: only the
+direct LHS of `??` gets Nullable; everything deeper (including
+sub-expressions of that LHS) gets Trap.  That's conservative and
+easy to reason about.
+
+### Handler emission
+
+For each arithmetic op, `src/ops.rs` gets two functions:
 
 ```rust
-macro_rules! checked_int {
-    ($result:expr, $fallback:expr) => {{
-        match $result {
-            Some(v) if v != i32::MIN => v,
-            Some(_) => {
-                debug_assert!(false, "arith produced i32::MIN");
-                i32::MIN
-            }
-            None => {
-                debug_assert!(false, "arith overflow");
-                $fallback
-            }
-        }
-    }};
+// Nullable variant — current behaviour, returns sentinel on overflow.
+pub fn op_add_int_nullable(v1: i32, v2: i32) -> i32 { /* existing */ }
+
+// Trap variant — new.  Panic / runtime-error on overflow.
+pub fn op_add_int_trap(v1: i32, v2: i32) -> i32 {
+    if v1 == i32::MIN || v2 == i32::MIN {
+        panic!("arithmetic with nullable input (= null sentinel)");
+    }
+    match v1.checked_add(v2) {
+        Some(v) if v != i32::MIN => v,
+        _ => panic!("arithmetic overflow"),
+    }
 }
 ```
 
-Every arithmetic handler (`op_add_int`, `op_mul_int`, etc. at lines
-531–571; `op_add_long` at 313; `_nn` variants at 367–405) already
-routes through `checked_add` / `checked_mul` / `checked_sub` /
-`checked_div` / `checked_rem`.  The ONLY remaining channel for
-silent-wrong-result is the **`$fallback` arm that returns
-`i32::MIN`** — i.e. overflow silently becomes the null sentinel.
+The panic carries `file:line:col` via the existing debug-map /
+stack-trace infrastructure (`src/stack.rs` or similar).
 
-So Phase 1's surface area is small and centralised: **change the
-`None` and "result is sentinel" arms of the two macros
-(`checked_int!` + `checked_long!`) from "return sentinel" to "trap"
-(G) or "return null but lift the hole-gated coercions" (G′)**.
+Same pattern for `sub`, `mul`, `div`, `rem` across both `int` and
+`long`.
 
-## Scope if Phase 0 picks G (expected)
+Division / modulo by zero:
+- `op_div_int_nullable`: today returns `i32::MIN` on `v2 == 0`.
+- `op_div_int_trap`: panic with "division by zero at file:line:col".
 
-### Primary edit: `src/ops.rs`
+### Interpreter trap landing
 
-Change `checked_int!` and `checked_long!` macros:
-
-```rust
-// G-semantics — trap on overflow / sentinel result.
-macro_rules! checked_int {
-    ($result:expr, $context:expr) => {{
-        match $result {
-            Some(v) if v != i32::MIN => v,
-            _ => panic!("arithmetic overflow or sentinel result in {}", $context),
-        }
-    }};
-}
-```
-
-(Or `diagnostic!` / dedicated error type rather than panic; the
-handler at the interpreter loop catches the trap and reports line:col
-of the operator that tripped it.)
-
-Update all callers (`op_add_int`, `op_sub_int`, `op_mul_int`,
-`op_div_int`, `op_rem_int`, the `_long` siblings, and the `_nn`
-variants).  The callers' up-front `v != i32::MIN` guards stay — they
-detect nullable INPUTS; the macro now traps on a nullable OUTPUT.
-
-### Division / modulo by zero
-
-Today `op_div_int` at line 561 and `op_rem_int` at line 571 both
-guard `v2 != 0` and return `i32::MIN` on divide-by-zero.  Change:
-when `v2 == 0`, trap with a div-by-zero error (distinct diagnostic
-from overflow).  Same for `_long` and `_nn` variants.
-
-### Interpreter trap handler
-
-The handler needs a landing spot — probably `src/state/mod.rs` where
-the opcode dispatch loop lives.  When `checked_int!` (or its new
-trap function) fires, the runtime walks the current PC back to the
-source line/col via the existing debug-map infrastructure and emits:
-
-```
-arithmetic overflow at file:line:col (expr: a * b, lhs=..., rhs=...)
-```
-
-Then exit non-zero.  Do NOT continue execution.
+When the panic fires, `src/state/mod.rs`'s opcode dispatch loop
+catches it and reports.  Hook into whichever diagnostic emitter the
+rest of the interpreter uses.  Suggested site: the top-level
+`execute` loop in `src/state/mod.rs`.
 
 ### Native codegen path
 
-**Auto-covered**.  Native codegen emits `ops::op_*` calls directly
-(see `src/generation/mod.rs:474` — `writeln!(w, "use loft::ops;")`).
-Changing the macro changes the behaviour of every emitted path.
-No separate native edit needed.
+`src/generation/mod.rs:474` — native codegen already emits
+`use loft::ops;` and calls `ops::op_*` directly.  Change: codegen
+picks the Trap vs Nullable function name based on the same ancestor
+check that the interpreter codegen uses.  Both paths share the
+codegen logic in `src/state/codegen.rs` or `src/parser/operators.rs`.
 
 ### WASM path
 
-**Auto-covered**.  WASM compiles to bytecode and executes via the
-same interpreter (`src/state/mod.rs:14` — `use crate::fill::OPERATORS`).
-No separate WASM edit.
+WASM shares the interpreter (`src/state/mod.rs:14`).  No separate
+edit.
 
-## Scope if Phase 0 picks G′
+## Scope — file list
 
-G′ requires BOTH changing the macros AND tightening the `not null`
-enforcement surface so nulls are caught at contract boundaries.
-Since Phase 0 is expected to return "≥1 holes," this branch is
-unlikely.  If it fires, open sub-phases for each hole identified in
-Phase 0 and land them in sequence BEFORE the macro change.
+| File | Change |
+|---|---|
+| `src/ops.rs:33-52` | Keep existing `checked_int!` macro as the **Nullable** logic.  Extract a new `checked_int_trap!` macro that panics instead of returning `i32::MIN`. |
+| `src/ops.rs:54-73` | Same for `checked_long!`. |
+| `src/ops.rs:531-571` | Add `op_{add,sub,mul,div,rem}_int_trap` functions paralleling the existing int handlers.  Existing handlers become the Nullable variants (rename for clarity). |
+| `src/ops.rs:313-405` | Same for long, including `_nn` variants. |
+| `src/fill.rs:477-656` | Register new opcode handlers for the Trap variants.  Existing `OpAddInt` / `OpMulInt` / etc. become `OpAddIntNullable` / `OpMulIntNullable` (or keep old names as Nullable aliases to avoid stdlib rewriting). |
+| `default/01_code.loft` | Add the new Trap opcode declarations.  Rename existing `OpAddInt` family to `...Nullable` if we want explicit names, or leave as-is and add `...Trap` siblings. |
+| `src/native.rs` | Register the Trap variants. |
+| `src/parser/operators.rs` | Arithmetic-op codegen: detect "immediate LHS of `??`" context and pick Nullable vs Trap. |
+| `src/state/codegen.rs` | Same detection logic if codegen emits arithmetic from here instead of operators.rs (check during implementation). |
+| `src/state/mod.rs` | Trap handler: catch the panic, report `file:line:col` + operator, exit non-zero. |
 
 ## Test plan
 
-Un-ignore (or create) and make pass on all three backends:
+Un-ignore / create.  All tests run on interpreter + native.
 
 | Test | Purpose |
 |---|---|
-| `c54g_checked_add_traps_on_overflow` | `(i32::MAX + 1)` now traps, not returns MIN |
-| `c54g_checked_sub_traps_on_underflow` | `(i32::MIN + 1) - 2` traps |
-| `c54g_checked_mul_traps_on_overflow` | `(i32::MAX * 2)` traps |
-| `c54g_checked_div_traps_on_abs_min` | `i32::MIN / -1` traps (the only `checked_div` overflow case) |
-| `c54g_div_by_zero_traps` | `a / 0` traps with dedicated "division by zero" diagnostic |
-| `c54g_mod_by_zero_traps` | `a % 0` traps |
-| `c54g_long_add_traps_on_overflow` | i64 version |
-| `c54g_long_div_by_zero_traps` | i64 version |
-| `c54g_explicit_i32_min_literal_preserved` | `x = -2_147_483_648` — literal stays, not a trap |
-| `c54g_nullable_input_not_a_trap` | `null + 1` — propagates null (doesn't trap), because the macro's up-front `v != i32::MIN` guards keep nullable-input semantics |
-| `c54g_interp_and_native_agree_on_trap` | same program under interpreter and native emits matching diagnostics |
-| `c54g_interp_and_wasm_agree_on_trap` | same program under interpreter and WASM emits matching diagnostics |
+| `c54g_checked_add_traps_on_overflow` | `i32::MAX + 1` in bare context → trap |
+| `c54g_checked_sub_traps_on_underflow` | `i32::MIN + 1 - 2` in bare context → trap |
+| `c54g_checked_mul_traps_on_overflow` | `i32::MAX * 2` in bare context → trap |
+| `c54g_checked_div_traps_on_abs_min` | `i32::MIN / -1` in bare context → trap |
+| `c54g_div_by_zero_traps` | `a / 0` in bare context → trap with "division by zero" |
+| `c54g_mod_by_zero_traps` | `a % 0` in bare context → trap |
+| `c54g_long_add_traps` | `i64::MAX + 1` (or via `integer` post-Phase-2) traps |
+| `c54g_long_div_by_zero_traps` | i64 div-by-zero traps |
+| **`c54g_hybrid_nullcoalesce_discharges_overflow`** | `(i32::MAX * 2) ?? 42` returns 42 (G-hybrid preserves idiom) |
+| **`c54g_hybrid_nullcoalesce_discharges_div_zero`** | `(a / 0) ?? -1` returns -1 |
+| `c54g_nested_arith_inside_nullcoalesce` | `((a + b) * c) ?? 0` — only the immediate LHS of `??` gets Nullable; nested overflow traps |
+| `c54g_nullable_input_traps` | `null + 1` in bare context traps with "nullable input" (not silent sentinel) |
+| `c54g_explicit_i32_min_literal_preserved` | `x = -2_147_483_648` literal stays intact in storage (no trap) |
+| `c54g_interp_and_native_agree_on_trap` | Same program under interpreter and native emits matching trap diagnostics |
 
-Plus full workspace suite (`scripts/find_problems.sh --bg --wait`) —
-0 failures, confirming that existing stdlib / libs don't accidentally
-rely on the silent-sentinel behaviour.  Any site that DOES rely on it
-needs rewriting with `??` (post-G′) or explicit guards (pre-G′).
+Plus full workspace suite — any test that relied on the silent-sentinel
+behaviour needs rewriting with explicit `??` or guards.  The `probes/`
+fixtures (probes 01-06, 09) also get re-checked: under G-hybrid,
+probes 01-06 and 09 now trap (good — the null can't be silently
+produced in the first place).
 
-## Critical files
+## Risk: the `OP ?? default` detection
 
-- `src/ops.rs` — primary edit (macros + per-op functions, lines
-  33–571 for int, 251–480 for long + `_nn`).
-- `src/state/mod.rs` — trap handler landing (opcode dispatch loop).
-- `src/fill.rs` — confirm no additional arithmetic paths bypass
-  `ops.rs` (they shouldn't, based on audit).
-- `default/01_code.loft` — verify every arithmetic operator
-  definition routes through the changed ops (they do today).
+The detection's precision matters.  Too liberal (everything inside
+`??` is Nullable) and users lose the trap where they expected it.
+Too strict (only bare binary ops) and common shapes like
+`(a * b + c) ?? 0` trap on the `+` unexpectedly.
 
-## Risks
+**Policy**: only the **outermost arithmetic op whose result directly
+becomes the LHS of `??`** gets the Nullable variant.  Sub-expressions
+trap.  In `(a * b + c) ?? 0`, `+` is Nullable; `*` traps if it
+overflows.  This forces users to split: `inner = a * b; (inner + c)
+?? 0`.  Clear, predictable.
 
-1. **Stdlib / lib silent-sentinel dependence.**  If any loft code
-   currently relies on `a * b` returning `i32::MIN` instead of
-   trapping, the full suite will catch it.  Each such site is a
-   trap under G but a bug regardless — fix at the site.
-2. **Debug-build behaviour change.**  Today `checked_int!` has
-   `debug_assert!(false, ...)` — debug already panics.  G just
-   extends the behaviour to release.  No debug-vs-release drift.
-3. **Diagnostic quality.**  Trap message must include operator
-   location.  Without good diagnostics, users can't find the
-   overflow site.  Budget 30 min for the diagnostic path.
+Document this rule in LOFT.md's "Arithmetic safety" section (Phase 6).
 
 ## Budget
 
-**240 minutes** for implementation + parity verification across
-backends + full suite.  If a single stdlib site breaks under G,
-budget `01a-stdlib-overflow-fix.md` as a sub-phase.
+**240-360 minutes** for implementation + parity.  If the compile-time
+detection at the operator-codegen site exceeds 100 LoC, pivot to
+pure G (documented as fallback — removes the Nullable codepath
+entirely, breaks the `??` idiom for overflow, users migrate to
+explicit guards).
+
+Sub-phases:
+- `01a-native-trap-parity.md` if native diagnostics diverge from
+  interpreter.
+- `01b-pure-g-fallback.md` if G-hybrid detection proves too complex.
 
 ## Deliverables
 
-- `src/ops.rs` macro rewrite + trap landings.
-- `src/state/mod.rs` trap-handler hook.
-- New / un-ignored tests.
-- QUALITY.md C54 entry: G (or G′) marked Done.
-- Initiative README phase-table status flip.
+- `src/ops.rs` Trap + Nullable macros + functions.
+- `src/fill.rs` handler registration.
+- `src/parser/operators.rs` codegen detection.
+- `src/state/mod.rs` trap landing.
+- 14 named tests (un-ignored or new) passing on interpreter + native.
+- Probes 01-06, 09 re-run under G-hybrid — all now trap instead of
+  silent-null.
+- QUALITY.md C54.G entry: Closed.
+- LOFT.md "Arithmetic safety" section stub (full writeup in Phase 6).

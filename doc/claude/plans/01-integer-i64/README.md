@@ -46,8 +46,8 @@ initiative is the execution plan.
 | File | Phase | Status |
 |---|---|---|
 | `README.md` | Goal + index (this file) | — |
-| `00-null-enforcement-audit.md` | Phase 0 — audit `not null` enforcement surface; decide G vs G′ | Not started |
-| `01-checked-arith.md` | Phase 1 — land the chosen semantic fix (C54.G trap OR C54.G′ null-on-overflow) across interpreter + native + WASM | Not started |
+| `00-null-enforcement-audit.md` | Phase 0 — audit `not null` enforcement surface; decide G vs G′ | **Done** — 7/11 holes found; decision: ship **G-hybrid** (trap default, null inside `??`) |
+| `01-checked-arith.md` | Phase 1 — land C54.G-hybrid: trap on bare overflow, null inside `??` so idiom `x = (a*b) ?? default` still works | Not started |
 | `02-i64-storage.md` | Phase 2 — C54.A: widen `integer` to i64, opcode replumb, `.loftc` version bump, `--migrate-i64` tool | Not started |
 | `03-u32-type.md` | Phase 3 — C54.C: add `u32` as a stdlib type; RGBA use-case probe | Not started |
 | `04-deprecate-long.md` | Phase 4 — C54.B: remove `long` + `l` suffix, `--migrate-long` tool, stdlib/tests/lib sweep | Not started |
@@ -59,6 +59,21 @@ commits.  Phases can produce follow-up plans if the work surfaces
 non-trivial sub-issues; add them to this table under the triggering parent
 (e.g. `02a-migration-tool-design.md` if the migration tool outgrows its
 section of `02-i64-storage.md`).
+
+### Follow-up holes filed by Phase 0
+
+The audit surfaced 7 pre-existing null-enforcement gaps orthogonal to
+C54.  They do NOT block any C54 phase; tracked for future enforcement
+work:
+
+- **H1** — `not null` field write runtime check (probes 01, 02, 03).
+- **H2** — `not null` function parameter runtime check (probes 04, 05).
+- **H3** — `-> T not null` return narrowing runtime check (probe 06).
+- **H4** — array/hash index null/bounds runtime check (probe 09).
+
+Each opens its own sub-phase only when prioritised
+(`07-enforcement-H1-field-writes.md`, etc.).  A future C54.G′
+migration (null-on-overflow everywhere) depends on H1-H4 closing.
 
 ## Dependency ordering
 
