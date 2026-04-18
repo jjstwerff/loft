@@ -233,12 +233,19 @@ fn OpDivLong(v1: long, v2: long) -> long;
 #rust"ops::op_div_long(@v1, @v2)"
 fn OpRemLong(v1: long, v2: long) -> long;
 #rust"ops::op_rem_long(@v1, @v2)"
-// C54.G-hybrid long Nullable variants: deferred — opcode budget maxed at
-// 255/255 today.  Phase 5 (C54.E) deletes duplicate Op*Long ops after
-// Phase 2 widens `integer` to i64, freeing slots.  At that point these
-// become trivially available.  Until then, `long`-typed arithmetic
-// inside `??` keeps trap semantics (users hit it rarely because `long`
-// itself is slated for deprecation in Phase 4).
+// C54.G-hybrid (Phase 2b) — nullable long arithmetic.  Emitted only
+// when the op's result is the immediate LHS of `??` so `??` can
+// discharge the null.  Mirrors Op{Add,Min,Mul,Div,Rem}IntNullable.
+fn OpAddLongNullable(v1: long, v2: long) -> long;
+#rust"ops::op_add_long_nullable(@v1, @v2)"
+fn OpMinLongNullable(v1: long, v2: long) -> long;
+#rust"ops::op_min_long_nullable(@v1, @v2)"
+fn OpMulLongNullable(v1: long, v2: long) -> long;
+#rust"ops::op_mul_long_nullable(@v1, @v2)"
+fn OpDivLongNullable(v1: long, v2: long) -> long;
+#rust"ops::op_div_long_nullable(@v1, @v2)"
+fn OpRemLongNullable(v1: long, v2: long) -> long;
+#rust"ops::op_rem_long_nullable(@v1, @v2)"
 fn OpLandLong(v1: long, v2: long) -> long;
 #rust"ops::op_logical_and_long(@v1, @v2)"
 fn OpLorLong(v1: long, v2: long) -> long;

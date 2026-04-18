@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 260] = &[
+pub const OPERATORS: &[fn(&mut State); 265] = &[
     goto,
     goto_word,
     goto_false,
@@ -76,6 +76,11 @@ pub const OPERATORS: &[fn(&mut State); 260] = &[
     mul_long,
     div_long,
     rem_long,
+    add_long_nullable,
+    min_long_nullable,
+    mul_long_nullable,
+    div_long_nullable,
+    rem_long_nullable,
     land_long,
     lor_long,
     eor_long,
@@ -697,6 +702,41 @@ fn rem_long(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_rem_long(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn add_long_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_add_long_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn min_long_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_min_long_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn mul_long_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_mul_long_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn div_long_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_div_long_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn rem_long_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_rem_long_nullable(v_v1, v_v2);
     s.put_stack(new_value);
 }
 

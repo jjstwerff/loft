@@ -599,9 +599,11 @@ impl Parser {
             "MulInt" => "OpMulIntNullable",
             "DivInt" => "OpDivIntNullable",
             "RemInt" => "OpRemIntNullable",
-            // Op*Long Nullable variants deferred until Phase 5 frees opcode
-            // slots.  `long` arithmetic inside `??` keeps trap semantics
-            // until then.
+            "AddLong" => "OpAddLongNullable",
+            "MinLong" => "OpMinLongNullable",
+            "MulLong" => "OpMulLongNullable",
+            "DivLong" => "OpDivLongNullable",
+            "RemLong" => "OpRemLongNullable",
             _ => return,
         };
         let new_nr = data.def_nr(nullable_name);
