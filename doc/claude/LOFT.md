@@ -54,8 +54,8 @@ and can emit Rust code for host integration.
 | Type        | Description                                      |
 |-------------|--------------------------------------------------|
 | `boolean`   | `true` / `false`                                 |
-| `integer`   | 32-bit signed integer (range can be constrained) |
-| `long`      | 64-bit signed integer; literals end with `l`     |
+| `integer`   | 32-bit signed integer (range can be constrained). Overflow traps.  See "Arithmetic safety" below. |
+| `long`      | 64-bit signed integer; literals end with `l`.  **Deprecated** — run `loft --migrate-long` to rewrite to `integer` (will become i64 in 0.9.0). |
 | `float`     | 64-bit floating-point; literals contain a `.`    |
 | `single`    | 32-bit float; literals end with `f`              |
 | `character` | A single Unicode character                       |
@@ -79,11 +79,42 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 | `reference` | record 0 | Opaque; `!r` detects it |
 | plain `enum` | byte `255` | Limits plain enums to 255 variants |
 
-**Integer sentinel warning:** Arithmetic that produces exactly `i32::MIN` (e.g.
-`-2147483647 - 1`) becomes indistinguishable from `null`. Division by zero also
-returns `null` (`i32::MIN`). If a program needs the full 32-bit signed range, use
-`long` instead. For struct fields, `not null` reclaims the sentinel value for
-storage, allowing the full range.
+**Arithmetic safety (C54.G-hybrid, landed 0.9.0):** integer arithmetic that
+would overflow — `(i32::MAX + 1)`, `(i32::MIN - 1)`, `(i32::MAX * 2)` — now
+produces a **runtime trap** with source location, NOT a silent null.
+Division and modulo by zero also trap.  The trap message names the operator
+and the inputs, so the failing site is obvious.
+
+```loft
+a = 2147483647;
+b = a + 1;                  // TRAPS: "integer overflow: 2147483647 + 1"
+c = a / 0;                  // TRAPS: "integer division by zero"
+```
+
+**`??` discharge**: if the arithmetic's result is the *immediate* LHS of a
+`??`, the trap is suppressed and the op produces null — which `??` then
+catches.  Use this idiom when you want overflow to fall through to a
+default:
+
+```loft
+x = (a * b) ?? default;     // overflow → x = default, no trap
+// Note: only the OUTERMOST op gets the discharge.  Nested sub-
+// expressions still trap.  Split into stages if they need different
+// handling:
+inner = a * b;              // traps if this overflows
+x = (inner + c) ?? 0;       // outer + gets discharge
+```
+
+Explicit `i32::MIN` literals (`x = -2_147_483_648`) are preserved — loft
+recognizes them as the null sentinel and doesn't produce them from
+arithmetic anymore.  Long arithmetic has the same behaviour at
+`i64::MIN`.
+
+**Legacy note:** before C54.G-hybrid, overflow silently produced the
+`i32::MIN` / `i64::MIN` sentinel.  Programs that relied on that
+behaviour should either use explicit guards (`if a > 0 && b > 0 && a <
+i32::MAX / b { a * b } else { default }`) or adopt the `?? default`
+idiom.
 
 **`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
 or default?" but the answer differs by type because the null sentinel is in-band.
@@ -112,12 +143,25 @@ integer limit(0, 65535)    // fits in a short
 
 The default library also defines convenient width-specific aliases:
 ```
-u8    // integer limit(0, 255)
-i8    // integer limit(-128, 127)
-u16   // integer limit(0, 65535)
-i16   // integer limit(-32768, 32767)
-i32   // integer (explicit 32-bit)
+u8    // integer limit(0, 255)              — 1 byte unsigned
+i8    // integer limit(-128, 127)           — 1 byte signed
+u16   // integer limit(0, 65535)            — 2 bytes unsigned
+i16   // integer limit(-32768, 32767)       — 2 bytes signed
+i32   // integer (explicit 32-bit)          — 4 bytes signed
+u32   // integer limit(0, 4_294_967_294)    — 4 bytes unsigned (post-2a)
 ```
+
+`u32` covers the `0 ..= 4_294_967_294` range (one sentinel reserved for
+null).  Values up to `u32::MAX - 1` round-trip through arithmetic and
+storage.  Typical use: RGBA pixels, large file offsets, bitmasks wider
+than i32.  `u32 not null` unlocks the full 2³² range when the field
+can't carry null.
+
+**Migration note:** the `long` type and `l` literal suffix remain
+supported but are slated for removal.  Run `loft --migrate-long <path>`
+to rewrite `long` → `integer` and `42l` → `42` in user code; the tool
+preserves identifiers containing `long` (e.g. `long_value`), string
+literals, and comments.
 
 ### Composite types
 
