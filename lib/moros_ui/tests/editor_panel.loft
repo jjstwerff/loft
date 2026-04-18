@@ -1,0 +1,88 @@
+// Step 20 — editor_panel rebuild tests.  Assert the convenience
+// wrapper reads the right fields off EditorState and passes them
+// through to panel_build.
+use moros_ui;
+use moros_sim;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn build() -> EditorState {
+  e = editor_default();
+  // A non-trivial avatar pose so the status strip has meaningful
+  // numbers to check.
+  e.es_player.pl_pos = vec3(1.5, 2.75, 3.0);
+  e.es_overlay_cy   = 4;
+  e.es_tools.ts_current = ToolKind.RaiseHex;
+  e.es_tools.ts_height_step = 2;
+  e
+}
+
+fn test_returns_a_panel_with_six_toolbar_buttons() {
+  s = build();
+  p = editor_panel(s, 1280, 720, 60);
+  assert(len(p.p_toolbar) == TOOLBAR_BUTTONS,
+         "toolbar has {TOOLBAR_BUTTONS} buttons; got {len(p.p_toolbar)}");
+}
+
+fn test_selected_toolbar_button_reflects_current_tool() {
+  s = build();
+  // RaiseHex is tool id 1 per tool_of_id / id_of_tool mapping.
+  p = editor_panel(s, 1280, 720, 60);
+  assert(p.p_toolbar[1].btn_selected, "Raise button is selected");
+  assert(!p.p_toolbar[0].btn_selected, "None not selected");
+  assert(!p.p_toolbar[2].btn_selected, "Lower not selected");
+}
+
+fn test_palette_reflects_current_tool() {
+  s = build();
+  p = editor_panel(s, 1280, 720, 60);
+  // RaiseHex → height-step palette (4 entries).
+  assert(len(p.p_list.lb_items) == 4,
+         "raise palette: 4 entries; got {len(p.p_list.lb_items)}");
+}
+
+fn test_status_strip_contains_hex_coords() {
+  s = build();
+  // Player at world (1.5, _, 3.0) → world_to_hex computes the hex.
+  addr = world_to_hex(1.5, 3.0);
+  p = editor_panel(s, 1280, 720, 60);
+  expected_q = "q={addr.ha_q}";
+  assert(contains(p.p_status.ss_text, expected_q),
+         "status mentions q={addr.ha_q}; got '{p.p_status.ss_text}'");
+  expected_cy = "cy={s.es_overlay_cy}";
+  assert(contains(p.p_status.ss_text, expected_cy),
+         "status mentions cy=4; got '{p.p_status.ss_text}'");
+}
+
+fn test_status_strip_contains_fps() {
+  s = build();
+  p = editor_panel(s, 1280, 720, 120);
+  assert(contains(p.p_status.ss_text, "120"),
+         "status mentions FPS 120; got '{p.p_status.ss_text}'");
+}
+
+fn test_panel_rect_matches_window_height() {
+  s = build();
+  p = editor_panel(s, 1280, 720, 60);
+  assert(p.p_rect.r_h == 720, "panel rect height tracks window_h");
+  assert(p.p_rect.r_w == PANEL_WIDTH, "panel rect width is fixed strip");
+}
+
+fn test_tool_switch_changes_palette() {
+  s = build();
+  s.es_tools.ts_current = ToolKind.PlaceStencil;
+  p = editor_panel(s, 1280, 720, 60);
+  // Stencil palette size is managed by stencil_palette_size (3 today).
+  assert(len(p.p_list.lb_items) == stencil_palette_size(),
+         "stencil palette size; got {len(p.p_list.lb_items)}");
+  assert(p.p_toolbar[3].btn_selected, "Stencil button selected");
+}
+
+fn test_overlay_cy_change_surfaces_in_status() {
+  s = build();
+  s.es_overlay_cy = 7;
+  p = editor_panel(s, 1280, 720, 60);
+  assert(contains(p.p_status.ss_text, "cy=7"),
+         "status mentions cy=7; got '{p.p_status.ss_text}'");
+}

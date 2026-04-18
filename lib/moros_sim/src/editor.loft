@@ -158,6 +158,14 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   if input.in_layer_down && st.es_overlay_cy > 0 {
     st.es_overlay_cy = st.es_overlay_cy - 1;
   }
+  // Step 19 — wall direction cycling.  `ts_wall_direction` cycles
+  // through the six edges 0..5 (N / NE / SE / S / SW / NW) with wrap.
+  if input.in_wall_dir_next {
+    st.es_tools.ts_wall_direction = (st.es_tools.ts_wall_direction + 1) % 6;
+  }
+  if input.in_wall_dir_prev {
+    st.es_tools.ts_wall_direction = (st.es_tools.ts_wall_direction + 5) % 6;
+  }
   apply_mouse_look(st, input.in_mouse_dx);
   player_step(st.es_player, st.es_map, dt, input);
   camera_apply_input(st, input);
@@ -188,6 +196,8 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
 //   "tab"                            — camera mode toggle
 //   "o"                              — occlusion toggle
 //   "r" "f"                          — overlay layer up / down
+//   "[" "]"                          — wall-direction prev / next
+//                                      (cycles 0..5 N/NE/SE/S/SW/NW)
 //   "z"  (requires ctrl_pressed)     — undo
 //   "y"  (requires ctrl_pressed)     — redo
 //   "ctrl_s"  (composite)            — save (avoids colliding with
@@ -231,6 +241,8 @@ pub fn input_from_keys(
     if pk == "o"   { out.in_occlusion_toggle = true; }
     if pk == "r"   { out.in_layer_up   = true; }
     if pk == "f"   { out.in_layer_down = true; }
+    if pk == "["   { out.in_wall_dir_prev = true; }
+    if pk == "]"   { out.in_wall_dir_next = true; }
     if pk == "z" && ctrl_pressed { out.in_undo = true; }
     if pk == "y" && ctrl_pressed { out.in_redo = true; }
     if pk == "ctrl_s"            { out.in_save = true; }
