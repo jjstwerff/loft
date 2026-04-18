@@ -639,6 +639,111 @@ Returns the store record to the free list.  The store allocator uses a bitmap
 
 ---
 
+## Inline-lift safety — the `OpCopyRecord | 0x8000` invariant
+
+Struct-returning calls that appear inline in an expression (format-string
+interpolation, chained accessor, assertion, tuple element) are transformed by
+scope analysis into `__lift_N = callee(...)` followed by
+`OpCopyRecord(src, to=__lift_N, tp)`.  The top bit of `tp` (`0x8000`) is the
+**free-source** flag: after copying the returned record into the destination,
+the source store is freed.
+
+The flag is necessary for **owned returns** — if the callee freshly allocated
+its return (e.g. `fn f() -> T { T { .. } }`), nothing else would free that
+store and issue #120 reintroduces.
+
+The flag is **unsafe for borrowed-view returns** — if the callee returned a
+view into one of its arguments (e.g. `fn f(c) -> Inner { c.items[0] }`), the
+source store is the caller's own data.  Freeing it corrupts the caller.
+
+### The gate
+
+`src/state/codegen.rs` emits the flag only when the callee's declared return
+type carries an **empty** `dep` chain (= owned).  If the chain is non-empty
+(= view into some arg), the flag is cleared.
+
+Two emission sites:
+
+- `gen_set_first_ref_call_copy` (~`codegen.rs:1284`) — first-assignment from a call
+- `generate_set` reassignment path (~`codegen.rs:918`) — re-assignment into an existing ref slot
+
+Both sites test:
+```rust
+let is_borrowed_view = !stack.data.def(fn_nr).returned.depend().is_empty();
+let tp_with_free = if is_borrowed_view {
+    i32::from(tp_nr)                 // no free
+} else {
+    i32::from(tp_nr) | 0x8000        // safe to free (owned)
+};
+```
+
+### Feeding the gate — dep merging from return expressions
+
+For the gate to work, `def.returned.depend()` must reflect whether the
+function's body ever returns a view.  Two parser helpers merge per-return
+deps into the declared return type:
+
+| Helper | File | Fires on |
+|---|---|---|
+| `text_return(ls)` | `parser/control.rs:2264` | `Type::Text` returns, in both `parse_return` (mid-body) and `block_result` (tail) |
+| `ref_return(ls)` | `parser/control.rs:2351` | `Type::Reference` / `Type::Enum(_, true, _)` returns, in both `parse_return` (mid-body) and `block_result` (tail) |
+
+The Vector arm of `ref_return` fires only from `block_result` (tail), not
+from `parse_return` (mid-body) — promoting mid-body Vector deps would
+promote globals and locals to hidden ref args and break callers.
+
+For a mixed-return callee
+```loft
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+    if idx >= 0 && idx < len(c.items) {
+        return c.items[idx];   // view
+    }
+    Inner { n: 0 }             // owned
+}
+```
+the mid-body `return c.items[idx]` carries `Reference(Inner, [c])`.
+`parse_return` calls `ref_return([c])`, which merges `c` into
+`def.returned`'s dep chain via the `attr_names` idempotency path (since `c`
+is already an attribute — no new hidden arg created).  The declared return
+becomes `Reference(Inner, [c])`; the gate fires at the call site; `0x8000`
+clears; the caller's store is untouched.
+
+### Lock bracket — second line of defence
+
+Both gated emission sites wrap the `OpCopyRecord` in `n_set_store_lock(arg,
+true)` / `(arg, false)` for every ref-typed arg to the call.  The runtime
+`copy_record` handler at `state/io.rs:1001` skips the source-free when the
+source store is locked.  This is a belt-and-suspenders guard for the case
+where the dep-chain inference is incomplete.
+
+### Known trade-offs
+
+1. **Owned-fallback leak on mixed-return callees.**  After the dep merge,
+   the gate clears `0x8000` for every call to a mixed-return callee.  The
+   owned fallback branch's fresh store is no longer freed and leaks.
+   Magnitude: one small struct per fallback call; the fallback is typically
+   an error path.  Future: promote Reference returns to a caller-provided
+   scratch buffer (analogous to the `__ref_1` vector mechanism) to close
+   this.
+
+2. **WASM feature unconditionally clears `0x8000`** at
+   `gen_set_first_ref_call_copy`.  Safe (no corruption) but leaks
+   callee-fresh stores under WASM.  Separate audit.
+
+3. **Vector mid-body returns** are not merged.  If a Vector-returning
+   function has `return GLOBAL_CONST;` or `return local_vec;` in a branch,
+   `ref_return`'s promotion logic would add hidden ref args that break
+   callers.  No Vector SIGSEGV variant has been observed; a future phase
+   could filter `ls` to function-parameter vars only.
+
+### History
+
+P181 surfaced the corruption; Phase 1 (2026-04-18) added the gate;
+Phase 1b (2026-04-18) added the `parse_return` dep merge; Phase 2
+(2026-04-18) audited all `OpCopyRecord` emission sites and confirmed
+the invariant holds.  See
+`doc/claude/plans/finished/00-inline-lift-safety/` for the full initiative record.
+
 ## Diagnostic: `LOFT_LOG=scope_debug`
 
 Set `LOFT_LOG=scope_debug` to trace free decisions at compile time:

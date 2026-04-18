@@ -57,8 +57,8 @@ budget.
 | `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Likely-closed** — variant 09 probe passes; revisit if a real shape surfaces |
 | `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | **Done** — clean, no new bugs; variant 18 probe confirms tuple-destructure path safe |
 | `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Likely-closed** — variant 17 passes after Phase 1b; revisit only if a new multi-call shape surfaces |
-| `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | Not started |
-| `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | Not started |
+| `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | **Closed** — subsumed by Phase 2 audit (native sites never set 0x8000) |
+| `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | **Done** — section added to `LIFETIME.md` |
 
 Each phase's plan file is opened at the start of its session and
 closed when the phase commits.  Phases can produce their own

@@ -5,7 +5,7 @@
 // callee's return type has a non-empty `dep` chain (i.e. the return
 // is a view into an arg, not an owned fresh store).
 //
-// Origin: `doc/claude/plans/00-inline-lift-safety/snippets/01_field_access.loft`.
+// Origin: `doc/claude/plans/finished/00-inline-lift-safety/snippets/01_field_access.loft`.
 
 struct P181Inner { n: integer not null }
 struct P181Container { items: vector<P181Inner> }

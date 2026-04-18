@@ -9804,7 +9804,7 @@ fn test() {
 /// Inference already tags these correctly for consistent-view
 /// callees; a deeper issue with MIXED-return callees
 /// (some paths view, some owned) is tracked separately in
-/// `doc/claude/plans/00-inline-lift-safety/01b-return-dep-inference.md`.
+/// `doc/claude/plans/finished/00-inline-lift-safety/01b-return-dep-inference.md`.
 ///
 /// Tests: `tests/lib/p181_inline_field_access.loft`.
 #[test]

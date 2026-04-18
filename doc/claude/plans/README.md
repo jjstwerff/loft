@@ -22,11 +22,13 @@ per phase.
 
 | Dir | Initiative | Current phase |
 |---|---|---|
-| `00-inline-lift-safety/` | Eliminate silent memory corruption from inline struct-returning calls in expression contexts (P181 family). | Phase 0 — diagnostic (`00-p181-diagnostic.md`) |
+| — | (none open) | |
 
 ## Finished initiatives
 
-See `finished/` (empty at time of writing).
+| Dir | Initiative | Closed |
+|---|---|---|
+| `finished/00-inline-lift-safety/` | Eliminate silent memory corruption from inline struct-returning calls in expression contexts (P181 family). | 2026-04-18 — all phases done; 18 snippet variants pass; spec captured in `doc/claude/LIFETIME.md` |
 
 ## One-off plans elsewhere
 
