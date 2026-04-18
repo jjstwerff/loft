@@ -1057,6 +1057,16 @@ impl Parser {
                 false
             };
             if has_limit || not_null {
+                // C54.A incremental 2a — when `integer limit(lo, hi)` has
+                // bounds that exceed i32 range, promote to `Type::Long`
+                // (i64 storage + i64 arithmetic).  This is what makes
+                // `u32 = integer limit(0, 4_294_967_294)` round-trip
+                // correctly: values up to u32::MAX fit in an i64.
+                // Narrow-bounded integers (u8/u16/i8/i16/i32-range) stay
+                // as Type::Integer with packed storage.
+                if has_limit && i64::from(max) > i64::from(i32::MAX) {
+                    return Some(Type::Long);
+                }
                 return Some(Type::Integer(min, max, not_null));
             }
         }
@@ -1297,8 +1307,15 @@ impl Parser {
                 *min = if min_neg { -(nr as i32) } else { nr as i32 };
             }
             self.lexer.token(",");
+            // C54.A incremental 2a — accept both Integer and Long literals.
+            // Values > i32::MAX now tokenise as Long (so u32-range bounds
+            // like `limit(0, 4_294_967_294)` work).  Truncate to u32
+            // (current `max: u32` param); future phases can widen to i64
+            // if signed-bound support for > i32 ranges is needed.
             if let Some(nr) = self.lexer.has_integer() {
                 *max = nr;
+            } else if let Some(nr) = self.lexer.has_long() {
+                *max = nr as u32;
             }
             self.lexer.token(")");
             true

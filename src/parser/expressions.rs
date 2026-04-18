@@ -543,6 +543,21 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
+        // C54.A incremental 2a — if the variable carries an annotated
+        // target type `: Long` with a narrower `Integer` RHS
+        // (e.g. `x: u32 = 100` where `u32` promoted to Long), run
+        // `convert()` BEFORE `change_var` fires the "cannot change
+        // type" diagnostic.  Narrowly scoped to Integer → Long so
+        // other cross-category conversions (e.g. Enum → Integer via
+        // OpConvIntFromEnum, which would silently pass but IS a real
+        // type mismatch) still fall through to the existing error
+        // path.  Similar widens for single→float etc. stay handled
+        // by the later convert at op == "=".
+        let needs_early_widen =
+            op == "=" && matches!(f_type, Type::Long) && matches!(s_type, Type::Integer(_, _, _));
+        if needs_early_widen && self.convert(code, &s_type, f_type) {
+            s_type = f_type.clone();
+        }
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
             // auto-promote text argument to local String on first mutation.
