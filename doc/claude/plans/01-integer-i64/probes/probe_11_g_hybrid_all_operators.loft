@@ -1,0 +1,94 @@
+// Probe 11 — G-hybrid: verify every arithmetic operator traps on
+// overflow / div-zero in bare context but discharges inside `??`.
+//
+// Under C54.G-hybrid (Phase 1 + 2b): Op{Add,Sub,Mul,Div,Rem}{Int,Long}
+// traps in bare position; Op{Add,Sub,Mul,Div,Rem}{Int,Long}Nullable
+// fires in `??` LHS position.
+
+// ── add: bare traps, ?? discharges ────────────────────────────────────
+
+fn test_add_int_discharge() {
+  p_max_i: integer = 2147483647;
+  p_r = (p_max_i + 1) ?? -1;
+  assert(p_r == -1, "int add overflow discharged");
+}
+
+fn test_add_long_discharge() {
+  p_max_l: long = 9223372036854775807l;
+  p_r = (p_max_l + 1l) ?? -1l;
+  assert(p_r == -1l, "long add overflow discharged");
+}
+
+// ── sub: bare traps, ?? discharges ────────────────────────────────────
+
+fn test_sub_int_discharge() {
+  p_min_i: integer = -2147483647;
+  p_r = (p_min_i - 2) ?? 0;
+  assert(p_r == 0, "int sub underflow discharged");
+}
+
+fn test_sub_long_discharge() {
+  p_min_l: long = -9223372036854775807l;
+  p_r = (p_min_l - 2l) ?? 0l;
+  assert(p_r == 0l, "long sub underflow discharged");
+}
+
+// ── mul: bare traps, ?? discharges ────────────────────────────────────
+
+fn test_mul_int_discharge() {
+  p_big_i: integer = 2147483647;
+  p_r = (p_big_i * 2) ?? 999;
+  assert(p_r == 999, "int mul overflow discharged");
+}
+
+fn test_mul_long_discharge() {
+  p_big_l: long = 4611686018427387904l;
+  p_r = (p_big_l * 3l) ?? 999l;
+  assert(p_r == 999l, "long mul overflow discharged");
+}
+
+// ── div: bare traps on 0, ?? discharges ───────────────────────────────
+
+fn test_div_int_discharge() {
+  p_d: integer = 100;
+  p_r = (p_d / 0) ?? -99;
+  assert(p_r == -99, "int div zero discharged");
+}
+
+fn test_div_long_discharge() {
+  p_d_l: long = 100l;
+  p_r = (p_d_l / 0l) ?? -99l;
+  assert(p_r == -99l, "long div zero discharged");
+}
+
+// ── rem: bare traps on 0, ?? discharges ───────────────────────────────
+
+fn test_rem_int_discharge() {
+  p_rm: integer = 100;
+  p_r = (p_rm % 0) ?? 7;
+  assert(p_r == 7, "int rem zero discharged");
+}
+
+fn test_rem_long_discharge() {
+  p_rm_l: long = 100l;
+  p_r = (p_rm_l % 0l) ?? 7l;
+  assert(p_r == 7l, "long rem zero discharged");
+}
+
+// ── non-?? contexts: ensure normal arithmetic still works ────────────
+
+fn test_normal_int() {
+  assert(2 + 3 == 5, "normal add");
+  assert(10 - 3 == 7, "normal sub");
+  assert(4 * 5 == 20, "normal mul");
+  assert(20 / 4 == 5, "normal div");
+  assert(20 % 7 == 6, "normal rem");
+}
+
+fn test_normal_long() {
+  assert(2l + 3l == 5l, "normal long add");
+  assert(10l - 3l == 7l, "normal long sub");
+  assert(4l * 5l == 20l, "normal long mul");
+  assert(20l / 4l == 5l, "normal long div");
+  assert(20l % 7l == 6l, "normal long rem");
+}
