@@ -53,10 +53,10 @@ budget.
 | `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | **Done** — Option B chosen |
 | `01-p181-fix.md` | Phase 1 — gate `0x8000` on callee return-dep (two codegen sites) | **Done-partial** — covers consistent-view callees |
 | `01b-return-dep-inference.md` | Phase 1b — teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed (blocks `map_get_hex`) | **Done** — Reference + Enum arms; Vector deferred |
-| `01c-dynamic-dispatch.md` | Phase 1c — CallRef (fn-ref / interface-method) safe default when the callee isn't statically knowable | **Likely-closed** — variant 08 passes; revisit only if Phase 2 finds a case |
-| `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Likely-closed** — variant 09 probe passes; revisit if a real shape surfaces |
+| `01c-dynamic-dispatch.md` | Phase 1c — CallRef (fn-ref / interface-method) safe default when the callee isn't statically knowable | **Closed** — variants 08 + 21 (fn-ref to mixed-return) both PASS; hidden-ref-arg mechanism protects this path |
+| `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Closed** — variant 09 passes; no reachable shape found |
 | `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | **Done** — clean, no new bugs; variant 18 probe confirms tuple-destructure path safe |
-| `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Likely-closed** — variant 17 passes after Phase 1b; revisit only if a new multi-call shape surfaces |
+| `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Closed** — variants 17, 20, 22 all PASS (multi-call, Vector multi-branch, chained transitive) |
 | `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | **Closed** — subsumed by Phase 2 audit (native sites never set 0x8000) |
 | `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | **Done** — section added to `LIFETIME.md` |
 
@@ -161,6 +161,10 @@ any snippet to re-confirm.
 | 16  | `16_single_call_assert.loft`   | SINGLE mixed-return in assert cond, literal msg       | PASS | 2a |
 | 17  | `17_println_two_calls.loft`    | TWO mixed-return inline calls in one `println` fmt    | **PASS** (was SIGSEGV pre-Phase-1b) | 2a — closed by Phase 1b |
 | 18  | `18_tuple_destructure.loft`    | Tuple destructure of two struct-returning calls       | PASS | 2 probe (tuple_copy site safe) |
+| 19  | `19_vector_mixed_return.loft`  | Vector mixed-return inline in `println` format        | PASS | loose-end probe (Vector arm deferral validated) |
+| 20  | `20_vector_two_calls_both_branches.loft` | Vector mixed-return, TWO calls hitting both branches | PASS | loose-end probe (Vector + multi-inline) |
+| 21  | `21_fnref_mixed_return.loft`   | fn-ref dispatch to mixed-return, inline + owned fallback | PASS | loose-end probe (1c — fn-ref on mixed return) |
+| 22  | `22_chained_mixed_returns.loft` | Chained `get_inner(h.w, i).n` with transitive mixed deps | PASS | loose-end probe (chained + transitive dep propagation) |
 
 Key findings from the inventory:
 - Phase 1b (Reference + Enum arms in `parse_return`) closes both
@@ -173,6 +177,37 @@ Key findings from the inventory:
   non-format variants pass, and all mixed-return variants pass
   after Phase 1b.  Phase 2a remains open only as a safety net if
   a new multi-call shape ever surfaces.
+
+### Loose-end validation (2026-04-18)
+
+After closing the initiative, four follow-up probes verify the
+"likely-closed" phases and the Vector deferral:
+
+- **Variant 19** — A Vector-returning mixed callee (`fn f(c) -> vector<Inner>
+  { if ... return c.items; ... empty }`) used inline in `println`.  PASSES.
+  Static dump shows the callee's signature is
+  `fn n_first_items_or_empty(c, empty) -> vector<ref(Inner)>["empty"]` —
+  i.e. `block_result`'s tail-side Vector arm already promoted `empty` to
+  a hidden ref arg, giving the return type a non-empty dep `[empty]`.
+  The Phase 1 codegen gate fires, `0x8000` clears, no corruption.
+  **Conclusion**: Vectors are safe *by construction* via the existing
+  hidden-ref-arg mechanism.  The Phase 1b Vector-arm skip is validated.
+
+- **Variant 20** — Same shape, TWO calls in one format string, one hitting
+  the view path and one hitting the owned fallback.  PASSES.  Multi-call
+  Vector case covered.
+
+- **Variant 21** — fn-ref (`f = first_or_empty; f(h.c, 0)`) to a
+  Reference-returning mixed callee, inline in `println` with both view-
+  and owned-branch calls.  PASSES.  Dispatch through a fn-ref also relies
+  on the hidden-ref-arg mechanism, so no `OpCopyRecord | 0x8000` emission
+  path exists.  **Conclusion**: Phase 1c has no reachable corruption class.
+
+- **Variant 22** — chained `get_inner(h.w, i).n` where `get_inner` mid-body
+  returns the result of ANOTHER mixed-return call.  Tests transitive dep
+  propagation: the inner call's `[w.w -> w]` dep flows through the outer
+  function's return type merge.  PASSES.  **Conclusion**: Phase 2a has no
+  reachable corruption class for chained / nested mixed-return calls.
 
 ## Provenance
 

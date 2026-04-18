@@ -1,0 +1,36 @@
+// Variant 22 — chained mixed-return calls: `g(f(h.c, 0)).n` where
+// both `f` and `g` have mixed return paths.  Also probes the case
+// where the OUTER call's arg is the result of an INNER inline-lift.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Wrapper { w: Container }
+struct Holder {
+  w:        Wrapper,
+  sentinel: integer not null,
+}
+
+fn first_inner(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn get_inner(w: Wrapper, idx: integer) -> Inner {
+  if len(w.w.items) > 0 {
+    return first_inner(w.w, idx);   // mid-body return of another mixed-return call
+  }
+  Inner { n: -1 }
+}
+
+fn test_variant_22_chained() {
+  h = Holder {
+    w: Wrapper { w: Container { items: [Inner { n: 7 }, Inner { n: 11 }] } },
+    sentinel: 42,
+  };
+  println(
+    "a={get_inner(h.w, 0).n} b={get_inner(h.w, 1).n} c={get_inner(h.w, 99).n}"
+  );
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}
