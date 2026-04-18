@@ -1,22 +1,16 @@
 // Step 11 — click dispatch for the walkable editor.
 //
-// `route_click` (panel.loft) only mutates `ToolState` for panel
-// widgets; world clicks fall through returning `UhWorld` with no
-// world-side effect.  This file adds the UI-aware `editor_click`
-// that closes the loop: on a world hit, push an undo snapshot and
-// invoke `tool_apply` at the avatar's current hex.
+// `route_click` (panel.loft) handles panel-widget clicks by mutating
+// `ToolState` (tool select + palette select).  World clicks fall
+// through returning `UhWorld` with no world-side effect, which this
+// file closes: on a world hit, push an undo snapshot and invoke
+// `tool_apply` at the avatar's current hex.
 //
 // Avatar-centric dispatch: the click's (mx, my) are only used for
 // panel hit-testing; once we're outside the panel we apply the
 // current tool where the red ball stands.  A mouse-aware raycast
 // (ground pick) is a later step — it needs camera state, which
 // the UI layer does not own.
-//
-// Tool / palette mutations are written inline (not via
-// `route_click`) so the compiler's mutation scan sees direct
-// `st.es_tools.*` writes and accepts `&EditorState` — working
-// around P176 where `&`-through-helper mutations are invisible to
-// the caller-side analysis.
 
 use moros_sim;
 use moros_editor;
@@ -26,28 +20,7 @@ use graphics;
 use panel;
 
 pub fn editor_click(st: &EditorState, p: Panel, mx: integer, my: integer) -> UiHit {
-  ec_hit = panel_hit_test(p, mx, my);
-  if ec_hit is UhToolButton { tb_id } {
-    st.es_tools.ts_current = tool_of_id(tb_id);
-  }
-  if ec_hit is UhListItem { li_idx } {
-    if st.es_tools.ts_current == ToolKind.RaiseHex
-       || st.es_tools.ts_current == ToolKind.LowerHex {
-      if li_idx == 0 { st.es_tools.ts_height_step = 1; }
-      if li_idx == 1 { st.es_tools.ts_height_step = 2; }
-      if li_idx == 2 { st.es_tools.ts_height_step = 4; }
-      if li_idx == 3 { st.es_tools.ts_height_step = 8; }
-    }
-    if st.es_tools.ts_current == ToolKind.PlaceStencil {
-      st.es_tools.ts_selected_stencil = li_idx;
-    }
-    if st.es_tools.ts_current == ToolKind.PlaceItem {
-      st.es_tools.ts_selected_item = li_idx;
-    }
-    if st.es_tools.ts_current == ToolKind.PlaceWall {
-      st.es_tools.ts_selected_wall = li_idx;
-    }
-  }
+  ec_hit = route_click(p, st.es_tools, mx, my);
   if ec_hit is UhWorld {
     if st.es_tools.ts_current != ToolKind.None {
       ec_addr = world_to_hex(st.es_player.pl_pos.x, st.es_player.pl_pos.z);

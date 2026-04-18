@@ -9689,3 +9689,65 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P176 — method-style callee: `fn add(self: Box, x) { self.items += [x]; }`
+/// called from a `&Box` parameter caller should compile.  Before the fix,
+/// `find_written_vars` did not recurse into the callee's body, so the
+/// caller's `&Box` param looked unused and the "Parameter ... has `&`
+/// but is never modified" error fired.  Fix: interprocedural
+/// `callee_param_writes` analysis in `src/parser/mod.rs`.
+#[test]
+fn p176_ref_param_method_style_mutation() {
+    code!(
+        "struct P176Box { items: vector<integer> }
+fn p176_add(self: P176Box, x: integer) { self.items += [x]; }
+fn p176_caller(b: &P176Box) { p176_add(b, 1); }
+fn test() {
+    bx = P176Box { items: [] };
+    p176_caller(bx);
+    assert(len(bx.items) == 1, \"expected 1 got {len(bx.items)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P176 — 3-level forwarding: only the innermost callee writes a
+/// field, two intermediate callers just forward the value.  The
+/// outermost `&T` must still be accepted.  Exercises the fixpoint /
+/// monotone-merge code path.
+#[test]
+fn p176_transitive_forwarding_three_levels() {
+    code!(
+        "struct P176Tx { val: integer not null }
+fn p176_inner(self: P176Tx)   { self.val = self.val + 1; }
+fn p176_mid(self: P176Tx)     { p176_inner(self); }
+fn p176_outer(b: &P176Tx)     { p176_mid(b); }
+fn test() {
+    b = P176Tx { val: 0 };
+    p176_outer(b);
+    assert(b.val == 1, \"expected 1 got {b.val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P176 — recursive self-call must terminate the analysis.  The
+/// `callee_param_writes` placeholder breaks cycles before descending
+/// into the body.  Without the placeholder, the fn would recurse
+/// infinitely while computing its own param-writes.
+#[test]
+fn p176_recursive_self_call_terminates() {
+    code!(
+        "struct P176Rec { val: integer not null }
+fn p176_bump(n: &P176Rec, depth: integer) {
+    n.val = n.val + 1;
+    if depth > 0 { p176_bump(n, depth - 1); }
+}
+fn test() {
+    n = P176Rec { val: 0 };
+    p176_bump(n, 3);
+    assert(n.val == 4, \"expected 4 got {n.val}\");
+}"
+    )
+    .result(Value::Null);
+}
