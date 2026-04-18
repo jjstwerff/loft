@@ -1,6 +1,52 @@
 # Phase 2 — C54.A: widen `integer` to i64 + range-packed storage
 
-Status: **not started** — blocked by Phase 1.
+Status: **not started** — blocked by Phase 1 **AND tightly coupled with Phase 4**.
+
+## Coupling discovered (2026-04-18 attempt)
+
+A minimal approach — "redirect unbounded `integer` in `parse_type` to
+return `Type::Long` so arithmetic picks up i64 registers" — was
+attempted.  It compiles but fails to load the stdlib because
+every `integer` / `long` overload pair in `default/01_code.loft`
+collides:
+
+```
+pub fn abs(both: integer) -> integer { ... }   // line 145
+pub fn abs(both: long)    -> long    { ... }   // line 213
+```
+
+Under the redirect, both signatures become `abs(long) -> long` and
+the parser rejects the duplicate.
+
+Same collision exists for every function overloaded between
+`integer` and `long` — `min`, `max`, `sign`, `round`, `floor`,
+`ceil`, etc.  ~50 `long`-specific stdlib declarations.
+
+**Implication**: Phase 2 and Phase 4 (deprecate `long`) MUST land
+together, OR the stdlib needs a transitional layer where `long`
+functions stay for now but become no-ops that forward to their
+`integer` counterparts.  Either way, `long` overloads get removed
+as part of the Phase 2 landing.
+
+Estimate revised: Phase 2 + Phase 4 combined ≈ 800-1000 minutes.
+
+## Revised landing sequence
+
+Single atomic session covering:
+
+1. Widen `Type::Integer` representation OR redirect unbounded
+   `integer` to `Type::Long` (pick one).
+2. Sweep stdlib: remove all `long`-specific function overloads
+   (their `integer` twins absorb them).
+3. Update `pub type integer size(4)` → `size(8)`.
+4. Run regen_fill_rs to update bytecode handlers.
+5. Verify: interpreter + native + WASM parity, full workspace
+   suite, `c54_*` tests un-ignored.
+6. `.loftc` auto-invalidates via `CARGO_PKG_VERSION` bump.
+7. Migration tool shipped on the same commit.
+
+Sub-phases `02a-migration-tool-design.md` and `02b-stdlib-sweep.md`
+open once the atomic session starts.
 
 ## What changes for the user
 

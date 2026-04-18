@@ -48,7 +48,7 @@ initiative is the execution plan.
 | `README.md` | Goal + index (this file) | — |
 | `00-null-enforcement-audit.md` | Phase 0 — audit `not null` enforcement surface; decide G vs G′ | **Done** — 7/11 holes found; decision: ship **G-hybrid** (trap default, null inside `??`) |
 | `01-checked-arith.md` | Phase 1 — land C54.G-hybrid: trap on bare overflow, null inside `??` so idiom `x = (a*b) ?? default` still works | **Done** — commit `925ee36`; 5 Int Nullable opcodes + `??`-context dispatch; Long Nullable deferred to Phase 5 |
-| `02-i64-storage.md` | Phase 2 — C54.A: widen `integer` to i64, opcode replumb, `.loftc` version bump, `--migrate-i64` tool | Not started |
+| `02-i64-storage.md` | Phase 2 — C54.A: widen `integer` to i64, opcode replumb, `.loftc` version bump, `--migrate-i64` tool.  **Tightly coupled with Phase 4** — stdlib overloads between `integer` and `long` collide under the widen, so Phase 4's stdlib sweep lands together. | Not started |
 | `03-u32-type.md` | Phase 3 — C54.C: add `u32` as a stdlib type; RGBA use-case probe | **Blocked on Phase 2** — explored, deferred; lexer relaxation landed as prerequisite |
 | `04-deprecate-long.md` | Phase 4 — C54.B: remove `long` + `l` suffix, `--migrate-long` tool, stdlib/tests/lib sweep | Not started |
 | `05-opcode-reclamation.md` | Phase 5 — C54.E: delete 26 duplicate `Op*Long` arithmetic opcodes; reclaim for O1 | Not started |
