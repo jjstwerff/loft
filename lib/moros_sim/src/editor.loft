@@ -28,6 +28,13 @@ pub struct EditorState {
   es_occlusion_on: boolean,            // see-through toggle, honoured by renderer
   es_camera_mode:  CameraMode,
   es_camera:       RenderCamera,       // Step 17 — live camera state
+  // Step 21 — user's persistent orbit delta on top of the mode's
+  // default pose.  Accumulated by right-drag; reset on camera-mode
+  // toggle so the new mode starts from its canonical pose.  Applied
+  // via `camera_orbit` every frame AFTER `camera_follow` /
+  // `camera_overview` compute the base pose.
+  es_cam_az_offset: float not null,
+  es_cam_el_offset: float not null,
 }
 
 pub fn editor_default() -> EditorState {
@@ -40,6 +47,8 @@ pub fn editor_default() -> EditorState {
     es_occlusion_on: false,
     es_camera_mode:  CameraMode.Follow,
     es_camera:       camera_default(),
+    es_cam_az_offset: 0.0,
+    es_cam_el_offset: 0.0,
   }
 }
 
@@ -91,26 +100,39 @@ pub CAMERA_ZOOM_STEP = 1.0;
 // envelope: mode-driven follow / overview positioning, right-drag
 // orbit, wheel zoom.  Called by `editor_tick` AFTER physics so the
 // camera snaps to the avatar's post-integration pose.
+//
+// Step 21 — right-drag orbit is PERSISTENT: user adjustments
+// accumulate in `es_cam_az_offset` / `es_cam_el_offset` rather than
+// on the camera directly, because `camera_follow` / `camera_overview`
+// overwrite azimuth/elevation each frame to track the avatar.  The
+// offsets are re-applied via `camera_orbit` AFTER the mode's base
+// pose is computed, so the user's orbit choice survives across
+// frames until the mode toggles.
 pub fn camera_apply_input(st: &EditorState, input: InputState) {
   // Wheel zoom first (mode-independent).
   if input.in_wheel != 0 {
     cai_dz = (input.in_wheel as float) * CAMERA_ZOOM_STEP;
     camera_zoom_unbounded(st.es_camera, 0.0 - cai_dz);
   }
-  // Right-drag orbit — only honoured when the user is actually
-  // holding the button; the caller marks `in_rclick = true` while
-  // the button is down.
+  // Right-drag accumulates into persistent offsets.
   if input.in_rclick && (input.in_mouse_dx != 0 || input.in_mouse_dy != 0) {
-    cai_daz = (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
-    cai_del = (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
-    camera_orbit(st.es_camera, cai_daz, cai_del);
+    st.es_cam_az_offset =
+      st.es_cam_az_offset + (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
+    st.es_cam_el_offset =
+      st.es_cam_el_offset + (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
   }
-  // Mode-driven positioning — keeps target tied to avatar hex in
-  // Follow, pins to a high overview in Overview.
+  // Mode-driven base pose — target tracks avatar in Follow, pins
+  // to a high overview otherwise.  Both calls RESET the camera's
+  // azimuth/elevation/distance to the mode's canonical values.
   if st.es_camera_mode == CameraMode.Follow {
     camera_follow(st.es_player.pl_pos, st.es_player.pl_facing, st.es_camera);
   } else {
     camera_overview(st.es_player.pl_pos, st.es_camera);
+  }
+  // Re-apply the user's orbit offset AFTER the base pose.  `camera_orbit`
+  // clamps elevation internally to keep the view sane.
+  if st.es_cam_az_offset != 0.0 || st.es_cam_el_offset != 0.0 {
+    camera_orbit(st.es_camera, st.es_cam_az_offset, st.es_cam_el_offset);
   }
 }
 
@@ -142,6 +164,12 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
     } else {
       st.es_camera_mode = CameraMode.Follow;
     }
+    // Step 21 — reset persistent orbit on mode change so the new
+    // mode opens with its canonical pose (user may have spun the
+    // camera in the old mode; carrying that into the other would be
+    // disorienting).
+    st.es_cam_az_offset = 0.0;
+    st.es_cam_el_offset = 0.0;
   }
   if input.in_occlusion_toggle {
     st.es_occlusion_on = !st.es_occlusion_on;
