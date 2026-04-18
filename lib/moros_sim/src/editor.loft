@@ -71,6 +71,30 @@ fn tool_from_number(n: integer) -> ToolKind {
 // drift into untextured space by accident.
 pub MAX_OVERLAY_CY = 7;
 
+// Step 16 — mouse-look sensitivity (radians per pixel of horizontal
+// mouse delta).  A full 360° turn at the default takes ~2094 px of
+// motion — roughly two sweeps of a 1080p screen, which matches the
+// feel of Half-Life-era WASD+mouse editors.
+pub MOUSE_LOOK_SENSITIVITY = 0.003;
+
+// Rotate the avatar's facing by the horizontal mouse delta, keeping
+// the result in `[-PI, PI]` so long sessions can't accumulate
+// floating-point error.  Called by `editor_tick`, but also exposed
+// for hosts that want to drive turn from a different source (e.g.
+// gamepad right-stick).
+pub fn apply_mouse_look(st: &EditorState, dx: integer) {
+  if dx == 0 { return; }
+  ml_delta = (dx as float) * MOUSE_LOOK_SENSITIVITY;
+  st.es_player.pl_facing = st.es_player.pl_facing + ml_delta;
+  ml_two_pi = PI + PI;
+  while st.es_player.pl_facing > PI {
+    st.es_player.pl_facing = st.es_player.pl_facing - ml_two_pi;
+  }
+  while st.es_player.pl_facing < 0.0 - PI {
+    st.es_player.pl_facing = st.es_player.pl_facing + ml_two_pi;
+  }
+}
+
 pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   if input.in_tool_number >= 1 && input.in_tool_number <= 6 {
     st.es_tools.ts_current = tool_from_number(input.in_tool_number);
@@ -97,6 +121,7 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   if input.in_layer_down && st.es_overlay_cy > 0 {
     st.es_overlay_cy = st.es_overlay_cy - 1;
   }
+  apply_mouse_look(st, input.in_mouse_dx);
   player_step(st.es_player, st.es_map, dt, input);
 }
 
@@ -217,4 +242,28 @@ pub fn input_from_snapshot(
     mx, my, mouse_dx, mouse_dy, wheel,
     clicked, rclicked, ctrl_pressed,
   )
+}
+
+// ── Persistence (Step 15) ────────────────────────────────────────
+// Save / load persist the Map only — Player, ToolState, UndoStack
+// are session state that doesn't travel with the scene file.  After
+// a successful load the undo stack is cleared, since its entries
+// snapshot hexes in the OLD map and replaying them into the freshly
+// loaded map would stamp unrelated coordinates.
+
+pub fn editor_save_to_file(st: EditorState, path: text) -> boolean {
+  ef_json = map_to_json(st.es_map);
+  ef_f = file(path);
+  ef_f.write(ef_json);
+  true
+}
+
+pub fn editor_load_from_file(st: &EditorState, path: text) -> boolean {
+  ef_lf = file(path);
+  if !ef_lf.exists() { return false; }
+  ef_text = ef_lf.content();
+  if len(ef_text) == 0 { return false; }
+  st.es_map  = map_from_json(ef_text);
+  st.es_undo = undo_empty();
+  true
 }

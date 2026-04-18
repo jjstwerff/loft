@@ -1,0 +1,86 @@
+// Step 15 — save / load tests.  Round-trip a Map via a temp file
+// and confirm post-load state is equivalent to pre-save.
+use moros_sim;
+use moros_editor;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn temp_path(name: text) -> text {
+  // Cheap, test-local scratch path — no scheduling concerns here
+  // since each test uses a unique file name.
+  "/tmp/loft_moros_sim_{name}.json"
+}
+
+fn build() -> EditorState {
+  es = editor_default();
+  // Write a couple of hexes so the JSON round-trip has something
+  // to preserve.
+  map_set_height(es.es_map, 0, 0, 0, 5);
+  map_set_height(es.es_map, 1, 2, 0, 3);
+  map_set_wall_dir(es.es_map, 0, 0, 0, 0, 1);   // wall N on (0,0,0)
+  es
+}
+
+fn test_save_writes_file() {
+  s = build();
+  sp = temp_path("save_smoke");
+  ok = editor_save_to_file(s, sp);
+  assert(ok, "save reports success");
+  f = file(sp);
+  assert(f.exists(), "file exists after save");
+  content = f.content();
+  assert(len(content) > 0, "json body non-empty, len={len(content)}");
+}
+
+fn test_round_trip_preserves_heights() {
+  rt = build();
+  rtp = temp_path("roundtrip_heights");
+  editor_save_to_file(rt, rtp);
+
+  // Fresh state with an empty map, then load.
+  rt2 = editor_default();
+  loaded = editor_load_from_file(rt2, rtp);
+  assert(loaded, "load reports success");
+
+  assert(map_get_hex(rt2.es_map, 0, 0, 0).h_height == 5,
+         "(0,0,0) height restored; got {map_get_hex(rt2.es_map, 0, 0, 0).h_height}");
+  assert(map_get_hex(rt2.es_map, 1, 2, 0).h_height == 3,
+         "(1,2,0) height restored; got {map_get_hex(rt2.es_map, 1, 2, 0).h_height}");
+}
+
+fn test_round_trip_preserves_walls() {
+  rw = build();
+  rwp = temp_path("roundtrip_walls");
+  editor_save_to_file(rw, rwp);
+  rw2 = editor_default();
+  editor_load_from_file(rw2, rwp);
+  assert(map_get_hex(rw2.es_map, 0, 0, 0).h_wall_n == 1,
+         "wall N preserved; got {map_get_hex(rw2.es_map, 0, 0, 0).h_wall_n}");
+}
+
+fn test_load_missing_file_returns_false() {
+  lm = editor_default();
+  // Pick a path that can't exist (embedded null-ish nonsense).
+  ok = editor_load_from_file(lm, "/tmp/does_not_exist_moros_sim_p15.json");
+  assert(!ok, "missing file: load returns false");
+}
+
+fn test_load_clears_undo_stack() {
+  lc = build();
+  // Capture a hex before saving so the undo stack is non-empty.
+  undo_push(lc.es_undo, lc.es_map, 0, 0, 0);
+  map_set_height(lc.es_map, 0, 0, 0, 9);
+  assert(undo_depth(lc.es_undo) == 1, "pre-save: one entry");
+
+  lcp = temp_path("roundtrip_undo");
+  editor_save_to_file(lc, lcp);
+
+  // Fresh state, populate its undo stack too, then load — post-load
+  // undo should be empty (entries from the old map become invalid).
+  lc2 = editor_default();
+  undo_push(lc2.es_undo, lc2.es_map, 5, 5, 0);
+  assert(undo_depth(lc2.es_undo) == 1, "pre-load: seeded undo entry");
+  editor_load_from_file(lc2, lcp);
+  assert(undo_depth(lc2.es_undo) == 0, "post-load: undo cleared");
+}
