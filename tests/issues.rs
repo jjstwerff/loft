@@ -9751,3 +9751,27 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P180 — assigning a `single` (f32) literal to a `float` (f64) struct
+/// field is silently accepted by the parser and corrupts the record at
+/// runtime (interpreter panics `index out of bounds` in the allocation
+/// layer; native codegen leaks a raw rustc E0308 up to the user).
+///
+/// Post-fix expectation: parser rejects the mismatch with a proper
+/// diagnostic at the assignment site, before codegen / execution.
+///
+/// Gated `#[ignore]` until fixed.  Fixture at
+/// `tests/lib/p180_single_to_float_field.loft`.
+#[test]
+#[ignore]
+fn p180_single_literal_into_float_field() {
+    code!(
+        "struct P180Box { a: float not null, b: integer not null }
+fn test() {
+    p = P180Box { a: 1.0, b: 42 };
+    p.a = 1.2f;
+    assert(p.a > 1.19 && p.a < 1.21, \"expected ~1.2 got {p.a}\");
+}"
+    )
+    .result(Value::Null);
+}
