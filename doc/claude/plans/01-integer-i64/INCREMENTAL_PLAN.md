@@ -4,6 +4,12 @@ Status: **devised 2026-04-18** — breaks the coupled Phase 2+4 effort into
 8 landable increments, each completable in a single session (<400 min)
 without leaving the codebase in an inconsistent state.
 
+**Progress (2026-04-18)**:
+- **2a Done** (`8aee716`) — wide-limit-to-Long + `u32` stdlib alias.
+- **2b Done** (`9940f57`) — Op*Long Nullable opcodes; Phase 1 G-hybrid
+  fully covers long arithmetic.
+- 2c, 2d, 2e, 2f, 2g, 2h — remaining.
+
 ## Guiding insight
 
 The coupling (Phase 2 and Phase 4 breaking if split) came from the
