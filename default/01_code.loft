@@ -27,6 +27,11 @@ pub type u16 = integer limit(0, 65535) size(2);
 pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
 pub type i32 = integer size(4);
+// u32 (C54.C) deferred — requires Phase 2 (i64-register arithmetic +
+// storage widening of values > i32::MAX).  Without Phase 2, assigning
+// a value > i32::MAX to a `u32`-aliased field silently wraps to a
+// negative i32.  Tracked at
+// `doc/claude/plans/01-integer-i64/03-u32-type.md`.
 // --- Interfaces ---
 // Standard interfaces for bounded generic functions.
 // A type satisfies an interface by defining the required operator or method.

@@ -1,6 +1,56 @@
 # Phase 3 — C54.C: add `u32` as a stdlib type
 
-Status: **not started** — blocked by Phase 2.
+Status: **blocked — explored, deferred pending Phase 2**.
+
+## What was attempted (2026-04-18)
+
+Tried to land `u32` without the full Phase 2 widen.  Two minor
+compiler changes landed as prerequisites:
+
+- `src/lexer.rs::ret_number` — accepts integer literals up to `u32::MAX`
+  (was: rejected anything > `i32::MAX` without the `l` suffix).  This
+  lets `limit(0, 4294967294)` parse in user code.
+- `default/01_code.loft` — tried `pub type u32 = integer limit(0, 4294967294) size(4);`.
+
+## What didn't work
+
+Values > `i32::MAX` silently wrap when stored in a 4-byte integer slot.
+Probe: `x: u32 = 3000000000;` prints `-1294967296` (signed i32
+interpretation of the bit pattern).  The `limit(...)` clause doesn't
+enforce at write time — storage is still i32 regardless of the
+declared max.
+
+For `u32` to round-trip:
+
+1. **Storage**: the 4-byte slot must be interpreted as *unsigned* when
+   read for an `integer limit(0, X)` where `X > i32::MAX`.
+2. **Arithmetic register**: widening to i64 so `u32 + u32` doesn't
+   overflow at 2^31 (today traps under G; ideal would be "headroom to
+   2^32").
+3. **Write narrowing**: a range check at store time that rejects
+   values outside `[0, u32::MAX]`.
+
+Items 1-3 are exactly Phase 2's scope (`02-i64-storage.md`).  Without
+Phase 2, `u32` is a leaky abstraction and the stdlib alias was
+deliberately NOT added.
+
+## Keeping the lexer change
+
+The `ret_number` change is net-positive on its own — it unblocks
+downstream Phase 2 work and improves error messages for large
+literals ("out of range (exceeds u32::MAX)" vs the old generic
+"Problem parsing integer").  Committed separately.
+
+## Unblocks
+
+Phase 2 (C54.A).  Once i64 register arithmetic + unsigned-read at
+bounded storage lands, revisit this phase: the stdlib alias and all
+5 test probes from QUALITY.md § 452-453 should land in an afternoon.
+
+## Budget (post-Phase-2)
+
+60-120 minutes.  Same estimate as before, just gated on Phase 2
+being complete.
 
 ## Why this is small
 

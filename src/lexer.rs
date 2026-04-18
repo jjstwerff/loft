@@ -980,12 +980,19 @@ impl Lexer {
     }
 
     fn ret_number(&mut self, r: u64, p: Position, start_zero: bool) -> LexResult {
-        let max = i32::MAX as usize;
+        // Accept integer literals up to u32::MAX without the `l` suffix so
+        // `limit(0, 4_294_967_294)` and similar u32-range bounds parse
+        // naturally.  `l` suffix still promotes to i64 for `long` literals.
+        // Values above u32::MAX without `l` suffix are an error.
+        let u32_max = u64::from(u32::MAX);
         if let Some('l') = self.iter.peek() {
             self.next_char();
             LexResult::new(LexItem::Long(r), p)
-        } else if r > max as u64 {
-            self.err(Level::Error, "Problem parsing integer");
+        } else if r > u32_max {
+            self.err(
+                Level::Error,
+                "Integer literal out of range (exceeds u32::MAX)",
+            );
             LexResult::new(LexItem::Integer(0, start_zero), p)
         } else {
             LexResult::new(LexItem::Integer(r as u32, start_zero), p)
