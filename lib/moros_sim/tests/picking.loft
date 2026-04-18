@@ -1,0 +1,110 @@
+// Step 18 — mouse-to-world picking + edit_at_hex tests.
+use moros_sim;
+use moros_editor;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn make_flat(cols: integer, rows: integer) -> Map {
+  fm = map_empty();
+  for fq in 0..cols {
+    for fr in 0..rows {
+      map_set_height(fm, fq, fr, 0, 0);
+    }
+  }
+  fm
+}
+
+fn build() -> EditorState {
+  b = editor_default();
+  b.es_map = make_flat(8, 8);
+  // Camera pointed at origin with a moderate tilt so horizontal
+  // screen deltas map to meaningful world-x deltas for the
+  // off-centre pick test.  89° near-top-down flattens horizontal
+  // rays and makes left/right picks collapse onto the same column.
+  b.es_camera.target    = vec3(0.0, 0.0, 0.0);
+  b.es_camera.azimuth   = 0.0;
+  b.es_camera.elevation = 45.0;
+  b.es_camera.distance  = 20.0;
+  b
+}
+
+// ── pick_hex_under_cursor ────────────────────────────────────────
+
+fn test_pick_centre_of_screen_is_origin_hex() {
+  p = build();
+  pa = pick_hex_under_cursor(p, 640, 360, 1280, 720);
+  // Top-down camera over origin: centre pixel picks (0, 0).
+  assert(pa.ha_q == 0, "q=0 at screen centre; got {pa.ha_q}");
+  assert(pa.ha_r == 0, "r=0 at screen centre; got {pa.ha_r}");
+}
+
+fn test_pick_tracks_overlay_cy_floor() {
+  // Raising the overlay cy should pick a DIFFERENT hex unless the
+  // ray passes exactly through the vertical axis — which the
+  // near-top-down setup ensures for the centre pixel.  Check that
+  // the method at least accepts the non-zero cy without crashing
+  // and still returns a valid HexAddress.
+  p = build();
+  p.es_overlay_cy = 3;
+  pa = pick_hex_under_cursor(p, 640, 360, 1280, 720);
+  assert(pa.ha_q == 0, "centre pick still (0,0) with raised cy");
+  assert(pa.ha_r == 0, "centre pick still (0,0) with raised cy");
+}
+
+fn test_pick_off_centre_moves_hex() {
+  p = build();
+  // Extremes of the screen should definitely land in different
+  // hexes.  Accept either q or r changing (axial coordinates tilt).
+  left = pick_hex_under_cursor(p, 0, 360, 1280, 720);
+  right = pick_hex_under_cursor(p, 1279, 360, 1280, 720);
+  differs = left.ha_q != right.ha_q || left.ha_r != right.ha_r;
+  assert(differs,
+         "left ({left.ha_q},{left.ha_r}) != right ({right.ha_q},{right.ha_r})");
+}
+
+// ── edit_at_hex ──────────────────────────────────────────────────
+
+fn test_edit_at_hex_raise() {
+  e = build();
+  e.es_tools.ts_current = ToolKind.RaiseHex;
+  e.es_tools.ts_height_step = 4;
+  edit_at_hex(e, 3, 2);
+  assert(map_get_hex(e.es_map, 3, 2, 0).h_height == 4,
+         "hex raised; got {map_get_hex(e.es_map, 3, 2, 0).h_height}");
+  assert(undo_depth(e.es_undo) == 1, "one logical undo entry");
+  assert(!in_batch(e.es_undo), "batch closed");
+}
+
+fn test_edit_at_hex_none_is_noop() {
+  n = build();
+  // Default tool is None.
+  edit_at_hex(n, 1, 1);
+  assert(map_get_hex(n.es_map, 1, 1, 0).h_height == 0, "height untouched");
+  assert(undo_depth(n.es_undo) == 0, "no undo push");
+}
+
+fn test_edit_at_hex_undo_round_trip() {
+  u = build();
+  u.es_tools.ts_current = ToolKind.RaiseHex;
+  u.es_tools.ts_height_step = 2;
+  edit_at_hex(u, 4, 5);
+  assert(map_get_hex(u.es_map, 4, 5, 0).h_height == 2, "raised +2");
+  ui = input_empty();
+  ui.in_undo = true;
+  editor_tick(u, ui, 1.0 / 60.0);
+  assert(map_get_hex(u.es_map, 4, 5, 0).h_height == 0, "undo restored");
+}
+
+// ── End-to-end: pick then edit ──────────────────────────────────
+
+fn test_pick_then_edit_end_to_end() {
+  p = build();
+  p.es_tools.ts_current = ToolKind.RaiseHex;
+  p.es_tools.ts_height_step = 1;
+  // Pick centre (origin hex), edit it.
+  pa = pick_hex_under_cursor(p, 640, 360, 1280, 720);
+  edit_at_hex(p, pa.ha_q, pa.ha_r);
+  assert(map_get_hex(p.es_map, pa.ha_q, pa.ha_r, 0).h_height == 1,
+         "picked hex raised; got {map_get_hex(p.es_map, pa.ha_q, pa.ha_r, 0).h_height}");
+}

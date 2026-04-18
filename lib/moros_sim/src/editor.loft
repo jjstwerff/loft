@@ -27,6 +27,7 @@ pub struct EditorState {
   es_overlay_cy:   integer not null,   // vertical layer the next edit targets
   es_occlusion_on: boolean,            // see-through toggle, honoured by renderer
   es_camera_mode:  CameraMode,
+  es_camera:       RenderCamera,       // Step 17 — live camera state
 }
 
 pub fn editor_default() -> EditorState {
@@ -38,6 +39,7 @@ pub fn editor_default() -> EditorState {
     es_overlay_cy:   0,
     es_occlusion_on: false,
     es_camera_mode:  CameraMode.Follow,
+    es_camera:       camera_default(),
   }
 }
 
@@ -76,6 +78,41 @@ pub MAX_OVERLAY_CY = 7;
 // motion — roughly two sweeps of a 1080p screen, which matches the
 // feel of Half-Life-era WASD+mouse editors.
 pub MOUSE_LOOK_SENSITIVITY = 0.003;
+
+// Step 17 — camera-orbit sensitivity.  Degrees of azimuth/elevation
+// per pixel of mouse motion while the right button is held.
+pub CAMERA_ORBIT_SENSITIVITY = 0.3;
+
+// Step 17 — camera zoom step per wheel tick.  Positive wheel delta
+// pulls the camera in (shorter distance); negative pushes out.
+pub CAMERA_ZOOM_STEP = 1.0;
+
+// Step 17 — apply per-frame camera updates derived from the input
+// envelope: mode-driven follow / overview positioning, right-drag
+// orbit, wheel zoom.  Called by `editor_tick` AFTER physics so the
+// camera snaps to the avatar's post-integration pose.
+pub fn camera_apply_input(st: &EditorState, input: InputState) {
+  // Wheel zoom first (mode-independent).
+  if input.in_wheel != 0 {
+    cai_dz = (input.in_wheel as float) * CAMERA_ZOOM_STEP;
+    camera_zoom_unbounded(st.es_camera, 0.0 - cai_dz);
+  }
+  // Right-drag orbit — only honoured when the user is actually
+  // holding the button; the caller marks `in_rclick = true` while
+  // the button is down.
+  if input.in_rclick && (input.in_mouse_dx != 0 || input.in_mouse_dy != 0) {
+    cai_daz = (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
+    cai_del = (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
+    camera_orbit(st.es_camera, cai_daz, cai_del);
+  }
+  // Mode-driven positioning — keeps target tied to avatar hex in
+  // Follow, pins to a high overview in Overview.
+  if st.es_camera_mode == CameraMode.Follow {
+    camera_follow(st.es_player.pl_pos, st.es_player.pl_facing, st.es_camera);
+  } else {
+    camera_overview(st.es_player.pl_pos, st.es_camera);
+  }
+}
 
 // Rotate the avatar's facing by the horizontal mouse delta, keeping
 // the result in `[-PI, PI]` so long sessions can't accumulate
@@ -123,6 +160,7 @@ pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
   }
   apply_mouse_look(st, input.in_mouse_dx);
   player_step(st.es_player, st.es_map, dt, input);
+  camera_apply_input(st, input);
 }
 
 // ── Input decoding (Step 10) ─────────────────────────────────────
@@ -266,4 +304,42 @@ pub fn editor_load_from_file(st: &EditorState, path: text) -> boolean {
   st.es_map  = map_from_json(ef_text);
   st.es_undo = undo_empty();
   true
+}
+
+// ── Mouse-to-world picking (Step 18) ─────────────────────────────
+// Translate screen-space (mx, my) to the hex coordinate on the
+// current overlay layer's floor plane.  The floor y is derived from
+// `es_overlay_cy * HEIGHT_SCALE` so picks land on the layer the
+// editor is currently targeting — matches the "edit where you're
+// looking, at the cy you've scrolled to" mental model.
+//
+// Returns the HexAddress struct (`ha_q`, `ha_r`).  Hosts combine
+// this with `es_overlay_cy` for a full (q, r, cy) edit target.
+pub fn pick_hex_under_cursor(
+  st: EditorState,
+  mx: integer, my: integer,
+  viewport_w: integer, viewport_h: integer,
+) -> HexAddress {
+  pk_floor_y = (st.es_overlay_cy as float) * HEIGHT_SCALE;
+  pick_hex(
+    st.es_camera,
+    mx as float,          my as float,
+    viewport_w as float,  viewport_h as float,
+    pk_floor_y,
+  )
+}
+
+// Apply the current tool at an explicit hex, bracketed by an undo
+// batch.  Companion to `editor_click`'s avatar-centric dispatch —
+// hosts call this after `pick_hex_under_cursor` for click-where-you-
+// look editing.  Same no-op semantics as `editor_click`: tool
+// `None` does nothing.
+pub fn edit_at_hex(st: &EditorState, q: integer, r: integer) {
+  if st.es_tools.ts_current == ToolKind.None { return; }
+  batch_begin(st.es_undo);
+  undo_push(st.es_undo, st.es_map, q, r, st.es_overlay_cy);
+  ec_world = hex_to_world(q, r, 0);
+  ec_pos = vec3(ec_world.x, st.es_player.pl_pos.y, ec_world.z);
+  tool_apply(ec_pos, st.es_overlay_cy, st.es_map, st.es_tools);
+  batch_end(st.es_undo);
 }

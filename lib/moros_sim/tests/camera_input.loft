@@ -1,0 +1,118 @@
+// Step 17 — camera_apply_input tests.  Exercise wheel zoom,
+// right-drag orbit, follow/overview mode switches, and the
+// editor_tick integration.
+use moros_sim;
+use moros_editor;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn build() -> EditorState {
+  c = editor_default();
+  // Put the avatar somewhere non-origin so follow target is unambiguous.
+  c.es_player.pl_pos = vec3(3.0, 0.0, 4.0);
+  c
+}
+
+fn test_default_camera_is_default() {
+  d = build();
+  assert(d.es_camera.distance == 10.0, "default distance; got {d.es_camera.distance}");
+  assert(d.es_camera.azimuth  == 45.0, "default azimuth");
+  assert(d.es_camera.fov_y    == 60.0, "default fov");
+}
+
+fn test_wheel_zooms_in() {
+  w = build();
+  wi = input_empty();
+  wi.in_wheel = 2;
+  camera_apply_input(w, wi);
+  // Wheel + 2 → distance goes down by 2 * CAMERA_ZOOM_STEP = 2.
+  assert(w.es_camera.distance < 10.0, "closer after wheel+; got {w.es_camera.distance}");
+  assert(w.es_camera.distance > 7.5,  "not too close");
+}
+
+fn test_wheel_zooms_out() {
+  w = build();
+  wi = input_empty();
+  wi.in_wheel = -3;
+  camera_apply_input(w, wi);
+  assert(w.es_camera.distance > 10.0, "further after wheel-; got {w.es_camera.distance}");
+}
+
+fn test_rclick_drag_orbits_azimuth() {
+  o = build();
+  prior_az = o.es_camera.azimuth;
+  oi = input_empty();
+  oi.in_rclick = true;
+  oi.in_mouse_dx = 10;    // 10 * 0.3 = 3° daz
+  camera_apply_input(o, oi);
+  assert(o.es_camera.azimuth > prior_az,
+         "azimuth increased; was {prior_az} now {o.es_camera.azimuth}");
+}
+
+fn test_rclick_drag_orbits_elevation() {
+  o = build();
+  prior_el = o.es_camera.elevation;
+  oi = input_empty();
+  oi.in_rclick = true;
+  oi.in_mouse_dy = 10;    // 10 * 0.3 = 3° del
+  camera_apply_input(o, oi);
+  assert(o.es_camera.elevation > prior_el,
+         "elevation increased; was {prior_el} now {o.es_camera.elevation}");
+}
+
+fn test_no_rclick_ignores_mouse_delta() {
+  // Mouse deltas without right-click must not orbit — they belong
+  // to mouse-look (which operates on pl_facing, not the camera).
+  // Use Overview mode so camera_follow doesn't override azimuth
+  // from the avatar facing on every call.
+  n = build();
+  n.es_camera_mode = CameraMode.Overview;
+  prior_az = n.es_camera.azimuth;
+  // Feed one "baseline" tick so overview's own azimuth choice
+  // settles before we measure.
+  camera_apply_input(n, input_empty());
+  baseline_az = n.es_camera.azimuth;
+  ni = input_empty();
+  ni.in_mouse_dx = 100;   // in_rclick is false
+  camera_apply_input(n, ni);
+  assert(n.es_camera.azimuth == baseline_az,
+         "no rclick → no orbit; baseline {baseline_az} now {n.es_camera.azimuth}");
+  _ = prior_az;  // kept for the comment above — silence unused-warn
+}
+
+fn test_follow_mode_targets_avatar() {
+  // After apply_input in Follow, camera target should track the
+  // avatar head position (head = pl_pos + eye offset).  We only
+  // assert that target moved toward the avatar, not the exact
+  // offset (that's camera_follow's concern).
+  f = build();
+  fi = input_empty();
+  camera_apply_input(f, fi);
+  // camera_follow sets target close to the head; x/z should be near (3, 4).
+  assert(f.es_camera.target.x > 2.0 && f.es_camera.target.x < 4.0,
+         "follow target x tracks avatar; got {f.es_camera.target.x}");
+  assert(f.es_camera.target.z > 3.0 && f.es_camera.target.z < 5.0,
+         "follow target z tracks avatar; got {f.es_camera.target.z}");
+}
+
+fn test_overview_mode_flips_elevation_high() {
+  ov = build();
+  ov.es_camera_mode = CameraMode.Overview;
+  ovi = input_empty();
+  camera_apply_input(ov, ovi);
+  // Overview pins elevation near-vertical.
+  assert(ov.es_camera.elevation > 60.0,
+         "overview elevation is high; got {ov.es_camera.elevation}");
+}
+
+fn test_tick_calls_camera_apply_input() {
+  // editor_tick ends with camera_apply_input — a wheel delta in the
+  // input envelope should zoom the camera via the tick.
+  t = build();
+  ti = input_empty();
+  ti.in_wheel = 1;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_camera.distance < 10.0,
+         "tick zoomed via wheel; got {t.es_camera.distance}");
+}
