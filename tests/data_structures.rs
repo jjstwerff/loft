@@ -29,13 +29,14 @@ pub fn record() {
     stores.field(s, "percentage", stores.name("single"));
     stores.field(s, "calc", stores.name("long"));
     stores.finish();
-    assert_eq!(stores.size(stores.name("Data")), 29);
+    assert_eq!(stores.size(stores.name("Data")), 33);
     assert_eq!(stores.enum_val(e, 2), "Hourly");
-    assert_eq!(stores.position(s, "amount"), 0);
-    assert_eq!(stores.position(s, "category"), 28);
-    assert_eq!(stores.position(s, "size"), 20);
-    assert_eq!(stores.position(s, "percentage"), 24);
-    assert_eq!(stores.position(s, "calc"), 8);
+    assert_eq!(stores.position(s, "size"), 0);
+    assert_eq!(stores.position(s, "amount"), 8);
+    assert_eq!(stores.position(s, "calc"), 16);
+    assert_eq!(stores.position(s, "name"), 24);
+    assert_eq!(stores.position(s, "percentage"), 28);
+    assert_eq!(stores.position(s, "category"), 32);
     //stores.dump_types();
     let result = stores.database(1234);
     let test_string = "{ name: \"Hello World!\", category: Hourly, size: 12345, percentage: 0.15 }";
@@ -325,6 +326,7 @@ pub fn hash_records_sorted_single_field() {
     let keys = stores.keys(v).to_vec();
     let recs = hash::records_sorted(&into, &stores.allocations, &keys);
     // Resolve each rec-nr to its `name` field for an observable order.
+    let name_off = u32::from(stores.position(s, "name"));
     let names: Vec<String> = recs
         .iter()
         .map(|&r| {
@@ -333,9 +335,10 @@ pub fn hash_records_sorted_single_field() {
                 rec: r,
                 pos: 8,
             };
-            let name_pos = stores.allocations[rec.store_nr as usize].get_int(rec.rec, rec.pos);
+            let name_pos =
+                stores.allocations[rec.store_nr as usize].get_u32_raw(rec.rec, rec.pos + name_off);
             stores.allocations[rec.store_nr as usize]
-                .get_str(name_pos as u32)
+                .get_str(name_pos)
                 .to_string()
         })
         .collect();
@@ -374,6 +377,8 @@ pub fn hash_records_sorted_multi_field() {
     stores.parse(data, v, &into);
     let keys = stores.keys(v).to_vec();
     let recs = hash::records_sorted(&into, &stores.allocations, &keys);
+    let region_off = u32::from(stores.position(s, "region"));
+    let score_off = u32::from(stores.position(s, "score"));
     let pairs: Vec<(String, i64)> = recs
         .iter()
         .map(|&r| {
@@ -383,9 +388,9 @@ pub fn hash_records_sorted_multi_field() {
                 pos: 8,
             };
             let store = &stores.allocations[rec.store_nr as usize];
-            let region_pos = store.get_u32_raw(rec.rec, rec.pos);
+            let region_pos = store.get_u32_raw(rec.rec, rec.pos + region_off);
             let region = store.get_str(region_pos).to_string();
-            let score = store.get_int(rec.rec, rec.pos + 4);
+            let score = store.get_int(rec.rec, rec.pos + score_off);
             (region, score)
         })
         .collect();
@@ -625,28 +630,31 @@ pub fn index_deletions() {
     let mut rng = Pcg64Mcg::seed_from_u64(42);
     let keys = stores.keys(v).to_vec();
     let elms = 100;
+    // Post-2c Elm layout: k:integer[0] c:integer[8] #left[16] #right[24] #color[32].
+    // User data starts at rec.pos=8; tree pointers at absolute byte rec.pos+16=24.
+    // Record needs 33 user bytes + 8 header = 41 bytes = 6 words.
     for i in 0..elms {
-        let rec = stores.claim(&db, 3);
-        assert!(rec.rec < i * 4 + 8, "Claimed record {} too high", rec.rec);
+        let rec = stores.claim(&db, 6);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_i32_raw(rec.rec, 4, key as i32);
-        s.set_i32_raw(rec.rec, 8, i as i32);
-        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        // Write k at rec.pos+0=8 (8 bytes), c at rec.pos+8=16 (8 bytes).
+        s.set_int(rec.rec, 8, i64::from(key));
+        s.set_int(rec.rec, 16, i64::from(i));
+        tree::add(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
         recs.push(rec);
     }
     for d in 0..500 {
         let i = rng.next_u64() % recs.len() as u64;
         let rec = recs[i as usize];
-        tree::remove(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        tree::remove(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_i32_raw(rec.rec, 4, key as i32);
-        s.set_i32_raw(rec.rec, 8, 100 + d);
-        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        s.set_int(rec.rec, 8, i64::from(key));
+        s.set_int(rec.rec, 16, i64::from(100 + d));
+        tree::add(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
     }
 }
 
