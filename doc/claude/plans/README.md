@@ -22,7 +22,7 @@ per phase.
 
 | Dir | Initiative | Current phase |
 |---|---|---|
-| — | (none open) | |
+| `01-integer-i64/` | Eliminate `i32::MIN`-as-null sentinel and silent wrap / div-by-zero; decouple arithmetic width (i64) from storage width. | Phase 0 — `not null` enforcement audit + G/G′ decision (`00-null-enforcement-audit.md`) |
 
 ## Finished initiatives
 
