@@ -304,7 +304,7 @@ pub fn OpInsertVector(
     index: i32,
     db_tp: i32,
 ) -> DbRef {
-    let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
+    let new_value = vector::insert_vector(&data, size as u32, i64::from(index), &mut stores.allocations);
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
 }
@@ -1169,7 +1169,7 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
             // plain vector: arg is the element type index
             let elem_size = u32::from(stores.size(arg as u16));
             let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, elem_size, cur, &mut stores.allocations);
+            vector::remove_vector(&data, elem_size, i64::from(cur), &mut stores.allocations);
             state.set_cur(n);
         }
         1 => {
@@ -1217,7 +1217,7 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
                 return;
             }
             let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, arg as u32, cur, &mut stores.allocations);
+            vector::remove_vector(&data, arg as u32, i64::from(cur), &mut stores.allocations);
             state.set_cur(n);
         }
         _ => {}

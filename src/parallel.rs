@@ -155,7 +155,7 @@ pub fn run_parallel_direct(
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
                     for row_idx in start..end {
-                        let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                        let row_idx_i32 = row_idx as i64;
                         let row_ref = vector::get_vector(
                             &input_t,
                             element_size,
@@ -182,7 +182,7 @@ pub fn run_parallel_direct(
         let mut state = program.new_state(stores.clone_for_worker());
         let ret_sz = return_size as usize;
         for row_idx in 0..n_rows {
-            let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+            let row_idx_i32 = row_idx as i64;
             let row_ref = vector::get_vector(
                 input,
                 element_size,
@@ -243,7 +243,7 @@ pub fn run_parallel_raw(
                     let row_ref = vector::get_vector(
                         &input_t,
                         element_size,
-                        i32::try_from(row_idx).expect("row index fits i32"),
+                        row_idx as i64,
                         &state.database.allocations,
                     );
                     let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
@@ -274,7 +274,7 @@ pub fn run_parallel_raw(
             let row_ref = vector::get_vector(
                 input,
                 element_size,
-                i32::try_from(row_idx).expect("row index fits i32"),
+                row_idx as i64,
                 &state.database.allocations,
             );
             *result = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
@@ -328,7 +328,7 @@ pub fn run_parallel_text(
                     let row_ref = vector::get_vector(
                         &input_t,
                         element_size,
-                        i32::try_from(row_idx).expect("row index fits i32"),
+                        row_idx as i64,
                         &state.database.allocations,
                     );
                     let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
@@ -359,7 +359,7 @@ pub fn run_parallel_text(
             let row_ref = vector::get_vector(
                 input,
                 element_size,
-                i32::try_from(row_idx).expect("row index fits i32"),
+                row_idx as i64,
                 &state.database.allocations,
             );
             *result = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
@@ -413,7 +413,7 @@ pub fn run_parallel_ref(
                     let row_ref = vector::get_vector(
                         &input_t,
                         element_size,
-                        i32::try_from(row_idx).expect("row index fits i32"),
+                        row_idx as i64,
                         &state.database.allocations,
                     );
                     let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
@@ -443,7 +443,7 @@ pub fn run_parallel_ref(
             let row_ref = vector::get_vector(
                 input,
                 element_size,
-                i32::try_from(row_idx).expect("row index fits i32"),
+                row_idx as i64,
                 &state.database.allocations,
             );
             let val = state.execute_at_ref(fn_pos, &row_ref, extra_args);
@@ -493,7 +493,7 @@ pub fn run_parallel_int(
                 let mut state = prog.new_state(worker_stores);
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
-                    let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                    let row_idx_i32 = row_idx as i64;
                     let row_ref = vector::get_vector(
                         &input_t,
                         element_size,
@@ -525,7 +525,7 @@ pub fn run_parallel_int(
         let mut state = program.new_state(stores.clone_for_worker());
         let mut results = vec![i32::MIN; n_rows];
         for (row_idx, result) in results.iter_mut().enumerate() {
-            let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+            let row_idx_i32 = row_idx as i64;
             let row_ref = vector::get_vector(
                 input,
                 element_size,
@@ -591,7 +591,7 @@ pub fn run_parallel_light(
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
                     for row_idx in start..end {
-                        let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+                        let row_idx_i32 = row_idx as i64;
                         let row_ref = vector::get_vector(
                             &input_t,
                             element_size,
@@ -617,7 +617,7 @@ pub fn run_parallel_light(
         let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(0)) };
         let mut state = program.new_state(worker_stores);
         for row_idx in 0..n_rows {
-            let row_idx_i32 = i32::try_from(row_idx).expect("row index fits i32");
+            let row_idx_i32 = row_idx as i64;
             let row_ref = vector::get_vector(
                 input,
                 element_size,

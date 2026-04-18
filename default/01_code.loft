@@ -85,7 +85,7 @@ fn OpGotoFalse(step: const i8, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpGotoFalseWord(step: const i16, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-fn OpCall(d_nr: const i32, args_size: const u16, to: const i32);
+fn OpCall(d_nr: const integer, args_size: const u16, to: const integer);
 #rust"s.fn_call(@d_nr as u32, @args_size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
 #rust"s.fn_return(@ret, @value, @discard);"
@@ -130,7 +130,7 @@ fn OpConvIntFromNull() -> integer;
 #rust"i32::MIN"
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
-fn OpConstLongText(start: const i32, size: const i32) -> text;
+fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
 #rust"@v1.parse().unwrap_or(i32::MIN)"

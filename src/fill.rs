@@ -415,7 +415,7 @@ fn conv_character_from_null(s: &mut State) {
 fn const_long_text(s: &mut State) {
     let v_start = *s.code::<i64>();
     let v_size = *s.code::<i64>();
-    s.string_from_texts(v_start as i32, v_size as i32);
+    s.string_from_texts(v_start, v_size);
 }
 
 fn cast_int_from_text(s: &mut State) {
@@ -1214,7 +1214,7 @@ fn get_text_sub(s: &mut State) {
 fn text_character(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = s.string();
-    let new_value = ops::text_character(v_v1.str(), v_v2 as i32);
+    let new_value = ops::text_character(v_v1.str(), v_v2);
     s.put_stack(new_value);
 }
 
@@ -1719,7 +1719,7 @@ fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index as i32, &s.database.allocations);
+    let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
     s.put_stack(new_value);
 }
 
@@ -1727,7 +1727,7 @@ fn vector_ref(s: &mut State) {
     let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
     let new_value = s.database.get_ref(
-        &vector::get_vector(&v_r, 4, v_index as i32, &s.database.allocations),
+        &vector::get_vector(&v_r, 4, v_index, &s.database.allocations),
         0,
     );
     s.put_stack(new_value);
@@ -1747,7 +1747,7 @@ fn remove_vector(s: &mut State) {
     let new_value = vector::remove_vector(
         &v_r,
         u32::from(v_size),
-        v_index as i32,
+        v_index,
         &mut s.database.allocations,
     );
     s.put_stack(new_value);

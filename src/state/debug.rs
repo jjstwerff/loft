@@ -844,7 +844,7 @@ impl State {
     }
 
     pub(super) fn fn_name(&mut self, f: &mut dyn Write, data: &Data) -> Result<(), Error> {
-        let addr = *self.code::<i32>() as u32;
+        let addr = *self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {
@@ -874,7 +874,7 @@ impl State {
             Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 => {
                 format!("{}", i32::from(*self.code::<i16>()))
             }
-            Type::Integer(_, _, _) => format!("{}", *self.code::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.code::<i64>()),
             Type::Boolean => format!("{}", *self.code::<u8>() == 1),
             Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
             Type::Long => format!("{}", *self.code::<i64>()),
@@ -1306,7 +1306,7 @@ impl State {
         a_nr: usize,
         data: &Data,
     ) {
-        let addr = *self.code::<i32>() as u32;
+        let addr = *self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {

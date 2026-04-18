@@ -133,9 +133,9 @@ impl State {
         if let Some(v) = self.calls.get(&def_nr) {
             let old = self.code_pos;
             for pos in v.clone() {
-                // skip opcode(1) + d_nr(4) + args_size(2) to reach the i32 target
-                self.code_pos = pos + 7;
-                self.code_add(start as i32);
+                // skip opcode(1) + d_nr(8) + args_size(2) to reach the i64 target
+                self.code_pos = pos + 11;
+                self.code_add(i64::from(start));
             }
             self.code_pos = old;
         }
@@ -430,10 +430,10 @@ impl State {
             let const_store = &mut self.database.allocations[crate::database::CONST_STORE as usize];
             let rec = const_store.set_str(value);
             stack.add_op("OpConstStoreText", self);
-            self.code_add(rec as i32);
+            self.code_add(i64::from(rec));
             // set_str stores length at (rec, 4); text bytes start at (rec, 8).
             // We encode the record position; the opcode reads length from the store.
-            self.code_add(0i32); // pos offset within the record (length is at rec+4)
+            self.code_add(0i64); // pos offset within the record (length is at rec+4)
         }
         Type::Text(Vec::new())
     }
@@ -1640,7 +1640,7 @@ impl State {
             } else {
                 stack.add_op("OpCall", self);
             }
-            self.code_add(op); // d_nr: u32
+            self.code_add(op as i64); // d_nr: i64 (stdlib `const i32` widens post-2c)
             let args_size: u16 = stack
                 .data
                 .def(op)
@@ -1649,7 +1649,7 @@ impl State {
                 .map(|a| size(&a.typedef, &Context::Argument))
                 .sum();
             self.code_add(args_size);
-            self.code_add(stack.data.def(op).code_position as i32);
+            self.code_add(stack.data.def(op).code_position as i64);
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
@@ -2023,7 +2023,7 @@ impl State {
             }
             Type::Integer(_, _, _) => {
                 if let Value::Int(nr) = p {
-                    self.code_add(*nr);
+                    self.code_add(i64::from(*nr));
                 }
             }
             Type::Enum(_, _, _) => {

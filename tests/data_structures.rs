@@ -374,7 +374,7 @@ pub fn hash_records_sorted_multi_field() {
     stores.parse(data, v, &into);
     let keys = stores.keys(v).to_vec();
     let recs = hash::records_sorted(&into, &stores.allocations, &keys);
-    let pairs: Vec<(String, i32)> = recs
+    let pairs: Vec<(String, i64)> = recs
         .iter()
         .map(|&r| {
             let rec = DbRef {
@@ -383,8 +383,8 @@ pub fn hash_records_sorted_multi_field() {
                 pos: 8,
             };
             let store = &stores.allocations[rec.store_nr as usize];
-            let region_pos = store.get_int(rec.rec, rec.pos);
-            let region = store.get_str(region_pos as u32).to_string();
+            let region_pos = store.get_u32_raw(rec.rec, rec.pos);
+            let region = store.get_str(region_pos).to_string();
             let score = store.get_int(rec.rec, rec.pos + 4);
             (region, score)
         })
@@ -629,8 +629,8 @@ pub fn index_deletions() {
         assert!(rec.rec < i * 4 + 8, "Claimed record {} too high", rec.rec);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_int(rec.rec, 4, key as i32);
-        s.set_int(rec.rec, 8, i as i32);
+        s.set_i32_raw(rec.rec, 4, key as i32);
+        s.set_i32_raw(rec.rec, 8, i as i32);
         tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
         tree::validate(&into, 12, &stores.allocations, &keys);
         recs.push(rec);
@@ -642,8 +642,8 @@ pub fn index_deletions() {
         tree::validate(&into, 12, &stores.allocations, &keys);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_int(rec.rec, 4, key as i32);
-        s.set_int(rec.rec, 8, 100 + d);
+        s.set_i32_raw(rec.rec, 4, key as i32);
+        s.set_i32_raw(rec.rec, 8, 100 + d);
         tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
         tree::validate(&into, 12, &stores.allocations, &keys);
     }

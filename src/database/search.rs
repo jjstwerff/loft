@@ -114,16 +114,16 @@ impl Stores {
             vector::get_vector(
                 data,
                 u32::from(self.types[c as usize].size),
-                v as i32,
+                v,
                 &self.allocations,
             )
         } else {
             DbRef {
                 store_nr: data.store_nr,
-                rec: if data.rec == 0 || self.store(data).get_int(data.rec, 4) == 0 {
+                rec: if data.rec == 0 || self.store(data).get_u32_raw(data.rec, 4) == 0 {
                     0
                 } else {
-                    self.store(data).get_int(data.rec, 0) as u32
+                    self.store(data).get_u32_raw(data.rec, 0)
                 },
                 pos: 8,
             }
@@ -135,7 +135,7 @@ impl Stores {
             let res = vector::get_vector(
                 data,
                 u32::from(self.types[c as usize].size),
-                v as i32,
+                v,
                 &self.allocations,
             );
             DbRef {
@@ -150,10 +150,10 @@ impl Stores {
         } else {
             DbRef {
                 store_nr: data.store_nr,
-                rec: if data.rec == 0 || self.store(data).get_int(data.rec, 4) == 0 {
+                rec: if data.rec == 0 || self.store(data).get_u32_raw(data.rec, 4) == 0 {
                     0
                 } else {
-                    let rec = self.store(data).get_int(data.rec, 0) as u32;
+                    let rec = self.store(data).get_u32_raw(data.rec, 0);
                     self.store(data).get_int(rec, 8) as u32
                 },
                 pos: 8,
@@ -458,7 +458,7 @@ impl Stores {
                 vector::remove_vector(
                     data,
                     size,
-                    ((rec.pos - 8) / size) as i32,
+                    i64::from((rec.pos - 8) / size),
                     &mut self.allocations,
                 );
             }

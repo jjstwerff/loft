@@ -125,8 +125,8 @@ pub fn shuffle_ints(v: &mut [i32]) {
 }
 
 #[must_use]
-pub fn text_character(val: &str, from: i32) -> char {
-    let len = val.len() as i32;
+pub fn text_character(val: &str, from: i64) -> char {
+    let len = val.len() as i64;
     let mut idx = if from < 0 { from + len } else { from };
     if idx < 0 || idx >= len {
         return char::from(0);

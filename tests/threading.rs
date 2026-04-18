@@ -52,11 +52,11 @@ fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {
 
     {
         let store = stores.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         for (i, &v) in values.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, v);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, v);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     DbRef {
@@ -155,14 +155,14 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         // Pairs: (1,2), (3,4), (5,6), (7,8)
         let pairs = [(1i32, 2i32), (3, 4), (5, 6), (7, 8)];
         for (i, (a, b)) in pairs.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *a); // field a at offset 0
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *b); // field b at offset 4
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8, *a); // field a at offset 0
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8 + 4, *b); // field b at offset 4
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -239,16 +239,16 @@ fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         // Triples: (1,2,3), (4,5,6), (7,8,9), (10,11,12)
         let triples = [(1i32, 2, 3), (4, 5, 6), (7, 8, 9), (10, 11, 12)];
         for (i, (a, b, c)) in triples.iter().enumerate() {
             let off = 8 + i as u32 * 12;
-            store.set_int(vec_rec, off, *a);
-            store.set_int(vec_rec, off + 4, *b);
-            store.set_int(vec_rec, off + 8, *c);
+            store.set_i32_raw(vec_rec, off, *a);
+            store.set_i32_raw(vec_rec, off + 4, *b);
+            store.set_i32_raw(vec_rec, off + 8, *c);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -285,14 +285,14 @@ fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         // (value, factor) pairs; factor is context shared per-element
         let pairs: [(i32, i32); 5] = [(3, 2), (5, 3), (7, 4), (2, 10), (1, 0)];
         for (i, (v, f)) in pairs.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *f);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8, *v);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8 + 4, *f);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -330,14 +330,14 @@ fn clamp_lo(r: const Thresh) -> integer {
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         // (value, threshold)
         let rows: [(i32, i32); 6] = [(10, 5), (3, 5), (5, 5), (0, 1), (100, 50), (49, 50)];
         for (i, (v, t)) in rows.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *t);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8, *v);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 8 + 4, *t);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {

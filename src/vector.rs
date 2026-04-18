@@ -23,16 +23,21 @@ fn checked_vec_cap(count: u32, size: u32) -> u32 {
 }
 
 // TODO change slice to its own vector on updating it
-pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) -> DbRef {
+pub fn insert_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> DbRef {
     let len = length_vector(db, stores);
-    let real = if index < 0 { index + len as i32 } else { index };
-    if real < 0 || real > len as i32 {
+    let real = if index < 0 {
+        index + i64::from(len)
+    } else {
+        index
+    };
+    if real < 0 || real > i64::from(len) {
         return DbRef {
             store_nr: db.store_nr,
             rec: 0,
             pos: 0,
         };
     }
+    let real = real as i32;
     let store = keys::mut_store(db, stores);
     let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
     let new_length;
@@ -255,7 +260,7 @@ pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
 }
 
 #[must_use]
-pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
+pub fn get_vector(db: &DbRef, size: u32, from: i64, stores: &[Store]) -> DbRef {
     #[cfg(debug_assertions)]
     if db.store_nr != u16::MAX {
         debug_assert!(
@@ -265,7 +270,7 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
         );
     }
     let store = keys::store(db, stores);
-    if from == i32::MIN {
+    if from == i64::MIN {
         return DbRef {
             store_nr: db.store_nr,
             rec: 0,
@@ -274,8 +279,8 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
     }
     let v_rec = store.get_u32_raw(db.rec, db.pos);
     let l = length_vector(db, stores);
-    let f = if from < 0 { from + l as i32 } else { from };
-    if f < 0 || f >= l as i32 {
+    let f = if from < 0 { from + i64::from(l) } else { from };
+    if f < 0 || f >= i64::from(l) {
         DbRef {
             store_nr: db.store_nr,
             rec: 0,
@@ -290,15 +295,11 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
     }
 }
 
-pub fn remove_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) -> bool {
+pub fn remove_vector(db: &DbRef, size: u32, index: i64, stores: &mut [Store]) -> bool {
     let len = i64::from(length_vector(db, stores));
     let store = keys::mut_store(db, stores);
     let vec_rec = store.get_u32_raw(db.rec, db.pos);
-    let i = if index < 0 {
-        i64::from(index) + len
-    } else {
-        i64::from(index)
-    };
+    let i = if index < 0 { index + len } else { index };
     if i >= len || i < 0 || vec_rec == 0 {
         return false;
     }

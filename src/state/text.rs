@@ -38,7 +38,7 @@ impl State {
     /// # Panics
     /// Always — `OpConstLongText` is obsolete; long strings now use `OpConstStoreText`.
     #[allow(clippy::unused_self)]
-    pub fn string_from_texts(&mut self, _start: i32, _size: i32) {
+    pub fn string_from_texts(&mut self, _start: i64, _size: i64) {
         panic!("OpConstLongText is obsolete — use OpConstStoreText");
     }
 

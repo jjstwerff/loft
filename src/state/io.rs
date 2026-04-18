@@ -898,7 +898,7 @@ impl State {
                 vector::remove_vector(
                     &data,
                     u32::from(self.database.size(tp)),
-                    cur,
+                    i64::from(cur),
                     &mut self.database.allocations,
                 );
                 self.put_var(state_var - 8, n);
@@ -956,7 +956,7 @@ impl State {
                     return;
                 }
                 let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(&data, u32::from(tp), cur, &mut self.database.allocations);
+                vector::remove_vector(&data, u32::from(tp), i64::from(cur), &mut self.database.allocations);
                 self.put_var(state_var - 8, n);
             }
             3 => {
@@ -973,7 +973,7 @@ impl State {
                 vector::remove_vector(
                     &data,
                     size,
-                    (cur - 8) / i32::from(tp),
+                    i64::from((cur - 8) / i32::from(tp)),
                     &mut self.database.allocations,
                 );
                 self.put_var(state_var - 8, n);
@@ -1143,7 +1143,7 @@ impl State {
         let index = *self.get_stack::<i32>();
         let r = *self.get_stack::<DbRef>();
         let new_value =
-            vector::insert_vector(&r, u32::from(size), index, &mut self.database.allocations);
+            vector::insert_vector(&r, u32::from(size), i64::from(index), &mut self.database.allocations);
         self.database.set_default_value(db_tp, &new_value);
         self.put_stack(new_value);
     }
