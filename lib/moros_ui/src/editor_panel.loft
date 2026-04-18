@@ -1,0 +1,29 @@
+// Step 20 — panel rebuild driven by EditorState.
+//
+// `panel_build` takes raw primitives (q, r, cy, altitude, fps) so the
+// UI layer stays Player-agnostic.  Real frame loops have to thread
+// five derived values through every frame anyway, so provide a
+// convenience that reads them straight off the `EditorState`: avatar
+// hex from `pl_pos`, altitude from `pl_pos.y`, overlay cy, current
+// tools, and the host-supplied `fps`.  Callers get a ready-to-render
+// `Panel` with a single function call.
+
+use moros_sim;
+use moros_render;
+use graphics;
+use panel;
+
+pub fn editor_panel(
+  st: EditorState,
+  window_w: integer, window_h: integer,
+  fps: integer,
+) -> Panel {
+  ep_addr = world_to_hex(st.es_player.pl_pos.x, st.es_player.pl_pos.z);
+  panel_build(
+    st.es_tools,
+    window_w, window_h,
+    ep_addr.ha_q, ep_addr.ha_r, st.es_overlay_cy,
+    st.es_player.pl_pos.y,
+    fps,
+  )
+}

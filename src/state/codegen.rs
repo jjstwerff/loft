@@ -922,7 +922,12 @@ impl State {
                         .iter()
                         .any(|a| a.hidden && a.typedef.heap_dep().is_some());
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    let tp_val = if has_hidden_ref {
+                    // P181: same gate as `gen_set_first_ref_call_copy`.
+                    // A borrowed-view return (non-empty dep chain) must
+                    // NOT have its source freed — the "source" is a slice
+                    // of the caller-owned arg's store.
+                    let is_borrowed_view = !stack.data.def(*fn_nr).returned.depend().is_empty();
+                    let tp_val = if has_hidden_ref || is_borrowed_view {
                         i32::from(tp_nr)
                     } else {
                         i32::from(tp_nr) | 0x8000
@@ -1280,8 +1285,24 @@ impl State {
         // High bit = free source store after deep copy.
         // Disabled under WASM: frame yield/resume creates store aliases that rc
         // alone cannot track yet; freeing causes "Allocating a used store" panics.
+        //
+        // P181: also clear the flag when the callee returns a BORROWED view
+        // (its return type carries a `dep` chain naming one of its args).
+        // In that case the "source" of the CopyRecord is a slice of the
+        // arg's store; freeing it would corrupt the caller.  Return-dep
+        // inference already tags these returns correctly — we just need
+        // to consult it here.
+        let is_borrowed_view = if let Value::Call(fn_nr, _) = value {
+            !stack.data.def(*fn_nr).returned.depend().is_empty()
+        } else {
+            false
+        };
         #[cfg(not(feature = "wasm"))]
-        let tp_with_free = i32::from(tp_nr) | 0x8000;
+        let tp_with_free = if is_borrowed_view {
+            i32::from(tp_nr)
+        } else {
+            i32::from(tp_nr) | 0x8000
+        };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);
         let copy_val = Value::Call(

@@ -1,0 +1,172 @@
+// Step 10 — input_from_keys tests.  Exercises every branch of
+// the keyboard-snapshot → InputState decoder.
+use moros_sim;
+
+// ── Held keys — continuous motion ────────────────────────────────
+
+fn test_held_wasd_sets_motion_flags() {
+  ih_held: vector<text> = ["w", "a"];
+  ih_pressed: vector<text> = [];
+  ih = input_from_keys(ih_held, ih_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ih.in_fwd, "w → fwd");
+  assert(ih.in_strafe_left, "a → strafe_left");
+  assert(!ih.in_back, "no s");
+  assert(!ih.in_strafe_right, "no d");
+}
+
+fn test_held_d_and_s_sets_right_and_back() {
+  is_held: vector<text> = ["d", "s"];
+  is_pressed: vector<text> = [];
+  is_i = input_from_keys(is_held, is_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(is_i.in_strafe_right, "d → strafe_right");
+  assert(is_i.in_back, "s → back (no ctrl)");
+}
+
+fn test_held_s_with_ctrl_is_not_back() {
+  // Ctrl+S must not double as walk-back.
+  icth_held: vector<text> = ["s"];
+  icth_pressed: vector<text> = [];
+  icth = input_from_keys(icth_held, icth_pressed, 0, 0, 0, 0, 0, false, false, true);
+  assert(!icth.in_back, "ctrl+s held does NOT set in_back");
+}
+
+fn test_held_space_sets_jump() {
+  isp_held: vector<text> = ["space"];
+  isp_pressed: vector<text> = [];
+  isp = input_from_keys(isp_held, isp_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(isp.in_jump_held, "space → jump_held");
+}
+
+// ── Pressed (edge) keys — tool select / toggles ──────────────────
+
+fn test_pressed_tool_numbers_all_six() {
+  for it_n in 1..=6 {
+    it_held: vector<text> = [];
+    it_pressed: vector<text> = ["{it_n}"];
+    it_i = input_from_keys(it_held, it_pressed, 0, 0, 0, 0, 0, false, false, false);
+    assert(it_i.in_tool_number == it_n, "press {it_n} → in_tool_number {it_i.in_tool_number}");
+  }
+}
+
+fn test_pressed_tool_number_only_on_pressed_not_held() {
+  // Holding "1" without pressing this frame should NOT re-select.
+  ihn_held: vector<text> = ["1"];
+  ihn_pressed: vector<text> = [];
+  ihn = input_from_keys(ihn_held, ihn_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ihn.in_tool_number == 0, "holding 1 without press: tool_number stays 0");
+}
+
+fn test_pressed_tab_toggles_mode() {
+  itb_held: vector<text> = [];
+  itb_pressed: vector<text> = ["tab"];
+  itb = input_from_keys(itb_held, itb_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(itb.in_mode_toggle, "tab → mode_toggle");
+  assert(!itb.in_occlusion_toggle, "tab does not set occlusion");
+}
+
+fn test_pressed_o_toggles_occlusion() {
+  ioc_held: vector<text> = [];
+  ioc_pressed: vector<text> = ["o"];
+  ioc = input_from_keys(ioc_held, ioc_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ioc.in_occlusion_toggle, "o → occlusion_toggle");
+}
+
+fn test_pressed_ctrl_z_is_undo() {
+  iuz_held: vector<text> = [];
+  iuz_pressed: vector<text> = ["z"];
+  iuz = input_from_keys(iuz_held, iuz_pressed, 0, 0, 0, 0, 0, false, false, true);
+  assert(iuz.in_undo, "ctrl+z → undo");
+}
+
+fn test_pressed_z_without_ctrl_is_not_undo() {
+  inz_held: vector<text> = [];
+  inz_pressed: vector<text> = ["z"];
+  inz = input_from_keys(inz_held, inz_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!inz.in_undo, "plain z (no ctrl) is NOT undo");
+}
+
+fn test_pressed_ctrl_s_is_save() {
+  isv_held: vector<text> = [];
+  isv_pressed: vector<text> = ["ctrl_s"];
+  isv = input_from_keys(isv_held, isv_pressed, 0, 0, 0, 0, 0, false, false, true);
+  assert(isv.in_save, "ctrl+s → save");
+}
+
+// ── Mouse state passthrough ──────────────────────────────────────
+
+fn test_mouse_state_passthrough() {
+  im_held: vector<text> = [];
+  im_pressed: vector<text> = [];
+  im = input_from_keys(im_held, im_pressed, 320, 240, -3, 7, 2, true, false, false);
+  assert(im.in_mx == 320, "mx");
+  assert(im.in_my == 240, "my");
+  assert(im.in_mouse_dx == -3, "dx");
+  assert(im.in_mouse_dy == 7, "dy");
+  assert(im.in_wheel == 2, "wheel");
+  assert(im.in_click, "click");
+  assert(!im.in_rclick, "no rclick");
+}
+
+fn test_mouse_rclick_passthrough() {
+  irc_held: vector<text> = [];
+  irc_pressed: vector<text> = [];
+  irc = input_from_keys(irc_held, irc_pressed, 0, 0, 0, 0, 0, false, true, false);
+  assert(!irc.in_click, "no click");
+  assert(irc.in_rclick, "rclick");
+}
+
+// ── Combined state — typical frame ───────────────────────────────
+
+fn test_combined_walk_jump_and_tool_select() {
+  ic_held: vector<text> = ["w", "d", "space"];
+  ic_pressed: vector<text> = ["3"];
+  ic = input_from_keys(ic_held, ic_pressed, 400, 300, 1, 0, 0, true, false, false);
+  assert(ic.in_fwd, "fwd");
+  assert(ic.in_strafe_right, "right");
+  assert(ic.in_jump_held, "jump");
+  assert(ic.in_tool_number == 3, "tool 3");
+  assert(ic.in_click, "clicked");
+  assert(ic.in_mx == 400 && ic.in_my == 300, "mx/my");
+}
+
+// ── Overlay layer hotkeys (Step 14) ──────────────────────────────
+
+fn test_pressed_r_sets_layer_up() {
+  ir_held: vector<text> = [];
+  ir_pressed: vector<text> = ["r"];
+  ir = input_from_keys(ir_held, ir_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ir.in_layer_up, "r → layer_up");
+  assert(!ir.in_layer_down, "not layer_down");
+}
+
+fn test_pressed_f_sets_layer_down() {
+  ifk_held: vector<text> = [];
+  ifk_pressed: vector<text> = ["f"];
+  ifk = input_from_keys(ifk_held, ifk_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ifk.in_layer_down, "f → layer_down");
+  assert(!ifk.in_layer_up, "not layer_up");
+}
+
+fn test_held_r_does_not_repeat_layer_up() {
+  // Holding r without pressing this frame: NOT an edge → no layer-up.
+  ihr_held: vector<text> = ["r"];
+  ihr_pressed: vector<text> = [];
+  ihr = input_from_keys(ihr_held, ihr_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!ihr.in_layer_up, "held r without press: no edge");
+}
+
+// ── Redo hotkey (Step 13) ───────────────────────────────────────
+
+fn test_pressed_ctrl_y_is_redo() {
+  iry_held: vector<text> = [];
+  iry_pressed: vector<text> = ["y"];
+  iry = input_from_keys(iry_held, iry_pressed, 0, 0, 0, 0, 0, false, false, true);
+  assert(iry.in_redo, "ctrl+y → redo");
+}
+
+fn test_pressed_y_without_ctrl_is_not_redo() {
+  iny_held: vector<text> = [];
+  iny_pressed: vector<text> = ["y"];
+  iny = input_from_keys(iny_held, iny_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!iny.in_redo, "plain y (no ctrl) is NOT redo");
+}

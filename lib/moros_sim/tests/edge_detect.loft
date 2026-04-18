@@ -1,0 +1,113 @@
+// Step 12 — edge-detection helpers.  Exercise every branch of
+// `keys_pressed_since` and the packaged `input_from_snapshot`.
+use moros_sim;
+
+// ── keys_pressed_since ──────────────────────────────────────────
+
+fn test_no_change_returns_empty() {
+  ke_a: vector<text> = ["w"];
+  ke_b: vector<text> = ["w"];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 0, "stable held → no edges; got {len(out)}");
+}
+
+fn test_single_new_key_returned() {
+  ke_a: vector<text> = [];
+  ke_b: vector<text> = ["1"];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 1, "one edge expected");
+  assert(out[0] == "1", "edge is '1'");
+}
+
+fn test_released_key_not_returned() {
+  ke_a: vector<text> = ["w"];
+  ke_b: vector<text> = [];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 0, "release doesn't produce edge");
+}
+
+fn test_held_and_new_mix() {
+  // "w" was held last frame and still is; "2" is new this frame.
+  ke_a: vector<text> = ["w"];
+  ke_b: vector<text> = ["w", "2"];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 1, "only the fresh key");
+  assert(out[0] == "2", "edge is '2'");
+}
+
+fn test_multiple_new_keys_preserve_order() {
+  ke_a: vector<text> = [];
+  ke_b: vector<text> = ["w", "space", "3"];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 3, "three edges");
+  assert(out[0] == "w", "0 = w");
+  assert(out[1] == "space", "1 = space");
+  assert(out[2] == "3", "2 = 3");
+}
+
+fn test_swap_keys_returns_only_new() {
+  // Last frame: "a". This frame: "d". Both edges (a released, d pressed);
+  // only pressed ones are returned.
+  ke_a: vector<text> = ["a"];
+  ke_b: vector<text> = ["d"];
+  out = keys_pressed_since(ke_a, ke_b);
+  assert(len(out) == 1, "only pressed edge");
+  assert(out[0] == "d", "edge is 'd'");
+}
+
+// ── input_from_snapshot (combined edge decode) ───────────────────
+
+fn test_snapshot_first_frame_all_pressed_are_edges() {
+  // prev empty, curr has everything held.
+  is_prev: vector<text> = [];
+  is_curr: vector<text> = ["w", "2"];
+  snap = input_from_snapshot(
+    is_prev, is_curr, 0, 0, 0, 0, 0, false, false, false,
+  );
+  assert(snap.in_fwd, "w → fwd (held)");
+  assert(snap.in_tool_number == 2, "2 pressed this frame");
+}
+
+fn test_snapshot_stable_held_no_edge_fires() {
+  // "2" was held last frame AND this frame — no pressed-edge.
+  is_prev: vector<text> = ["2"];
+  is_curr: vector<text> = ["2"];
+  snap = input_from_snapshot(
+    is_prev, is_curr, 0, 0, 0, 0, 0, false, false, false,
+  );
+  assert(snap.in_tool_number == 0, "stable held '2' does NOT re-select");
+}
+
+fn test_snapshot_ctrl_z_edge_triggers_undo() {
+  is_prev: vector<text> = [];
+  is_curr: vector<text> = ["z"];
+  snap = input_from_snapshot(
+    is_prev, is_curr, 0, 0, 0, 0, 0, false, false, true,
+  );
+  assert(snap.in_undo, "ctrl+z edge → undo");
+}
+
+fn test_snapshot_mouse_passthrough() {
+  is_prev: vector<text> = [];
+  is_curr: vector<text> = [];
+  snap = input_from_snapshot(
+    is_prev, is_curr, 400, 300, -2, 5, 1, true, false, false,
+  );
+  assert(snap.in_mx == 400, "mx");
+  assert(snap.in_mouse_dx == -2, "dx");
+  assert(snap.in_wheel == 1, "wheel");
+  assert(snap.in_click, "click");
+}
+
+fn test_snapshot_walk_while_jump_held() {
+  // Both held; no new edges.
+  is_prev: vector<text> = ["w", "space"];
+  is_curr: vector<text> = ["w", "space"];
+  snap = input_from_snapshot(
+    is_prev, is_curr, 0, 0, 0, 0, 0, false, false, false,
+  );
+  assert(snap.in_fwd, "fwd");
+  assert(snap.in_jump_held, "jump held");
+  assert(snap.in_tool_number == 0, "no edge trigger");
+  assert(!snap.in_mode_toggle, "no tab edge");
+}

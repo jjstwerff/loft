@@ -1,0 +1,31 @@
+// P181 regression — inline struct-returning call in format-string
+// interpolation with a field-access arg used to SIGSEGV via
+// `OpCopyRecord(... | 0x8000)` freeing a borrowed-view source.
+// Fix: `src/state/codegen.rs` now clears the `0x8000` flag when the
+// callee's return type has a non-empty `dep` chain (i.e. the return
+// is a view into an arg, not an owned fresh store).
+//
+// Origin: `doc/claude/plans/finished/00-inline-lift-safety/snippets/01_field_access.loft`.
+
+struct P181Inner { n: integer not null }
+struct P181Container { items: vector<P181Inner> }
+struct P181Holder {
+  c:        P181Container,
+  sentinel: integer not null,
+}
+
+fn p181_first_inner(c: P181Container) -> P181Inner {
+  c.items[0]
+}
+
+fn test_p181_inline_field_access_format_string() {
+  h = P181Holder {
+    c: P181Container { items: [P181Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  base = p181_first_inner(h.c);
+  assert(base.n == 1, "baseline; got {base.n}");
+  assert(p181_first_inner(h.c).n == 1,
+         "inline; got {p181_first_inner(h.c).n}");
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+}

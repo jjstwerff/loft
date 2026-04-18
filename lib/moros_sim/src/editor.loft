@@ -1,0 +1,400 @@
+// EditorState — aggregate for the walkable editor's logical state
+// (Step 9).  Bundles map, avatar, tool selection, undo stack, and
+// user-toggleable render flags so the host loop has one value to
+// pass into `editor_tick`.  No UI or panel dependency lives here —
+// that part stays in moros_ui's `editor_click` (Step 9b).
+//
+// Step 10 adds `input_from_keys`: pure decoder from a keyboard /
+// mouse snapshot to an `InputState`.  Pressed-vs-held edge detection
+// is the caller's responsibility: pass only keys that have just
+// transitioned this frame for edge-triggered fields (tool select,
+// toggles), and all currently-held keys for continuous fields
+// (WASD, Space).
+
+use moros_map;
+use moros_editor;
+use moros_render;
+use graphics;
+use player;
+use tools;
+
+// ── Camera control (Step 21, P181 refactor) ─────────────────────
+// User's persistent orbit delta on top of the current camera
+// mode's default pose.  Accumulated by right-drag; reset on
+// camera-mode toggle so each mode opens at its canonical pose.
+// Applied via `camera_orbit` every frame AFTER `camera_follow` /
+// `camera_overview` compute the base pose.
+//
+// Lives in its own struct (not as two floats inline on
+// `EditorState`) as a P181 workaround — the inline-float tail
+// shape tripped a slot-allocator interaction that silently dropped
+// `undo_push` mutations from a sibling `&UndoStack` arg.  Using a
+// nested `Reference`-typed sub-struct as the tail restores the
+// previous layout behaviour while keeping the same semantics.
+pub struct CameraControl {
+  cc_az_offset: float not null,
+  cc_el_offset: float not null,
+}
+
+pub fn camera_control_default() -> CameraControl {
+  CameraControl { cc_az_offset: 0.0, cc_el_offset: 0.0 }
+}
+
+// ── Aggregate state ──────────────────────────────────────────────
+pub struct EditorState {
+  es_map:          Map,
+  es_player:       Player,
+  es_tools:        ToolState,
+  es_undo:         UndoStack,
+  es_overlay_cy:   integer not null,   // vertical layer the next edit targets
+  es_occlusion_on: boolean,            // see-through toggle, honoured by renderer
+  es_camera_mode:  CameraMode,
+  es_camera:       RenderCamera,       // Step 17 — live camera state
+  es_camera_ctrl:  CameraControl,      // Step 21 — orbit offsets (see above)
+}
+
+pub fn editor_default() -> EditorState {
+  EditorState {
+    es_map:          map_empty(),
+    es_player:       player_default(),
+    es_tools:        tool_state_default(),
+    es_undo:         undo_empty(),
+    es_overlay_cy:   0,
+    es_occlusion_on: false,
+    es_camera_mode:  CameraMode.Follow,
+    es_camera:       camera_default(),
+    es_camera_ctrl:  camera_control_default(),
+  }
+}
+
+// ── Per-frame update ─────────────────────────────────────────────
+// Advances physics, applies edge-triggered input mutations, and
+// returns control to the host.  Click dispatch lives in Step 9b
+// (moros_ui) because it needs panel hit-testing.
+//
+// Input fields consumed here (edge-triggered unless noted):
+//   in_tool_number:      0 = no change, 1..6 = select tool
+//   in_mode_toggle:      flip camera mode Follow ↔ Overview
+//   in_occlusion_toggle: flip see-through rendering
+//   in_undo:             pop one edit (or one batch) from undo
+//   in_fwd/back/…/jump:  consumed by player_step (held)
+// Keyboard hotkeys 1..6 mirror the panel toolbar labels (panel.loft):
+// "1" = None (deselect), "2" = Raise, "3" = Lower, "4" = Stencil,
+// "5" = Item, "6" = Wall.  Keep this aligned with `tool_of_id` there.
+fn tool_from_number(n: integer) -> ToolKind {
+  if n == 1 { return ToolKind.None; }
+  if n == 2 { return ToolKind.RaiseHex; }
+  if n == 3 { return ToolKind.LowerHex; }
+  if n == 4 { return ToolKind.PlaceStencil; }
+  if n == 5 { return ToolKind.PlaceItem; }
+  if n == 6 { return ToolKind.PlaceWall; }
+  ToolKind.None
+}
+
+// Overlay layer clamp.  The editor currently exposes a fixed
+// 8-level stack (cy 0..7) — chunks themselves can hold more, but
+// the walkable-editor UI keeps the range bounded so the user can't
+// drift into untextured space by accident.
+pub MAX_OVERLAY_CY = 7;
+
+// Step 16 — mouse-look sensitivity (radians per pixel of horizontal
+// mouse delta).  A full 360° turn at the default takes ~2094 px of
+// motion — roughly two sweeps of a 1080p screen, which matches the
+// feel of Half-Life-era WASD+mouse editors.
+pub MOUSE_LOOK_SENSITIVITY = 0.003;
+
+// Step 17 — camera-orbit sensitivity.  Degrees of azimuth/elevation
+// per pixel of mouse motion while the right button is held.
+pub CAMERA_ORBIT_SENSITIVITY = 0.3;
+
+// Step 17 — camera zoom step per wheel tick.  Positive wheel delta
+// pulls the camera in (shorter distance); negative pushes out.
+pub CAMERA_ZOOM_STEP = 1.0;
+
+// Step 17 — apply per-frame camera updates derived from the input
+// envelope: mode-driven follow / overview positioning, right-drag
+// orbit, wheel zoom.  Called by `editor_tick` AFTER physics so the
+// camera snaps to the avatar's post-integration pose.
+//
+// Step 21 — right-drag orbit is PERSISTENT: user adjustments
+// accumulate in `es_cam_az_offset` / `es_cam_el_offset` rather than
+// on the camera directly, because `camera_follow` / `camera_overview`
+// overwrite azimuth/elevation each frame to track the avatar.  The
+// offsets are re-applied via `camera_orbit` AFTER the mode's base
+// pose is computed, so the user's orbit choice survives across
+// frames until the mode toggles.
+pub fn camera_apply_input(st: &EditorState, input: InputState) {
+  // Wheel zoom first (mode-independent).
+  if input.in_wheel != 0 {
+    cai_dz = (input.in_wheel as float) * CAMERA_ZOOM_STEP;
+    camera_zoom_unbounded(st.es_camera, 0.0 - cai_dz);
+  }
+  // Right-drag accumulates into persistent offsets.
+  if input.in_rclick && (input.in_mouse_dx != 0 || input.in_mouse_dy != 0) {
+    st.es_camera_ctrl.cc_az_offset =
+      st.es_camera_ctrl.cc_az_offset + (input.in_mouse_dx as float) * CAMERA_ORBIT_SENSITIVITY;
+    st.es_camera_ctrl.cc_el_offset =
+      st.es_camera_ctrl.cc_el_offset + (input.in_mouse_dy as float) * CAMERA_ORBIT_SENSITIVITY;
+  }
+  // Mode-driven base pose — target tracks avatar in Follow, pins
+  // to a high overview otherwise.  Both calls RESET the camera's
+  // azimuth/elevation/distance to the mode's canonical values.
+  if st.es_camera_mode == CameraMode.Follow {
+    camera_follow(st.es_player.pl_pos, st.es_player.pl_facing, st.es_camera);
+  } else {
+    camera_overview(st.es_player.pl_pos, st.es_camera);
+  }
+  // Re-apply the user's orbit offset AFTER the base pose.  `camera_orbit`
+  // clamps elevation internally to keep the view sane.
+  if st.es_camera_ctrl.cc_az_offset != 0.0 || st.es_camera_ctrl.cc_el_offset != 0.0 {
+    camera_orbit(st.es_camera, st.es_camera_ctrl.cc_az_offset, st.es_camera_ctrl.cc_el_offset);
+  }
+}
+
+// Rotate the avatar's facing by the horizontal mouse delta, keeping
+// the result in `[-PI, PI]` so long sessions can't accumulate
+// floating-point error.  Called by `editor_tick`, but also exposed
+// for hosts that want to drive turn from a different source (e.g.
+// gamepad right-stick).
+pub fn apply_mouse_look(st: &EditorState, dx: integer) {
+  if dx == 0 { return; }
+  ml_delta = (dx as float) * MOUSE_LOOK_SENSITIVITY;
+  st.es_player.pl_facing = st.es_player.pl_facing + ml_delta;
+  ml_two_pi = PI + PI;
+  while st.es_player.pl_facing > PI {
+    st.es_player.pl_facing = st.es_player.pl_facing - ml_two_pi;
+  }
+  while st.es_player.pl_facing < 0.0 - PI {
+    st.es_player.pl_facing = st.es_player.pl_facing + ml_two_pi;
+  }
+}
+
+pub fn editor_tick(st: &EditorState, input: InputState, dt: float) {
+  if input.in_tool_number >= 1 && input.in_tool_number <= 6 {
+    st.es_tools.ts_current = tool_from_number(input.in_tool_number);
+  }
+  if input.in_mode_toggle {
+    if st.es_camera_mode == CameraMode.Follow {
+      st.es_camera_mode = CameraMode.Overview;
+    } else {
+      st.es_camera_mode = CameraMode.Follow;
+    }
+    // Step 21 — reset persistent orbit on mode change so the new
+    // mode opens with its canonical pose (user may have spun the
+    // camera in the old mode; carrying that into the other would be
+    // disorienting).
+    st.es_camera_ctrl.cc_az_offset = 0.0;
+    st.es_camera_ctrl.cc_el_offset = 0.0;
+  }
+  if input.in_occlusion_toggle {
+    st.es_occlusion_on = !st.es_occlusion_on;
+  }
+  if input.in_undo {
+    undo_pop(st.es_undo, st.es_map);
+  }
+  if input.in_redo {
+    redo(st.es_undo, st.es_map);
+  }
+  if input.in_layer_up && st.es_overlay_cy < MAX_OVERLAY_CY {
+    st.es_overlay_cy = st.es_overlay_cy + 1;
+  }
+  if input.in_layer_down && st.es_overlay_cy > 0 {
+    st.es_overlay_cy = st.es_overlay_cy - 1;
+  }
+  // Step 19 — wall direction cycling.  `ts_wall_direction` cycles
+  // through the six edges 0..5 (N / NE / SE / S / SW / NW) with wrap.
+  if input.in_wall_dir_next {
+    st.es_tools.ts_wall_direction = (st.es_tools.ts_wall_direction + 1) % 6;
+  }
+  if input.in_wall_dir_prev {
+    st.es_tools.ts_wall_direction = (st.es_tools.ts_wall_direction + 5) % 6;
+  }
+  apply_mouse_look(st, input.in_mouse_dx);
+  player_step(st.es_player, st.es_map, dt, input);
+  camera_apply_input(st, input);
+}
+
+// ── Input decoding (Step 10) ─────────────────────────────────────
+// Pure map from a keyboard / mouse snapshot to the InputState the
+// integrator understands.
+//
+//   held:    every key currently down this frame (WASD, Space, …)
+//   pressed: subset that went down *this frame* (edge trigger;
+//            callers deduplicate by diffing against the previous
+//            frame's held set).
+//   mx/my:   current mouse screen coords
+//   dx/dy:   delta since previous frame
+//   wheel:   scroll ticks, positive = up
+//   clicked: left-click down this frame
+//   rclicked: right-click down this frame
+//   ctrl_pressed: whether Ctrl is held — gates "z"/"s" meaning
+//                 between movement and undo/save.
+//
+// Key name convention (case-insensitive on the caller side; the
+// helper itself only pattern-matches on lower-case letters + a few
+// symbolic names):
+//   "w" "a" "s" "d"                  — WASD (s also doubles as back)
+//   "space"                          — jump
+//   "1".."6"                         — tool select
+//   "tab"                            — camera mode toggle
+//   "o"                              — occlusion toggle
+//   "r" "f"                          — overlay layer up / down
+//   "[" "]"                          — wall-direction prev / next
+//                                      (cycles 0..5 N/NE/SE/S/SW/NW)
+//   "z"  (requires ctrl_pressed)     — undo
+//   "y"  (requires ctrl_pressed)     — redo
+//   "ctrl_s"  (composite)            — save (avoids colliding with
+//                                      movement "s")
+pub fn input_from_keys(
+  held:           vector<text>,
+  pressed:        vector<text>,
+  mx:             integer, my:             integer,
+  mouse_dx:       integer, mouse_dy:       integer,
+  wheel:          integer,
+  clicked:        boolean, rclicked:       boolean,
+  ctrl_pressed:   boolean,
+) -> InputState {
+  out = input_empty();
+  out.in_mx       = mx;
+  out.in_my       = my;
+  out.in_mouse_dx = mouse_dx;
+  out.in_mouse_dy = mouse_dy;
+  out.in_wheel    = wheel;
+  out.in_click    = clicked;
+  out.in_rclick   = rclicked;
+
+  for hk in held {
+    if hk == "w"     { out.in_fwd          = true; }
+    if hk == "a"     { out.in_strafe_left  = true; }
+    if hk == "d"     { out.in_strafe_right = true; }
+    if hk == "space" { out.in_jump_held    = true; }
+    // "s" is WASD-back only when ctrl isn't held; ctrl+s is save
+    // (handled via the `ctrl_s` edge key below).
+    if hk == "s" && !ctrl_pressed { out.in_back = true; }
+  }
+
+  for pk in pressed {
+    if pk == "1" { out.in_tool_number = 1; }
+    if pk == "2" { out.in_tool_number = 2; }
+    if pk == "3" { out.in_tool_number = 3; }
+    if pk == "4" { out.in_tool_number = 4; }
+    if pk == "5" { out.in_tool_number = 5; }
+    if pk == "6" { out.in_tool_number = 6; }
+    if pk == "tab" { out.in_mode_toggle      = true; }
+    if pk == "o"   { out.in_occlusion_toggle = true; }
+    if pk == "r"   { out.in_layer_up   = true; }
+    if pk == "f"   { out.in_layer_down = true; }
+    if pk == "["   { out.in_wall_dir_prev = true; }
+    if pk == "]"   { out.in_wall_dir_next = true; }
+    if pk == "z" && ctrl_pressed { out.in_undo = true; }
+    if pk == "y" && ctrl_pressed { out.in_redo = true; }
+    if pk == "ctrl_s"            { out.in_save = true; }
+  }
+
+  out
+}
+
+// ── Edge detection (Step 12) ─────────────────────────────────────
+// The host typically samples held-key state each frame.  The
+// integrator needs the PRESSED subset (edges) for tool select /
+// toggles.  `keys_pressed_since` diffs two held snapshots and
+// returns keys that newly went down this frame.
+pub fn keys_pressed_since(
+  prev_held: vector<text>,
+  curr_held: vector<text>,
+) -> vector<text> {
+  kps_out: vector<text> = [];
+  for kp_k in curr_held {
+    kp_found = false;
+    for kp_p in prev_held {
+      if kp_p == kp_k { kp_found = true; }
+    }
+    if !kp_found {
+      kps_out += [kp_k];
+    }
+  }
+  kps_out
+}
+
+// Convenience: package the full per-frame decode from two
+// consecutive held snapshots.  The host passes (prev_held, held,
+// mouse, ctrl) — `keys_pressed_since` derives the edge set, then
+// `input_from_keys` builds the final `InputState`.
+pub fn input_from_snapshot(
+  prev_held:    vector<text>,
+  curr_held:    vector<text>,
+  mx:           integer, my:       integer,
+  mouse_dx:     integer, mouse_dy: integer,
+  wheel:        integer,
+  clicked:      boolean, rclicked: boolean,
+  ctrl_pressed: boolean,
+) -> InputState {
+  ifs_pressed = keys_pressed_since(prev_held, curr_held);
+  input_from_keys(
+    curr_held, ifs_pressed,
+    mx, my, mouse_dx, mouse_dy, wheel,
+    clicked, rclicked, ctrl_pressed,
+  )
+}
+
+// ── Persistence (Step 15) ────────────────────────────────────────
+// Save / load persist the Map only — Player, ToolState, UndoStack
+// are session state that doesn't travel with the scene file.  After
+// a successful load the undo stack is cleared, since its entries
+// snapshot hexes in the OLD map and replaying them into the freshly
+// loaded map would stamp unrelated coordinates.
+
+pub fn editor_save_to_file(st: EditorState, path: text) -> boolean {
+  ef_json = map_to_json(st.es_map);
+  ef_f = file(path);
+  ef_f.write(ef_json);
+  true
+}
+
+pub fn editor_load_from_file(st: &EditorState, path: text) -> boolean {
+  ef_lf = file(path);
+  if !ef_lf.exists() { return false; }
+  ef_text = ef_lf.content();
+  if len(ef_text) == 0 { return false; }
+  st.es_map  = map_from_json(ef_text);
+  st.es_undo = undo_empty();
+  true
+}
+
+// ── Mouse-to-world picking (Step 18) ─────────────────────────────
+// Translate screen-space (mx, my) to the hex coordinate on the
+// current overlay layer's floor plane.  The floor y is derived from
+// `es_overlay_cy * HEIGHT_SCALE` so picks land on the layer the
+// editor is currently targeting — matches the "edit where you're
+// looking, at the cy you've scrolled to" mental model.
+//
+// Returns the HexAddress struct (`ha_q`, `ha_r`).  Hosts combine
+// this with `es_overlay_cy` for a full (q, r, cy) edit target.
+pub fn pick_hex_under_cursor(
+  st: EditorState,
+  mx: integer, my: integer,
+  viewport_w: integer, viewport_h: integer,
+) -> HexAddress {
+  pk_floor_y = (st.es_overlay_cy as float) * HEIGHT_SCALE;
+  pick_hex(
+    st.es_camera,
+    mx as float,          my as float,
+    viewport_w as float,  viewport_h as float,
+    pk_floor_y,
+  )
+}
+
+// Apply the current tool at an explicit hex, bracketed by an undo
+// batch.  Companion to `editor_click`'s avatar-centric dispatch —
+// hosts call this after `pick_hex_under_cursor` for click-where-you-
+// look editing.  Same no-op semantics as `editor_click`: tool
+// `None` does nothing.
+pub fn edit_at_hex(st: &EditorState, q: integer, r: integer) {
+  if st.es_tools.ts_current == ToolKind.None { return; }
+  batch_begin(st.es_undo);
+  undo_push(st.es_undo, st.es_map, q, r, st.es_overlay_cy);
+  ec_world = hex_to_world(q, r, 0);
+  ec_pos = vec3(ec_world.x, st.es_player.pl_pos.y, ec_world.z);
+  tool_apply(ec_pos, st.es_overlay_cy, st.es_map, st.es_tools);
+  batch_end(st.es_undo);
+}

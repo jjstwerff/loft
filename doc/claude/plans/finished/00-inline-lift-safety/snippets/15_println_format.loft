@@ -1,0 +1,26 @@
+// Variant 15 — format-string interpolation inside `println` (NOT
+// inside an assert).  If the corruption is format-string-specific
+// (not assert-specific), this should behave the same as variant 07.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_15_println_format() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  println("hi {first_or_empty(h.c, 0).n}");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

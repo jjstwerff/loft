@@ -1,0 +1,37 @@
+// Variant 10 — Phase 2a shape: inline struct-returning call in an
+// `if` / `while` condition (NOT in a format string).
+//
+// The Phase 0 diagnosis focused on format-string interpolation,
+// but scope analysis's inline-lift pattern fires in any context
+// where a Call appears inside an expression whose result flows to
+// somewhere that expects a struct-typed operand — including
+// conditions via field access.
+//
+// Status PRE-fix: likely SIGSEGV if the lift emits the same
+// `OpCopyRecord(..., tp | 0x8000)` pattern.  Phase 1's gate
+// handles consistent-view callees (first_inner) but not mixed-
+// return (Phase 1b).  Run both to see which phase catches this.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_10_inline_in_condition() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // Inline in an `if` condition — no format string, no assert.
+  if first_inner(h.c).n == 1 {
+    assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+  } else {
+    assert(false, "branch not taken");
+  }
+}

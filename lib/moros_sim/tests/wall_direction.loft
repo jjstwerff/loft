@@ -1,0 +1,101 @@
+// Step 19 — wall-direction cycling tests.
+use moros_sim;
+use moros_editor;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn build() -> EditorState {
+  b = editor_default();
+  b.es_tools.ts_wall_direction = 0;   // N
+  b
+}
+
+// ── editor_tick cycling ─────────────────────────────────────────
+
+fn test_next_increments_from_n_to_ne() {
+  t = build();
+  ti = input_empty();
+  ti.in_wall_dir_next = true;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_tools.ts_wall_direction == 1,
+         "N→NE; got {t.es_tools.ts_wall_direction}");
+}
+
+fn test_next_wraps_nw_to_n() {
+  t = build();
+  t.es_tools.ts_wall_direction = 5;   // NW
+  ti = input_empty();
+  ti.in_wall_dir_next = true;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_tools.ts_wall_direction == 0,
+         "NW→N wrap; got {t.es_tools.ts_wall_direction}");
+}
+
+fn test_prev_decrements_from_ne_to_n() {
+  t = build();
+  t.es_tools.ts_wall_direction = 1;   // NE
+  ti = input_empty();
+  ti.in_wall_dir_prev = true;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_tools.ts_wall_direction == 0,
+         "NE→N; got {t.es_tools.ts_wall_direction}");
+}
+
+fn test_prev_wraps_n_to_nw() {
+  t = build();
+  t.es_tools.ts_wall_direction = 0;   // N
+  ti = input_empty();
+  ti.in_wall_dir_prev = true;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_tools.ts_wall_direction == 5,
+         "N→NW wrap; got {t.es_tools.ts_wall_direction}");
+}
+
+fn test_full_cycle_returns_to_start() {
+  // Six NEXT ticks from N should return to N.
+  t = build();
+  ti = input_empty();
+  ti.in_wall_dir_next = true;
+  for _ in 0..6 { editor_tick(t, ti, 1.0 / 60.0); }
+  assert(t.es_tools.ts_wall_direction == 0,
+         "6 nexts → back to N; got {t.es_tools.ts_wall_direction}");
+}
+
+fn test_next_and_prev_same_frame_is_noop() {
+  // Both flags in one tick: +1 then -1 should net to zero.
+  t = build();
+  t.es_tools.ts_wall_direction = 3;   // S
+  ti = input_empty();
+  ti.in_wall_dir_next = true;
+  ti.in_wall_dir_prev = true;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_tools.ts_wall_direction == 3,
+         "net zero; got {t.es_tools.ts_wall_direction}");
+}
+
+// ── input_from_keys bindings ────────────────────────────────────
+
+fn test_bracket_right_maps_to_next() {
+  ihk_held: vector<text> = [];
+  ihk_pressed: vector<text> = ["]"];
+  ih = input_from_keys(ihk_held, ihk_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ih.in_wall_dir_next, "] → in_wall_dir_next");
+  assert(!ih.in_wall_dir_prev, "not prev");
+}
+
+fn test_bracket_left_maps_to_prev() {
+  ipk_held: vector<text> = [];
+  ipk_pressed: vector<text> = ["["];
+  ip = input_from_keys(ipk_held, ipk_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(ip.in_wall_dir_prev, "[ → in_wall_dir_prev");
+  assert(!ip.in_wall_dir_next, "not next");
+}
+
+fn test_held_bracket_does_not_repeat() {
+  // Holding without pressed: no edge fires.
+  irh_held: vector<text> = ["]"];
+  irh_pressed: vector<text> = [];
+  irh = input_from_keys(irh_held, irh_pressed, 0, 0, 0, 0, 0, false, false, false);
+  assert(!irh.in_wall_dir_next, "held ] without press: no edge");
+}

@@ -1,0 +1,32 @@
+// Variant 20 — Vector mixed-return, TWO inline calls in one format string,
+// and one call hits the OWNED path while the other hits the VIEW path.
+// Covers the 2a-multi-inline-lifts class for vectors specifically.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  empty_c:  Container,   // has len(items) == 0, triggers the owned fallback
+  sentinel: integer not null,
+}
+
+fn first_items_or_empty(c: Container) -> vector<Inner> {
+  if len(c.items) > 0 {
+    return c.items;
+  }
+  empty: vector<Inner> = [];
+  empty
+}
+
+fn test_variant_20_two_branches_one_println() {
+  h = Holder {
+    c:       Container { items: [Inner { n: 1 }, Inner { n: 2 }] },
+    empty_c: Container { items: [] },
+    sentinel: 42,
+  };
+  // First call → view path (h.c has items).  Second call → owned path.
+  println(
+    "view={len(first_items_or_empty(h.c))} owned={len(first_items_or_empty(h.empty_c))}"
+  );
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

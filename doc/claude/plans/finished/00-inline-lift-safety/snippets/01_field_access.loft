@@ -1,0 +1,45 @@
+// Variant 01 — field access on callee's return in format string.
+// This is the P181 canonical shape, minimally reproduced.
+//
+// Corrupting pattern:
+//   assert(cond, "got {f(o.field).inner}")
+//
+// The call `f(o.field)` passes `o.field` as an expression (not a
+// Var).  Scope analysis's inline-lift pattern hoists the call
+// result via `OpCopyRecord` with the `0x8000` free-source flag.
+// The lock machinery around that op only covers `Value::Var`
+// args, so `o.field`'s store is not locked.  The free-source frees
+// something it shouldn't — sibling fields of `o` corrupt.
+//
+// Expected pre-fix: the `sentinel preserved` assertion fails
+// because h.sentinel reads as something other than 42.
+// Expected post-fix: all three assertions pass.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+// Accessor-style callee: returns a view into its arg's vector.
+// The return type (`Inner`) has no explicit dep annotation; loft's
+// return-dep inference may or may not tag it as borrowed.  That's
+// exactly the question Phase 0 needs to answer.
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_01_field_access() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // Baseline (no format-string lift): passes.
+  base = first_inner(h.c);
+  assert(base.n == 1, "baseline; got {base.n}");
+  // Trigger: format-string interpolation with inline call.
+  assert(first_inner(h.c).n == 1, "inline; got {first_inner(h.c).n}");
+  // Sibling-field corruption check.
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+}

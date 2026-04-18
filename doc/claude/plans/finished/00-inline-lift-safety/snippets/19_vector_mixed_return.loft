@@ -1,0 +1,40 @@
+// Variant 19 — VECTOR mixed-return inline lift.  Phase 1b merged Reference
+// + Enum(struct-enum) mid-body deps but deliberately skipped Vector because
+// mirroring it broke moros_ui (globals/locals getting promoted to hidden
+// ref args).  If a Vector mixed-return callee inline-lifts into a
+// format-string context with a field-access arg, does the same SIGSEGV
+// class still fire?
+//
+// Shape:
+//   fn f(c) -> vector<T> {
+//     if cond { return c.inner; }   // view into c's vector store
+//     []                             // owned-fresh empty
+//   }
+//   println("len={len(f(h.c))}");   // inline, field-access arg
+//
+// Expected status: if VECTOR arm class of bug reproduces → SIGSEGV.
+// Otherwise PASS (the Phase 1b deferral was safe).
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_items_or_empty(c: Container) -> vector<Inner> {
+  if len(c.items) > 0 {
+    return c.items;
+  }
+  empty: vector<Inner> = [];
+  empty
+}
+
+fn test_variant_19_vector_mixed() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }, Inner { n: 2 }] },
+    sentinel: 42,
+  };
+  println("len={len(first_items_or_empty(h.c))}");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

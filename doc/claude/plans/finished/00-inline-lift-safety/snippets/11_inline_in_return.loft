@@ -1,0 +1,18 @@
+// Variant 11 — Phase 2a shape: inline struct-returning call in a
+// `return expr` statement.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn score_of(c: Container) -> integer {
+  return first_inner(c).n * 10;   // inline-lift in return expr
+}
+
+fn test_variant_11_inline_in_return() {
+  c = Container { items: [Inner { n: 3 }] };
+  assert(score_of(c) == 30, "got {score_of(c)}");
+}

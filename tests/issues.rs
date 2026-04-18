@@ -9662,3 +9662,169 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P179 — passing `&struct.field` as a non-sole argument silently
+/// corrupted both the `&` destination and the preceding by-value
+/// arg.  Fixed by routing non-Var `&T` sources through a work-ref
+/// local in `src/parser/mod.rs::convert()`, emitting a
+/// `Value::Insert([Set(__ref_N, expr), OpCreateStack(Var(__ref_N))])`
+/// that `src/scopes.rs::scan_args` hoists into the enclosing
+/// statement list (so the work-ref lives at function scope, not
+/// block scope), plus `set_skip_free` to keep the borrowed DbRef
+/// from freeing the owning store at scope exit.
+///
+/// Fixture lives at
+/// `tests/lib/p179_ref_field_arg_corrupts_siblings.loft`.
+#[test]
+fn p179_ref_field_arg_corrupts_sibling() {
+    code!(
+        "struct P179Inner { pin_n: integer not null }
+struct P179Outer { po_x: P179Inner, po_q: integer not null }
+fn p179_int_ref(n: integer, r: &P179Inner) { r.pin_n = n; }
+fn test() {
+    o = P179Outer { po_x: P179Inner { pin_n: 0 }, po_q: 0 };
+    p179_int_ref(42, o.po_x);
+    assert(o.po_x.pin_n == 42, \"int+&field: expected 42, got {o.po_x.pin_n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P176 — method-style callee: `fn add(self: Box, x) { self.items += [x]; }`
+/// called from a `&Box` parameter caller should compile.  Before the fix,
+/// `find_written_vars` did not recurse into the callee's body, so the
+/// caller's `&Box` param looked unused and the "Parameter ... has `&`
+/// but is never modified" error fired.  Fix: interprocedural
+/// `callee_param_writes` analysis in `src/parser/mod.rs`.
+#[test]
+fn p176_ref_param_method_style_mutation() {
+    code!(
+        "struct P176Box { items: vector<integer> }
+fn p176_add(self: P176Box, x: integer) { self.items += [x]; }
+fn p176_caller(b: &P176Box) { p176_add(b, 1); }
+fn test() {
+    bx = P176Box { items: [] };
+    p176_caller(bx);
+    assert(len(bx.items) == 1, \"expected 1 got {len(bx.items)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P176 — 3-level forwarding: only the innermost callee writes a
+/// field, two intermediate callers just forward the value.  The
+/// outermost `&T` must still be accepted.  Exercises the fixpoint /
+/// monotone-merge code path.
+#[test]
+fn p176_transitive_forwarding_three_levels() {
+    code!(
+        "struct P176Tx { val: integer not null }
+fn p176_inner(self: P176Tx)   { self.val = self.val + 1; }
+fn p176_mid(self: P176Tx)     { p176_inner(self); }
+fn p176_outer(b: &P176Tx)     { p176_mid(b); }
+fn test() {
+    b = P176Tx { val: 0 };
+    p176_outer(b);
+    assert(b.val == 1, \"expected 1 got {b.val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P176 — recursive self-call must terminate the analysis.  The
+/// `callee_param_writes` placeholder breaks cycles before descending
+/// into the body.  Without the placeholder, the fn would recurse
+/// infinitely while computing its own param-writes.
+#[test]
+fn p176_recursive_self_call_terminates() {
+    code!(
+        "struct P176Rec { val: integer not null }
+fn p176_bump(n: &P176Rec, depth: integer) {
+    n.val = n.val + 1;
+    if depth > 0 { p176_bump(n, depth - 1); }
+}
+fn test() {
+    n = P176Rec { val: 0 };
+    p176_bump(n, 3);
+    assert(n.val == 4, \"expected 4 got {n.val}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P180 — assigning a `single` (f32) literal to a `float` (f64) struct
+/// field used to be silently accepted and corrupted the record at
+/// runtime.  Fix: `src/parser/expressions.rs` now funnels simple-
+/// assignment RHS through the same `convert()` machinery the
+/// constructor and return-type paths already use, which widens via
+/// `OpConvFloatFromSingle` and rejects narrowing with a diagnostic.
+#[test]
+fn p180_single_literal_into_float_field() {
+    code!(
+        "struct P180Box { a: float not null, b: integer not null }
+fn test() {
+    p = P180Box { a: 1.0, b: 42 };
+    p.a = 1.2f;
+    // f32 1.2 widened to f64 is not exactly 1.2; allow a tolerance
+    // that covers the unavoidable precision loss.
+    assert(p.a > 1.19 && p.a < 1.21, \"expected ~1.2 got {p.a}\");
+    assert(p.b == 42, \"b untouched, got {p.b}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P180 companion — widening an `integer` RHS into a `long` field
+/// still works after the int→long hand-rolled branch in the
+/// assignment path was replaced with a generic `convert()` funnel.
+/// Guards against regressing the prior auto-widen behaviour.
+#[test]
+fn p180_int_widens_to_long_field() {
+    code!(
+        "struct P180Long { n: long not null }
+fn test() {
+    p = P180Long { n: 0l };
+    p.n = 42;
+    assert(p.n == 42l, \"expected 42l got {p.n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P181 — inline struct-returning call inside a format-string
+/// interpolation used to SIGSEGV when the call's arg was a
+/// field-access expression (not a plain Var) and the callee
+/// returned a borrowed view into one of its args.  Root cause:
+/// `OpCopyRecord` was emitted with the `0x8000` free-source flag
+/// set unconditionally, freeing the view's source store.
+///
+/// Fix in `src/state/codegen.rs` (two sites — first-assignment and
+/// reassignment paths both touch OpCopyRecord): clear the flag
+/// when the callee's return type carries a non-empty `dep` chain.
+/// Inference already tags these correctly for consistent-view
+/// callees; a deeper issue with MIXED-return callees
+/// (some paths view, some owned) is tracked separately in
+/// `doc/claude/plans/finished/00-inline-lift-safety/01b-return-dep-inference.md`.
+///
+/// Tests: `tests/lib/p181_inline_field_access.loft`.
+#[test]
+fn p181_inline_field_access_format_string() {
+    code!(
+        "struct P181Inner { n: integer not null }
+struct P181Container { items: vector<P181Inner> }
+struct P181Holder { c: P181Container, sentinel: integer not null }
+fn p181_first_inner(c: P181Container) -> P181Inner {
+    c.items[0]
+}
+fn test() {
+    h = P181Holder {
+        c: P181Container { items: [P181Inner { n: 1 }] },
+        sentinel: 42,
+    };
+    assert(p181_first_inner(h.c).n == 1,
+           \"inline; got {p181_first_inner(h.c).n}\");
+    assert(h.sentinel == 42, \"sentinel preserved; got {h.sentinel}\");
+}"
+    )
+    .result(Value::Null);
+}

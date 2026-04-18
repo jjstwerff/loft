@@ -1,0 +1,34 @@
+// Step 11 — click dispatch for the walkable editor.
+//
+// `route_click` (panel.loft) handles panel-widget clicks by mutating
+// `ToolState` (tool select + palette select).  World clicks fall
+// through returning `UhWorld` with no world-side effect, which this
+// file closes: on a world hit, push an undo snapshot and invoke
+// `tool_apply` at the avatar's current hex.
+//
+// Avatar-centric dispatch: the click's (mx, my) are only used for
+// panel hit-testing; once we're outside the panel we apply the
+// current tool where the red ball stands.  A mouse-aware raycast
+// (ground pick) is a later step — it needs camera state, which
+// the UI layer does not own.
+
+use moros_sim;
+use moros_editor;
+use moros_map;
+use moros_render;
+use graphics;
+use panel;
+
+pub fn editor_click(st: &EditorState, p: Panel, mx: integer, my: integer) -> UiHit {
+  ec_hit = route_click(p, st.es_tools, mx, my);
+  if ec_hit is UhWorld {
+    if st.es_tools.ts_current != ToolKind.None {
+      ec_addr = world_to_hex(st.es_player.pl_pos.x, st.es_player.pl_pos.z);
+      batch_begin(st.es_undo);
+      undo_push(st.es_undo, st.es_map, ec_addr.ha_q, ec_addr.ha_r, st.es_overlay_cy);
+      tool_apply(st.es_player.pl_pos, st.es_overlay_cy, st.es_map, st.es_tools);
+      batch_end(st.es_undo);
+    }
+  }
+  ec_hit
+}

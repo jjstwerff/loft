@@ -1,0 +1,85 @@
+// Step 16 — mouse-look rotation tests.
+use moros_sim;
+use moros_editor;
+use moros_render;
+use moros_map;
+use graphics;
+
+fn build() -> EditorState {
+  ms = editor_default();
+  // Use an empty map — apply_mouse_look doesn't touch map state.
+  ms
+}
+
+fn test_zero_delta_preserves_facing() {
+  z = build();
+  z.es_player.pl_facing = 1.2;
+  apply_mouse_look(z, 0);
+  assert(z.es_player.pl_facing == 1.2, "zero dx leaves facing; got {z.es_player.pl_facing}");
+}
+
+fn test_positive_delta_increases_facing() {
+  p = build();
+  apply_mouse_look(p, 100);
+  // 100 * 0.003 = 0.3 rad.
+  assert(p.es_player.pl_facing > 0.29 && p.es_player.pl_facing < 0.31,
+         "+100 px → 0.3 rad; got {p.es_player.pl_facing}");
+}
+
+fn test_negative_delta_decreases_facing() {
+  n = build();
+  apply_mouse_look(n, -100);
+  assert(n.es_player.pl_facing < 0.0 - 0.29 && n.es_player.pl_facing > 0.0 - 0.31,
+         "-100 px → -0.3 rad; got {n.es_player.pl_facing}");
+}
+
+fn test_accumulates_across_calls() {
+  a = build();
+  apply_mouse_look(a, 50);
+  apply_mouse_look(a, 50);
+  apply_mouse_look(a, 50);
+  // 3 * 50 * 0.003 = 0.45
+  assert(a.es_player.pl_facing > 0.44 && a.es_player.pl_facing < 0.46,
+         "accumulated 3*50 → 0.45 rad; got {a.es_player.pl_facing}");
+}
+
+fn test_wrap_around_plus_pi() {
+  // Start near +pi, push past — should wrap into negative.
+  w = build();
+  w.es_player.pl_facing = 3.1;    // just under PI (~3.1416)
+  apply_mouse_look(w, 100);        // +0.3 rad → overshoots PI
+  assert(w.es_player.pl_facing < 0.0,
+         "wrap into [-PI,0); got {w.es_player.pl_facing}");
+  // Should be ~3.1 + 0.3 - 2π ≈ -2.883
+  assert(w.es_player.pl_facing > 0.0 - 2.9,
+         "near -2.883; got {w.es_player.pl_facing}");
+  assert(w.es_player.pl_facing < 0.0 - 2.87,
+         "near -2.883; got {w.es_player.pl_facing}");
+}
+
+fn test_wrap_around_minus_pi() {
+  w2 = build();
+  w2.es_player.pl_facing = 0.0 - 3.1;
+  apply_mouse_look(w2, -100);      // -0.3 rad → undershoots -PI
+  assert(w2.es_player.pl_facing > 0.0,
+         "wrap into (0, PI]; got {w2.es_player.pl_facing}");
+}
+
+// ── Integration with editor_tick ────────────────────────────────
+
+fn test_tick_applies_mouse_look() {
+  t = build();
+  ti = input_empty();
+  ti.in_mouse_dx = 100;
+  editor_tick(t, ti, 1.0 / 60.0);
+  assert(t.es_player.pl_facing > 0.29 && t.es_player.pl_facing < 0.31,
+         "tick consumed in_mouse_dx; got {t.es_player.pl_facing}");
+}
+
+fn test_tick_zero_dx_preserves_facing() {
+  t2 = build();
+  t2.es_player.pl_facing = 0.7;
+  ti2 = input_empty();   // in_mouse_dx = 0 by default
+  editor_tick(t2, ti2, 1.0 / 60.0);
+  assert(t2.es_player.pl_facing == 0.7, "zero dx; got {t2.es_player.pl_facing}");
+}

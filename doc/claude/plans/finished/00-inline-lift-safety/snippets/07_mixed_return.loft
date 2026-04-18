@@ -1,0 +1,41 @@
+// Variant 07 — MIXED-return callee (Phase 1b shape).
+//
+// Shape: the callee has two return paths, one a view, one owned.
+// Return-dep inference takes the INTERSECTION of paths' deps, so a
+// function returning `vec[i]` in one branch and `T {}` in another
+// is tagged as owned (empty dep) — the Phase 1 gate misses it and
+// the inline-lift pattern still crashes.
+//
+// Status PRE-Phase-1b: SIGSEGV / corruption (same shape as P181
+// in the real-world `map_get_hex` call).
+// Status POST-Phase-1b: all three assertions pass.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+// Mirrors `map_get_hex`'s shape: view when found, owned when not.
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];        // view into c's store
+  }
+  Inner { n: 0 }                 // owned fresh
+}
+
+fn test_variant_07_mixed_return() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // Found path — inline-lift with the "view" return.
+  assert(first_or_empty(h.c, 0).n == 1,
+         "found inline; got {first_or_empty(h.c, 0).n}");
+  // Not-found path — inline-lift with the "owned" return.
+  assert(first_or_empty(h.c, 99).n == 0,
+         "not-found inline; got {first_or_empty(h.c, 99).n}");
+  // Sibling-field corruption check.
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+}

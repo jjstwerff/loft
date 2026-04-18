@@ -664,7 +664,33 @@ impl Parser {
                     );
                 }
             } else {
-                *code = self.cl("OpCreateStack", std::slice::from_ref(code));
+                let orig = std::mem::replace(code, Value::Null);
+                if matches!(orig, Value::Var(_)) {
+                    *code = self.cl("OpCreateStack", &[orig]);
+                } else {
+                    // P179: produce a `Value::Insert` so that scope
+                    // analysis (`scopes::scan_args`) hoists the
+                    // pre-call Set into the enclosing statement list.
+                    // Insert does not form a scope, so the work-ref
+                    // lives at function scope and its slot survives
+                    // the call.  Using `v_block` instead would create
+                    // a block scope whose exit FreeStack clobbers the
+                    // ref-target bytes and corrupts preceding args.
+                    //
+                    // The work-ref holds only a COPY of an existing
+                    // DbRef — it does not own a store — so tell
+                    // scopes to suppress the scope-exit `OpFreeRef`.
+                    // Without `skip_free`, the shared store would
+                    // be decremented once per call and eventually
+                    // reach ref_count 0, dangling the caller's
+                    // owning reference across loop iterations.
+                    let wv = self.vars.work_refs(is_type, &mut self.lexer);
+                    self.vars.set_skip_free(wv);
+                    *code = Value::Insert(vec![
+                        v_set(wv, orig),
+                        self.cl("OpCreateStack", &[Value::Var(wv)]),
+                    ]);
+                }
             }
             return true;
         }
@@ -2778,7 +2804,11 @@ impl Parser {
     fn check_ref_mutations(&mut self, arguments: &[Argument]) {
         let code = self.data.def(self.context).code.clone();
         let mut written: HashSet<u16> = HashSet::new();
-        find_written_vars(&code, &self.data, &mut written);
+        // P176: interprocedural param-write cache, local to this check.
+        // Re-created per function-body check; small cost, avoids
+        // persisting state across passes or across unrelated checks.
+        let mut callee_cache: HashMap<u32, Vec<bool>> = HashMap::new();
+        find_written_vars(&code, &self.data, &mut written, &mut callee_cache);
         // Enhancement: when a for-loop variable is FIELD-WRITTEN (OpSet*
         // through the loop var, not just loop-advance Set), also mark the
         // collection it iterates over as written.  The dep chain is:
@@ -2971,11 +3001,19 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
 /// - It is passed as a `RefVar`-typed argument to a `Value::Call`, or
 /// - It appears anywhere in the first argument of a field-write operator (`OpSet*`),
 ///   which covers the pattern `v[idx].field = val` where `v: &vector<T>`.
-fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
+/// - **P176**: it flows into a callee whose own body mutates that
+///   parameter (directly or transitively via further calls).  The
+///   interprocedural lookup is memoised via `callee_cache`.
+fn find_written_vars(
+    code: &Value,
+    data: &Data,
+    written: &mut HashSet<u16>,
+    callee_cache: &mut HashMap<u32, Vec<bool>>,
+) {
     match code {
         Value::Set(v, body) => {
             written.insert(*v);
-            find_written_vars(body, data, written);
+            find_written_vars(body, data, written, callee_cache);
         }
         Value::Call(fn_nr, args) => {
             let def = data.def(*fn_nr);
@@ -3011,39 +3049,89 @@ fn find_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>) {
                 if i == 1 && second_arg_write {
                     collect_vars_in(arg, written);
                 }
-                find_written_vars(arg, data, written);
+                find_written_vars(arg, data, written, callee_cache);
+            }
+            // P176: the callee may mutate one of its by-value parameters
+            // through a field write (e.g. `fn add(self: Box, x) { self.items += [x] }`).
+            // Look up its param-write effects and mark the corresponding
+            // caller-side arg vars so `check_ref_mutations` sees them as
+            // mutated.  Skip natives (`def.code == Value::Null`) — their
+            // effects are already encoded by the OpSet*/OpAppend*/OpCopyRecord
+            // patterns above.  Args are collected with `collect_vars_in` so
+            // wrapped sources (field access, `OpCreateStack(Var(_))` from
+            // the P179 path) still propagate the mutation to their root var.
+            if def.code != Value::Null {
+                let callee_writes = callee_param_writes(*fn_nr, data, callee_cache);
+                for (i, arg) in args.iter().enumerate() {
+                    if i < callee_writes.len() && callee_writes[i] {
+                        collect_vars_in(arg, written);
+                    }
+                }
             }
         }
         Value::Block(block) | Value::Loop(block) => {
             for item in &block.operators {
-                find_written_vars(item, data, written);
+                find_written_vars(item, data, written, callee_cache);
             }
         }
         Value::Insert(list) => {
             for item in list {
-                find_written_vars(item, data, written);
+                find_written_vars(item, data, written, callee_cache);
             }
         }
         Value::If(cond, then, els) => {
-            find_written_vars(cond, data, written);
-            find_written_vars(then, data, written);
-            find_written_vars(els, data, written);
+            find_written_vars(cond, data, written, callee_cache);
+            find_written_vars(then, data, written, callee_cache);
+            find_written_vars(els, data, written, callee_cache);
         }
         Value::Return(v) | Value::Drop(v) => {
-            find_written_vars(v, data, written);
+            find_written_vars(v, data, written, callee_cache);
         }
         // T1.5: TuplePut writes to the ref-tuple variable via its element assignment.
         Value::TuplePut(var_nr, _, inner) => {
             written.insert(*var_nr);
-            find_written_vars(inner, data, written);
+            find_written_vars(inner, data, written, callee_cache);
         }
         Value::Iter(_, create, next, extra) => {
-            find_written_vars(create, data, written);
-            find_written_vars(next, data, written);
-            find_written_vars(extra, data, written);
+            find_written_vars(create, data, written, callee_cache);
+            find_written_vars(next, data, written, callee_cache);
+            find_written_vars(extra, data, written, callee_cache);
         }
         _ => {}
     }
+}
+
+/// P176: for the given user-defined function, return a boolean per
+/// parameter indicating whether its body writes that parameter
+/// (directly or through a transitive call).  Results are memoised
+/// in `cache`; a placeholder (all-false) is inserted before recursive
+/// analysis so cycles are broken.  Caller should iterate to fixpoint
+/// if precise transitive effects across recursion chains are needed;
+/// for linear forwarding (the common case) one pass suffices.
+fn callee_param_writes(fn_nr: u32, data: &Data, cache: &mut HashMap<u32, Vec<bool>>) -> Vec<bool> {
+    if let Some(v) = cache.get(&fn_nr) {
+        return v.clone();
+    }
+    let def = data.def(fn_nr);
+    let n = def.attributes.len();
+    // Break recursion: insert a placeholder before walking the body.
+    cache.insert(fn_nr, vec![false; n]);
+    if def.code == Value::Null || n == 0 {
+        return vec![false; n];
+    }
+    let body = def.code.clone();
+    let mut written: HashSet<u16> = HashSet::new();
+    find_written_vars(&body, data, &mut written, cache);
+    let result: Vec<bool> = (0..n).map(|i| written.contains(&(i as u16))).collect();
+    // Monotone merge with any prior placeholder entry.
+    let prev = cache.get(&fn_nr).cloned().unwrap_or_else(|| vec![false; n]);
+    let merged: Vec<bool> = prev
+        .iter()
+        .zip(result.iter())
+        .map(|(a, b)| *a || *b)
+        .collect();
+    cache.insert(fn_nr, merged.clone());
+    merged
 }
 
 /// Like `find_written_vars` but only collects variables that are FIELD-written

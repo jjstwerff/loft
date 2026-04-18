@@ -1,0 +1,20 @@
+// Variant 04 — OWNED result control.  The callee allocates a fresh
+// store and returns it; there's nothing to borrow from.  Expected
+// behaviour both pre- and post-fix: the inline-lift works fine;
+// no corruption.  (Option B gates on the return type's dep chain
+// being non-empty, so an owned-result callee with empty dep keeps
+// the `0x8000` free-source flag and everything is correct.)
+//
+// Compare this fixture's IR return-type annotation to variant 01's:
+// we expect THIS one to say `-> Inner` (no `["x"]` suffix) because
+// the return depends on nothing in the arg list.
+
+struct Inner { n: integer not null }
+
+fn make_inner(x: integer) -> Inner {
+  Inner { n: x }
+}
+
+fn test_variant_04_owned_control() {
+  assert(make_inner(5).n == 5, "owned; got {make_inner(5).n}");
+}

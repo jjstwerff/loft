@@ -1,0 +1,30 @@
+// Variant 18 — tuple destructure with struct-returning calls as elements.
+// Tests that `gen_set_first_ref_tuple_copy` (codegen.rs:~1227) remains safe
+// even when the individual tuple elements came from a `gen_set_first_ref_call_copy`
+// (codegen.rs:~1284) site.  Single inline path per call via the Phase 1b gate.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_18_tuple_destructure() {
+  h = Holder {
+    c: Container { items: [Inner { n: 7 }, Inner { n: 9 }] },
+    sentinel: 42,
+  };
+  // Two struct-returning calls both feeding a tuple-destructure.
+  (a, b) = (first_or_empty(h.c, 0), first_or_empty(h.c, 1));
+  assert(a.n == 7, "a.n; got {a.n}");
+  assert(b.n == 9, "b.n; got {b.n}");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

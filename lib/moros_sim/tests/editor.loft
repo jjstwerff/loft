@@ -1,0 +1,219 @@
+// Step 9 — EditorState + editor_tick tests.  Exercise the
+// per-frame state transitions without touching UI or rendering.
+use moros_sim;
+use moros_map;
+use moros_editor;
+use moros_render;
+use graphics;
+
+fn make_flat(cols: integer, rows: integer) -> Map {
+  fm = map_empty();
+  for fq in 0..cols {
+    for fr in 0..rows {
+      map_set_height(fm, fq, fr, 0, 0);
+    }
+  }
+  fm
+}
+
+fn build_state() -> EditorState {
+  es = editor_default();
+  es.es_map = make_flat(10, 10);
+  // Plant the avatar on solid ground.
+  es.es_player.pl_pos = vec3(0.0, 0.0, 0.0);
+  es.es_player.pl_on_ground = true;
+  es
+}
+
+// ── Tool selection — number row 1..6 ─────────────────────────────
+
+fn test_tick_select_tool_raise() {
+  // Keyboard "2" = Raise, matching the panel hotkey labels.
+  et_s = build_state();
+  et_i = input_empty();
+  et_i.in_tool_number = 2;
+  editor_tick(et_s, et_i, 1.0 / 60.0);
+  assert(et_s.es_tools.ts_current == ToolKind.RaiseHex, "2 → Raise");
+}
+
+fn test_tick_select_tool_wall() {
+  // Keyboard "6" = PlaceWall.
+  et_w = build_state();
+  et_wi = input_empty();
+  et_wi.in_tool_number = 6;
+  editor_tick(et_w, et_wi, 1.0 / 60.0);
+  assert(et_w.es_tools.ts_current == ToolKind.PlaceWall, "6 → PlaceWall");
+}
+
+fn test_tick_select_tool_one_is_none() {
+  // Keyboard "1" = None (deselect).
+  et_n = build_state();
+  et_n.es_tools.ts_current = ToolKind.RaiseHex;
+  et_ni = input_empty();
+  et_ni.in_tool_number = 1;
+  editor_tick(et_n, et_ni, 1.0 / 60.0);
+  assert(et_n.es_tools.ts_current == ToolKind.None, "1 → None (deselect)");
+}
+
+fn test_tick_tool_number_zero_preserves_current() {
+  et_p = build_state();
+  et_p.es_tools.ts_current = ToolKind.RaiseHex;
+  et_pi = input_empty();
+  et_pi.in_tool_number = 0;
+  editor_tick(et_p, et_pi, 1.0 / 60.0);
+  assert(et_p.es_tools.ts_current == ToolKind.RaiseHex, "zero keeps Raise");
+}
+
+fn test_tick_tool_number_out_of_range_no_change() {
+  et_o = build_state();
+  et_o.es_tools.ts_current = ToolKind.LowerHex;
+  et_oi = input_empty();
+  et_oi.in_tool_number = 99;
+  editor_tick(et_o, et_oi, 1.0 / 60.0);
+  assert(et_o.es_tools.ts_current == ToolKind.LowerHex, "OOB leaves Lower");
+}
+
+// ── Camera-mode + occlusion toggles ──────────────────────────────
+
+fn test_tick_mode_toggle_cycles_camera() {
+  et_m = build_state();
+  assert(et_m.es_camera_mode == CameraMode.Follow, "starts Follow");
+  et_mi = input_empty();
+  et_mi.in_mode_toggle = true;
+  editor_tick(et_m, et_mi, 1.0 / 60.0);
+  assert(et_m.es_camera_mode == CameraMode.Overview, "→ Overview");
+  editor_tick(et_m, et_mi, 1.0 / 60.0);
+  assert(et_m.es_camera_mode == CameraMode.Follow, "→ Follow again");
+}
+
+fn test_tick_occlusion_toggle() {
+  et_oc = build_state();
+  assert(!et_oc.es_occlusion_on, "starts off");
+  et_oci = input_empty();
+  et_oci.in_occlusion_toggle = true;
+  editor_tick(et_oc, et_oci, 1.0 / 60.0);
+  assert(et_oc.es_occlusion_on, "→ on");
+  editor_tick(et_oc, et_oci, 1.0 / 60.0);
+  assert(!et_oc.es_occlusion_on, "→ off");
+}
+
+// ── Undo wiring ──────────────────────────────────────────────────
+
+fn test_tick_undo_pops_edit() {
+  et_u = build_state();
+  // Capture a pre-edit snapshot and mutate a hex.
+  undo_push(et_u.es_undo, et_u.es_map, 0, 0, 0);
+  map_set_height(et_u.es_map, 0, 0, 0, 5);
+  assert(map_get_hex(et_u.es_map, 0, 0, 0).h_height == 5, "edited to 5");
+  assert(undo_depth(et_u.es_undo) == 1, "one undo entry pending");
+
+  et_ui = input_empty();
+  et_ui.in_undo = true;
+  editor_tick(et_u, et_ui, 1.0 / 60.0);
+  assert(map_get_hex(et_u.es_map, 0, 0, 0).h_height == 0, "height restored");
+  assert(undo_depth(et_u.es_undo) == 0, "undo stack drained");
+}
+
+// ── Physics integration — Y motion ───────────────────────────────
+
+fn test_tick_advances_physics_jump() {
+  et_j = build_state();
+  et_ji = input_empty();
+  et_ji.in_jump_held = true;
+  for _ in 0..30 { editor_tick(et_j, et_ji, 1.0 / 60.0); }
+  assert(et_j.es_player.pl_pos.y > 4.9, "jumped to {et_j.es_player.pl_pos.y}");
+  assert(et_j.es_player.pl_holding_jump, "jump flag propagated");
+}
+
+fn test_tick_advances_physics_walk_forward() {
+  et_wf = build_state();
+  et_wfi = input_empty();
+  et_wfi.in_fwd = true;
+  for _ in 0..60 { editor_tick(et_wf, et_wfi, 1.0 / 60.0); }
+  // 1.0 s at WALK_SPEED=6 along +Z (facing=0).
+  assert(et_wf.es_player.pl_pos.z > 5.5, "walked to z={et_wf.es_player.pl_pos.z}");
+  assert(et_wf.es_player.pl_pos.z < 6.5, "not too far z={et_wf.es_player.pl_pos.z}");
+}
+
+// ── Redo (Step 13) ───────────────────────────────────────────────
+
+fn test_tick_redo_reapplies_undone_edit() {
+  et_r = build_state();
+  // Capture the pre-edit snapshot, edit, then undo via tick.
+  undo_push(et_r.es_undo, et_r.es_map, 0, 0, 0);
+  map_set_height(et_r.es_map, 0, 0, 0, 5);
+  et_ri = input_empty();
+  et_ri.in_undo = true;
+  editor_tick(et_r, et_ri, 1.0 / 60.0);
+  assert(map_get_hex(et_r.es_map, 0, 0, 0).h_height == 0, "undone to 0");
+  assert(redo_depth(et_r.es_undo) == 1, "one redo entry pending");
+
+  // Now redo.
+  et_rri = input_empty();
+  et_rri.in_redo = true;
+  editor_tick(et_r, et_rri, 1.0 / 60.0);
+  assert(map_get_hex(et_r.es_map, 0, 0, 0).h_height == 5, "redo reapplied");
+  assert(redo_depth(et_r.es_undo) == 0, "redo drained");
+}
+
+fn test_tick_redo_empty_is_noop() {
+  et_re = build_state();
+  et_rei = input_empty();
+  et_rei.in_redo = true;
+  editor_tick(et_re, et_rei, 1.0 / 60.0);
+  // No edits ever made; no redo entries; map unchanged.
+  assert(map_get_hex(et_re.es_map, 0, 0, 0).h_height == 0, "untouched");
+  assert(redo_depth(et_re.es_undo) == 0, "still empty");
+}
+
+// ── Overlay layer navigation (Step 14) ──────────────────────────
+
+fn test_tick_layer_up_increments() {
+  et_lu = build_state();
+  assert(et_lu.es_overlay_cy == 0, "start cy=0");
+  et_lui = input_empty();
+  et_lui.in_layer_up = true;
+  editor_tick(et_lu, et_lui, 1.0 / 60.0);
+  assert(et_lu.es_overlay_cy == 1, "→ 1");
+  editor_tick(et_lu, et_lui, 1.0 / 60.0);
+  assert(et_lu.es_overlay_cy == 2, "→ 2");
+}
+
+fn test_tick_layer_up_clamps_at_max() {
+  et_cm = build_state();
+  et_cm.es_overlay_cy = MAX_OVERLAY_CY;
+  et_cmi = input_empty();
+  et_cmi.in_layer_up = true;
+  editor_tick(et_cm, et_cmi, 1.0 / 60.0);
+  assert(et_cm.es_overlay_cy == MAX_OVERLAY_CY,
+         "clamp at {MAX_OVERLAY_CY}, got {et_cm.es_overlay_cy}");
+}
+
+fn test_tick_layer_down_decrements() {
+  et_ld = build_state();
+  et_ld.es_overlay_cy = 3;
+  et_ldi = input_empty();
+  et_ldi.in_layer_down = true;
+  editor_tick(et_ld, et_ldi, 1.0 / 60.0);
+  assert(et_ld.es_overlay_cy == 2, "→ 2");
+}
+
+fn test_tick_layer_down_clamps_at_zero() {
+  et_lz = build_state();
+  assert(et_lz.es_overlay_cy == 0, "start 0");
+  et_lzi = input_empty();
+  et_lzi.in_layer_down = true;
+  editor_tick(et_lz, et_lzi, 1.0 / 60.0);
+  assert(et_lz.es_overlay_cy == 0, "clamp at 0");
+}
+
+fn test_tick_layer_up_and_down_same_frame_net_zero() {
+  // Both flags true in one frame: up then down — cy unchanged.
+  et_both = build_state();
+  et_both.es_overlay_cy = 4;
+  et_bi = input_empty();
+  et_bi.in_layer_up = true;
+  et_bi.in_layer_down = true;
+  editor_tick(et_both, et_bi, 1.0 / 60.0);
+  assert(et_both.es_overlay_cy == 4, "up+down net zero, got {et_both.es_overlay_cy}");
+}

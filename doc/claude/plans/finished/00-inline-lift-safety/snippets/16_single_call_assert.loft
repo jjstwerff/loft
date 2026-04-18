@@ -1,0 +1,27 @@
+// Variant 16 — does the crash need TWO inline calls (one in cond,
+// one in message), or just ONE?  Same shape as variant 07 but the
+// assert's message is a plain literal — no inline interpolation.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_16_single_call_in_assert() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // ONE inline call — in the condition only; message is a literal.
+  assert(first_or_empty(h.c, 0).n == 1, "found");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

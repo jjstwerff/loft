@@ -1,0 +1,17 @@
+// Variant 01c — strip the test down to ONLY the inline-lift line.
+// If this also SEGFAULTs, the crash is the inline-lift by itself,
+// not anything about the sentinel / sibling corruption check.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder { c: Container }
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_01c_inline_only() {
+  h = Holder { c: Container { items: [Inner { n: 1 }] } };
+  // ONLY the inline-lift call — no pre-baseline, no sibling check.
+  assert(first_inner(h.c).n == 1, "inline; got {first_inner(h.c).n}");
+}

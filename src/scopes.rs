@@ -1164,7 +1164,19 @@ impl Scopes {
                     && ops[..n - 1].iter().all(|v| {
                         matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__lift_"))
                     });
-                if is_a56_hoisted || is_p135_hoisted {
+                // P179: hoist Set(__ref_N, expr) preamble produced by the
+                // parser's `&T`-conversion path for non-Var sources.  The
+                // final op is always OpCreateStack(Var(__ref_N)); after
+                // hoisting it stays as the arg value, while the Set moves
+                // into the enclosing statement list so the work-ref lives
+                // at function scope (its slot must survive the call).
+                let is_p179_hoisted = n >= 2
+                    && ops[..n - 1].iter().all(|v| {
+                        matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__ref_"))
+                    })
+                    && matches!(&ops[n - 1], Value::Call(d_nr, _)
+                        if data.def(*d_nr).name == "OpCreateStack");
+                if is_a56_hoisted || is_p135_hoisted || is_p179_hoisted {
                     let mut it = ops.into_iter();
                     for _ in 0..n - 1 {
                         preamble.push(it.next().unwrap());

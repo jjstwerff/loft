@@ -1,0 +1,37 @@
+// P180 — assigning a `single` (f32) literal to a `float` (f64) struct
+// field is silently accepted by the parser and corrupts the record
+// at runtime.
+//
+// Expected (post-fix): parser rejects with
+//   "Cannot assign single to float field 'a' — add an explicit cast"
+//   (or similar), at least downgrading from silent corruption to a
+//   clean diagnostic.
+//
+// Actual (pre-fix):
+//   - Interpreter: prints baseline, then panics
+//     `index out of bounds: the len is 3 but the index is 8`
+//     at `src/database/allocation.rs:362:30`.
+//   - Native: rustc aborts with E0308 "expected f64, found f32"
+//     in generated code.
+//
+// Same shape for the symmetric cases (float → single field, float →
+// single return, single → float return) is believed to exist but not
+// verified here — the single → float field assignment is the concrete
+// trigger we hit while writing the mouse-look tests.
+
+struct P180Box { a: float not null, b: integer not null }
+
+fn test_single_literal_into_float_field() {
+  // Baseline construction works (numeric literal `1.0` is `float`).
+  p = P180Box { a: 1.0, b: 42 };
+  assert(p.a == 1.0, "baseline a==1.0");
+  assert(p.b == 42, "baseline b==42");
+  // Silent type mismatch: assigning `1.2f` (single) to `float` field.
+  // Post-fix: parser should diagnose this before reaching the runtime.
+  p.a = 1.2f;
+  // If we even reach this assert, the post-fix behaviour is compilation
+  // failure; pre-fix we either panic above or read corrupted data.
+  assert(p.a > 1.19 && p.a < 1.21,
+         "expected 1.2 after assignment, got {p.a}");
+  assert(p.b == 42, "b untouched, got {p.b}");
+}

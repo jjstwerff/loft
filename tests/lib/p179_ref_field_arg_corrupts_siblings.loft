@@ -1,0 +1,88 @@
+// P179 — when a call passes a `&struct.field` expression as a later
+// argument, the preceding arguments read corrupted values inside the
+// callee.  When the `&struct.field` is the ONLY argument, behaviour
+// is correct.  Aliasing the field to a local first and passing the
+// local also works.
+//
+// Symptoms (all tests PASS currently mean the bug is fixed; at time
+// of filing they all FAIL):
+//   p179_int_ref(42, o.x):   n read as  3 instead of 42
+//   p179_2int_ref(3, 4, o.x): a + b evaluated as 11 instead of 7
+//   p179_bool_ref(true, o.x): f read as false (body skipped)
+//   p179_text_ref("hello", o.x): len(t) reads 8 instead of 5
+//   p179_two_refs(o.a, o.b): BOTH mutations lost — output struct
+//     unchanged.
+
+pub struct P179Inner { pin_n: integer not null }
+
+pub struct P179Outer {
+  po_a: P179Inner,
+  po_b: P179Inner,
+}
+
+pub struct P179Mix { pm_x: P179Inner, pm_q: integer not null }
+
+pub fn p179_int_ref  (n: integer,   r: &P179Inner) { r.pin_n = n; }
+pub fn p179_2int_ref (a: integer, b: integer, r: &P179Inner) { r.pin_n = a + b; }
+pub fn p179_bool_ref (f: boolean,   r: &P179Inner) { if f { r.pin_n = 77; } }
+pub fn p179_text_ref (t: text,      r: &P179Inner) { r.pin_n = len(t); }
+pub fn p179_two_refs (a: &P179Inner, b: &P179Inner) {
+  a.pin_n = a.pin_n + 10;
+  b.pin_n = b.pin_n + 100;
+}
+
+fn test_preceding_int_reads_wrong() {
+  p_a = P179Mix { pm_x: P179Inner { pin_n: 0 }, pm_q: 0 };
+  p179_int_ref(42, p_a.pm_x);
+  assert(p_a.pm_x.pin_n == 42, "int+&field: pin_n should be 42, got {p_a.pm_x.pin_n}");
+}
+
+fn test_two_preceding_ints_sum_wrong() {
+  p_b = P179Mix { pm_x: P179Inner { pin_n: 0 }, pm_q: 0 };
+  p179_2int_ref(3, 4, p_b.pm_x);
+  assert(p_b.pm_x.pin_n == 7, "2int+&field: expected 3+4=7, got {p_b.pm_x.pin_n}");
+}
+
+fn test_preceding_bool_reads_false() {
+  p_c = P179Mix { pm_x: P179Inner { pin_n: 0 }, pm_q: 0 };
+  p179_bool_ref(true, p_c.pm_x);
+  assert(p_c.pm_x.pin_n == 77, "bool+&field: expected 77 (body ran), got {p_c.pm_x.pin_n}");
+}
+
+fn test_preceding_text_len_wrong() {
+  p_d = P179Mix { pm_x: P179Inner { pin_n: 0 }, pm_q: 0 };
+  p179_text_ref("hello", p_d.pm_x);
+  assert(p_d.pm_x.pin_n == 5, "text+&field: expected len=5, got {p_d.pm_x.pin_n}");
+}
+
+fn test_two_sibling_refs_lose_both_mutations() {
+  p_e = P179Outer {
+    po_a: P179Inner { pin_n: 0 },
+    po_b: P179Inner { pin_n: 0 },
+  };
+  p179_two_refs(p_e.po_a, p_e.po_b);
+  assert(p_e.po_a.pin_n == 10,  "first &field: expected +10, got {p_e.po_a.pin_n}");
+  assert(p_e.po_b.pin_n == 100, "second &field: expected +100, got {p_e.po_b.pin_n}");
+}
+
+// Workaround: alias to locals first — confirms the repro.
+fn test_local_alias_workaround_works() {
+  p_f = P179Outer {
+    po_a: P179Inner { pin_n: 0 },
+    po_b: P179Inner { pin_n: 0 },
+  };
+  lfa = p_f.po_a;
+  lfb = p_f.po_b;
+  p179_two_refs(lfa, lfb);
+  assert(p_f.po_a.pin_n == 10,  "alias 1: {p_f.po_a.pin_n}");
+  assert(p_f.po_b.pin_n == 100, "alias 2: {p_f.po_b.pin_n}");
+}
+
+// Control: single-&-arg case is fine.
+fn test_single_ref_field_alone_works() {
+  p_g = P179Mix { pm_x: P179Inner { pin_n: 0 }, pm_q: 0 };
+  // Same function as the failing cases, but called with zero preceding args.
+  p179_two_refs(p_g.pm_x, p_g.pm_x);
+  // Both writes alias to the same field, net +110 = 110.
+  assert(p_g.pm_x.pin_n == 110, "alone: expected 110, got {p_g.pm_x.pin_n}");
+}

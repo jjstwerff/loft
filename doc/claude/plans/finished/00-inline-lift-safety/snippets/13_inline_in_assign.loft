@@ -1,0 +1,29 @@
+// Variant 13 — Phase 2a shape: inline struct-returning call on
+// the RHS of a first-assignment / reassignment / compound
+// assignment.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_13_inline_in_assign() {
+  h = Holder {
+    c: Container { items: [Inner { n: 7 }] },
+    sentinel: 42,
+  };
+  // First-assignment from inline call.  The `.n` access happens
+  // after the call; does the lift pattern fire here?
+  x = first_inner(h.c).n;
+  assert(x == 7, "x; got {x}");
+  // Compound `+=` on RHS.
+  x += first_inner(h.c).n;
+  assert(x == 14, "x += ; got {x}");
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+}

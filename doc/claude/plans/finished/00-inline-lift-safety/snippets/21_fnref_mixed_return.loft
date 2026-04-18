@@ -1,0 +1,38 @@
+// Variant 21 — fn-ref (dynamic dispatch) to a MIXED-return callee,
+// inline-lift into a format string with field-access arg.
+//
+// This is the real Phase 1c shape.  The Phase 1 gate at
+// `codegen.rs:~1295` keys on `Value::Call(fn_nr, _)` and so for a
+// `Value::CallRef` (call-through-fn-ref) path, the callee's return-dep
+// isn't statically visible.  If OpCopyRecord with 0x8000 is still
+// emitted on that path, mixed-return corruption would fire.
+//
+// Expected (per Phase 2 audit): PASS — the fn-ref call path uses the
+// hidden-ref-arg mechanism for Reference returns and never emits
+// 0x8000 directly.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_21_fnref_mixed_return() {
+  h = Holder {
+    c: Container { items: [Inner { n: 5 }] },
+    sentinel: 42,
+  };
+  f = first_or_empty;
+  // Inline-lift through fn-ref with field-access arg AND owned fallback
+  // (idx=9 triggers the owned branch in the second call).
+  println("view={f(h.c, 0).n} owned={f(h.c, 9).n}");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

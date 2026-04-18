@@ -60,7 +60,12 @@ pub struct InputState {
   in_mode_toggle:      boolean,
   in_occlusion_toggle: boolean,
   in_undo:             boolean,
+  in_redo:             boolean,
   in_save:             boolean,
+  in_layer_up:         boolean,
+  in_layer_down:       boolean,
+  in_wall_dir_prev:    boolean,   // cycle `ts_wall_direction` counter-clockwise
+  in_wall_dir_next:    boolean,   // cycle `ts_wall_direction` clockwise
 }
 
 pub fn input_empty() -> InputState {
@@ -70,7 +75,9 @@ pub fn input_empty() -> InputState {
     in_mx: 0, in_my: 0, in_mouse_dx: 0, in_mouse_dy: 0,
     in_wheel: 0, in_click: false, in_rclick: false,
     in_tool_number: 0, in_mode_toggle: false, in_occlusion_toggle: false,
-    in_undo: false, in_save: false,
+    in_undo: false, in_redo: false, in_save: false,
+    in_layer_up: false, in_layer_down: false,
+    in_wall_dir_prev: false, in_wall_dir_next: false,
   }
 }
 
