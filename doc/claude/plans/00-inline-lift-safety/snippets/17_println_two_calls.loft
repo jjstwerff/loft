@@ -1,0 +1,28 @@
+// Variant 17 — println with TWO inline calls to the mixed-return
+// callee in a single format string.  Narrows whether the trigger
+// is "two calls in one assert" or "two calls in any format-string
+// context".
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_17_println_two_calls() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // Two inline calls in one format string.
+  println("a={first_or_empty(h.c, 0).n} b={first_or_empty(h.c, 0).n}");
+  assert(h.sentinel == 42, "sentinel; got {h.sentinel}");
+}

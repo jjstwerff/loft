@@ -1,0 +1,44 @@
+// Variant 09 — Phase 1d probe: owned-return callee that mutates
+// its expression arg.
+//
+// The Phase 1 gate keeps `0x8000` set for owned-return callees.
+// The lock machinery in `gen_set_first_ref_call_copy` is supposed
+// to protect ref-typed args from being freed by the 0x8000 source-
+// free — but its `Value::Var` filter skips expression args.  This
+// fixture attempts to trigger corruption via an expression arg
+// whose store is aliased with the callee's return source.
+//
+// Status PRE-investigation: unknown.  This fixture's job is to
+// PROBE whether the hole exists.  If it passes, Phase 1d is
+// probably already covered by the adjacent `has_hidden_ref` check
+// at `src/state/codegen.rs:918` and Phase 1d can be closed as
+// "no-op, already handled".  If it crashes / corrupts, Phase 1d
+// needs a real fix (extend the lock filter to collect vars from
+// field-access expressions, or similar).
+
+struct Inner { n: integer not null }
+struct Bucket { items: vector<Inner> }
+struct Holder {
+  b:        Bucket,
+  sentinel: integer not null,
+}
+
+// Owned return (fresh Inner), mutates the `&Bucket` arg.
+fn push_and_report(b: &Bucket, n: integer) -> Inner {
+  b.items += [Inner { n: n }];
+  Inner { n: len(b.items) }
+}
+
+fn test_variant_09_owned_with_aliasing() {
+  h = Holder {
+    b: Bucket { items: [] },
+    sentinel: 42,
+  };
+  // Inline-lift: arg is `h.b` — expression, not Var.
+  // Callee mutates h.b (via &) AND returns an owned fresh Inner.
+  assert(push_and_report(h.b, 10).n == 1,
+         "owned-with-mutation; got {push_and_report(h.b, 10).n}");
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+  assert(len(h.b.items) == 2,
+         "bucket mutated twice (once per inline call); got {len(h.b.items)}");
+}

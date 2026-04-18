@@ -42,19 +42,56 @@ views.
 
 ## Phase layout
 
+After Phase 0 + 1 landed the scope grew — the initiative now
+covers four distinct codegen holes plus the audit / spec work.
+Each row below is a stand-alone phase with its own plan file and
+budget.
+
 | File | Phase | Status |
 |---|---|---|
 | `README.md` | Goal + index (this file) | — |
 | `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | **Done** — Option B chosen |
-| `01-p181-fix.md` | Gate `0x8000` on callee return-dep (two codegen sites) | **Done-partial** — covers consistent-view callees |
-| `01b-return-dep-inference.md` | Teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed | **Open** |
-| `02-audit-adjacent-sites.md` | Review codegen for same-shape shortcuts elsewhere | Not started |
-| `03-spec.md` | Document the inline-lift invariant as a language commitment | Not started |
+| `01-p181-fix.md` | Phase 1 — gate `0x8000` on callee return-dep (two codegen sites) | **Done-partial** — covers consistent-view callees |
+| `01b-return-dep-inference.md` | Phase 1b — teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed (blocks `map_get_hex`) | **Open — primary live gap** |
+| `01c-dynamic-dispatch.md` | Phase 1c — CallRef (fn-ref / interface-method) safe default when the callee isn't statically knowable | **Likely-closed** — variant 08 passes; revisit only if Phase 2 finds a case |
+| `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Likely-closed** — variant 09 probe passes; revisit if a real shape surfaces |
+| `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | Not started |
+| `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Open** — depends on Phase 1b outcome |
+| `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | Not started |
+| `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | Not started |
 
 Each phase's plan file is opened at the start of its session and
 closed when the phase commits.  Phases can produce their own
-follow-up plans (e.g. `02-a-some-specific-issue.md`) if the audit
-surfaces non-trivial sub-issues.
+follow-up plans if the audit surfaces non-trivial sub-issues; add
+them to this table and number them under the triggering parent
+(e.g. `02c-…md`).
+
+## Scope summary — what's in / what's adjacent
+
+**In scope** (all phases above):
+- The `0x8000` free-source flag's interaction with borrowed-view
+  returns.
+- Return-dep inference soundness for the shapes that the gate
+  relies on.
+- The lock filter around `OpCopyRecord` that protects args from
+  being freed by owned-return callees.
+- Every inline-lift emission site (format string, condition,
+  return, for, assignment) in every codegen path (interpreter +
+  native).
+
+**Adjacent but separate** (NOT in scope — would spin out as a new
+initiative under `doc/claude/plans/`):
+- Source-level syntax for hand-annotating return-dep (`-> Hex[m]`).
+  The current plan relies on inference; authors can't override.
+- Wholesale refactor of `src/scopes.rs`'s inline-lift pattern.
+- Generic "view vs owned" as a first-class type distinction in
+  the language spec (Phase 3 touches the invariant; a full type
+  theory is a separate effort).
+
+**Out of scope** (may come back as follow-ups years from now):
+- New opcodes beyond what each phase strictly needs.
+- Changing `OpCopyRecord`'s runtime semantics.
+- Adding new language features.
 
 ## Ground rules
 
@@ -98,6 +135,45 @@ At the end of every phase:
 5. Issue #120 leak-regression fixture stays green.
 6. Every new bug variant added in Phase 0 has a fixture in
    `tests/lib/p181_*.loft` that FAILS pre-fix and PASSES post-fix.
+
+## Snippet inventory
+
+Fixtures in `snippets/` probe specific expression shapes.  Status
+below is current as of the commit that writes this table; re-run
+any snippet to re-confirm.
+
+| # | File | Shape | Current status | Phase |
+|---|---|---|---|---|
+| 01  | `01_field_access.loft`         | `{f(o.x).n}` format-interp (consistent view)         | **PASS** (was SIGSEGV pre-Phase-1) | 0 / 1 |
+| 01b | `01b_without_lift.loft`        | Same body, no inline-lift (control)                   | PASS | 0 |
+| 01c | `01c_inline_only.loft`         | Minimal: one inline-lift line                         | **PASS** (was SIGSEGV pre-Phase-1) | 0 / 1 |
+| 01d | `01d_var_arg_inline.loft`      | Inline-lift, Var arg (control)                        | PASS | 0 |
+| 04  | `04_owned_control.loft`        | Owned-result callee, inline-lift (control)            | PASS | 0 |
+| 07  | `07_mixed_return.loft`         | Mixed-return callee (view + owned fallback)           | **SIGSEGV** | 1b |
+| 08  | `08_dynamic_dispatch.loft`     | fn-ref call with borrowed-view result                 | PASS | 1c probe (no hole found) |
+| 09  | `09_owned_with_aliasing.loft`  | Owned-return callee mutating an expression arg        | PASS | 1d probe (no hole found) |
+| 10  | `10_inline_in_condition.loft`  | Single inline-lift in `if` condition                  | PASS | 2a (consistent view) |
+| 11  | `11_inline_in_return.loft`     | Single inline-lift in `return expr`                   | PASS | 2a (consistent view) |
+| 12  | `12_inline_in_for.loft`        | Single inline-lift as for-iterator                    | PASS | 2a |
+| 13  | `13_inline_in_assign.loft`     | Single inline-lift on assignment RHS / `+=`           | PASS | 2a (consistent view) |
+| 14  | `14_mixed_return_various_contexts.loft` | Mixed-return in condition / assign (single calls)  | PASS | 2a / 1b interaction |
+| 15  | `15_println_format.loft`       | SINGLE mixed-return inline in `println` format        | PASS | 2a |
+| 16  | `16_single_call_assert.loft`   | SINGLE mixed-return in assert cond, literal msg       | PASS | 2a |
+| 17  | `17_println_two_calls.loft`    | TWO mixed-return inline calls in one `println` fmt    | **SIGSEGV** | 2a — the real multi-call target |
+
+Key findings from the inventory:
+- All passing variants confirm Phase 1's gate is working.
+- Only TWO shapes reproduce the crash today:
+  1. Mixed-return callee in a single context (variant 07) — fixed
+     by Phase 1b.
+  2. Multiple inline-lift calls to the mixed-return callee in one
+     expression (variant 17) — should also be fixed by Phase 1b
+     (same root cause: the first call's `0x8000` free corrupts
+     source, second call walks freed memory).  If Phase 1b
+     doesn't automatically cover 17, Phase 2a activates.
+- The "non-format context" hypothesis (Phase 2a in its original
+  framing) is likely moot — all single-call non-format variants
+  pass.
 
 ## Provenance
 

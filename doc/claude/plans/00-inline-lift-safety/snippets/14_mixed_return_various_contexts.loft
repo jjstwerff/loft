@@ -1,0 +1,48 @@
+// Variant 14 — the mixed-return callee (Phase 1b shape) used in
+// EVERY non-format inline-lift context.  Isolates whether Phase 1b
+// alone is enough or whether Phase 2a also needs fixes.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_or_empty(c: Container, idx: integer) -> Inner {
+  if idx >= 0 && idx < len(c.items) {
+    return c.items[idx];
+  }
+  Inner { n: 0 }
+}
+
+fn test_variant_14_condition() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  if first_or_empty(h.c, 0).n == 1 {
+    assert(h.sentinel == 42, "condition: sentinel; got {h.sentinel}");
+  }
+}
+
+fn test_variant_14_return() {
+  h = Holder {
+    c: Container { items: [Inner { n: 3 }] },
+    sentinel: 42,
+  };
+  // Inline in return expr via helper.
+  get_n = first_or_empty(h.c, 0).n;
+  assert(get_n == 3, "return-like; got {get_n}");
+  assert(h.sentinel == 42, "return: sentinel; got {h.sentinel}");
+}
+
+fn test_variant_14_assign() {
+  h = Holder {
+    c: Container { items: [Inner { n: 5 }] },
+    sentinel: 42,
+  };
+  x = first_or_empty(h.c, 0).n;
+  assert(x == 5, "assign: x; got {x}");
+  assert(h.sentinel == 42, "assign: sentinel; got {h.sentinel}");
+}

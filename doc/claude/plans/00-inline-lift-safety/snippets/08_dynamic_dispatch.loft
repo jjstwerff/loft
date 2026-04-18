@@ -1,0 +1,38 @@
+// Variant 08 — CallRef (fn-ref / dynamic dispatch) — Phase 1c shape.
+//
+// The Phase 1 gate pattern-matches on `Value::Call(fn_nr, _)` — the
+// callee is known at codegen time.  For `Value::CallRef` (call
+// through a fn-ref variable or an interface method), the concrete
+// callee isn't statically knowable, so
+// `stack.data.def(fn_nr).returned.depend()` isn't available.
+//
+// Safe default: treat as borrowed-view (clear `0x8000`).  This may
+// leak for truly-owned returns but won't corrupt.  The leak is
+// recoverable via explicit user freeing; corruption is not.
+//
+// Status PRE-Phase-1c: if the code path triggers, likely SIGSEGV.
+// Status POST-Phase-1c: test passes.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_08_dynamic_dispatch() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  // Grab a fn-ref — codegen can't statically resolve `f` to
+  // `first_inner`.
+  f = first_inner;
+  // Inline-lift with the dynamic call.
+  assert(f(h.c).n == 1, "dyn inline; got {f(h.c).n}");
+  assert(h.sentinel == 42, "sentinel preserved; got {h.sentinel}");
+}

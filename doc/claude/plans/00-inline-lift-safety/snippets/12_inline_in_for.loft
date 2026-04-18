@@ -1,0 +1,26 @@
+// Variant 12 — Phase 2a shape: inline struct-returning call used
+// as a for-loop iterator target.  Forces the inline-lift to hoist
+// the call's result into a temp that the for-loop iterates over.
+//
+// This shape is speculative — scope analysis may or may not emit
+// the same `OpCopyRecord(..., tp | 0x8000)` here.  If it does and
+// the callee returns a borrowed view, Phase 1's gate should cover
+// it; if the lift happens via a different codegen path, we find
+// a new site to audit.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+
+fn items_of(c: Container) -> vector<Inner> {
+  c.items                       // view (vector field)
+}
+
+fn test_variant_12_inline_in_for() {
+  c = Container { items: [Inner { n: 1 }, Inner { n: 2 }, Inner { n: 3 }] };
+  sum = 0;
+  // Inline: `items_of(c)` as the iterator.
+  for it in items_of(c) {
+    sum = sum + it.n;
+  }
+  assert(sum == 6, "got {sum}");
+}
