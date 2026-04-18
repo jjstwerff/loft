@@ -356,7 +356,7 @@ impl Stores {
             closure_map: HashMap::new(),
             jnull_sentinel: None,
         };
-        result.base_type("integer", 4); // 0
+        result.base_type("integer", 8); // 0  (Phase 2c: widened from 4)
         result.base_type("long", 8); // 1
         result.base_type("single", 4); // 2
         result.base_type("float", 8); // 3

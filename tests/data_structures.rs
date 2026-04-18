@@ -478,7 +478,7 @@ pub fn array_record() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+        "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -515,7 +515,7 @@ pub fn ordered_record() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+        "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -557,7 +557,7 @@ pub fn index() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[17/4]: parents [Main 9]{n:text[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+        "Elm[29/8]: parents [Main 9]{n:text[24], c:integer[0], #left_1:integer[8], #right_1:integer[16], #color_1:boolean[28]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -611,7 +611,7 @@ pub fn index_deletions() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[17/4]: parents [Main 9]{k:integer[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+        "Elm[33/8]: parents [Main 9]{k:integer[0], c:integer[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[32]}"
     );
     let db = stores.database(2);
     let into = DbRef {
@@ -660,7 +660,7 @@ pub fn index_find() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[25/8]:{cat:integer[8], name:text[12], value:float[0], #left_1:integer[16], #right_1:integer[20], #color_1:boolean[24]}"
+        "Elm[37/8]:{cat:integer[0], name:text[32], value:float[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[36]}"
     );
     let db = stores.database(8);
     let into = DbRef {
