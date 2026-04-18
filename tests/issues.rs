@@ -9790,3 +9790,41 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P181 — inline struct-returning call inside a format-string
+/// interpolation used to SIGSEGV when the call's arg was a
+/// field-access expression (not a plain Var) and the callee
+/// returned a borrowed view into one of its args.  Root cause:
+/// `OpCopyRecord` was emitted with the `0x8000` free-source flag
+/// set unconditionally, freeing the view's source store.
+///
+/// Fix in `src/state/codegen.rs` (two sites — first-assignment and
+/// reassignment paths both touch OpCopyRecord): clear the flag
+/// when the callee's return type carries a non-empty `dep` chain.
+/// Inference already tags these correctly for consistent-view
+/// callees; a deeper issue with MIXED-return callees
+/// (some paths view, some owned) is tracked separately in
+/// `doc/claude/plans/00-inline-lift-safety/01b-return-dep-inference.md`.
+///
+/// Tests: `tests/lib/p181_inline_field_access.loft`.
+#[test]
+fn p181_inline_field_access_format_string() {
+    code!(
+        "struct P181Inner { n: integer not null }
+struct P181Container { items: vector<P181Inner> }
+struct P181Holder { c: P181Container, sentinel: integer not null }
+fn p181_first_inner(c: P181Container) -> P181Inner {
+    c.items[0]
+}
+fn test() {
+    h = P181Holder {
+        c: P181Container { items: [P181Inner { n: 1 }] },
+        sentinel: 42,
+    };
+    assert(p181_first_inner(h.c).n == 1,
+           \"inline; got {p181_first_inner(h.c).n}\");
+    assert(h.sentinel == 42, \"sentinel preserved; got {h.sentinel}\");
+}"
+    )
+    .result(Value::Null);
+}

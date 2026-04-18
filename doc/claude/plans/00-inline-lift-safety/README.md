@@ -46,7 +46,8 @@ views.
 |---|---|---|
 | `README.md` | Goal + index (this file) | — |
 | `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | **Done** — Option B chosen |
-| `01-p181-fix.md` | Implement chosen fix (gate `0x8000` on callee return-dep) + regression fixtures | **Open** |
+| `01-p181-fix.md` | Gate `0x8000` on callee return-dep (two codegen sites) | **Done-partial** — covers consistent-view callees |
+| `01b-return-dep-inference.md` | Teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed | **Open** |
 | `02-audit-adjacent-sites.md` | Review codegen for same-shape shortcuts elsewhere | Not started |
 | `03-spec.md` | Document the inline-lift invariant as a language commitment | Not started |
 

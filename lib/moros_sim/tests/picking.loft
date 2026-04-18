@@ -70,14 +70,14 @@ fn test_edit_at_hex_raise() {
   e.es_tools.ts_current = ToolKind.RaiseHex;
   e.es_tools.ts_height_step = 4;
   edit_at_hex(e, 3, 2);
-  // P181 workaround: inline `{map_get_hex(e.es_map, ...).h_height}`
-  // in a format-string message triggers a `CopyRecord` with the
-  // 0x8000 free-source flag that clobbers `e.es_undo` on this
-  // EditorState layout.  Hoisting the result into a local avoids
-  // the inline-lift pattern and lets the full invariant check
-  // (undo_depth == 1, !in_batch) run correctly.  Tracked as P181
-  // (latent — same shape would bite any struct with a same-store
-  // UndoStack neighbour, not just moros_sim).
+  // P181 workaround still needed (phase-1 gate doesn't cover this
+  // shape): hoist `map_get_hex` into a local.  Root cause: the
+  // callee has a MIXED-return body (view from `ck_hexes[idx]` AND
+  // owned-fresh `Hex {}` fallback).  Return-dep inference tags the
+  // function as owned, so the `0x8000` free-source flag is set.
+  // Gate doesn't fire → crash / corruption.  Tracked in phase
+  // `01b-return-dep-inference.md` of the inline-lift-safety
+  // initiative.
   h = map_get_hex(e.es_map, 3, 2, 0);
   assert(h.h_height == 4, "hex raised; got {h.h_height}");
   d = undo_depth(e.es_undo);

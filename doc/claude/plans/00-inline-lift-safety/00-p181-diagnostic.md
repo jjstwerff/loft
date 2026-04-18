@@ -1,8 +1,10 @@
 # Phase 0 — P181 diagnostic
 
 Status: **done** — 2026-04-18.  Conclusion: take **Option B**
-(gate `0x8000` on callee return-dep).  Fix plan opened at
-`01-p181-fix.md`.
+(gate `0x8000` on callee return-dep).  Fix plan at
+`01-p181-fix.md` (done-partial — covers consistent-view callees).
+Follow-up at `01b-return-dep-inference.md` opens the inference
+gap for mixed-return callees (the shape `map_get_hex` hits).
 
 ## Goal of this phase
 
