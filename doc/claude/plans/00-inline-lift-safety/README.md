@@ -55,7 +55,7 @@ budget.
 | `01b-return-dep-inference.md` | Phase 1b — teach return-dep inference to UNION over return paths so mixed-return accessors get tagged as borrowed (blocks `map_get_hex`) | **Done** — Reference + Enum arms; Vector deferred |
 | `01c-dynamic-dispatch.md` | Phase 1c — CallRef (fn-ref / interface-method) safe default when the callee isn't statically knowable | **Likely-closed** — variant 08 passes; revisit only if Phase 2 finds a case |
 | `01d-owned-with-aliasing.md` | Phase 1d — sibling: `Value::Var`-only lock filter for OWNED-return callees that alias an expression arg | **Likely-closed** — variant 09 probe passes; revisit if a real shape surfaces |
-| `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | Not started |
+| `02-audit-adjacent-sites.md` | Phase 2 — audit every `OpCopyRecord` emission + cross-ref with P143/P150/P152/P155 | **Done** — clean, no new bugs; variant 18 probe confirms tuple-destructure path safe |
 | `02a-multi-inline-lifts.md` | Phase 2a — the REAL Phase 2a target: TWO or more inline-lift calls to the same (or aliasing) callee in one expression.  Variant 17 crashes `println("a={f(o.x).n} b={f(o.x).n}")`; first call's `0x8000` frees o.x's source, second call walks freed memory.  Narrower than "non-format contexts" (those pass). | **Likely-closed** — variant 17 passes after Phase 1b; revisit only if a new multi-call shape surfaces |
 | `02b-native-codegen-emission.md` | Phase 2b — audit `src/generation/dispatch.rs` direct-emission `OpCopyRecord` sites | Not started |
 | `03-spec.md` | Phase 3 — document the inline-lift + view-vs-owned invariant as a language commitment | Not started |
@@ -160,6 +160,7 @@ any snippet to re-confirm.
 | 15  | `15_println_format.loft`       | SINGLE mixed-return inline in `println` format        | PASS | 2a |
 | 16  | `16_single_call_assert.loft`   | SINGLE mixed-return in assert cond, literal msg       | PASS | 2a |
 | 17  | `17_println_two_calls.loft`    | TWO mixed-return inline calls in one `println` fmt    | **PASS** (was SIGSEGV pre-Phase-1b) | 2a — closed by Phase 1b |
+| 18  | `18_tuple_destructure.loft`    | Tuple destructure of two struct-returning calls       | PASS | 2 probe (tuple_copy site safe) |
 
 Key findings from the inventory:
 - Phase 1b (Reference + Enum arms in `parse_return`) closes both
