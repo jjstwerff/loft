@@ -568,7 +568,7 @@ impl Stores {
                     self.store_mut(rec).set_byte(rec.rec, rec.pos, 0, 0);
                 }
                 5 => {
-                    self.store_mut(rec).set_int(rec.rec, rec.pos, 0);
+                    self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
                 }
                 _ => (),
             }
@@ -610,7 +610,7 @@ impl Stores {
             | Parts::Index(_, _, _)
             | Parts::Array(_)
             | Parts::Vector(_) => {
-                self.store_mut(rec).set_int(rec.rec, rec.pos, 0);
+                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Base => {
                 panic!(

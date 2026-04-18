@@ -439,27 +439,28 @@ pub fn hash_sorted_vec_u32_layout() {
         "scratch must be allocated in the hash's store"
     );
     // Header: offset 4 holds the data-record number.
-    let data_rec = stores.allocations[result.store_nr as usize].get_int(result.rec, 4) as u32;
+    let data_rec = stores.allocations[result.store_nr as usize].get_u32_raw(result.rec, 4);
     assert_ne!(data_rec, 0, "header must point at a nonzero data record");
     // Data record: offset 4 = count.
-    let count = stores.allocations[result.store_nr as usize].get_int(data_rec, 4);
+    let count = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, 4);
     assert_eq!(count, 3, "expected 3 elements, got {count}");
     // Data record offset 8..8+12 holds 3 u32 rec-nrs at 4-byte stride.
     // Read each, resolve its `name` field, verify ascending order.
+    // Post-2c layout for Elm{name:text, value:integer}: value at 0 (8B), name at 8 (4B).
+    let name_pos = u32::from(stores.position(s, "name"));
     let mut names = Vec::new();
     for i in 0..3u32 {
         let base = 8 + i * 4;
-        let rec_nr = stores.allocations[result.store_nr as usize].get_int(data_rec, base) as u32;
+        let rec_nr = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, base);
         assert_ne!(rec_nr, 0, "element {i} rec-nr should be nonzero");
         let rec = DbRef {
             store_nr: into.store_nr,
             rec: rec_nr,
             pos: 8,
         };
-        // name field is at offset 0 of the record body (pos 8 + 0).
         let store = &stores.allocations[rec.store_nr as usize];
-        let name_off = store.get_int(rec.rec, rec.pos);
-        names.push(store.get_str(name_off as u32).to_string());
+        let name_off = store.get_u32_raw(rec.rec, rec.pos + name_pos);
+        names.push(store.get_str(name_off).to_string());
     }
     assert_eq!(names, vec!["apple", "mango", "zebra"]);
 }
