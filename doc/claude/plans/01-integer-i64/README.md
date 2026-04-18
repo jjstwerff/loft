@@ -78,12 +78,16 @@ migration (null-on-overflow everywhere) depends on H1-H4 closing.
 ## Dependency ordering
 
 ```
-                 ┌─→ 00 audit ─→ decide G vs G′ ─→ 01 checked-arith ┐
-                 │                                                   ├─→ 02 i64-storage ─→ 05 opcode-reclamation ─→ 06 spec
-                 │                                                   │          │
-stdlib-aware ────┤                                                   ├──────────┤
-                 │                                                   │          │
-                 └───────────────────────────────────────────→ 03 u32 type      └─→ 04 deprecate long
+00 audit ─→ decide G vs G′ ─→ 01 checked-arith ─→ [ 02 i64-storage + 04 deprecate long ]
+                                                              │         (atomic combined landing)
+                                                              ↓
+                                                       03 u32 type
+                                                              │
+                                                              ↓
+                                                  05 opcode-reclamation
+                                                              │
+                                                              ↓
+                                                          06 spec
 ```
 
 - **Phase 0 gates Phase 1**: the G vs G′ decision depends on whether the
@@ -93,15 +97,21 @@ stdlib-aware ────┤                                                   �
   semantic fix — no `.loftc` bump, no migration.  After 1, overflow /
   div-zero cease being silent-wrong-result bugs even on today's 4-byte
   integer storage.
-- **Phase 2 (A) depends on Phase 1**: once G/G′ is live, A's remaining
-  value is headroom for timestamps / bitmasks / checksums — no longer a
-  safety argument.  Splitting keeps the high-risk cache bump isolated.
-- **Phase 3 (C, u32)** is independent and can land at any time after 2.
-- **Phase 4 (B, deprecate long)** depends on 2 (the widen) and is a
-  stdlib sweep.
-- **Phase 5 (E, opcode reclamation)** depends on 2 (the widen makes
-  `Op*Long` duplicates) and on 4 (the stdlib sweep clears `long`
-  references).
+- **Phase 2 (A) + Phase 4 (B) are COUPLED** (discovered 2026-04-18
+  during a minimal Phase 2 attempt).  Widening unbounded `integer` to
+  share representation with `long` collapses every `fn f(integer)` ↔
+  `fn f(long)` overload pair in the stdlib into a duplicate-definition
+  error (~50 sites: `abs`, `min`, `max`, `round`, `sign`, …).  The
+  stdlib sweep (Phase 4's scope) is therefore a PREREQUISITE for the
+  widen (Phase 2's scope), not a follow-up.  Both must land in a
+  single atomic commit.  Combined estimate: **800–1000 minutes**.
+- **Phase 3 (C, u32)** depends on the 2+4 landing — `u32`'s
+  `limit(0, u32::MAX - 1)` needs i64 register arithmetic to round-trip
+  values > `i32::MAX`.
+- **Phase 5 (E, opcode reclamation)** depends on 2+4.  With `integer`
+  collapsed to i64, the `Op*Long` arithmetic family becomes duplicate.
+  Phase 5 deletes them and reclaims ~26 opcode slots (unblocking O1
+  superinstruction peephole).
 - **Phase 6 (spec)** at the end captures the landed invariants.
 
 ## Scope summary — what's in / what's adjacent
