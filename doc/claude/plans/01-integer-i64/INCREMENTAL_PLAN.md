@@ -98,6 +98,8 @@ Budget: **120-180 min**.
 
 ### 2e — `long` / `l` deprecation warnings
 
+Status (discovered 2026-04-18): **DEPENDS ON 2g**, not standalone.
+
 Scope:
 - `src/lexer.rs::ret_number` — when `l` suffix is seen, emit
   `Level::Warning` "deprecated; use plain integer (now i64) in 0.9.0+".
@@ -110,7 +112,26 @@ Scope:
 Delivers: **Phase 4 deprecation warnings** (user-facing).  Users still
 can write `long` / `10l` during transition.
 
-Budget: **60-120 min**.
+**Attempted 2026-04-18, reverted.**  The test suite contains dozens of
+fixtures (`tests/issues.rs`, `tests/parse_errors.rs`) that use `long`
+/ `l` in their inline code strings.  The `code!()` macro asserts
+"Expected ''" (no diagnostics), so every warning fires a test
+failure.  Filename-based suppression for `default/` isn't enough —
+test code has arbitrary synthetic filenames.  Options for a later
+landing:
+- **Option A**: sweep tests via `--migrate-long` first (Phase 2g),
+  then add the warnings.  Cleanest.
+- **Option B**: add an opt-in CLI flag `--deprecation-warnings` that
+  turns the warnings on.  Tests run without the flag.  Compatible
+  but clunky.
+- **Option C**: emit warnings but at a lower level (hint, not
+  warning) that doesn't trigger test-diagnostic checks.  Requires
+  new diagnostic level.
+
+Recommendation: Option A — run 2g first, then 2e is a trivial
+addition.
+
+Budget: **60-120 min** (post-2g).
 
 ### 2f — `--migrate-long` source rewriter
 
