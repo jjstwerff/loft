@@ -85,6 +85,7 @@ mod stack;
 
 pub mod documentation;
 pub mod formatter;
+pub mod migrate_long;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

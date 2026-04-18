@@ -1166,6 +1166,37 @@ fn main() {
         if a == "--version" {
             println!("loft {}", env!("CARGO_PKG_VERSION"));
             return;
+        } else if a == "--migrate-long" {
+            // C54.B migration tool — rewrite `long` type references and
+            // `l` literal suffixes to their post-C54.A equivalents.
+            let dry_run = argv.get(i).is_some_and(|s| s == "--dry-run");
+            if dry_run {
+                i += 1;
+            }
+            let Some(target) = argv.get(i) else {
+                eprintln!("usage: loft --migrate-long [--dry-run] <path-or-dir>");
+                std::process::exit(1);
+            };
+            match loft::migrate_long::migrate_path(std::path::Path::new(target), dry_run) {
+                Ok((scanned, modified)) => {
+                    if dry_run {
+                        println!(
+                            "migrate-long (dry run): {scanned} file(s) scanned, \
+                             {modified} would be rewritten"
+                        );
+                    } else {
+                        println!(
+                            "migrate-long: {scanned} file(s) scanned, \
+                             {modified} rewritten"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("migrate-long error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
         } else if a == "--path" {
             dir.clone_from(&argv[i]);
             i += 1;
