@@ -9753,24 +9753,39 @@ fn test() {
 }
 
 /// P180 — assigning a `single` (f32) literal to a `float` (f64) struct
-/// field is silently accepted by the parser and corrupts the record at
-/// runtime (interpreter panics `index out of bounds` in the allocation
-/// layer; native codegen leaks a raw rustc E0308 up to the user).
-///
-/// Post-fix expectation: parser rejects the mismatch with a proper
-/// diagnostic at the assignment site, before codegen / execution.
-///
-/// Gated `#[ignore]` until fixed.  Fixture at
-/// `tests/lib/p180_single_to_float_field.loft`.
+/// field used to be silently accepted and corrupted the record at
+/// runtime.  Fix: `src/parser/expressions.rs` now funnels simple-
+/// assignment RHS through the same `convert()` machinery the
+/// constructor and return-type paths already use, which widens via
+/// `OpConvFloatFromSingle` and rejects narrowing with a diagnostic.
 #[test]
-#[ignore]
 fn p180_single_literal_into_float_field() {
     code!(
         "struct P180Box { a: float not null, b: integer not null }
 fn test() {
     p = P180Box { a: 1.0, b: 42 };
     p.a = 1.2f;
+    // f32 1.2 widened to f64 is not exactly 1.2; allow a tolerance
+    // that covers the unavoidable precision loss.
     assert(p.a > 1.19 && p.a < 1.21, \"expected ~1.2 got {p.a}\");
+    assert(p.b == 42, \"b untouched, got {p.b}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P180 companion — widening an `integer` RHS into a `long` field
+/// still works after the int→long hand-rolled branch in the
+/// assignment path was replaced with a generic `convert()` funnel.
+/// Guards against regressing the prior auto-widen behaviour.
+#[test]
+fn p180_int_widens_to_long_field() {
+    code!(
+        "struct P180Long { n: long not null }
+fn test() {
+    p = P180Long { n: 0l };
+    p.n = 42;
+    assert(p.n == 42l, \"expected 42l got {p.n}\");
 }"
     )
     .result(Value::Null);

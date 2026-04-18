@@ -679,13 +679,54 @@ use a separate collection or add after the loop"
             *code = Value::Insert(ls);
             return Type::Void;
         }
-        // Auto-convert integer to long for a long-typed LHS assignment.
-        if matches!(f_type, Type::Long)
-            && matches!(s_type, Type::Integer(_, _, _))
-            && op == "="
+        // P180: route the RHS of a simple assignment through `convert()`
+        // so it picks up the same widening-with-explicit-narrowing policy
+        // the constructor path (`handle_field`) and return-type path
+        // (`parse_return`) already use.  `convert()` wraps `code` with an
+        // `OpConv*FromY` call when a matching widening op is registered
+        // (`integer → long`, `integer → float`, `single → float`, …) and
+        // returns false on unrelated / narrowing mismatches — which we
+        // surface as a clean diagnostic rather than silent runtime
+        // corruption.  Guarded to `op == "="`: compound assignments
+        // (`+=`, `-=`, …) flow through `compute_op_code` which type-checks
+        // via the operator's own attribute list.  Skip when either side
+        // is `Unknown` — generic / bounded-template bodies carry
+        // placeholder types until monomorphisation; letting convert()
+        // fire there would report spurious "cannot assign X to
+        // unknown(0)" errors.
+        // Restrict to scalar target types: collection targets
+        // (`vector`, `hash`, `sorted`, `index`, `spacial`) and
+        // `Reference` / `RefVar` compound types have their own
+        // handling paths (`towards_set`, `copy_ref`, …).  Running
+        // `convert()` on them would flag legitimate initialisations
+        // (e.g. `h.field = [...]` for a hash field) as mismatches.
+        let scalar_target = matches!(
+            f_type,
+            Type::Integer(_, _, _)
+                | Type::Long
+                | Type::Float
+                | Type::Single
+                | Type::Boolean
+                | Type::Character
+                | Type::Text(_)
+        );
+        if op == "="
+            && scalar_target
             && !self.first_pass
+            && !f_type.is_unknown()
+            && !s_type.is_unknown()
+            && !matches!(s_type, Type::Null)
+            && !f_type.is_equal(&s_type)
+            && !self.convert(code, &s_type, f_type)
         {
-            *code = self.cl("OpConvLongFromInt", std::slice::from_ref(code));
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot assign {} to a field of type {} — use 'as {}' to cast explicitly",
+                s_type.name(&self.data),
+                f_type.name(&self.data),
+                f_type.name(&self.data),
+            );
         }
         if self.validate_lock_assign(code, to) {
             return Type::Void;
