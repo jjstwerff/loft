@@ -1,0 +1,15 @@
+// Variant 01d — inline-lift but with a Var arg (not a field-access).
+// If this passes, confirms the bug is specifically about non-Var
+// (expression) args slipping the lock filter.
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_01d_var_arg() {
+  c = Container { items: [Inner { n: 1 }] };
+  assert(first_inner(c).n == 1, "inline via Var; got {first_inner(c).n}");
+}

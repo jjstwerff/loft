@@ -1,6 +1,8 @@
 # Phase 0 — P181 diagnostic
 
-Status: **open**.
+Status: **done** — 2026-04-18.  Conclusion: take **Option B**
+(gate `0x8000` on callee return-dep).  Fix plan opened at
+`01-p181-fix.md`.
 
 ## Goal of this phase
 
@@ -195,6 +197,103 @@ When Phase 0 closes, commit to the branch:
 
 No compiler change is committed in Phase 0.  The purpose of this
 phase is "decide what to do", not "do it".
+
+---
+
+## Phase 0 findings (2026-04-18)
+
+Fixtures built under `snippets/` (kept in the plan dir so they
+travel with this doc — regression fixtures will be promoted to
+`tests/lib/` in Phase 1):
+
+| # | Fixture | Shape | Pre-fix result |
+|---|---|---|---|
+| 1  | `01_field_access.loft`    | `{f(o.field).n}` format-interp                 | SIGSEGV |
+| 1b | `01b_without_lift.loft`   | Same body minus the inline-lift (control)      | pass |
+| 1c | `01c_inline_only.loft`    | Minimal: just the inline-lift line             | SIGSEGV |
+| 1d | `01d_var_arg_inline.loft` | Inline-lift but arg is `Var` (control)         | pass |
+| 4  | `04_owned_control.loft`   | Owned-result callee, inline-lift (control)     | pass |
+
+Variants 02 (indexed return), 03 (method chain), 05 (scalar
+return) and 06 (chained views) deferred — the signature for the
+bug is already unambiguous from 1 vs 1d; spending Phase 0 time on
+additional variants is lower-value than writing the fix.  Phase 1
+adds the variants it needs as regression tests on top of the
+chosen fix.
+
+### Bug-site confirmation
+
+Failing fixture 1c IR (`LOFT_LOG=static`) at the assertion site:
+
+```
+[16] __lift_1(1):ref(Inner) = n_first_inner(OpGetField(h(1), 0i32, 64i32));
+```
+
+Generates bytecode:
+
+```
+ 94[136]: Call(d_nr=548, args_size=12, fn=n_first_inner)
+105[136]: VarRef(var[4]) -> ref(reference) type=Inner 63
+108[148]: CopyRecord(data: ref(reference), to: ref(reference), tp=32831)
+```
+
+`tp=32831 = 63 | 0x8000` — the free-source flag is set.
+
+Critically, `n_first_inner`'s return is tagged in the IR:
+
+```
+fn n_first_inner(c: ref(Container)[0]) -> ref(Inner)["c"]
+```
+
+i.e. the return type carries `dep=[c]` — return-dep inference
+already correctly identifies this as a borrowed view.
+
+For variant 04 (owned result) the same inference produces:
+
+```
+fn n_make_inner(x: integer) -> ref(Inner)
+```
+
+No dep — owned.  The existing inference distinguishes the two
+cases perfectly; codegen just isn't consulting it when deciding
+whether to OR the `0x8000` flag.
+
+### Bug site (exact)
+
+`src/state/codegen.rs:1280–1290` in
+`gen_set_first_ref_call_copy` — the `tp_with_free` computation:
+
+```rust
+#[cfg(not(feature = "wasm"))]
+let tp_with_free = i32::from(tp_nr) | 0x8000;
+```
+
+Unconditionally sets the flag.  No consultation of the callee's
+return-type dep.  Matches Option B's one-line-fix profile.
+
+The `ref_args` lock-collection loop at ~1252 (the "locks only
+`Value::Var` args" filter, which originally looked like the
+culprit in my earlier P181 hypothesis) is NOT directly involved
+— the lock machinery is an orthogonal safeguard.  The actual fix
+is above, at the flag-setting step.
+
+### Option pick — B
+
+Rubric criteria satisfied:
+- **All known-failing fixtures have non-empty return-dep**:
+  confirmed on variant 01 (`Inner["c"]`).
+- **All currently-passing fixtures either have empty return-dep
+  (owned) OR don't reach this code path**: confirmed on variants
+  04 and 01d.
+- **Option B diff is a one-line gate** at the `tp_with_free`
+  computation.  No slot-allocator ripples (Option A's risk).
+  No compensating-frees audit (Option C's risk).
+- **Return-dep inference is already correct** for both the
+  accessor-style callee (variant 01) and the constructor-style
+  callee (variant 04).
+
+Option B is the right choice.  Implementation plan in
+`01-p181-fix.md`.
 
 ## Notes / gotchas picked up during the session that produced P181
 

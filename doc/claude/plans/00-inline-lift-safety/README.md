@@ -45,8 +45,8 @@ views.
 | File | Phase | Status |
 |---|---|---|
 | `README.md` | Goal + index (this file) | — |
-| `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | Open |
-| `01-p181-fix.md` | Implement chosen fix + regression fixtures | Not started |
+| `00-p181-diagnostic.md` | Variant inventory, bug site confirmation, fix-direction pick | **Done** — Option B chosen |
+| `01-p181-fix.md` | Implement chosen fix (gate `0x8000` on callee return-dep) + regression fixtures | **Open** |
 | `02-audit-adjacent-sites.md` | Review codegen for same-shape shortcuts elsewhere | Not started |
 | `03-spec.md` | Document the inline-lift invariant as a language commitment | Not started |
 

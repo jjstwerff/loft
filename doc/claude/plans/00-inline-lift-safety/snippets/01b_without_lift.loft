@@ -1,0 +1,27 @@
+// Variant 01b — control.  Same shape as 01 but without the
+// format-string inline lift.  Should always pass (pre- and post-fix).
+//
+// If THIS crashes, the bug isn't specifically about the inline-lift
+// pattern — it's about something more basic (the call + vector
+// access itself, or the Holder struct layout).
+
+struct Inner { n: integer not null }
+struct Container { items: vector<Inner> }
+struct Holder {
+  c:        Container,
+  sentinel: integer not null,
+}
+
+fn first_inner(c: Container) -> Inner {
+  c.items[0]
+}
+
+fn test_variant_01b_control() {
+  h = Holder {
+    c: Container { items: [Inner { n: 1 }] },
+    sentinel: 42,
+  };
+  base = first_inner(h.c);
+  assert(base.n == 1, "baseline");
+  assert(h.sentinel == 42, "sentinel preserved");
+}
