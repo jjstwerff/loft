@@ -805,7 +805,7 @@ pub struct Data {
     statics: Vec<u8>,
     pub(crate) op_codes: u16,
     possible: HashMap<String, Vec<u32>>,
-    pub(crate) operators: HashMap<u8, u32>,
+    pub(crate) operators: HashMap<u16, u32>,
     /// PKG.4: native function symbols — loft function name → Rust symbol path.
     /// Populated when packages with `[native.functions]` are loaded.
     /// Keys are the user-facing loft names (e.g. `save_png`), not the internal
@@ -1044,7 +1044,7 @@ impl Data {
             self.op_codes
         );
         self.definitions[def_nr as usize].op_code = self.op_codes;
-        self.operators.insert(self.op_codes as u8, def_nr);
+        self.operators.insert(self.op_codes, def_nr);
         self.op_codes += 1;
     }
 
@@ -1719,12 +1719,12 @@ impl Data {
     }
 
     #[must_use]
-    pub fn has_op(&self, op: u8) -> bool {
+    pub fn has_op(&self, op: u16) -> bool {
         self.operators.contains_key(&op)
     }
 
     #[must_use]
-    pub fn operator(&self, op: u8) -> &Definition {
+    pub fn operator(&self, op: u16) -> &Definition {
         self.def(self.operators[&op])
     }
 

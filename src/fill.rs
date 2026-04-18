@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 255] = &[
+pub const OPERATORS: &[fn(&mut State); 260] = &[
     goto,
     goto_word,
     goto_false,
@@ -48,6 +48,11 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     mul_int,
     div_int,
     rem_int,
+    add_int_nullable,
+    min_int_nullable,
+    mul_int_nullable,
+    div_int_nullable,
+    rem_int_nullable,
     land_int,
     lor_int,
     eor_int,
@@ -506,6 +511,41 @@ fn rem_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i32>();
     let v_v1 = *s.get_stack::<i32>();
     let new_value = ops::op_rem_int(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn add_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = ops::op_add_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn min_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = ops::op_min_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn mul_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = ops::op_mul_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn div_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = ops::op_div_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn rem_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i32>();
+    let new_value = ops::op_rem_int_nullable(v_v1, v_v2);
     s.put_stack(new_value);
 }
 

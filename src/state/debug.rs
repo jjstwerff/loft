@@ -780,7 +780,13 @@ impl State {
         )?;
         while self.code_pos < start_pos + data.def(d_nr).code_length {
             let p = self.code_pos;
-            let op = *self.code::<u8>();
+            let first = *self.code::<u8>();
+            let op: u16 = if first == 255 {
+                let ext = *self.code::<u8>();
+                255u16 + u16::from(ext)
+            } else {
+                u16::from(first)
+            };
             assert!(
                 data.has_op(op),
                 "Unknown operator {op} in byte_code of {}",
@@ -943,7 +949,19 @@ impl State {
         };
         while self.code_pos < self.bytecode.len() as u32 {
             let code = self.code_pos;
-            let op = *self.code::<u8>();
+            // 2-byte opcode handling — mirrors `state/mod.rs::execute`
+            // (see `emit_op` in `state/mod.rs:149`): opcodes ≥ 255 are
+            // encoded as `[255, op-255]`.  Without this branch the trace
+            // loop misreads the lead byte 255 as a single-byte opcode and
+            // dispatches through `OPERATORS[255]` instead of the intended
+            // handler.
+            let first = *self.code::<u8>();
+            let op = if first == 255 {
+                let ext = *self.code::<u8>();
+                255u16 + u16::from(ext)
+            } else {
+                u16::from(first)
+            };
             let op_name = data.operator(op).name.clone();
             let op_base = &op_name[2..]; // strip "Op" prefix
 
@@ -1096,12 +1114,12 @@ impl State {
     pub(super) fn log_step(
         &mut self,
         log: &mut dyn Write,
-        op: u8,
+        op: u16,
         code: u32,
         fn_ctx: &(u32, i64),
         config: &LogConfig,
         data: &Data,
-    ) -> Result<u8, Error> {
+    ) -> Result<u16, Error> {
         let (d_nr, frame_offset) = *fn_ctx;
         let cur = self.code_pos;
         let stack = self.stack_pos;
@@ -1301,7 +1319,7 @@ impl State {
     pub(super) fn log_result(
         &mut self,
         log: &mut dyn Write,
-        op: u8,
+        op: u16,
         code: u32,
         data: &Data,
     ) -> Result<(), Error> {

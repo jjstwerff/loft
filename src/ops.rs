@@ -28,48 +28,51 @@ thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
 }
 
-/// In debug builds, use checked arithmetic and panic on overflow.
-/// In release builds, use unchecked arithmetic for speed.
+/// C54.G — trap (panic) on overflow or sentinel-collision result.
+/// Uniform behaviour across debug and release builds: silent-sentinel
+/// channel for overflow is closed.  The dual `checked_int_nullable!`
+/// preserves the old release behaviour for the G-hybrid `??`-context
+/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
+/// can discharge the null.
 macro_rules! checked_int {
     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        #[cfg(debug_assertions)]
-        {
-            let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
-            assert!(
-                r != i32::MIN,
-                "integer null-sentinel collision: {} {} {} = i32::MIN",
-                $v1,
-                $op,
-                $v2
-            );
-            r
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            $checked.unwrap_or(i32::MIN)
-        }
+        let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
+        assert!(
+            r != i32::MIN,
+            "integer null-sentinel collision: {} {} {} = i32::MIN",
+            $v1,
+            $op,
+            $v2
+        );
+        r
     }};
 }
 
 macro_rules! checked_long {
     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        #[cfg(debug_assertions)]
-        {
-            let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
-            assert!(
-                r != i64::MIN,
-                "long null-sentinel collision: {} {} {} = i64::MIN",
-                $v1,
-                $op,
-                $v2
-            );
-            r
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            $checked.unwrap_or(i64::MIN)
-        }
+        let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
+        assert!(
+            r != i64::MIN,
+            "long null-sentinel collision: {} {} {} = i64::MIN",
+            $v1,
+            $op,
+            $v2
+        );
+        r
     }};
+}
+
+/// C54.G-hybrid nullable variant — returns the null sentinel on overflow
+/// or sentinel-collision result.  Used when the caller has committed to
+/// discharging the null via `??`.  Compile-time picked in
+/// `src/parser/operators.rs::handle_operator` when the arithmetic op's
+/// result is the immediate LHS of a `??`.
+macro_rules! checked_int_nullable {
+    ($checked:expr) => {{ $checked.unwrap_or(i32::MIN) }};
+}
+
+macro_rules! checked_long_nullable {
+    ($checked:expr) => {{ $checked.unwrap_or(i64::MIN) }};
 }
 
 macro_rules! sentinel_int {
@@ -358,6 +361,59 @@ pub fn op_rem_long(v1: i64, v2: i64) -> i64 {
     }
 }
 
+// ── C54.G-hybrid — nullable long arithmetic ──────────────────────────────
+// Sibling of op_add_int_nullable / etc. for the long path.
+
+#[inline]
+#[must_use]
+pub fn op_add_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_add(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_min_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_sub(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_mul_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_mul(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_div_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+        checked_long_nullable!(v1.checked_div(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_rem_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+        checked_long_nullable!(v1.checked_rem(v2))
+    } else {
+        i64::MIN
+    }
+}
+
 // ── O6: Non-null long variants ────────────────────────────────────────────
 // Skip the i64::MIN sentinel check when both operands are known non-null
 // (local variables with definite assignment).  Used by native codegen.
@@ -571,6 +627,62 @@ pub fn op_div_int(v1: i32, v2: i32) -> i32 {
 pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
     if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
         checked_int!(v1.checked_rem(v2), "%", v1, v2)
+    } else {
+        i32::MIN
+    }
+}
+
+// ── C54.G-hybrid — nullable integer arithmetic ────────────────────────────
+// These mirror op_add_int / op_min_int / op_mul_int / op_div_int / op_rem_int
+// but return `i32::MIN` on overflow or divide-by-zero instead of panicking.
+// Emitted only when codegen detects the op's result is the immediate LHS of
+// a `??` expression — the null is then caught and discharged.
+
+#[inline]
+#[must_use]
+pub fn op_add_int_nullable(v1: i32, v2: i32) -> i32 {
+    if v1 != i32::MIN && v2 != i32::MIN {
+        checked_int_nullable!(v1.checked_add(v2))
+    } else {
+        i32::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_min_int_nullable(v1: i32, v2: i32) -> i32 {
+    if v1 != i32::MIN && v2 != i32::MIN {
+        checked_int_nullable!(v1.checked_sub(v2))
+    } else {
+        i32::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_mul_int_nullable(v1: i32, v2: i32) -> i32 {
+    if v1 != i32::MIN && v2 != i32::MIN {
+        checked_int_nullable!(v1.checked_mul(v2))
+    } else {
+        i32::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_div_int_nullable(v1: i32, v2: i32) -> i32 {
+    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+        checked_int_nullable!(v1.checked_div(v2))
+    } else {
+        i32::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_rem_int_nullable(v1: i32, v2: i32) -> i32 {
+    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+        checked_int_nullable!(v1.checked_rem(v2))
     } else {
         i32::MIN
     }
@@ -858,28 +970,24 @@ mod test {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "integer overflow")]
     fn add_int_overflow() {
         let _ = op_add_int(i32::MAX, 1);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "integer overflow")]
     fn sub_int_overflow() {
         let _ = op_min_int(i32::MIN + 1, 2);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "integer overflow")]
     fn mul_int_overflow() {
         let _ = op_mul_int(i32::MAX, 2);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "integer null-sentinel collision")]
     fn sub_int_sentinel() {
         let _ = op_min_int(-2_147_483_647, 1);
@@ -890,6 +998,9 @@ mod test {
     #[should_panic(expected = "integer null-sentinel collision")]
     fn and_int_sentinel() {
         // 0x80000001 & 0x80000002 = 0x80000000 = i32::MIN
+        // Uses sentinel_int! which only asserts in debug builds.  C54.G
+        // tightens arithmetic (checked_int!) to always trap; bitwise ops
+        // are a separate concern tracked by `sentinel_int!`.
         let _ = op_logical_and_int(i32::MIN + 1, i32::MIN + 2);
     }
 
@@ -899,14 +1010,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "long overflow")]
     fn add_long_overflow() {
         let _ = op_add_long(i64::MAX, 1);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "long null-sentinel collision")]
     fn sub_long_sentinel() {
         let _ = op_min_long(i64::MIN + 1, 1);

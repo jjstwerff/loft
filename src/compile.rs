@@ -391,15 +391,15 @@ pub fn build_opcode_len_table(data: &Data) -> [u8; 256] {
     table
 }
 
-/// Resolve opcode number by operator name.  Returns `u8::MAX` if not found.
+/// Resolve opcode number by operator name.  Returns `u16::MAX` if not found.
 #[must_use]
-pub fn opcode_by_name(data: &Data, name: &str) -> u8 {
+pub fn opcode_by_name(data: &Data, name: &str) -> u16 {
     for (&op, &d_nr) in &data.operators {
         if data.definitions[d_nr as usize].name == name {
             return op;
         }
     }
-    u8::MAX
+    u16::MAX
 }
 
 /// Disassemble bytecode for one function to `writer`.
@@ -432,9 +432,14 @@ pub fn disassemble(
     let mut pc = start;
     while pc < end && pc < bytecode.len() {
         let rel = pc - start;
-        let op = bytecode[pc];
-        let ilen = op_len[op as usize] as usize;
-        if ilen == 0 {
+        let first = bytecode[pc];
+        let (op, op_byte_len): (u16, usize) = if first == 255 && pc + 1 < bytecode.len() {
+            (255u16 + u16::from(bytecode[pc + 1]), 2)
+        } else {
+            (u16::from(first), 1)
+        };
+        let ilen = op_len[first as usize] as usize + (op_byte_len - 1);
+        if op_len[first as usize] == 0 {
             writeln!(writer, "{rel:4}: ??? (opcode {op})")?;
             break;
         }
@@ -442,7 +447,15 @@ pub fn disassemble(
             writeln!(writer, "  .L{rel}:")?;
         }
         let op_name = opcode_display_name(op, data);
-        let args = format_op_args(op, bytecode, pc, data, vars, start, op_name);
+        let args = format_op_args(
+            op,
+            bytecode,
+            pc + op_byte_len - 1,
+            data,
+            vars,
+            start,
+            op_name,
+        );
         writeln!(writer, "{rel:4}: {op_name}({args})")?;
         pc += ilen;
     }
@@ -463,8 +476,13 @@ fn collect_jump_targets(
     let mut targets = std::collections::BTreeSet::new();
     let mut pc = start;
     while pc < end && pc < bytecode.len() {
-        let op = bytecode[pc];
-        let ilen = op_len[op as usize] as usize;
+        let first = bytecode[pc];
+        let (op, op_bytes): (u16, usize) = if first == 255 && pc + 1 < bytecode.len() {
+            (255u16 + u16::from(bytecode[pc + 1]), 2)
+        } else {
+            (u16::from(first), 1)
+        };
+        let ilen = op_len[first as usize] as usize + (op_bytes - 1);
         if ilen == 0 {
             break;
         }
@@ -490,7 +508,7 @@ fn collect_jump_targets(
 
 /// Return the printable opcode name, stripping the `Op` prefix so the
 /// disassembly reads as `Call(...)` rather than `OpCall(...)`.
-fn opcode_display_name(op: u8, data: &Data) -> &str {
+fn opcode_display_name(op: u16, data: &Data) -> &str {
     if data.has_op(op) {
         let n = &data.operator(op).name;
         n.strip_prefix("Op").unwrap_or(n.as_str())
@@ -507,7 +525,7 @@ fn opcode_display_name(op: u8, data: &Data) -> &str {
 /// - word-sized slot indices resolved to their variable name
 /// - 32-bit call targets resolved to the function name at that address
 fn format_op_args(
-    op: u8,
+    op: u16,
     bytecode: &[u8],
     pc: usize,
     data: &Data,
