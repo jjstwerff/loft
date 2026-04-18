@@ -2,96 +2,188 @@
 
 Status: **not started** — blocked by Phase 1.
 
-## Context
+## What changes for the user
 
-After Phase 1, overflow / div-zero no longer silently wrong-result.
-Phase 2's remaining value is **headroom** — microsecond timestamps,
-accumulating checksums, bitmasks, file offsets — not safety.  This is
-the largest-blast-radius phase in the initiative: opcode replumb,
-`.loftc` bump, persisted-DB migration.
+| Today | After Phase 2 |
+|---|---|
+| `integer` = i32 storage + i32 arithmetic | `integer` = **i64 storage** + i64 arithmetic |
+| `i32` = explicit alias for the old default | `i32` = explicit narrow alias (4-byte storage, i64 arithmetic register) |
+| `integer limit(0, 255)` = 1-byte storage | unchanged — 1-byte storage, widens to i64 on read |
+| `long` / `10l` = i64 | still works; becomes a no-op alias.  Phase 4 deprecates. |
+| Timestamp / checksum math overflows silently | headroom up to 2^63 |
 
-## Scope
+Arithmetic behaviour does NOT change — Phase 1 already unified
+overflow semantics.  Phase 2's value is pure **headroom + storage
+optimisation for common small-magnitude literals**.
 
-### Runtime
+## Design
 
-- `Op*Int` family in `src/fill.rs` — registers become i64 throughout.
-- `get_int` / `set_int` in `src/store.rs` — widen on load, narrow on
-  store with existing `limit` range check.
-- `Type::size()` default arm `4 → 8` for unbounded `integer`.
-- Bounded integer fields (`limit(...)`, `i8`, `u8`, `i16`, `u16`)
-  retain current storage width.
+### Decouple arithmetic width from storage width
+
+- **Arithmetic always i64.**  `OpAddInt`, `OpMulInt`, … operate on
+  i64 registers.  `i32::MIN` stops being the arithmetic sentinel;
+  `i64::MIN` replaces it.
+- **Storage default for unbounded `integer` is 8 bytes** (i64).
+  Bounded fields (`limit(lo, hi)`, `i8`, `u8`, `i16`, `u16`) keep
+  their bit-packed storage.
+- **Load widens, store narrows.**  Reading `i8` / `u8` / `i16` /
+  `u16` / `integer limit(...)` sign- or zero-extends to i64.
+  Writing narrows back with the existing `limit` range check.
+
+### Bytecode-constant family (width-graded by magnitude)
+
+Per QUALITY.md § 421-432:
+
+| Opcode | Stream bytes | Range | Use case |
+|---|---|---|---|
+| `OpConstTiny` | 1 | −128 ..= 127 | `x = 0`, `x = 1`, loop bounds, indices |
+| `OpConstShort` | 2 | −32 768 ..= 32 767 | small literals |
+| `OpConstInt` | 4 | −2³¹ ..= 2³¹ − 1 | existing 4-byte literals |
+| `OpConstLong` | 8 | full i64 | timestamps, large constants |
+
+Each sign-extends into an i64 register on load.  The common case
+(`x = 0`, `for i in 0..n`, `v[i]`) stores 1 byte after opcode —
+~50 % bytecode-size saving on integer-heavy programs.
+
+`OpConstTiny` and `OpConstShort` are NEW opcodes.  `OpConstInt`
+already exists.  `OpConstLong` exists (`default/01_code.loft` line
+185).  Keep all four.
+
+## Critical files
+
+### Register width + type surface
+
+| File | Change |
+|---|---|
+| `src/data.rs:32` | `pub static I32: Type = Type::Integer(i32::MIN+1, i32::MAX as u32, false);` — widen the default `integer` type to the i64 range.  Rename this static to `I64` or add a new `I64` + leave `I32` for explicit `i32` alias. |
+| `src/data.rs:172` | `Type::Integer(i32, u32, bool)` — extend min/max fields to i64 OR add a new `Type::Integer64(i64, u64, bool)` variant and route unbounded integers there.  **Second option is safer**: keep `Type::Integer` as the 4-byte-max-storage bounded variant, introduce `Integer64` as the unbounded default.  Decide in implementation. |
+| `src/data.rs:529` | `Type::Integer(_, _, _) ... => 4` — default arm for unbounded → 8.  Depends on which struct is chosen above. |
+| `src/data.rs:1846-1858` | Rust type selection for native codegen — adjust default arm to emit `i64` for unbounded. |
+
+### Storage read/write
+
+| File | Change |
+|---|---|
+| `src/store.rs:1115` | `get_int(&self, rec, fld) -> i32` → `get_int(&self, rec, fld) -> i64`.  Width of the stored slot stays 4 bytes for bounded, widens to 8 bytes for unbounded.  Read code differentiates by field metadata. |
+| `src/store.rs:1124` | `set_int(&mut self, rec, fld, val: i32) -> bool` → `set_int(... val: i64) -> bool`.  Store narrows with range check; error if value doesn't fit bounded width. |
+| `src/store.rs:1153` | `get_short` — signature stays, still reads u16, result widens into i64. |
+| `src/store.rs:1167` | `set_short` — accept i64, narrow to u16 with range check. |
+| `src/store.rs:1184` | `get_byte` — same pattern, u8 → i64. |
+| `src/store.rs:1194` | `set_byte` — same pattern, i64 → u8 with range check. |
+| `src/store.rs` | **New**: `get_int64`, `set_int64` for the 8-byte unbounded path.  OR collapse `get_int` into the 8-byte version and have bounded fields use `get_byte` / `get_short`. |
+
+### Arithmetic handlers
+
+| File | Change |
+|---|---|
+| `src/ops.rs:531-571` | `op_{add,sub,mul,div,rem}_int(v1: i32, v2: i32) -> i32` → `op_*_int64(v1: i64, v2: i64) -> i64`.  Given Phase 1 already routes through `checked_*`, the edit is a type widening + macro parameter update. |
+| `src/ops.rs:313-405` | `op_*_long` family merges into the i64 path.  They're currently distinct only because the interpreter distinguished `integer` (i32) from `long` (i64) registers.  After Phase 2 both are i64 → duplication.  Phase 5 deletes the `_long` siblings. |
+| `src/fill.rs:477-656` | Handler dispatch — each `OpAddInt` / `OpMulInt` / etc. swaps its `i32` pop/push for `i64` pop/push.  The stack representation becomes 8 bytes per integer slot (or stays 4 for bounded — stack slots are width-typed). |
 
 ### Bytecode constants
 
-Per QUALITY.md § 421-432, opcodes stay width-graded by magnitude:
+| File | Change |
+|---|---|
+| `src/fill.rs` | Add handlers for `OpConstTiny` (reads 1 byte, sign-extends to i64) and `OpConstShort` (reads 2 bytes, sign-extends).  `OpConstInt` already reads 4 bytes; promote its result to i64 on load. |
+| `src/state/codegen.rs` | In the literal-emit path, pick the narrowest opcode by magnitude: `value in [-128..128)` → `OpConstTiny`; `in [-32768..32768)` → `OpConstShort`; `in i32 range` → `OpConstInt`; else `OpConstLong`. |
+| `default/01_code.loft` | Add `OpConstTiny` and `OpConstShort` operator definitions.  Add their native-registry entries. |
+| `src/native.rs` | Register native handlers for the new ops. |
 
-| Opcode | Stream bytes | Range |
-|---|---|---|
-| `OpConstTiny` | 1 | −128 ..= 127 |
-| `OpConstShort` | 2 | −32 768 ..= 32 767 |
-| `OpConstInt` | 4 | −2³¹ ..= 2³¹ − 1 |
-| `OpConstLong` | 8 | full i64 |
+### `.loftc` cache
 
-All sign-extend into i64 registers.  Common-case (`x = 0`, loop
-bounds, indices) store 1 byte after opcode — ~50 % bytecode-size saving
-on integer-heavy programs.
+`src/cache.rs:13-16` — magic `b"LFC1"` + SHA-256 of
+`VERSION + BUILD_ID + source`.  No explicit format version field.
 
-### Cache format
+- **Option A — rely on version bump.**  Bumping `CARGO_PKG_VERSION`
+  (e.g. to 0.9.0) changes the SHA-256 key; old caches fail-closed.
+  Simplest.  Has the side effect of invalidating ALL caches across
+  the codebase, not just integer-storage-sensitive ones.  Acceptable.
+- **Option B — introduce magic `LFC2` + explicit format version.**
+  More work, lets us keep `.loftc` for files that didn't touch
+  integer storage.  Not worth it for a single release bump.
 
-- Bump `.loftc` version.  Old caches fail-closed with a clear diagnostic
-  pointing at the migrator.
-- Add schema version field if not already present.
+**Decide: Option A.**  Bump version, invalidate all caches.
 
-### Migration tool
+### Persisted-database migration
 
-`loft --migrate-i64 <dbfile>`:
-- Reads old-format persisted DB.
-- Rewrites `integer` columns to 8-byte storage.
-- Preserves `i8` / `u8` / `i16` / `u16` / `limit(...)` fields verbatim.
-- Fails loudly on format mismatch; no silent data loss.
+If any persisted database stored unbounded `integer` as 4-byte values,
+those DBs need migration.  Ship `loft --migrate-i64 <dbfile>`:
 
-### Backends
+```
+Read the database's schema block.
+For each column declared `integer` (unbounded):
+  - Read the 4-byte value.
+  - Write to a new column with 8-byte storage.
+  - If the old value was `i32::MIN` (null sentinel), write `i64::MIN`
+    (new sentinel).
+Rewrite the schema block with widened column widths.
+Atomic rename.
+```
 
-- Interpreter: direct — swap registers to i64, update `get_int` /
-  `set_int`.
-- Native (`src/generation/`): emit i64 arithmetic; revalidate overflow
-  trap (Phase 1) still fires correctly on wider registers.
-- WASM: i64 is a first-class type in wasm32-wasip2 — should be a
-  near-trivial port.  Verify.
+Conservative dry-run flag.  Refuses to migrate if the schema looks
+malformed.
+
+Critical files for the migrator:
+- `src/database/structures.rs` — schema read/write.
+- New: `src/migrate_i64.rs` — the migration logic.
+- `src/main.rs` — CLI `--migrate-i64 <path>` handler.
 
 ## Test plan (from QUALITY.md § 434-440)
 
-Un-ignore:
-- `c54_i32_min_round_trip` — the canary test; explicit `-2_147_483_648
-  * 1` now returns the same value (no more sentinel).
-- `c54_arithmetic_at_boundary`
-- `c54_bounded_storage_preserved`
-- `c54_unbounded_storage_widens`
-- `c54_u8_times_u8_no_overflow`
-- `c54_loftc_cache_invalidated`
-- `c54_migration_tool_roundtrip`
-- `c54a_const_tiny_used_for_small_literals`
+Un-ignore and make pass on all three backends:
 
-Plus cross-backend parity tests (new): interpreter vs native vs WASM
-on a battery of boundary values (MIN / MIN+1 / -1 / 0 / 1 / MAX-1 /
-MAX).
+| Test | Purpose |
+|---|---|
+| `c54_i32_min_round_trip` | `-2_147_483_648 * 1` returns `-2_147_483_648`, not null |
+| `c54_arithmetic_at_boundary` | boundary values (MAX, MAX-1, -1, 0, 1, MIN+1, MIN) round-trip |
+| `c54_bounded_storage_preserved` | `integer limit(0, 255)` still 1 byte in the store |
+| `c54_unbounded_storage_widens` | `integer` unbounded reads 8 bytes in the store |
+| `c54_u8_times_u8_no_overflow` | `u8 * u8` in i64 register; result up to 65025 fits |
+| `c54_loftc_cache_invalidated` | old `.loftc` from a pre-C54 build fails to load cleanly |
+| `c54_migration_tool_roundtrip` | persisted DB with a `i32::MIN`-null column round-trips through migrator |
+| `c54a_const_tiny_used_for_small_literals` | `x = 0` emits `OpConstTiny 0`, 1 byte after opcode |
+| `c54a_const_short_used_for_small_literals` | `x = 1000` emits `OpConstShort 1000`, 2 bytes |
+| `c54a_bytecode_size_savings_integer_heavy` | emit a loop with integer-heavy math; compare bytecode-length pre- and post-phase; assert ≥30 % reduction |
 
-## Risk mitigation
+Plus cross-backend parity tests for every boundary value.
 
-The `.loftc` bump + migration tool are the biggest risk.  Sub-plan
-`02a-migration-tool-design.md` opens if the tool requires more than a
-~200-line implementation.  Migration tool ships on the SAME commit as
-the format bump — no interim state.
+## Risks
+
+1. **Opcode-count explosion.**  Adding `OpConstTiny` + `OpConstShort`
+   while keeping `OpConstInt` + `OpConstLong` adds 2 opcodes.
+   Current budget: 254 / 256.  This pushes to 256 / 256.  Phase 5
+   reclaims 26 slots by deleting duplicate `Op*Long` — that happens
+   AFTER Phase 4 deprecates `long`.  Phase 2 will briefly run at
+   255-256 used.
+2. **Stack-slot width.**  If stack slots are currently 4 bytes,
+   widening to 8 bytes per integer slot doubles stack usage for
+   integer-heavy code.  Measure before committing.  If it's a
+   problem, introduce variable-width slots (already hinted at by
+   the `OpVarInt` / `OpVarLong` split).
+3. **Migration tool edge cases.**  Schema evolution, nullable
+   columns, nested structs containing integer fields.  The
+   migration tool needs to walk the full schema graph.  Budget
+   separately if it outgrows ~300 LoC.
+4. **WASM parity.**  WASM's i64 support is first-class
+   (`wasm32-wasip2`).  Should be near-trivial.  Verify with a WASM
+   boundary test.
 
 ## Budget
 
-**480-720 minutes** across the phase.  If the opcode replumb in
-`src/fill.rs` surfaces parity bugs, open
-`02b-fill-rs-i64-parity.md` as a sub-phase.
+**480-720 minutes** across the phase.
+
+Sub-phases that may open:
+- `02a-migration-tool-design.md` if the migration tool exceeds
+  ~300 LoC.
+- `02b-fill-rs-i64-parity.md` if the `src/fill.rs` handler rewrite
+  surfaces per-handler parity bugs.
+- `02c-const-stream-encoding.md` if `OpConstTiny` / `OpConstShort`
+  integration with the codegen emitter needs its own design.
 
 ## Deliverables
 
-- All `c54_*` (non-G) tests un-ignored.
+- All `c54_*` (non-G) tests un-ignored and passing.
 - Migration tool committed with round-trip fixture.
-- `.loftc` version bumped.
-- PROBLEMS.md / QUALITY.md entry updated.
+- `.loftc` version bumped (via `CARGO_PKG_VERSION` bump).
+- QUALITY.md C54.A entry: Closed.
+- `RELEASE.md` 0.9.0 gate entry: C54.A complete.
