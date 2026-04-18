@@ -8,7 +8,8 @@ without leaving the codebase in an inconsistent state.
 - **2a Done** (`8aee716`) — wide-limit-to-Long + `u32` stdlib alias.
 - **2b Done** (`9940f57`) — Op*Long Nullable opcodes; Phase 1 G-hybrid
   fully covers long arithmetic.
-- 2c, 2d, 2e, 2f, 2g, 2h — remaining.
+- **2f Done** (`feaa3e7`) — `--migrate-long` source rewriter CLI.
+- 2c, 2d, 2e, 2g, 2h — remaining.
 
 ## Guiding insight
 
