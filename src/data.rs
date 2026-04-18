@@ -526,8 +526,8 @@ impl Type {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _, _) | Type::Character => 4,
-        Type::Long | Type::Float => 8,
+        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
@@ -1855,7 +1855,7 @@ impl Data {
             }
             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
-            Type::Integer(_, _, _) => "i32",
+            Type::Integer(_, _, _) => "i64",
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",

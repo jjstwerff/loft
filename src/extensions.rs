@@ -703,7 +703,7 @@ fn dispatch_call(
             pos: 0,
         };
         let header = stores.claim(&base, 1);
-        stores.store_mut(&base).set_int(header.rec, 4, r.rec as i32);
+        stores.store_mut(&base).set_u32_raw(header.rec, 4, r.rec);
         let dbref = crate::keys::DbRef {
             store_nr: r.store_nr,
             rec: header.rec,

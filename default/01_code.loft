@@ -5,7 +5,7 @@
 // True or false value.
 pub type boolean size(1);
 // 32-bit signed integer.
-pub type integer size(4);
+pub type integer size(8);
 // 64-bit signed integer. Use when values exceed ~2 billion.
 pub type long size(8);
 // 32-bit floating-point. Good for graphics and performance-sensitive math.

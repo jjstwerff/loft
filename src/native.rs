@@ -558,11 +558,11 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
         for (i, &val) in results.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, val);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let result_ref = DbRef {
@@ -779,10 +779,10 @@ fn parallel_light_execute_and_collect(
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+    stores.store_mut(&result_db).set_u32_raw(vec_rec, 4, n as u32);
     stores
         .store_mut(&result_db)
-        .set_int(header_rec, 4, vec_rec as i32);
+        .set_u32_raw(header_rec, 4, vec_rec);
     let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
 
     let mut pool = crate::parallel::WorkerPool::new(n_threads, pool_m, 256);
@@ -831,10 +831,10 @@ fn parallel_execute_and_collect(
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    stores.store_mut(&result_db).set_int(vec_rec, 4, n as i32);
+    stores.store_mut(&result_db).set_u32_raw(vec_rec, 4, n as u32);
     stores
         .store_mut(&result_db)
-        .set_int(header_rec, 4, vec_rec as i32);
+        .set_u32_raw(header_rec, 4, vec_rec);
 
     if is_ref {
         let batches = run_parallel_ref(
@@ -877,7 +877,7 @@ fn parallel_execute_and_collect(
         let store = stores.store_mut(&result_db);
         for (i, s) in strings.iter().enumerate() {
             let s_pos = store.set_str(s);
-            store.set_int(vec_rec, 8 + i as u32 * 4, s_pos as i32);
+            store.set_u32_raw(vec_rec, 8 + i as u32 * 4, s_pos);
         }
     } else if return_size >= 4 {
         let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
@@ -1029,14 +1029,14 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         let fn_str = stores.store_mut(&vec).set_str(fn_name.as_str());
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + function_pos, fn_str as i32);
+            .set_u32_raw(elm.rec, elm.pos + function_pos, fn_str);
         let file_str = stores.store_mut(&vec).set_str(file.as_str());
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + file_pos, file_str as i32);
+            .set_u32_raw(elm.rec, elm.pos + file_pos, file_str);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + line_pos, *line as i32);
+            .set_int(elm.rec, elm.pos + line_pos, i64::from(*line));
         // Explicitly zero arguments and variables so that reused (non-zeroed) store
         // blocks don't leave garbage data that looks like a valid first_block_rec.
         stores
@@ -1088,11 +1088,11 @@ fn populate_frame_variables(
     // Header: count
     stores
         .store_mut(sf_vec)
-        .set_int(inner_rec, 4, frame_vars.len() as i32);
+        .set_u32_raw(inner_rec, 4, frame_vars.len() as u32);
     // Link from the StackFrame.variables field to this inner record.
     stores
         .store_mut(sf_vec)
-        .set_int(parent_rec, vars_field_abs, inner_rec as i32);
+        .set_u32_raw(parent_rec, vars_field_abs, inner_rec);
 
     // schema-driven field position lookup.  A typo or rename in
     // default/04_stacktrace.loft surfaces as a clear panic instead of a
@@ -1138,17 +1138,17 @@ fn populate_frame_variables(
         let inline_pos = 8 + (i as u32) * var_elm_size;
         // Write name
         let name_str = stores.store_mut(sf_vec).set_str(&vs.name);
-        stores.store_mut(sf_vec).set_int(
+        stores.store_mut(sf_vec).set_u32_raw(
             inner_rec,
             inline_pos + u32::from(name_pos),
-            name_str as i32,
+            name_str,
         );
         // Write type_name
         let type_str = stores.store_mut(sf_vec).set_str(&vs.type_name);
-        stores.store_mut(sf_vec).set_int(
+        stores.store_mut(sf_vec).set_u32_raw(
             inner_rec,
             inline_pos + u32::from(type_pos),
-            type_str as i32,
+            type_str,
         );
         // Write ArgValue: discriminant byte at av_abs (1-indexed),
         // variant data at av_abs + position(variant_tp, field_name).
@@ -1164,7 +1164,7 @@ fn populate_frame_variables(
             }
             crate::database::VarValueSnapshot::Int(n) => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 3);
-                store_mut.set_int(inner_rec, av_abs + u32::from(int_n_pos), *n);
+                store_mut.set_int(inner_rec, av_abs + u32::from(int_n_pos), i64::from(*n));
             }
             crate::database::VarValueSnapshot::Long(n) => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 4);
@@ -1180,23 +1180,23 @@ fn populate_frame_variables(
             }
             crate::database::VarValueSnapshot::Char(c) => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 7);
-                store_mut.set_int(inner_rec, av_abs + u32::from(char_c_pos), *c as i32);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(char_c_pos), *c as u32);
             }
             crate::database::VarValueSnapshot::Text(s) => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 8);
                 let txt = store_mut.set_str(s);
-                store_mut.set_int(inner_rec, av_abs + u32::from(text_t_pos), txt as i32);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(text_t_pos), txt);
             }
             crate::database::VarValueSnapshot::Ref { store, rec, pos } => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 9);
-                store_mut.set_int(inner_rec, av_abs + u32::from(ref_store_pos), *store);
-                store_mut.set_int(inner_rec, av_abs + u32::from(ref_rec_pos), *rec);
-                store_mut.set_int(inner_rec, av_abs + u32::from(ref_pos_pos), *pos);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(ref_store_pos), *store as u32);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(ref_rec_pos), *rec as u32);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(ref_pos_pos), *pos as u32);
             }
             crate::database::VarValueSnapshot::Other(desc) => {
                 store_mut.set_byte(inner_rec, av_abs, 0, 11);
                 let txt = store_mut.set_str(desc);
-                store_mut.set_int(inner_rec, av_abs + u32::from(other_desc_pos), txt as i32);
+                store_mut.set_u32_raw(inner_rec, av_abs + u32::from(other_desc_pos), txt);
             }
         }
     }
@@ -1498,7 +1498,7 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
             let s_rec = stores.store_mut(slot).set_str(s);
             let sm = stores.store_mut(slot);
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_STRING);
-            sm.set_int(slot.rec, val_pos, s_rec as i32);
+            sm.set_u32_raw(slot.rec, val_pos, s_rec);
         }
         crate::json::Parsed::Array(v) => {
             // Step 4 fourth slice (2026-04-14) — recurse into nested
@@ -1548,7 +1548,7 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
                 let name_rec = stores.store_mut(&elm).set_str(key);
                 stores
                     .store_mut(&elm)
-                    .set_int(elm.rec, elm.pos + name_field_pos, name_rec as i32);
+                    .set_u32_raw(elm.rec, elm.pos + name_field_pos, name_rec);
                 let value_slot = DbRef {
                     store_nr: elm.store_nr,
                     rec: elm.rec,
@@ -1600,7 +1600,7 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             let s_rec = stores.store_mut(&result).set_str(&s);
             let store_mut = stores.store_mut(&result);
             store_mut.set_byte(result.rec, pos, 0, JV_DISCR_STRING);
-            store_mut.set_int(result.rec, value_pos, s_rec as i32);
+            store_mut.set_u32_raw(result.rec, value_pos, s_rec);
             stores.last_json_errors.clear();
         }
         Ok(crate::json::Parsed::Array(v)) if v.is_empty() => {
@@ -1682,7 +1682,7 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
                 let name_rec = stores.store_mut(&elm).set_str(key);
                 stores
                     .store_mut(&elm)
-                    .set_int(elm.rec, elm.pos + name_field_pos, name_rec as i32);
+                    .set_u32_raw(elm.rec, elm.pos + name_field_pos, name_rec);
                 // Write value: inline JsonValue at the value-field
                 // offset within the JsonField slot.
                 let value_slot = DbRef {
@@ -1843,13 +1843,13 @@ fn n_item(stores: &mut Stores, stack: &mut DbRef) {
     }
     let array_tp = stores.name("JArray");
     let items_pos = u32::from(stores.position(array_tp, "items")) + self_ref.pos;
-    let items_rec = stores.store(&self_ref).get_int(self_ref.rec, items_pos);
+    let items_rec = stores.store(&self_ref).get_i32_raw(self_ref.rec, items_pos);
     if items_rec <= 0 {
         let r = jv_null_sentinel(stores);
         stores.put(stack, r);
         return;
     }
-    let length = stores.store(&self_ref).get_int(items_rec as u32, 4);
+    let length = stores.store(&self_ref).get_u32_raw(items_rec as u32, 4) as i32;
     if index >= length {
         let r = jv_null_sentinel(stores);
         stores.put(stack, r);
@@ -1875,28 +1875,28 @@ fn n_item(stores: &mut Stores, stack: &mut DbRef) {
 fn n_len(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    let len = match discr {
+    let len: i64 = match discr {
         JV_DISCR_ARRAY => {
             let array_tp = stores.name("JArray");
             let items_pos = u32::from(stores.position(array_tp, "items")) + v.pos;
-            let items_rec = stores.store(&v).get_int(v.rec, items_pos);
+            let items_rec = stores.store(&v).get_i32_raw(v.rec, items_pos);
             if items_rec <= 0 {
                 0
             } else {
-                stores.store(&v).get_int(items_rec as u32, 4)
+                i64::from(stores.store(&v).get_u32_raw(items_rec as u32, 4))
             }
         }
         JV_DISCR_OBJECT => {
             let obj_tp = stores.name("JObject");
             let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
-            let fields_rec = stores.store(&v).get_int(v.rec, fields_pos);
+            let fields_rec = stores.store(&v).get_i32_raw(v.rec, fields_pos);
             if fields_rec <= 0 {
                 0
             } else {
-                stores.store(&v).get_int(fields_rec as u32, 4)
+                i64::from(stores.store(&v).get_u32_raw(fields_rec as u32, 4))
             }
         }
-        _ => i32::MIN,
+        _ => i64::MIN,
     };
     stores.put(stack, len);
 }
@@ -2029,14 +2029,14 @@ fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: 
             if item_discr == JV_DISCR_STRING {
                 let str_tp = stores.name("JString");
                 let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
-                let s_rec = stores.store(&sub).get_int(sub.rec, value_pos) as u32;
+                let s_rec = stores.store(&sub).get_u32_raw(sub.rec, value_pos);
                 let text_val = stores.store(&sub).get_str(s_rec).to_owned();
                 let new_s_rec = stores.store_mut(dest).set_str(&text_val);
                 stores
                     .store_mut(dest)
-                    .set_int(dest.rec, dest_field_pos, new_s_rec as i32);
+                    .set_u32_raw(dest.rec, dest_field_pos, new_s_rec);
             } else {
-                stores.store_mut(dest).set_int(dest.rec, dest_field_pos, 0);
+                stores.store_mut(dest).set_u32_raw(dest.rec, dest_field_pos, 0);
             }
         } else {
             // Look at the field type's Parts to decide what to do.
@@ -2188,23 +2188,18 @@ fn unwrap_int(
     item_discr: i32,
     struct_name: &str,
     field_name: &str,
-) -> i32 {
+) -> i64 {
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
-        return i32::MIN;
+        return i64::MIN;
     }
     let num_tp = stores.name("JNumber");
     let value_pos = u32::from(stores.position(num_tp, "value")) + sub.pos;
     let f = stores.store(sub).get_float(sub.rec, value_pos);
     if !f.is_finite() {
-        return i32::MIN;
+        return i64::MIN;
     }
-    let as_i64 = f as i64;
-    if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&as_i64) {
-        as_i64 as i32
-    } else {
-        i32::MIN
-    }
+    f as i64
 }
 
 fn unwrap_float(
@@ -2333,7 +2328,7 @@ fn populate_vector_from_jarray(
             let new_s_rec = stores.store_mut(&elm).set_str(&s);
             stores
                 .store_mut(&elm)
-                .set_int(elm.rec, elm.pos, new_s_rec as i32);
+                .set_u32_raw(elm.rec, elm.pos, new_s_rec);
         } else if matches!(elem_parts, Parts::Struct(_)) {
             // Struct element — recurse into the walker writing into
             // the freshly-appended embedded element slot.
@@ -2415,7 +2410,7 @@ fn n_json_string(stores: &mut Stores, stack: &mut DbRef) {
     let s_rec = stores.store_mut(&result).set_str(&s_owned);
     let store_mut = stores.store_mut(&result);
     store_mut.set_byte(result.rec, pos, 0, JV_DISCR_STRING);
-    store_mut.set_int(result.rec, value_pos, s_rec as i32);
+    store_mut.set_u32_raw(result.rec, value_pos, s_rec);
     stores.last_json_errors.clear();
     stores.put(stack, result);
 }
@@ -2590,7 +2585,7 @@ fn n_keys(stores: &mut Stores, stack: &mut DbRef) {
         let new_name_rec = stores.store_mut(&elm).set_str(&name_str);
         stores
             .store_mut(&elm)
-            .set_int(elm.rec, elm.pos, new_name_rec as i32);
+            .set_u32_raw(elm.rec, elm.pos, new_name_rec);
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     stores.put(stack, vec);
@@ -2653,7 +2648,7 @@ fn n_fields(stores: &mut Stores, stack: &mut DbRef) {
         let new_name_rec = stores.store_mut(&elm).set_str(&name);
         stores
             .store_mut(&elm)
-            .set_int(elm.rec, elm.pos + name_field_pos, new_name_rec as i32);
+            .set_u32_raw(elm.rec, elm.pos + name_field_pos, new_name_rec);
         let value_slot = DbRef {
             store_nr: elm.store_nr,
             rec: elm.rec,

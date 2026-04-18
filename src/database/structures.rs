@@ -46,7 +46,7 @@ impl Stores {
             | Parts::Index(c, _, _)
             | Parts::Spacial(c, _) => {
                 let rec = self.claim(&d, 1 + ((u32::from(self.size(c)) + 7) >> 3));
-                self.store_mut(&rec).set_int(rec.rec, 4, data.rec as i32);
+                self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
             }
             _ => panic!(
@@ -117,7 +117,7 @@ impl Stores {
             Parts::Array(_) => {
                 let reference = vector::vector_append(data, 4, &mut self.allocations);
                 self.store_mut(data)
-                    .set_int(reference.rec, reference.pos, rec.rec as i32);
+                    .set_u32_raw(reference.rec, reference.pos, rec.rec);
                 vector::vector_finish(data, &mut self.allocations);
             }
             Parts::Hash(_, _) => hash::add(
@@ -156,12 +156,12 @@ impl Stores {
         // same backing store the resize inside `vector_append` / `vector_set_size` may
         // reallocate the vector and invalidate `o_rec`.  Reading it after the resize would
         // reference freed memory, silently producing corrupt data.
-        let o_rec = keys::store(o_db, &self.allocations).get_int(o_db.rec, o_db.pos) as u32;
+        let o_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
         let size = u32::from(self.size(known));
         // If source and destination share the same backing vector record, copy source elements
         // to a local buffer first so the resize cannot invalidate the source pointer.
         let same_vec = db.store_nr == o_db.store_nr && o_rec != 0 && {
-            let dest_rec = keys::store(db, &self.allocations).get_int(db.rec, db.pos) as u32;
+            let dest_rec = keys::store(db, &self.allocations).get_u32_raw(db.rec, db.pos);
             dest_rec == o_rec
         };
         let snapshot: Vec<u8> = if same_vec {
@@ -182,7 +182,7 @@ impl Stores {
         // re-read the current rec from the field slot (which `vector_set_size`
         // keeps up to date) before we use it for the byte copy.  Element
         // offset (`append_pos`) is layout-stable across relocation.
-        let dest_rec = keys::store(db, &self.allocations).get_int(db.rec, db.pos) as u32;
+        let dest_rec = keys::store(db, &self.allocations).get_u32_raw(db.rec, db.pos);
         let new_db = DbRef {
             store_nr: db.store_nr,
             rec: dest_rec,
@@ -197,7 +197,7 @@ impl Stores {
             }
         } else if db.store_nr == o_db.store_nr {
             // Re-read o_rec after resize in case it moved (non-self-append same-store case).
-            let o_rec = keys::store(o_db, &self.allocations).get_int(o_db.rec, o_db.pos) as u32;
+            let o_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
             keys::mut_store(db, &mut self.allocations).copy_block(
                 o_rec,
                 8,
@@ -249,18 +249,18 @@ impl Stores {
 
     pub fn vector_set_size(&mut self, db: &DbRef, adding: u32, size: u32) {
         let store = keys::mut_store(db, &mut self.allocations);
-        let mut vec_rec = store.get_int(db.rec, db.pos) as u32;
-        let length = store.get_int(vec_rec, 4) as u32;
+        let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
+        let length = store.get_u32_raw(vec_rec, 4);
         if adding > 1 {
             let new_vec = store.resize(vec_rec, ((length + adding) * size + 15) / 8);
             if new_vec != vec_rec {
-                store.set_int(db.rec, db.pos, new_vec as i32);
+                store.set_u32_raw(db.rec, db.pos, new_vec);
                 // P153: track the relocation so the length write below lands
                 // in the current record instead of the freed one.
                 vec_rec = new_vec;
             }
         }
-        store.set_int(vec_rec, 4, length as i32 + adding as i32);
+        store.set_u32_raw(vec_rec, 4, length + adding);
     }
 
     /// P54-U phase 2: walk a [`crate::json::Parsed`] tree into
@@ -494,7 +494,7 @@ impl Stores {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_int(to.rec, to.pos, *n as i32);
+                self.store_mut(to).set_int(to.rec, to.pos, *n as i64);
                 Ok(())
             }
             1 => {
@@ -536,7 +536,7 @@ impl Stores {
                     return Err(mismatch());
                 };
                 let text_pos = self.store_mut(to).set_str(s);
-                self.store_mut(to).set_int(to.rec, to.pos, text_pos as i32);
+                self.store_mut(to).set_u32_raw(to.rec, to.pos, text_pos);
                 Ok(())
             }
             _ => Err(mismatch()),
@@ -553,7 +553,7 @@ impl Stores {
         if tp <= 6 {
             match tp {
                 0 | 6 => {
-                    self.store_mut(rec).set_int(rec.rec, rec.pos, i32::MIN);
+                    self.store_mut(rec).set_int(rec.rec, rec.pos, i64::MIN);
                 }
                 1 => {
                     self.store_mut(rec).set_long(rec.rec, rec.pos, i64::MIN);
@@ -631,7 +631,7 @@ impl Stores {
             };
         }
         let store = self.store(db);
-        let res = store.get_int(db.rec, db.pos + fld) as u32;
+        let res = store.get_u32_raw(db.rec, db.pos + fld);
         DbRef {
             store_nr: db.store_nr,
             rec: res,

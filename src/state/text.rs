@@ -47,10 +47,10 @@ impl State {
     /// length at `get_int(rec, 4)`, bytes at `ptr + rec*8 + 8`.
     pub fn string_from_const_store(&mut self, rec: u32, _pos: u32) {
         let store = &self.database.allocations[crate::database::CONST_STORE as usize];
-        let len = store.get_int(rec, 4);
+        let len = store.get_u32_raw(rec, 4) as i32;
         let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         unsafe {
-            self.set_string(len, ptr);
+            self.set_string(len as i32, ptr);
         }
     }
 

@@ -709,14 +709,15 @@ impl Stores {
         }
         if known_type < 6 {
             match known_type {
-                0 | 6 => store.get_int(rec, pos) == i32::MIN,
+                0 => store.get_int(rec, pos) == i64::MIN,
+                6 => store.get_u32_raw(rec, pos) == u32::MAX,
                 1 => store.get_long(rec, pos) == i64::MIN,
                 2 => store.get_single(rec, pos).is_nan(),
                 3 => store.get_float(rec, pos).is_nan(),
                 4 => store.get_byte(rec, pos, 0) > 1,
                 5 => {
-                    store.get_int(rec, pos) == 0
-                        || store.get_str(store.get_int(rec, pos) as u32).is_empty()
+                    let text_nr = store.get_u32_raw(rec, pos);
+                    text_nr == 0 || store.get_str(text_nr).is_empty()
                 }
                 _ => false,
             }
@@ -727,7 +728,7 @@ impl Stores {
         {
             rec == 0
         } else if let Parts::Vector(_) = &self.types[known_type as usize].parts {
-            store.get_int(rec, pos) == 0
+            store.get_u32_raw(rec, pos) == 0
         } else if let Parts::Byte(from, nullable) = &self.types[known_type as usize].parts {
             let v = store.get_byte(rec, pos, *from);
             *nullable && v == 255

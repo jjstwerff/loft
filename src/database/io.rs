@@ -223,14 +223,23 @@ impl Stores {
     pub fn write_data(&mut self, r: &DbRef, tp: u16, little_endian: bool, data: &[u8]) {
         let store = &mut self.allocations[r.store_nr as usize];
         match tp {
-            0 | 6 => {
+            0 => {
                 let d = data[0..4].try_into().unwrap();
                 let v = if little_endian {
                     i32::from_le_bytes(d)
                 } else {
                     i32::from_be_bytes(d)
                 };
-                store.set_int(r.rec, r.pos, v);
+                store.set_int(r.rec, r.pos, i64::from(v));
+            }
+            6 => {
+                let d = data[0..4].try_into().unwrap();
+                let v = if little_endian {
+                    u32::from_le_bytes(d)
+                } else {
+                    u32::from_be_bytes(d)
+                };
+                store.set_u32_raw(r.rec, r.pos, v);
             }
             1 => {
                 // long
@@ -275,7 +284,7 @@ impl Stores {
                     String::from_utf8_unchecked(v)
                 };
                 let s = store.set_str(v.as_str());
-                store.set_int(r.rec, r.pos, s as i32);
+                store.set_u32_raw(r.rec, r.pos, s);
             }
             _ => match self.types[tp as usize].parts.clone() {
                 Parts::Struct(s) | Parts::EnumValue(_, s) => {
@@ -294,7 +303,7 @@ impl Stores {
                     }
                 }
                 Parts::Enum(_) | Parts::Byte(_, _) => {
-                    store.set_int(r.rec, r.pos, i32::from(data[0]));
+                    store.set_byte(r.rec, r.pos, 0, i32::from(data[0]));
                 }
                 Parts::Short(_, _) => {
                     let d: [u8; 2] = data[0..2].try_into().unwrap();
@@ -303,7 +312,7 @@ impl Stores {
                     } else {
                         i32::from(i16::from_be_bytes(d))
                     };
-                    store.set_int(r.rec, r.pos, v);
+                    store.set_short(r.rec, r.pos, 0, v);
                 }
                 Parts::Vector(elem_tp) => {
                     let elem_size = u32::from(self.size(elem_tp));
@@ -421,8 +430,8 @@ impl Stores {
                 let elm = vector::vector_append(&vector, 33, &mut self.allocations);
                 let store = self.store_mut(result);
                 let name_pos = store.set_str(&name) as i32;
-                store.set_int(elm.rec, elm.pos + 24, name_pos);
-                store.set_int(elm.rec, elm.pos + 28, i32::MIN);
+                store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+                store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
                 // Initialize current and next to null (i64::MIN) so they're not shown
                 store.set_long(elm.rec, elm.pos + 8, i64::MIN);
                 store.set_long(elm.rec, elm.pos + 16, i64::MIN);
@@ -451,8 +460,8 @@ impl Stores {
             let elm = vector::vector_append(&vector, 33, &mut self.allocations);
             let store = self.store_mut(result);
             let name_pos = store.set_str(&full) as i32;
-            store.set_int(elm.rec, elm.pos + 24, name_pos);
-            store.set_int(elm.rec, elm.pos + 28, i32::MIN);
+            store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+            store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
             store.set_long(elm.rec, elm.pos + 8, i64::MIN);
             store.set_long(elm.rec, elm.pos + 16, i64::MIN);
             // Fill metadata for this entry.
@@ -485,10 +494,10 @@ impl Stores {
         if let Ok((img, width, height)) = crate::png_store::read(file_path, store) {
             if let Some(name) = std::path::Path::new(&file_path).file_name() {
                 let name_pos = store.set_str(name.to_str().unwrap());
-                store.set_int(result.rec, result.pos, name_pos as i32);
-                store.set_int(result.rec, result.pos + 4, width as i32);
-                store.set_int(result.rec, result.pos + 8, height as i32);
-                store.set_int(result.rec, result.pos + 12, img as i32);
+                store.set_u32_raw(result.rec, result.pos, name_pos);
+                store.set_int(result.rec, result.pos + 4, i64::from(width));
+                store.set_int(result.rec, result.pos + 8, i64::from(height));
+                store.set_u32_raw(result.rec, result.pos + 12, img);
                 true
             } else {
                 false
@@ -510,7 +519,7 @@ impl Stores {
             // FS-E: write text content via JS host bridge.
             let file_path = {
                 let s = self.store_mut(file);
-                s.get_str(s.get_int(file.rec, file.pos + 24) as u32)
+                s.get_str(s.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_write_text(&file_path, v);
@@ -519,11 +528,11 @@ impl Stores {
         {
             let f_nr = self.files.len() as i32;
             let s = self.store_mut(file);
-            let mut file_ref = s.get_int(file.rec, file.pos + 28);
+            let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                let file_name = s.get_str(s.get_int(file.rec, file.pos + 24) as u32);
+                let file_name = s.get_str(s.get_u32_raw(file.rec, file.pos + 24));
                 if let Ok(f) = std::fs::File::create(file_name) {
-                    s.set_int(file.rec, file.pos + 28, f_nr);
+                    s.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.files.push(Some(f));
                 }
                 file_ref = f_nr;

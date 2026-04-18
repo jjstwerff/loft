@@ -66,7 +66,7 @@ impl Stores {
         if db.rec == 1 {
             return "/".to_string();
         }
-        let p_rec = self.store(db).get_int(db.rec, 4);
+        let p_rec = self.store(db).get_u32_raw(db.rec, 4);
         let p_tp = if self.types[tp as usize].parents.is_empty()
             || self.types[tp as usize].parents.len() > 1
         {
@@ -103,7 +103,7 @@ impl Stores {
                                 res += "?";
                                 break;
                             }
-                            let rec = self.store(db).get_int(data.rec, data.pos) as u32;
+                            let rec = self.store(db).get_u32_raw(data.rec, data.pos);
                             if rec == db.rec {
                                 write!(res, "{count}").unwrap();
                                 break;
@@ -157,7 +157,7 @@ impl Stores {
                                         break;
                                     }
                                     let rec =
-                                        self.store(db).get_int(sub_data.rec, sub_data.pos) as u32;
+                                        self.store(db).get_u32_raw(sub_data.rec, sub_data.pos);
                                     if rec == db.rec {
                                         write!(res, "{count}").unwrap();
                                         break;
@@ -206,7 +206,7 @@ impl Stores {
     // Used for testing, returns the interpreted data or the error path on problems.
     pub fn parse_message(&mut self, text: &str, tp: u16) -> String {
         let db = self.database(u32::from(self.types[tp as usize].size));
-        self.store_mut(&db).set_int(db.rec, 4, i32::from(tp));
+        self.store_mut(&db).set_u32_raw(db.rec, 4, u32::from(tp));
         match self.try_parse_unified(text, tp, &db) {
             Ok(()) => {
                 let mut s = String::new();
@@ -256,11 +256,11 @@ impl Stores {
     #[must_use]
     pub fn text_vector(&mut self, args: &[String]) -> DbRef {
         let vec = self.database(4);
-        self.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+        self.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
         for v in args {
             let elm = vector::vector_append(&vec, 4, &mut self.allocations);
             let s = self.store_mut(&vec).set_str(v.as_str());
-            self.store_mut(&vec).set_int(elm.rec, elm.pos, s as i32);
+            self.store_mut(&vec).set_u32_raw(elm.rec, elm.pos, s);
             vector::vector_finish(&vec, &mut self.allocations);
         }
         vec
@@ -276,7 +276,7 @@ impl Stores {
         let elm = self.name("Variable");
         let size = u32::from(self.size(elm));
         let vec = self.database(size);
-        self.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+        self.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
         #[cfg(not(feature = "wasm"))]
         for t in std::env::vars_os() {
             let name = t.0.to_str().unwrap();
@@ -284,8 +284,8 @@ impl Stores {
             let elm = vector::vector_append(&vec, size, &mut self.allocations);
             let n = self.store_mut(&vec).set_str(name);
             let v = self.store_mut(&vec).set_str(value);
-            self.store_mut(&vec).set_int(elm.rec, elm.pos, n as i32);
-            self.store_mut(&vec).set_int(elm.rec, elm.pos + 4, v as i32);
+            self.store_mut(&vec).set_u32_raw(elm.rec, elm.pos, n);
+            self.store_mut(&vec).set_u32_raw(elm.rec, elm.pos + 4, v);
             vector::vector_finish(&vec, &mut self.allocations);
         }
         vec
@@ -474,7 +474,7 @@ impl ShowDb<'_> {
                 "true"
             });
         } else if self.known_type == 5 {
-            let text_nr = self.store().get_int(self.rec, self.pos) as u32;
+            let text_nr = self.store().get_u32_raw(self.rec, self.pos);
             if text_nr == 0 || text_nr >= self.store().capacity_words() {
                 write!(s, "<bad-text:{text_nr}>").unwrap();
             } else {
@@ -484,9 +484,9 @@ impl ShowDb<'_> {
                 s.push('\"');
             }
         } else if self.known_type == 6 {
-            let i = self.store().get_int(self.rec, self.pos);
-            if i != i32::MAX
-                && let Some(ch) = char::from_u32(i as u32)
+            let i = self.store().get_u32_raw(self.rec, self.pos);
+            if i != u32::MAX
+                && let Some(ch) = char::from_u32(i)
             {
                 write!(s, "'{ch}'").unwrap();
             }
@@ -712,7 +712,7 @@ impl ShowDb<'_> {
     fn write_hash(&self, s: &mut String, content: u16, indent: u16, data: &DbRef, complex: bool) {
         let mut map = BTreeMap::new();
         let mut pos = i32::MAX;
-        let rec = self.stores.store_nr(self.store).get_int(data.rec, data.pos) as u32;
+        let rec = self.stores.store_nr(self.store).get_u32_raw(data.rec, data.pos);
         if rec == 0 {
             s.push(']');
             return;
@@ -726,7 +726,7 @@ impl ShowDb<'_> {
             } else {
                 break;
             }
-            let rec = self.stores.store_nr(self.store).get_int(rec, pos as u32);
+            let rec = self.stores.store_nr(self.store).get_i32_raw(rec, pos as u32);
             if rec != 0 {
                 let r = DbRef {
                     store_nr: data.store_nr,
@@ -862,7 +862,7 @@ impl DumpDb<'_> {
             }),
             5 => {
                 // text
-                let text_nr = self.store().get_int(self.rec, self.pos) as u32;
+                let text_nr = self.store().get_u32_raw(self.rec, self.pos);
                 if text_nr == 0 || text_nr >= self.store().capacity_words() {
                     write!(s, "<bad-text:{text_nr}>").unwrap();
                 } else {
@@ -872,8 +872,8 @@ impl DumpDb<'_> {
             }
             6 => {
                 // character
-                let i = self.store().get_int(self.rec, self.pos);
-                if let Some(ch) = char::from_u32(i as u32) {
+                let i = self.store().get_u32_raw(self.rec, self.pos);
+                if let Some(ch) = char::from_u32(i) {
                     write!(s, "'{ch}'").unwrap();
                 } else {
                     write!(s, "'?{i}'").unwrap();
@@ -1004,7 +1004,7 @@ impl DumpDb<'_> {
         };
         // Show the vector record reference
         let vec_rec = if data.rec > 0 {
-            self.store().get_int(data.rec, data.pos) as u32
+            self.store().get_u32_raw(data.rec, data.pos)
         } else {
             0
         };

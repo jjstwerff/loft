@@ -186,7 +186,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         state
             .database
             .store_mut(&db)
-            .set_int(db.rec, 4, i32::from(vec_tp));
+            .set_u32_raw(db.rec, 4, u32::from(vec_tp));
         state.database.set_default_value(vec_tp, &db);
         let vec_ref = DbRef {
             store_nr: db.store_nr,
@@ -197,7 +197,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             let rec = state.database.record_new(&vec_ref, vec_tp, 0);
             match val {
                 Value::Int(v) => {
-                    state.database.store_mut(&rec).set_int(rec.rec, rec.pos, *v);
+                    state.database.store_mut(&rec).set_int(rec.rec, rec.pos, i64::from(*v));
                 }
                 Value::Float(v) => {
                     state
@@ -224,7 +224,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
                     // into the text field as an int pointer.
                     let store = state.database.store_mut(&rec);
                     let s_pos = store.set_str(v);
-                    store.set_int(rec.rec, rec.pos, s_pos as i32);
+                    store.set_u32_raw(rec.rec, rec.pos, s_pos);
                 }
                 _ => {}
             }

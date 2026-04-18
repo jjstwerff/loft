@@ -55,7 +55,7 @@ pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
     }
     stores.clear(&db);
     let r = stores.claim(&db, u32::from(size));
-    stores.store_mut(&r).set_int(r.rec, 4, i32::from(db_tp));
+    stores.store_mut(&r).set_u32_raw(r.rec, 4, u32::from(db_tp));
     stores.set_default_value(db_tp, &r);
     db.store_nr = r.store_nr;
     db.rec = 1;
@@ -108,7 +108,7 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
     {
         let stored_type = stores.store(&db).get_int(db.rec, 4) as u16;
         if stored_type == file_type {
-            let file_ref = stores.store(&db).get_int(db.rec, db.pos + 28);
+            let file_ref = stores.store(&db).get_i32_raw(db.rec, db.pos + 28);
             if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
                 stores.files[file_ref as usize] = None;
             }
@@ -543,7 +543,7 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     content.clear();
@@ -569,7 +569,7 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
     if file.rec == 0 {
         return;
     }
-    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref == i32::MIN {
         stores
             .store_mut(&file)
@@ -596,7 +596,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     if let Ok(meta) = std::fs::metadata(&file_path) {
@@ -624,16 +624,16 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     // Close any open handle so resize starts from a clean state.
-    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
         stores.files[file_ref as usize] = None;
         stores
             .store_mut(&file)
-            .set_int(file.rec, file.pos + 28, i32::MIN);
+            .set_i32_raw(file.rec, file.pos + 28, i32::MIN);
         stores
             .store_mut(&file)
             .set_long(file.rec, file.pos + 8, i64::MIN);
@@ -661,7 +661,7 @@ pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
 #[cfg(not(feature = "wasm"))]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN {
         return file_ref;
     }
@@ -669,7 +669,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
         let store = stores.store(file);
         (
             store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned(),
             store.get_byte(file.rec, file.pos + 32, 0),
         )
@@ -678,7 +678,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
         Ok(f) => {
             stores
                 .store_mut(file)
-                .set_int(file.rec, file.pos + 28, f_nr);
+                .set_i32_raw(file.rec, file.pos + 28, f_nr);
             // If the file was NotExists, mark it as TextFile now that it exists.
             if format == 5 {
                 stores
@@ -700,14 +700,14 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 #[cfg(not(feature = "wasm"))]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN {
         return file_ref;
     }
     let file_name = {
         let store = stores.store(file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     match OpenOptions::new().read(true).open(&file_name) {
@@ -717,7 +717,7 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             }
             stores
                 .store_mut(file)
-                .set_int(file.rec, file.pos + 28, f_nr);
+                .set_i32_raw(file.rec, file.pos + 28, f_nr);
             stores.files.push(Some(f));
             f_nr
         }
@@ -1387,11 +1387,11 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     let header_rec = header_cr.rec;
     {
         let store = stores.store_mut(&base);
-        store.set_int(vec_rec, 4, count as i32);
+        store.set_u32_raw(vec_rec, 4, count as u32);
         for (i, &val) in indices.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, val);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: base.store_nr,
@@ -1449,15 +1449,15 @@ where
                 store.set_byte(vec_rec, fld, 0, val as i32);
             }
             _ => {
-                store.set_int(vec_rec, fld, val as i32);
+                store.set_i32_raw(vec_rec, fld, val as i32);
             }
         }
         fld += return_sz;
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1500,12 +1500,12 @@ where
         let s = worker(stores, elm);
         let store = stores.store_mut(&result_db);
         let s_pos = store.set_str(&s);
-        store.set_int(vec_rec, 8 + (i as u32) * 4, s_pos as i32);
+        store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1563,8 +1563,8 @@ where
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1586,14 +1586,14 @@ pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: 
 
 /// Read an integer result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
             rec: v_rec,
             pos: 0,
         })
-        .get_int(v_rec, 8 + (idx as u32) * 4)
+        .get_i32_raw(v_rec, 8 + (idx as u32) * 4)
 }
 
 /// Read a long result element from a `n_parallel_for_native` result vector.
@@ -1851,14 +1851,14 @@ pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
         let fn_str = stores.store_mut(&vec).set_str(fn_name);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos, fn_str as i32);
+            .set_u32_raw(elm.rec, elm.pos, fn_str);
         let file_str = stores.store_mut(&vec).set_str(file);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 4, file_str as i32);
+            .set_u32_raw(elm.rec, elm.pos + 4, file_str);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 8, *line as i32);
+            .set_int(elm.rec, elm.pos + 8, i64::from(*line));
         // Zero the arguments and variables vector fields.
         stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
         stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);

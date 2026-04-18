@@ -254,7 +254,7 @@ impl State {
     ///
     /// # Panics
     /// When call depth exceeds `MAX_CALL_DEPTH` (possible infinite recursion).
-    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
+    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i64) {
         let args_base = self.stack_pos - u32::from(args_size);
         // Find the nearest source line at or before the current code position.
         // line_numbers entries are emitted before the first instruction on each line,
@@ -317,7 +317,7 @@ impl State {
             self.put_stack(closure);
         }
         let total = arg_size + if has_closure { 12 } else { 0 };
-        let code_pos = self.fn_positions[d_nr] as i32;
+        let code_pos = self.fn_positions[d_nr] as i64;
         self.fn_call(d_nr as u32, total, code_pos);
     }
 

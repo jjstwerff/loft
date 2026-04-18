@@ -182,7 +182,7 @@ impl State {
         match val {
             Value::Int(value) => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(*value);
+                self.code_add(i64::from(*value));
                 I32.clone()
             }
             Value::Enum(value, tp) => {
@@ -411,8 +411,8 @@ impl State {
                 // Uses existing OpConstInt + OpVarRef — no new opcode needed.
                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
                 stack.add_op("OpConstInt", self);
-                self.code_add(*d_nr);
-                // clos_pos computed after ConstInt advanced stack.position by 4.
+                self.code_add(i64::from(*d_nr));
+                // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
                 let clos_pos = stack.position - stack.function.stack(*clos_var);
                 stack.add_op("OpVarRef", self);
                 self.code_add(clos_pos);
@@ -723,7 +723,7 @@ impl State {
             match elem {
                 Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
-                    self.code_add(0i32);
+                    self.code_add(0i64);
                 }
                 Type::Boolean => {
                     stack.add_op("OpConstFalse", self);
@@ -788,13 +788,13 @@ impl State {
                 stack.add_op("OpVarRef", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
-                self.code_add(0);
+                self.code_add(0i64);
                 stack.add_op("OpSetInt", self);
                 self.code_add(4u16);
                 stack.add_op("OpCreateStack", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
-                self.code_add(12);
+                self.code_add(12i64);
                 stack.add_op("OpSetByte", self);
                 self.code_add(4u16);
                 self.code_add(0u16);
@@ -822,7 +822,7 @@ impl State {
             }
             Type::Integer(_, _, _) | Type::Character => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
+                self.code_add(i64::MIN);
             }
             Type::Long => {
                 stack.add_op("OpConstLong", self);
@@ -838,7 +838,7 @@ impl State {
             }
             Type::Boolean => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
+                self.code_add(i64::MIN);
             }
             _ => {
                 // For other types, push a zero-filled DbRef as a generic null.
@@ -1135,7 +1135,7 @@ impl State {
                 // pre-init a fn-ref slot with 16 null bytes.
                 // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
+                self.code_add(i64::MIN);
                 stack.add_op("OpNullRefSentinel", self);
             } else {
                 // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].

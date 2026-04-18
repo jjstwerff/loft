@@ -36,10 +36,74 @@ index 3bc0796..0bba1d4 100644
              Type::Text(_) if context == &Context::Variable => "String",
              Type::Text(_) => "Str",
 diff --git a/src/ops.rs b/src/ops.rs
-index e46f3bb..b934147 100644
+index e46f3bb..089da3b 100644
 --- a/src/ops.rs
 +++ b/src/ops.rs
-@@ -263,18 +263,15 @@ pub fn op_negate_long(val: i64) -> i64 {
+@@ -30,24 +30,11 @@ thread_local! {
+ 
+ /// C54.G — trap (panic) on overflow or sentinel-collision result.
+ /// Uniform behaviour across debug and release builds: silent-sentinel
+-/// channel for overflow is closed.  The dual `checked_int_nullable!`
++/// channel for overflow is closed.  The dual `checked_long_nullable!`
+ /// preserves the old release behaviour for the G-hybrid `??`-context
+-/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
+-/// can discharge the null.
+-macro_rules! checked_int {
+-    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+-        let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
+-        assert!(
+-            r != i32::MIN,
+-            "integer null-sentinel collision: {} {} {} = i32::MIN",
+-            $v1,
+-            $op,
+-            $v2
+-        );
+-        r
+-    }};
+-}
+-
++/// path, where the codegen emits `OpAddLongNullable` / etc. so `??`
++/// can discharge the null.  (`_int` variants were removed in Phase 2c —
++/// `op_*_int` functions now forward to `op_*_long`.)
+ macro_rules! checked_long {
+     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+         let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
+@@ -62,34 +49,10 @@ macro_rules! checked_long {
+     }};
+ }
+ 
+-/// C54.G-hybrid nullable variant — returns the null sentinel on overflow
+-/// or sentinel-collision result.  Used when the caller has committed to
+-/// discharging the null via `??`.  Compile-time picked in
+-/// `src/parser/operators.rs::handle_operator` when the arithmetic op's
+-/// result is the immediate LHS of a `??`.
+-macro_rules! checked_int_nullable {
+-    ($checked:expr) => {{ $checked.unwrap_or(i32::MIN) }};
+-}
+-
+ macro_rules! checked_long_nullable {
+     ($checked:expr) => {{ $checked.unwrap_or(i64::MIN) }};
+ }
+ 
+-macro_rules! sentinel_int {
+-    ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+-        let r = $expr;
+-        #[cfg(debug_assertions)]
+-        assert!(
+-            r != i32::MIN,
+-            "integer null-sentinel collision: {} {} {} = i32::MIN",
+-            $v1,
+-            $op,
+-            $v2
+-        );
+-        r
+-    }};
+-}
+-
+ macro_rules! sentinel_long {
+     ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+         let r = $expr;
+@@ -263,18 +226,15 @@ pub fn op_negate_long(val: i64) -> i64 {
  
  #[inline]
  #[must_use]
@@ -63,7 +127,7 @@ index e46f3bb..b934147 100644
  }
  
  #[inline]
-@@ -285,8 +282,8 @@ pub fn op_cast_long_from_single(val: f32) -> i64 {
+@@ -285,8 +245,8 @@ pub fn op_cast_long_from_single(val: f32) -> i64 {
  
  #[inline]
  #[must_use]
@@ -74,7 +138,7 @@ index e46f3bb..b934147 100644
  }
  
  #[inline]
-@@ -521,40 +518,34 @@ pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
+@@ -521,40 +481,34 @@ pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
  
  #[inline]
  #[must_use]
@@ -127,7 +191,7 @@ index e46f3bb..b934147 100644
          f32::NAN
      } else {
          val as f32
-@@ -563,8 +554,8 @@ pub fn op_conv_single_from_int(val: i32) -> f32 {
+@@ -563,8 +517,8 @@ pub fn op_conv_single_from_int(val: i32) -> f32 {
  
  #[inline]
  #[must_use]
@@ -138,7 +202,7 @@ index e46f3bb..b934147 100644
  }
  
  #[inline]
-@@ -582,54 +573,38 @@ pub fn op_conv_bool_from_character(v: char) -> bool {
+@@ -582,54 +536,38 @@ pub fn op_conv_bool_from_character(v: char) -> bool {
      v != '\0'
  }
  
@@ -207,7 +271,7 @@ index e46f3bb..b934147 100644
  }
  
  // ── C54.G-hybrid — nullable integer arithmetic ────────────────────────────
-@@ -640,109 +615,62 @@ pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
+@@ -640,109 +578,62 @@ pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
  
  #[inline]
  #[must_use]
@@ -337,7 +401,7 @@ index e46f3bb..b934147 100644
  }
  
  /**
-@@ -966,42 +894,41 @@ mod test {
+@@ -966,42 +857,41 @@ mod test {
  
      #[test]
      fn add_int_null_propagation() {
@@ -394,7 +458,7 @@ index e46f3bb..b934147 100644
      }
  
      #[test]
-@@ -1021,31 +948,7 @@ mod test {
+@@ -1021,31 +911,7 @@ mod test {
          let _ = op_min_long(i64::MIN + 1, 1);
      }
  

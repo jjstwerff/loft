@@ -34,18 +34,18 @@ pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
         };
     }
     let store = keys::mut_store(db, stores);
-    let mut vec_rec = store.get_int(db.rec, db.pos) as u32;
+    let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
     let new_length;
     if vec_rec == 0 {
         // claim a new array with minimal 11 elements
         vec_rec = store.claim(checked_vec_cap(11, size));
-        store.set_int(db.rec, db.pos, vec_rec as i32);
+        store.set_u32_raw(db.rec, db.pos, vec_rec);
         new_length = 1;
     } else {
         new_length = len + 1;
         let new_vec = store.resize(vec_rec, checked_vec_cap(new_length, size));
         if new_vec != vec_rec {
-            store.set_int(db.rec, db.pos, new_vec as i32);
+            store.set_u32_raw(db.rec, db.pos, new_vec);
             vec_rec = new_vec;
         }
         store.copy_block(
@@ -56,7 +56,7 @@ pub fn insert_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
             (len as isize - real as isize) * size as isize,
         );
     }
-    store.set_int(vec_rec, 4, new_length as i32);
+    store.set_u32_raw(vec_rec, 4, new_length);
     DbRef {
         store_nr: db.store_nr,
         rec: vec_rec,
@@ -77,7 +77,7 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
     if db.rec == 0 {
         return;
     }
-    let vec_rec = store.get_int(db.rec, db.pos) as u32;
+    let vec_rec = store.get_u32_raw(db.rec, db.pos);
     if vec_rec != 0 {
         return; // already allocated — don't overwrite
     }
@@ -85,8 +85,8 @@ pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [St
     let alloc_count = count.max(11);
     let words = checked_vec_cap(alloc_count, elem_size);
     let new_rec = store.claim(words);
-    store.set_int(db.rec, db.pos, new_rec as i32);
-    store.set_int(new_rec, 4, 0); // length = 0
+    store.set_u32_raw(db.rec, db.pos, new_rec);
+    store.set_u32_raw(new_rec, 4, 0); // length = 0
 }
 
 pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
@@ -98,18 +98,18 @@ pub fn vector_append(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
             pos: 0,
         };
     }
-    let mut vec_rec = store.get_int(db.rec, db.pos) as u32;
+    let mut vec_rec = store.get_u32_raw(db.rec, db.pos);
     let pos = if vec_rec == 0 {
         // new array
         vec_rec = store.claim(checked_vec_cap(11, size)); // minimal 11 elements
-        store.set_int(db.rec, db.pos, vec_rec as i32);
-        store.set_int(vec_rec, 4, 0); // initial length
+        store.set_u32_raw(db.rec, db.pos, vec_rec);
+        store.set_u32_raw(vec_rec, 4, 0); // initial length
         0
     } else {
-        let length = store.get_int(vec_rec, 4) as u32;
+        let length = store.get_u32_raw(vec_rec, 4);
         let new_vec = store.resize(vec_rec, checked_vec_cap(length + 1, size));
         if new_vec != vec_rec {
-            store.set_int(db.rec, db.pos, new_vec as i32);
+            store.set_u32_raw(db.rec, db.pos, new_vec);
             vec_rec = new_vec;
         }
         length
@@ -126,22 +126,22 @@ pub fn vector_finish(db: &DbRef, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let vec_rec = store.get_int(db.rec, db.pos) as u32;
-    let length = store.get_int(vec_rec, 4);
-    store.set_int(vec_rec, 4, length + 1);
+    let vec_rec = store.get_u32_raw(db.rec, db.pos);
+    let length = store.get_u32_raw(vec_rec, 4);
+    store.set_u32_raw(vec_rec, 4, length + 1);
 }
 
 pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
     // Keep an extra record between the current and the new one.
     // This is needed to allow to create a new open space to move the new record to.
     let store = keys::mut_store(db, stores);
-    let mut sorted_rec = store.get_int(db.rec, db.pos) as u32;
+    let mut sorted_rec = store.get_u32_raw(db.rec, db.pos);
     // Claim a record at the back of the current structure or create a new structure.
     if sorted_rec == 0 {
         sorted_rec = store.claim(checked_vec_cap(12, size));
-        store.set_int(db.rec, db.pos, sorted_rec as i32);
+        store.set_u32_raw(db.rec, db.pos, sorted_rec);
         // Set initial length to 0
-        store.set_int(sorted_rec, 4, 0);
+        store.set_u32_raw(sorted_rec, 4, 0);
         // return the first record
         DbRef {
             store_nr: db.store_nr,
@@ -149,10 +149,10 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
             pos: 8,
         }
     } else {
-        let length = store.get_int(sorted_rec, 4) as u32;
+        let length = store.get_u32_raw(sorted_rec, 4);
         let new_sorted = store.resize(sorted_rec, checked_vec_cap(length + 2, size));
         if new_sorted != sorted_rec {
-            store.set_int(db.rec, db.pos, new_sorted as i32);
+            store.set_u32_raw(db.rec, db.pos, new_sorted);
             sorted_rec = new_sorted;
         }
         // return the last record inside the allocation
@@ -165,11 +165,11 @@ pub fn sorted_new(db: &DbRef, size: u32, stores: &mut [Store]) -> DbRef {
 }
 
 pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Store]) {
-    let sorted_rec = keys::store(sorted, stores).get_int(sorted.rec, sorted.pos) as u32;
-    let length = keys::store(sorted, stores).get_int(sorted_rec, 4) as u32;
+    let sorted_rec = keys::store(sorted, stores).get_u32_raw(sorted.rec, sorted.pos);
+    let length = keys::store(sorted, stores).get_u32_raw(sorted_rec, 4);
     if length == 0 {
         // we do not have to reorder the first inserted record; set length to 1
-        keys::mut_store(sorted, stores).set_int(sorted_rec, 4, 1);
+        keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1);
         return;
     }
     let latest_pos = checked_vec_pos(length + 1, size);
@@ -200,17 +200,17 @@ pub fn sorted_finish(sorted: &DbRef, size: u32, keys: &[Key], stores: &mut [Stor
         checked_vec_pos(pos, size) as isize,
         size as isize,
     );
-    store.set_int(sorted_rec, 4, (length + 1) as i32);
+    store.set_u32_raw(sorted_rec, 4, length + 1);
 }
 
 pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [Store]) {
     let rec_ref = sorted_new(sorted, 4, stores);
-    let sorted_rec = keys::store(sorted, stores).get_int(sorted.rec, sorted.pos) as u32;
-    let length = keys::store(sorted, stores).get_int(sorted_rec, 4) as u32;
+    let sorted_rec = keys::store(sorted, stores).get_u32_raw(sorted.rec, sorted.pos);
+    let length = keys::store(sorted, stores).get_u32_raw(sorted_rec, 4);
     if length == 0 {
         // we do not have to reorder the first inserted record, set length to 1
-        keys::mut_store(sorted, stores).set_int(sorted_rec, 4, 1);
-        keys::mut_store(sorted, stores).set_int(sorted_rec, rec_ref.pos, rec.rec as i32);
+        keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1);
+        keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, rec_ref.pos, rec.rec);
         return;
     }
     let key = keys::get_key(rec, stores, keys);
@@ -225,8 +225,8 @@ pub fn ordered_finish(sorted: &DbRef, rec: &DbRef, keys: &[Key], stores: &mut [S
             (latest_pos - pos * 4) as isize,
         );
     }
-    keys::mut_store(&rec_ref, stores).set_int(sorted_rec, 8 + pos * 4, rec.rec as i32);
-    keys::mut_store(sorted, stores).set_int(sorted_rec, 4, 1 + length as i32);
+    keys::mut_store(&rec_ref, stores).set_u32_raw(sorted_rec, 8 + pos * 4, rec.rec);
+    keys::mut_store(sorted, stores).set_u32_raw(sorted_rec, 4, 1 + length);
 }
 
 #[must_use]
@@ -235,22 +235,22 @@ pub fn length_vector(db: &DbRef, stores: &[Store]) -> u32 {
         return 0;
     }
     let store = keys::store(db, stores);
-    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
     if v_rec == 0 {
         0
     } else {
-        store.get_int(v_rec, 4) as u32
+        store.get_u32_raw(v_rec, 4)
     }
 }
 
 pub fn clear_vector(db: &DbRef, stores: &mut [Store]) {
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
     if v_rec != 0 {
         // Only set size of the vector to 0
         // TODO when the main path to a separate allocated objects: remove these
         // TODO lower string reference counts where needed
-        store.set_int(v_rec, 4, 0);
+        store.set_u32_raw(v_rec, 4, 0);
     }
 }
 
@@ -272,7 +272,7 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
             pos: 0,
         };
     }
-    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
     let l = length_vector(db, stores);
     let f = if from < 0 { from + l as i32 } else { from };
     if f < 0 || f >= l as i32 {
@@ -293,7 +293,7 @@ pub fn get_vector(db: &DbRef, size: u32, from: i32, stores: &[Store]) -> DbRef {
 pub fn remove_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) -> bool {
     let len = i64::from(length_vector(db, stores));
     let store = keys::mut_store(db, stores);
-    let vec_rec = store.get_int(db.rec, db.pos) as u32;
+    let vec_rec = store.get_u32_raw(db.rec, db.pos);
     let i = if index < 0 {
         i64::from(index) + len
     } else {
@@ -311,7 +311,7 @@ pub fn remove_vector(db: &DbRef, size: u32, index: i32, stores: &mut [Store]) ->
             (len as isize - i as isize) * size as isize,
         );
     }
-    store.set_int(vec_rec, 4, len as i32 - 1);
+    store.set_u32_raw(vec_rec, 4, len as u32 - 1);
     true
 }
 
@@ -332,11 +332,11 @@ pub fn sorted_find(
         return (0, false);
     }
     let store = keys::store(sorted, stores);
-    let sorted_rec = store.get_int(sorted.rec, sorted.pos) as u32;
+    let sorted_rec = store.get_u32_raw(sorted.rec, sorted.pos);
     if sorted_rec == 0 {
         return (0, false);
     }
-    let length = store.get_int(sorted_rec, 4) as u32;
+    let length = store.get_u32_raw(sorted_rec, 4);
     if length == 0 {
         return (0, false);
     }
@@ -394,8 +394,8 @@ pub fn ordered_find(
     key: &[Content],
 ) -> (u32, bool) {
     let store = keys::store(sorted, stores);
-    let sorted_rec = store.get_int(sorted.rec, sorted.pos) as u32;
-    let length = store.get_int(sorted_rec, 4) as u32;
+    let sorted_rec = store.get_u32_raw(sorted.rec, sorted.pos);
+    let length = store.get_u32_raw(sorted_rec, 4);
     let mut result = DbRef {
         store_nr: sorted.store_nr,
         rec: 0,
@@ -409,7 +409,7 @@ pub fn ordered_find(
     let mut right = length - 1;
     loop {
         let mid = (left + right + 1) >> 1;
-        result.rec = store.get_int(sorted_rec, 8 + mid * 4) as u32;
+        result.rec = store.get_u32_raw(sorted_rec, 8 + mid * 4);
         result.pos = 8;
         let cmp = keys::key_compare(key, &result, stores, keys);
         let action = if cmp == Ordering::Equal {
@@ -446,12 +446,12 @@ pub fn ordered_find(
 }
 
 pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_int(data.rec, data.pos) as u32;
+    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
     }
-    let length = keys::store(data, stores).get_int(rec, 4);
+    let length = keys::store(data, stores).get_u32_raw(rec, 4) as i32;
     if *pos == i32::MAX && length != 0 {
         *pos = 8;
     } else if length != 0 && *pos < 8 + (length - 1) * i32::from(size) {
@@ -462,12 +462,12 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
 }
 
 pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_int(data.rec, data.pos) as u32;
+    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
     }
-    let length = keys::store(data, stores).get_int(rec, 4);
+    let length = keys::store(data, stores).get_u32_raw(rec, 4) as i32;
     if *pos == i32::MAX && length != 0 {
         *pos = 0;
     } else if length != 0 && *pos < length - 1 {
@@ -482,12 +482,12 @@ pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
 /// the first call sets `pos` to `length - 1` (last element).
 /// Returns `i32::MAX` when the iterator has moved past the first element.
 pub fn vector_step_rev(data: &DbRef, pos: &mut i32, stores: &[Store]) {
-    let rec = keys::store(data, stores).get_int(data.rec, data.pos) as u32;
+    let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
     if rec == 0 {
         *pos = i32::MAX;
         return;
     }
-    let length = keys::store(data, stores).get_int(rec, 4);
+    let length = keys::store(data, stores).get_u32_raw(rec, 4) as i32;
     if length == 0 || *pos == i32::MAX || *pos >= length {
         // Not started yet (sentinel) or past the end — begin at the last element.
         *pos = if length == 0 { i32::MAX } else { length - 1 };
@@ -507,7 +507,7 @@ pub fn sort_vector(db: &DbRef, elem_size: u16, is_float: bool, stores: &mut [Sto
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
     if v_rec == 0 {
         return;
     }
@@ -533,19 +533,19 @@ pub fn sort_vector(db: &DbRef, elem_size: u16, is_float: bool, stores: &mut [Sto
         4 => {
             if is_float {
                 let mut vals: Vec<f32> = (0..len)
-                    .map(|i| f32::from_bits(store.get_int(v_rec, 8 + (i as u32) * 4) as u32))
+                    .map(|i| f32::from_bits(store.get_u32_raw(v_rec, 8 + (i as u32) * 4)))
                     .collect();
                 vals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Greater));
                 for (i, &v) in vals.iter().enumerate() {
-                    store.set_int(v_rec, 8 + (i as u32) * 4, v.to_bits() as i32);
+                    store.set_u32_raw(v_rec, 8 + (i as u32) * 4, v.to_bits());
                 }
             } else {
                 let mut vals: Vec<i32> = (0..len)
-                    .map(|i| store.get_int(v_rec, 8 + (i as u32) * 4))
+                    .map(|i| store.get_i32_raw(v_rec, 8 + (i as u32) * 4))
                     .collect();
                 vals.sort_unstable();
                 for (i, &v) in vals.iter().enumerate() {
-                    store.set_int(v_rec, 8 + (i as u32) * 4, v);
+                    store.set_i32_raw(v_rec, 8 + (i as u32) * 4, v);
                 }
             }
         }
@@ -579,7 +579,7 @@ pub fn reverse_vector(db: &DbRef, elem_size: u32, stores: &mut [Store]) {
         return;
     }
     let store = keys::mut_store(db, stores);
-    let v_rec = store.get_int(db.rec, db.pos) as u32;
+    let v_rec = store.get_u32_raw(db.rec, db.pos);
     if v_rec == 0 {
         return;
     }
