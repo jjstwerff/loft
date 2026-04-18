@@ -134,7 +134,7 @@ pub fn init(state: &mut State) {
 }
 
 fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     let v_test = *stores.get::<bool>(stack);
@@ -174,7 +174,7 @@ fn n_assert(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger {
@@ -198,7 +198,7 @@ fn n_panic(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn n_log_info(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger
@@ -209,7 +209,7 @@ fn n_log_info(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn n_log_warn(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger
@@ -220,7 +220,7 @@ fn n_log_warn(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn n_log_error(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger
@@ -236,7 +236,7 @@ fn n_log_error(stores: &mut Stores, stack: &mut DbRef) {
 }
 
 fn n_log_fatal(stores: &mut Stores, stack: &mut DbRef) {
-    let v_line = *stores.get::<i32>(stack);
+    let v_line = *stores.get::<i64>(stack);
     let v_file = *stores.get::<Str>(stack);
     let v_message = *stores.get::<Str>(stack);
     if let Some(ref logger) = stores.logger

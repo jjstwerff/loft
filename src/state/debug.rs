@@ -1367,7 +1367,7 @@ impl State {
             let stack = self.stack_pos;
             let known = *k;
             let res = match known {
-                0 => format!("{}", *self.get_stack::<i32>()), // integer
+                0 => format!("{}", *self.get_stack::<i64>()), // integer
                 1 => format!("{}", *self.get_stack::<i64>()), // long
                 2 => format!("{}", *self.get_stack::<f32>()), // single
                 3 => format!("{}", *self.get_stack::<f64>()), // float
@@ -1423,7 +1423,7 @@ impl State {
 
     pub(super) fn dump_stack(&mut self, typedef: &Type, code: u32, data: &Data) -> String {
         match typedef {
-            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i64>()),
             Type::Character => {
                 let c = *self.get_stack::<char>();
                 if c == char::from(0) {

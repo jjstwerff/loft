@@ -205,8 +205,8 @@ impl State {
 
     #[inline]
     pub fn get_text_sub(&mut self) {
-        let mut till = *self.get_stack::<i32>();
-        let mut from = *self.get_stack::<i32>();
+        let mut till = *self.get_stack::<i64>() as i32;
+        let mut from = *self.get_stack::<i64>() as i32;
         let v1 = self.string();
         if from < 0 || from >= v1.len as i32 {
             self.put_stack(Str {
@@ -356,9 +356,9 @@ impl State {
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
         let dir = *self.code::<i8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<i64>();
-        let s = self.string_mut(pos - 12);
+        let s = self.string_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
@@ -369,49 +369,49 @@ impl State {
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
         let dir = *self.code::<i8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<i64>();
-        let s = self.string_ref_mut(pos - 12);
+        let s = self.string_ref_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
     pub fn format_float(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>() as i32;
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<f64>();
-        let s = self.string_mut(pos - 16);
+        let s = self.string_mut(pos - 24);
         ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_stack_float(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>() as i32;
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<f64>();
-        let s = self.string_ref_mut(pos - 16); // f64(8)+i32(4)+i32(4) = 16 bytes popped
+        let s = self.string_ref_mut(pos - 24); // f64(8)+i64(8)+i64(8) = 24 bytes popped
         ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_single(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>() as i32;
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<f32>();
-        let s = self.string_mut(pos - 12);
+        let s = self.string_mut(pos - 20);
         ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_stack_single(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>() as i32;
+        let width = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<f32>();
-        let s = self.string_ref_mut(pos - 12);
+        let s = self.string_ref_mut(pos - 20);
         ops::format_single(s, val, width, precision, dir);
     }
 
@@ -419,19 +419,19 @@ impl State {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
         let token = *self.code::<u8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = self.string();
-        let s = self.string_mut(pos - 4 - size_ptr() as u16);
-        ops::format_text(s, val.str(), width, dir, token);
+        let s = self.string_mut(pos - 8 - size_ptr() as u16);
+        ops::format_text(s, val.str(), width as i32, dir, token);
     }
 
     pub fn format_stack_text(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
         let token = *self.code::<u8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = self.string();
-        let s = self.string_ref_mut(pos - 4 - size_ptr() as u16);
-        ops::format_text(s, val.str(), width, dir, token);
+        let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);
+        ops::format_text(s, val.str(), width as i32, dir, token);
     }
 }

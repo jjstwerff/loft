@@ -95,12 +95,12 @@ impl State {
             let (v_ptr, store_nr) = {
                 let store = self.database.store(&vec_ref);
                 (
-                    store.get_int(vec_ref.rec, vec_ref.pos) as u32,
+                    store.get_u32_raw(vec_ref.rec, vec_ref.pos),
                     vec_ref.store_nr,
                 )
             };
             if v_ptr != 0 {
-                let length = self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
+                let length = self.database.allocations[store_nr as usize].get_u32_raw(v_ptr, 4);
                 let elem_size = u32::from(self.database.size(elem_tp));
                 for i in 0..length {
                     let elem = DbRef {
@@ -231,7 +231,7 @@ impl State {
     }
 
     pub fn read_file(&mut self) {
-        let bytes = *self.get_stack::<i32>();
+        let bytes = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<DbRef>();
         let file = *self.get_stack::<DbRef>();
         let db_tp = *self.code::<u16>();
@@ -686,7 +686,7 @@ impl State {
                 let vec_len = if sorted_rec == 0 {
                     0
                 } else {
-                    all[data.store_nr as usize].get_int(sorted_rec, 4) as u32
+                    all[data.store_nr as usize].get_u32_raw(sorted_rec, 4)
                 };
                 if reverse {
                     start = if till.is_empty() {
@@ -760,7 +760,7 @@ impl State {
                 break;
             }
             match k.type_nr.abs() {
-                1 => key.push(Content::Long(i64::from(*self.get_stack::<i32>()))),
+                1 => key.push(Content::Long(*self.get_stack::<i64>())),
                 2 => key.push(Content::Long(*self.get_stack::<i64>())),
                 3 => key.push(Content::Single(*self.get_stack::<f32>())),
                 4 => key.push(Content::Float(*self.get_stack::<f64>())),
@@ -850,11 +850,11 @@ impl State {
                 3 => {
                     let mut pos = cur as i32;
                     vector::vector_next(&data, &mut pos, 4, &self.database.allocations);
-                    let vector = store.get_int(data.rec, data.pos) as u32;
+                    let vector = store.get_u32_raw(data.rec, data.pos);
                     let rec = if pos == i32::MAX {
                         0
                     } else {
-                        store.get_int(vector, pos as u32) as u32
+                        store.get_u32_raw(vector, pos as u32)
                     };
                     self.put_var(state_var - 8, pos as u32);
                     DbRef {
@@ -993,13 +993,13 @@ impl State {
 
     pub fn append_copy(&mut self) {
         let tp = *self.code::<u16>();
-        let multiply = *self.get_stack::<i32>() as u32;
+        let multiply = *self.get_stack::<i64>() as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
         let v_rec = crate::keys::store(&data, &self.database.allocations)
-            .get_int(data.rec, data.pos) as u32;
+            .get_u32_raw(data.rec, data.pos);
         let from = DbRef {
             store_nr: data.store_nr,
             rec: v_rec,
@@ -1101,7 +1101,7 @@ impl State {
                 break;
             }
             match k {
-                0 | 6 => key.push(Content::Long(i64::from(*self.get_stack::<i32>()))),
+                0 | 6 => key.push(Content::Long(*self.get_stack::<i64>())),
                 1 => key.push(Content::Long(*self.get_stack::<i64>())),
                 2 => key.push(Content::Single(*self.get_stack::<f32>())),
                 3 => key.push(Content::Float(*self.get_stack::<f64>())),
@@ -1140,7 +1140,7 @@ impl State {
     pub fn insert_vector(&mut self) {
         let size = *self.code::<u16>();
         let db_tp = *self.code::<u16>();
-        let index = *self.get_stack::<i32>();
+        let index = *self.get_stack::<i64>();
         let r = *self.get_stack::<DbRef>();
         let new_value =
             vector::insert_vector(&r, u32::from(size), i64::from(index), &mut self.database.allocations);

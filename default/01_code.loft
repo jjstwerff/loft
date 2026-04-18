@@ -115,11 +115,11 @@ fn OpNot(v1: boolean) -> boolean;
 fn OpConstInt(val: const integer) -> integer;
 #rust"@val"
 fn OpConstShort(val: const i16) -> integer;
-#rust"i32::from(@val)"
+#rust"i64::from(@val)"
 fn OpConstTiny(val: const i8) -> integer;
-#rust"i32::from(@val)"
+#rust"i64::from(@val)"
 fn OpVarInt(pos: const u16) -> integer;
-#rust"*s.get_var::<i32>(@pos)"
+#rust"*s.get_var::<i64>(@pos)"
 fn OpVarCharacter(pos: const u16) -> character;
 #rust"*s.get_var::<char>(@pos)"
 fn OpPutInt(pos: const u16, value: integer);
@@ -127,13 +127,13 @@ fn OpPutInt(pos: const u16, value: integer);
 fn OpPutCharacter(pos: const u16, value: character);
 #rust"s.put_var(@pos, @value);"
 fn OpConvIntFromNull() -> integer;
-#rust"i32::MIN"
+#rust"i64::MIN"
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
 fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
-#rust"@v1.parse().unwrap_or(i32::MIN)"
+#rust"@v1.parse().unwrap_or(i64::MIN)"
 fn OpCastLongFromText(v1: text) -> long;
 #rust"@v1.parse().unwrap_or(i64::MIN)"
 fn OpCastSingleFromText(v1: text) -> single;
@@ -685,14 +685,14 @@ fn OpConstText(_value: const text) -> text;
 #rust"s.string_from_code();"
 fn OpConvTextFromNull() -> text;
 fn OpLengthText(v1: text) -> integer;
-#rust"@v1.len() as i32"
+#rust"@v1.len() as i64"
 // Number of bytes in the text. Use for bounds checks and iteration limits.
 pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
 
 fn OpSizeText(v1: text) -> integer;
-#rust"@v1.chars().count() as i32"
+#rust"@v1.chars().count() as i64"
 // Number of Unicode code points (characters) in the text.
 pub fn size(both: text) -> integer {
   OpSizeText(both)
@@ -731,7 +731,7 @@ fn OpTextCompare(v1: text, v2: character) -> i32;
 fn OpCastCharacterFromInt(v1: i32) -> character;
 #rust"char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
 fn OpConvIntFromCharacter(v1: character) -> i32;
-#rust"if @v1 == char::from(0) {{ i32::MIN }} else {{ @v1 as i32 }}"
+#rust"if @v1 == char::from(0) {{ i64::MIN }} else {{ i64::from(@v1 as u32) }}"
 type enumerate size(1);
 fn OpVarEnum(pos: const u16) -> enumerate;
 #rust"*s.get_var::<u8>(@pos)"
@@ -746,9 +746,9 @@ fn OpCastTextFromEnum(v1: enumerate, enum_tp: const u16) -> text;
 fn OpCastEnumFromText(v1: text, enum_tp: const u16) -> enumerate;
 #rust"s.database.to_enum(@enum_tp, @v1)"
 fn OpConvIntFromEnum(v1: enumerate) -> integer;
-#rust"if @v1 == 255 {{ i32::MIN }} else {{ i32::from(@v1) }}"
+#rust"if @v1 == 255 {{ i64::MIN }} else {{ i64::from(@v1) }}"
 fn OpCastEnumFromInt(v1: integer) -> enumerate;
-#rust"if @v1 == i32::MIN {{ 255 }} else {{ @v1 as u8 }}"
+#rust"if @v1 == i64::MIN {{ 255 }} else {{ @v1 as u8 }}"
 fn OpConvEnumFromNull() -> enumerate;
 #rust"255u8"
 // A reference to a record, this can 'live' inside an array
@@ -779,7 +779,7 @@ fn OpNeRef(v1: reference, v2: reference) -> boolean;
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
 #rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val.rec);}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
@@ -787,9 +787,9 @@ fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
 // Simple type value write and read, vector elements always have fld=0.
 // All these types are passed by value instead of by reference.
 fn OpGetInt(v1: reference, fld: const u16) -> integer;
-#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
-#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_u32_raw(db.rec, db.pos + u32::from(@fld))).unwrap_or(char::from(0)) }} }}"
 fn OpGetLong(v1: reference, fld: const u16) -> long;
 #rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
@@ -797,19 +797,19 @@ fn OpGetSingle(v1: reference, fld: const u16) -> single;
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
 #rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; i64::from(stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
 #rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }}}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 #rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; i64::from(stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(@fld))))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val as u32);}}"
 fn OpSetLong(v1: reference, fld: const u16, val: long);
 #rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
@@ -817,11 +817,11 @@ fn OpSetSingle(v1: reference, fld: const u16, val: single);
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
 #rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
-#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
+#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + u32::from(@fld), s_pos);}}"
 // --- Collections ---
 // Operations on vector<T> — the primary ordered collection type.
 // Vectors are grown by appending with += and elements are accessed by index.
@@ -833,7 +833,7 @@ fn OpVarVector(pos: const u16) -> vector;
 #rust"*s.get_var::<DbRef>(@pos)"
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
-#rust"vector::length_vector(&@r, &s.database.allocations) as i32"
+#rust"vector::length_vector(&@r, &s.database.allocations) as i64"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)

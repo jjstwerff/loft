@@ -368,19 +368,19 @@ fn const_int(s: &mut State) {
 
 fn const_short(s: &mut State) {
     let v_val = *s.code::<i16>();
-    let new_value = i32::from(v_val);
+    let new_value = i64::from(v_val);
     s.put_stack(new_value);
 }
 
 fn const_tiny(s: &mut State) {
     let v_val = *s.code::<i8>();
-    let new_value = i32::from(v_val);
+    let new_value = i64::from(v_val);
     s.put_stack(new_value);
 }
 
 fn var_int(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<i32>(v_pos);
+    let new_value = *s.get_var::<i64>(v_pos);
     s.put_stack(new_value);
 }
 
@@ -403,7 +403,7 @@ fn put_character(s: &mut State) {
 }
 
 fn conv_int_from_null(s: &mut State) {
-    let new_value = i32::MIN;
+    let new_value = i64::MIN;
     s.put_stack(new_value);
 }
 
@@ -420,7 +420,7 @@ fn const_long_text(s: &mut State) {
 
 fn cast_int_from_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().parse().unwrap_or(i32::MIN);
+    let new_value = v_v1.str().parse().unwrap_or(i64::MIN);
     s.put_stack(new_value);
 }
 
@@ -1175,13 +1175,13 @@ fn conv_text_from_null(s: &mut State) {
 
 fn length_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().len() as i32;
+    let new_value = v_v1.str().len() as i64;
     s.put_stack(new_value);
 }
 
 fn size_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().chars().count() as i32;
+    let new_value = v_v1.str().chars().count() as i64;
     s.put_stack(new_value);
 }
 
@@ -1285,9 +1285,9 @@ fn cast_character_from_int(s: &mut State) {
 fn conv_int_from_character(s: &mut State) {
     let v_v1 = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     let new_value = if v_v1 == char::from(0) {
-        i32::MIN
+        i64::MIN
     } else {
-        v_v1 as i32
+        i64::from(v_v1 as u32)
     };
     s.put_stack(new_value);
 }
@@ -1333,9 +1333,9 @@ fn cast_enum_from_text(s: &mut State) {
 fn conv_int_from_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<u8>();
     let new_value = if v_v1 == 255 {
-        i32::MIN
+        i64::MIN
     } else {
-        i32::from(v_v1)
+        i64::from(v_v1)
     };
     s.put_stack(new_value);
 }
@@ -1486,7 +1486,7 @@ fn get_character(s: &mut State) {
             char::from_u32(
                 s.database
                     .store(&db)
-                    .get_int(db.rec, db.pos + u32::from(v_fld)) as u32,
+                    .get_u32_raw(db.rec, db.pos + u32::from(v_fld)),
             )
             .unwrap_or(char::from(0))
         }
@@ -1536,9 +1536,11 @@ fn get_byte(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+        i64::from(s.database.store(&db).get_byte(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+        ))
     };
     s.put_stack(new_value);
 }
@@ -1575,9 +1577,11 @@ fn get_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+        i64::from(s.database.store(&db).get_short(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+        ))
     };
     s.put_stack(new_value);
 }
@@ -1588,7 +1592,7 @@ fn get_text(s: &mut State) {
     let new_value = {
         let db = v_v1;
         let store = s.database.store(&db);
-        Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(v_fld)) as u32))
+        Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(v_fld))))
     };
     s.put_stack(new_value);
 }
@@ -1706,7 +1710,7 @@ fn var_vector(s: &mut State) {
 
 fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::length_vector(&v_r, &s.database.allocations) as i32;
+    let new_value = vector::length_vector(&v_r, &s.database.allocations) as i64;
     s.put_stack(new_value);
 }
 

@@ -292,26 +292,26 @@ impl State {
     /// Panics if `fn_var < 16` (the fn-ref slot is 16 bytes: `d_nr` + closure `DbRef`), or if
     /// the slot holds a negative definition number (un-initialised / null sentinel).
     pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
-        // fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
+        // fn-ref slot is 20B ([d_nr:i64][closure:DbRef]); fn_var must be ≥ 20.
         assert!(
-            fn_var >= 16,
-            "fn_call_ref: fn_var={fn_var} < 16 — fn-ref slot is 16B (d_nr + closure DbRef)"
+            fn_var >= 20,
+            "fn_call_ref: fn_var={fn_var} < 20 — fn-ref slot is 20B (d_nr i64 + closure DbRef)"
         );
-        let d_nr_i32 = *self.get_var::<i32>(fn_var);
-        // Negative d_nr = un-initialised slot (integer null sentinel = i32::MIN).
+        let d_nr_i64 = *self.get_var::<i64>(fn_var);
+        // Negative d_nr = un-initialised slot (integer null sentinel = i64::MIN).
         assert!(
-            d_nr_i32 >= 0,
-            "fn_call_ref: d_nr={d_nr_i32} is negative — fn-ref slot was never assigned"
+            d_nr_i64 >= 0,
+            "fn_call_ref: d_nr={d_nr_i64} is negative — fn-ref slot was never assigned"
         );
-        let d_nr = d_nr_i32 as usize;
+        let d_nr = d_nr_i64 as usize;
         assert!(
             d_nr < self.fn_positions.len(),
             "fn_call_ref: d_nr={d_nr} out of range (fn_positions.len={})",
             self.fn_positions.len()
         );
-        // Read closure DbRef from bytes 4..16 of the fn-ref slot.
-        // fn_var is distance from fn_ref slot START to TOS; slot+4 = TOS-(fn_var-4).
-        let closure = *self.get_var::<DbRef>(fn_var - 4);
+        // Read closure DbRef from bytes 8..20 of the fn-ref slot.
+        // fn_var is distance from fn_ref slot START to TOS; slot+8 = TOS-(fn_var-8).
+        let closure = *self.get_var::<DbRef>(fn_var - 8);
         let has_closure = closure.rec != 0;
         if has_closure {
             self.put_stack(closure);
