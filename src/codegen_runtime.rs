@@ -106,7 +106,7 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
         && db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
     {
-        let stored_type = stores.store(&db).get_int(db.rec, 4) as u16;
+        let stored_type = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
         if stored_type == file_type {
             let file_ref = stores.store(&db).get_i32_raw(db.rec, db.pos + 28);
             if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
@@ -204,7 +204,7 @@ pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i32 {
     if db.rec == 0 {
         0
     } else {
-        let tp = stores.store(&db).get_int(db.rec, 4) as u16;
+        let tp = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
         i32::from(stores.size(tp))
     }
 }
@@ -512,11 +512,11 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             let mut pos = cur as i32;
             vector::vector_next(&data, &mut pos, 4, all);
             let store = crate::keys::store(&data, all);
-            let vector = store.get_int(data.rec, data.pos) as u32;
+            let vector = store.get_u32_raw(data.rec, data.pos);
             let rec = if pos == i32::MAX {
                 0
             } else {
-                store.get_int(vector, pos as u32) as u32
+                store.get_u32_raw(vector, pos as u32)
             };
             cur = pos as u32;
             DbRef {
@@ -938,9 +938,9 @@ impl FileVal for DbRef {
         if let Some(tp_info) = stores.types.get(db_tp as usize) {
             if let Parts::Vector(elem_tp) = tp_info.parts {
                 let store = &stores.allocations[self.store_nr as usize];
-                let v_rec = store.get_int(self.rec, self.pos) as u32;
+                let v_rec = store.get_u32_raw(self.rec, self.pos);
                 if v_rec != 0 {
-                    let length = store.get_int(v_rec, 4) as u32;
+                    let length = store.get_u32_raw(v_rec, 4);
                     let elem_size = u32::from(stores.size(elem_tp));
                     for i in 0..length {
                         let elem = DbRef {
@@ -979,7 +979,7 @@ impl FileVal for DbRef {
                     *self = stores.database(12);
                     // Zero-init the vector header slot so vector_append sees
                     // vec_rec=0 (no storage yet) instead of garbage memory.
-                    stores.store_mut(self).set_int(self.rec, self.pos, 0);
+                    stores.store_mut(self).set_u32_raw(self.rec, self.pos, 0);
                 }
                 let n_elems = bytes.len() / elem_size as usize;
                 for i in 0..n_elems {
@@ -1242,7 +1242,7 @@ pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
     let length = vector::length_vector(&data, &stores.allocations);
     // Read v_rec before resize; from points to the last existing element.
     let v_rec_before =
-        crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
+        crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
     let from = DbRef {
         store_nr: data.store_nr,
         rec: v_rec_before,
@@ -1253,7 +1253,7 @@ pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
     vector::vector_append(&data, size, &mut stores.allocations);
     stores.vector_set_size(&data, multiply, size);
     // Re-read v_rec in case the resize moved the record.
-    let v_rec = crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
+    let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
     for i in 0..(multiply - 1) {
         let to = DbRef {
             store_nr: data.store_nr,
@@ -1432,7 +1432,7 @@ where
     for i in 0..n {
         let elm = {
             let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+                .get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1490,7 +1490,7 @@ where
     for i in 0..n {
         let elm = {
             let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+                .get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1545,7 +1545,7 @@ where
     for i in 0..n {
         let elm = {
             let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+                .get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1576,7 +1576,7 @@ where
 /// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.
 /// Returns a `DbRef` pointing to the inline struct data at the given index.
 pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: i32) -> DbRef {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     DbRef {
         store_nr: r.store_nr,
         rec: v_rec,
@@ -1598,7 +1598,7 @@ pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
 
 /// Read a long result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1610,7 +1610,7 @@ pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
 
 /// Read a float result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     let bits = stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1623,7 +1623,7 @@ pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
 
 /// Read a boolean result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1843,25 +1843,34 @@ pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
 
     let sf_elm = stores.name("StackFrame");
     let sf_size = u32::from(stores.size(sf_elm));
+    let fn_pos = u32::from(stores.position(sf_elm, "function"));
+    let file_pos = u32::from(stores.position(sf_elm, "file"));
+    let line_pos = u32::from(stores.position(sf_elm, "line"));
+    let args_pos = u32::from(stores.position(sf_elm, "arguments"));
+    let vars_pos = u32::from(stores.position(sf_elm, "variables"));
     let vec = stores.database(sf_size);
-    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
 
     for (fn_name, file, line) in &snapshot {
         let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
         let fn_str = stores.store_mut(&vec).set_str(fn_name);
         stores
             .store_mut(&vec)
-            .set_u32_raw(elm.rec, elm.pos, fn_str);
+            .set_u32_raw(elm.rec, elm.pos + fn_pos, fn_str);
         let file_str = stores.store_mut(&vec).set_str(file);
         stores
             .store_mut(&vec)
-            .set_u32_raw(elm.rec, elm.pos + 4, file_str);
+            .set_u32_raw(elm.rec, elm.pos + file_pos, file_str);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 8, i64::from(*line));
+            .set_int(elm.rec, elm.pos + line_pos, i64::from(*line));
         // Zero the arguments and variables vector fields.
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
+        stores
+            .store_mut(&vec)
+            .set_u32_raw(elm.rec, elm.pos + args_pos, 0);
+        stores
+            .store_mut(&vec)
+            .set_u32_raw(elm.rec, elm.pos + vars_pos, 0);
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     vec

@@ -921,8 +921,8 @@ fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
-    let vec_rec = store.get_int(v_ref.rec, v_ref.pos) as u32;
-    let val = store.get_int(vec_rec, 8 + v_idx as u32 * 4);
+    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
+    let val = store.get_int(vec_rec, 8 + v_idx as u32 * 8);
     stores.put(stack, val);
 }
 
@@ -931,7 +931,7 @@ fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
-    let vec_rec = store.get_int(v_ref.rec, v_ref.pos) as u32;
+    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
     let val = store.get_long(vec_rec, 8 + v_idx as u32 * 8);
     stores.put(stack, val);
 }
@@ -941,7 +941,7 @@ fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
-    let vec_rec = store.get_int(v_ref.rec, v_ref.pos) as u32;
+    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
     let bits = store.get_long(vec_rec, 8 + v_idx as u32 * 8);
     stores.put(stack, f64::from_bits(bits as u64));
 }
@@ -951,7 +951,7 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
     let v_idx = *stores.get::<i32>(stack);
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
-    let vec_rec = store.get_int(v_ref.rec, v_ref.pos) as u32;
+    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
     let val = store.get_byte(vec_rec, 8 + v_idx as u32, 0);
     stores.put(stack, val != 0);
 }
@@ -1022,7 +1022,7 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
     let arguments_pos = lookup("arguments");
     let vars_field_pos = lookup("variables");
     let vec = stores.database(sf_size);
-    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
 
     for (frame_idx, (fn_name, file, line)) in snapshot.iter().enumerate() {
         let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
@@ -1041,10 +1041,10 @@ fn n_stack_trace(stores: &mut Stores, stack: &mut DbRef) {
         // blocks don't leave garbage data that looks like a valid first_block_rec.
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + arguments_pos, 0);
+            .set_u32_raw(elm.rec, elm.pos + arguments_pos, 0);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + vars_field_pos, 0);
+            .set_u32_raw(elm.rec, elm.pos + vars_field_pos, 0);
 
         // TR1.4: build vector<VarInfo> for this frame from the snapshot.
         if let Some(frame_vars) = vars_snapshot.get(frame_idx) {
@@ -1406,17 +1406,17 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
         JV_DISCR_STRING => {
             let str_tp = stores.name("JString");
             let val_pos = u32::from(stores.position(str_tp, "value"));
-            let s_rec = stores.store(src).get_int(src.rec, src.pos + val_pos) as u32;
+            let s_rec = stores.store(src).get_u32_raw(src.rec, src.pos + val_pos);
             let s = stores.store(src).get_str(s_rec).to_owned();
             crate::json::Parsed::Str(s)
         }
         JV_DISCR_ARRAY => {
             let array_tp = stores.name("JArray");
             let items_pos = u32::from(stores.position(array_tp, "items")) + src.pos;
-            let items_rec = stores.store(src).get_int(src.rec, items_pos);
+            let items_rec = stores.store(src).get_i32_raw(src.rec, items_pos);
             let mut children = Vec::new();
             if items_rec > 0 {
-                let length = stores.store(src).get_int(items_rec as u32, 4);
+                let length = i64::from(stores.store(src).get_u32_raw(items_rec as u32, 4));
                 let jv_tp = stores.name("JsonValue");
                 let jv_size = u32::from(stores.size(jv_tp));
                 for i in 0..length {
@@ -1435,10 +1435,10 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
         JV_DISCR_OBJECT => {
             let obj_tp = stores.name("JObject");
             let fields_pos = u32::from(stores.position(obj_tp, "fields")) + src.pos;
-            let fields_rec = stores.store(src).get_int(src.rec, fields_pos);
+            let fields_rec = stores.store(src).get_i32_raw(src.rec, fields_pos);
             let mut entries = Vec::new();
             if fields_rec > 0 {
-                let length = stores.store(src).get_int(fields_rec as u32, 4);
+                let length = i64::from(stores.store(src).get_u32_raw(fields_rec as u32, 4));
                 let jf_tp = stores.name("JsonField");
                 let jf_size = u32::from(stores.size(jf_tp));
                 let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -1448,8 +1448,7 @@ fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Parsed {
                         8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
                     let name_rec = stores
                         .store(src)
-                        .get_int(fields_rec as u32, elem_offset + name_field_pos)
-                        as u32;
+                        .get_u32_raw(fields_rec as u32, elem_offset + name_field_pos);
                     let name = stores.store(src).get_str(name_rec).to_owned();
                     let value_slot = DbRef {
                         store_nr: src.store_nr,
@@ -1517,7 +1516,7 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
             let jv_size = u32::from(stores.size(jv_tp));
             let sm = stores.store_mut(slot);
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_ARRAY);
-            sm.set_int(slot.rec, items_abs_pos, 0);
+            sm.set_u32_raw(slot.rec, items_abs_pos, 0);
             for inner in v {
                 let elm = crate::vector::vector_append(&items_db, jv_size, &mut stores.allocations);
                 materialise_primitive_into(stores, &elm, inner);
@@ -1541,7 +1540,7 @@ fn materialise_primitive_into(stores: &mut Stores, slot: &DbRef, child: &crate::
             let value_field_pos = u32::from(stores.position(jf_tp, "value"));
             let sm = stores.store_mut(slot);
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_OBJECT);
-            sm.set_int(slot.rec, fields_abs_pos, 0);
+            sm.set_u32_raw(slot.rec, fields_abs_pos, 0);
             for (key, _key_at, inner) in v {
                 let elm =
                     crate::vector::vector_append(&fields_db, jf_size, &mut stores.allocations);
@@ -1645,7 +1644,7 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             store_mut.set_byte(result.rec, pos, 0, JV_DISCR_ARRAY);
             // Zero the items-vector handle (record #) so vector_append
             // claims a fresh vector record on the first iteration.
-            store_mut.set_int(result.rec, items_abs_pos, 0);
+            store_mut.set_u32_raw(result.rec, items_abs_pos, 0);
             for child in v {
                 let elm = crate::vector::vector_append(&items_db, jv_size, &mut stores.allocations);
                 materialise_primitive_into(stores, &elm, child);
@@ -1673,7 +1672,7 @@ fn n_json_parse(stores: &mut Stores, stack: &mut DbRef) {
             let value_field_pos = u32::from(stores.position(jf_tp, "value"));
             let store_mut = stores.store_mut(&result);
             store_mut.set_byte(result.rec, pos, 0, JV_DISCR_OBJECT);
-            store_mut.set_int(result.rec, fields_abs_pos, 0);
+            store_mut.set_u32_raw(result.rec, fields_abs_pos, 0);
             for (key, _key_at, child) in v {
                 let elm =
                     crate::vector::vector_append(&fields_db, jf_size, &mut stores.allocations);
@@ -1721,7 +1720,7 @@ fn n_as_text(stores: &mut Stores, stack: &mut DbRef) {
     if discr == JV_DISCR_STRING {
         let str_tp = stores.name("JString");
         let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
-        let s_rec = stores.store(&v).get_int(v.rec, value_pos) as u32;
+        let s_rec = stores.store(&v).get_u32_raw(v.rec, value_pos);
         let s = stores.store(&v).get_str(s_rec).to_string();
         stores.scratch.clear();
         stores.scratch.push(s);
@@ -1789,13 +1788,13 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + self_ref.pos;
-    let fields_rec = stores.store(&self_ref).get_int(self_ref.rec, fields_pos);
+    let fields_rec = stores.store(&self_ref).get_i32_raw(self_ref.rec, fields_pos);
     if fields_rec <= 0 {
         let r = jv_null_sentinel(stores);
         stores.put(stack, r);
         return;
     }
-    let length = stores.store(&self_ref).get_int(fields_rec as u32, 4);
+    let length = i64::from(stores.store(&self_ref).get_u32_raw(fields_rec as u32, 4));
     let jf_tp = stores.name("JsonField");
     let jf_size = u32::from(stores.size(jf_tp));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -1805,7 +1804,7 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
         let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
         let name_rec = stores
             .store(&self_ref)
-            .get_int(fields_rec as u32, elm_offset + name_field_pos) as u32;
+            .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
         let stored_name = stores.store(&self_ref).get_str(name_rec).to_owned();
         if stored_name == lookup {
             let value_ref = DbRef {
@@ -2105,11 +2104,11 @@ fn lookup_jobject_field(stores: &Stores, src: &DbRef, name: &str) -> Option<DbRe
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + src.pos;
-    let fields_rec = stores.store(src).get_int(src.rec, fields_pos);
+    let fields_rec = stores.store(src).get_i32_raw(src.rec, fields_pos);
     if fields_rec <= 0 {
         return None;
     }
-    let length = stores.store(src).get_int(fields_rec as u32, 4);
+    let length = i64::from(stores.store(src).get_u32_raw(fields_rec as u32, 4));
     let jf_tp = stores.name("JsonField");
     let jf_size = u32::from(stores.size(jf_tp));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -2118,7 +2117,7 @@ fn lookup_jobject_field(stores: &Stores, src: &DbRef, name: &str) -> Option<DbRe
         let elm_off = 8u32 + u32::try_from(i).expect("non-negative") * jf_size;
         let name_rec = stores
             .store(src)
-            .get_int(fields_rec as u32, elm_off + name_field_pos) as u32;
+            .get_u32_raw(fields_rec as u32, elm_off + name_field_pos);
         if stores.store(src).get_str(name_rec) == name {
             return Some(DbRef {
                 store_nr: src.store_nr,
@@ -2247,7 +2246,7 @@ fn unwrap_text(
     }
     let str_tp = stores.name("JString");
     let value_pos = u32::from(stores.position(str_tp, "value")) + sub.pos;
-    let s_rec = stores.store(sub).get_int(sub.rec, value_pos) as u32;
+    let s_rec = stores.store(sub).get_u32_raw(sub.rec, value_pos);
     stores.store(sub).get_str(s_rec).to_owned()
 }
 
@@ -2285,11 +2284,11 @@ fn populate_vector_from_jarray(
     }
     let array_tp = stores.name("JArray");
     let items_pos = u32::from(stores.position(array_tp, "items")) + src_arr.pos;
-    let items_rec = stores.store(src_arr).get_int(src_arr.rec, items_pos);
+    let items_rec = stores.store(src_arr).get_i32_raw(src_arr.rec, items_pos);
     if items_rec <= 0 {
         return;
     }
-    let length = stores.store(src_arr).get_int(items_rec as u32, 4);
+    let length = i64::from(stores.store(src_arr).get_u32_raw(items_rec as u32, 4));
     let jv_tp = stores.name("JsonValue");
     let jv_size = u32::from(stores.size(jv_tp));
     let elem_size = u32::from(stores.size(elem_kt));
@@ -2438,7 +2437,7 @@ fn n_json_array(stores: &mut Stores, stack: &mut DbRef) {
         // into a Parsed snapshot.  Done in two passes — read the
         // source under `&Stores`, then write into the dest under
         // `&mut Stores` — so the borrow checker stays happy.
-        let input_inner_rec = stores.store(&items).get_int(items.rec, items.pos) as u32;
+        let input_inner_rec = stores.store(&items).get_u32_raw(items.rec, items.pos);
         let jv_tp = stores.name("JsonValue");
         let jv_size = u32::from(stores.size(jv_tp));
         let mut children = Vec::with_capacity(length as usize);
@@ -2472,7 +2471,7 @@ fn n_json_object(stores: &mut Stores, stack: &mut DbRef) {
             .set_byte(result.rec, result.pos, 0, JV_DISCR_OBJECT);
         stores.last_json_errors.clear();
     } else {
-        let input_inner_rec = stores.store(&fields).get_int(fields.rec, fields.pos) as u32;
+        let input_inner_rec = stores.store(&fields).get_u32_raw(fields.rec, fields.pos);
         let jf_tp = stores.name("JsonField");
         let jf_size = u32::from(stores.size(jf_tp));
         let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -2483,8 +2482,7 @@ fn n_json_object(stores: &mut Stores, stack: &mut DbRef) {
             let elem_offset = 8u32 + i * jf_size;
             let name_rec = stores
                 .store(&fields)
-                .get_int(input_inner_rec, elem_offset + name_field_pos)
-                as u32;
+                .get_u32_raw(input_inner_rec, elem_offset + name_field_pos);
             let name = stores.store(&fields).get_str(name_rec).to_owned();
             let value_slot = DbRef {
                 store_nr: fields.store_nr,
@@ -2519,12 +2517,12 @@ fn n_has_field(stores: &mut Stores, stack: &mut DbRef) {
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
-    let fields_rec = stores.store(&v).get_int(v.rec, fields_pos);
+    let fields_rec = stores.store(&v).get_i32_raw(v.rec, fields_pos);
     if fields_rec <= 0 {
         stores.put(stack, false);
         return;
     }
-    let length = stores.store(&v).get_int(fields_rec as u32, 4);
+    let length = i64::from(stores.store(&v).get_u32_raw(fields_rec as u32, 4));
     let jf_tp = stores.name("JsonField");
     let jf_size = u32::from(stores.size(jf_tp));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -2533,7 +2531,7 @@ fn n_has_field(stores: &mut Stores, stack: &mut DbRef) {
         let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
         let name_rec = stores
             .store(&v)
-            .get_int(fields_rec as u32, elm_offset + name_field_pos) as u32;
+            .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
         let stored_name = stores.store(&v).get_str(name_rec).to_owned();
         if stored_name == lookup {
             stores.put(stack, true);
@@ -2558,19 +2556,19 @@ fn n_keys(stores: &mut Stores, stack: &mut DbRef) {
     // matches `stores.size("text")` (4 bytes for the record-nr
     // pointing into the same store's string area).
     let vec = stores.database(text_size.max(1));
-    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
     if discr != JV_DISCR_OBJECT {
         stores.put(stack, vec);
         return;
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
-    let fields_rec = stores.store(&v).get_int(v.rec, fields_pos);
+    let fields_rec = stores.store(&v).get_i32_raw(v.rec, fields_pos);
     if fields_rec <= 0 {
         stores.put(stack, vec);
         return;
     }
-    let length = stores.store(&v).get_int(fields_rec as u32, 4);
+    let length = i64::from(stores.store(&v).get_u32_raw(fields_rec as u32, 4));
     let jf_tp = stores.name("JsonField");
     let jf_size = u32::from(stores.size(jf_tp));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
@@ -2578,8 +2576,7 @@ fn n_keys(stores: &mut Stores, stack: &mut DbRef) {
         let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
         let name_rec_in_jobject = stores
             .store(&v)
-            .get_int(fields_rec as u32, elm_offset + name_field_pos)
-            as u32;
+            .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
         let name_str = stores.store(&v).get_str(name_rec_in_jobject).to_owned();
         let elm = crate::vector::vector_append(&vec, text_size, &mut stores.allocations);
         let new_name_rec = stores.store_mut(&elm).set_str(&name_str);
@@ -2610,19 +2607,19 @@ fn n_fields(stores: &mut Stores, stack: &mut DbRef) {
     let jf_tp = stores.name("JsonField");
     let jf_size = u32::from(stores.size(jf_tp));
     let vec = stores.database(jf_size.max(1));
-    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
     if discr != JV_DISCR_OBJECT {
         stores.put(stack, vec);
         return;
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
-    let fields_rec = stores.store(&v).get_int(v.rec, fields_pos);
+    let fields_rec = stores.store(&v).get_i32_raw(v.rec, fields_pos);
     if fields_rec <= 0 {
         stores.put(stack, vec);
         return;
     }
-    let length = stores.store(&v).get_int(fields_rec as u32, 4);
+    let length = i64::from(stores.store(&v).get_u32_raw(fields_rec as u32, 4));
     let name_field_pos = u32::from(stores.position(jf_tp, "name"));
     let value_field_pos = u32::from(stores.position(jf_tp, "value"));
     // Read each input field's name + value (recursive Parsed
@@ -2634,7 +2631,7 @@ fn n_fields(stores: &mut Stores, stack: &mut DbRef) {
         let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
         let name_rec = stores
             .store(&v)
-            .get_int(fields_rec as u32, elm_offset + name_field_pos) as u32;
+            .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
         let name = stores.store(&v).get_str(name_rec).to_owned();
         let value_slot = DbRef {
             store_nr: v.store_nr,
@@ -2751,7 +2748,7 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
         JV_DISCR_STRING => {
             let str_tp = stores.name("JString");
             let value_pos = u32::from(stores.position(str_tp, "value")) + v.pos;
-            let s_rec = stores.store(v).get_int(v.rec, value_pos) as u32;
+            let s_rec = stores.store(v).get_u32_raw(v.rec, value_pos);
             let raw = stores.store(v).get_str(s_rec).to_string();
             let mut out = String::with_capacity(raw.len() + 2);
             write_json_string(&mut out, &raw);
@@ -2760,11 +2757,11 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
         JV_DISCR_ARRAY => {
             let array_tp = stores.name("JArray");
             let items_pos = u32::from(stores.position(array_tp, "items")) + v.pos;
-            let items_rec = stores.store(v).get_int(v.rec, items_pos);
+            let items_rec = stores.store(v).get_i32_raw(v.rec, items_pos);
             if items_rec <= 0 {
                 return "[]".to_string();
             }
-            let length = stores.store(v).get_int(items_rec as u32, 4);
+            let length = i64::from(stores.store(v).get_u32_raw(items_rec as u32, 4));
             if length <= 0 {
                 return "[]".to_string();
             }
@@ -2798,11 +2795,11 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
         JV_DISCR_OBJECT => {
             let obj_tp = stores.name("JObject");
             let fields_pos = u32::from(stores.position(obj_tp, "fields")) + v.pos;
-            let fields_rec = stores.store(v).get_int(v.rec, fields_pos);
+            let fields_rec = stores.store(v).get_i32_raw(v.rec, fields_pos);
             if fields_rec <= 0 {
                 return "{}".to_string();
             }
-            let length = stores.store(v).get_int(fields_rec as u32, 4);
+            let length = i64::from(stores.store(v).get_u32_raw(fields_rec as u32, 4));
             if length <= 0 {
                 return "{}".to_string();
             }
@@ -2823,8 +2820,7 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
                 let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
                 let name_rec = stores
                     .store(v)
-                    .get_int(fields_rec as u32, elm_offset + name_field_pos)
-                    as u32;
+                    .get_u32_raw(fields_rec as u32, elm_offset + name_field_pos);
                 let raw = stores.store(v).get_str(name_rec).to_string();
                 write_json_string(&mut out, &raw);
                 out.push(':');

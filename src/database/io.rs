@@ -50,9 +50,20 @@ impl Stores {
     pub fn read_data(&self, r: &DbRef, tp: u16, little_endian: bool, data: &mut Vec<u8>) {
         let store = &self.allocations[r.store_nr as usize];
         match tp {
-            0 | 6 => {
-                // integer | character
+            0 => {
+                // integer (i64 post-2c)
                 let v = store.get_int(r.rec, r.pos);
+                (if little_endian {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                })
+                .iter()
+                .for_each(|&x| data.push(x));
+            }
+            6 => {
+                // character (u32)
+                let v = store.get_u32_raw(r.rec, r.pos);
                 (if little_endian {
                     v.to_le_bytes()
                 } else {
@@ -101,7 +112,7 @@ impl Stores {
             }
             5 => {
                 // text
-                let v = store.get_str(store.get_int(r.rec, r.pos) as u32);
+                let v = store.get_str(store.get_u32_raw(r.rec, r.pos));
                 v.as_bytes().iter().for_each(|&x| data.push(x));
             }
             _ => match self.types[tp as usize].parts.clone() {
@@ -122,10 +133,10 @@ impl Stores {
                     data.push(store.get_byte(r.rec, r.pos, 0) as u8);
                 }
                 Parts::Byte(_, _) => {
-                    data.push(store.get_int(r.rec, r.pos) as u8);
+                    data.push(store.get_byte(r.rec, r.pos, 0) as u8);
                 }
                 Parts::Short(_, _) => {
-                    let v = store.get_int(r.rec, r.pos) as i16;
+                    let v = store.get_short(r.rec, r.pos, 0) as i16;
                     (if little_endian {
                         v.to_le_bytes()
                     } else {
@@ -137,13 +148,13 @@ impl Stores {
                 Parts::Vector(elem_tp) => {
                     let v_rec = {
                         let store = &self.allocations[r.store_nr as usize];
-                        store.get_int(r.rec, r.pos) as u32
+                        store.get_u32_raw(r.rec, r.pos)
                     };
                     let length = if v_rec == 0 {
                         0u32
                     } else {
                         let store = &self.allocations[r.store_nr as usize];
-                        store.get_int(v_rec, 4) as u32
+                        store.get_u32_raw(v_rec, 4)
                     };
                     let elem_size = u32::from(self.size(elem_tp));
                     let store_nr = r.store_nr;
@@ -159,15 +170,15 @@ impl Stores {
                 Parts::Array(elem_tp) => {
                     let store_nr = r.store_nr;
                     let store = &self.allocations[store_nr as usize];
-                    let v_rec = store.get_int(r.rec, r.pos) as u32;
+                    let v_rec = store.get_u32_raw(r.rec, r.pos);
                     let length = if v_rec == 0 {
                         0u32
                     } else {
-                        store.get_int(v_rec, 4) as u32
+                        store.get_u32_raw(v_rec, 4)
                     };
                     // Collect elm_recs before the mutable borrow in read_data.
                     let elm_recs: Vec<u32> = (0..length)
-                        .map(|i| store.get_int(v_rec, 8 + 4 * i) as u32)
+                        .map(|i| store.get_u32_raw(v_rec, 8 + 4 * i))
                         .collect();
                     for elm_rec in elm_recs {
                         let elem = DbRef {
@@ -352,7 +363,7 @@ impl Stores {
             return false;
         }
         let store = self.store_mut(file);
-        let filename = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
         let path = std::path::Path::new(filename);
         fill_file(path, store, file)
     }
@@ -386,7 +397,7 @@ impl Stores {
         let file_path = {
             let store = self.store_mut(file);
             store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned()
         };
         let store = self.store_mut(file);

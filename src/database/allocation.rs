@@ -678,7 +678,7 @@ impl Stores {
         for i in 1..length * 2 {
             let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
             if elm == 0 {
-                self.store_mut(to).set_int(into, 8 + 4 * i, 0);
+                self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
             let new = self.store_mut(to).claim(size.div_ceil(8));
@@ -872,12 +872,12 @@ impl Stores {
             Parts::Base if tp == 5 => {
                 // text
                 let store = self.store_mut(rec);
-                let cur = store.get_int(rec.rec, rec.pos);
+                let cur = store.get_u32_raw(rec.rec, rec.pos);
                 if cur == 0 {
                     return;
                 }
                 store.delete(cur as u32);
-                store.set_int(rec.rec, rec.pos, 0);
+                store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 for f in fields.clone() {
@@ -895,7 +895,7 @@ impl Stores {
                 let tp = *v;
                 let length = vector::length_vector(rec, &self.allocations);
                 let size = u32::from(self.size(tp));
-                let cur = self.store(rec).get_int(rec.rec, rec.pos);
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
                 if cur == 0 {
                     // Do nothing if the structure was empty
                     return;
@@ -912,7 +912,7 @@ impl Stores {
                 }
                 let store = self.store_mut(rec);
                 store.delete(cur as u32);
-                store.set_int(rec.rec, rec.pos, 0);
+                store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Array(v) | Parts::Ordered(v, _) => {
                 let tp = *v;
@@ -936,7 +936,7 @@ impl Stores {
                 }
                 let store = self.store_mut(rec);
                 store.delete(cur);
-                store.set_int(rec.rec, rec.pos, 0);
+                store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Hash(v, _) => {
                 let tp = *v;
@@ -963,7 +963,7 @@ impl Stores {
                 }
                 let store = self.store_mut(rec);
                 store.delete(cur);
-                store.set_int(rec.rec, rec.pos, 0);
+                store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Spacial(_, _) => panic!("Not implemented"),
             Parts::Index(c, _, _) => {
@@ -985,7 +985,7 @@ impl Stores {
                     );
                     self.store_mut(rec).delete(node);
                 }
-                self.store_mut(rec).set_int(rec.rec, rec.pos, 0);
+                self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
             }
             _ => {}
         }
