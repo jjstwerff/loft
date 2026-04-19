@@ -53,10 +53,11 @@ fn main() {
   f += 0x4050607;
   f += 0x8090a0b0c0d0e0fl;
   // `f#size` returns the total number of bytes written so far.
-  assert(f#size == 16l, "Should have written 16 bytes.");
+  // Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.
+  assert(f#size == 20l, "Should have written 20 bytes.");
   // Text is written as raw UTF-8 bytes with no length prefix.
   f += "Hello world!";
-  assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
+  assert(f#size == 32l, "Size should be 32 bytes (20 + 12).");
  }  // The file closes when the handle goes out of scope.
   // `move(src, dst)` renames a file. It refuses if the destination already
   // exists or if either path would leave the project directory.
