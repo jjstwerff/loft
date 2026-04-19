@@ -1025,6 +1025,18 @@ impl Parser {
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
+        // Phase 2c round 10b: `long` is deprecated — it now aliases `integer`
+        // (same i64 storage post-2c).  Emit a warning so users / stdlib
+        // maintainers can track remaining call sites.  Skip when parsing
+        // the default library (it still uses `long` in some signatures
+        // pending the round-10c sweep).
+        if type_name == "long" && !self.first_pass && !self.default {
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                "type `long` is deprecated — use `integer` (both are 8 bytes post-2c)"
+            );
+        }
         let tp_nr = if self.lexer.has_token("::") {
             if let Some(name) = self.lexer.has_identifier() {
                 let source = self.data.get_source(type_name);

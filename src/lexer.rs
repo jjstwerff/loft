@@ -110,6 +110,11 @@ pub struct Lexer {
     /// After `}` closes the expression, resume with `backtick_string_resume()`
     /// instead of `string()`.
     in_backtick: bool,
+    /// Post-2c round 10b: emit a deprecation warning when the `l` literal
+    /// suffix is seen.  Suppressed (set to `false`) while parsing the
+    /// `default/*.loft` stdlib, which still contains stray `l` suffixes
+    /// pending the round-10c sweep.
+    pub warn_deprecated_long: bool,
     diagnostics: Diagnostics,
 }
 
@@ -235,6 +240,7 @@ impl Default for Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
+            warn_deprecated_long: true,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -274,6 +280,7 @@ impl Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
+            warn_deprecated_long: true,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -986,9 +993,17 @@ impl Lexer {
         // Values > i64::MAX (impossible to represent in i64) are rejected.
         let i32_max = u64::from(i32::MAX as u32);
         let i64_max = i64::MAX as u64;
-        // Accept and drop the `l` suffix if present.
+        // Accept and drop the `l` suffix if present.  Post-2c round 10b:
+        // `integer` and `long` share i64 storage, so the suffix is a no-op.
+        // Warn so users can strip it from their code.
         if let Some('l') = self.iter.peek() {
             self.next_char();
+            if self.warn_deprecated_long {
+                self.err(
+                    Level::Warning,
+                    "the `l` literal suffix is deprecated — `integer` is now 8 bytes",
+                );
+            }
         }
         if r > i64_max {
             self.err(

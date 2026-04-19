@@ -13,12 +13,10 @@ use glb;
 
 // Pack RGBA channels into a single integer using bitwise ops.
 // Layout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue.
-// Note: loft integers are 32-bit signed, so the alpha channel uses the
-// sign bit region.  Bitwise ops work correctly on the raw bits.
+// Loft integers are 64-bit signed post-2c, so the packed value fits
+// directly — no widening cast needed.
 pub fn rgba(cr: integer, cg: integer, cb: integer, ca: integer) -> integer {
-  // Use long arithmetic to avoid i32::MIN null sentinel when alpha >= 128.
-  packed = ((ca & 255) as long << 24l) | ((cr & 255) as long << 16l) | ((cg & 255) as long << 8l) | (cb & 255) as long;
-  packed as integer
+  ((ca & 255) << 24) | ((cr & 255) << 16) | ((cg & 255) << 8) | (cb & 255)
 }
 
 pub fn rgb(cr: integer, cg: integer, cb: integer) -> integer {
