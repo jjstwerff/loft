@@ -303,11 +303,11 @@ fn t_4text_trim_end(stores: &mut Stores, stack: &mut DbRef) {
 fn t_4text_find(stores: &mut Stores, stack: &mut DbRef) {
     let v_value = *stores.get::<Str>(stack);
     let v_self = *stores.get::<Str>(stack);
-    let new_value = {
+    let new_value: i64 = {
         if let Some(v) = v_self.str().find(v_value.str()) {
-            v as i32
+            v as i64
         } else {
-            i32::MIN
+            i64::MIN
         }
     };
     stores.put(stack, new_value);
@@ -316,11 +316,11 @@ fn t_4text_find(stores: &mut Stores, stack: &mut DbRef) {
 fn t_4text_rfind(stores: &mut Stores, stack: &mut DbRef) {
     let v_value = *stores.get::<Str>(stack);
     let v_self = *stores.get::<Str>(stack);
-    let new_value = {
+    let new_value: i64 = {
         if let Some(v) = v_self.str().rfind(v_value.str()) {
-            v as i32
+            v as i64
         } else {
-            i32::MIN
+            i64::MIN
         }
     };
     stores.put(stack, new_value);

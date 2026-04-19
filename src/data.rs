@@ -397,7 +397,8 @@ impl Type {
             } else if c_max - c_min < 65536 || (nullable && c_max - c_min == 65536) {
                 2
             } else {
-                4
+                // Phase 2c: integer is stored as 8-byte i64 by default.
+                8
             }
         } else {
             0

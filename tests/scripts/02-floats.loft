@@ -127,7 +127,7 @@ fn main() {
   assert(!(nan_val as integer), "NaN as integer is null");
   assert(!(nan_val as long), "NaN as long is null");
   inf_pos = 1.0 / 0.0;
-  assert(inf_pos as integer == 2147483647, "positive infinity as integer saturates to i32::MAX");
+  assert(inf_pos as integer == 9223372036854775807l, "positive infinity as integer saturates to i64::MAX");
   inf_neg = -1.0 / 0.0;
   assert(!(inf_neg as integer), "negative infinity as integer is null (i32::MIN)");
   assert(!(inf_neg as long), "negative infinity as long is null (i64::MIN)");

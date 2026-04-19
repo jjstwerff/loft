@@ -89,6 +89,27 @@ impl State {
             let store = self.database.store(&val);
             let s: &String = store.addr::<String>(val.rec, val.pos);
             data.extend_from_slice(s.as_bytes());
+        } else if matches!(
+            &self.database.types[db_tp as usize].parts,
+            Parts::Byte(_, _) | Parts::Short(_, _)
+        ) {
+            // Narrow-integer values sit in an 8B variable slot stored raw as i64
+            // (OpPutInt), not via the +1-encoded Parts::Byte/Short encoding that
+            // structs use.  Read the raw value and serialise directly so the
+            // resulting bytes match the user-visible value.
+            let v = self.database.store(&val).get_int(val.rec, val.pos);
+            match &self.database.types[db_tp as usize].parts {
+                Parts::Byte(_, _) => data.push(v as u8),
+                Parts::Short(_, _) => {
+                    let b = if little_endian {
+                        (v as u16).to_le_bytes()
+                    } else {
+                        (v as u16).to_be_bytes()
+                    };
+                    data.extend_from_slice(&b);
+                }
+                _ => unreachable!(),
+            }
         } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
             let elem_tp = *elem_tp;
             let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
@@ -224,6 +245,27 @@ impl State {
                 let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
                 self.database
                     .write_data(&vec_ref, db_tp, little_endian, &data);
+            } else if matches!(
+                &self.database.types[db_tp as usize].parts,
+                Parts::Byte(_, _) | Parts::Short(_, _)
+            ) {
+                // Narrow-integer reads (byte/short) target a u8/u16 variable whose
+                // stack slot is 8 bytes (Phase 2c integer width) and holds a raw
+                // i64 — not the +1-encoded form that Parts::Byte/Short use in
+                // struct fields.  Decode the bytes and store as a raw i64.
+                let v: i64 = match &self.database.types[db_tp as usize].parts {
+                    Parts::Byte(_, _) => i64::from(data[0]),
+                    Parts::Short(_, _) => {
+                        let d: [u8; 2] = data[0..2].try_into().unwrap();
+                        if little_endian {
+                            i64::from(u16::from_le_bytes(d))
+                        } else {
+                            i64::from(u16::from_be_bytes(d))
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                self.database.store_mut(&val).set_int(val.rec, val.pos, v);
             } else {
                 self.database.write_data(&val, db_tp, little_endian, &data);
             }

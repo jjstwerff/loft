@@ -1652,8 +1652,8 @@ impl Parser {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Spacial(_, _, _)
-            | Type::Sorted(_, _, _)
-            | Type::Character => self.cl("OpSetInt", &[ref_code, pos_val, val_code]),
+            | Type::Sorted(_, _, _) => self.cl("OpSetInt", &[ref_code, pos_val, val_code]),
+            Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, _) => {
                 // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
                 // Copy the struct bytes into the embedded field instead.
