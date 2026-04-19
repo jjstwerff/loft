@@ -3101,8 +3101,15 @@ impl Parser {
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
+                        // Post-2c: prefer the alias's forced size(N) annotation.
+                        // `d_nr` (local above) is the def_nr of the alias the user
+                        // typed — e.g. i32 — not the base integer it collapses to
+                        // via type_elm.  Only forced_size on the alias applies.
+                        let forced = self.data.forced_size(d_nr);
                         let packed = tp.size(false);
-                        *val = if packed > 0 {
+                        *val = if let Some(n) = forced {
+                            Value::Int(i32::from(n))
+                        } else if packed > 0 {
                             // Range-constrained integer: use packed field size
                             Value::Int(i32::from(packed))
                         } else {

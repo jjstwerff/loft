@@ -23,8 +23,8 @@ enum Format {
 
 #[cfg(not(feature = "wasm"))]
 fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
-    store.set_long(file.rec, file.pos + 16, i64::MIN); // current
-    store.set_long(file.rec, file.pos + 24, i64::MIN); // next
+    store.set_long(file.rec, file.pos + 8, i64::MIN); // current
+    store.set_long(file.rec, file.pos + 16, i64::MIN); // next
     if let Ok(data) = path.metadata() {
         store.set_long(file.rec, file.pos, i64::MIN); // no size
         let tp = if data.is_dir() {
@@ -35,10 +35,10 @@ fn fill_file(path: &std::path::Path, store: &mut Store, file: &DbRef) -> bool {
         } else {
             Format::NotExists
         };
-        store.set_byte(file.rec, file.pos + 36, 0, tp as i32);
+        store.set_byte(file.rec, file.pos + 32, 0, tp as i32);
         true
     } else {
-        store.set_byte(file.rec, file.pos + 36, 0, Format::NotExists as i32);
+        store.set_byte(file.rec, file.pos + 32, 0, Format::NotExists as i32);
         false
     }
 }
@@ -145,6 +145,16 @@ impl Stores {
                     .iter()
                     .for_each(|&x| data.push(x));
                 }
+                Parts::Int(_, _) => {
+                    let v = store.get_i32_raw(r.rec, r.pos);
+                    (if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    })
+                    .iter()
+                    .for_each(|&x| data.push(x));
+                }
                 Parts::Vector(elem_tp) => {
                     let v_rec = {
                         let store = &self.allocations[r.store_nr as usize];
@@ -223,6 +233,7 @@ impl Stores {
                     .sum(),
                 Parts::Enum(_) | Parts::Byte(_, _) => 1,
                 Parts::Short(_, _) => 2,
+                Parts::Int(_, _) => 4,
                 _ => 0,
             },
         }
@@ -326,6 +337,15 @@ impl Stores {
                     };
                     store.set_short(r.rec, r.pos, 0, v);
                 }
+                Parts::Int(_, _) => {
+                    let d: [u8; 4] = data[0..4].try_into().unwrap();
+                    let v = if little_endian {
+                        i32::from_le_bytes(d)
+                    } else {
+                        i32::from_be_bytes(d)
+                    };
+                    store.set_i32_raw(r.rec, r.pos, v);
+                }
                 Parts::Vector(elem_tp) => {
                     let elem_size = u32::from(self.size(elem_tp));
                     if elem_size == 0 {
@@ -364,7 +384,7 @@ impl Stores {
             return false;
         }
         let store = self.store_mut(file);
-        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 32));
+        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
         let path = std::path::Path::new(filename);
         fill_file(path, store, file)
     }
@@ -383,9 +403,9 @@ impl Stores {
         }
         let store = self.store_mut(file);
         store.set_long(file.rec, file.pos, i64::MIN);
+        store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
-        store.set_long(file.rec, file.pos + 24, i64::MIN);
-        store.set_byte(file.rec, file.pos + 36, 0, 5); // NotExists
+        store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
         false
     }
 
@@ -398,23 +418,23 @@ impl Stores {
         let file_path = {
             let store = self.store_mut(file);
             store
-                .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned()
         };
         let store = self.store_mut(file);
+        store.set_long(file.rec, file.pos + 8, i64::MIN);
         store.set_long(file.rec, file.pos + 16, i64::MIN);
-        store.set_long(file.rec, file.pos + 24, i64::MIN);
         if crate::wasm::host_fs_is_dir(&file_path) {
             store.set_long(file.rec, file.pos, i64::MIN);
-            store.set_byte(file.rec, file.pos + 36, 0, 4); // Directory
+            store.set_byte(file.rec, file.pos + 32, 0, 4); // Directory
             true
         } else if crate::wasm::host_fs_is_file(&file_path) {
             let sz = crate::wasm::host_fs_file_size(&file_path);
             store.set_long(file.rec, file.pos, sz.max(0));
-            store.set_byte(file.rec, file.pos + 36, 0, 1); // TextFile
+            store.set_byte(file.rec, file.pos + 32, 0, 1); // TextFile
             true
         } else {
-            store.set_byte(file.rec, file.pos + 36, 0, 5); // NotExists
+            store.set_byte(file.rec, file.pos + 32, 0, 5); // NotExists
             false
         }
     }
@@ -439,14 +459,14 @@ impl Stores {
                 }
             }
             for (name, entry) in res {
-                let elm = vector::vector_append(&vector, 37, &mut self.allocations);
+                let elm = vector::vector_append(&vector, 33, &mut self.allocations);
                 let store = self.store_mut(result);
                 let name_pos = store.set_str(&name) as i32;
-                store.set_u32_raw(elm.rec, elm.pos + 32, name_pos as u32);
-                store.set_int(elm.rec, elm.pos + 8, i64::MIN);
+                store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+                store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
                 // Initialize current and next to null (i64::MIN) so they're not shown
+                store.set_long(elm.rec, elm.pos + 8, i64::MIN);
                 store.set_long(elm.rec, elm.pos + 16, i64::MIN);
-                store.set_long(elm.rec, elm.pos + 24, i64::MIN);
                 vector::vector_finish(&vector, &mut self.allocations);
                 let store = self.store_mut(result);
                 if !fill_file(&entry.path(), store, &elm) {
@@ -469,26 +489,26 @@ impl Stores {
         };
         for name in entries {
             let full = format!("{file_path}/{name}");
-            let elm = vector::vector_append(&vector, 37, &mut self.allocations);
+            let elm = vector::vector_append(&vector, 33, &mut self.allocations);
             let store = self.store_mut(result);
             let name_pos = store.set_str(&full) as i32;
-            store.set_u32_raw(elm.rec, elm.pos + 32, name_pos as u32);
-            store.set_int(elm.rec, elm.pos + 8, i64::MIN);
+            store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+            store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
+            store.set_long(elm.rec, elm.pos + 8, i64::MIN);
             store.set_long(elm.rec, elm.pos + 16, i64::MIN);
-            store.set_long(elm.rec, elm.pos + 24, i64::MIN);
             // Fill metadata for this entry.
             let is_dir = crate::wasm::host_fs_is_dir(&full);
             let is_file = crate::wasm::host_fs_is_file(&full);
             let store = self.store_mut(result);
             if is_dir {
                 store.set_long(elm.rec, elm.pos, i64::MIN);
-                store.set_byte(elm.rec, elm.pos + 36, 0, 4); // Directory
+                store.set_byte(elm.rec, elm.pos + 32, 0, 4); // Directory
             } else if is_file {
                 let sz = crate::wasm::host_fs_file_size(&full);
                 store.set_long(elm.rec, elm.pos, sz.max(0));
-                store.set_byte(elm.rec, elm.pos + 36, 0, 1); // TextFile
+                store.set_byte(elm.rec, elm.pos + 32, 0, 1); // TextFile
             } else {
-                store.set_byte(elm.rec, elm.pos + 36, 0, 5); // NotExists
+                store.set_byte(elm.rec, elm.pos + 32, 0, 5); // NotExists
             }
             vector::vector_finish(&vector, &mut self.allocations);
         }
@@ -531,7 +551,7 @@ impl Stores {
             // FS-E: write text content via JS host bridge.
             let file_path = {
                 let s = self.store_mut(file);
-                s.get_str(s.get_u32_raw(file.rec, file.pos + 32))
+                s.get_str(s.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_write_text(&file_path, v);
@@ -540,14 +560,14 @@ impl Stores {
         {
             let f_nr = self.files.len() as i32;
             let s = self.store_mut(file);
-            let mut file_ref = s.get_int(file.rec, file.pos + 8);
-            if file_ref == i64::MIN {
-                let file_name = s.get_str(s.get_u32_raw(file.rec, file.pos + 32));
+            let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
+                let file_name = s.get_str(s.get_u32_raw(file.rec, file.pos + 24));
                 if let Ok(f) = std::fs::File::create(file_name) {
-                    s.set_int(file.rec, file.pos + 8, i64::from(f_nr));
+                    s.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.files.push(Some(f));
                 }
-                file_ref = i64::from(f_nr);
+                file_ref = f_nr;
             }
             if let Some(f) = &mut self.files[file_ref as usize] {
                 f.write_all(v.as_bytes()).unwrap_or_default();

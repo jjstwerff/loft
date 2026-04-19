@@ -106,6 +106,7 @@ pub enum Parts {
     EnumValue(u8, Vec<Field>),         // Enumerate value with actual value for typed structures.
     Byte(i32, bool),                   // start number and nullable flag
     Short(i32, bool),                  // start number and nullable flag
+    Int(i32, bool),                    // 4-byte integer field (size(4) annotation). Null sentinel: i32::MIN.
     Vector(u16),                       // The records are part of the vector
     Array(u16),                        // The array holds references for each record
     Sorted(u16, Vec<(u16, bool)>),     // Sorted vector on fields with an ascending flag

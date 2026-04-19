@@ -1791,6 +1791,14 @@ use #count instead"
     /// Compute the in-store byte size of a vector element type.
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
+        // Post-2c: honor size(N) on integer aliases.  Must run before the
+        // generic `known_type → database.size(...)` path below, because
+        // database.size for the 8-byte integer base returns 8 regardless.
+        if matches!(elm, Type::Integer(_, _, _))
+            && let Some(n) = self.data.forced_size(elm_td)
+        {
+            return i32::from(n);
+        }
         // B5 (2026-04-13): for a mixed struct-enum element type
         // (`Type::Enum(_, true, _)`), the parent enum's `known_type` is
         // a byte-sized enumerate (size 1) — wrong for vector storage,

@@ -608,6 +608,23 @@ impl Stores {
         }
     }
 
+    /// 4-byte integer field type, used for `pub type T = integer size(4);`
+    /// subtypes (e.g. `i32`).  Stored raw (no +1 shift); `i32::MIN` reserved
+    /// as the null sentinel.  Stack values stay 8-byte i64 — narrowing
+    /// happens at the field boundary via OpSetInt4/OpGetInt4.
+    pub fn int(&mut self, min: i32, nullable: bool) -> u16 {
+        let name = format!("int<{min},{nullable}>");
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types
+                .push(Type::new(&name, Parts::Int(min, nullable), 4));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
     pub fn enumerate(&mut self, name: &str) -> u16 {
         let num = self.types.len() as u16;
         self.types

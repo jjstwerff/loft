@@ -389,6 +389,19 @@ impl Stores {
                     .set_short(to.rec, to.pos, from, *n as i32);
                 Ok(())
             }
+            Parts::Int(_from, _null) => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return Err(WalkErr {
+                        at: 0,
+                        path: path.clone(),
+                    });
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                let v = *n as i64;
+                let raw = if v == i64::MIN { i32::MIN } else { v as i32 };
+                self.store_mut(to).set_i32_raw(to.rec, to.pos, raw);
+                Ok(())
+            }
         }
     }
 
@@ -585,6 +598,10 @@ impl Stores {
             Parts::Short(_, null) => {
                 self.store_mut(rec)
                     .set_short(rec.rec, rec.pos, 0, if null { 65535 } else { 0 });
+            }
+            Parts::Int(_, null) => {
+                self.store_mut(rec)
+                    .set_i32_raw(rec.rec, rec.pos, if null { i32::MIN } else { 0 });
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 for f in &fields {

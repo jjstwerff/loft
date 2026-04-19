@@ -1364,6 +1364,13 @@ impl Parser {
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
+        // Post-2c: honor size(N) on integer aliases.
+        if matches!(tp, Type::Integer(_, _, _)) {
+            let alias_nr = data.type_elm(tp);
+            if let Some(n) = data.forced_size(alias_nr) {
+                return i32::from(n);
+            }
+        }
         match tp {
             Type::Single | Type::Boolean | Type::Character | Type::Text(_) | Type::Enum(_, false, _) => 4,
             Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
@@ -1534,18 +1541,32 @@ impl Parser {
             let nm = self.data.attr_name(d_nr, f_nr);
             self.database.position(self.data.def(d_nr).known_type, &nm)
         };
-        self.get_val(&tp, nullable, u32::from(pos), code)
+        // Post-2c: pass the field's alias def_nr so `get_val` can honor
+        // size(N) for integer subtypes (e.g. i32 → OpGetInt4).
+        let alias = if f_nr == usize::MAX {
+            u32::MAX
+        } else {
+            self.data.def(d_nr).attributes[f_nr].alias_d_nr
+        };
+        self.get_val(&tp, nullable, u32::from(pos), code, alias)
     }
 
-    fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value) -> Value {
+    fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
             Type::Integer(min, _, _) => {
-                let s = tp.size(nullable);
+                // Post-2c: honor size(N) on the captured alias; fall back to
+                // the limit()-based heuristic when no alias info available.
+                let s = self
+                    .data
+                    .forced_size(alias)
+                    .unwrap_or_else(|| tp.size(nullable));
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(*min)])
                 } else if s == 2 {
                     self.cl("OpGetShort", &[code, p, Value::Int(*min)])
+                } else if s == 4 {
+                    self.cl("OpGetInt4", &[code, p])
                 } else {
                     self.cl("OpGetInt", &[code, p])
                 }
@@ -1639,11 +1660,23 @@ impl Parser {
         let set_op = match tp {
             Type::Integer(min, _, _) => {
                 let m = Value::Int(min);
-                let s = tp.size(self.data.attr_nullable(d_nr, f_nr));
+                // Post-2c: honor size(N) on the alias recorded during field
+                // parsing; fall back to the limit()-based heuristic.
+                let alias_nr = if f_nr != usize::MAX {
+                    self.data.def(d_nr).attributes[f_nr].alias_d_nr
+                } else {
+                    u32::MAX
+                };
+                let s = self
+                    .data
+                    .forced_size(alias_nr)
+                    .unwrap_or_else(|| tp.size(self.data.attr_nullable(d_nr, f_nr)));
                 if s == 1 {
                     self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
                     self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
+                } else if s == 4 {
+                    self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
                 } else {
                     self.cl("OpSetInt", &[ref_code, pos_val, val_code])
                 }

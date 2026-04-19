@@ -217,6 +217,7 @@ impl Parser {
                 "OpSetShort",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
+            "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
             "OpGetLong" => {
                 // f#next = pos: seek the file AND update the stored field.
                 if args[1] == Value::Int(16)

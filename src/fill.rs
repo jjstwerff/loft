@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 266] = &[
+pub const OPERATORS: &[fn(&mut State); 268] = &[
     goto,
     goto_word,
     goto_false,
@@ -210,6 +210,8 @@ pub const OPERATORS: &[fn(&mut State); 266] = &[
     set_float,
     set_byte,
     set_short,
+    get_int4,
+    set_int4,
     set_text,
     var_vector,
     length_vector,
@@ -1693,6 +1695,41 @@ fn set_short(s: &mut State) {
             i32::from(v_min),
             v_val as i32,
         );
+    }
+}
+
+fn get_int4(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r = s
+            .database
+            .store(&db)
+            .get_i32_raw(db.rec, db.pos + u32::from(v_fld));
+        if r == i32::MIN {
+            i64::MIN
+        } else {
+            i64::from(r)
+        }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_int4(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_val = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = if v_val == i64::MIN {
+            i32::MIN
+        } else {
+            v_val as i32
+        };
+        s.database
+            .store_mut(&db)
+            .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
     }
 }
 

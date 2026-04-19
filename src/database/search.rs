@@ -228,6 +228,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::Int(_, _)
             | Parts::Spacial(_, _) => panic!(
                 "find called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
@@ -414,6 +415,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::Int(_, _)
             | Parts::Hash(_, _)
             | Parts::Spacial(_, _) => panic!(
                 "Undefined iterate on non-collection type: {} (db={})",
@@ -478,6 +480,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::Int(_, _)
             | Parts::Spacial(_, _) => panic!(
                 "remove called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db

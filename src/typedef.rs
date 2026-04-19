@@ -346,11 +346,20 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                 }
                 Type::Integer(minimum, _, not_null) => {
                     let field_nullable = nullable && !not_null;
-                    let s = a_type.size(field_nullable);
+                    // Post-2c: if the field's alias has a forced size(N)
+                    // annotation, prefer it over the limit()-based heuristic.
+                    // The alias def_nr was captured in parse_field because
+                    // Type::Integer collapses alias names.
+                    let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
+                    let s = data
+                        .forced_size(alias)
+                        .unwrap_or_else(|| a_type.size(field_nullable));
                     if s == 1 {
                         database.byte(minimum, field_nullable)
                     } else if s == 2 {
                         database.short(minimum, field_nullable)
+                    } else if s == 4 {
+                        database.int(minimum, field_nullable)
                     } else {
                         database.name("integer")
                     }

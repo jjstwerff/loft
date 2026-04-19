@@ -261,12 +261,12 @@ impl Parser {
         self.vars.in_use(var_nr, true);
         if self.lexer.has_keyword("format") {
             let file_ref = Value::Var(var_nr);
-            *code = self.cl("OpGetEnum", &[file_ref, Value::Int(36)]);
+            *code = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
             let fmt_def = self.data.def_nr("Format");
             *t = Type::Enum(fmt_def, false, Vec::new());
         } else if self.lexer.has_keyword("exists") {
             let file_ref = Value::Var(var_nr);
-            let fmt = self.cl("OpGetEnum", &[file_ref, Value::Int(36)]);
+            let fmt = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
             let fmt_def = self.data.def_nr("Format");
             let enum_tp = Type::Enum(fmt_def, false, Vec::new());
             let ne_val = if let Some(&a_nr) = self.data.def(fmt_def).attr_names.get("NotExists") {
@@ -281,12 +281,12 @@ impl Parser {
             *code = self.cl("OpSizeFile", &[Value::Var(var_nr)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("index") {
-            // Read the current field at offset 16 (post-2c File layout)
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
+            // Read the current field at offset 8 (pre-2c layout restored now that i32 is 4B)
+            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(8)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("next") {
-            // Read the next field at offset 24 (post-2c File layout)
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(24)]);
+            // Read the next field at offset 16 (pre-2c layout restored)
+            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("read") {
             self.lexer.token("(");
@@ -296,6 +296,8 @@ impl Parser {
             // Determine read type from optional "as T"
             let (read_type, db_tp) = if self.lexer.has_token("as") {
                 if let Some(type_name) = self.lexer.has_identifier() {
+                    // Capture the alias def_nr so size(N) can pick Parts::Int.
+                    let alias_nr = self.data.def_nr(&type_name);
                     let tp = self
                         .parse_type(u32::MAX, &type_name, false)
                         .unwrap_or(Type::Text(vec![]));
@@ -312,7 +314,35 @@ impl Parser {
                         );
                     }
                     self.ensure_io_type(&tp.clone());
-                    let id = self.get_type(&tp);
+                    // Post-2c: honor `as i32` by routing to Parts::Int (4B) when
+                    // the alias has size(4).
+                    let id = if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(4)
+                    {
+                        if !self.first_pass {
+                            self.database.int(*min, false)
+                        } else {
+                            u16::MAX
+                        }
+                    } else if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(1)
+                    {
+                        if !self.first_pass {
+                            self.database.byte(*min, false)
+                        } else {
+                            u16::MAX
+                        }
+                    } else if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(2)
+                    {
+                        if !self.first_pass {
+                            self.database.short(*min, false)
+                        } else {
+                            u16::MAX
+                        }
+                    } else {
+                        self.get_type(&tp)
+                    };
                     (tp, id)
                 } else {
                     let text_tp = Type::Text(vec![]);

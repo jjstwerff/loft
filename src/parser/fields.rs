@@ -423,7 +423,7 @@ impl Parser {
                         &[code.clone(), Value::Int(elm_size), *next.clone()],
                     );
                     if self.database.is_base(known) {
-                        v = self.get_val(etp, true, 0, v);
+                        v = self.get_val(etp, true, 0, v, u32::MAX);
                     }
                     v
                 };
@@ -457,7 +457,7 @@ impl Parser {
         } else {
             *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
             if self.database.is_base(known) {
-                *code = self.get_val(etp, true, 0, code.clone());
+                *code = self.get_val(etp, true, 0, code.clone(), u32::MAX);
             }
         }
         None

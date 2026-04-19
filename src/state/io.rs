@@ -28,7 +28,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
@@ -52,7 +52,7 @@ impl State {
         #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
         {
             let store = self.database.store(&file);
-            let file_path = store.get_str(store.get_u32_raw(file.rec, file.pos + 32));
+            let file_path = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
             let path_string = file_path.to_owned();
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
             if let Ok(mut f) = File::open(&path_string) {
@@ -150,17 +150,17 @@ impl State {
         let format = self
             .database
             .store(&file)
-            .get_byte(file.rec, file.pos + 36, 0);
+            .get_byte(file.rec, file.pos + 32, 0);
         // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists (default to TextFile).
         if format != 1 && format != 5 && format != 2 && format != 3 {
             return;
         }
         let little_endian = format == 2;
-        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 24);
+        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
         let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
         self.database
             .store_mut(&file)
-            .set_long(file.rec, file.pos + 16, next_pos);
+            .set_long(file.rec, file.pos + 8, next_pos);
         let data = self.assemble_write_data(val, db_tp, little_endian);
         let written = data.len();
         #[cfg(feature = "wasm")]
@@ -169,7 +169,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, next_pos);
@@ -178,12 +178,12 @@ impl State {
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 8);
-            let file_ref = if file_ref == i64::MIN {
+            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            let file_ref = if file_ref == i32::MIN {
                 let file_name = {
                     let store = self.database.store(&file);
                     store
-                        .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
                 match File::create(&file_name) {
@@ -194,14 +194,14 @@ impl State {
                         }
                         self.database
                             .store_mut(&file)
-                            .set_int(file.rec, file.pos + 8, i64::from(f_nr));
+                            .set_i32_raw(file.rec, file.pos + 28, f_nr);
                         if format == 5 {
                             self.database
                                 .store_mut(&file)
-                                .set_byte(file.rec, file.pos + 36, 0, 1);
+                                .set_byte(file.rec, file.pos + 32, 0, 1);
                         }
                         self.database.files.push(Some(f));
-                        i64::from(f_nr)
+                        f_nr
                     }
                     Err(e) => {
                         eprintln!("file create error for {file_name:?}: {e}");
@@ -224,7 +224,7 @@ impl State {
         }
         self.database
             .store_mut(&file)
-            .set_long(file.rec, file.pos + 24, next_pos + written as i64);
+            .set_long(file.rec, file.pos + 16, next_pos + written as i64);
     }
 
     /// Dispatch read bytes into `val` of type `db_tp`.
@@ -288,17 +288,17 @@ impl State {
         let format = self
             .database
             .store(&file)
-            .get_byte(file.rec, file.pos + 36, 0);
+            .get_byte(file.rec, file.pos + 32, 0);
         // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists.
         if format != 1 && format != 5 && format != 2 && format != 3 {
             return;
         }
         let little_endian = format == 2;
-        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 24);
+        let raw_next = self.database.store(&file).get_long(file.rec, file.pos + 16);
         let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
         self.database
             .store_mut(&file)
-            .set_long(file.rec, file.pos + 16, next_pos);
+            .set_long(file.rec, file.pos + 8, next_pos);
         let n = bytes as usize;
         #[cfg(feature = "wasm")]
         {
@@ -306,7 +306,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, next_pos);
@@ -314,7 +314,7 @@ impl State {
                 let actual = data.len();
                 self.database.store_mut(&file).set_long(
                     file.rec,
-                    file.pos + 24,
+                    file.pos + 16,
                     next_pos + actual as i64,
                 );
                 self.dispatch_read_data(val, db_tp, little_endian, data, n);
@@ -325,18 +325,18 @@ impl State {
         {
             let f_nr = self.database.files.len() as i32;
             let store = self.database.store_mut(&file);
-            let mut file_ref = store.get_int(file.rec, file.pos + 8);
-            if file_ref == i64::MIN {
-                let file_name = store.get_str(store.get_u32_raw(file.rec, file.pos + 32));
+            let mut file_ref = store.get_i32_raw(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
+                let file_name = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
                 if let Ok(mut f) = File::open(file_name) {
                     // apply stored seek position on first open.
                     if next_pos != 0 {
                         let _ = f.seek(SeekFrom::Start(next_pos as u64));
                     }
-                    store.set_int(file.rec, file.pos + 8, i64::from(f_nr));
+                    store.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.database.files.push(Some(f));
                 }
-                file_ref = i64::from(f_nr);
+                file_ref = f_nr;
             } else if let Some(f) = &mut self.database.files[file_ref as usize] {
                 // Handle already open: user may have set #next explicitly to seek.
                 // Sync the OS file handle with the stored next_pos.
@@ -360,7 +360,7 @@ impl State {
             };
             self.database.store_mut(&file).set_long(
                 file.rec,
-                file.pos + 24,
+                file.pos + 16,
                 next_pos + actual as i64,
             );
             if is_text {
@@ -382,24 +382,24 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, pos);
             self.database
                 .store_mut(&file)
-                .set_long(file.rec, file.pos + 24, pos);
+                .set_long(file.rec, file.pos + 16, pos);
             return;
         }
         #[cfg(not(feature = "wasm"))]
         {
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 8);
-            if file_ref == i64::MIN {
+            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            if file_ref == i32::MIN {
                 // File not yet open — store the seek position in #next so the first
                 // read/write applies it after opening the file.
                 self.database
                     .store_mut(&file)
-                    .set_long(file.rec, file.pos + 24, pos);
+                    .set_long(file.rec, file.pos + 16, pos);
             } else if let Some(f) = &mut self.database.files[file_ref as usize]
                 && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
             {
@@ -420,7 +420,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let size = crate::wasm::host_fs_file_size(&file_path);
@@ -431,7 +431,7 @@ impl State {
         {
             let store = self.database.store(&file);
             let file_path = store
-                .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned();
             let size = if let Ok(meta) = std::fs::metadata(&file_path) {
                 meta.len() as i64
@@ -455,7 +455,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let ok = if let Some(mut bytes) = crate::wasm::host_fs_read_binary(&file_path) {
@@ -474,23 +474,23 @@ impl State {
             let path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_u32_raw(file.rec, file.pos + 32))
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             // Close any open handle: the handle may be in read or write mode with a stale
             // position, and after resize the position might be beyond the new end of file.
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 8);
-            if file_ref != i64::MIN && (file_ref as usize) < self.database.files.len() {
+            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
                 self.database.files[file_ref as usize] = None;
                 self.database
                     .store_mut(&file)
-                    .set_int(file.rec, file.pos + 8, i64::MIN);
+                    .set_i32_raw(file.rec, file.pos + 28, i32::MIN);
+                self.database
+                    .store_mut(&file)
+                    .set_long(file.rec, file.pos + 8, i64::MIN);
                 self.database
                     .store_mut(&file)
                     .set_long(file.rec, file.pos + 16, i64::MIN);
-                self.database
-                    .store_mut(&file)
-                    .set_long(file.rec, file.pos + 24, i64::MIN);
             }
             let ok = OpenOptions::new()
                 .write(true)
@@ -523,8 +523,8 @@ impl State {
         {
             let stored_type = self.database.store(&db).get_u32_raw(db.rec, 4) as u16;
             if stored_type == file_type {
-                let file_ref = self.database.store(&db).get_int(db.rec, db.pos + 8);
-                if file_ref != i64::MIN && (file_ref as usize) < self.database.files.len() {
+                let file_ref = self.database.store(&db).get_i32_raw(db.rec, db.pos + 28);
+                if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
                     self.database.files[file_ref as usize] = None;
                 }
             }

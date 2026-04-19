@@ -632,6 +632,11 @@ pub struct Attribute {
     pub check: Value,
     /// Optional message for a failed constraint check.
     pub check_message: Value,
+    /// Post-2c: when the field's declared type was an integer alias with a
+    /// `size(N)` annotation (e.g. `i32`), this holds the alias def_nr so
+    /// `fill_database` / codegen can consult `forced_size(alias_nr)`.  `0`
+    /// means "no alias" — fall back to the limit()-based heuristic.
+    pub alias_d_nr: u32,
 }
 
 impl Debug for Attribute {
@@ -723,6 +728,11 @@ pub struct Definition {
     /// DbRef into CONST_STORE for pre-built vector constants.
     /// `None` for non-constant definitions or constants that couldn't be pre-built.
     pub const_ref: Option<crate::keys::DbRef>,
+    /// Post-2c: explicit `size(N)` annotation on an integer subtype
+    /// (e.g. `pub type i32 = integer size(4);`).  `None` means use the
+    /// limit()-based heuristic; `Some(n)` forces the stored-width to n
+    /// bytes (n ∈ {1, 2, 4, 8}).
+    pub forced_size: Option<u8>,
 }
 
 impl Definition {
@@ -975,6 +985,7 @@ impl Data {
             value: Value::Null,
             check: Value::Null,
             check_message: Value::Null,
+            alias_d_nr: u32::MAX,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];
@@ -1019,6 +1030,7 @@ impl Data {
             closure_record: u32::MAX,
             bounds: Vec::new(),
             const_ref: None,
+            forced_size: None,
         };
         self.definitions.push(new_def);
         rec
@@ -1700,6 +1712,18 @@ impl Data {
     pub fn def(&self, dnr: u32) -> &Definition {
         assert_ne!(dnr, u32::MAX, "Unknown definition");
         &self.definitions[dnr as usize]
+    }
+
+    /// Post-2c: return the explicit `size(N)` annotation on the definition,
+    /// if any.  Used by field allocation and sizeof() to honor `pub type i32 =
+    /// integer size(4);` — the size overrides the limit()-based heuristic.
+    /// Returns `None` when no annotation was provided (use the heuristic).
+    #[must_use]
+    pub fn forced_size(&self, dnr: u32) -> Option<u8> {
+        if dnr == u32::MAX || (dnr as usize) >= self.definitions.len() {
+            return None;
+        }
+        self.definitions[dnr as usize].forced_size
     }
 
     /// Return the `def_nr`s of all definitions whose `parent` field equals `parent_nr`.
