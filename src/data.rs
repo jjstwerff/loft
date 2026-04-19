@@ -385,6 +385,11 @@ impl Type {
         self == other
             || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
+            // Post-2c round 10b: Long and Integer share i64 storage; treat
+            // them as equal for dispatch / convert purposes.
+            || matches!((self, other),
+                (Type::Long, Type::Integer(_, _, _)) |
+                (Type::Integer(_, _, _), Type::Long))
     }
 
     #[must_use]

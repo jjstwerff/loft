@@ -29,7 +29,14 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.definitions[d_nr as usize].known_type = 7;
         }
         "long" => {
-            data.set_returned(d_nr, Type::Long);
+            // Phase 2c round 10b: user-facing `long` is now an alias for
+            // `integer` (both i64 storage post-2c).  Parser hands out
+            // Type::Integer so cross-type arithmetic needs no explicit cast.
+            // Type::Long is still produced internally for wide-limit
+            // promotions in parse_type (e.g. `integer limit(0, 4_294_967_294)`).
+            // known_type stays 1 so Long-typed database fields keep routing
+            // through OpGetLong / OpSetLong.
+            data.set_returned(d_nr, I32.clone());
             data.definitions[d_nr as usize].known_type = 1;
         }
         "integer" => {
