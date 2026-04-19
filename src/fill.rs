@@ -2024,14 +2024,14 @@ fn coroutine_exhausted(s: &mut State) {
 
 fn var_fn_ref(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<[i32; 4]>(v_pos);
+    let new_value = *s.get_var::<[u8; 20]>(v_pos);
     s.put_stack(new_value);
 }
 
 fn put_fn_ref(s: &mut State) {
     let v_pos = *s.code::<u16>();
     {
-        let v = *s.get_stack::<[i32; 4]>();
+        let v = *s.get_stack::<[u8; 20]>();
         s.put_var(v_pos, v);
     }
 }

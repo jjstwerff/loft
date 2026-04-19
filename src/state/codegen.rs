@@ -1396,9 +1396,9 @@ impl State {
         {
             return Type::Void;
         }
-        // free the closure DbRef embedded at offset+4 in a 16-byte fn-ref
-        // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout is
-        // [d_nr 4B][closure DbRef 12B], so the closure is at var_pos - 4.
+        // free the closure DbRef embedded at offset+8 in a 20-byte fn-ref
+        // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout
+        // is [d_nr 8B][closure DbRef 12B], so the closure is at var_pos - 8.
         // OpNullRefSentinel produces store_nr=u16::MAX; database.free() is a no-op
         // for that sentinel, so non-capturing lambdas are safe.
         if stack.data.def(op).name == "OpFreeRef"
@@ -1407,7 +1407,7 @@ impl State {
         {
             let var_pos = stack.position - stack.function.stack(*v);
             stack.add_op("OpVarRef", self);
-            self.code_add(var_pos - 4);
+            self.code_add(var_pos - 8);
             stack.add_op("OpFreeRef", self);
             return Type::Void;
         }
@@ -1791,7 +1791,13 @@ impl State {
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
             Type::Integer(_, _, _) => stack.add_op("OpVarInt", self),
-            Type::Function(_, _, _) => stack.add_op("OpVarFnRef", self),
+            Type::Function(_, _, _) => {
+                stack.add_op("OpVarFnRef", self);
+                // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
+                // signature returns `text` (16 B Str).  Add the 4-byte
+                // discrepancy to the compile-time stack tracker.
+                stack.position += 4;
+            }
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
@@ -2124,7 +2130,13 @@ impl State {
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
             Type::Integer(_, _, _) => stack.add_op("OpPutInt", self),
-            Type::Function(_, _, _) => stack.add_op("OpPutFnRef", self),
+            Type::Function(_, _, _) => {
+                stack.add_op("OpPutFnRef", self);
+                // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
+                // signature pops `text` (16 B Str).  Subtract the 4-byte
+                // discrepancy from the compile-time stack tracker.
+                stack.position -= 4;
+            }
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
