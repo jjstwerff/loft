@@ -631,6 +631,18 @@ impl Parser {
         if matches!(is_type, Type::Never) {
             return true;
         }
+        // Post-2c: integer and long share i64 storage.  Allow free conversion
+        // either direction — they're runtime-identical.  (Phase 2c round 10
+        // will eventually delete Type::Long; until then this keeps cross-type
+        // assignments like `x: integer = 9_876_543_210` working without an
+        // explicit cast.)
+        let _ = code;
+        if matches!((is_type, should),
+            (Type::Long, Type::Integer(_, _, _)) |
+            (Type::Integer(_, _, _), Type::Long))
+        {
+            return true;
+        }
         // Struct-literal inline constructors are typed as Rewritten(Reference(...)); strip
         // the wrapper so method calls chained on the constructor are accepted correctly.
         if let Type::Rewritten(inner) = is_type {

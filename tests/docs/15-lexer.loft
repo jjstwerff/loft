@@ -29,7 +29,7 @@ fn main() {
   // equals s and returns true; otherwise it leaves the token in place and
   // returns false. `peek()` returns the next token as text without consuming
   // it. `position()` returns the current location as `file:line:col`.
-  l.parse_string("Tokens", "12 += -2 * 3l >> 4");
+  l.parse_string("Tokens", "12 += -2 * 3 >> 4");
   assert(l.int() == 12, "Integer");
   assert(!l.matches("+"), "Incorrect plus");
   assert(l.peek() != "+", "Incorrect plus");

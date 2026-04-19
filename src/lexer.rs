@@ -980,22 +980,20 @@ impl Lexer {
     }
 
     fn ret_number(&mut self, r: u64, p: Position, start_zero: bool) -> LexResult {
-        // C54.A incremental 2a — literals in the `i32::MAX+1 ..= u32::MAX`
-        // range promote to `LexItem::Long` so they round-trip correctly
-        // when compared to or arithmetic'd with i64-backed values (like
-        // `u32`-typed variables after Phase 2a's wide-limit-to-Long rule).
-        // Sign-extending a u32 bit pattern > i32::MAX to i64 produces a
-        // NEGATIVE i64; promoting at lex time avoids that path entirely.
-        // Values above u32::MAX without `l` suffix are an error.
-        let u32_max = u64::from(u32::MAX);
+        // Post-round-10: `integer` is 8 bytes.  The `l` suffix is accepted
+        // for backward compatibility but has no semantic effect — values
+        // >= 2^31 auto-promote to LexItem::Long regardless of suffix.
+        // Values > i64::MAX (impossible to represent in i64) are rejected.
         let i32_max = u64::from(i32::MAX as u32);
+        let i64_max = i64::MAX as u64;
+        // Accept and drop the `l` suffix if present.
         if let Some('l') = self.iter.peek() {
             self.next_char();
-            LexResult::new(LexItem::Long(r), p)
-        } else if r > u32_max {
+        }
+        if r > i64_max {
             self.err(
                 Level::Error,
-                "Integer literal out of range (exceeds u32::MAX)",
+                "Integer literal out of range (exceeds i64::MAX)",
             );
             LexResult::new(LexItem::Integer(0, start_zero), p)
         } else if r > i32_max {

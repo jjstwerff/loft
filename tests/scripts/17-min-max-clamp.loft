@@ -32,15 +32,15 @@ fn main() {
   assert(!clamp(5, n, 10), "int clamp null lo is null");
   assert(!clamp(5, 1, n), "int clamp null hi is null");
   // --- long min/max/clamp ---
-  assert(min(3l, 5l) == 3l, "long min");
-  assert(max(3l, 5l) == 5l, "long max");
-  assert(clamp(12l, 1l, 10l) == 10l, "long clamp above hi");
-  assert(clamp(5l, 1l, 10l) == 5l, "long clamp inside");
-  zl = 0l;
-  nl = 1l / zl;
-  assert(!min(nl, 5l), "long min null propagation");
-  assert(!max(nl, 5l), "long max null propagation");
-  assert(!clamp(nl, 1l, 10l), "long clamp null propagation");
+  assert(min(3, 5) == 3, "long min");
+  assert(max(3, 5) == 5, "long max");
+  assert(clamp(12, 1, 10) == 10, "long clamp above hi");
+  assert(clamp(5, 1, 10) == 5, "long clamp inside");
+  zl = 0;
+  nl = 1 / zl;
+  assert(!min(nl, 5), "long min null propagation");
+  assert(!max(nl, 5), "long max null propagation");
+  assert(!clamp(nl, 1, 10), "long clamp null propagation");
   // --- single min/max/clamp ---
   assert(min(1.0f, 2.0f) == 1.0f, "single min");
   assert(max(1.0f, 2.0f) == 2.0f, "single max");

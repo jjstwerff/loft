@@ -53,7 +53,7 @@ fn main() {
   assert("1.5" as float == 1.5, "text to float");
   assert("{1.5}" == "1.5", "float to text");
   assert(3.0 as integer == 3, "float to int truncates");
-  assert(3l as float == 3.0, "long to float");
+  assert(3 as float == 3.0, "long to float");
   // --- Negative floor, ceil, round ---
   assert(floor(-2.1) == -3.0, "floor of negative");
   assert(floor(-2.0) == -2.0, "floor of exact negative");
@@ -125,13 +125,13 @@ fn main() {
   // --- Float-to-int cast edge cases ---
   nan_val = sqrt(-1.0);
   assert(!(nan_val as integer), "NaN as integer is null");
-  assert(!(nan_val as long), "NaN as long is null");
+  assert(!(nan_val as integer), "NaN as integer is null");
   inf_pos = 1.0 / 0.0;
-  assert(inf_pos as integer == 9223372036854775807l, "positive infinity as integer saturates to i64::MAX");
+  assert(inf_pos as integer == 9223372036854775807, "positive infinity as integer saturates to i64::MAX");
   inf_neg = -1.0 / 0.0;
   assert(!(inf_neg as integer), "negative infinity as integer is null (i32::MIN)");
-  assert(!(inf_neg as long), "negative infinity as long is null (i64::MIN)");
-  assert(inf_pos as long > 1000000000l, "positive infinity as long saturates");
+  assert(!(inf_neg as integer), "negative infinity as integer is null (i64::MIN)");
+  assert(inf_pos as integer > 1000000000, "positive infinity as integer saturates");
   // --- Float infinity arithmetic (IEEE 754) ---
   assert(inf_pos + inf_pos > 1000000.0, "inf + inf is positive infinity");
   assert(!(inf_pos - inf_pos), "inf - inf is NaN (null)");

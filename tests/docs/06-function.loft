@@ -68,7 +68,7 @@ fn scale(a: integer, factor: integer) -> integer {
   a * factor
 }
 // ## Type-Based Dispatch
-// You can define two functions with the same name as long as their parameter types differ.
+// You can define two functions with the same name as integer as their parameter types differ.
 // Loft picks the right one at compile time based on the type of the argument you pass.
 
 fn describe_int(v: integer) -> text {

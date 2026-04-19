@@ -16,8 +16,8 @@ fn main() {
   assert("{12:+4}" == " +12", "int signed width");
   assert("{1:03}" == "001", "int zero-padded");
   // --- Long formats ---
-  assert("{2l:+4}" == "  +2", "long signed width");
-  assert("{12l as integer}" == "12", "long cast to int");
+  assert("{2:+4}" == "  +2", "long signed width");
+  assert("{12 as integer}" == "12", "long cast to int");
   // --- Float formats ---
   assert("{1.2:4.2}" == "1.20", "float width.precision");
   assert("{334.1:.2}" == "334.10", "float precision only");
@@ -65,9 +65,9 @@ fn main() {
   assert("{0.0:.2}" == "0.00", "zero float precision");
   assert("{-1.5:.1}" == "-1.5", "negative float precision");
   // --- Long formatting ---
-  assert("{0l}" == "0", "long zero format");
-  assert("{-5l}" == "-5", "negative long format");
-  assert("{1000000l}" == "1000000", "large long format");
+  assert("{0}" == "0", "long zero format");
+  assert("{-5}" == "-5", "negative long format");
+  assert("{1000000}" == "1000000", "large long format");
   // --- Width smaller than content ---
   assert("{12345:3}" == "12345", "width smaller than int: no truncation");
   // Note: {\"hello\":3} triggers the nested-quote parse bug (issue 9); use a variable.

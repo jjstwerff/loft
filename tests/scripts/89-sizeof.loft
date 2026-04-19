@@ -20,13 +20,13 @@ fn test_sizeof_enum() {
 
 enum SzVal {
   Small { n: u8 },
-  Large { n: long }
+  Large { n: integer }
 }
 
 fn get_sz_size(v: SzVal) -> integer { sizeof(v) }
 
 fn test_sizeof_enum_structs() {
-  assert(get_sz_size(Small { n: 1 }) != get_sz_size(Large { n: 42l }),
+  assert(get_sz_size(Small { n: 1 }) != get_sz_size(Large { n: 42 }),
     "polymorphic enum variants should have different sizes");
 }
 
@@ -35,20 +35,20 @@ fn test_sizeof_packed_integer_types() {
 }
 
 enum SzEn2 { W1, W2 }
-struct SzS { a: integer, b: long, c: SzEn2 }
+struct SzS { a: integer, b: integer, c: SzEn2 }
 
 fn test_sizeof_struct() {
   assert(sizeof(SzS) == 13, "struct size");
 }
 
-struct SzHS { a: integer, b: long, c: integer }
+struct SzHS { a: integer, b: integer, c: integer }
 struct SzHMain { s: hash<SzHS[b]> }
 
 fn test_sizeof_hash_member() {
   assert(sizeof(SzHS) + 100 * sizeof(SzHMain) == 416, "hash member sizes");
 }
 
-struct SzIS { a: integer, b: long, c: integer }
+struct SzIS { a: integer, b: integer, c: integer }
 struct SzIMain { s: index<SzIS[a, -c]> }
 
 fn test_sizeof_index_member() {

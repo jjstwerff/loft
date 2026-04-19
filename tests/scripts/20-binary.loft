@@ -13,7 +13,7 @@ fn main() {
   f#format = BigEndian;
   f += 0 as u8;
   f += 255 as u8;
-  assert(f#size == 2l, "u8 write size");
+  assert(f#size == 2, "u8 write size");
  }
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
@@ -61,15 +61,15 @@ fn main() {
   assert(f#read(4) as i32 == 0x11223344, "i32 BE roundtrip");
  }
   assert(delete("test_loft_a.bin").ok(), "delete after i32 BE test");
-  // === Binary: long (i64) ===
+  // === Binary: integer (i64) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
-  f += 0x0102030405060708l;
-  assert(f#size == 8l, "long write size");
+  f += 0x0102030405060708;
+  assert(f#size == 8, "long write size");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
-  assert(f#read(8) as long == 0x0102030405060708l, "long LE roundtrip");
+  assert(f#read(8) as integer == 0x0102030405060708, "long LE roundtrip");
  }
   assert(delete("test_loft_a.bin").ok(), "delete after long test");
   // === Binary: single (f32) ===
@@ -86,7 +86,7 @@ fn main() {
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   f += 3.14;
-  assert(f#size == 8l, "float write size");
+  assert(f#size == 8, "float write size");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -97,12 +97,12 @@ fn main() {
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   f += "Hello";
-  assert(f#size == 5l, "text binary write size");
+  assert(f#size == 5, "text binary write size");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   assert(f#read(5) as text == "Hello", "text binary read");
-  f#next = 0l;
+  f#next = 0;
   assert(f#read(100) as text == "Hello", "text read past eof full");
  }
   assert(delete("test_loft_a.bin").ok(), "delete after text binary test");
@@ -124,22 +124,22 @@ fn main() {
   f += 1 as u8;
   f += 0x0203 as u16;
   f += 0x04050607;
-  f += 0x08090a0b0c0d0e0fl;
-  assert(f#size == 16l, "mixed write total 16 bytes");
+  f += 0x08090a0b0c0d0e0f;
+  assert(f#size == 16, "mixed write total 16 bytes");
   f += "Hello world!";
-  assert(f#size == 28l, "mixed write with text 28 bytes");
+  assert(f#size == 28, "mixed write with text 28 bytes");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   // First 4 bytes as LE: [0x00,0x01,0x02,0x03] → 0x03020100
   assert(f#read(4) as i32 == 0x03020100, "mixed LE read first 4");
-  assert(f#index == 0l, "#index at start");
-  assert(f#next == 4l, "#next after first read");
+  assert(f#index == 0, "#index at start");
+  assert(f#next == 4, "#next after first read");
   // Seek to text part
-  f#next = 16l;
+  f#next = 16;
   assert(f#read(5) as text == "Hello", "mixed seek+read text");
-  assert(f#index == 16l, "#index after seek");
-  assert(f#next == 21l, "#next after text read");
+  assert(f#index == 16, "#index after seek");
+  assert(f#next == 21, "#next after text read");
   rest = f#read(100) as text;
   assert(rest == " world!", "mixed read to eof");
   assert(f#next == f#size, "#next at end == #size");
@@ -150,7 +150,7 @@ fn main() {
   f#format = LittleEndian;
   fv = [1.5, 2.5, 3.5];
   f += fv;
-  assert(f#size == 24l, "vector<float> write size (3*8 bytes)={f#size}");
+  assert(f#size == 24, "vector<float> write size (3*8 bytes)={f#size}");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -166,7 +166,7 @@ fn main() {
   f#format = LittleEndian;
   sv = [10.0f, 20.0f, 30.0f];
   f += sv;
-  assert(f#size == 12l, "vector<single> write size (3*4 bytes)={f#size}");
+  assert(f#size == 12, "vector<single> write size (3*4 bytes)={f#size}");
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -180,15 +180,15 @@ fn main() {
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   f += [1, 2, 3];
-  f += [100l, 200l];
+  f += [100, 200];
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   ri = f#read(12) as vector<integer>;
-  rl = f#read(16) as vector<long>;
+  rl = f#read(16) as vector<integer>;
   assert(ri[2] == 3, "multi-vector int [2]={ri[2]}");
-  assert(rl[0] == 100l, "multi-vector long [0]={rl[0]}");
-  assert(rl[1] == 200l, "multi-vector long [1]={rl[1]}");
+  assert(rl[0] == 100, "multi-vector long [0]={rl[0]}");
+  assert(rl[1] == 200, "multi-vector long [1]={rl[1]}");
  }
   assert(delete("test_loft_a.bin").ok(), "delete after multi-vector test");
 }

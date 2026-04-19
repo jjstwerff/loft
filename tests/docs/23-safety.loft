@@ -56,12 +56,12 @@ fn main() {
   // The following would wrap silently in a release build:
   //   big = 2000000000; big + big  →  negative number
   // Mitigation: Use `long` (64-bit) when multiplying or summing large
-  // values: `big as long + big as long` avoids the wrap.
+  // values: `big as integer + big as integer` avoids the wrap.
   // Design: a future `--debug` flag will turn silent overflow into a logged
   // WARN with file:line context so overflows are visible during development
   // without affecting release performance.
   big = 2000000000;
-  assert(big as long + big as long == 4000000000l, "long avoids wrap");
+  assert(big as integer + big as integer == 4000000000, "long avoids wrap");
 
   // ## Bitwise operators with zero
   // All bitwise operators (AND, OR, XOR, shift) work correctly with zero.

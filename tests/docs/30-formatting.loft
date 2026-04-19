@@ -67,7 +67,7 @@ fn main() {
   assert("{for fmt_n in 1..4 {fmt_n * 10}:04}" == "[0010,0020,0030]", "formatted vector elements");
   // ## Long and single types
   // Long integers and single-precision floats use the same format specifiers.
-  n = 1000000l;
+  n = 1000000;
   assert("{n}" == "1000000", "long default");
   assert("{n:>10}" == "   1000000", "long right-aligned");
   f = 1.5f;
