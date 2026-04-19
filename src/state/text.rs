@@ -66,10 +66,10 @@ impl State {
     #[inline]
     pub fn length_character(&mut self) {
         let v_v1 = *self.get_stack::<char>();
-        let new_value = if v_v1 == char::from(0) {
+        let new_value: i64 = if v_v1 == char::from(0) {
             0
         } else {
-            v_v1.to_string().len() as i32
+            v_v1.to_string().len() as i64
         };
         self.put_stack(new_value);
     }

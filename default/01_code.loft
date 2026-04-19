@@ -130,6 +130,8 @@ fn OpConvIntFromNull() -> integer;
 #rust"i64::MIN"
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
+fn OpConvCharacterFromInt(v1: integer) -> character;
+#rust"char::from_u32((@v1) as u32).unwrap_or(char::from(0))"
 fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;

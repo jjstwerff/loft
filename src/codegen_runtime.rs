@@ -108,8 +108,8 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
     {
         let stored_type = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
         if stored_type == file_type {
-            let file_ref = stores.store(&db).get_i32_raw(db.rec, db.pos + 28);
-            if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
+            let file_ref = stores.store(&db).get_int(db.rec, db.pos + 8);
+            if file_ref != i64::MIN && (file_ref as usize) < stores.files.len() {
                 stores.files[file_ref as usize] = None;
             }
         }
@@ -543,7 +543,7 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+            .get_str(store.get_u32_raw(file.rec, file.pos + 32))
             .to_owned()
     };
     content.clear();
@@ -569,11 +569,11 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
     if file.rec == 0 {
         return;
     }
-    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
-    if file_ref == i32::MIN {
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 8);
+    if file_ref == i64::MIN {
         stores
             .store_mut(&file)
-            .set_long(file.rec, file.pos + 16, pos);
+            .set_long(file.rec, file.pos + 24, pos);
     } else if let Some(f) = &mut stores.files[file_ref as usize]
         && let Err(e) = f.seek(SeekFrom::Start(pos as u64))
     {
@@ -596,7 +596,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+            .get_str(store.get_u32_raw(file.rec, file.pos + 32))
             .to_owned()
     };
     if let Ok(meta) = std::fs::metadata(&file_path) {
@@ -624,22 +624,22 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+            .get_str(store.get_u32_raw(file.rec, file.pos + 32))
             .to_owned()
     };
     // Close any open handle so resize starts from a clean state.
-    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
-    if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
+    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 8);
+    if file_ref != i64::MIN && (file_ref as usize) < stores.files.len() {
         stores.files[file_ref as usize] = None;
         stores
             .store_mut(&file)
-            .set_i32_raw(file.rec, file.pos + 28, i32::MIN);
-        stores
-            .store_mut(&file)
-            .set_long(file.rec, file.pos + 8, i64::MIN);
+            .set_int(file.rec, file.pos + 8, i64::MIN);
         stores
             .store_mut(&file)
             .set_long(file.rec, file.pos + 16, i64::MIN);
+        stores
+            .store_mut(&file)
+            .set_long(file.rec, file.pos + 24, i64::MIN);
     }
     OpenOptions::new()
         .write(true)
@@ -657,57 +657,57 @@ pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
 // ─── File I/O ─────────────────────────────────────────────────────────────────
 
 /// Open (or reuse) a file handle for writing.  Returns the index into
-/// `stores.files`, or `i32::MIN` on error.
+/// `stores.files`, or `i64::MIN` on error.
 #[cfg(not(feature = "wasm"))]
-fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
+fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i64 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
-    if file_ref != i32::MIN {
+    let file_ref = stores.store(file).get_int(file.rec, file.pos + 8);
+    if file_ref != i64::MIN {
         return file_ref;
     }
     let (file_name, format) = {
         let store = stores.store(file);
         (
             store
-                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+                .get_str(store.get_u32_raw(file.rec, file.pos + 32))
                 .to_owned(),
-            store.get_byte(file.rec, file.pos + 32, 0),
+            store.get_byte(file.rec, file.pos + 36, 0),
         )
     };
     match File::create(&file_name) {
         Ok(f) => {
             stores
                 .store_mut(file)
-                .set_i32_raw(file.rec, file.pos + 28, f_nr);
+                .set_int(file.rec, file.pos + 8, i64::from(f_nr));
             // If the file was NotExists, mark it as TextFile now that it exists.
             if format == 5 {
                 stores
                     .store_mut(file)
-                    .set_byte(file.rec, file.pos + 32, 0, 1);
+                    .set_byte(file.rec, file.pos + 36, 0, 1);
             }
             stores.files.push(Some(f));
-            f_nr
+            i64::from(f_nr)
         }
         Err(e) => {
             eprintln!("file create error for {file_name:?}: {e}");
-            i32::MIN
+            i64::MIN
         }
     }
 }
 
 /// Open (or reuse) a file handle for reading, seeking to `initial_pos`.
-/// Returns the index into `stores.files`, or `i32::MIN` on error.
+/// Returns the index into `stores.files`, or `i64::MIN` on error.
 #[cfg(not(feature = "wasm"))]
-fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
+fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i64 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
-    if file_ref != i32::MIN {
+    let file_ref = stores.store(file).get_int(file.rec, file.pos + 8);
+    if file_ref != i64::MIN {
         return file_ref;
     }
     let file_name = {
         let store = stores.store(file);
         store
-            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
+            .get_str(store.get_u32_raw(file.rec, file.pos + 32))
             .to_owned()
     };
     match OpenOptions::new().read(true).open(&file_name) {
@@ -717,13 +717,13 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             }
             stores
                 .store_mut(file)
-                .set_i32_raw(file.rec, file.pos + 28, f_nr);
+                .set_int(file.rec, file.pos + 8, i64::from(f_nr));
             stores.files.push(Some(f));
-            f_nr
+            i64::from(f_nr)
         }
         Err(e) => {
             eprintln!("file open error for {file_name:?}: {e}");
-            i32::MIN
+            i64::MIN
         }
     }
 }
@@ -1003,22 +1003,22 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
     if file.rec == 0 {
         return;
     }
-    let format = stores.store(&file).get_byte(file.rec, file.pos + 32, 0);
+    let format = stores.store(&file).get_byte(file.rec, file.pos + 36, 0);
     // format: 1=TextFile, 2=LittleEndian, 3=BigEndian, 5=NotExists
     if format != 1 && format != 2 && format != 3 && format != 5 {
         return;
     }
     let little_endian = format == 2;
     let file_ref = file_handle_write(stores, &file);
-    if file_ref == i32::MIN {
+    if file_ref == i64::MIN {
         return;
     }
     // Track write position: set #index = where this write starts.
-    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
+    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 24);
     let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
     stores
         .store_mut(&file)
-        .set_long(file.rec, file.pos + 8, next_pos);
+        .set_long(file.rec, file.pos + 16, next_pos);
     let data = val.file_to_bytes(stores, db_tp, little_endian);
     let written = data.len() as i64;
     if let Some(f) = stores
@@ -1032,7 +1032,7 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
     // Update #next to reflect the end of this write.
     stores
         .store_mut(&file)
-        .set_long(file.rec, file.pos + 16, next_pos + written);
+        .set_long(file.rec, file.pos + 24, next_pos + written);
 }
 
 /// WASM stub: file write not available.
@@ -1052,19 +1052,19 @@ pub fn OpReadFile<T: FileVal>(
     if file.rec == 0 {
         return;
     }
-    let format = stores.store(&file).get_byte(file.rec, file.pos + 32, 0);
+    let format = stores.store(&file).get_byte(file.rec, file.pos + 36, 0);
     if format != 1 && format != 2 && format != 3 && format != 5 {
         return;
     }
     let little_endian = format == 2;
     // Track read position: #next holds the byte offset to read from.
-    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 16);
+    let raw_next = stores.store(&file).get_long(file.rec, file.pos + 24);
     let next_pos = if raw_next == i64::MIN { 0 } else { raw_next };
     stores
         .store_mut(&file)
-        .set_long(file.rec, file.pos + 8, next_pos);
+        .set_long(file.rec, file.pos + 16, next_pos);
     let file_ref = file_handle_read(stores, &file, next_pos);
-    if file_ref == i32::MIN {
+    if file_ref == i64::MIN {
         return;
     }
     let n = bytes.max(0) as usize;
@@ -1089,7 +1089,7 @@ pub fn OpReadFile<T: FileVal>(
     val.file_from_bytes(stores, db_tp, little_endian, &buf);
     stores
         .store_mut(&file)
-        .set_long(file.rec, file.pos + 16, next_pos + nread as i64);
+        .set_long(file.rec, file.pos + 24, next_pos + nread as i64);
 }
 
 /// WASM stub: file read not available.

@@ -1282,13 +1282,16 @@ impl Parser {
                     && (new_d as usize) < data.definitions.len()
                     && data.def(new_d).name == "OpGetVector"
                     && new_args.len() == 3
-                    && matches!(&new_args[1], Value::Int(0 | 12))
                 {
+                    let cur_size = if let Value::Int(n) = &new_args[1] { *n } else { 0 };
                     let elm_size = Self::type_element_size(concrete, data);
-                    let mut fixed = new_args;
-                    fixed[1] = Value::Int(elm_size);
-                    let call = Value::Call(new_d, fixed);
-                    return Self::wrap_vector_get_val(call, concrete, data);
+                    if elm_size != cur_size {
+                        let mut fixed = new_args;
+                        fixed[1] = Value::Int(elm_size);
+                        let call = Value::Call(new_d, fixed);
+                        return Self::wrap_vector_get_val(call, concrete, data);
+                    }
+                    return Self::wrap_vector_get_val(Value::Call(new_d, new_args), concrete, data);
                 }
                 // I9-text fixup: when a T-stub had an extra __work_1 parameter
                 // (for text-returning interface methods) but the concrete method
@@ -1362,13 +1365,8 @@ impl Parser {
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
         match tp {
-            Type::Integer(_, _, _)
-            | Type::Single
-            | Type::Boolean
-            | Type::Character
-            | Type::Text(_)
-            | Type::Enum(_, false, _) => 4,
-            Type::Long | Type::Float => 8,
+            Type::Single | Type::Boolean | Type::Character | Type::Text(_) | Type::Enum(_, false, _) => 4,
+            Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.

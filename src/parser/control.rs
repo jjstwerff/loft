@@ -1328,7 +1328,7 @@ impl Parser {
             lit = Value::Text(s);
             Type::Text(Vec::new())
         } else if let Some(c) = self.lexer.has_char() {
-            lit = Value::Int(c as i32);
+            lit = self.cl("OpConvCharacterFromInt", &[Value::Int(c as i32)]);
             Type::Character
         } else if self.lexer.has_token("true") {
             lit = Value::Boolean(true);

@@ -261,12 +261,12 @@ impl Parser {
         self.vars.in_use(var_nr, true);
         if self.lexer.has_keyword("format") {
             let file_ref = Value::Var(var_nr);
-            *code = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
+            *code = self.cl("OpGetEnum", &[file_ref, Value::Int(36)]);
             let fmt_def = self.data.def_nr("Format");
             *t = Type::Enum(fmt_def, false, Vec::new());
         } else if self.lexer.has_keyword("exists") {
             let file_ref = Value::Var(var_nr);
-            let fmt = self.cl("OpGetEnum", &[file_ref, Value::Int(32)]);
+            let fmt = self.cl("OpGetEnum", &[file_ref, Value::Int(36)]);
             let fmt_def = self.data.def_nr("Format");
             let enum_tp = Type::Enum(fmt_def, false, Vec::new());
             let ne_val = if let Some(&a_nr) = self.data.def(fmt_def).attr_names.get("NotExists") {
@@ -281,12 +281,12 @@ impl Parser {
             *code = self.cl("OpSizeFile", &[Value::Var(var_nr)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("index") {
-            // Read the current field at offset 8
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(8)]);
+            // Read the current field at offset 16 (post-2c File layout)
+            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("next") {
-            // Read the next field at offset 16
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
+            // Read the next field at offset 24 (post-2c File layout)
+            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(24)]);
             *t = Type::Long;
         } else if self.lexer.has_keyword("read") {
             self.lexer.token("(");

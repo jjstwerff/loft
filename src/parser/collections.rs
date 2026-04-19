@@ -1826,12 +1826,8 @@ use #count instead"
         }
         // Fallback for primitive types
         match elm {
-            Type::Integer(_, _, _)
-            | Type::Single
-            | Type::Boolean
-            | Type::Character
-            | Type::Text(_) => 4,
-            Type::Long | Type::Float => 8,
+            Type::Single | Type::Boolean | Type::Character | Type::Text(_) => 4,
+            Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
             _ => 12, // DbRef size for reference types
         }
     }

@@ -594,8 +594,8 @@ mod tests {
     #[test]
     fn no_conflict_adjacent_slots() {
         let mut f = Function::new("f", "test");
-        add_var(&mut f, &INT, 0, 0, 20); // slot [0, 4)
-        add_var(&mut f, &INT, 4, 0, 20); // slot [4, 8)
+        add_var(&mut f, &INT, 0, 0, 20); // slot [0, 8) — integer is 8 bytes post-2c
+        add_var(&mut f, &INT, 8, 0, 20); // slot [8, 16)
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 

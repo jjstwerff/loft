@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 265] = &[
+pub const OPERATORS: &[fn(&mut State); 266] = &[
     goto,
     goto_word,
     goto_false,
@@ -31,6 +31,7 @@ pub const OPERATORS: &[fn(&mut State); 265] = &[
     put_character,
     conv_int_from_null,
     conv_character_from_null,
+    conv_character_from_int,
     const_long_text,
     cast_int_from_text,
     cast_long_from_text,
@@ -409,6 +410,12 @@ fn conv_int_from_null(s: &mut State) {
 
 fn conv_character_from_null(s: &mut State) {
     let new_value = char::from(0);
+    s.put_stack(new_value);
+}
+
+fn conv_character_from_int(s: &mut State) {
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = char::from_u32((v_v1) as u32).unwrap_or(char::from(0));
     s.put_stack(new_value);
 }
 
