@@ -39,7 +39,7 @@ fn main() {
   // === Binary: i32 (LittleEndian) ===
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
-  f += 0x11223344;
+  f += 0x11223344 as i32;
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
@@ -54,7 +54,7 @@ fn main() {
   // === Binary: i32 (BigEndian) ===
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
-  f += 0x11223344;
+  f += 0x11223344 as i32;
  }
  {f = file("test_loft_a.bin");
   f#format = BigEndian;
@@ -107,14 +107,15 @@ fn main() {
  }
   assert(delete("test_loft_a.bin").ok(), "delete after text binary test");
   // === Binary: vector of integers ===
+  // Post-2c integer = 8 bytes at rest; each element serializes as i64.
  {f = file("test_loft_b.bin");
   f#format = LittleEndian;
   f +=[1, 2];
  }
  {f = file("test_loft_b.bin");
   f#format = LittleEndian;
-  f#read(4) as i32;
-  assert(f#read(4) as i32 == 2, "integer vector binary write: second element");
+  f#read(8) as integer;
+  assert(f#read(8) as integer == 2, "integer vector binary write: second element");
  }
   assert(delete("test_loft_b.bin").ok(), "delete after integer-vector write test");
   // === Mixed write: sequential types ===
@@ -123,7 +124,7 @@ fn main() {
   f += 0 as u8;
   f += 1 as u8;
   f += 0x0203 as u16;
-  f += 0x04050607;
+  f += 0x04050607 as i32;
   f += 0x08090a0b0c0d0e0f;
   assert(f#size == 16, "mixed write total 16 bytes");
   f += "Hello world!";
@@ -177,6 +178,7 @@ fn main() {
  }
   assert(delete("test_loft_a.bin").ok(), "delete after vector<single> test");
   // === multiple vectors round-trip in one file ===
+  // Post-2c integer = 8 bytes at rest; 3 elements = 24 bytes, 2 elements = 16 bytes.
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
   f += [1, 2, 3];
@@ -184,7 +186,7 @@ fn main() {
  }
  {f = file("test_loft_a.bin");
   f#format = LittleEndian;
-  ri = f#read(12) as vector<integer>;
+  ri = f#read(24) as vector<integer>;
   rl = f#read(16) as vector<integer>;
   assert(ri[2] == 3, "multi-vector int [2]={ri[2]}");
   assert(rl[0] == 100, "multi-vector long [0]={rl[0]}");

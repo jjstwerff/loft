@@ -11,12 +11,12 @@ fn main() {
   // === Seek then overwrite ===
  {f = file("test_loft_13_a.bin");
   f#format = LittleEndian;
-  f += 0x11223344;
-  f += 0x55667788;
+  f += 0x11223344 as i32;
+  f += 0x55667788 as i32;
   // Seek back to start and overwrite first int.
   // Use a value that fits in i32 (0xaabbccdd overflows i32).
   f#next = 0;
-  f += 0x11111111;
+  f += 0x11111111 as i32;
  }
  {f = file("test_loft_13_a.bin");
   f#format = LittleEndian;
@@ -37,8 +37,8 @@ fn main() {
   // Truncate binary file: write two ints, resize to 4 — only first remains
  {f = file("test_loft_13_a.bin");
   f#format = LittleEndian;
-  f += 0x11223344;
-  f += 0x55667788;
+  f += 0x11223344 as i32;
+  f += 0x55667788 as i32;
   f#size = 4;
  }
  {f = file("test_loft_13_a.bin");
@@ -102,7 +102,7 @@ fn main() {
   // === Incomplete read (fewer bytes than type requires) → #next unchanged ===
  {f = file("test_loft_13_a.bin");
   f#format = LittleEndian;
-  f += 42;
+  f += 42 as i32;
  }
  {f = file("test_loft_13_a.bin");
   f#format = LittleEndian;
@@ -116,7 +116,7 @@ fn main() {
   // === file().size field reflects written size (via new file() call) ===
  {f = file("test_loft_13_b.bin");
   f#format = LittleEndian;
-  f += 42;
+  f += 42 as i32;
  }
   assert(file("test_loft_13_b.bin").size == 4, "file().size reflects 4-byte write");
   assert(delete("test_loft_13_b.bin").ok(), "delete after size-field test");
