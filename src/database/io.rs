@@ -439,7 +439,7 @@ impl Stores {
                 }
             }
             for (name, entry) in res {
-                let elm = vector::vector_append(&vector, 33, &mut self.allocations);
+                let elm = vector::vector_append(&vector, 37, &mut self.allocations);
                 let store = self.store_mut(result);
                 let name_pos = store.set_str(&name) as i32;
                 store.set_u32_raw(elm.rec, elm.pos + 32, name_pos as u32);
@@ -469,7 +469,7 @@ impl Stores {
         };
         for name in entries {
             let full = format!("{file_path}/{name}");
-            let elm = vector::vector_append(&vector, 33, &mut self.allocations);
+            let elm = vector::vector_append(&vector, 37, &mut self.allocations);
             let store = self.store_mut(result);
             let name_pos = store.set_str(&full) as i32;
             store.set_u32_raw(elm.rec, elm.pos + 32, name_pos as u32);

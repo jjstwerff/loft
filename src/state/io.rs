@@ -209,6 +209,11 @@ impl State {
                     }
                 }
             } else {
+                // Handle already open: sync OS handle with stored next_pos so
+                // the user can `f#next = N` to overwrite bytes in place.
+                if let Some(f) = &mut self.database.files[file_ref as usize] {
+                    let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                }
                 file_ref
             };
             if let Some(f) = &mut self.database.files[file_ref as usize]
@@ -332,6 +337,10 @@ impl State {
                     self.database.files.push(Some(f));
                 }
                 file_ref = i64::from(f_nr);
+            } else if let Some(f) = &mut self.database.files[file_ref as usize] {
+                // Handle already open: user may have set #next explicitly to seek.
+                // Sync the OS file handle with the stored next_pos.
+                let _ = f.seek(SeekFrom::Start(next_pos as u64));
             }
             let is_text = self.database.is_text_type(db_tp);
             let mut data = vec![0u8; n];
