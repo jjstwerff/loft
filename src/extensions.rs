@@ -455,7 +455,7 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
                 if r.rec == 0 || r.pos == 0 {
                     ArgVal::Ref(r.store_nr, 0, 0)
                 } else {
-                    let vec_rec = stores.store(&r).get_int(r.rec, r.pos) as u32;
+                    let vec_rec = stores.store(&r).get_u32_raw(r.rec, r.pos);
                     ArgVal::Ref(r.store_nr, vec_rec, 0)
                 }
             }

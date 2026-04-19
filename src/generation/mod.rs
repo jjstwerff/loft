@@ -1109,11 +1109,11 @@ extern crate loft;"
                 let elem = Self::vector_elem_rust_type(elem_tp);
                 writeln!(
                     w,
-                    "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_int(var_{var}.rec, var_{var}.pos) as u32;"
+                    "  let _vr_{var} = loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(var_{var}.rec, var_{var}.pos);"
                 )?;
                 writeln!(
                     w,
-                    "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_int(_vr_{var}, 4) as u32 }};"
+                    "  let _vc_{var} = if _vr_{var} == 0 {{ 0u32 }} else {{ loft::keys::store(&var_{var}, &stores.allocations).get_u32_raw(_vr_{var}, 4) }};"
                 )?;
                 writeln!(
                     w,

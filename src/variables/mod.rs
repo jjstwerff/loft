@@ -1262,7 +1262,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
-        Type::Function(_, _, _) => 16,
+        Type::Function(_, _, _) => 20, // Phase 2c: 8B d_nr (i64) + 12B closure DbRef
         Type::Text(_) if context == &Context::Variable => size_of::<String>() as u16,
         Type::Text(_) => size_of::<&str>() as u16,
         Type::RefVar(_)

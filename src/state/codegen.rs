@@ -1132,13 +1132,13 @@ impl State {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
             if *value == Value::Null {
-                // pre-init a fn-ref slot with 16 null bytes.
-                // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
+                // pre-init a fn-ref slot with 20 null bytes.
+                // d_nr = i64::MIN (integer null sentinel) + closure = null DbRef (12B).
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
                 stack.add_op("OpNullRefSentinel", self);
             } else {
-                // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+                // A5.6-1/A5.6-2: 20-byte fn-ref slot: [d_nr (8B)][closure DbRef (12B)].
                 // gen_fn_ref_value ensures every branch (including if-else) reaches the
                 // join point with a full 16-byte slot.
                 self.gen_fn_ref_value(value, stack);
