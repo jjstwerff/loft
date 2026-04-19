@@ -952,7 +952,13 @@ impl State {
                     i64::from(cur),
                     &mut self.database.allocations,
                 );
-                self.put_var(state_var - 8, n);
+                // iter_var (#index) is i64 on stack post-2c.  Sign-extend n
+                // (may be −1 after remove-at-index-0) and write all 8 bytes
+                // so the high word doesn't leak a stale value into the next
+                // VarInt — otherwise −1 comes back as 0xFFFFFFFF = 2^32−1.
+                // put_var adds size_of::<T>(); switching i32→i64 shifts the
+                // target address up by 4 bytes, so pos moves from −8 to −4.
+                self.put_var(state_var - 4, i64::from(n));
             }
             1 => {
                 // Use the outer `cur` (read as i32 before the data DbRef was popped).
