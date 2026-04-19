@@ -91,12 +91,12 @@ impl State {
             data.extend_from_slice(s.as_bytes());
         } else if matches!(
             &self.database.types[db_tp as usize].parts,
-            Parts::Byte(_, _) | Parts::Short(_, _)
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
         ) {
             // Narrow-integer values sit in an 8B variable slot stored raw as i64
             // (OpPutInt), not via the +1-encoded Parts::Byte/Short encoding that
-            // structs use.  Read the raw value and serialise directly so the
-            // resulting bytes match the user-visible value.
+            // structs use (nor the i32::MIN null sentinel of Parts::Int).
+            // Read the raw i64 and serialise directly.
             let v = self.database.store(&val).get_int(val.rec, val.pos);
             match &self.database.types[db_tp as usize].parts {
                 Parts::Byte(_, _) => data.push(v as u8),
@@ -105,6 +105,14 @@ impl State {
                         (v as u16).to_le_bytes()
                     } else {
                         (v as u16).to_be_bytes()
+                    };
+                    data.extend_from_slice(&b);
+                }
+                Parts::Int(_, _) => {
+                    let b = if little_endian {
+                        (v as i32).to_le_bytes()
+                    } else {
+                        (v as i32).to_be_bytes()
                     };
                     data.extend_from_slice(&b);
                 }
@@ -252,12 +260,14 @@ impl State {
                     .write_data(&vec_ref, db_tp, little_endian, &data);
             } else if matches!(
                 &self.database.types[db_tp as usize].parts,
-                Parts::Byte(_, _) | Parts::Short(_, _)
+                Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
             ) {
-                // Narrow-integer reads (byte/short) target a u8/u16 variable whose
-                // stack slot is 8 bytes (Phase 2c integer width) and holds a raw
-                // i64 — not the +1-encoded form that Parts::Byte/Short use in
-                // struct fields.  Decode the bytes and store as a raw i64.
+                // Narrow-integer reads (byte/short/int) target a u8/u16/i32
+                // variable whose stack slot is 8 bytes (Phase 2c integer
+                // width) and holds a raw i64 — not the +1-encoded form that
+                // Parts::Byte/Short use in struct fields, nor the i32::MIN
+                // null sentinel Parts::Int uses.  Decode the bytes and store
+                // as a sign-extended i64.
                 let v: i64 = match &self.database.types[db_tp as usize].parts {
                     Parts::Byte(_, _) => i64::from(data[0]),
                     Parts::Short(_, _) => {
@@ -266,6 +276,14 @@ impl State {
                             i64::from(u16::from_le_bytes(d))
                         } else {
                             i64::from(u16::from_be_bytes(d))
+                        }
+                    }
+                    Parts::Int(_, _) => {
+                        let d: [u8; 4] = data[0..4].try_into().unwrap();
+                        if little_endian {
+                            i64::from(i32::from_le_bytes(d))
+                        } else {
+                            i64::from(i32::from_be_bytes(d))
                         }
                     }
                     _ => unreachable!(),

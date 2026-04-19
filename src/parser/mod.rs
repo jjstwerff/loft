@@ -168,6 +168,12 @@ pub struct Parser {
     /// Field-capture aliases created by `if expr is Variant { field } { body }`.
     /// Drained by `parse_if` after the body to restore previous name mappings.
     pub(crate) is_capture_aliases: Vec<(String, Option<u16>)>,
+    /// Post-2c: captures the most recently parsed `as <alias>` cast target's
+    /// def_nr when the alias has a `size(N)` annotation.  Consumed by
+    /// `append_to_file` so that `f += x as i32` narrows the serialised
+    /// payload to the alias's byte width.  Reset to `u32::MAX` at the start
+    /// of each top-level statement; irrelevant outside file-I/O `+=`.
+    pub(crate) last_cast_alias: u32,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches (P163).
@@ -335,6 +341,7 @@ impl Parser {
             in_par_body: false,
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
+            last_cast_alias: u32::MAX,
         }
     }
 

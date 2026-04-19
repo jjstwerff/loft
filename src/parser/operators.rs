@@ -724,6 +724,14 @@ impl Parser {
                         &ctp.name(&self.data),
                     );
                 }
+                // Post-2c: remember the cast target alias so `f += x as i32`
+                // can narrow the file-serialisation width.  Only stored when
+                // the alias carries a `size(N)` annotation; otherwise
+                // `u32::MAX` = "no alias info".
+                let alias_nr = self.data.def_nr(&tps);
+                if alias_nr != u32::MAX && self.data.forced_size(alias_nr).is_some() {
+                    self.last_cast_alias = alias_nr;
+                }
                 let mut rt = tp;
                 for d in ctp.depend() {
                     rt = rt.depending(d);

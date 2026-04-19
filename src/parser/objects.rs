@@ -423,7 +423,13 @@ impl Parser {
         None
     }
 
-    pub(crate) fn write_to_file(&mut self, file_var: u16, val: Value, val_type: &Type) -> Value {
+    pub(crate) fn write_to_file(
+        &mut self,
+        file_var: u16,
+        val: Value,
+        val_type: &Type,
+        cast_alias: u32,
+    ) -> Value {
         if let Type::Reference(d_nr, _) = val_type
             && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
         {
@@ -439,7 +445,24 @@ impl Parser {
         }
         let val_type_clone = val_type.clone();
         self.ensure_io_type(&val_type_clone);
-        let db_tp = self.get_type(val_type);
+        // Post-2c: if the value was written as `… as <alias>` and the alias
+        // has size(N), narrow the serialisation to the alias's db type.
+        let db_tp = if let Type::Integer(min, _, _) = val_type
+            && let Some(n) = self.data.forced_size(cast_alias)
+        {
+            if self.first_pass {
+                u16::MAX
+            } else {
+                match n {
+                    1 => self.database.byte(*min, false),
+                    2 => self.database.short(*min, false),
+                    4 => self.database.int(*min, false),
+                    _ => self.get_type(val_type),
+                }
+            }
+        } else {
+            self.get_type(val_type)
+        };
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
         for d in val_type.depend() {
             self.vars.depend(temp_var, d);

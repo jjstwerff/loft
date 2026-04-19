@@ -1009,11 +1009,16 @@ use a separate collection or add after the loop"
     pub(crate) fn append_to_file(&mut self, code: &mut Value, file_v: u16) {
         let mut rhs_code = Value::Null;
         let mut unused = Type::Null; // parent_tp, this is normally used to unpack the vector fill
+        // Clear any leftover cast marker so we only pick up a cast parsed as
+        // part of THIS rhs expression.
+        self.last_cast_alias = u32::MAX;
         let mut rhs_type = self.parse_operators(&Type::Unknown(0), &mut rhs_code, &mut unused, 0);
         if let Type::Rewritten(tp) = rhs_type {
             rhs_type = *tp;
         }
-        *code = self.write_to_file(file_v, rhs_code, &rhs_type);
+        let cast_alias = self.last_cast_alias;
+        self.last_cast_alias = u32::MAX;
+        *code = self.write_to_file(file_v, rhs_code, &rhs_type, cast_alias);
     }
 
     /// Determine the variable number for an assignment target.
