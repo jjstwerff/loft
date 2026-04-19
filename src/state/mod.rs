@@ -1644,7 +1644,7 @@ impl State {
     ///
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations (infinite-loop guard).
-    pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i32 {
+    pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i64 {
         // Fix #92: propagate data_ptr, stack_trace_lib_nr, and fn_positions from
         // ParallelCtx so that stack_trace() works inside parallel workers called via
         // n_parallel_for_int.  When parallel_ctx is None (direct run_parallel_* path),
@@ -1689,7 +1689,7 @@ impl State {
                 break;
             }
         }
-        *self.get_stack::<i32>()
+        *self.get_stack::<i64>()
     }
 
     /// Execute a worker function at `fn_pos`, return raw result bits as `u64`.

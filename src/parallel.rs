@@ -469,7 +469,7 @@ pub fn run_parallel_int(
     input: &DbRef,
     element_size: u32,
     n_threads: usize,
-) -> Vec<i32> {
+) -> Vec<i64> {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
         return Vec::new();
@@ -478,7 +478,7 @@ pub fn run_parallel_int(
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, i32)>>();
+        let (tx, rx) = mpsc::channel::<Vec<(usize, i64)>>();
 
         let mut handles = Vec::with_capacity(threads);
         for t in 0..threads {
@@ -508,7 +508,7 @@ pub fn run_parallel_int(
             handles.push(handle);
         }
         drop(tx);
-        let mut results = vec![i32::MIN; n_rows];
+        let mut results = vec![i64::MIN; n_rows];
         for batch in rx {
             for (idx, val) in batch {
                 results[idx] = val;
@@ -523,7 +523,7 @@ pub fn run_parallel_int(
     {
         let _ = n_threads;
         let mut state = program.new_state(stores.clone_for_worker());
-        let mut results = vec![i32::MIN; n_rows];
+        let mut results = vec![i64::MIN; n_rows];
         for (row_idx, result) in results.iter_mut().enumerate() {
             let row_idx_i32 = row_idx as i64;
             let row_ref = vector::get_vector(

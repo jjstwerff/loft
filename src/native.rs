@@ -499,8 +499,8 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 #[cfg(feature = "threading")]
 fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
     // Pop arguments (last-pushed first).
-    let v_threads = *stores.get::<i32>(stack);
-    let v_element_size = *stores.get::<i32>(stack);
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as u32;
     let v_input = *stores.get::<DbRef>(stack);
     let v_func = *stores.get::<Str>(stack);
 
@@ -546,9 +546,9 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 
     // Build an integer-vector result in a fresh store.
     let result_db = stores.null(); // allocates an empty store
-    // Vector data record: fld=4 count, fld=8+ elements (4 bytes each).
-    // Record size in 8-byte units: ceil((8 + n*4) / 8).
-    let vec_words = ((n as u32) * 4 + 15) / 8;
+    // Post-2c: fld=4 count, fld=8+ elements (8 bytes each = i64).
+    // Record size in 8-byte units: ceil((8 + n*8) / 8).
+    let vec_words = (n as u32) + 1;
     let vec_words = vec_words.max(1);
     let vec_cr = stores.claim(&result_db, vec_words);
     let vec_rec = vec_cr.rec;
@@ -560,7 +560,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
         let store = stores.store_mut(&result_db);
         store.set_u32_raw(vec_rec, 4, n as u32);
         for (i, &val) in results.iter().enumerate() {
-            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
+            store.set_int(vec_rec, 8 + i as u32 * 8, val);
         }
         store.set_u32_raw(header_rec, 4, vec_rec);
     }
@@ -577,22 +577,22 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
 /// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.
 /// `return_size`: 0=text, 1=bool, 4=int, 8=long/float.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    // Stack layout (push order from codegen):
-    //   vec(12B), elem_size(4B), return_size(4B), threads(4B), func(4B),
-    //   extra1(4B), ..., extraN(4B), n_extra(4B)
+    // Stack layout (push order from codegen, post-2c each `integer` = 8B):
+    //   vec(12B), elem_size(8B), return_size(8B), threads(8B), func(8B),
+    //   extra1(8B), ..., extraN(8B), n_extra(8B)
     // Pop order (LIFO): n_extra, extraN, ..., extra1, func, threads, return_size, elem_size, vec
 
-    let n_extra = *stores.get::<i32>(stack) as usize;
+    let n_extra = *stores.get::<i64>(stack) as usize;
     let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
     for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i32>(stack) as u64);
+        extra_args.push(*stores.get::<i64>(stack) as u64);
     }
     extra_args.reverse(); // restore push order (first extra = first worker param)
 
-    let v_func = *stores.get::<i32>(stack);
-    let v_threads = *stores.get::<i32>(stack);
-    let v_return_size = *stores.get::<i32>(stack);
-    let v_element_size = *stores.get::<i32>(stack);
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
     let v_input = *stores.get::<DbRef>(stack);
 
     let (fn_pos, program, n_hidden_text) = {
@@ -693,17 +693,18 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
 fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     // Same stack layout as n_parallel_for: n_extra on top, then declared params.
     // Pop order (LIFO): n_extra, extras..., func, threads, return_size, elem_size, input.
-    let n_extra = *stores.get::<i32>(stack) as usize;
+    // Post-2c: each `integer` is 8B.
+    let n_extra = *stores.get::<i64>(stack) as usize;
     let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
     for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i32>(stack) as u64);
+        extra_args.push(*stores.get::<i64>(stack) as u64);
     }
     extra_args.reverse();
 
-    let v_func = *stores.get::<i32>(stack);
-    let v_threads = *stores.get::<i32>(stack);
-    let v_return_size = *stores.get::<i32>(stack);
-    let v_element_size = *stores.get::<i32>(stack);
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
     let v_input = *stores.get::<DbRef>(stack);
 
     let (fn_pos, program) = {
@@ -918,7 +919,7 @@ fn parallel_execute_and_collect(
 
 #[cfg(feature = "threading")]
 fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i32>(stack);
+    let v_idx = *stores.get::<i64>(stack) as i32;
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
     let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
@@ -928,7 +929,7 @@ fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
 
 #[cfg(feature = "threading")]
 fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i32>(stack);
+    let v_idx = *stores.get::<i64>(stack) as i32;
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
     let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
@@ -938,7 +939,7 @@ fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
 
 #[cfg(feature = "threading")]
 fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i32>(stack);
+    let v_idx = *stores.get::<i64>(stack) as i32;
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
     let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
@@ -948,7 +949,7 @@ fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
 
 #[cfg(feature = "threading")]
 fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i32>(stack);
+    let v_idx = *stores.get::<i64>(stack) as i32;
     let v_ref = *stores.get::<DbRef>(stack);
     let store = stores.store(&v_ref);
     let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
@@ -1253,7 +1254,7 @@ fn hex_encode(data: &[u8]) -> String {
 /// path emits it as a compile-time constant; direct callers must
 /// use `sizeof(hash<T[…]>)`-style type introspection to obtain it.
 fn n_hash_sorted(stores: &mut Stores, stack: &mut DbRef) {
-    let v_tp = *stores.get::<i32>(stack);
+    let v_tp = *stores.get::<i64>(stack) as u16;
     let v_h = *stores.get::<DbRef>(stack);
     let result = stores.build_hash_sorted_vec(&v_h, v_tp as u16);
     stores.put(stack, result);
@@ -1830,7 +1831,7 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
 /// fresh one) — it's a borrowed view that lives as long as the
 /// parent's store does.  Matches the file-pattern arena contract.
 fn n_item(stores: &mut Stores, stack: &mut DbRef) {
-    let index = *stores.get::<i32>(stack);
+    let index = *stores.get::<i64>(stack) as i32;
     let self_ref = *stores.get::<DbRef>(stack);
     let discr = stores
         .store(&self_ref)
@@ -1930,7 +1931,7 @@ fn n_len(stores: &mut Stores, stack: &mut DbRef) {
 /// `src`, and pushes the result DbRef.  The compile-time codegen calls
 /// this for every `Struct.parse(JsonValue)` invocation.
 fn n_struct_from_jsonvalue(stores: &mut Stores, stack: &mut DbRef) {
-    let struct_kt_arg = *stores.get::<i32>(stack);
+    let struct_kt_arg = *stores.get::<i64>(stack) as i32;
     let src = *stores.get::<DbRef>(stack);
     let struct_kt = struct_kt_arg as u16;
     // `stores.size` returns the struct's size in bytes; `database`
