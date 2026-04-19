@@ -1754,7 +1754,7 @@ fn var_vector(s: &mut State) {
 
 fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::length_vector(&v_r, &s.database.allocations) as i64;
+    let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 

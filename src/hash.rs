@@ -40,7 +40,7 @@ pub fn add(hash: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
         keys::mut_store(hash, stores).set_u32_raw(hash.rec, hash.pos, claim);
     }
     hash_set(claim, rec, stores, keys);
-    keys::mut_store(rec, stores).set_u32_raw(claim, 4, length as u32 + 1);
+    keys::mut_store(rec, stores).set_u32_raw(claim, 4, length + 1);
     // hash_validate(hash, key, stores, keys);
 }
 

@@ -538,7 +538,7 @@ fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
         )
     };
 
-    let element_size = v_element_size as u32;
+    let element_size = v_element_size;
     let n_threads = (v_threads as usize).max(1);
 
     let results = run_parallel_int(stores, program, fn_pos, &v_input, element_size, n_threads);
@@ -780,7 +780,9 @@ fn parallel_light_execute_and_collect(
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    stores.store_mut(&result_db).set_u32_raw(vec_rec, 4, n as u32);
+    stores
+        .store_mut(&result_db)
+        .set_u32_raw(vec_rec, 4, n as u32);
     stores
         .store_mut(&result_db)
         .set_u32_raw(header_rec, 4, vec_rec);
@@ -832,7 +834,9 @@ fn parallel_execute_and_collect(
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    stores.store_mut(&result_db).set_u32_raw(vec_rec, 4, n as u32);
+    stores
+        .store_mut(&result_db)
+        .set_u32_raw(vec_rec, 4, n as u32);
     stores
         .store_mut(&result_db)
         .set_u32_raw(header_rec, 4, vec_rec);
@@ -1139,18 +1143,14 @@ fn populate_frame_variables(
         let inline_pos = 8 + (i as u32) * var_elm_size;
         // Write name
         let name_str = stores.store_mut(sf_vec).set_str(&vs.name);
-        stores.store_mut(sf_vec).set_u32_raw(
-            inner_rec,
-            inline_pos + u32::from(name_pos),
-            name_str,
-        );
+        stores
+            .store_mut(sf_vec)
+            .set_u32_raw(inner_rec, inline_pos + u32::from(name_pos), name_str);
         // Write type_name
         let type_str = stores.store_mut(sf_vec).set_str(&vs.type_name);
-        stores.store_mut(sf_vec).set_u32_raw(
-            inner_rec,
-            inline_pos + u32::from(type_pos),
-            type_str,
-        );
+        stores
+            .store_mut(sf_vec)
+            .set_u32_raw(inner_rec, inline_pos + u32::from(type_pos), type_str);
         // Write ArgValue: discriminant byte at av_abs (1-indexed),
         // variant data at av_abs + position(variant_tp, field_name).
         let av_abs = inline_pos + u32::from(val_pos);
@@ -1256,7 +1256,7 @@ fn hex_encode(data: &[u8]) -> String {
 fn n_hash_sorted(stores: &mut Stores, stack: &mut DbRef) {
     let v_tp = *stores.get::<i64>(stack) as u16;
     let v_h = *stores.get::<DbRef>(stack);
-    let result = stores.build_hash_sorted_vec(&v_h, v_tp as u16);
+    let result = stores.build_hash_sorted_vec(&v_h, v_tp);
     stores.put(stack, result);
 }
 
@@ -1789,7 +1789,9 @@ fn n_field(stores: &mut Stores, stack: &mut DbRef) {
     }
     let obj_tp = stores.name("JObject");
     let fields_pos = u32::from(stores.position(obj_tp, "fields")) + self_ref.pos;
-    let fields_rec = stores.store(&self_ref).get_i32_raw(self_ref.rec, fields_pos);
+    let fields_rec = stores
+        .store(&self_ref)
+        .get_i32_raw(self_ref.rec, fields_pos);
     if fields_rec <= 0 {
         let r = jv_null_sentinel(stores);
         stores.put(stack, r);
@@ -2036,7 +2038,9 @@ fn populate_struct_from_jsonvalue(stores: &mut Stores, dest: &DbRef, struct_kt: 
                     .store_mut(dest)
                     .set_u32_raw(dest.rec, dest_field_pos, new_s_rec);
             } else {
-                stores.store_mut(dest).set_u32_raw(dest.rec, dest_field_pos, 0);
+                stores
+                    .store_mut(dest)
+                    .set_u32_raw(dest.rec, dest_field_pos, 0);
             }
         } else {
             // Look at the field type's Parts to decide what to do.

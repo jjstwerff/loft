@@ -186,7 +186,10 @@ impl State {
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
-            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             let file_ref = if file_ref == i32::MIN {
                 let file_name = {
                     let store = self.database.store(&file);
@@ -411,7 +414,10 @@ impl State {
         }
         #[cfg(not(feature = "wasm"))]
         {
-            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
                 // File not yet open — store the seek position in #next so the first
                 // read/write applies it after opening the file.
@@ -497,7 +503,10 @@ impl State {
             };
             // Close any open handle: the handle may be in read or write mode with a stale
             // position, and after resize the position might be beyond the new end of file.
-            let file_ref = self.database.store(&file).get_i32_raw(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
                 self.database.files[file_ref as usize] = None;
                 self.database
@@ -1031,7 +1040,12 @@ impl State {
                     return;
                 }
                 let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(&data, u32::from(tp), i64::from(cur), &mut self.database.allocations);
+                vector::remove_vector(
+                    &data,
+                    u32::from(tp),
+                    i64::from(cur),
+                    &mut self.database.allocations,
+                );
                 self.put_var(state_var - 8, n);
             }
             3 => {
@@ -1073,8 +1087,8 @@ impl State {
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
-        let v_rec = crate::keys::store(&data, &self.database.allocations)
-            .get_u32_raw(data.rec, data.pos);
+        let v_rec =
+            crate::keys::store(&data, &self.database.allocations).get_u32_raw(data.rec, data.pos);
         let from = DbRef {
             store_nr: data.store_nr,
             rec: v_rec,
@@ -1218,7 +1232,7 @@ impl State {
         let index = *self.get_stack::<i64>();
         let r = *self.get_stack::<DbRef>();
         let new_value =
-            vector::insert_vector(&r, u32::from(size), i64::from(index), &mut self.database.allocations);
+            vector::insert_vector(&r, u32::from(size), index, &mut self.database.allocations);
         self.database.set_default_value(db_tp, &new_value);
         self.put_stack(new_value);
     }

@@ -876,7 +876,7 @@ impl Stores {
                 if cur == 0 {
                     return;
                 }
-                store.delete(cur as u32);
+                store.delete(cur);
                 store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
@@ -904,14 +904,14 @@ impl Stores {
                     self.remove_claims(
                         &DbRef {
                             store_nr: rec.store_nr,
-                            rec: cur as u32,
+                            rec: cur,
                             pos: 8 + size * i,
                         },
                         tp,
                     );
                 }
                 let store = self.store_mut(rec);
-                store.delete(cur as u32);
+                store.delete(cur);
                 store.set_u32_raw(rec.rec, rec.pos, 0);
             }
             Parts::Array(v) | Parts::Ordered(v, _) => {

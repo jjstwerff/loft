@@ -1640,7 +1640,7 @@ impl State {
             } else {
                 stack.add_op("OpCall", self);
             }
-            self.code_add(op as i64); // d_nr: i64 (stdlib `const i32` widens post-2c)
+            self.code_add(i64::from(op)); // d_nr: i64 (stdlib `const i32` widens post-2c)
             let args_size: u16 = stack
                 .data
                 .def(op)
@@ -1649,7 +1649,7 @@ impl State {
                 .map(|a| size(&a.typedef, &Context::Argument))
                 .sum();
             self.code_add(args_size);
-            self.code_add(stack.data.def(op).code_position as i64);
+            self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);

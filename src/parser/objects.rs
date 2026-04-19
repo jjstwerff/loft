@@ -319,26 +319,26 @@ impl Parser {
                     let id = if let Type::Integer(min, _, _) = &tp
                         && self.data.forced_size(alias_nr) == Some(4)
                     {
-                        if !self.first_pass {
-                            self.database.int(*min, false)
-                        } else {
+                        if self.first_pass {
                             u16::MAX
+                        } else {
+                            self.database.int(*min, false)
                         }
                     } else if let Type::Integer(min, _, _) = &tp
                         && self.data.forced_size(alias_nr) == Some(1)
                     {
-                        if !self.first_pass {
-                            self.database.byte(*min, false)
-                        } else {
+                        if self.first_pass {
                             u16::MAX
+                        } else {
+                            self.database.byte(*min, false)
                         }
                     } else if let Type::Integer(min, _, _) = &tp
                         && self.data.forced_size(alias_nr) == Some(2)
                     {
-                        if !self.first_pass {
-                            self.database.short(*min, false)
-                        } else {
+                        if self.first_pass {
                             u16::MAX
+                        } else {
+                            self.database.short(*min, false)
                         }
                     } else {
                         self.get_type(&tp)

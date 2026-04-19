@@ -818,7 +818,7 @@ fn OpVarVector(pos: const u16) -> vector;
 #rust"*s.get_var::<DbRef>(@pos)"
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
-#rust"vector::length_vector(&@r, &s.database.allocations) as i64"
+#rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)

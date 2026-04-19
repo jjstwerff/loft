@@ -643,10 +643,10 @@ impl Parser {
         // assignments like `x: integer = 9_876_543_210` working without an
         // explicit cast.)
         let _ = code;
-        if matches!((is_type, should),
-            (Type::Long, Type::Integer(_, _, _)) |
-            (Type::Integer(_, _, _), Type::Long))
-        {
+        if matches!(
+            (is_type, should),
+            (Type::Long, Type::Integer(_, _, _)) | (Type::Integer(_, _, _), Type::Long)
+        ) {
             return true;
         }
         // Struct-literal inline constructors are typed as Rewritten(Reference(...)); strip
@@ -1308,7 +1308,11 @@ impl Parser {
                     && data.def(new_d).name == "OpGetVector"
                     && new_args.len() == 3
                 {
-                    let cur_size = if let Value::Int(n) = &new_args[1] { *n } else { 0 };
+                    let cur_size = if let Value::Int(n) = &new_args[1] {
+                        *n
+                    } else {
+                        0
+                    };
                     let elm_size = Self::type_element_size(concrete, data);
                     if elm_size != cur_size {
                         let mut fixed = new_args;
@@ -1397,7 +1401,11 @@ impl Parser {
             }
         }
         match tp {
-            Type::Single | Type::Boolean | Type::Character | Type::Text(_) | Type::Enum(_, false, _) => 4,
+            Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_)
+            | Type::Enum(_, false, _) => 4,
             Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
@@ -1687,10 +1695,10 @@ impl Parser {
                 let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
-                let alias_nr = if f_nr != usize::MAX {
-                    self.data.def(d_nr).attributes[f_nr].alias_d_nr
-                } else {
+                let alias_nr = if f_nr == usize::MAX {
                     u32::MAX
+                } else {
+                    self.data.def(d_nr).attributes[f_nr].alias_d_nr
                 };
                 let s = self
                     .data

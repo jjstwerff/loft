@@ -70,13 +70,13 @@ impl Stores {
         let p_tp = if self.types[tp as usize].parents.is_empty()
             || self.types[tp as usize].parents.len() > 1
         {
-            self.store(db).get_short(p_rec as u32, 8, 0) as u16
+            self.store(db).get_short(p_rec, 8, 0) as u16
         } else {
             *self.types[tp as usize].parents.iter().next().unwrap()
         };
         let parent = DbRef {
             store_nr: db.store_nr,
-            rec: p_rec as u32,
+            rec: p_rec,
             pos: 8,
         };
         let mut res = self.path(&parent, p_tp);
@@ -720,7 +720,10 @@ impl ShowDb<'_> {
     fn write_hash(&self, s: &mut String, content: u16, indent: u16, data: &DbRef, complex: bool) {
         let mut map = BTreeMap::new();
         let mut pos = i32::MAX;
-        let rec = self.stores.store_nr(self.store).get_u32_raw(data.rec, data.pos);
+        let rec = self
+            .stores
+            .store_nr(self.store)
+            .get_u32_raw(data.rec, data.pos);
         if rec == 0 {
             s.push(']');
             return;
@@ -734,7 +737,10 @@ impl ShowDb<'_> {
             } else {
                 break;
             }
-            let rec = self.stores.store_nr(self.store).get_i32_raw(rec, pos as u32);
+            let rec = self
+                .stores
+                .store_nr(self.store)
+                .get_i32_raw(rec, pos as u32);
             if rec != 0 {
                 let r = DbRef {
                     store_nr: data.store_nr,

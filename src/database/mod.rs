@@ -106,11 +106,11 @@ pub enum Parts {
     EnumValue(u8, Vec<Field>),         // Enumerate value with actual value for typed structures.
     Byte(i32, bool),                   // start number and nullable flag
     Short(i32, bool),                  // start number and nullable flag
-    Int(i32, bool),                    // 4-byte integer field (size(4) annotation). Null sentinel: i32::MIN.
-    Vector(u16),                       // The records are part of the vector
-    Array(u16),                        // The array holds references for each record
-    Sorted(u16, Vec<(u16, bool)>),     // Sorted vector on fields with an ascending flag
-    Ordered(u16, Vec<(u16, bool)>),    // Sorted array on fields with an ascending flag
+    Int(i32, bool), // 4-byte integer field (size(4) annotation). Null sentinel: i32::MIN.
+    Vector(u16),    // The records are part of the vector
+    Array(u16),     // The array holds references for each record
+    Sorted(u16, Vec<(u16, bool)>), // Sorted vector on fields with an ascending flag
+    Ordered(u16, Vec<(u16, bool)>), // Sorted array on fields with an ascending flag
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Spacial(u16, Vec<u16>),            // A spacial index with the listed coordinate fields as a key

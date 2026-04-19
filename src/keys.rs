@@ -251,7 +251,7 @@ pub fn key_compare(key: &[Content], rec: &DbRef, stores: &[Store], keys: &[Key])
 fn compare_key(k: &Content, record: &DbRef, stores: &[Store], key: &Key, pos: u32) -> Ordering {
     let s = store(record, stores);
     let c = match (k, key.type_nr.abs()) {
-        (Content::Long(v), 1) => v.cmp(&(i64::from(s.get_int(record.rec, record.pos + pos)))),
+        (Content::Long(v), 1) => v.cmp(&s.get_int(record.rec, record.pos + pos)),
         (Content::Long(v), 2) => v.cmp(&s.get_long(record.rec, record.pos + pos)),
         (Content::Single(v), 3) => single_cmp(*v, s.get_single(record.rec, record.pos + pos)),
         (Content::Float(v), 4) => float_cmp(*v, s.get_float(record.rec, record.pos + pos)),
@@ -287,15 +287,15 @@ pub fn get_key(record: &DbRef, stores: &[Store], keys: &[Key]) -> Vec<Content> {
         match k.type_nr.abs() {
             1 => {
                 let v = store(record, stores).get_int(record.rec, p);
-                result.push(Content::Long(i64::from(v)));
+                result.push(Content::Long(v));
             }
             2 => {
                 let v = store(record, stores).get_long(record.rec, p);
                 result.push(Content::Long(v));
             }
             6 => {
-                let v = store(record, stores)
-                    .get_str(store(record, stores).get_u32_raw(record.rec, p));
+                let v =
+                    store(record, stores).get_str(store(record, stores).get_u32_raw(record.rec, p));
                 result.push(Content::Str(Str::new(v)));
             }
             _ => {
@@ -347,7 +347,7 @@ pub fn key_hash(key: &[Content]) -> u64 {
 fn hash_ref(r: &DbRef, stores: &[Store], key: &Key, p: u32, hasher: &mut DefaultHasher) {
     let s = store(r, stores);
     match key.type_nr.abs() {
-        1 => i64::from(s.get_int(r.rec, p)).hash(hasher),
+        1 => s.get_int(r.rec, p).hash(hasher),
         2 => s.get_long(r.rec, p).hash(hasher),
         3 | 4 => (),
         6 => s.get_str(s.get_u32_raw(r.rec, p)).hash(hasher),

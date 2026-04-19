@@ -197,7 +197,10 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             let rec = state.database.record_new(&vec_ref, vec_tp, 0);
             match val {
                 Value::Int(v) => {
-                    state.database.store_mut(&rec).set_int(rec.rec, rec.pos, i64::from(*v));
+                    state
+                        .database
+                        .store_mut(&rec)
+                        .set_int(rec.rec, rec.pos, i64::from(*v));
                 }
                 Value::Float(v) => {
                     state

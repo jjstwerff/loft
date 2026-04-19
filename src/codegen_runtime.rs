@@ -304,7 +304,12 @@ pub fn OpInsertVector(
     index: i32,
     db_tp: i32,
 ) -> DbRef {
-    let new_value = vector::insert_vector(&data, size as u32, i64::from(index), &mut stores.allocations);
+    let new_value = vector::insert_vector(
+        &data,
+        size as u32,
+        i64::from(index),
+        &mut stores.allocations,
+    );
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
 }
@@ -1431,8 +1436,8 @@ where
     let mut fld = 8u32;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_u32_raw(input.rec, input.pos);
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1489,8 +1494,8 @@ where
     let header_rec = header_cr.rec;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_u32_raw(input.rec, input.pos);
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1544,8 +1549,8 @@ where
     let header_rec = header_cr.rec;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_u32_raw(input.rec, input.pos);
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,

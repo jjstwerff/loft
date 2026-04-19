@@ -188,9 +188,9 @@ pub fn rtree_insert(
     // Top node
     if size == 1 {
         store.set_i32_raw(tree, RAD_TOP, -(size as i32));
-        set_node(store, tree, size as u32, higher, rec as i32);
-        set_node(store, tree, size as u32, !higher, cur as i32);
-        set_bits(store, bits, size as u32, 0);
+        set_node(store, tree, size, higher, rec as i32);
+        set_node(store, tree, size, !higher, cur as i32);
+        set_bits(store, bits, size, 0);
         return;
     }
     // Find node to split, this is not necessarily the last

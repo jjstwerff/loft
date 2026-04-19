@@ -50,7 +50,7 @@ impl State {
         let len = store.get_u32_raw(rec, 4) as i32;
         let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         unsafe {
-            self.set_string(len as i32, ptr);
+            self.set_string(len, ptr);
         }
     }
 

@@ -551,8 +551,7 @@ impl Stores {
             // FS-E: write text content via JS host bridge.
             let file_path = {
                 let s = self.store_mut(file);
-                s.get_str(s.get_u32_raw(file.rec, file.pos + 24))
-                    .to_owned()
+                s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned()
             };
             crate::wasm::host_fs_write_text(&file_path, v);
         }

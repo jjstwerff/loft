@@ -317,7 +317,7 @@ impl State {
             self.put_stack(closure);
         }
         let total = arg_size + if has_closure { 12 } else { 0 };
-        let code_pos = self.fn_positions[d_nr] as i64;
+        let code_pos = i64::from(self.fn_positions[d_nr]);
         self.fn_call(d_nr as u32, total, code_pos);
     }
 

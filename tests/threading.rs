@@ -52,7 +52,7 @@ fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {
 
     {
         let store = stores.store_mut(&db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(vec_rec, 4, n);
         for (i, &v) in values.iter().enumerate() {
             store.set_int(vec_rec, 8 + i as u32 * 8, i64::from(v));
         }
@@ -157,7 +157,7 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(vec_rec, 4, n);
         // Pairs: (1,2), (3,4), (5,6), (7,8)
         let pairs = [(1i64, 2i64), (3, 4), (5, 6), (7, 8)];
         for (i, (a, b)) in pairs.iter().enumerate() {
@@ -241,7 +241,7 @@ fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(vec_rec, 4, n);
         // Post-2c: 3 integers × 8B = 24B stride.
         // Triples: (1,2,3), (4,5,6), (7,8,9), (10,11,12)
         let triples = [(1i64, 2i64, 3i64), (4, 5, 6), (7, 8, 9), (10, 11, 12)];
@@ -288,7 +288,7 @@ fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(vec_rec, 4, n);
         // (value, factor) pairs; factor is context shared per-element
         let pairs: [(i64, i64); 5] = [(3, 2), (5, 3), (7, 4), (2, 10), (1, 0)];
         for (i, (v, f)) in pairs.iter().enumerate() {
@@ -333,7 +333,7 @@ fn clamp_lo(r: const Thresh) -> integer {
 
     {
         let store = state.database.store_mut(&db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(vec_rec, 4, n);
         // (value, threshold) — post-2c: 2 × 8B = 16B stride
         let rows: [(i64, i64); 6] = [(10, 5), (3, 5), (5, 5), (0, 1), (100, 50), (49, 50)];
         for (i, (v, t)) in rows.iter().enumerate() {
