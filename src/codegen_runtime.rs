@@ -1774,14 +1774,16 @@ pub const NATIVE_COROUTINE_STORE: u16 = 0xFFFD;
 
 /// Return value from `LoftCoroutine::next_i64` when the generator is exhausted.
 ///
-/// For integer-yielding generators (`iterator<integer>`), the for-loop termination
-/// uses `op_conv_bool_from_int(val as i32)`, which returns `false` only when
-/// `val as i32 == i32::MIN`.  Using `i32::MIN as i64` ensures the cast lands on
-/// the integer null sentinel so the loop breaks correctly.
-///
-/// (Long-yielding generators need `i64::MIN` instead; deferred to N8b.3 — only
-/// integer generators are tested by N8b.1/N8b.2.)
-pub const COROUTINE_EXHAUSTED: i64 = i32::MIN as i64;
+/// Post-2c the `integer` type is i64 — both integer- and long-yielding
+/// generators terminate on `op_conv_bool_from_int(val)` returning
+/// `false`, which happens exactly when `val == i64::MIN`.  Pre-2c this
+/// constant was `i32::MIN as i64` because the integer null sentinel was
+/// `i32::MIN`; that's now the wrong value — the sentinel moved to
+/// `i64::MIN` when Phase 2c widened integer storage, and
+/// `coroutine_next_i64` returning `i32::MIN as i64` was being
+/// interpreted as a real value by `op_conv_bool_from_int`, leaving the
+/// for-loop iterating forever.
+pub const COROUTINE_EXHAUSTED: i64 = i64::MIN;
 
 /// Trait implemented by every native generator (state-machine struct).
 /// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory
