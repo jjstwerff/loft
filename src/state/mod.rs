@@ -1727,8 +1727,8 @@ impl State {
         // Element arg (DbRef) occupies the first parameter slot; extras follow.
         self.put_stack(*arg); // 12 bytes
         for &extra in extra_args {
-            // Push each extra as a raw i32 (integer context args).
-            self.put_stack(extra as i32);
+            // Push each extra as a raw i64 (integer context args, post-2c).
+            self.put_stack(extra as i64);
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
