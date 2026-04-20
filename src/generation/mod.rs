@@ -570,6 +570,17 @@ extern crate loft;"
     /// Sorting by `known_type` ensures the runtime recreates type IDs in the same order
     /// as the compile-time database, keeping field indices consistent.
     fn output_init(&mut self, w: &mut dyn Write, from: u32, till: u32) -> std::io::Result<()> {
+        // Base types are pre-registered by `Stores::new()` with fixed indices
+        // 0..=6 (integer, long, single, float, boolean, text, character — see
+        // `src/database/mod.rs:Stores::new`).  Subsequent struct / vector /
+        // hash / index fields reference these by `known_type`.  The emitter
+        // binds each pre-registered id into a `t{N}` variable so field
+        // references use the same `t{N}` form as types created below — the
+        // `known_type → runtime id` identity is made explicit via scope.
+        for n in 0..=6u16 {
+            writeln!(w, "    let t{n}: u16 = {n};")?;
+        }
+        let _ = writeln!(w, "    let _ = (t0, t1, t2, t3, t4, t5, t6); // suppress unused-let warnings for unreferenced base types");
         let mut type_defs: Vec<(u16, u32)> = Vec::new();
         for dnr in from..till {
             self.start_fn(dnr);
@@ -588,11 +599,26 @@ extern crate loft;"
         }
         type_defs.sort_by_key(|(type_id, _)| *type_id);
 
-        // Collect bare Byte/Short types that were registered by ensure_io_type() during
-        // file I/O parsing.  These have no corresponding loft definition, so output_init
-        // would otherwise skip them entirely, causing runtime type IDs to shift.
+        // Collect bare Byte/Short/Int types that were registered by
+        // `database.byte` / `.short` / `.int` during type-field lowering
+        // (e.g. narrow integer fields with `size(N)` annotations).  These
+        // have no corresponding loft definition, so `output_init` would
+        // otherwise skip them entirely, leaving a GAP in the runtime type
+        // id sequence and shifting every type numbered after it.
+        //
+        // Enum values without attributes (plain tag variants) are also not
+        // in `type_defs` — they don't get their own runtime type record,
+        // but `Stores::enumerate` still advances the counter when the
+        // parent enum is registered, so the plain-tag variants themselves
+        // don't consume a slot.  Only Parts::{Byte, Short, Int} produce
+        // standalone runtime types that need to be re-created here.
         let def_type_id_set: HashSet<u16> = type_defs.iter().map(|&(tid, _)| tid).collect();
-        let mut bare_io: Vec<(u16, i32, bool, bool)> = Vec::new(); // (type_id, min, nullable, is_short)
+        enum BareIo {
+            Byte(i32, bool),
+            Short(i32, bool),
+            Int(i32, bool),
+        }
+        let mut bare_io: Vec<(u16, BareIo)> = Vec::new();
         for (idx, tp) in self.stores.types.iter().enumerate() {
             let tid = idx as u16;
             if def_type_id_set.contains(&tid) {
@@ -600,48 +626,83 @@ extern crate loft;"
             }
             match &tp.parts {
                 crate::database::Parts::Byte(min, nullable) => {
-                    bare_io.push((tid, *min, *nullable, false));
+                    bare_io.push((tid, BareIo::Byte(*min, *nullable)));
                 }
                 crate::database::Parts::Short(min, nullable) => {
-                    bare_io.push((tid, *min, *nullable, true));
+                    bare_io.push((tid, BareIo::Short(*min, *nullable)));
+                }
+                crate::database::Parts::Int(min, nullable) => {
+                    bare_io.push((tid, BareIo::Int(*min, *nullable)));
                 }
                 _ => {}
             }
         }
-        bare_io.sort_by_key(|&(tid, _, _, _)| tid);
+        bare_io.sort_by_key(|&(tid, _)| tid);
         let mut bare_idx = 0;
 
         // Build a map from known_type → dnr for dependency resolution.
         let type_id_to_dnr: HashMap<u16, u32> =
             type_defs.iter().map(|&(tid, dnr)| (tid, dnr)).collect();
 
-        // For each struct / enum-value, collect the content type IDs of its
-        // sorted / index / hash / vector fields so we can emit them first.
+        // For each struct / enum-value / enum, collect the known_type ids that
+        // its emission will *reference* as `t{N}` let-bindings — so the
+        // topological walk emits them first.  Previously these were raw u16
+        // literals and forward references worked; with the Category D let-
+        // binding scheme, every referenced id must already be in scope.
+        //
+        // Struct / EnumValue: content-type of each sorted / hash / index /
+        // vector field is a dep.  Enum: each typed variant (EnumValue with
+        // attributes) is a dep, since `db.value(enum, variant_name, t{N})`
+        // must find the variant's `t{N}` binding in scope.
         let mut deps: HashMap<u16, Vec<u16>> = HashMap::new();
         for &(type_id, dnr) in &type_defs {
             let def = self.data.def(dnr);
             let is_container = matches!(def.def_type, DefType::Struct)
                 || (def.def_type == DefType::EnumValue && !def.attributes.is_empty());
-            if !is_container {
+            let is_enum = def.def_type == DefType::Enum;
+            if !is_container && !is_enum {
                 continue;
             }
             let mut d: Vec<u16> = Vec::new();
-            for a in &def.attributes.clone() {
-                let c_nr = match &a.typedef {
-                    Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
-                        // Guard matches the Vector convention: skip unresolved (u32::MAX) content types.
-                        (*c_nr != u32::MAX).then_some(*c_nr)
+            if is_container {
+                for a in &def.attributes.clone() {
+                    let c_nr = match &a.typedef {
+                        Type::Sorted(c_nr, _, _)
+                        | Type::Hash(c_nr, _, _)
+                        | Type::Index(c_nr, _, _) => {
+                            // Guard matches the Vector convention: skip unresolved (u32::MAX) content types.
+                            (*c_nr != u32::MAX).then_some(*c_nr)
+                        }
+                        Type::Vector(c_type, _) => {
+                            let n = self.data.type_def_nr(c_type);
+                            (n != u32::MAX).then_some(n)
+                        }
+                        _ => None,
+                    };
+                    if let Some(c_nr) = c_nr {
+                        let c_tp = self.data.def(c_nr).known_type;
+                        if c_tp != u16::MAX && type_id_to_dnr.contains_key(&c_tp) {
+                            d.push(c_tp);
+                        }
                     }
-                    Type::Vector(c_type, _) => {
-                        let n = self.data.type_def_nr(c_type);
-                        (n != u32::MAX).then_some(n)
-                    }
-                    _ => None,
-                };
-                if let Some(c_nr) = c_nr {
-                    let c_tp = self.data.def(c_nr).known_type;
-                    if c_tp != u16::MAX && type_id_to_dnr.contains_key(&c_tp) {
-                        d.push(c_tp);
+                }
+            } else {
+                // is_enum: typed variants referenced by `db.value(enum, name, t{N})`.
+                for a in &def.attributes.clone() {
+                    if matches!(a.typedef, Type::Enum(_, true, _)) {
+                        // Resolve the EnumValue def_nr whose parent matches.
+                        let v_dnr = (0..self.data.definitions()).find(|&v| {
+                            let vd = self.data.def(v);
+                            vd.def_type == DefType::EnumValue
+                                && vd.parent == dnr
+                                && vd.name == a.name
+                        });
+                        if let Some(v_dnr) = v_dnr {
+                            let v_tp = self.data.def(v_dnr).known_type;
+                            if v_tp != u16::MAX && type_id_to_dnr.contains_key(&v_tp) {
+                                d.push(v_tp);
+                            }
+                        }
                     }
                 }
             }
@@ -650,62 +711,68 @@ extern crate loft;"
             }
         }
 
-        // Emit type definitions in topological order: dependencies first.
-        // Bare byte/short IO types are interleaved at their correct positions.
-        let mut emitted: HashSet<u16> = HashSet::new();
+        // Two-phase emission: (1) create all types in known_type order so every
+        // cross-reference in phase 2 is a backward reference to an already-bound
+        // `t{N}`; (2) populate struct / enum-value fields and enum values once
+        // every type id is in scope.  This resolves mutual-recursion cycles
+        // (e.g. JsonValue enum with JArray variant holding vector<JsonValue>)
+        // that broke the previous single-pass topological approach.
+        let _ = deps; // no longer used; kept only for future re-introduction
+        let _ = type_id_to_dnr;
+
+        // Phase 1 — type creation in strict known_type order.
         for &(type_id, dnr) in &type_defs {
-            // Emit bare byte/short types that must precede this definition.
             while bare_idx < bare_io.len() && bare_io[bare_idx].0 < type_id {
-                let (tid, min, nullable, is_short) = bare_io[bare_idx];
-                if is_short {
-                    writeln!(w, "    db.short({min}, {nullable}); // type {tid}")?;
-                } else {
-                    writeln!(w, "    db.byte({min}, {nullable}); // type {tid}")?;
+                let (tid, ref bio) = bare_io[bare_idx];
+                match bio {
+                    BareIo::Byte(min, nullable) => {
+                        writeln!(w, "    let t{tid} = db.byte({min}, {nullable});")?;
+                    }
+                    BareIo::Short(min, nullable) => {
+                        writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
+                    }
+                    BareIo::Int(min, nullable) => {
+                        writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
+                    }
                 }
+                writeln!(w, "    let _ = t{tid}; // may be unused")?;
                 bare_idx += 1;
             }
-            self.emit_def_ordered(w, type_id, dnr, &type_id_to_dnr, &deps, &mut emitted)?;
+            self.emit_type_creation(w, type_id, dnr)?;
         }
-        // Emit any remaining bare byte/short types after all defs.
         while bare_idx < bare_io.len() {
-            let (tid, min, nullable, is_short) = bare_io[bare_idx];
-            if is_short {
-                writeln!(w, "    db.short({min}, {nullable}); // type {tid}")?;
-            } else {
-                writeln!(w, "    db.byte({min}, {nullable}); // type {tid}")?;
+            let (tid, ref bio) = bare_io[bare_idx];
+            match bio {
+                BareIo::Byte(min, nullable) => {
+                    writeln!(w, "    let t{tid} = db.byte({min}, {nullable});")?;
+                }
+                BareIo::Short(min, nullable) => {
+                    writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
+                }
+                BareIo::Int(min, nullable) => {
+                    writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
+                }
             }
+            writeln!(w, "    let _ = t{tid}; // may be unused")?;
             bare_idx += 1;
+        }
+
+        // Phase 2 — populate struct / enum-value fields and enum values.
+        for &(type_id, dnr) in &type_defs {
+            self.emit_type_fields(w, type_id, dnr)?;
         }
         Ok(())
     }
 
-    /// Recursively emit `type_id` (def `dnr`) and its content-type dependencies
-    /// before emitting the type itself, so that `db.sorted(c_tp, ...)` etc. always
-    /// find the content type already registered.
-    fn emit_def_ordered(
+    /// Phase 1 — emit just the type-creation call for `dnr` (no fields,
+    /// no enum values).  Captures the runtime id in a `let t{type_id}`
+    /// binding so Phase 2 field/value emission can reference it.
+    fn emit_type_creation(
         &mut self,
         w: &mut dyn Write,
         type_id: u16,
         dnr: u32,
-        type_id_to_dnr: &HashMap<u16, u32>,
-        deps: &HashMap<u16, Vec<u16>>,
-        emitted: &mut HashSet<u16>,
     ) -> std::io::Result<()> {
-        if emitted.contains(&type_id) {
-            return Ok(());
-        }
-        // Mark as emitted before recursing to prevent infinite loops on cycles.
-        emitted.insert(type_id);
-        // Emit all content-type dependencies first.
-        if let Some(d) = deps.get(&type_id) {
-            for &dep_tp in d {
-                if let (false, Some(&dep_dnr)) =
-                    (emitted.contains(&dep_tp), type_id_to_dnr.get(&dep_tp))
-                {
-                    self.emit_def_ordered(w, dep_tp, dep_dnr, type_id_to_dnr, deps, emitted)?;
-                }
-            }
-        }
         if dnr == u32::MAX {
             eprintln!(
                 "codegen warning: skipping type_id={type_id} — definition number is unresolved (u32::MAX)"
@@ -714,15 +781,14 @@ extern crate loft;"
         }
         let def = self.data.def(dnr);
         if matches!(def.def_type, DefType::Struct) {
-            self.output_struct(w, dnr, 0)?;
+            writeln!(
+                w,
+                "    let t{type_id} = db.structure(\"{}\", 0);",
+                def.name
+            )?;
         } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
-            // Determine the 1-based position in the parent enum's attributes.
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
-                eprintln!(
-                    "codegen warning: EnumValue '{}' (dnr={dnr}) has no parent — skipping",
-                    def.name
-                );
                 return Ok(());
             }
             let parent = self.data.def(parent_nr);
@@ -732,14 +798,18 @@ extern crate loft;"
                 .enumerate()
                 .find(|(_, a)| a.name == def.name)
                 .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
-            self.output_struct(w, dnr, enum_value)?;
+            writeln!(
+                w,
+                "    let t{type_id} = db.structure(\"{}\", {enum_value});",
+                def.name
+            )?;
         } else if def.def_type == DefType::Enum {
-            output_enum(w, dnr, self.data)?;
+            writeln!(
+                w,
+                "    let t{type_id} = db.enumerate(\"{}\");",
+                def.name
+            )?;
         } else if def.def_type == DefType::Vector {
-            // Determine the content type's known_type for the db.vector() call.
-            // Prefer def.parent (set by check_vector/vector_def), but fall back to
-            // extracting the content type from the definition's returned Type when
-            // parent is unresolved (u32::MAX) due to cross-source scoping.
             let content_known = if def.parent != u32::MAX {
                 self.data.def(def.parent).known_type
             } else if let Type::Vector(ref c_type, _) = def.returned {
@@ -753,11 +823,49 @@ extern crate loft;"
                 u16::MAX
             };
             if content_known != u16::MAX {
-                writeln!(w, "    db.vector({content_known});")?;
+                let content_ref = type_id_ref(content_known);
+                writeln!(w, "    let t{type_id} = db.vector({content_ref});")?;
+                writeln!(w, "    let _ = t{type_id}; // may be unused")?;
             }
         }
         Ok(())
     }
+
+    /// Phase 2 — populate struct / enum-value fields or enum values for the
+    /// already-created type at `type_id` / `dnr`.  Runs after all `t{N}`
+    /// bindings are in scope so cross-references can be resolved freely.
+    fn emit_type_fields(
+        &self,
+        w: &mut dyn Write,
+        type_id: u16,
+        dnr: u32,
+    ) -> std::io::Result<()> {
+        if dnr == u32::MAX {
+            return Ok(());
+        }
+        let def = self.data.def(dnr);
+        if matches!(def.def_type, DefType::Struct) {
+            self.output_struct_fields(w, dnr, 0, type_id)?;
+        } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
+            let parent_nr = def.parent;
+            if parent_nr == u32::MAX {
+                return Ok(());
+            }
+            let parent = self.data.def(parent_nr);
+            let enum_value = parent
+                .attributes
+                .iter()
+                .enumerate()
+                .find(|(_, a)| a.name == def.name)
+                .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
+            self.output_struct_fields(w, dnr, enum_value, type_id)?;
+        } else if def.def_type == DefType::Enum {
+            output_enum_values(w, dnr, self.data, type_id)?;
+        }
+        // DefType::Vector has no fields to populate.
+        Ok(())
+    }
+
 
     /// Use this to emit all function bodies for the given definition range.
     /// When `reachable` is Some, only functions in the set are emitted.
@@ -784,9 +892,12 @@ extern crate loft;"
 
     /// Use this to emit a single struct field into the db-builder output.
     /// Dispatches on the field's `typedef` to produce the correct `db.*` call.
+    /// `s_var` is the Rust variable holding the parent struct's runtime id
+    /// (e.g. `t59` for `known_type=59`).
     fn emit_field(
         &self,
         w: &mut dyn Write,
+        s_var: &str,
         field_name: &str,
         typedef: &Type,
         nullable: bool,
@@ -796,7 +907,14 @@ extern crate loft;"
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;
-                emit_db_field(w, "s", field_name, "vec", &format!("db.vector({content})"))?;
+                let content_ref = type_id_ref(content);
+                emit_db_field(
+                    w,
+                    s_var,
+                    field_name,
+                    "vec",
+                    &format!("db.vector({content_ref})"),
+                )?;
             }
             return Ok(());
         }
@@ -805,7 +923,7 @@ extern crate loft;"
             if field_size == 1 {
                 emit_db_field(
                     w,
-                    "s",
+                    s_var,
                     field_name,
                     "byte",
                     &format!("db.byte({min}, {nullable})"),
@@ -813,18 +931,19 @@ extern crate loft;"
             } else if field_size == 2 {
                 emit_db_field(
                     w,
-                    "s",
+                    s_var,
                     field_name,
                     "short",
                     &format!("db.short({min}, {nullable})"),
                 )?;
             } else {
-                writeln!(w, "    db.field(s, \"{field_name}\", 0);")?;
+                writeln!(w, "    db.field({s_var}, \"{field_name}\", 0);")?;
             }
             return Ok(());
         }
         if let Type::Sorted(c_nr, keys, _) = typedef {
             let c_tp = self.data.def(*c_nr).known_type;
+            let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
                 .map(|(k, asc)| format!("(\"{k}\".to_string(), {asc})"))
@@ -832,15 +951,16 @@ extern crate loft;"
                 .join(", ");
             emit_db_field(
                 w,
-                "s",
+                s_var,
                 field_name,
                 "sorted",
-                &format!("db.sorted({c_tp}, &[{keys_str}])"),
+                &format!("db.sorted({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }
         if let Type::Hash(c_nr, keys, _) = typedef {
             let c_tp = self.data.def(*c_nr).known_type;
+            let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
                 .map(|k| format!("\"{k}\".to_string()"))
@@ -848,15 +968,16 @@ extern crate loft;"
                 .join(", ");
             emit_db_field(
                 w,
-                "s",
+                s_var,
                 field_name,
                 "hash",
-                &format!("db.hash({c_tp}, &[{keys_str}])"),
+                &format!("db.hash({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }
         if let Type::Index(c_nr, keys, _) = typedef {
             let c_tp = self.data.def(*c_nr).known_type;
+            let c_ref = type_id_ref(c_tp);
             let keys_str = keys
                 .iter()
                 .map(|(k, asc)| format!("(\"{k}\".to_string(), {asc})"))
@@ -864,36 +985,35 @@ extern crate loft;"
                 .join(", ");
             emit_db_field(
                 w,
-                "s",
+                s_var,
                 field_name,
                 "index",
-                &format!("db.index({c_tp}, &[{keys_str}])"),
+                &format!("db.index({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }
         if known_type != u16::MAX {
-            writeln!(w, "    db.field(s, \"{field_name}\", {known_type});")?;
+            let kt_ref = type_id_ref(known_type);
+            writeln!(
+                w,
+                "    db.field({s_var}, \"{field_name}\", {kt_ref});"
+            )?;
         }
         Ok(())
     }
 
-    /// Use this to register one struct or enum-value type in the runtime database.
-    /// The runtime field layout must be byte-for-byte identical to the compile-time layout,
-    /// so field order and builder calls here must match what the compiler produced.
-    ///
-    /// `enum_value` is 0 for plain structs and the 1-based variant index for enum-value structs.
-    fn output_struct(
+    /// Phase 2 emission for a struct or enum-value type: populate fields.
+    /// The type itself was already created in Phase 1 — this only emits the
+    /// `db.field(...)` calls and any implicit enum-discriminator byte.
+    fn output_struct_fields(
         &self,
         w: &mut dyn Write,
         def_nr: u32,
         enum_value: i32,
+        type_id: u16,
     ) -> std::io::Result<()> {
         let def = self.data.def(def_nr);
-        writeln!(
-            w,
-            "    let s = db.structure(\"{}\", {enum_value}); // {}",
-            def.name, def.known_type
-        )?;
+        let s_var = format!("t{type_id}");
         // For EnumValue types, the compile-time DB may have an implicit "enum" discriminator
         // field at position 0 (added when a "byte" type already existed from another struct).
         // If the compile-time type has "enum" at position 0, we must emit it here so that
@@ -903,13 +1023,13 @@ extern crate loft;"
             && self.stores.position(def.known_type, "enum") == 0
         {
             writeln!(w, "    let byte_enum = db.byte(0, false);")?;
-            writeln!(w, "    db.field(s, \"enum\", byte_enum);")?;
+            writeln!(w, "    db.field({s_var}, \"enum\", byte_enum);")?;
         }
         for a in &def.attributes {
             let td_nr = self.data.type_def_nr(&a.typedef);
             let field_type_id = self.data.def(td_nr).known_type;
             assert_ne!(def_nr, u32::MAX, "Unknown def_nr for {:?}", a.typedef);
-            self.emit_field(w, &a.name, &a.typedef, a.nullable, field_type_id)?;
+            self.emit_field(w, &s_var, &a.name, &a.typedef, a.nullable, field_type_id)?;
         }
         Ok(())
     }
@@ -1209,8 +1329,14 @@ extern crate loft;"
             Type::Long => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
-            // Integer: loft uses i64 as the canonical runtime integer type (post-2c).
-            Type::Integer(_, _, _) => "i64",
+            // Vector<integer> keeps 4-byte packed element storage — this is
+            // the raw-pointer calling convention shared with pre-compiled
+            // cdylib native packages (`lib/graphics/native`, `lib/moros_render`).
+            // Loft-side integer values are i64 on the stack post-2c; the
+            // narrow→wide conversion happens at read / write sites via
+            // `ops::read_int_at` / `set_i32_raw`, so the in-memory element
+            // layout can stay i32.
+            Type::Integer(_, _, _) => "i32",
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }
@@ -1230,12 +1356,31 @@ fn emit_db_field(
     Ok(())
 }
 
+/// Render a compile-time `known_type` as a reference expression in the
+/// generated `init()` body.  For real types (0..=u16::MAX-1) this is the
+/// `t{N}` let-binding that `output_init` / `output_struct` emit at the
+/// time the runtime id is assigned.  For the `u16::MAX` null sentinel
+/// (used by `Type::Vector(Type::Unresolved, _)` etc.) we emit the raw
+/// literal — there is no let-binding for it.
+fn type_id_ref(known_type: u16) -> String {
+    if known_type == u16::MAX {
+        "u16::MAX".to_string()
+    } else {
+        format!("t{known_type}")
+    }
+}
+
 /// Use this to register an enum in the runtime database.
 /// Plain tag variants are registered with `u16::MAX`; struct-enum variants use the variant
 /// struct's `known_type` so that `ShowDb` can dispatch to the variant's fields.
-fn output_enum(w: &mut dyn Write, d_nr: u32, data: &Data) -> std::io::Result<()> {
+fn output_enum_values(
+    w: &mut dyn Write,
+    d_nr: u32,
+    data: &Data,
+    type_id: u16,
+) -> std::io::Result<()> {
     let def = data.def(d_nr);
-    writeln!(w, "    let e = db.enumerate(\"{}\");", def.name)?;
+    let e_var = format!("t{type_id}");
     for a in &def.attributes {
         let variant_type = if matches!(a.typedef, Type::Enum(_, true, _)) {
             // Find the EnumValue definition whose parent is this enum and name matches.
@@ -1251,9 +1396,9 @@ fn output_enum(w: &mut dyn Write, d_nr: u32, data: &Data) -> std::io::Result<()>
             u16::MAX
         };
         if variant_type == u16::MAX {
-            writeln!(w, "    db.value(e, \"{}\", u16::MAX);", a.name)?;
+            writeln!(w, "    db.value({e_var}, \"{}\", u16::MAX);", a.name)?;
         } else {
-            writeln!(w, "    db.value(e, \"{}\", {variant_type}_u16);", a.name)?;
+            writeln!(w, "    db.value({e_var}, \"{}\", t{variant_type});", a.name)?;
         }
     }
     Ok(())

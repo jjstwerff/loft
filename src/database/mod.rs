@@ -383,8 +383,7 @@ impl Stores {
             if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
                 let db: &DbRef = unsafe { &*(r as *const T as *const DbRef) };
                 debug_assert!(
-                    db.store_nr == u16::MAX
-                        || (db.store_nr as usize) < self.allocations.len(),
+                    db.store_nr == u16::MAX || (db.store_nr as usize) < self.allocations.len(),
                     "get<DbRef>: OOB store_nr={} (allocations.len()={}) \
                      rec={} pos={} — corrupt DbRef on stack",
                     db.store_nr,
@@ -403,8 +402,7 @@ impl Stores {
             if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
                 let db: &DbRef = unsafe { &*(&val as *const T as *const DbRef) };
                 debug_assert!(
-                    db.store_nr == u16::MAX
-                        || (db.store_nr as usize) < self.allocations.len(),
+                    db.store_nr == u16::MAX || (db.store_nr as usize) < self.allocations.len(),
                     "put<DbRef>: OOB store_nr={} (allocations.len()={}) \
                      rec={} pos={} — corrupt DbRef being pushed",
                     db.store_nr,
