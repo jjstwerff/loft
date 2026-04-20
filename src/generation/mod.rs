@@ -370,11 +370,21 @@ pub(super) fn default_native_value(tp: &Type) -> String {
 /// reference those pre-created bare collections via `t{N}`) and
 /// `EnumValues` (the `db.value` add-backs that close the enum ↔
 /// variant mutual-recursion cycle).
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 enum FieldPhase {
+    /// Emit ALL struct / enum-value fields in source order.  Collection
+    /// fields (Sorted/Hash/Index/Vector) trigger inline `db.sorted /
+    /// hash / index / vector` creation that dedups on name — the
+    /// runtime id assigned at first creation matches the compile-time
+    /// `known_type`, so subsequent references through raw literals
+    /// (`OpNewRecord(parent_tp, field_index)`) stay correct.
+    AllFields,
+    /// Emit only the `db.value(...)` add-backs for enum values.
+    EnumValues,
+    /// (Historical — kept for potential partial emission.)
     Simple,
     Collection,
-    EnumValues,
 }
 
 /// Return true when the given field type participates in Phase 2
@@ -640,6 +650,7 @@ extern crate loft;"
         // don't consume a slot.  Only Parts::{Byte, Short, Int} produce
         // standalone runtime types that need to be re-created here.
         let def_type_id_set: HashSet<u16> = type_defs.iter().map(|&(tid, _)| tid).collect();
+        #[allow(dead_code)]
         enum BareIo {
             Byte(i32, bool),
             Short(i32, bool),
@@ -668,15 +679,20 @@ extern crate loft;"
                 crate::database::Parts::Vector(c) => {
                     bare_io.push((tid, BareIo::Vector(*c)));
                 }
-                crate::database::Parts::Sorted(c, keys) => {
-                    bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
-                }
-                crate::database::Parts::Hash(c, keys) => {
-                    bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
-                }
-                crate::database::Parts::Index(c, keys, _) => {
-                    bare_io.push((tid, BareIo::Index(*c, keys.clone())));
-                }
+                // Sorted / Hash / Index are created INLINE during struct
+                // field emission (via `emit_field` → `db.sorted / hash /
+                // index`).  The inline calls dedup by name, so the
+                // runtime id assigned at first-creation stays valid for
+                // every subsequent reference.  Emitting these in the
+                // bare_io stream would either duplicate the creation or
+                // require the content struct's fields to be populated
+                // before its container — which would swap the source-
+                // order of the container's fields and break opcode
+                // `OpNewRecord(parent_tp, field_index)` calls that were
+                // baked at parse time.
+                crate::database::Parts::Sorted(_, _)
+                | crate::database::Parts::Hash(_, _)
+                | crate::database::Parts::Index(_, _, _) => {}
                 _ => {}
             }
         }
@@ -790,8 +806,15 @@ extern crate loft;"
         // sufficient because parse-time `fill_database` guarantees each
         // type's content dependencies already have a `known_type` by
         // the time the type itself is registered.
-        let _ = deps;
-        let _ = type_id_to_dnr;
+        // Track which type_ids have been fully emitted (creation +
+        // fields) so the recursive walk below breaks cycles.  A type's
+        // `db.structure` / `db.enumerate` call is emitted BEFORE
+        // recursion, so by the time a field references it the `t{N}`
+        // binding is already in scope — resolving the mutual-recursion
+        // case (JsonValue enum ↔ JArray variant with
+        // `items: vector<JsonValue>`).
+        let mut emitted: HashSet<u16> = HashSet::new();
+        let type_id_to_dnr_local = type_id_to_dnr;
 
         for &(type_id, dnr) in &type_defs {
             while bare_idx < bare_io.len() && bare_io[bare_idx].0 < type_id {
@@ -845,13 +868,14 @@ extern crate loft;"
                 writeln!(w, "    let _ = t{tid}; // may be unused")?;
                 bare_idx += 1;
             }
-            self.emit_type_creation(w, type_id, dnr)?;
-            // Populate non-collection fields immediately so subsequent
-            // bare Sorted/Hash/Index types created in the `bare_io`
-            // stream find the content struct's fields already in place.
-            // Collection fields are populated in Phase 2 (after all
-            // bare collection `t{N}` bindings exist).
-            self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::Simple)?;
+            self.emit_def_create_recurse_fields(
+                w,
+                type_id,
+                dnr,
+                &deps,
+                &type_id_to_dnr_local,
+                &mut emitted,
+            )?;
         }
         while bare_idx < bare_io.len() {
             let (tid, ref bio) = bare_io[bare_idx];
@@ -905,15 +929,113 @@ extern crate loft;"
             bare_idx += 1;
         }
 
-        // Phase 2 — populate collection fields on structs / enum-values
-        // (referencing the bare Vector / Sorted / Hash / Index `t{N}`
-        // bindings emitted above) and enum value add-backs.
-        for &(type_id, dnr) in &type_defs {
-            self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::Collection)?;
-        }
+        // Phase 2 — enum value add-backs (db.value) emitted after all
+        // typed variant structs have been created, so the enum ↔
+        // variant mutual-recursion cycle resolves without forward refs.
         for &(type_id, dnr) in &type_defs {
             if self.data.def(dnr).def_type == DefType::Enum {
                 self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::EnumValues)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Recursive single-pass emission: create the type's `t{N}`
+    /// binding first so any subsequent inline collection-field emission
+    /// referencing it as `t{N}` finds the binding in scope.  Then
+    /// recurse into content-type dependencies (from `deps`) to satisfy
+    /// forward references like `JObject { fields: vector<JsonField> }`
+    /// where `JsonField` has a higher `known_type` than `JObject`.
+    /// Finally, emit fields in source order — inline collection creates
+    /// dedup on name and land at the correct runtime id.
+    #[allow(clippy::only_used_in_recursion)]
+    fn emit_def_create_recurse_fields(
+        &mut self,
+        w: &mut dyn Write,
+        type_id: u16,
+        dnr: u32,
+        deps: &HashMap<u16, Vec<u16>>,
+        type_id_to_dnr: &HashMap<u16, u32>,
+        emitted: &mut HashSet<u16>,
+    ) -> std::io::Result<()> {
+        if !emitted.insert(type_id) {
+            return Ok(());
+        }
+        // Emit type-creation call first so the `t{type_id}` binding is
+        // available for any recursive emission that reads it as a
+        // content type below.
+        self.emit_type_creation(w, type_id, dnr)?;
+        if dnr == u32::MAX {
+            return Ok(());
+        }
+        let def = self.data.def(dnr);
+        if matches!(def.def_type, DefType::Struct)
+            || (def.def_type == DefType::EnumValue && !def.attributes.is_empty())
+        {
+            // Walk fields in source order, mirroring parse-time
+            // `fill_database` exactly.  For each collection field
+            // (`vector / sorted / hash / index<X>`), recurse into the
+            // content type X *inline* — so X's `db.structure` call (and
+            // any type X's own fields trigger) land at the same
+            // runtime index as parse time.  Then emit the field itself,
+            // which triggers inline `db.vector / sorted / hash / index`
+            // creation at the next runtime id — matching parse-time.
+            let enum_value = if def.def_type == DefType::EnumValue {
+                let parent = self.data.def(def.parent);
+                parent
+                    .attributes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.name == def.name)
+                    .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1)
+            } else {
+                0
+            };
+            let s_var = format!("t{type_id}");
+            if enum_value > 0
+                && def.known_type != u16::MAX
+                && self.stores.position(def.known_type, "enum") == 0
+            {
+                writeln!(w, "    let byte_enum = db.byte(0, false);")?;
+                writeln!(w, "    db.field({s_var}, \"enum\", byte_enum);")?;
+            }
+            let attrs = def.attributes.clone();
+            for a in &attrs {
+                // Resolve field's content dep and recurse inline
+                // before the field is emitted — parse-time
+                // `fill_database` does the same via recursive content
+                // resolution when a collection field first names a
+                // forward-declared type.
+                let dep_tp = match &a.typedef {
+                    Type::Sorted(c_nr, _, _) | Type::Hash(c_nr, _, _) | Type::Index(c_nr, _, _) => {
+                        (*c_nr != u32::MAX)
+                            .then(|| self.data.def(*c_nr).known_type)
+                            .filter(|t| *t != u16::MAX)
+                    }
+                    Type::Vector(c_type, _) => {
+                        let n = self.data.type_def_nr(c_type);
+                        (n != u32::MAX)
+                            .then(|| self.data.def(n).known_type)
+                            .filter(|t| *t != u16::MAX)
+                    }
+                    _ => None,
+                };
+                if let Some(dep_tp) = dep_tp
+                    && !emitted.contains(&dep_tp)
+                    && let Some(&dep_dnr) = type_id_to_dnr.get(&dep_tp)
+                {
+                    self.emit_def_create_recurse_fields(
+                        w,
+                        dep_tp,
+                        dep_dnr,
+                        deps,
+                        type_id_to_dnr,
+                        emitted,
+                    )?;
+                }
+                let td_nr = self.data.type_def_nr(&a.typedef);
+                let field_type_id = self.data.def(td_nr).known_type;
+                self.emit_field(w, &s_var, &a.name, &a.typedef, a.nullable, field_type_id)?;
             }
         }
         Ok(())
@@ -999,7 +1121,10 @@ extern crate loft;"
         if matches!(def.def_type, DefType::Struct)
             || (def.def_type == DefType::EnumValue && !def.attributes.is_empty())
         {
-            if matches!(mode, FieldPhase::Simple | FieldPhase::Collection) {
+            if matches!(
+                mode,
+                FieldPhase::Simple | FieldPhase::Collection | FieldPhase::AllFields
+            ) {
                 let enum_value = if def.def_type == DefType::EnumValue {
                     let parent = self.data.def(def.parent);
                     parent
@@ -1180,6 +1305,7 @@ extern crate loft;"
         for a in &def.attributes {
             let is_coll = is_collection_field(&a.typedef);
             let emit = match phase {
+                FieldPhase::AllFields => true,
                 FieldPhase::Simple => !is_coll,
                 FieldPhase::Collection => is_coll,
                 FieldPhase::EnumValues => false,
