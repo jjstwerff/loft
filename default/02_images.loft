@@ -62,7 +62,7 @@ fn OpGetDir(path: text, result: vector < File >) -> boolean;
 #rust"stores.get_dir(@path, &@result)"
 fn OpGetFileText(file: File, content:  & text);
 fn OpWriteFile(file: File, val: reference, db_tp: const u16);
-fn OpReadFile(file: File, val: reference, bytes: i32, db_tp: const u16);
+fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16);
 fn OpSeekFile(file: File, pos: long);
 fn OpSizeFile(file: File) -> long;
 fn OpDelete(path: text) -> boolean;

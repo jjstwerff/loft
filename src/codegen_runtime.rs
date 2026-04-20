@@ -171,9 +171,9 @@ pub fn OpGetRecord(
 ///
 /// Bytecode equivalent: `State::get_text_sub` in `src/state/text.rs`.
 #[must_use]
-pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
+pub fn OpGetTextSub(text: &str, from: i64, till: i64) -> &str {
     let bytes = text.as_bytes();
-    let len = bytes.len() as i32;
+    let len = bytes.len() as i64;
     if from < 0 || from >= len {
         return "";
     }
@@ -184,7 +184,7 @@ pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
     }
     // Resolve negative `till` to a forward byte offset.
     let t_raw = if till < 0 { len + till } else { till };
-    if t_raw <= f as i32 {
+    if t_raw <= f as i64 {
         return "";
     }
     // Clamp to string length.
@@ -200,12 +200,12 @@ pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
 /// Return the byte size of a database record's type.
 /// Bytecode equivalent: `OpSizeofRef` in `src/state/io.rs:290`.
 #[must_use]
-pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i32 {
+pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i64 {
     if db.rec == 0 {
         0
     } else {
         let tp = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
-        i32::from(stores.size(tp))
+        i64::from(stores.size(tp))
     }
 }
 
@@ -301,15 +301,10 @@ pub fn OpInsertVector(
     stores: &mut Stores,
     data: DbRef,
     size: i32,
-    index: i32,
+    index: i64,
     db_tp: i32,
 ) -> DbRef {
-    let new_value = vector::insert_vector(
-        &data,
-        size as u32,
-        i64::from(index),
-        &mut stores.allocations,
-    );
+    let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
 }
@@ -318,12 +313,12 @@ pub fn OpInsertVector(
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
 #[must_use]
-pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i32 {
+pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i64 {
     let ch = ops::to_char(c);
     if ch == '\0' {
         0
     } else {
-        i32::try_from(ch.len_utf8()).unwrap_or(0)
+        i64::try_from(ch.len_utf8()).unwrap_or(0)
     }
 }
 
@@ -1051,7 +1046,7 @@ pub fn OpReadFile<T: FileVal>(
     stores: &mut Stores,
     file: DbRef,
     val: &mut T,
-    bytes: i32,
+    bytes: i64,
     db_tp: i32,
 ) {
     if file.rec == 0 {
@@ -1103,7 +1098,7 @@ pub fn OpReadFile<T: FileVal>(
     _stores: &mut Stores,
     _file: DbRef,
     _val: &mut T,
-    _bytes: i32,
+    _bytes: i64,
     _db_tp: i32,
 ) {
 }
@@ -1241,7 +1236,7 @@ pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
 /// Append `count - 1` copies of the last element of `data`, expanding the vector.
 ///
 /// Bytecode equivalent: `State::append_copy` in `src/state/io.rs`.
-pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
+pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i64, tp: i32) {
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
@@ -1279,7 +1274,7 @@ pub fn cr_rand_seed(seed: i64) {
     let _ = seed;
 }
 #[must_use]
-pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
+pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
     #[cfg(feature = "random")]
     {
         crate::ops::rand_int(lo, hi)
@@ -1287,7 +1282,7 @@ pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
     #[cfg(not(feature = "random"))]
     {
         let _ = (lo, hi);
-        i32::MIN
+        i64::MIN
     }
 }
 
@@ -1340,7 +1335,7 @@ pub fn n_path_sep(_stores: &mut Stores) -> i32 {
 /// path calls this with the hash's type id as a compile-time constant
 /// and iterates the result via Ordered (on=3).  Bytecode equivalent:
 /// `n_hash_sorted` in `src/native.rs`.
-pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i32) -> DbRef {
+pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i64) -> DbRef {
     stores.build_hash_sorted_vec(&h, tp as u16)
 }
 
@@ -1361,17 +1356,17 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) when `lo > hi`.
+/// Returns `i64::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
-pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
+pub fn n_rand(_stores: &mut Stores, lo: i64, hi: i64) -> i64 {
     cr_rand_int(lo, hi)
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
-    let count = if n == i32::MIN || n <= 0 {
+pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
+    let count = if n == i64::MIN || n <= 0 {
         0usize
     } else {
         n as usize

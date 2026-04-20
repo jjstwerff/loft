@@ -948,6 +948,7 @@ fn n1_native_pipeline_trivial_program() {
         next_format_count: 0,
         yield_collect: false,
         fn_ref_context: false,
+        i32_literal_context: false,
         call_stack_prefix: None,
         wasm_browser: false,
     };
@@ -8614,6 +8615,7 @@ fn p144_ref_param_forward_native() {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            i32_literal_context: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -9001,6 +9003,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            i32_literal_context: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };

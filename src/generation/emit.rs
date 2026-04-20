@@ -32,8 +32,12 @@ impl Output<'_> {
                         w,
                         "({v}_i32 as u32, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }})"
                     )?;
-                } else {
+                } else if self.i32_literal_context {
+                    // tp-number / field-index / flag-enum slot: runtime
+                    // still expects i32.
                     write!(w, "{v}_i32")?;
+                } else {
+                    write!(w, "{v}_i64")?;
                 }
             }
             Value::Enum(v, _) => write!(w, "{v}_u8")?,
@@ -382,11 +386,23 @@ impl Output<'_> {
         }
     }
 
+    /// Emit a value in an i32-literal context — any `Value::Int`
+    /// descendant emits as `_i32` instead of the post-2c `_i64`
+    /// default.  Use at tp-number, field-index, and flag-enum
+    /// argument slots where the runtime signature is still i32.
+    pub(super) fn emit_i32_slot(&mut self, w: &mut dyn Write, val: &Value) -> std::io::Result<()> {
+        let saved = self.i32_literal_context;
+        self.i32_literal_context = true;
+        let r = self.output_code_inner(w, val);
+        self.i32_literal_context = saved;
+        r
+    }
+
     /// Emit a typed null sentinel for the given type.
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
-            Type::Integer(_, _, _) | Type::Character => write!(w, "i32::MIN"),
-            Type::Long => write!(w, "i64::MIN"),
+            Type::Character => write!(w, "i32::MIN"),
+            Type::Integer(_, _, _) | Type::Long => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
             Type::Boolean => write!(w, "false"),

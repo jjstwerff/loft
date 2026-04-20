@@ -183,6 +183,7 @@ pub fn reachable_functions(data: &Data, entry_defs: &[u32]) -> HashSet<u32> {
 /// Use this to drive Rust code generation from a compiled loft program.
 /// It bundles the read-only compile-time data with the mutable emission state
 /// so that individual emits functions don't need to pass both separately.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Output<'a> {
     pub data: &'a Data,
     pub stores: &'a Stores,
@@ -207,6 +208,13 @@ pub struct Output<'a> {
     /// instead of `d_nr_i32`.  Set during fn-ref variable assignment so
     /// if-else branches produce the correct tuple type.
     pub fn_ref_context: bool,
+    /// When true, `Value::Int` emits `{v}_i32` instead of the post-2c
+    /// default `{v}_i64`.  Set when emitting a tp-number / field-index /
+    /// flag-enum slot (where the runtime signature is still i32) so
+    /// compile-time constants land at the expected width.  Cleared on
+    /// entry to every recursive `output_code_inner` that isn't
+    /// explicitly inside such a slot.
+    pub i32_literal_context: bool,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
@@ -290,7 +298,8 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             "i16"
         }
         Type::Enum(_, false, _) => "u8",
-        Type::Integer(_, _, _) | Type::Character | Type::Null => "i32",
+        Type::Character | Type::Null => "i32",
+        Type::Integer(_, _, _) => "i64",
         // null is represented as the null sentinel of the target type
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
@@ -481,7 +490,7 @@ extern crate loft;"
             w,
             "mod external {{
     pub fn rand_seed(seed: i64) {{ loft::codegen_runtime::cr_rand_seed(seed); }}
-    pub fn rand_int(lo: i32, hi: i32) -> i32 {{ loft::codegen_runtime::cr_rand_int(lo, hi) }}
+    pub fn rand_int(lo: i64, hi: i64) -> i64 {{ loft::codegen_runtime::cr_rand_int(lo, hi) }}
 }}\n"
         )
     }
@@ -946,7 +955,7 @@ extern crate loft;"
         if def.name == "n_assert" && def.code == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i32) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i64) {{"
             )?;
             writeln!(
                 w,
@@ -1181,7 +1190,7 @@ extern crate loft;"
             }
         }
         if needs_ret_cast {
-            write!(w, ") }}) as i32")?;
+            write!(w, ") }}) as i64")?;
         } else {
             write!(w, ") }}")?;
         }
@@ -1200,8 +1209,8 @@ extern crate loft;"
             Type::Long => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
-            // Integer: loft uses i32 as the canonical runtime integer type.
-            Type::Integer(_, _, _) => "i32",
+            // Integer: loft uses i64 as the canonical runtime integer type (post-2c).
+            Type::Integer(_, _, _) => "i64",
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }

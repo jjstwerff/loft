@@ -69,26 +69,26 @@ macro_rules! sentinel_long {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) if `lo > hi` or if either bound is null.
+/// Returns `i64::MIN` (null) if `lo > hi` or if either bound is null.
 #[cfg(feature = "random")]
 #[must_use]
-pub fn rand_int(lo: i32, hi: i32) -> i32 {
-    if lo == i32::MIN || hi == i32::MIN || lo > hi {
-        return i32::MIN;
+pub fn rand_int(lo: i64, hi: i64) -> i64 {
+    if lo == i64::MIN || hi == i64::MIN || lo > hi {
+        return i64::MIN;
     }
-    let range = (i64::from(hi) - i64::from(lo) + 1) as u64;
+    let range = (hi - lo + 1) as u64;
     let r = RNG.with(|rng| rng.borrow_mut().next_u64());
-    lo + (r % range) as i32
+    lo + (r % range) as i64
 }
 
 /// WASM fallback: delegate to the JS host RNG when `random` crate is not available.
 #[cfg(all(feature = "wasm", not(feature = "random")))]
 #[must_use]
-pub fn rand_int(lo: i32, hi: i32) -> i32 {
-    if lo == i32::MIN || hi == i32::MIN || lo > hi {
-        return i32::MIN;
+pub fn rand_int(lo: i64, hi: i64) -> i64 {
+    if lo == i64::MIN || hi == i64::MIN || lo > hi {
+        return i64::MIN;
     }
-    crate::wasm::host_random_int(lo, hi)
+    i64::from(crate::wasm::host_random_int(lo as i32, hi as i32))
 }
 
 /// Reseed the thread-local RNG.
@@ -173,7 +173,7 @@ pub fn to_char(val: i32) -> char {
 }
 
 #[inline]
-pub fn format_text(s: &mut String, val: &str, width: i32, dir: i8, token: u8) {
+pub fn format_text(s: &mut String, val: &str, width: i64, dir: i8, token: u8) {
     // dir=2 means "unset default"; text defaults to left-align (-1)
     let dir = if dir == 2 { -1 } else { dir };
     let mut tokens = width as usize;
@@ -646,7 +646,7 @@ pub fn format_int(
     s: &mut String,
     val: i32,
     radix: u8,
-    width: i32,
+    width: i64,
     token: u8,
     plus: bool,
     note: bool,
@@ -701,7 +701,7 @@ pub fn format_long(
     s: &mut String,
     val: i64,
     radix: u8,
-    width: i32,
+    width: i64,
     token: u8,
     plus: bool,
     note: bool,
@@ -757,7 +757,7 @@ pub fn format_long(
 
 use std::fmt::Write as _;
 
-pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32, dir: i8) {
+pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     if precision >= 0 {
@@ -768,7 +768,7 @@ pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32, dir: i
     format_text(s, &res, width, dir, b' ');
 }
 
-pub fn format_single(s: &mut String, val: f32, width: i32, precision: i32, dir: i8) {
+pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     if precision >= 0 {
