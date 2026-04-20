@@ -148,13 +148,41 @@ sites emit `OpSetInt4` instead of `OpSetInt`:
 
 **Minimal 4-line reproducer now passes**.  But the wrap
 suite tests (`wrap::{dir, last, parser_debug}`) still fail
-with the same panic — they exercise a different code path
-(the parser library's `parse(...)` → Lexer.set_tokens chain)
-that has ADDITIONAL sites emitting `OpSetInt` for collection
-headers.  Next session: find the remaining sites via
-targeted grep for `stack.add_op("OpSetInt", ...)` or
-`self.cl("OpSetInt", ...)` in contexts where the destination
-field is a collection type.
+with the same panic shape.
+
+*Follow-up investigation (2026-04-20, late)*: the wrap-test
+failure is **NOT** another OpSetInt overflow.  It's a
+**corrupt DbRef on the interpreter stack** — the panic
+shows `Allocations::claim` receiving
+`DbRef{store_nr:8, rec:4, pos:45}` when only 5 stores
+exist.  The 12 bytes of the DbRef look like they were read
+from an arbitrary region of a record, not set by the 3
+OpSetInt sites already fixed.
+
+Traced the emission chain:
+1. Runtime `set_int fld=55 val=0 ref={store_nr:4, rec:1, pos:8}`
+   is the last set_int before panic.  Parser struct
+   `cur_file: integer = 0` at offset 55.  With `forced_size=None`
+   and `tp.size=8`, this 8-byte write is CORRECT per the
+   declared field.
+2. Immediately after, `new_record` is called with a DbRef
+   read from the stack whose `store_nr=8`.
+3. No OpSetInt site I can identify writes `store_nr=8` into
+   a DbRef slot.
+
+Hypothesis: a field-read op or stack-manipulation op is
+reading 12 bytes from a misaligned slot in the Parser
+record, interpreting unrelated bytes as a DbRef.  The
+trigger pattern is the parser library's indexed
+hash-field access (`self.tokens[f].possible += [...]`)
+which exercises a compound chain my minimal repro doesn't
+touch.
+
+**Deferred** to a dedicated session with bytecode
+disassembly + live stack tracing.  The OpSetInt fix
+(`d3ac78c`) is correct and should remain — it addressed
+one of the real post-2c bugs.  The remaining wrap-test
+hang is a separate issue that needs its own investigation.
 
 Minimal 4-line reproducer saved at
 `probes/probe_d1_hash_sorted_hang.loft`:
