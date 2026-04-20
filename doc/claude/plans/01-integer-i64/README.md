@@ -202,4 +202,30 @@ At the end of every phase:
 - Decision tree (G vs G′): QUALITY.md § 479-557.
 - Closed-by-decision: C54.D (Rust-style literal suffixes) —
   `doc/claude/DESIGN_DECISIONS.md § C54.D`.
-- Initiative opened: 2026-04-18, branch TBD (per-phase branches).
+- Initiative opened: 2026-04-18, branch `int_migrate`.
+
+## Execution progress (2026-04-20)
+
+Phases 2a / 2b / 2c / 2e / 2f landed; 2c broken into ~10 sub-rounds
+plus 9 cleanup commits that stay within the "interpreter path always
+green" invariant.  Categories E, D.2, D.3, F all closed this session.
+Current state: **16 failing tests** remain, clustered in:
+
+- **Category C** — native codegen i32 → i64 (5 + 2 related, retry planned)
+- **Category D.1** — wrap::{dir, last, parser_debug} (3 tests, same panic shape as D.2/E)
+- **Category G** — WASM export (5 tests, deferred)
+
+**Post-round-10b.1 streak**: 9 consecutive commits, 50 tests turned
+green, 0 regressions.  Two of the commits (`7bf3558` + `edbc9f3`) are
+narrow two-line runtime fixes to stale post-2c 4-byte integer
+widths — together they cleared 7 tests across D.2 / D.3 / E.
+
+Roadmap:
+
+- `INCREMENTAL_PLAN.md` — the 8-increment split (status tracked here).
+- `PHASE_2C_PROGRESS.md` — per-round commits + remaining failure
+  taxonomy + next-action table.
+- `CATEGORY_C_FINDINGS.md` — detailed Category C retry plan (Strategy
+  1: widen runtime signatures completely).
+- `PHASE_2C_EXECUTION.md` — original dedicated-session checklist,
+  preserved as reference.
