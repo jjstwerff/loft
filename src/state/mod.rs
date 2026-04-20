@@ -1782,7 +1782,7 @@ impl State {
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
-            self.put_stack(extra as i32);
+            self.put_stack(extra as i64);
         }
         self.put_stack(u32::MAX);
         self.code_pos = fn_pos;
@@ -1853,7 +1853,7 @@ impl State {
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
-            self.put_stack(extra as i32);
+            self.put_stack(extra as i64);
         }
         // Push the work buffer DbRefs as the hidden parameters.
         for cr in &work_crs {
