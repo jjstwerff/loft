@@ -96,13 +96,13 @@ fn sequential_file_blocks_read_conflict() {
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(2) as u16 == 0x0302, \"u16-le\"); }
   delete(\"slots_test_a.bin\");
-  {f = file(\"slots_test_a.bin\"); f#format = LittleEndian; f += 0x11223344; }
+  {f = file(\"slots_test_a.bin\"); f#format = LittleEndian; f += 0x11223344 as i32; }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(4) as i32 == 0x11223344, \"i32-le-rt\"); }
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
    assert(f#read(4) as i32 == 0x44332211, \"i32-le-as-be\"); }
   delete(\"slots_test_a.bin\");
-  {f = file(\"slots_test_a.bin\"); f#format = BigEndian; f += 0x11223344; }
+  {f = file(\"slots_test_a.bin\"); f#format = BigEndian; f += 0x11223344 as i32; }
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
    assert(f#read(4) as i32 == 0x11223344, \"i32-be-rt\"); }
   delete(\"slots_test_a.bin\");
