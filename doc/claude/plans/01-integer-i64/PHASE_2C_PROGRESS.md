@@ -1,7 +1,7 @@
 # Phase 2c — execution progress log
 
 Status: **in-flight on branch `int_migrate`**.  Last commit
-`edbc9f3` (2026-04-20).  Suite failure count: **16 of ~1800
+`9ecbf1f` (2026-04-20).  Suite failure count: **16 of ~1800
 tests**.
 
 This file captures the post-INCREMENTAL_PLAN execution state.
@@ -32,6 +32,7 @@ next.
 | | `54f649f` | slots.rs narrow-write i32 cast (same pattern as 89d42de) | 1 |
 | | `7bf3558` | n_parallel_for extra-arg cleanup: `-= 4` → `-= 8` | 3 |
 | | `edbc9f3` | worker extra-arg push: `as i32` → `as i64` | 3 |
+| | `9ecbf1f` | execute_at_long + execute_at_text sibling push fix | 0 (preventive) |
 
 **Since round 10b.1 (`291ce7a`)**: 59 → 16 failures, **50
 tests turned green**, 0 regressions across 9 consecutive
@@ -95,8 +96,35 @@ Three sub-bugs:
 **D.1 — `allocation.rs:265` index OOB (3 tests)**
 `wrap::dir`, `wrap::last`, `wrap::parser_debug` —
 `index 8 out of 5`.  Fires on `tests/docs/15-lexer.loft` and
-`16-parser.loft`.  Suspected: DbRef store_nr corruption from
-mis-sized layout.
+`16-parser.loft`.
+
+*Investigation 2026-04-20 (partial)*:
+
+- Backtrace: `State::execute_argv` → `State::new_record` →
+  `Stores::record_new` → `Allocations::claim` with a
+  `DbRef{store_nr=8}` against `allocations.len()=5`.
+- Trigger: method call on a Lexer struct that appends to an
+  indexed-collection field (`l.set_tokens(["x"])` alone
+  reproduces it; even smaller scripts take too long to
+  debug without better tooling).
+- Same panic shape as D.2/E — a DbRef read from the stack
+  has a corrupted store_nr field.  Different code path
+  (main thread, not parallel worker), but the hypothesis is
+  the same: post-2c stack-slot drift after a specific op
+  sequence.
+- Hot candidates for the drift:
+  - Indexed-collection field access (`struct.field[idx]`
+    reads + `+=` writes)
+  - Method-call on struct forwarding the `self: Ref` through
+    a RefVar argument
+  - For-loop over a `vector<text>` with 8-byte-per-iter
+    advancement when codegen assumed 4
+
+*Deferred*: requires a dedicated debugging session with
+(a) a minimal .loft reproducer that runs in < 5 seconds,
+(b) `LOFT_LOG=crash_tail` output capturing the 20 ops
+before the panic, (c) a bytecode disassembly of the
+suspect function.  Estimate: 2-4 hours.
 
 **D.2 — `codegen.rs:1780` slot-width drift (**CLOSED** 2026-04-20)**
 `wrap::loft_suite` + `wrap::script_threading` — cleared by
