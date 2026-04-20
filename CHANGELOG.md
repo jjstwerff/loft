@@ -9,6 +9,39 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Integer → i64 migration (Phase 2c)
+
+`integer` is now 8 bytes end-to-end — on the stack, in struct
+fields, in runtime arithmetic — across the interpreter, native
+codegen, and WASM backends.  Arithmetic that used to silently
+wrap at `i32::MIN / MAX` now traps (Phase 1 `?` / `??` dispatch
+from `925ee36`) or rounds trips correctly on i64.
+
+**What users see:**
+
+- `integer` literals beyond `i32::MAX` (e.g. `9_876_543_210`)
+  type-check without the `l` suffix.
+- The `l` literal suffix and the separate `long` keyword are
+  deprecation-warned; they now alias `integer` and map to the
+  same runtime width.
+- Narrow integer aliases — `u8`, `u16`, `i8`, `i16`, and `i32`
+  — keep their compact field storage (`Parts::{Byte, Short,
+  Int}`), with narrow↔wide conversion at read/write.  Pack
+  density is preserved for image buffers, pixel arrays, and
+  other bit-bounded data.
+- File I/O for binary formats now **requires an explicit
+  width cast** on scalar integer writes, e.g.
+  `f += 2 as i32;` (4-byte GLB version), `f += 0 as u8;`
+  (1-byte pixel).  Pre-2c `f += 2` wrote 4 bytes; post-2c
+  writes 8 — silent regressions in existing binary writers
+  are the most common footgun of this migration.
+
+**Downsides recorded** (`doc/claude/CAVEATS.md`): memory
+footprint of integer-heavy data structures roughly doubles;
+cross-crate cdylib packages keep 4-byte vector&lt;integer&gt;
+element storage; 26 duplicate `Op*Long` opcodes remain in the
+bytecode surface pending Phase 5 reclamation.
+
 ### JSON support
 
 Loft now has built-in JSON parsing and generation.

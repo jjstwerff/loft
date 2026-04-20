@@ -48,11 +48,12 @@ initiative is the execution plan.
 | `README.md` | Goal + index (this file) | — |
 | `00-null-enforcement-audit.md` | Phase 0 — audit `not null` enforcement surface; decide G vs G′ | **Done** — 7/11 holes found; decision: ship **G-hybrid** (trap default, null inside `??`) |
 | `01-checked-arith.md` | Phase 1 — land C54.G-hybrid: trap on bare overflow, null inside `??` so idiom `x = (a*b) ?? default` still works | **Done** — commit `925ee36`; 5 Int Nullable opcodes + `??`-context dispatch; Long Nullable deferred to Phase 5 |
-| `02-i64-storage.md` | Phase 2 — C54.A: widen `integer` to i64, opcode replumb, `.loftc` version bump, `--migrate-i64` tool.  **Tightly coupled with Phase 4** — stdlib overloads between `integer` and `long` collide under the widen, so Phase 4's stdlib sweep lands together. | **Partial** via increments 2a + 2b — see `INCREMENTAL_PLAN.md` |
+| `02-i64-storage.md` | Phase 2 — C54.A: widen `integer` to i64, opcode replumb, `.loftc` version bump, `--migrate-i64` tool.  **Tightly coupled with Phase 4** — stdlib overloads between `integer` and `long` collide under the widen, so Phase 4's stdlib sweep lands together. | **Done (semantic)** — this branch (`int_migrate`), 13 → 0 failing test binaries.  All three backends (interpreter, native, WASM) carry i64 integer end-to-end with narrow storage via `Parts::{Byte, Short, Int}` for alias fields. |
 | `03-u32-type.md` | Phase 3 — C54.C: add `u32` as a stdlib type; RGBA use-case probe | **Done** via increment 2a — u32 works for values up to `u32::MAX - 1` via the wide-limit-to-Long rule |
-| `04-deprecate-long.md` | Phase 4 — C54.B: remove `long` + `l` suffix, `--migrate-long` tool, stdlib/tests/lib sweep | Not started |
-| `05-opcode-reclamation.md` | Phase 5 — C54.E: delete 26 duplicate `Op*Long` arithmetic opcodes; reclaim for O1 | Not started |
-| `06-spec.md` | Phase 6 — document the new arithmetic invariant in LOFT.md + PROBLEMS.md + CAVEATS.md | Not started |
+| `04-deprecate-long.md` | Phase 4 — C54.B: remove `long` + `l` suffix, `--migrate-long` tool, stdlib/tests/lib sweep | **Partial** — `long` keyword now aliases `integer`, `l` suffix deprecation-warns (rounds 10a/10b).  Full deletion of `Type::Long` variant + `long` keyword: deferred, see `FINISH_MIGRATION.md § C`. |
+| `05-opcode-reclamation.md` | Phase 5 — C54.E: delete 26 duplicate `Op*Long` arithmetic opcodes; reclaim for O1 | **Deferred** — see `FINISH_MIGRATION.md § B`; ~3 hours mechanical work. |
+| `06-spec.md` | Phase 6 — document the new arithmetic invariant in LOFT.md + PROBLEMS.md + CAVEATS.md | **Done** — `CHANGELOG.md [Unreleased]`, `LOFT.md § Primitive types` + `§ Null representation`, `CAVEATS.md § C54`. |
+| `FINISH_MIGRATION.md` | Post-migration hardening + remaining cleanup (A / B / C / D / E) | **Partial** — A (asserts + audit) + E (docs) landed this session; B + C + D pending. |
 
 Phase files open at the start of their session and close when the phase
 commits.  Phases can produce follow-up plans if the work surfaces

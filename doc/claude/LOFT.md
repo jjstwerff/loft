@@ -54,8 +54,8 @@ and can emit Rust code for host integration.
 | Type        | Description                                      |
 |-------------|--------------------------------------------------|
 | `boolean`   | `true` / `false`                                 |
-| `integer`   | 32-bit signed integer (range can be constrained). Overflow traps.  See "Arithmetic safety" below. |
-| `long`      | 64-bit signed integer; literals end with `l`.  **Deprecated** — run `loft --migrate-long` to rewrite to `integer` (will become i64 in 0.9.0). |
+| `integer`   | 64-bit signed integer end-to-end (stack, fields, arithmetic).  Range can be constrained with `limit(...)`; narrow widths (`u8`/`u16`/`i8`/`i16`/`i32`) keep compact storage.  Overflow traps.  See "Arithmetic safety" below. |
+| `long`      | **Deprecated alias for `integer`** — kept for backwards compatibility; emits a warning.  The `l` literal suffix is also deprecated.  Both will be removed in a future release. |
 | `float`     | 64-bit floating-point; literals contain a `.`    |
 | `single`    | 32-bit float; literals end with `f`              |
 | `character` | A single Unicode character                       |
@@ -70,14 +70,16 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 | Type | Null sentinel | Notes |
 |------|---------------|-------|
 | `boolean` | `false` | `!b` is true for both `null` and `false` |
-| `integer` | `i32::MIN` (-2 147 483 648) | See warning below |
-| `long` | `i64::MIN` | Same risk as integer at the `i64` boundary |
+| `integer` | `i64::MIN` | Post-2c (0.9.0): 8-byte storage, sentinel moved from `i32::MIN`.  Accidental sentinel collisions effectively vanish at the i64 boundary. |
+| `long` | `i64::MIN` | Alias for `integer`; same sentinel. |
 | `float` | `NaN` | IEEE 754: `NaN != NaN`, but `!f` correctly detects null |
 | `single` | `NaN` (32-bit) | Same as `float` |
 | `character` | `'\0'` (NUL) | The null character is not a valid loft character value |
 | `text` | internal null pointer | Opaque; `!t` detects it; `len(t)` returns null |
 | `reference` | record 0 | Opaque; `!r` detects it |
 | plain `enum` | byte `255` | Limits plain enums to 255 variants |
+| narrow int (`u8`/`u16`/`i8`/`i16`) | top of the packed range | e.g. `i8::MIN` for `i8`; stored compactly in `Parts::Byte`/`Short` |
+| `i32` / `integer size(4)` | `i32::MIN` | 4-byte storage via `Parts::Int`; widens to i64 on the stack |
 
 **Arithmetic safety (C54.G-hybrid, landed 0.9.0):** integer arithmetic that
 would overflow — `(i32::MAX + 1)`, `(i32::MIN - 1)`, `(i32::MAX * 2)` — now
@@ -105,16 +107,26 @@ inner = a * b;              // traps if this overflows
 x = (inner + c) ?? 0;       // outer + gets discharge
 ```
 
-Explicit `i32::MIN` literals (`x = -2_147_483_648`) are preserved — loft
-recognizes them as the null sentinel and doesn't produce them from
-arithmetic anymore.  Long arithmetic has the same behaviour at
-`i64::MIN`.
+Explicit `i64::MIN` is the null sentinel for `integer` (post-2c).  The
+older `i32::MIN` sentinel survives on `i32` / `u8` / `u16` / `i8` / `i16`
+alias fields — those use their own narrow sentinel at storage time, but
+widen to i64 on the stack so arithmetic is uniform.  The interpreter
+and native backends both recognise `i64::MIN` as the integer null and
+don't produce it from arithmetic any more.
 
 **Legacy note:** before C54.G-hybrid, overflow silently produced the
 `i32::MIN` / `i64::MIN` sentinel.  Programs that relied on that
 behaviour should either use explicit guards (`if a > 0 && b > 0 && a <
-i32::MAX / b { a * b } else { default }`) or adopt the `?? default`
+i64::MAX / b { a * b } else { default }`) or adopt the `?? default`
 idiom.
+
+**Binary file I/O caveat:** post-2c `f += <integer_expression>` on a
+`BigEndian` / `LittleEndian` file writes **8 bytes**.  Pre-2c
+wrote 4.  Writers of binary formats must add an explicit width
+cast — `f += 2 as i32;` for a 4-byte u32 field, `f += 0 as u8;`
+for a byte, `f += v as u16;` for a 2-byte field.  The GLB / PNG
+writers in the stdlib were updated accordingly; custom binary
+protocols need the same audit.
 
 **`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
 or default?" but the answer differs by type because the null sentinel is in-band.

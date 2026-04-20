@@ -1213,6 +1213,12 @@ extern crate loft;"
             // Mirrors `src/typedef.rs:354-373` exactly so the runtime
             // Parts matches the interpreter's (Byte/Short/Int/base).
             let field_size = forced_size.unwrap_or_else(|| typedef.size(nullable));
+            debug_assert!(
+                matches!(field_size, 1 | 2 | 4 | 8),
+                "emit_field: unexpected integer field width \
+                 field_size={field_size} for `{field_name}` — only 1/2/4/8 \
+                 are supported by db.byte / db.short / db.int / db.field"
+            );
             if field_size == 1 {
                 emit_db_field(
                     w,

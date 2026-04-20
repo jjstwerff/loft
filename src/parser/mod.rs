@@ -1594,6 +1594,12 @@ impl Parser {
                     .data
                     .forced_size(alias)
                     .unwrap_or_else(|| tp.size(nullable));
+                debug_assert!(
+                    matches!(s, 1 | 2 | 4 | 8),
+                    "get_val: unexpected integer field width s={s} \
+                     (alias_d_nr={alias}) — only 1/2/4/8 are supported \
+                     by the OpGet* family"
+                );
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(*min)])
                 } else if s == 2 {
@@ -1704,6 +1710,23 @@ impl Parser {
                     .data
                     .forced_size(alias_nr)
                     .unwrap_or_else(|| tp.size(self.data.attr_nullable(d_nr, f_nr)));
+                // Size-consistency gate: the size resolved from
+                // `forced_size` / limit must be one of the four
+                // supported widths.  Any other value indicates a
+                // post-2c regression in `size()` or a novel alias that
+                // needs a matching Op emission branch here.
+                debug_assert!(
+                    matches!(s, 1 | 2 | 4 | 8),
+                    "set_field_check: unexpected integer field width \
+                     s={s} for {}.{} (alias_d_nr={alias_nr}) — only \
+                     1/2/4/8 are supported by the OpSet* family",
+                    self.data.def(d_nr).name,
+                    if f_nr == usize::MAX {
+                        "<unknown>".to_string()
+                    } else {
+                        self.data.def(d_nr).attributes[f_nr].name.clone()
+                    },
+                );
                 if s == 1 {
                     self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
