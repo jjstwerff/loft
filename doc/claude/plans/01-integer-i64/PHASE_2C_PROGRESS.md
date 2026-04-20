@@ -126,6 +126,37 @@ Three sub-bugs:
 before the panic, (c) a bytecode disassembly of the
 suspect function.  Estimate: 2-4 hours.
 
+*Update (2026-04-20, late)*: **D.1 is actually an infinite
+loop, not a direct crash**.  The `record_new` OOB panic in
+the failing wrap tests is a defensive bounds check that
+fires *eventually* after the interpreter spends unbounded
+time spinning.  Minimal 4-line reproducer saved at
+`probes/probe_d1_hash_sorted_hang.loft`:
+
+```loft
+struct Poss { length: integer, token: text }
+struct Tok { start: character, possible: sorted<Poss[-length, token]> }
+struct Db { items: hash<Tok[start]> }
+fn main() {
+  db = Db { };
+  db.items += [Tok { start: 'x', possible: [] }];
+}
+```
+
+Trigger: append to a `hash<X[key]>` where `X` contains a
+nested `sorted<Y[key]>` field.  Removing either the outer
+`hash` or the inner `sorted` makes the script terminate.
+Narrower isolation than previously thought — points at the
+hash+sorted nested-key machinery in `src/vector.rs` /
+`src/hash.rs` rather than a stack-layout bug.
+
+*Also discovered*: two `data_structures` test binaries from
+2026-04-18 had been spinning orphaned for 34+ hours (82 h /
+49 h CPU time).  Killed; all 16 data_structures tests pass
+in < 20 s each on the current tree — the bug that spun them
+was fixed by the round 5-10 commits and only stale detached
+processes remained.
+
 **D.2 — `codegen.rs:1780` slot-width drift (**CLOSED** 2026-04-20)**
 `wrap::loft_suite` + `wrap::script_threading` — cleared by
 commits `7bf3558` (codegen tracker widen) + `edbc9f3` (worker
