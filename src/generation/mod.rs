@@ -363,6 +363,30 @@ pub(super) fn default_native_value(tp: &Type) -> String {
     }
 }
 
+/// Which subset of a struct / enum-value's attributes to emit in the
+/// current pass of `output_init`.  Phase 1 emits `Simple` fields so
+/// bare Sorted/Hash/Index types registered later find their content
+/// struct already populated.  Phase 2 emits `Collection` fields (which
+/// reference those pre-created bare collections via `t{N}`) and
+/// `EnumValues` (the `db.value` add-backs that close the enum ↔
+/// variant mutual-recursion cycle).
+#[derive(Clone, Copy, PartialEq)]
+enum FieldPhase {
+    Simple,
+    Collection,
+    EnumValues,
+}
+
+/// Return true when the given field type participates in Phase 2
+/// (collection-typed fields that reference a bare Vector / Sorted /
+/// Hash / Index created during `output_init`'s first pass).
+fn is_collection_field(tp: &Type) -> bool {
+    matches!(
+        tp,
+        Type::Vector(_, _) | Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+    )
+}
+
 impl Output<'_> {
     /// Use this before emitting indented output lines.
     /// # Errors
@@ -580,7 +604,10 @@ extern crate loft;"
         for n in 0..=6u16 {
             writeln!(w, "    let t{n}: u16 = {n};")?;
         }
-        let _ = writeln!(w, "    let _ = (t0, t1, t2, t3, t4, t5, t6); // suppress unused-let warnings for unreferenced base types");
+        let _ = writeln!(
+            w,
+            "    let _ = (t0, t1, t2, t3, t4, t5, t6); // suppress unused-let warnings for unreferenced base types"
+        );
         let mut type_defs: Vec<(u16, u32)> = Vec::new();
         for dnr in from..till {
             self.start_fn(dnr);
@@ -617,6 +644,10 @@ extern crate loft;"
             Byte(i32, bool),
             Short(i32, bool),
             Int(i32, bool),
+            Vector(u16),
+            Sorted(u16, Vec<(u16, bool)>),
+            Hash(u16, Vec<u16>),
+            Index(u16, Vec<(u16, bool)>),
         }
         let mut bare_io: Vec<(u16, BareIo)> = Vec::new();
         for (idx, tp) in self.stores.types.iter().enumerate() {
@@ -634,11 +665,35 @@ extern crate loft;"
                 crate::database::Parts::Int(min, nullable) => {
                     bare_io.push((tid, BareIo::Int(*min, *nullable)));
                 }
+                crate::database::Parts::Vector(c) => {
+                    bare_io.push((tid, BareIo::Vector(*c)));
+                }
+                crate::database::Parts::Sorted(c, keys) => {
+                    bare_io.push((tid, BareIo::Sorted(*c, keys.clone())));
+                }
+                crate::database::Parts::Hash(c, keys) => {
+                    bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
+                }
+                crate::database::Parts::Index(c, keys, _) => {
+                    bare_io.push((tid, BareIo::Index(*c, keys.clone())));
+                }
                 _ => {}
             }
         }
         bare_io.sort_by_key(|&(tid, _)| tid);
         let mut bare_idx = 0;
+        // Resolve a struct's field name by field_nr — needed for
+        // Sorted/Hash/Index key-string emission at bare-type level.
+        let resolve_field_name = |c: u16, k: u16| -> String {
+            if let crate::database::Parts::Struct(ref fields)
+            | crate::database::Parts::EnumValue(_, ref fields) =
+                self.stores.types[c as usize].parts
+            {
+                fields[k as usize].name.clone()
+            } else {
+                "?".to_string()
+            }
+        };
 
         // Build a map from known_type → dnr for dependency resolution.
         let type_id_to_dnr: HashMap<u16, u32> =
@@ -720,7 +775,24 @@ extern crate loft;"
         let _ = deps; // no longer used; kept only for future re-introduction
         let _ = type_id_to_dnr;
 
-        // Phase 1 — type creation in strict known_type order.
+        // Single-pass emission in strict known_type order.
+        //
+        // For struct / enum-value types we emit `db.structure` + fields
+        // immediately so that any subsequent bare Sorted/Hash/Index
+        // (registered inline via the struct field emission) gets its
+        // runtime id assigned at the exact moment that matches the
+        // compile-time `known_type`.  For enums we only emit
+        // `db.enumerate` here; the `db.value(enum, variant_tid)` calls
+        // move to Phase 2 so that mutual-recursion cycles (enum →
+        // typed variant → enum) break cleanly.
+        //
+        // `deps` / `type_id_to_dnr` are retired — known_type order is
+        // sufficient because parse-time `fill_database` guarantees each
+        // type's content dependencies already have a `known_type` by
+        // the time the type itself is registered.
+        let _ = deps;
+        let _ = type_id_to_dnr;
+
         for &(type_id, dnr) in &type_defs {
             while bare_idx < bare_io.len() && bare_io[bare_idx].0 < type_id {
                 let (tid, ref bio) = bare_io[bare_idx];
@@ -734,11 +806,52 @@ extern crate loft;"
                     BareIo::Int(min, nullable) => {
                         writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
                     }
+                    BareIo::Vector(c) => {
+                        let c_ref = type_id_ref(*c);
+                        writeln!(w, "    let t{tid} = db.vector({c_ref});")?;
+                    }
+                    BareIo::Sorted(c, keys) => {
+                        let c_ref = type_id_ref(*c);
+                        let keys_str = keys
+                            .iter()
+                            .map(|&(k, asc)| {
+                                format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(w, "    let t{tid} = db.sorted({c_ref}, &[{keys_str}]);")?;
+                    }
+                    BareIo::Hash(c, keys) => {
+                        let c_ref = type_id_ref(*c);
+                        let keys_str = keys
+                            .iter()
+                            .map(|&k| format!("\"{}\".to_string()", resolve_field_name(*c, k)))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
+                    }
+                    BareIo::Index(c, keys) => {
+                        let c_ref = type_id_ref(*c);
+                        let keys_str = keys
+                            .iter()
+                            .map(|&(k, asc)| {
+                                format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(w, "    let t{tid} = db.index({c_ref}, &[{keys_str}]);")?;
+                    }
                 }
                 writeln!(w, "    let _ = t{tid}; // may be unused")?;
                 bare_idx += 1;
             }
             self.emit_type_creation(w, type_id, dnr)?;
+            // Populate non-collection fields immediately so subsequent
+            // bare Sorted/Hash/Index types created in the `bare_io`
+            // stream find the content struct's fields already in place.
+            // Collection fields are populated in Phase 2 (after all
+            // bare collection `t{N}` bindings exist).
+            self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::Simple)?;
         }
         while bare_idx < bare_io.len() {
             let (tid, ref bio) = bare_io[bare_idx];
@@ -752,14 +865,56 @@ extern crate loft;"
                 BareIo::Int(min, nullable) => {
                     writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
                 }
+                BareIo::Vector(c) => {
+                    let c_ref = type_id_ref(*c);
+                    writeln!(w, "    let t{tid} = db.vector({c_ref});")?;
+                }
+                BareIo::Sorted(c, keys) => {
+                    let c_ref = type_id_ref(*c);
+                    let keys_str = keys
+                        .iter()
+                        .map(|&(k, asc)| {
+                            format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(w, "    let t{tid} = db.sorted({c_ref}, &[{keys_str}]);")?;
+                }
+                BareIo::Hash(c, keys) => {
+                    let c_ref = type_id_ref(*c);
+                    let keys_str = keys
+                        .iter()
+                        .map(|&k| format!("\"{}\".to_string()", resolve_field_name(*c, k)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
+                }
+                BareIo::Index(c, keys) => {
+                    let c_ref = type_id_ref(*c);
+                    let keys_str = keys
+                        .iter()
+                        .map(|&(k, asc)| {
+                            format!("(\"{}\".to_string(), {asc})", resolve_field_name(*c, k))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(w, "    let t{tid} = db.index({c_ref}, &[{keys_str}]);")?;
+                }
             }
             writeln!(w, "    let _ = t{tid}; // may be unused")?;
             bare_idx += 1;
         }
 
-        // Phase 2 — populate struct / enum-value fields and enum values.
+        // Phase 2 — populate collection fields on structs / enum-values
+        // (referencing the bare Vector / Sorted / Hash / Index `t{N}`
+        // bindings emitted above) and enum value add-backs.
         for &(type_id, dnr) in &type_defs {
-            self.emit_type_fields(w, type_id, dnr)?;
+            self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::Collection)?;
+        }
+        for &(type_id, dnr) in &type_defs {
+            if self.data.def(dnr).def_type == DefType::Enum {
+                self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::EnumValues)?;
+            }
         }
         Ok(())
     }
@@ -781,11 +936,7 @@ extern crate loft;"
         }
         let def = self.data.def(dnr);
         if matches!(def.def_type, DefType::Struct) {
-            writeln!(
-                w,
-                "    let t{type_id} = db.structure(\"{}\", 0);",
-                def.name
-            )?;
+            writeln!(w, "    let t{type_id} = db.structure(\"{}\", 0);", def.name)?;
         } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
             let parent_nr = def.parent;
             if parent_nr == u32::MAX {
@@ -804,11 +955,7 @@ extern crate loft;"
                 def.name
             )?;
         } else if def.def_type == DefType::Enum {
-            writeln!(
-                w,
-                "    let t{type_id} = db.enumerate(\"{}\");",
-                def.name
-            )?;
+            writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;
         } else if def.def_type == DefType::Vector {
             let content_known = if def.parent != u32::MAX {
                 self.data.def(def.parent).known_type
@@ -831,41 +978,46 @@ extern crate loft;"
         Ok(())
     }
 
-    /// Phase 2 — populate struct / enum-value fields or enum values for the
-    /// already-created type at `type_id` / `dnr`.  Runs after all `t{N}`
-    /// bindings are in scope so cross-references can be resolved freely.
-    fn emit_type_fields(
+    /// Populate struct / enum-value fields or enum values.  `mode` selects
+    /// which kinds of fields to emit:
+    ///   `FieldPhase::Simple`      — scalar / text / enum-typed fields only.
+    ///   `FieldPhase::Collection`  — Vector / Sorted / Hash / Index fields
+    ///                               (reference pre-created `t{N}` bare
+    ///                               types emitted by Phase 1).
+    ///   `FieldPhase::EnumValues`  — enum value add-backs (`db.value`).
+    fn emit_type_fields_mode(
         &self,
         w: &mut dyn Write,
         type_id: u16,
         dnr: u32,
+        mode: FieldPhase,
     ) -> std::io::Result<()> {
         if dnr == u32::MAX {
             return Ok(());
         }
         let def = self.data.def(dnr);
-        if matches!(def.def_type, DefType::Struct) {
-            self.output_struct_fields(w, dnr, 0, type_id)?;
-        } else if def.def_type == DefType::EnumValue && !def.attributes.is_empty() {
-            let parent_nr = def.parent;
-            if parent_nr == u32::MAX {
-                return Ok(());
+        if matches!(def.def_type, DefType::Struct)
+            || (def.def_type == DefType::EnumValue && !def.attributes.is_empty())
+        {
+            if matches!(mode, FieldPhase::Simple | FieldPhase::Collection) {
+                let enum_value = if def.def_type == DefType::EnumValue {
+                    let parent = self.data.def(def.parent);
+                    parent
+                        .attributes
+                        .iter()
+                        .enumerate()
+                        .find(|(_, a)| a.name == def.name)
+                        .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1)
+                } else {
+                    0
+                };
+                self.output_struct_fields_filtered(w, dnr, enum_value, type_id, mode)?;
             }
-            let parent = self.data.def(parent_nr);
-            let enum_value = parent
-                .attributes
-                .iter()
-                .enumerate()
-                .find(|(_, a)| a.name == def.name)
-                .map_or(0, |(i, _)| i32::try_from(i).unwrap_or(0) + 1);
-            self.output_struct_fields(w, dnr, enum_value, type_id)?;
-        } else if def.def_type == DefType::Enum {
+        } else if def.def_type == DefType::Enum && matches!(mode, FieldPhase::EnumValues) {
             output_enum_values(w, dnr, self.data, type_id)?;
         }
-        // DefType::Vector has no fields to populate.
         Ok(())
     }
-
 
     /// Use this to emit all function bodies for the given definition range.
     /// When `reachable` is Some, only functions in the set are emitted.
@@ -994,31 +1146,31 @@ extern crate loft;"
         }
         if known_type != u16::MAX {
             let kt_ref = type_id_ref(known_type);
-            writeln!(
-                w,
-                "    db.field({s_var}, \"{field_name}\", {kt_ref});"
-            )?;
+            writeln!(w, "    db.field({s_var}, \"{field_name}\", {kt_ref});")?;
         }
         Ok(())
     }
 
-    /// Phase 2 emission for a struct or enum-value type: populate fields.
-    /// The type itself was already created in Phase 1 — this only emits the
-    /// `db.field(...)` calls and any implicit enum-discriminator byte.
-    fn output_struct_fields(
+    /// Populate struct / enum-value fields, restricted to the given
+    /// `phase`.  Runs once per struct per phase (Simple before any bare
+    /// Sorted/Hash/Index types register, Collection after they do).
+    fn output_struct_fields_filtered(
         &self,
         w: &mut dyn Write,
         def_nr: u32,
         enum_value: i32,
         type_id: u16,
+        phase: FieldPhase,
     ) -> std::io::Result<()> {
         let def = self.data.def(def_nr);
         let s_var = format!("t{type_id}");
-        // For EnumValue types, the compile-time DB may have an implicit "enum" discriminator
-        // field at position 0 (added when a "byte" type already existed from another struct).
-        // If the compile-time type has "enum" at position 0, we must emit it here so that
-        // field indices match (content field is at index 1, not 0).
-        if enum_value > 0
+        // Implicit enum-discriminator byte (inserted when the runtime
+        // already had a plain `byte` type at the position where the
+        // variant's content fields should begin).  Emitted only in
+        // Phase 1 so field indices line up before any collection
+        // fields are added.
+        if phase == FieldPhase::Simple
+            && enum_value > 0
             && def.known_type != u16::MAX
             && self.stores.position(def.known_type, "enum") == 0
         {
@@ -1026,6 +1178,15 @@ extern crate loft;"
             writeln!(w, "    db.field({s_var}, \"enum\", byte_enum);")?;
         }
         for a in &def.attributes {
+            let is_coll = is_collection_field(&a.typedef);
+            let emit = match phase {
+                FieldPhase::Simple => !is_coll,
+                FieldPhase::Collection => is_coll,
+                FieldPhase::EnumValues => false,
+            };
+            if !emit {
+                continue;
+            }
             let td_nr = self.data.type_def_nr(&a.typedef);
             let field_type_id = self.data.def(td_nr).known_type;
             assert_ne!(def_nr, u32::MAX, "Unknown def_nr for {:?}", a.typedef);
