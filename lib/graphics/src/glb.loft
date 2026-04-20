@@ -155,23 +155,25 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
   f = file(path);
   f#format = LittleEndian;
 
-  // GLB header (12 bytes)
-  f += 0x46546C67;  // magic 'glTF'
-  f += 2;           // version 2
-  f += total_len;   // total file length
+  // GLB header (12 bytes — each u32 is 4 bytes).  Post-2c `integer`
+  // is 8 bytes; cast each scalar header field to `i32` so the file
+  // lands the expected GLB 2.0 layout.
+  f += 0x46546C67 as i32;  // magic 'glTF'
+  f += 2 as i32;           // version 2
+  f += total_len as i32;   // total file length
 
   // JSON chunk (8-byte header + padded JSON)
-  f += json_chunk;    // chunk data length (padded)
-  f += 0x4E4F534A;   // chunk type 'JSON'
-  f += json;          // JSON bytes (raw UTF-8)
+  f += json_chunk as i32;  // chunk data length (padded)
+  f += 0x4E4F534A as i32;  // chunk type 'JSON'
+  f += json;               // JSON bytes (raw UTF-8)
   // Pad JSON to 4-byte boundary with ASCII spaces
   for _ in 0..json_pad {
     f += 32 as u8;
   }
 
   // BIN chunk (8-byte header + binary buffers)
-  f += bin_bytes;     // chunk data length
-  f += 0x004E4942;   // chunk type 'BIN\0'
+  f += bin_bytes as i32;   // chunk data length
+  f += 0x004E4942 as i32;  // chunk type 'BIN\0'
   f += glb_pos_buf(m.vertices);
   f += glb_norm_buf(m.vertices);
   f += glb_uv_buf(m.vertices);
@@ -445,22 +447,24 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
   f = file(path);
   f#format = LittleEndian;
 
-  // GLB header
-  f += 0x46546C67;
-  f += 2;
-  f += total_len;
+  // GLB header — each u32 field is 4 bytes per spec.  Post-2c
+  // `integer` is 8 bytes; cast each scalar to `i32` so writes land
+  // the expected GLB 2.0 header layout.
+  f += 0x46546C67 as i32;
+  f += 2 as i32;
+  f += total_len as i32;
 
   // JSON chunk
-  f += json_chunk;
-  f += 0x4E4F534A;
+  f += json_chunk as i32;
+  f += 0x4E4F534A as i32;
   f += json;
   for _ in 0..json_pad {
     f += 32 as u8;
   }
 
   // BIN chunk
-  f += total_bin;
-  f += 0x004E4942;
+  f += total_bin as i32;
+  f += 0x004E4942 as i32;
   for me in sc.meshes {
     f += glb_pos_buf(me.vertices);
     f += glb_norm_buf(me.vertices);
