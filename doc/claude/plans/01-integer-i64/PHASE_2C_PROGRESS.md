@@ -33,6 +33,7 @@ next.
 | | `7bf3558` | n_parallel_for extra-arg cleanup: `-= 4` → `-= 8` | 3 |
 | | `edbc9f3` | worker extra-arg push: `as i32` → `as i64` | 3 |
 | | `9ecbf1f` | execute_at_long + execute_at_text sibling push fix | 0 (preventive) |
+| | `d3ac78c` | emit OpSetInt4 for collection/vector-header 4-byte writes | 0 (D.1 partial — minimal repro fixed, wrap tests still fail on unrelated path) |
 
 **Since round 10b.1 (`291ce7a`)**: 59 → 16 failures, **50
 tests turned green**, 0 regressions across 9 consecutive
@@ -130,7 +131,32 @@ suspect function.  Estimate: 2-4 hours.
 loop, not a direct crash**.  The `record_new` OOB panic in
 the failing wrap tests is a defensive bounds check that
 fires *eventually* after the interpreter spends unbounded
-time spinning.  Minimal 4-line reproducer saved at
+time spinning.
+
+**Root cause pinpointed**: `OpSetInt` writes 8 bytes post-2c,
+but collection-header fields (hash/sorted/vector/index/
+spacial) are 4-byte u32 pointers.  The extra 4 bytes
+overflow into the NEXT record's claim-size header,
+writing 0 where a free-block marker (-93) belongs.
+`Store::claim_scan` then loops forever: `pos += abs(0)`.
+
+**Partial fix applied** (commit `d3ac78c`) — three codegen
+sites emit `OpSetInt4` instead of `OpSetInt`:
+- `parser/mod.rs::set_field_check` (collection field write)
+- `parser/objects.rs::parse_object_field` (explicit-write)
+- `state/codegen.rs` vector-header init
+
+**Minimal 4-line reproducer now passes**.  But the wrap
+suite tests (`wrap::{dir, last, parser_debug}`) still fail
+with the same panic — they exercise a different code path
+(the parser library's `parse(...)` → Lexer.set_tokens chain)
+that has ADDITIONAL sites emitting `OpSetInt` for collection
+headers.  Next session: find the remaining sites via
+targeted grep for `stack.add_op("OpSetInt", ...)` or
+`self.cl("OpSetInt", ...)` in contexts where the destination
+field is a collection type.
+
+Minimal 4-line reproducer saved at
 `probes/probe_d1_hash_sorted_hang.loft`:
 
 ```loft
