@@ -470,6 +470,16 @@ impl Stores {
     pub fn index(&mut self, content: u16, key: &[(String, bool)]) -> u16 {
         let mut name = "index<".to_string() + &self.types[content as usize].name + "[";
         let key_nrs = self.create_key(content, key, &mut name);
+        // Dedup early.  Post-Category-D native codegen can call `db.index`
+        // for the same content/keys combination twice (once in Phase 1a's
+        // bare-io registration, once more during struct-field emission).
+        // The field appending below must run exactly ONCE per unique
+        // index type — otherwise the content struct accumulates stale
+        // `#left_N / #right_N / #color_N` triples that push real user
+        // fields to unexpected positions and break tree traversal.
+        if let Some(nr) = self.names.get(&name) {
+            return *nr;
+        }
         let int_c = self.name("integer");
         let bool_c = self.name("boolean");
         let mut nr = 1;
@@ -511,15 +521,11 @@ impl Stores {
         } else {
             u16::MAX
         };
-        if let Some(nr) = self.names.get(&name) {
-            *nr
-        } else {
-            let num = self.types.len() as u16;
-            self.types
-                .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
-            self.names.insert(name, num);
-            num
-        }
+        let num = self.types.len() as u16;
+        self.types
+            .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
+        self.names.insert(name, num);
+        num
     }
 
     pub(super) fn key_name(&mut self, content: u16, key: &[(u16, bool)], name: &mut String) {
