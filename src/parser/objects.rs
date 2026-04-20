@@ -1167,8 +1167,10 @@ impl Parser {
             | Type::Enum(_, true, _)
             | Type::Index(_, _, _) = td
             {
+                // Collection/enum-big header is a 4-byte u32 record pointer.
+                // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
                 list.push(self.cl(
-                    "OpSetInt",
+                    "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
                 ));
                 self.cl(

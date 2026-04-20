@@ -789,7 +789,10 @@ impl State {
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
                 self.code_add(0i64);
-                stack.add_op("OpSetInt", self);
+                // Vector header length field is 4 bytes (u32).  Post-2c
+                // `OpSetInt` writes 8 bytes and overflows into adjacent
+                // storage.  Use `OpSetInt4` to write only 4 bytes.
+                stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
                 stack.add_op("OpCreateStack", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
