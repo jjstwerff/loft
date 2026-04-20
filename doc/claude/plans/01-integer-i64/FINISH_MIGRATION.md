@@ -74,6 +74,23 @@ can't silently reintroduce the bugs this branch chased.
 
 ### B — Round 10b follow-up: deduplicate `Op*Long` family
 
+**Status (2026-04-20):** partial — `OpAbsLong` is removed (proof-of-
+concept deletion via `regen_fill_rs`).  A 22-op bulk batch (arithmetic
++ bitwise + comparison + conversion Long ops) was attempted and
+passed `wrap` / `issues` / `parse_errors` / `clippy` / `fmt` but
+regressed `moros_glb_cli_end_to_end`: the native-CLI run SIGSEGVs at
+runtime (opcode dispatch) during JSON-driven moros_render pipeline
+execution.  Minimal reproducers with long arithmetic in isolation
+don't crash — the interaction is somewhere deeper (possibly
+arg-conversion across lib boundaries that still see `long` types but
+dispatch `OpXxxInt`).  The 22-op batch was reverted; B stays at 1/26.
+
+Resume path: (a) identify the pc=84102 bytecode site in a freshly-
+compiled moros_glb run with `LOFT_LOG=static` and diff the emitted
+function body vs pre-B to find the pattern that changes; (b) when
+resolved, re-apply the 22-op batch with the fix, then the remaining
+~4 special-case ops (`OpConvLongFromInt`, `OpFormatLong`, etc.).
+
 Per `05-opcode-reclamation.md`, with `Type::Long` collapsed to
 `Type::Integer`, ~26 opcodes are duplicates:
 

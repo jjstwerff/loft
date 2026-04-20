@@ -210,11 +210,10 @@ fn OpPutLong(pos: const u16, value: long);
 #rust"s.put_var(@pos, @value);"
 fn OpConvLongFromNull() -> long;
 #rust"i64::MIN"
-fn OpAbsLong(v1: long) -> long;
-#rust"ops::op_abs_long(@v1)"
-// Post-2c round 10b: `abs(long)` removed — identical to `abs(integer)`
-// because `long` and `integer` share i64 storage.  Calls to `abs(x)` where
-// `x` has type `long` auto-convert via Type::Long → Type::Integer.
+// Post-2c round 10b: `OpAbsLong` / `abs(long)` removed — identical to
+// `abs(integer)` because `long` and `integer` share i64 storage.
+// `long` operands auto-convert via Type::Long → Type::Integer and match
+// `OpAbsInt`.
 
 fn OpMinSingleLong(v1: long) -> long;
 #rust"ops::op_negate_long(@v1)"

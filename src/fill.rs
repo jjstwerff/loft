@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 268] = &[
+pub const OPERATORS: &[fn(&mut State); 267] = &[
     goto,
     goto_word,
     goto_false,
@@ -67,7 +67,6 @@ pub const OPERATORS: &[fn(&mut State); 268] = &[
     var_long,
     put_long,
     conv_long_from_null,
-    abs_long,
     min_single_long,
     cast_int_from_long,
     conv_float_from_long,
@@ -646,12 +645,6 @@ fn put_long(s: &mut State) {
 
 fn conv_long_from_null(s: &mut State) {
     let new_value = i64::MIN;
-    s.put_stack(new_value);
-}
-
-fn abs_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_abs_long(v_v1);
     s.put_stack(new_value);
 }
 
