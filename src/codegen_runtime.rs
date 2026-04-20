@@ -1112,6 +1112,22 @@ pub trait IterState {
         u32::MAX
     }
     fn set_finish(&mut self, _n: u32) {}
+    /// Plain-vector iteration: the whole state is a signed i64
+    /// counter (no packed finish-field semantics).  Default
+    /// implementation truncates to i32 and delegates to `set_cur`,
+    /// which is correct for the i32 impl.  The i64 impl overrides
+    /// to write the full 64-bit value — otherwise `set_cur(-1)`
+    /// would zero-extend 0xFFFFFFFF, which the generated loop then
+    /// treats as 4_294_967_295 and skips past the end of the
+    /// vector instead of decrementing to -1.
+    fn set_cur_i64_plain(&mut self, n: i64) {
+        self.set_cur(n as i32);
+    }
+    /// Plain-vector: read as i64 (sign-extends for i32 impl, raw for
+    /// i64 impl).  Used by `OpRemove` when `on = 0`.
+    fn get_cur_i64_plain(&self) -> i64 {
+        i64::from(self.get_cur())
+    }
 }
 
 impl IterState for i32 {
@@ -1137,6 +1153,12 @@ impl IterState for i64 {
     fn set_finish(&mut self, n: u32) {
         let cur = (*self as u64) as u32;
         *self = ((u64::from(n) << 32) | u64::from(cur)).cast_signed();
+    }
+    fn set_cur_i64_plain(&mut self, n: i64) {
+        *self = n;
+    }
+    fn get_cur_i64_plain(&self) -> i64 {
+        *self
     }
 }
 
@@ -1166,11 +1188,15 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
     let reverse = (on & 64) != 0;
     match on & 63 {
         0 => {
-            // plain vector: arg is the element type index
+            // plain vector: arg is the element type index.
+            // Use the i64-plain accessors so the generated code, which
+            // drives `var_INDEX` as a raw i64 counter (`var += 1`),
+            // sees a properly sign-extended value after `set_cur(-1)`.
             let elem_size = u32::from(stores.size(arg as u16));
-            let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, elem_size, i64::from(cur), &mut stores.allocations);
-            state.set_cur(n);
+            let cur_i64 = state.get_cur_i64_plain();
+            let n = if reverse { cur_i64 + 1 } else { cur_i64 - 1 };
+            vector::remove_vector(&data, elem_size, cur_i64, &mut stores.allocations);
+            state.set_cur_i64_plain(n);
         }
         1 => {
             // index (red-black tree): arg is the type index; fields offset derived from it
