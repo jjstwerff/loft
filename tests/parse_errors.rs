@@ -150,7 +150,7 @@ fn undefined_return() {
 
 #[test]
 fn undefined_as() {
-    code!("fn test(v: integer) -> long { v as V }").error("Undefined type V at undefined_as:1:39");
+    code!("fn test(v: integer) -> integer { v as V }").error("Undefined type V at undefined_as:1:42");
 }
 
 #[test]

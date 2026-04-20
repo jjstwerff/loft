@@ -412,10 +412,10 @@ fn test() {
 #[test]
 fn set_long_field_null_via_ref() {
     code!(
-        "struct S { val: long }
+        "struct S { val: integer }
 fn clear(self: S) { self.val = null }
 fn test() {
-    s = S { val: 1000000l };
+    s = S { val: 1000000 };
     s.clear();
     assert(s.val == null, \"expected null, got {s.val}\");
 }"
@@ -427,13 +427,13 @@ fn test() {
 #[test]
 fn set_multiple_scalar_fields_null() {
     code!(
-        "struct S { a: integer, b: long }
+        "struct S { a: integer, b: integer }
 fn clear(self: S) {
     self.a = null;
     self.b = null;
 }
 fn test() {
-    s = S { a: 1, b: 2l };
+    s = S { a: 1, b: 2 };
     s.clear();
     assert(s.a == null, \"a should be null\");
     assert(s.b == null, \"b should be null\");
@@ -1637,7 +1637,7 @@ fn double(x: integer) -> integer { x * 2 }"
 // ── P1.2 — Short-form lambda expressions ─────────────────────────────────────
 // Short-form `|params| { body }` and `|| { body }` syntax for inline lambdas.
 
-// P1.2: long-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
+// P1.2: integer-form lambda `fn(x: integer) -> integer { x * 2 }` with explicit annotations.
 #[test]
 
 fn p1_2_short_lambda_explicit_types() {
@@ -3394,7 +3394,7 @@ fn p54_parse_object_field_access() {
 #[test]
 fn p54_parse_array_item_access() {
     code!(
-        "fn run() -> long {
+        "fn run() -> integer {
     v = json_parse(\"[10, 20, 30]\");
     v.item(1).as_long()
 }"
@@ -3573,7 +3573,7 @@ fn run_payload_kind() -> text {
     .result(Value::str("JArray"));
 }
 
-/// P54 step 5 vector-field slice — populate `vector<long>` from
+/// P54 step 5 vector-field slice — populate `vector<integer>` from
 /// a JArray of numbers.  Today's implementation routes through
 /// the `n_jsonvalue_to_vector_long` native which walks the
 /// JArray at runtime, truncates each JNumber toward zero, and
@@ -3583,7 +3583,7 @@ fn run_payload_kind() -> text {
 #[test]
 fn p54_struct_parse_accepts_vector_long_field_len() {
     code!(
-        "struct Data { items: vector<long> }
+        "struct Data { items: vector<integer> }
 fn run() -> integer {
     v = json_parse(\"{{\\\"items\\\":[10,20,30]}}\");
     d = Data.parse(v);
@@ -3597,8 +3597,8 @@ fn run() -> integer {
 #[test]
 fn p54_struct_parse_vector_long_first_element() {
     code!(
-        "struct Data { items: vector<long> }
-fn run_first() -> long {
+        "struct Data { items: vector<integer> }
+fn run_first() -> integer {
     v = json_parse(\"{{\\\"items\\\":[10,20,30]}}\");
     d = Data.parse(v);
     d.items[0]
@@ -3611,11 +3611,11 @@ fn run_first() -> long {
 #[test]
 fn p54_struct_parse_vector_long_iterates_correctly() {
     code!(
-        "struct Data { items: vector<long> }
-fn run_sum() -> long {
+        "struct Data { items: vector<integer> }
+fn run_sum() -> integer {
     v = json_parse(\"{{\\\"items\\\":[10,20,30]}}\");
     d = Data.parse(v);
-    total = 0l;
+    total = 0;
     for x in d.items { total += x; }
     total
 }"
@@ -3627,7 +3627,7 @@ fn run_sum() -> long {
 #[test]
 fn p54_struct_parse_vector_long_empty_array() {
     code!(
-        "struct Data { items: vector<long> }
+        "struct Data { items: vector<integer> }
 fn run_empty() -> integer {
     v = json_parse(\"{{\\\"items\\\":[]}}\");
     d = Data.parse(v);
@@ -3772,12 +3772,12 @@ fn run() -> integer {
 #[test]
 fn p54_struct_parse_vector_of_struct_iterates() {
     code!(
-        "struct Score { val: long }
+        "struct Score { val: integer }
 struct Bag { scores: vector<Score> }
-fn run() -> long {
+fn run() -> integer {
     v = json_parse(\"{{\\\"scores\\\":[{{\\\"val\\\":10}},{{\\\"val\\\":20}},{{\\\"val\\\":30}}]}}\");
     b = Bag.parse(v);
-    total = 0l;
+    total = 0;
     for s in b.scores { total += s.val; }
     total
 }"
@@ -5674,7 +5674,7 @@ fn q4_constructor_as_bool_round_trips() {
 #[test]
 fn q4_constructor_as_long_round_trips() {
     code!(
-        "fn run_q4cal() -> long {
+        "fn run_q4cal() -> integer {
     json_number(100.0).as_long()
 }"
     )
@@ -5921,7 +5921,7 @@ fn p54_err_path_escapes_slash_and_tilde() {
 #[test]
 fn p54_as_long_on_jstring_returns_null_sentinel() {
     code!(
-        "fn run_alos() -> long {
+        "fn run_alos() -> integer {
     json_string(\"hi\").as_long()
 }"
     )
@@ -5967,7 +5967,7 @@ fn p54_as_bool_on_jnull_returns_false() {
 #[test]
 fn p54_as_long_truncates_positive_float_toward_zero() {
     code!(
-        "fn run_altp() -> long {
+        "fn run_altp() -> integer {
     json_number(2.7).as_long()
 }"
     )
@@ -5978,7 +5978,7 @@ fn p54_as_long_truncates_positive_float_toward_zero() {
 #[test]
 fn p54_as_long_truncates_negative_float_toward_zero() {
     code!(
-        "fn run_altn() -> long {
+        "fn run_altn() -> integer {
     json_number(-2.7).as_long()
 }"
     )
@@ -6237,7 +6237,7 @@ fn q4_constructor_keys_preserves_insertion_order() {
 #[test]
 fn p54_deep_nesting_five_levels_navigable() {
     code!(
-        "fn run_pdn5() -> long {
+        "fn run_pdn5() -> integer {
     v_pdn5 = json_parse(`{{\"a\":{{\"b\":{{\"c\":{{\"d\":{{\"e\":42}}}}}}}}}}`);
     v_pdn5.field(\"a\").field(\"b\").field(\"c\").field(\"d\").field(\"e\").as_long()
 }"
@@ -6993,7 +6993,7 @@ fn q3_nested_object_round_trip() {
     src_q3nort = json_parse(\"{{\\\"a\\\":1,\\\"b\\\":2,\\\"c\\\":3}}\");
     text_q3nort = src_q3nort.to_json();
     back_q3nort = json_parse(text_q3nort);
-    sum_q3nort = 0l;
+    sum_q3nort = 0;
     sum_q3nort += back_q3nort.field(\"a\").as_long();
     sum_q3nort += back_q3nort.field(\"b\").as_long();
     sum_q3nort += back_q3nort.field(\"c\").as_long();
@@ -7213,7 +7213,7 @@ fn p54_step4_nonempty_primitive_array_length_correct() {
 #[test]
 fn p54_step4_nonempty_primitive_array_item_0_is_first() {
     code!(
-        "fn run_p4npi0() -> long {
+        "fn run_p4npi0() -> integer {
     v_p4npi0 = json_parse(\"[10,20,30]\");
     v_p4npi0.item(0).as_long()
 }"
@@ -7225,7 +7225,7 @@ fn p54_step4_nonempty_primitive_array_item_0_is_first() {
 #[test]
 fn p54_step4_nonempty_primitive_array_item_1_is_middle() {
     code!(
-        "fn run_p4npi1() -> long {
+        "fn run_p4npi1() -> integer {
     v_p4npi1 = json_parse(\"[10,20,30]\");
     v_p4npi1.item(1).as_long()
 }"
@@ -7333,7 +7333,7 @@ fn p54_step4_nonempty_primitive_object_length_correct() {
 #[test]
 fn p54_step4_nonempty_object_field_hit_returns_value() {
     code!(
-        "fn run_p4oh() -> long {
+        "fn run_p4oh() -> integer {
     v_p4oH = json_parse(\"{{\\\"age\\\":30}}\");
     v_p4oH.field(\"age\").as_long()
 }"
@@ -7444,7 +7444,7 @@ fn p54_step4_nested_array_inner_length() {
 #[test]
 fn p54_step4_nested_array_inner_item_value() {
     code!(
-        "fn run_p4niv() -> long {
+        "fn run_p4niv() -> integer {
     v_p4niv = json_parse(\"[[10,20],[30,40]]\");
     v_p4niv.item(1).item(0).as_long()
 }"
@@ -7459,7 +7459,7 @@ fn p54_step4_nested_array_inner_item_value() {
 #[test]
 fn p54_step4_nested_object_chained_field() {
     code!(
-        "fn run_p4nocf() -> long {
+        "fn run_p4nocf() -> integer {
     v_p4nocf = json_parse(\"{{\\\"a\\\":{{\\\"b\\\":7}}}}\");
     v_p4nocf.field(\"a\").field(\"b\").as_long()
 }"
@@ -7473,7 +7473,7 @@ fn p54_step4_nested_object_chained_field() {
 #[test]
 fn p54_step4_array_of_objects_field_lookup() {
     code!(
-        "fn run_p4aof() -> long {
+        "fn run_p4aof() -> integer {
     v_p4aof = json_parse(\"[{{\\\"k\\\":1}},{{\\\"k\\\":2}}]\");
     v_p4aof.item(1).field(\"k\").as_long()
 }"
@@ -7861,9 +7861,9 @@ fn q2_fields_collects_all_names() {
 #[test]
 fn q2_fields_preserves_primitive_number_values() {
     code!(
-        "fn run_q2fp() -> long {
+        "fn run_q2fp() -> integer {
     v_q2fp = json_parse(\"{{\\\"k\\\":42}}\");
-    sum_q2fp = 0l;
+    sum_q2fp = 0;
     for entry in v_q2fp.fields() {
         sum_q2fp += entry.value.as_long();
     }
@@ -8005,7 +8005,7 @@ fn q4_json_array_multi_element_round_trips() {
 #[test]
 fn q4_json_array_item_access_after_construction() {
     code!(
-        "fn run_q4aiac() -> long {
+        "fn run_q4aiac() -> integer {
     items_q4aiac: vector<JsonValue> = [
         json_number(10.0),
         json_number(20.0),
@@ -8085,7 +8085,7 @@ fn q4_json_object_empty_serialises_as_braces() {
 #[test]
 fn q4_json_object_single_field_round_trips() {
     code!(
-        "fn run_q4osf() -> long {
+        "fn run_q4osf() -> integer {
     f_q4osf = JsonField { name: \"k\", value: json_number(42.0) };
     fields_q4osf: vector<JsonField> = [f_q4osf];
     v_q4osf = json_object(fields_q4osf);
@@ -8176,7 +8176,7 @@ fn q4_forward_captured_subtree_object() {
 #[test]
 fn q4_forward_captured_subtree_round_trip() {
     code!(
-        "fn run_q4fcsr() -> long {
+        "fn run_q4fcsr() -> integer {
     src_q4fcsr = json_parse(\"[10,20,30]\");
     fields_q4fcsr: vector<JsonField> = [
         JsonField { name: \"data\", value: src_q4fcsr }
@@ -9598,7 +9598,7 @@ fn test() {
 /// P175 — file-scope `pub NAME: vector<T> = [...]` constants of
 /// textual element types were materialised as empty vectors at
 /// runtime (`len == 0`).  `vector<integer>` / `vector<float>` /
-/// `vector<single>` / `vector<long>` already worked because
+/// `vector<single>` / `vector<integer>` already worked because
 /// `compile::extract_literal_values` matched `OpSetInt/Float/Single/Long`
 /// calls.  `vector<text>` missed the `OpSetText` branch + the
 /// `Value::Text` arm in `build_const_vectors`'s per-element match,
@@ -9781,11 +9781,11 @@ fn test() {
 #[test]
 fn p180_int_widens_to_long_field() {
     code!(
-        "struct P180Long { n: long not null }
+        "struct P180Long { n: integer not null }
 fn test() {
-    p = P180Long { n: 0l };
+    p = P180Long { n: 0 };
     p.n = 42;
-    assert(p.n == 42l, \"expected 42l got {p.n}\");
+    assert(p.n == 42, \"expected 42 got {p.n}\");
 }"
     )
     .result(Value::Null);

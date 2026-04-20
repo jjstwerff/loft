@@ -367,7 +367,7 @@ use loft::parallel::run_parallel_raw;
 fn parallel_long_return_type() {
     let code = r#"
 struct Num { v: integer }
-fn to_long(r: const Num) -> long { r.v as long * 1000000000l }
+fn to_long(r: const Num) -> integer { r.v as integer * 1000000000 }
 "#;
     let (mut state, data) = compile(code);
 

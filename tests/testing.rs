@@ -134,7 +134,7 @@ impl Test {
 
     fn test(&self) -> String {
         let mut res = match &self.result {
-            Value::Long(v) => v.to_string() + "l",
+            Value::Long(v) => v.to_string(),
             Value::Int(v) => v.to_string(),
             Value::Enum(v, _) => v.to_string(),
             Value::Boolean(v) if *v => "true".to_string(),
