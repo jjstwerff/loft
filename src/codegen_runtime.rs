@@ -838,26 +838,132 @@ impl FileVal for i32 {
 }
 
 impl FileVal for i64 {
-    fn file_to_bytes(&self, _stores: &Stores, _db_tp: i32, little_endian: bool) -> Vec<u8> {
-        if little_endian {
-            self.to_le_bytes().to_vec()
-        } else {
-            self.to_be_bytes().to_vec()
+    fn file_to_bytes(&self, stores: &Stores, db_tp: i32, little_endian: bool) -> Vec<u8> {
+        // Post-2c: `integer` is i64 on the loft stack, but file-width is
+        // still declared per field type — u8 writes 1 byte, u16 writes 2,
+        // i32 writes 4, long writes 8.  Dispatch on `db_tp` mirroring the
+        // `FileVal for i32` impl so narrow-typed writes emit the right
+        // byte count and the final file size matches the interpreter.
+        let mut out = Vec::new();
+        match db_tp {
+            0 | 1 => {
+                // integer | long — both 8 bytes post-2c.
+                let b = if little_endian {
+                    self.to_le_bytes()
+                } else {
+                    self.to_be_bytes()
+                };
+                out.extend_from_slice(&b);
+            }
+            6 => {
+                // character — 4-byte narrow (u32 code point).
+                let v = *self as u32;
+                let b = if little_endian {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                };
+                out.extend_from_slice(&b);
+            }
+            4 => out.push(*self as u8), // boolean
+            _ => match &stores.types[db_tp as usize].parts {
+                crate::database::Parts::Byte(_, _) => out.push(*self as u8),
+                crate::database::Parts::Short(_, _) => {
+                    let v = *self as i16;
+                    let b = if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+                crate::database::Parts::Int(_, _) => {
+                    let v = *self as i32;
+                    let b = if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+                _ => {
+                    let b = if little_endian {
+                        self.to_le_bytes()
+                    } else {
+                        self.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+            },
         }
+        out
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &mut Stores,
-        _db_tp: i32,
+        stores: &mut Stores,
+        db_tp: i32,
         little_endian: bool,
         bytes: &[u8],
     ) {
-        if bytes.len() >= 8 {
-            *self = if little_endian {
-                i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
-            } else {
-                i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
-            };
+        match db_tp {
+            0 | 1 => {
+                if bytes.len() >= 8 {
+                    *self = if little_endian {
+                        i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                    } else {
+                        i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                    };
+                }
+            }
+            6 => {
+                if bytes.len() >= 4 {
+                    *self = i64::from(if little_endian {
+                        u32::from_le_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                    } else {
+                        u32::from_be_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                    });
+                }
+            }
+            4 => {
+                if let Some(&b) = bytes.first() {
+                    *self = i64::from(b);
+                }
+            }
+            _ => match &stores.types[db_tp as usize].parts {
+                crate::database::Parts::Byte(_, _) => {
+                    if let Some(&b) = bytes.first() {
+                        *self = i64::from(b);
+                    }
+                }
+                crate::database::Parts::Short(_, _) => {
+                    if bytes.len() >= 2 {
+                        let v = if little_endian {
+                            i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        } else {
+                            i16::from_be_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        };
+                        *self = i64::from(v);
+                    }
+                }
+                crate::database::Parts::Int(_, _) => {
+                    if bytes.len() >= 4 {
+                        *self = i64::from(if little_endian {
+                            i32::from_le_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                        } else {
+                            i32::from_be_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                        });
+                    }
+                }
+                _ => {
+                    if bytes.len() >= 8 {
+                        *self = if little_endian {
+                            i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                        } else {
+                            i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                        };
+                    }
+                }
+            },
         }
     }
 }
