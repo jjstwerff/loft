@@ -1035,7 +1035,16 @@ extern crate loft;"
                 }
                 let td_nr = self.data.type_def_nr(&a.typedef);
                 let field_type_id = self.data.def(td_nr).known_type;
-                self.emit_field(w, &s_var, &a.name, &a.typedef, a.nullable, field_type_id)?;
+                let forced = self.data.forced_size(a.alias_d_nr);
+                self.emit_field(
+                    w,
+                    &s_var,
+                    &a.name,
+                    &a.typedef,
+                    a.nullable,
+                    field_type_id,
+                    forced,
+                )?;
             }
         }
         Ok(())
@@ -1171,6 +1180,7 @@ extern crate loft;"
     /// Dispatches on the field's `typedef` to produce the correct `db.*` call.
     /// `s_var` is the Rust variable holding the parent struct's runtime id
     /// (e.g. `t59` for `known_type=59`).
+    #[allow(clippy::too_many_arguments)]
     fn emit_field(
         &self,
         w: &mut dyn Write,
@@ -1179,6 +1189,7 @@ extern crate loft;"
         typedef: &Type,
         nullable: bool,
         known_type: u16,
+        forced_size: Option<u8>,
     ) -> std::io::Result<()> {
         if let Type::Vector(c, _) = typedef {
             let c_def = self.data.type_def_nr(c);
@@ -1196,7 +1207,12 @@ extern crate loft;"
             return Ok(());
         }
         if let Type::Integer(min, _, _) = typedef {
-            let field_size = typedef.size(nullable);
+            // Post-2c: the field's size may come from the integer alias's
+            // `size(N)` annotation (captured in `Attribute.alias_d_nr` →
+            // `Data::forced_size`) OR from the `Type::Integer` range.
+            // Mirrors `src/typedef.rs:354-373` exactly so the runtime
+            // Parts matches the interpreter's (Byte/Short/Int/base).
+            let field_size = forced_size.unwrap_or_else(|| typedef.size(nullable));
             if field_size == 1 {
                 emit_db_field(
                     w,
@@ -1212,6 +1228,14 @@ extern crate loft;"
                     field_name,
                     "short",
                     &format!("db.short({min}, {nullable})"),
+                )?;
+            } else if field_size == 4 {
+                emit_db_field(
+                    w,
+                    s_var,
+                    field_name,
+                    "int",
+                    &format!("db.int({min}, {nullable})"),
                 )?;
             } else {
                 writeln!(w, "    db.field({s_var}, \"{field_name}\", 0);")?;
@@ -1316,7 +1340,16 @@ extern crate loft;"
             let td_nr = self.data.type_def_nr(&a.typedef);
             let field_type_id = self.data.def(td_nr).known_type;
             assert_ne!(def_nr, u32::MAX, "Unknown def_nr for {:?}", a.typedef);
-            self.emit_field(w, &s_var, &a.name, &a.typedef, a.nullable, field_type_id)?;
+            let forced = self.data.forced_size(a.alias_d_nr);
+            self.emit_field(
+                w,
+                &s_var,
+                &a.name,
+                &a.typedef,
+                a.nullable,
+                field_type_id,
+                forced,
+            )?;
         }
         Ok(())
     }
