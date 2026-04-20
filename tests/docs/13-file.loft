@@ -80,12 +80,13 @@ fn main() {
   assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
   assert(f#index == 0, "Last read started at byte 0.");
   assert(f#next == 4, "Next read starts at byte 4.");
-  // Seek to byte 16 to skip past the integers and read the text directly.
-  f#next = 16;
+  // Seek to byte 20 to skip past the integers and read the text directly.
+  // (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)
+  f#next = 20;
   s = f#read(5) as text;
-  assert(s == "Hello", "Partial text read from offset 16.");
-  assert(f#index == 16, "Last read started at byte 16.");
-  assert(f#next == 21, "Next position after 5-byte text read.");
+  assert(s == "Hello", "Partial text read from offset 20.");
+  assert(f#index == 20, "Last read started at byte 20.");
+  assert(f#next == 25, "Next position after 5-byte text read.");
   // Requesting more bytes than remain simply returns whatever is left.
   rest = f#read(100) as text;
   assert(rest == " world!", "Read continues to end of file.");
@@ -104,10 +105,10 @@ fn main() {
   f#format = LittleEndian;
   ints =[1, 2, 3, 4];
   f += ints;
-  assert(f#size == 16, "Four i32 values = 16 bytes");
+  assert(f#size == 32, "Four integers = 32 bytes (8 each, post-2c)");
   // Truncate to the first two integers.
-  f#size = 8;
-  assert(f#size == 8, "Truncated to 8 bytes");
+  f#size = 16;
+  assert(f#size == 16, "Truncated to 16 bytes");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
   // Write a count followed by individual float values. `sizeof(T)` returns
