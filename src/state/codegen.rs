@@ -1623,9 +1623,9 @@ impl State {
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {
-                    // Extra args are always integer (4 bytes) in the current implementation.
+                    // Extra args are always integer (8 bytes post-2c).
                     let _ = extra;
-                    stack.position -= 4;
+                    stack.position -= 8;
                 }
             }
             // add the result to the stack
