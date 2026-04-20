@@ -4,12 +4,30 @@ Status: **devised 2026-04-18** — breaks the coupled Phase 2+4 effort into
 8 landable increments, each completable in a single session (<400 min)
 without leaving the codebase in an inconsistent state.
 
-**Progress (2026-04-18)**:
+**Progress (2026-04-20)**:
 - **2a Done** (`8aee716`) — wide-limit-to-Long + `u32` stdlib alias.
 - **2b Done** (`9940f57`) — Op*Long Nullable opcodes; Phase 1 G-hybrid
   fully covers long arithmetic.
+- **2c Done** (`d5f5ec9` + rounds 5-9 + `67b537e`) — unbounded `integer`
+  widened to i64 storage + arithmetic; `long` aliases `integer` at the
+  keyword level.  Per-round detail in `PHASE_2C_PROGRESS.md`.
+- **2e Done** (`291ce7a`) — `long` / `l` deprecation warnings (gated on
+  non-default parse + second pass so the stdlib / test harness paths are
+  silent).
 - **2f Done** (`feaa3e7`) — `--migrate-long` source rewriter CLI.
-- 2c, 2d, 2e, 2g, 2h — remaining.
+- **2g Partial** — `dddb8ea` swept inline-source test fixtures; lib/
+  sweep is pending.
+- **2d** (Op*Int deletion) — blocked on Category C native codegen retry;
+  see `CATEGORY_C_FINDINGS.md`.
+- **2h** (spec close-out) — pending.
+
+**Current suite state (2026-04-20, end of session)**: **16 failing
+tests** across categories C, D.1, G — see `PHASE_2C_PROGRESS.md §
+Remaining failures`.  Categories F, E, D.2, D.3 all closed this
+session; H was never actually failing.  9 consecutive no-regression
+commits since round 10b.1, with the final two being narrow runtime
+codegen fixes (`7bf3558` + `edbc9f3`) that validated the
+`CODEGEN_AUDIT.md` thesis.
 
 ## Guiding insight
 

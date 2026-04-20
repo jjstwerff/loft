@@ -1,18 +1,28 @@
 # Phase 2c — concrete execution checklist for the dedicated session
 
-Status: **not started — checklist for the eventual dedicated session**.
+Status: **EXECUTED (2026-04-19 / 2026-04-20)** — see
+`PHASE_2C_PROGRESS.md` for the landed commits per round and
+`CATEGORY_C_FINDINGS.md` for the native-codegen retry plan.
 
-This document records the exact edit sequence I'd follow for Phase 2c
-(unbounded `integer` → i64).  Assembled from four attempted partial
-implementations this session that each hit the same architectural
-coupling.  The plan is correct; the attempts failed on time, not
-technique.
+The checklist below is preserved as the reference edit sequence
+and matches what actually landed across commits `d5f5ec9` through
+`8edb15c` — split across ~10 short rounds rather than the single
+240-360 min session originally anticipated.  The incremental
+shape worked; the coupling concerns proved manageable when split
+by subsystem (types → ops → stores → stdlib → tests → native
+bridge).
 
 ## Precondition: allocate 240-360 contiguous minutes
 
 Phase 2c ripples across ~15 files.  Intermediate states don't build.
 A 6-hour dedicated session is the right shape.  Don't attempt it
 split across sessions.
+
+**Post-execution note**: the intermediate-states-don't-build
+concern didn't hold in practice.  Each round kept the
+interpreter-path green; the native codegen path accumulated
+debt that required a coordinated Layer A+B+C pass (see
+`CATEGORY_C_FINDINGS.md`) which is still pending.
 
 ## Approach — "widen Type::Integer's backing type"
 
