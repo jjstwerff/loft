@@ -753,9 +753,11 @@ impl State {
             2 => {
                 // sorted points to the position of the record inside the vector
                 // empty from/till arrays signal "no constraint on this side".
-                // S-lexer: get_int returns i32::MIN for unresolved-type fields;
+                // Phase 2c: sorted collection pointer is a 4-byte u32 — using
+                // `get_int` (8 bytes post-2c) overflows into the next field.
+                // get_i32_raw returns i32::MIN for unresolved-type fields;
                 // guard against negative values (0 = empty, i32::MIN = unresolved).
-                let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
+                let sorted_rec_raw = all[data.store_nr as usize].get_i32_raw(data.rec, data.pos);
                 let sorted_rec = if sorted_rec_raw <= 0 {
                     0
                 } else {
@@ -1190,12 +1192,12 @@ impl State {
                 break;
             }
             match k {
-                0 | 6 => key.push(Content::Long(*self.get_stack::<i64>())),
-                1 => key.push(Content::Long(*self.get_stack::<i64>())),
+                0 | 1 => key.push(Content::Long(*self.get_stack::<i64>())),
                 2 => key.push(Content::Single(*self.get_stack::<f32>())),
                 3 => key.push(Content::Float(*self.get_stack::<f64>())),
                 4 => key.push(Content::Long(i64::from(*self.get_stack::<bool>()))),
                 5 => key.push(Content::Str(self.string())),
+                6 => key.push(Content::Long(i64::from(*self.get_stack::<u32>()))),
                 _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
             }
             // We assume that all none-base types are enumerate types.

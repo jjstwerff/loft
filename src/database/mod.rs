@@ -368,7 +368,7 @@ impl Stores {
     }
 
     #[must_use]
-    pub fn get<T>(&mut self, stack: &mut DbRef) -> &T {
+    pub fn get<T: 'static>(&mut self, stack: &mut DbRef) -> &T {
         debug_assert!(
             stack.pos >= size_of::<T>() as u32,
             "Stack underflow in get<{}>: stack.pos={} but need {} bytes",
@@ -377,10 +377,43 @@ impl Stores {
             size_of::<T>(),
         );
         stack.pos -= size_of::<T>() as u32;
-        self.store(stack).addr::<T>(stack.rec, stack.pos)
+        let r = self.store(stack).addr::<T>(stack.rec, stack.pos);
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(r as *const T as *const DbRef) };
+                debug_assert!(
+                    db.store_nr == u16::MAX
+                        || (db.store_nr as usize) < self.allocations.len(),
+                    "get<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                     rec={} pos={} — corrupt DbRef on stack",
+                    db.store_nr,
+                    self.allocations.len(),
+                    db.rec,
+                    db.pos,
+                );
+            }
+        }
+        r
     }
 
-    pub fn put<T>(&mut self, stack: &mut DbRef, val: T) {
+    pub fn put<T: 'static>(&mut self, stack: &mut DbRef, val: T) {
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&val as *const T as *const DbRef) };
+                debug_assert!(
+                    db.store_nr == u16::MAX
+                        || (db.store_nr as usize) < self.allocations.len(),
+                    "put<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                     rec={} pos={} — corrupt DbRef being pushed",
+                    db.store_nr,
+                    self.allocations.len(),
+                    db.rec,
+                    db.pos,
+                );
+            }
+        }
         let m = self.store_mut(stack).addr_mut::<T>(stack.rec, stack.pos);
         *m = val;
         stack.pos += size_of::<T>() as u32;

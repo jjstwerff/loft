@@ -4,7 +4,7 @@
 
 fn test_sizeof_integer() {
   a = 1;
-  assert(sizeof(1+2+3) + sizeof(integer) + 10 * sizeof(a) == 48, "int sizes");
+  assert(sizeof(1+2+3) + sizeof(integer) + 10 * sizeof(a) == 96, "int sizes");
 }
 
 fn test_sizeof_float() {
@@ -38,14 +38,14 @@ enum SzEn2 { W1, W2 }
 struct SzS { a: integer, b: integer, c: SzEn2 }
 
 fn test_sizeof_struct() {
-  assert(sizeof(SzS) == 13, "struct size");
+  assert(sizeof(SzS) == 17, "struct size");
 }
 
 struct SzHS { a: integer, b: integer, c: integer }
 struct SzHMain { s: hash<SzHS[b]> }
 
 fn test_sizeof_hash_member() {
-  assert(sizeof(SzHS) + 100 * sizeof(SzHMain) == 416, "hash member sizes");
+  assert(sizeof(SzHS) + 100 * sizeof(SzHMain) == 424, "hash member sizes");
 }
 
 struct SzIS { a: integer, b: integer, c: integer }
@@ -53,14 +53,14 @@ struct SzIMain { s: index<SzIS[a, -c]> }
 
 fn test_sizeof_index_member() {
   m = SzIMain {};
-  assert(sizeof(SzIS) + 100 * sizeof(m) == 425, "index member sizes");
+  assert(sizeof(SzIS) + 100 * sizeof(m) == 441, "index member sizes");
 }
 
 struct SzRS { a: integer, b: integer, c: integer }
 struct SzRMain { s: vector<SzRS>, biggest: reference<SzRS> }
 
 fn test_sizeof_reference_field() {
-  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 121612,
+  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 42824,
     "reference field sizes");
 }
 
@@ -69,6 +69,6 @@ struct SzVMain { s: vector<SzVS> }
 
 fn test_sizeof_vector() {
   m = SzVMain {};
-  assert(sizeof(SzVS) + 100 * sizeof(SzVMain) + 10000 * sizeof(m) + 100000 * sizeof(vector<SzVS>) == 1240412,
+  assert(sizeof(SzVS) + 100 * sizeof(SzVMain) + 10000 * sizeof(m) + 100000 * sizeof(vector<SzVS>) == 440424,
     "vector sizes");
 }

@@ -2293,6 +2293,10 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         Value::Line(_) => {} // source-line markers: skip
         Value::Var(n) => eprint!("{}", vars.name(*n)),
         Value::Break(n) => eprint!("break({n})"),
+        Value::BreakWith(n, inner) => {
+            eprint!("break({n}) ");
+            print_ir(inner, data, vars, depth);
+        }
         Value::Continue(n) => eprint!("continue({n})"),
         Value::Keys(keys) => eprint!("keys({keys:?})"),
         Value::Set(v, inner) => {

@@ -36,12 +36,11 @@ fn main() {
   assert(l.matches("+="), "Incorrect plus_is");
   assert(l.int() == -2, "Second integer");
   assert(l.matches("*"), "Incorrect multiply");
-  assert(l.int() != 3, "Third number");
-  assert(l.long_int() == 3, "Incorrect long");
-  assert(l.position() == "Tokens:1:15", "Incorrect position {l.position()}");
+  assert(l.int() == 3, "Third number");
+  assert(l.position() == "Tokens:1:14", "Incorrect position {l.position()}");
   assert(!l.matches(">"), "Incorrect higher");
   assert(l.matches(">>"), "Incorrect logical shift");
-  assert(l.position() == "Tokens:1:18", "Incorrect position {l.position()}");
+  assert(l.position() == "Tokens:1:17", "Incorrect position {l.position()}");
   // ## String Literals and Comments
   // `constant_text()` reads a double-quoted string and handles special codes
   // like \n (newline) and \\ (backslash). `constant_character()` reads a

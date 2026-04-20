@@ -100,6 +100,19 @@ pub fn set_context(
     });
 }
 
+/// Read the last-dispatched opcode context on this thread.
+/// Returns (pc, op_code, fn_d_nr).  Used by debug sentinels (e.g.
+/// the `put_stack`/`get_stack` DbRef-bounds check) to report which
+/// op was executing when a stack value turned out to be corrupt.
+#[must_use]
+#[allow(dead_code)]
+pub fn last_context() -> (u32, u8, u32) {
+    LAST_CTX.with(|c| {
+        let ctx = c.get();
+        (ctx.pc, ctx.op_code, ctx.fn_d_nr)
+    })
+}
+
 /// Install signal handlers for SIGSEGV / SIGABRT / SIGBUS.
 ///
 /// No-op on non-Unix platforms and when called more than once.

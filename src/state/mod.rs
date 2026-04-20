@@ -1277,7 +1277,7 @@ impl State {
     When the stack has no values left
     */
     #[must_use]
-    pub fn get_stack<T>(&mut self) -> &T {
+    pub fn get_stack<T: 'static>(&mut self) -> &T {
         assert!(
             (size_of::<T>() as u32) < self.stack_pos,
             "No elements left on the stack {} < {}",
@@ -1285,9 +1285,35 @@ impl State {
             size_of::<T>() as u32
         );
         self.stack_pos -= size_of::<T>() as u32;
-        self.database
+        let r = self
+            .database
             .store(&self.stack_cur)
-            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
+            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(r as *const T as *const DbRef) };
+                if !(db.store_nr == u16::MAX
+                    || (db.store_nr as usize) < self.database.allocations.len())
+                {
+                    let (op_pc, op_code, fn_d_nr) = crate::crash_report::last_context();
+                    panic!(
+                        "get_stack<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                         rec={} pos={} code_pos={} — corrupt DbRef on interpreter stack \
+                         [last op: pc={} op_code={} fn_d_nr={}]",
+                        db.store_nr,
+                        self.database.allocations.len(),
+                        db.rec,
+                        db.pos,
+                        self.code_pos,
+                        op_pc,
+                        op_code,
+                        fn_d_nr,
+                    );
+                }
+            }
+        }
+        r
     }
 
     /// `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
@@ -1357,7 +1383,31 @@ impl State {
         ) = value;
     }
 
-    pub fn put_stack<T>(&mut self, val: T) {
+    pub fn put_stack<T: 'static>(&mut self, val: T) {
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&val as *const T as *const DbRef) };
+                if !(db.store_nr == u16::MAX
+                    || (db.store_nr as usize) < self.database.allocations.len())
+                {
+                    let (op_pc, op_code, fn_d_nr) = crate::crash_report::last_context();
+                    panic!(
+                        "put_stack<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                         rec={} pos={} code_pos={} — corrupt DbRef being pushed \
+                         [last op: pc={} op_code={} fn_d_nr={}]",
+                        db.store_nr,
+                        self.database.allocations.len(),
+                        db.rec,
+                        db.pos,
+                        self.code_pos,
+                        op_pc,
+                        op_code,
+                        fn_d_nr,
+                    );
+                }
+            }
+        }
         let m = self
             .database
             .store_mut(&self.stack_cur)
