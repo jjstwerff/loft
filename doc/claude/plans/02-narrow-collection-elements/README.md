@@ -24,8 +24,8 @@ carries an inline-cast workaround (`glb_write_indices`).
 
 | # | Phase | File | Status | Blocks |
 |---|---|---|---|---|
-| 0 | Representation — extend `Type::Integer` with `Option<NonZeroU8>` forced_size | [00-representation.md](00-representation.md) | open | 1 |
-| 1 | Parser populates forced_size from the user-typed alias | [01-parser-populate.md](01-parser-populate.md) | blocked by 0 | 2 |
+| 0 | Representation — `Type::Integer(IntegerSpec)` named-struct carrier with bounds + `forced_size` | [00-representation.md](00-representation.md) | open | 1 |
+| 1 | Parser populates `IntegerSpec.forced_size` from the user-typed alias | [01-parser-populate.md](01-parser-populate.md) | blocked by 0 | 2 |
 | 2 | Resolver (`fill_database`) emits narrow vector database types | [02-resolver-narrow.md](02-resolver-narrow.md) | blocked by 1 | 3 |
 | 3 | Read path (`parse_vector_index` + iterator) uses narrow stride — **hardest** | [03-read-path.md](03-read-path.md) | blocked by 2 | 4 |
 | 4 | Append / Insert / Set / binary-file-write paths | [04-append-set.md](04-append-set.md) | blocked by 3 | 5 |
@@ -80,12 +80,23 @@ That's what the phased plan does.
   The failed attempt's approach.  Works for struct-field
   collections but not for local variables or return types.
   Rejected.
-- **Option B — extend `Type::Integer(i32, u32, bool)` to
-  `Type::Integer(i32, u32, bool, Option<NonZeroU8>)`.**
+- **Option B — wrap the Integer payload in a named struct
+  `IntegerSpec { min, max, not_null, forced_size }` and change
+  `Type::Integer(i32, u32, bool)` → `Type::Integer(IntegerSpec)`.**
   The alias signal flows naturally through `Box<Type>` in
-  `Type::Vector` and every other container.  ABI churn across
-  ~125 sites in 22 files, but mechanical.  **Chosen — see
-  Phase 0.**
+  `Type::Vector` and every other container.  ~130 call sites
+  migrate, but most collapse to `Type::Integer(s)` + `s.field`
+  access — shorter than the 4-tuple `(_, _, _, _)` form, and
+  future-proof when more fields are added.  Constructor helpers
+  (`IntegerSpec::u8()` / `signed32()` / `wide()`) consolidate ~10
+  sites that duplicate magic bound constants today.  **Chosen —
+  see Phase 0.**
+
+  (Earlier revision: Phase 0 was scoped as "add a fourth tuple
+  field" — `Type::Integer(i32, u32, bool, Option<NonZeroU8>)`.
+  The mechanical refactor compiled but degraded readability at
+  every pattern site.  Scoped up to a named struct on 2026-04-21
+  after the in-progress bulk edit surfaced the debt.)
 - **Option C — remap `Data::type_elm` to return alias def-nrs.**
   Requires a bounds-to-alias lookup.  Breaks when multiple
   aliases share the same bounds (`i32` and plain `integer` do

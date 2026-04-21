@@ -41,30 +41,34 @@ normal parse, and their `forced_size` is set by
 `src/parser/definitions.rs:442` when the parser sees `size(N)`.
 
 So when a field reads "i32" as its type name, `parse_type` returns
-a `Type::Integer(i32::MIN+1, i32::MAX as u32, false, None)` (the
-cloned I32 template) — the forced_size is LOST at this step.
+a `Type::Integer(IntegerSpec::signed32())` (the I32 template via
+the Phase 0 helper) — the forced_size on the Type stays `None`
+because the template is the plain-integer shape.  The `size(4)`
+annotation on `i32` is stored on the alias's definition
+(`Data::forced_size(i32_def_nr) = Some(4)`) but doesn't get
+stamped onto the Type.
 
 ### The fix
 
-`parse_type` needs to look up `forced_size(type_name's def_nr)` and
-stamp it onto the returned `Type::Integer`:
+`parse_type` needs to look up the alias's forced_size and stamp it
+onto the returned Type's `IntegerSpec`:
 
 ```rust
 // After the Type is resolved — near parse_type's existing Type::Integer path.
-if let Type::Integer(min, max, not_null, _) = tp {
-    let forced = self.data.forced_size(tp_nr)
-        .and_then(NonZeroU8::new);
-    tp = Type::Integer(min, max, not_null, forced);
+if let Type::Integer(mut spec) = tp {
+    if let Some(forced) = self.data.forced_size(tp_nr).and_then(NonZeroU8::new) {
+        spec.forced_size = Some(forced);
+    }
+    tp = Type::Integer(spec);
 }
 ```
 
-The critical rule: only populate forced_size from aliases that
-ACTUALLY carry a size annotation.  Plain `integer` has
+The critical rule: only stamp from aliases that ACTUALLY carry a
+size annotation NARROWER than the default.  Plain `integer` has
 `forced_size = Some(8)` from `default/01_code.loft` (`pub type
-integer size(8);`) — that's FINE because size-8 matches the
-default heuristic.  The distinction matters only for narrow aliases
-(i32, i16, u16, u8, i8) where the heuristic gives 8 but the alias
-demands 4 / 2 / 1.
+integer size(8);`) — matching the default 8-byte heuristic.  The
+distinction matters only for narrow aliases (i32, i16, u16, u8, i8)
+where the heuristic gives 8 but the alias demands 4 / 2 / 1.
 
 **Guard:** skip stamping when `type_name == "integer"` (or when
 `forced_size == Some(8)` — functionally equivalent).  This avoids
@@ -107,14 +111,14 @@ and assert they produce the same result for every struct field.
 Add a debug-assertion in `fill_database`:
 
 ```rust
-Type::Integer(minimum, _, not_null, forced_opt) => {
-    let field_nullable = nullable && !not_null;
+Type::Integer(spec) => {
+    let field_nullable = nullable && !spec.not_null;
     let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
     let via_attr = data.forced_size(alias);
-    let via_type = forced_opt.map(|n| n.get());
+    let via_type = spec.forced_size.map(NonZeroU8::get);
     debug_assert_eq!(via_attr, via_type,
         "Phase 1 regression: forced_size via alias_d_nr ({via_attr:?}) \
-         != via Type::Integer ({via_type:?}) for field {}.{}",
+         != via IntegerSpec.forced_size ({via_type:?}) for field {}.{}",
          data.def(d_nr).name,
          data.attr_name(d_nr, a_nr));
     let s = via_type.or(via_attr).unwrap_or_else(|| a_type.size(field_nullable));
@@ -130,13 +134,14 @@ field.  Then (Phase 2) the `alias_d_nr` attribute can be retired.
 
 ## Acceptance
 
-- [ ] `parse_type` produces `Type::Integer(_, _, _, Some(4))` for
-      `i32`, `Some(2)` for `u16` / `i16`, `Some(1)` for `u8` / `i8`
-      — verify via a one-off Rust unit test that runs `parse_type`
+- [ ] `parse_type` produces `Type::Integer(s)` with
+      `s.forced_size == Some(NonZeroU8::new(4).unwrap())` for `i32`,
+      `Some(2)` for `u16` / `i16`, `Some(1)` for `u8` / `i8` —
+      verify via a one-off Rust unit test that runs `parse_type`
       on a stub identifier and reads the result.
 - [ ] The debug_assert in `fill_database` never fires across
       `cargo test --release --no-fail-fast`.
-- [ ] Plain `integer` fields keep `Type::Integer(..., None)`
+- [ ] Plain `integer` fields keep `s.forced_size == None`
       (forced-size stays implicit).
 - [ ] Full test suite green.
 - [ ] `lib/graphics/src/glb.loft::glb_write_indices` workaround

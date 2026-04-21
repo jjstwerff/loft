@@ -95,34 +95,34 @@ Requires a new data structure with cache invalidation; and `Type`
 equality is fuzzy in places (e.g. Rewritten wraps).  Too much
 machinery.
 
-### ✅ Option D (RECOMMENDED): read forced_size directly from `Type::Integer`
+### ✅ Option D (RECOMMENDED): call `IntegerSpec::byte_width` at the emission site
 
-Post-Phase-0, `Type::Integer` carries `Option<NonZeroU8>` as its
-fourth field.  That IS the authoritative source of truth for
+Post-Phase-0, `Type::Integer` carries an `IntegerSpec` struct whose
+`byte_width(nullable)` method is the single source of truth for
 narrow integer widths.  Every emission site has access to the
-content Type (`etp`); just read the fourth field.
+content Type (`etp`); pattern-match and call the method.
 
-**Change 1 — `get_val` falls back to Type's forced_size when alias
-is absent** (`src/parser/mod.rs:1572`):
+**Change 1 — `get_val` falls back to the Type's `byte_width` when
+alias is absent** (`src/parser/mod.rs:1572`):
 
 ```rust
-Type::Integer(min, _, _, forced_opt) => {
+Type::Integer(spec) => {
     let s = self.data.forced_size(alias)
-        .or_else(|| forced_opt.map(NonZeroU8::get))
-        .unwrap_or_else(|| tp.size(nullable));
+        .unwrap_or_else(|| spec.byte_width(nullable));
     // ... same dispatch, unchanged
 }
 ```
 
-Now callers that pass `alias = u32::MAX` still get the right width
-if the Type carries forced_size.
+`byte_width` already honours `forced_size` first, then falls back
+to the bounds heuristic — so this one line subsumes both the old
+`forced_size(alias)` path AND the old `tp.size(nullable)` fallback.
 
-**Change 2 — `parse_vector_index` uses Type's forced_size for
-elm_size** (`src/parser/fields.rs:410-412`):
+**Change 2 — `parse_vector_index` uses `byte_width` for elm_size**
+(`src/parser/fields.rs:410-412`):
 
 ```rust
-let elm_size = if let Type::Integer(_, _, _, Some(forced)) = etp {
-    i32::from(forced.get())
+let elm_size = if let Type::Integer(spec) = etp {
+    i32::from(spec.byte_width(true))
 } else {
     let elm_td = self.data.type_elm(etp);
     let known = self.data.def(elm_td).known_type;
@@ -130,12 +130,12 @@ let elm_size = if let Type::Integer(_, _, _, Some(forced)) = etp {
 };
 ```
 
-Or wrapped as a helper on Parser (or Data):
+Or wrapped as a small helper on Parser:
 
 ```rust
 fn elem_byte_width(&self, etp: &Type) -> u8 {
-    if let Type::Integer(_, _, _, Some(n)) = etp {
-        return n.get();
+    if let Type::Integer(spec) = etp {
+        return spec.byte_width(true);
     }
     let elm_td = self.data.type_elm(etp);
     let known = self.data.def(elm_td).known_type;
@@ -143,10 +143,12 @@ fn elem_byte_width(&self, etp: &Type) -> u8 {
 }
 ```
 
-**Change 3 — apply the same helper at Site 2 and Site 3.**
+**Change 3 — apply the same helper at Site 2 (iterator setup) and
+Site 3 (chained index).**
 
-That's the entire Phase 3.  ~5 touched lines once a helper is in
-place.
+That's the entire Phase 3.  ~5 touched lines once `elem_byte_width`
+is in place, and all of them are one-liners that delegate to
+`IntegerSpec::byte_width`.
 
 ### Why Option D is better than the others
 
