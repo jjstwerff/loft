@@ -1159,14 +1159,13 @@ fn emit_repro_produces_runnable_loft_file() {
 
 #[test]
 fn binary_write_bare_integer_warns() {
-    code!("fn test() {\n  f = file(\"/tmp/lint_a.bin\");\n  f += 42;\n}")
-        .warning(
-            "`f += <integer>` without a width cast writes 8 bytes; for binary \
+    code!("fn test() {\n  f = file(\"/tmp/lint_a.bin\");\n  f += 42;\n}").warning(
+        "`f += <integer>` without a width cast writes 8 bytes; for binary \
              files (BigEndian / LittleEndian) add `as i8` / `as i16` / `as i32` \
              / `as u8` / `as u16` / `as u32` to pick the exact byte width.  Use \
              `as integer` to silence this warning when 8-byte writes are \
              intentional at binary_write_bare_integer_warns:3:11",
-        );
+    );
 }
 
 #[test]

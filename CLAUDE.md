@@ -230,13 +230,14 @@ The rule: **always commit before any operation that changes the working tree.**
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
 | [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
 | [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
+| [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture |
+| [REGEX.md](doc/claude/REGEX.md) | Regex standalone library — replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
 | [STACKTRACE.md](doc/claude/STACKTRACE.md) | Stack trace introspection — `stack_trace()` API, `StackFrame`, `ArgValue` |
 | [NATIVE.md](doc/claude/NATIVE.md) | Native code generation (`src/generation/`), `--native` default plan, fix plans |
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
 | [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
-| [BYTECODE_CACHE.md](doc/claude/BYTECODE_CACHE.md) | Bytecode cache (`.loftc`) design notes (deferred) |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
 | [DEBUG_PLAN.md](doc/claude/DEBUG_PLAN.md) | Systematic plan for all open safety/leak/data-loss issues (P120–P135) |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |

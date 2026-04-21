@@ -13,34 +13,12 @@ use std::fmt::Write as _;
 use std::io::{Error, Write};
 // Bytecode generation
 
-/// Create byte code.
+/// Create byte code from parsed Data.  Walks every user function,
+/// emits its bytecode into `state`, then materialises constant
+/// vectors into `CONST_STORE`.
 pub fn byte_code(state: &mut State, data: &mut Data) {
-    byte_code_with_cache(state, data, None, &[]);
-}
-
-/// Create byte code, optionally using a `.loftc` cache file.
-/// `cache_path` is the path to write/read the cache. When `None`, no caching.
-/// `sources` is the list of (filename, content) pairs used for the cache key.
-pub fn byte_code_with_cache(
-    state: &mut State,
-    data: &mut Data,
-    cache_file: Option<&str>,
-    sources: &[(&str, &str)],
-) {
     native::init(state);
     register_native_stubs(state, data);
-
-    // Try loading from cache.
-    if let Some(path) = cache_file {
-        let key = crate::cache::cache_key(sources);
-        if let Some(cached) = crate::cache::read_cache(path, &key)
-            && load_from_cache(state, data, &cached)
-        {
-            return;
-        }
-    }
-
-    // Full compilation.
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
@@ -49,101 +27,6 @@ pub fn byte_code_with_cache(
     }
     build_const_vectors(state, data);
     state.database.allocations[crate::database::CONST_STORE as usize].lock();
-
-    // Write cache for next run.
-    if let Some(path) = cache_file {
-        let key = crate::cache::cache_key(sources);
-        let cache_data = crate::cache::collect_cache_data(state, data);
-        let _ = crate::cache::write_cache(path, &key, &cache_data);
-    }
-}
-
-/// Restore State + Data from cached compilation output. Returns true on success.
-fn load_from_cache(state: &mut State, data: &mut Data, cached: &crate::cache::CacheData) -> bool {
-    use std::sync::Arc;
-
-    // Restore bytecode.
-    state.bytecode = Arc::new(cached.bytecode.clone());
-
-    // Restore CONST_STORE buffer.
-    let cs_idx = crate::database::CONST_STORE as usize;
-    let cs = &mut state.database.allocations[cs_idx];
-    let words = cached.const_store_buf.len() / 8;
-    if words > 0 {
-        // Resize the store to fit the cached data, then copy.
-        if cs.capacity_words() < words as u32 {
-            cs.resize(0, words as u32);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                cached.const_store_buf.as_ptr(),
-                cs.ptr,
-                cached.const_store_buf.len(),
-            );
-        }
-    }
-    cs.lock();
-    cs.ref_count = u32::MAX / 2;
-
-    // Restore vector constant stores.
-    for vs in &cached.vector_stores {
-        let idx = vs.store_nr as usize;
-        // Ensure the allocations array is large enough.
-        while state.database.allocations.len() <= idx {
-            state.database.allocations.push(crate::store::Store::new(4));
-        }
-        let store = &mut state.database.allocations[idx];
-        store.free = false;
-        let words = vs.data.len() / 8;
-        if store.capacity_words() < words as u32 {
-            store.resize(0, words as u32);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(vs.data.as_ptr(), store.ptr, vs.data.len());
-        }
-        store.lock();
-        store.ref_count = u32::MAX / 2;
-        // Update max store index.
-        if vs.store_nr >= state.database.max {
-            state.database.max = vs.store_nr + 1;
-        }
-    }
-
-    // Restore const_refs.
-    let null_ref = DbRef {
-        store_nr: u16::MAX,
-        rec: 0,
-        pos: 0,
-    };
-    state
-        .const_refs
-        .resize(data.definitions() as usize, null_ref);
-    for cr in &cached.const_refs {
-        if (cr.d_nr as usize) < state.const_refs.len() {
-            state.const_refs[cr.d_nr as usize] = DbRef {
-                store_nr: cr.store_nr,
-                rec: cr.rec,
-                pos: cr.pos,
-            };
-            // Also set on the Definition for native codegen.
-            data.definitions[cr.d_nr as usize].const_ref = Some(DbRef {
-                store_nr: cr.store_nr,
-                rec: cr.rec,
-                pos: cr.pos,
-            });
-        }
-    }
-
-    // Restore function code positions.
-    for func in &cached.functions {
-        let idx = func.d_nr as usize;
-        if idx < data.definitions.len() {
-            data.definitions[idx].code_position = func.code_position;
-            data.definitions[idx].code_length = func.code_length;
-        }
-    }
-
-    true
 }
 
 /// Extract literal values from vector constant Block IR and build
