@@ -39,10 +39,11 @@ from `925ee36`) or round-trips correctly on i64.
   writes 8 — silent regressions in existing binary writers
   are the most common footgun of this migration.
 
-**Migration aid:** the `loft --migrate-long <path>` CLI
-rewrites `long` → `integer` and strips `l` suffixes from
-external loft sources.  Use it once on every external
-`.loft` file after upgrading.
+**Migration aid:** no external users of pre-0.9.0 loft exist,
+so no migration path is needed in practice.  The internal
+`loft --migrate-long <path>` CLI is retained as a utility
+that rewrites `long` → `integer` and strips `l` suffixes, in
+case an external user surfaces later.
 
 **Downsides recorded** (`doc/claude/CAVEATS.md`): memory
 footprint of integer-heavy data structures roughly doubles;

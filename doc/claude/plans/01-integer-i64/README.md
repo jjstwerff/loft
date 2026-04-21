@@ -53,7 +53,7 @@ initiative is the execution plan.
 | `04-deprecate-long.md` | Phase 4 — C54.B: remove `long` + `l` suffix, `--migrate-long` tool, stdlib/tests/lib sweep | **Done** — `Type::Long` variant + `long` keyword + `l` literal suffix removed (commits `3e976b3`..`0c46abb`).  Stdlib, tests, and libs swept to `integer` + plain literals. |
 | `05-opcode-reclamation.md` | Phase 5 — C54.E: delete 26 duplicate `Op*Long` arithmetic opcodes; reclaim for O1 | **Done** — 34 `Op*Long` opcodes removed across rounds 10b.1–10b.4 + 10d (commits `5b2c89c`, `fd09612`, `cb0644c`, `e5a4988`, `3b34f89`).  OPERATORS table 268 → 234. |
 | `06-spec.md` | Phase 6 — document the new arithmetic invariant in LOFT.md + PROBLEMS.md + CAVEATS.md | **Done** — `CHANGELOG.md [Unreleased]`, `LOFT.md § Primitive types` + `§ Null representation`, `CAVEATS.md § C54`. |
-| `FINISH_MIGRATION.md` | Post-migration hardening + remaining cleanup (A / B / C / D / E) | **Mostly done** — A1/A2 (asserts + audit), B (opcode dedup), C (Type::Long + keyword removal), and E (docs) all landed.  D (persisted-DB migration tool) deferred; A3 (binary-format lint) optional.  See § B.postscript for the orthogonal `.loftc` cache-key bug. |
+| `FINISH_MIGRATION.md` | Post-migration hardening + remaining cleanup (A / B / C / D / E) | **Closed** — A1/A2 (asserts + audit), B (opcode dedup), C (Type::Long + keyword removal), E (docs) all shipped.  D (persisted-DB migration tool) **not needed** (no external users, no pre-2c databases).  A3 binary-format lint and the `.loftc` cache-key bug are orthogonal follow-ups outside this initiative. |
 
 Phase files open at the start of their session and close when the phase
 commits.  Phases can produce follow-up plans if the work surfaces

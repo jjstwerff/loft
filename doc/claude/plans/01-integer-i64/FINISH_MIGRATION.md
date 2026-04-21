@@ -187,19 +187,12 @@ pass.  Clippy + fmt clean.
 
 ### D — Persisted-database migration tool (`--migrate-i64`)
 
-Called out in README but not landed.  Any on-disk
-loft-stored database from pre-2c uses i32 integer storage and
-will read back wrong values on the post-2c runtime.  The tool:
-
-- Reads the pre-2c `.loftdb` (or whatever the extension is);
-  probes type table for `Parts::Integer` fields.
-- Rewrites each record into a post-2c layout (i64 field width).
-- Updates the `.loftc` cache-format version constant.
-
-Estimate: 4-6 hours.  Required before shipping a `1.0` if any
-user has a persisted database.  **If no user has one yet**,
-punt to "document the incompatibility in RELEASE.md and require
-fresh-DB start" — cheaper and we can defer the tool.
+**Status (2026-04-21):** **Closed — not needed.**  Loft has no
+external users yet, therefore no pre-2c `.loftdb` files exist in
+the wild.  The post-2c i64 layout is the only layout anyone will
+ever see; no migration tool is required.  If external users arrive
+later with a pre-2c database, this section is the seed for
+building `--migrate-i64` at that time (estimate: 4-6 hours).
 
 ### E — Phase 6 docs: record the invariants
 
@@ -231,10 +224,8 @@ Historical execution order (all shipped except D):
    `e5a4988`, `3b34f89`.  34 opcodes reclaimed.
 4. **C** (Type::Long removal) — commits `3e976b3`..`0c46abb`.
 5. **E** (docs) — this commit.
-6. **D** (migration tool) — deferred.  No known user with a
-   persisted database; document the incompatibility in
-   `RELEASE.md` and require fresh-DB start when an external
-   user first hits it.
+6. **D** (migration tool) — **closed, not needed.**  No external
+   users; no pre-2c databases exist anywhere.
 
 ## Downsides to document
 
@@ -312,21 +303,26 @@ Plus phase-specific:
 
 ## Closing the initiative
 
-The initiative closes when:
+The initiative is **closed** as of `9871f14` (2026-04-21).  All of
+A + B + C + E have shipped; D is not needed (no external users,
+no persisted databases).
 
-1. **Code**: A + B + C land.  Opcode table is 242 (268 - 26).
-   No `Type::Long` variant remains.
-2. **Docs**: E lands.  `QUALITY.md § C54` moves to closed,
-   `CHANGELOG.md` has the migration entry, `CAVEATS.md` documents
-   the downsides.
-3. **Migration**: D either ships or is explicitly deferred with
-   a fresh-DB-start note in `RELEASE.md`.
-4. **Gate**: `PROBLEMS.md` has no open C54 entries.
-   `RELEASE.md` safety gate passes.
+- **Code**: OPERATORS table 268 → 234 (34 opcodes reclaimed).
+  No `Type::Long` variant remains.  `long` keyword + `l` literal
+  suffix removed.  Suite green.
+- **Docs**: `CHANGELOG.md`, `LOFT.md`, `CAVEATS.md § C54`,
+  `INTERMEDIATE.md` all in sync.
+- **Migration**: Not required.
 
-Total remaining effort: **8-14 hours** across 2-3 sessions.  Low
-on drama — the hard decisions (G vs G', atomic 2+4 landing,
-cross-backend parity) are all decided and shipped.
+Orthogonal follow-ups (not part of this initiative):
+
+- A2 binary-format lint (parser warning on `f += integer_expr`
+  into BigEndian/LittleEndian files) — optional hardening.
+- B.postscript `.loftc` cache-key bug — the cache key misses
+  `default/*.loft` and `use`-imported libs, causing stale
+  bytecode loads on uncommitted stdlib edits.  Workaround
+  today: delete `.loftc` files after stdlib edits.  Fix sketch
+  at § B.postscript below.
 
 ## Provenance
 

@@ -168,11 +168,10 @@ than i32.  `u32 not null` unlocks the full 2³² range when the field
 can't carry null.
 
 **Migration note:** the `long` type keyword and the `l` literal
-suffix (e.g. `42l`) have been **removed** in 0.9.0.  External code
-that still uses them won't parse — run `loft --migrate-long <path>`
-to rewrite `long` → `integer` and `42l` → `42`; the tool preserves
-identifiers containing `long` (e.g. `long_value`), string literals,
-and comments.
+suffix (e.g. `42l`) were removed in 0.9.0.  There are no external
+users of pre-0.9.0 loft, so no migration path is needed in
+practice; the `loft --migrate-long <path>` CLI exists as an
+internal utility should one become necessary.
 
 ### Composite types
 
