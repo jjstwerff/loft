@@ -1040,6 +1040,13 @@ impl Parser {
                     "type `long` is deprecated — use `integer` (both are 8 bytes post-2c)"
                 );
             }
+            // Consume an optional `not null` after `long`.
+            let _not_null = if self.lexer.has_keyword("not") {
+                self.lexer.token("null");
+                true
+            } else {
+                false
+            };
             return Some(crate::data::I64.clone());
         }
         let tp_nr = if self.lexer.has_token("::") {

@@ -555,7 +555,7 @@ fn type_def(self: Parser, define: boolean) -> u16 {
   }
   return t;
 }
-// <value> ::= 'true' | 'false' | 'null' | <integer> | <long> | <float> | <single> | <constant_text> [ <formatting> ] | <character>
+// <value> ::= 'true' | 'false' | 'null' | <integer> | <float> | <single> | <constant_text> [ <formatting> ] | <character>
 
 fn value(self: Parser) -> boolean {
   v = self.lexer.peek();

@@ -45,15 +45,15 @@ pub fn ok(self: FileResult) -> boolean {
 pub struct File {
   path: text,
   // 24
-  size: long,
+  size: integer,
   // 0
   format: Format,
   // 32
   ref: i32,
   // 28
-  current: long,
+  current: integer,
   // 8
-  next: long  // 16
+  next: integer  // 16
 }
 
 fn OpGetFile(file: File) -> boolean;

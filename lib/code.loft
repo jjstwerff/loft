@@ -40,7 +40,7 @@ struct Variable {
 enum Value {
   Integer {v: integer },
   EnumValue {v: integer, typedef: u16 },
-  Long {v: long },
+  Long {v: integer },
   Float {v: float },
   Single {v: single },
   Text {v: text },
@@ -152,7 +152,7 @@ pub fn enum_value(self: Code, tp: u16, v: u8) {
   }
 }
 
-pub fn long_value(self: Code, v: long) {
+pub fn long_value(self: Code, v: integer) {
   if self.cur_arg < 255 {
     self.definitions[self.cur_def].variables[self.cur_arg].default +=[Long {v: v }];
   } else {

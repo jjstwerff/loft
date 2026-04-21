@@ -10,7 +10,7 @@ pub fn rand(lo: integer, hi: integer) -> integer;
 
 // Seeds the thread-local random number generator with the given value.
 // Call this before rand() or rand_indices() to get reproducible sequences.
-pub fn rand_seed(seed: long);
+pub fn rand_seed(seed: integer);
 #native "n_rand_seed"
 
 // Returns a vector of n integers [0, 1, ..., n-1] in a random order.

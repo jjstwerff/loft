@@ -97,7 +97,7 @@ pub struct Renderer {
   shadow_fbo: integer not null,
   shadow_tex: integer not null,
   shadow_size: integer not null,
-  start_tick: long not null,
+  start_tick: integer not null,
   vaos: vector<integer>,
   vert_counts: vector<integer>,
   uploaded: boolean not null

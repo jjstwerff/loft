@@ -30,15 +30,15 @@ pub struct WsMessage {
 pub struct GameEnvelope {
   sender: text,
   recipient: text,
-  sequence: long,
-  timestamp: long,
+  sequence: integer,
+  timestamp: integer,
   message: WsMessage
 }
 
 // --- Message constructors ---
 
 // Create a ping message.
-pub fn msg_ping(seq: long) -> GameEnvelope {
+pub fn msg_ping(seq: integer) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
@@ -49,7 +49,7 @@ pub fn msg_ping(seq: long) -> GameEnvelope {
 }
 
 // Create a pong response.
-pub fn msg_pong(seq: long) -> GameEnvelope {
+pub fn msg_pong(seq: integer) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",

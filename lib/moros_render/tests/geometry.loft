@@ -724,7 +724,7 @@ fn test_map_export_glb_header() {
     assert(hf#read(4) as i32 == 0x46546C67, "magic 'glTF'");
     assert(hf#read(4) as i32 == 2, "version 2");
     htotal = hf#read(4) as i32;
-    assert(htotal as long == hsz, "total_len matches file size = {hsz}");
+    assert(htotal as integer == hsz, "total_len matches file size = {hsz}");
   }
 }
 

@@ -24,7 +24,7 @@ fn test_glb_header() {
    assert(gh_f#read(4) as i32 == 0x46546C67, "magic 'glTF'");
    assert(gh_f#read(4) as i32 == 2, "version 2");
    gh_total = gh_f#read(4) as i32;
-   assert(gh_total as long == gh_sz, "total_len matches file size={gh_sz}");
+   assert(gh_total as integer == gh_sz, "total_len matches file size={gh_sz}");
   }
   delete("test_glb_b.glb");
 }
@@ -46,7 +46,7 @@ fn test_glb_chunk_types() {
    // After reading 5 x 4 = 20 bytes, current position = 20.
    // JSON data starts at 20 and is gt_jlen bytes long.
    // Use #next to jump to BIN chunk header at 20 + gt_jlen.
-   gt_f#next = (20 + gt_jlen) as long;
+   gt_f#next = (20 + gt_jlen) as integer;
    gt_f#read(4) as i32;  // skip BIN chunk data length
    assert(gt_f#read(4) as i32 == 0x004E4942, "BIN chunk type 'BIN\\0'");
   }
@@ -72,7 +72,7 @@ fn test_glb_bin_size() {
    gb_jlen = gb_f#read(4) as i32;  // JSON chunk length
    gb_f#read(4) as i32;  // JSON chunk type
    // Now seek past JSON data to BIN chunk header.
-   gb_f#next = (20 + gb_jlen) as long;
+   gb_f#next = (20 + gb_jlen) as integer;
    gb_blen = gb_f#read(4) as i32;  // BIN chunk data length
    assert(gb_blen == 108, "bin size for 3-vert 1-tri={gb_blen}");
   }

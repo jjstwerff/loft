@@ -27,8 +27,8 @@ pub fn color_r(color: integer) -> integer { (color >> 16) & 255 }
 pub fn color_g(color: integer) -> integer { (color >> 8) & 255 }
 pub fn color_b(color: integer) -> integer { color & 255 }
 pub fn color_a(color: integer) -> integer {
-  // Use long to avoid sign-extension from arithmetic right shift.
-  ((color as long & 0xFF000000l) >> 24l) as integer & 255
+  // integer is i64 post-2c, so the shift is logical on the high byte.
+  ((color & 0xFF000000) >> 24) & 255
 }
 
 // A 2D pixel canvas backed by a flat vector of RGBA integers.

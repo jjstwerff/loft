@@ -1167,7 +1167,7 @@ fn main() {
             br_pp_y[br_fi]    = PADDLE_Y;
             br_pp_w[br_fi]    = br_pp_step + 1.0;  // +1 px hides seams
             br_pp_on[br_fi]   = 1;
-            br_pp_cut[br_fi]  = (((br_now / 29l + br_fi as long * 7l) % 4l) as integer);
+            br_pp_cut[br_fi]  = (((br_now / 29l + br_fi as integer * 7l) % 4l) as integer);
             br_pp_rot[br_fi]  = 0.0;
             br_pp_drot[br_fi] = ((br_fi as float) - 5.5) * 0.7;
             // Group velocities — left plank flies left+up, middle
@@ -1265,7 +1265,7 @@ fn main() {
               br_pp_x[br_ei]    = br_px + (br_ei as float) * br_ex_step;
               br_pp_y[br_ei]    = PADDLE_Y;
               br_pp_w[br_ei]    = br_ex_step + 1.0;
-              br_pp_cut[br_ei]  = (((br_now / 37l + br_ei as long * 11l) % 4l) as integer);
+              br_pp_cut[br_ei]  = (((br_now / 37l + br_ei as integer * 11l) % 4l) as integer);
               br_pp_rot[br_ei]  = 0.0;
               br_pp_drot[br_ei] = ((br_ei as float) - 5.5) * 1.3;
               // Explode: larger outward vx, stronger upward kick.
