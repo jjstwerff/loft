@@ -41,6 +41,11 @@ fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
 // per index and bloat the BIN chunk, tripping
 // `test_map_export_glb_header`.  Written inline so the cast is
 // visible at the write site.
+//
+// TODO (P184 Phase 5): once local variables like `result: vector<i32> = []`
+// get narrow storage, restore the natural `glb_idx_buf() -> vector<i32>`
+// helper form.  Struct-field `vector<i32>` already works (Phases 2+3),
+// but locals still fall back to wide storage.
 fn glb_write_indices(f: File, tris: vector<mesh::Triangle>) {
   for t in tris {
     f += t.a as i32;
@@ -183,7 +188,7 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
   f += glb_pos_buf(m.vertices);
   f += glb_norm_buf(m.vertices);
   f += glb_uv_buf(m.vertices);
-  glb_write_indices(f, m.triangles);
+  f += glb_idx_buf(m.triangles);
 }
 
 // ─── Scene-level GLB export ───────────────────────────────────────────────────
@@ -475,6 +480,6 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
     f += glb_pos_buf(me.vertices);
     f += glb_norm_buf(me.vertices);
     f += glb_uv_buf(me.vertices);
-    glb_write_indices(f, me.triangles);
+    f += glb_idx_buf(me.triangles);
   }
 }

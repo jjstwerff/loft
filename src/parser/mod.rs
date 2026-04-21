@@ -1571,16 +1571,29 @@ impl Parser {
         let p = Value::Int(pos as i32);
         match tp {
             Type::Integer(spec) => {
-                // Post-2c: honour size(N) on the captured alias first.  P184
-                // Phase 3 adds a second fallback to `IntegerSpec.forced_size`
-                // (stamped by Phase 1 from user-typed integer aliases like
-                // `i32`) so callers that pass `alias = u32::MAX` — e.g. the
-                // vector-indexing codegen in `parser/fields.rs` — still see
-                // the correct narrow width.  Final fallback: bounds heuristic.
-                let s = self
-                    .data
-                    .forced_size(alias)
-                    .unwrap_or_else(|| spec.byte_width(nullable));
+                // Post-2c / P184 width selection:
+                // * `alias` is set → this is a struct-field read whose
+                //   captured alias may carry `size(N)`.  Use that, else
+                //   the bounds-heuristic `byte_width` (which works for
+                //   plain `integer` and `integer limit(...)` fields).
+                // * `alias == u32::MAX` AND spec has a forced_size → we're
+                //   likely inside a vector element read.  Use
+                //   `vector_narrow_width` to mirror Phase 2's actual
+                //   storage decision (1 and 4 bytes narrow; 2 stays wide
+                //   until the short-encoding Phase 4 round lands); fall
+                //   through to 8 when Phase 2 stored wide so reads align.
+                // * `alias == u32::MAX` AND no forced_size → bounds
+                //   heuristic (struct-field path for plain or limited
+                //   `integer`).
+                let s = if alias != u32::MAX {
+                    self.data
+                        .forced_size(alias)
+                        .unwrap_or_else(|| spec.byte_width(nullable))
+                } else if spec.forced_size.is_some() {
+                    spec.vector_narrow_width().unwrap_or(8)
+                } else {
+                    spec.byte_width(nullable)
+                };
                 debug_assert!(
                     matches!(s, 1 | 2 | 4 | 8),
                     "get_val: unexpected integer field width s={s} \

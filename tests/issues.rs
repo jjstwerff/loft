@@ -9868,6 +9868,28 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P184: `vector<u16>` — currently stored wide (8-byte) because
+/// `Parts::Short`'s legacy `val - min + 1` encoding diverges from
+/// the raw-byte vector copy path; narrow 2-byte storage awaits a
+/// later Phase 4 round.  This guard confirms the wide-fallback
+/// behaviour is consistent (reads + writes agree) so values
+/// round-trip correctly even without the narrowing optimisation.
+#[test]
+fn p184_vector_u16_round_trip() {
+    code!(
+        "struct P184U16Box { v: vector<u16> }
+fn test() {
+    b = P184U16Box { v: [] };
+    b.v += [1 as u16, 2 as u16, 300 as u16, 65000 as u16];
+    assert(b.v[0] == 1, \"v[0]\");
+    assert(b.v[1] == 2, \"v[1]\");
+    assert(b.v[2] == 300, \"v[2]\");
+    assert(b.v[3] == 65000, \"v[3]\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P184: `vector<u8>` narrow storage — 1-byte stride.
 #[test]
 fn p184_vector_u8_narrow_read() {

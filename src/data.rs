@@ -179,6 +179,30 @@ impl IntegerSpec {
         }
     }
 
+    /// P184 Phase 4-gate: element stride for narrow vectors, matching
+    /// what `typedef.rs::fill_database`'s Vector arm actually registers
+    /// in the database.  Returns `Some(n)` only when `n ∈ {1, 4}` —
+    /// `Parts::Byte` and `Parts::Int` use direct raw encoding that
+    /// agrees with the raw-byte copy path in `vector_add`.  Returns
+    /// `None` for 2-byte (`Parts::Short` uses legacy `val - min + 1`
+    /// encoding — deferred to a later Phase 4 round) and for any Type
+    /// without a `forced_size` annotation (the caller falls back to
+    /// the default wide-integer stride).
+    ///
+    /// Callers use this at compile time to emit matching `elm_size` in
+    /// `OpGetVector` / `OpSetVector`, and in `get_val` to choose the
+    /// right-width scalar-read opcode.  Keeping the predicate in one
+    /// place avoids the narrow-read / wide-storage skew that bit the
+    /// first Phase 3 attempt.
+    #[must_use]
+    pub fn vector_narrow_width(&self) -> Option<u8> {
+        match self.forced_size?.get() {
+            1 => Some(1),
+            4 => Some(4),
+            _ => None,
+        }
+    }
+
     /// True when the value range exceeds the signed-32-bit range.
     #[must_use]
     pub fn is_wide(&self) -> bool {

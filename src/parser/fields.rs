@@ -409,15 +409,17 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        // P184 Phase 3: honour `Type::Integer`'s forced_size when present
-        // (Phase 1 stamped it from the user-typed alias).  Without this,
-        // `elm_size` defaults to the base `integer`'s 8-byte stride and
-        // indexing `vector<i32>[i]` reads 8 bytes from a 4-byte-stride
-        // storage, returning `(v[i+1] << 32) | v[i]`.  The helper
-        // `IntegerSpec::byte_width` is the single source of truth —
-        // falls back to the bounds heuristic when forced_size is None.
-        let elm_size = if let Type::Integer(spec) = etp {
-            i32::from(spec.byte_width(true))
+        // P184 Phase 3: honour narrow vector-element stride when the
+        // content Type::Integer carries a forced_size AND Phase 2 would
+        // register a direct-encoded narrow type (see
+        // `IntegerSpec::vector_narrow_width` — currently 1 and 4 bytes).
+        // Shorts stay wide until Phase 4 aligns the `Parts::Short`
+        // encoding with raw-byte copies.  Falls back to the
+        // bounds-heuristic via `database.size(known_type)` otherwise.
+        let elm_size = if let Type::Integer(spec) = etp
+            && let Some(n) = spec.vector_narrow_width()
+        {
+            i32::from(n)
         } else {
             i32::from(self.database.size(known))
         };
