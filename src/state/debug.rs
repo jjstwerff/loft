@@ -470,12 +470,13 @@ impl State {
         is_arg: bool,
     ) -> VariableValue {
         match tp {
+            // Post-2c round 10c: wide Type::Integer (former Type::Long) is i64.
+            Type::Integer(_, max, _) if *max > i32::MAX as u32 => self
+                .peek_at::<i64>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
             Type::Integer(_, _, _) => self
                 .peek_at::<i32>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Integer),
-            Type::Long => self
-                .peek_at::<i64>(abs_pos)
-                .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
             Type::Single => self
                 .peek_at::<f32>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Single),
@@ -877,7 +878,6 @@ impl State {
             Type::Integer(_, _, _) => format!("{}", *self.code::<i64>()),
             Type::Boolean => format!("{}", *self.code::<u8>() == 1),
             Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
-            Type::Long => format!("{}", *self.code::<i64>()),
             Type::Single => format!("{}", *self.code::<f32>()),
             Type::Float => format!("{}", *self.code::<f64>()),
             Type::Text(_) => {
@@ -1246,7 +1246,7 @@ impl State {
             }
             let v = match key {
                 0 => self.dump_stack(&I32, u32::MAX, data),
-                1 => self.dump_stack(&Type::Long, u32::MAX, data),
+                1 => self.dump_stack(&crate::data::I64, u32::MAX, data),
                 2 => self.dump_stack(&Type::Single, u32::MAX, data),
                 3 => self.dump_stack(&Type::Float, u32::MAX, data),
                 4 => self.dump_stack(&Type::Boolean, u32::MAX, data),
@@ -1447,7 +1447,6 @@ impl State {
                     format!("{}({val})", self.database.enum_val(known, val))
                 }
             }
-            Type::Long => format!("{}", *self.get_stack::<i64>()),
             Type::Single => format!("{}", *self.get_stack::<f32>()),
             Type::Float => format!("{}", *self.get_stack::<f64>()),
             Type::Text(_) => {

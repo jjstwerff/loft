@@ -35,11 +35,10 @@ pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 /// Produced by the parser when it sees `long`, `integer limit(..., > i32::MAX)`,
 /// or an integer literal whose magnitude exceeds i32::MAX.  At rest: i64.
 ///
-/// Phase 2c round 10c — replaces `Type::Long`.  The `max` field can't hold
-/// full i64::MAX (it's u32), so u32::MAX is used as a "wide" sentinel; all
-/// downstream code just observes "max - min >= 256" and picks 8-byte
-/// storage.  Type::Long remains as a dead enum variant that no parser path
-/// produces.
+/// Phase 2c round 10c — replaces the former `Type::Long` variant.  The `max`
+/// field can't hold full i64::MAX (it's u32), so u32::MAX is used as a
+/// "wide" sentinel; all downstream code just observes "max - min >= 256"
+/// and picks 8-byte storage.
 pub static I64: Type = Type::Integer(i32::MIN + 1, u32::MAX, false);
 
 #[derive(Debug, PartialEq, Clone)]
@@ -150,7 +149,6 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _) => Value::Int(0),
-        Type::Long => Value::Long(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         Type::Text(_) => Value::Text(String::new()),
@@ -183,7 +181,6 @@ pub enum Type {
     Integer(i32, u32, bool),
     /// A store with the given base record type. (nullable)
     Boolean,
-    Long,
     Float,
     Single,
     Character,
@@ -396,11 +393,6 @@ impl Type {
         self == other
             || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
-            // Post-2c round 10b: Long and Integer share i64 storage; treat
-            // them as equal for dispatch / convert purposes.
-            || matches!((self, other),
-                (Type::Long, Type::Integer(_, _, _)) |
-                (Type::Integer(_, _, _), Type::Long))
     }
 
     #[must_use]
@@ -544,7 +536,7 @@ pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Function(_, _, _) | Type::Character => 4,
-        Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
+        Type::Integer(_, _, _) | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
@@ -1782,7 +1774,6 @@ impl Data {
         match tp {
             Type::Rewritten(t) => self.type_def_nr(t),
             Type::Integer(_, _, _) => self.source_nr(0, "integer"),
-            Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1809,7 +1800,6 @@ impl Data {
         match tp {
             Type::Rewritten(t) => self.type_elm(t),
             Type::Integer(_, _, _) => self.source_nr(0, "integer"),
-            Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1843,7 +1833,6 @@ impl Data {
             }
             Type::Integer(_, _, _) => "integer".to_string(),
             Type::Boolean => "boolean".to_string(),
-            Type::Long => "long".to_string(),
             Type::Float => "float".to_string(),
             Type::Single => "single".to_string(),
             Type::Character => "character".to_string(),
@@ -1900,7 +1889,6 @@ impl Data {
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",
-            Type::Long => "i64",
             Type::Boolean => "bool",
             Type::Float => "f64",
             Type::Single => "f32",

@@ -553,11 +553,10 @@ use a separate collection or add after the loop"
         // type mismatch) still fall through to the existing error
         // path.  Similar widens for single→float etc. stay handled
         // by the later convert at op == "=".
-        let needs_early_widen =
-            op == "=" && matches!(f_type, Type::Long) && matches!(s_type, Type::Integer(_, _, _));
-        if needs_early_widen && self.convert(code, &s_type, f_type) {
-            s_type = f_type.clone();
-        }
+        // Post-2c round 10c: Type::Long was folded into Type::Integer;
+        // any Integer↔Integer assignment is a no-op and needs no early widen.
+        let _ = op;
+        let _ = f_type;
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
             // auto-promote text argument to local String on first mutation.
@@ -718,7 +717,6 @@ use a separate collection or add after the loop"
         let scalar_target = matches!(
             f_type,
             Type::Integer(_, _, _)
-                | Type::Long
                 | Type::Float
                 | Type::Single
                 | Type::Boolean

@@ -672,10 +672,6 @@ use #count instead"
         }
         match tp {
             Type::Integer(_, _, _) => {
-                let value = self.cl("OpConvLongFromInt", std::slice::from_ref(format));
-                self.append_data_long(list, start, var, value, state);
-            }
-            Type::Long => {
                 self.append_data_long(list, start, var, format.clone(), state);
             }
             Type::Boolean => {
@@ -1739,8 +1735,10 @@ use #count instead"
 
             let variant_name = match &attr_type {
                 Type::Boolean => "FvBool",
+                // Post-2c round 10c: wide Type::Integer (former Type::Long)
+                // maps to FvLong; narrow range maps to FvInt.
+                Type::Integer(_, max, _) if *max > i32::MAX as u32 => "FvLong",
                 Type::Integer(_, _, _) => "FvInt",
-                Type::Long => "FvLong",
                 Type::Float => "FvFloat",
                 Type::Single => "FvSingle",
                 Type::Character => "FvChar",
@@ -1835,7 +1833,7 @@ use #count instead"
         // Fallback for primitive types
         match elm {
             Type::Single | Type::Boolean | Type::Character | Type::Text(_) => 4,
-            Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
+            Type::Integer(_, _, _) | Type::Float => 8,
             _ => 12, // DbRef size for reference types
         }
     }
@@ -1858,7 +1856,7 @@ use #count instead"
         if let Type::Vector(elm, _) = &types[0] {
             if !matches!(
                 elm.as_ref(),
-                Type::Integer(_, _, _) | Type::Long | Type::Float | Type::Single
+                Type::Integer(_, _, _) | Type::Float | Type::Single
             ) {
                 diagnostic!(
                     self.lexer,

@@ -292,7 +292,6 @@ impl State {
                         Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
-                        Type::Long => stack.add_op("OpGetLong", self),
                         Type::Float => stack.add_op("OpGetFloat", self),
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
@@ -320,7 +319,6 @@ impl State {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
-                    Type::Long => stack.add_op("OpVarLong", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
                     Type::Single => stack.add_op("OpVarSingle", self),
                     Type::Character => stack.add_op("OpVarCharacter", self),
@@ -365,7 +363,6 @@ impl State {
                         Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
-                        Type::Long => stack.add_op("OpSetLong", self),
                         Type::Float => stack.add_op("OpSetFloat", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
@@ -392,7 +389,6 @@ impl State {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
-                    Type::Long => stack.add_op("OpPutLong", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
                     Type::Single => stack.add_op("OpPutSingle", self),
                     Type::Character => stack.add_op("OpPutCharacter", self),
@@ -728,10 +724,6 @@ impl State {
                 Type::Boolean => {
                     stack.add_op("OpConstFalse", self);
                 }
-                Type::Long => {
-                    stack.add_op("OpConstLong", self);
-                    self.code_add(0i64);
-                }
                 Type::Single => {
                     stack.add_op("OpConstSingle", self);
                     self.code_add(0.0f32);
@@ -825,10 +817,6 @@ impl State {
             }
             Type::Integer(_, _, _) | Type::Character => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i64::MIN);
-            }
-            Type::Long => {
-                stack.add_op("OpConstLong", self);
                 self.code_add(i64::MIN);
             }
             Type::Float => {
@@ -1805,7 +1793,6 @@ impl State {
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
             Type::Boolean => stack.add_op("OpVarBool", self),
-            Type::Long => stack.add_op("OpVarLong", self),
             Type::Single => stack.add_op("OpVarSingle", self),
             Type::Float => stack.add_op("OpVarFloat", self),
             Type::Text(_) => {
@@ -1851,7 +1838,6 @@ impl State {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
-                        Type::Long => stack.add_op("OpVarLong", self),
                         Type::Float => stack.add_op("OpVarFloat", self),
                         Type::Single => stack.add_op("OpVarSingle", self),
                         Type::Character => stack.add_op("OpVarCharacter", self),
@@ -1882,7 +1868,6 @@ impl State {
             match &**tp {
                 Type::Integer(_, _, _) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
-                Type::Long => stack.add_op("OpGetLong", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
                 Type::Float => stack.add_op("OpGetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpGetByte", self),
@@ -2033,6 +2018,8 @@ impl State {
             Type::Integer(_, _, _) => {
                 if let Value::Int(nr) = p {
                     self.code_add(i64::from(*nr));
+                } else if let Value::Long(val) = p {
+                    self.code_add(*val);
                 }
             }
             Type::Enum(_, _, _) => {
@@ -2048,11 +2035,6 @@ impl State {
             Type::Text(_) => {
                 if let Value::Text(s) = p {
                     self.code_add_str(s);
-                }
-            }
-            Type::Long => {
-                if let Value::Long(val) = p {
-                    self.code_add(*val);
                 }
             }
             Type::Float => {
@@ -2104,7 +2086,6 @@ impl State {
             match *tp {
                 Type::Integer(_, _, _) => stack.add_op("OpSetInt", self),
                 Type::Character => stack.add_op("OpSetCharacter", self),
-                Type::Long => stack.add_op("OpSetLong", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
                 Type::Float => stack.add_op("OpSetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpSetByte", self),
@@ -2143,7 +2124,6 @@ impl State {
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
-            Type::Long => stack.add_op("OpPutLong", self),
             Type::Single => stack.add_op("OpPutSingle", self),
             Type::Float => stack.add_op("OpPutFloat", self),
             Type::Text(_) => {
@@ -2174,7 +2154,6 @@ impl State {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),
-                        Type::Long => stack.add_op("OpPutLong", self),
                         Type::Float => stack.add_op("OpPutFloat", self),
                         Type::Single => stack.add_op("OpPutSingle", self),
                         Type::Character => stack.add_op("OpPutCharacter", self),

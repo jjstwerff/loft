@@ -304,7 +304,6 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
         Type::Text(_) => "Str",
-        Type::Long => "i64",
         Type::Boolean => "bool",
         Type::Float => "f64",
         Type::Single => "f32",
@@ -339,7 +338,6 @@ pub(super) fn default_native_value(tp: &Type) -> String {
     match tp {
         Type::Float => "0.0_f64".into(),
         Type::Single => "0.0_f32".into(),
-        Type::Long => "0_i64".into(),
         Type::Boolean => "false".into(),
         Type::Text(_) => "Str::new(loft::state::STRING_NULL)".into(),
         Type::Routine(_) => "0_u32".into(),
@@ -476,7 +474,9 @@ extern crate loft;"
                             let elem = Self::vector_elem_rust_type(elem_tp);
                             let _ = write!(params, "ptr: *const {elem}, count: u32");
                         }
-                        Type::Long => {
+                        // Post-2c round 10c: wide Type::Integer (former Type::Long)
+                        // passes as i64 — range > i32::MAX can't fit in i32.
+                        Type::Integer(_, max, _) if *max > i32::MAX as u32 => {
                             let _ = write!(params, "{name}: i64");
                         }
                         Type::Float => {
@@ -495,8 +495,9 @@ extern crate loft;"
                 }
                 let ret = match &def.returned {
                     Type::Void => String::new(),
+                    // Post-2c round 10c: wide Type::Integer returns as i64.
+                    Type::Integer(_, max, _) if *max > i32::MAX as u32 => " -> i64".to_string(),
                     Type::Integer(_, _, _) | Type::Character => " -> i32".to_string(),
-                    Type::Long => " -> i64".to_string(),
                     Type::Float => " -> f64".to_string(),
                     Type::Single => " -> f32".to_string(),
                     Type::Boolean => " -> bool".to_string(),
@@ -1652,7 +1653,8 @@ extern crate loft;"
         match tp {
             Type::Single => "f32",
             Type::Float => "f64",
-            Type::Long => "i64",
+            // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
+            Type::Integer(_, max, _) if *max > i32::MAX as u32 => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
             // Vector<integer> keeps 4-byte packed element storage — this is

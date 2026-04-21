@@ -470,7 +470,6 @@ impl Parser {
             }
             // scalar types — dispatch to scalar match handler.
             Type::Integer(_, _, _)
-            | Type::Long
             | Type::Float
             | Type::Single
             | Type::Boolean
@@ -2241,7 +2240,7 @@ impl Parser {
             }
         } else if let Type::Text(_) = in_type {
             Type::Character
-        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) | Type::Long = in_type {
+        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) = in_type {
             // I13: check for custom iterator protocol before falling back.
             let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
             if next_d_nr != u32::MAX {

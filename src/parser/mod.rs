@@ -637,18 +637,7 @@ impl Parser {
         if matches!(is_type, Type::Never) {
             return true;
         }
-        // Post-2c: integer and long share i64 storage.  Allow free conversion
-        // either direction — they're runtime-identical.  (Phase 2c round 10
-        // will eventually delete Type::Long; until then this keeps cross-type
-        // assignments like `x: integer = 9_876_543_210` working without an
-        // explicit cast.)
         let _ = code;
-        if matches!(
-            (is_type, should),
-            (Type::Long, Type::Integer(_, _, _)) | (Type::Integer(_, _, _), Type::Long)
-        ) {
-            return true;
-        }
         // Struct-literal inline constructors are typed as Rewritten(Reference(...)); strip
         // the wrapper so method calls chained on the constructor are accepted correctly.
         if let Type::Rewritten(inner) = is_type {
@@ -1406,7 +1395,7 @@ impl Parser {
             | Type::Character
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
-            Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
+            Type::Integer(_, _, _) | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.
@@ -1438,7 +1427,6 @@ impl Parser {
         let p = Value::Int(0);
         let (op_name, extra) = match tp {
             Type::Integer(_, _, _) => ("OpGetInt", None),
-            Type::Long => ("OpGetLong", None),
             Type::Float => ("OpGetFloat", None),
             Type::Single => ("OpGetSingle", None),
             Type::Text(_) => ("OpGetText", None),
@@ -1615,7 +1603,6 @@ impl Parser {
                 let val = self.cl("OpGetByte", &[code, p, Value::Int(0)]);
                 self.cl("OpEqInt", &[val, Value::Int(1)])
             }
-            Type::Long => self.cl("OpGetLong", &[code, p]),
             Type::Float => self.cl("OpGetFloat", &[code, p]),
             Type::Single => self.cl("OpGetSingle", &[code, p]),
             Type::Text(_) => self.cl("OpGetText", &[code, p]),
@@ -1776,7 +1763,6 @@ impl Parser {
                 let v = v_if(val_code, Value::Int(1), Value::Int(0));
                 self.cl("OpSetByte", &[ref_code, pos_val, Value::Int(0), v])
             }
-            Type::Long => self.cl("OpSetLong", &[ref_code, pos_val, val_code]),
             Type::Float => self.cl("OpSetFloat", &[ref_code, pos_val, val_code]),
             Type::Single => self.cl("OpSetSingle", &[ref_code, pos_val, val_code]),
             Type::Text(_) => self.cl("OpSetText", &[ref_code, pos_val, val_code]),
@@ -2964,7 +2950,6 @@ impl Parser {
                 && matches!(
                     base_tp,
                     Type::Integer(_, _, _)
-                        | Type::Long
                         | Type::Float
                         | Type::Single
                         | Type::Boolean
@@ -3002,7 +2987,6 @@ impl Parser {
                 "OpConvEnumFromNull",
                 &[Value::Int(i32::from(self.data.def(*tp).known_type))],
             ),
-            Type::Long => self.cl("OpConvLongFromNull", &[]),
             Type::Float => self.cl("OpConvFloatFromNull", &[]),
             Type::Single => self.cl("OpConvSingleFromNull", &[]),
             Type::Text(_) => self.cl("OpConvTextFromNull", &[]),

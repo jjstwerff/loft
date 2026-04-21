@@ -471,7 +471,7 @@ impl Test {
             if let Value::Int(_) = self.result {
                 Type::Integer(i32::MIN, i32::MAX as u32, false)
             } else if let Value::Long(_) = self.result {
-                Type::Long
+                loft::data::I64.clone()
             } else if let Value::Text(_) = self.result {
                 Type::Text(Vec::new())
             } else if let Value::Float(_) = self.result {
@@ -488,8 +488,6 @@ impl Test {
             "integer"
         } else if let Type::Text(_) = tp {
             "text"
-        } else if let Type::Long = tp {
-            "long"
         } else if let Type::Boolean = tp {
             "boolean"
         } else if let Type::Float = tp {

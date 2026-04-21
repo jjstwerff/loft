@@ -1567,7 +1567,6 @@ impl Parser {
                 _ => self.database.name("integer"),
             },
             Type::Character => self.database.name("integer"),
-            Type::Long => self.database.name("long"),
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
             Type::Text(_) => self.database.name("text"),

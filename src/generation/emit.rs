@@ -402,7 +402,7 @@ impl Output<'_> {
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
             Type::Character => write!(w, "i32::MIN"),
-            Type::Integer(_, _, _) | Type::Long => write!(w, "i64::MIN"),
+            Type::Integer(_, _, _) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
             Type::Boolean => write!(w, "false"),
