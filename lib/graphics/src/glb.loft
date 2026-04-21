@@ -34,13 +34,19 @@ fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
   result
 }
 
-// Build the uint32 index buffer (3 indices per triangle: a, b, c).
-fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<integer> {
-  result = [];
+// Write the uint32 index buffer directly to a binary file (3 indices
+// per triangle, 4 bytes each per glTF spec).  Post-C54 `integer` is
+// 8-byte i64; emitting `f += t.a as i32` forces the 4-byte width.
+// A `vector<integer>`-returning helper would silently write 8 bytes
+// per index and bloat the BIN chunk, tripping
+// `test_map_export_glb_header`.  Written inline so the cast is
+// visible at the write site.
+fn glb_write_indices(f: File, tris: vector<mesh::Triangle>) {
   for t in tris {
-    result += [t.a, t.b, t.c];
+    f += t.a as i32;
+    f += t.b as i32;
+    f += t.c as i32;
   }
-  result
 }
 
 // Compute the minimum position across all vertices (component-wise).
@@ -177,7 +183,7 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
   f += glb_pos_buf(m.vertices);
   f += glb_norm_buf(m.vertices);
   f += glb_uv_buf(m.vertices);
-  f += glb_idx_buf(m.triangles);
+  glb_write_indices(f, m.triangles);
 }
 
 // ─── Scene-level GLB export ───────────────────────────────────────────────────
@@ -469,6 +475,6 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
     f += glb_pos_buf(me.vertices);
     f += glb_norm_buf(me.vertices);
     f += glb_uv_buf(me.vertices);
-    f += glb_idx_buf(me.triangles);
+    glb_write_indices(f, me.triangles);
   }
 }

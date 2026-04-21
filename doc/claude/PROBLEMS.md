@@ -32,6 +32,7 @@ existing entry, not re-open it as a bug.
 |---|-------|----------|------------|
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
+| 184 | `vector<i32>` ignores the `size(4)` annotation — elements stored + accessed as 8-byte i64 (same for `u32`, and symmetrically for `hash<i32>` / `sorted<i32>` / `index<i32>`) | Medium | **Workaround:** use `vector<integer>` and emit explicit `as i32` casts at binary-write sites (`f += val as i32`).  The type annotation looks narrower but storage + reads are both 8 bytes — trust the `integer` name and cast at boundaries. |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
@@ -1296,6 +1297,118 @@ expressions) stays in the condition since reading the enum byte is
 always safe.  Field reads now only execute when the variant matches.
 
 **Discovered:** 2026-04-17, while converting `#fields` iteration tests.
+
+---
+
+### P184 — `vector<i32>` / `hash<i32>` / `sorted<i32>` ignore the `size(4)` annotation
+
+**Severity:** Medium — silent layout mismatch between the declared narrow
+element type and the actual storage.  No crash, but any binary-format
+code (glTF, PNG, custom protocols) that trusts `vector<i32>` to mean
+"4 bytes per element" gets the wrong file size.  Indexing also returns
+values combined with adjacent elements.
+
+**Reproducer:**
+
+```loft
+struct Box { v: vector<i32> }
+
+fn test() {
+  b = Box { v: [] };
+  b.v += [1 as i32, 2 as i32, 3 as i32];
+  assert(b.v[0] == 1, "v[0] = {b.v[0]}");  // FAILS: v[0] = 8589934593
+  f = file("/tmp/out.bin");
+  f#format = LittleEndian;
+  f += b.v;
+  assert(f.size == 12, "12 bytes for 3 × i32");  // FAILS: 24 bytes
+}
+```
+
+The value `8589934593 = 0x200000001` is `(2 << 32) | 1` — `b.v[0]`
+reads 8 bytes and gets v[0] in the low half + v[1] in the high half.
+
+**Surfaced in:** `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
+after C54 Phase 2c.  The glTF BIN chunk's triangle indices were 24
+bytes per triangle (wrong) instead of the 12 bytes the header claimed.
+
+**Root cause:**
+
+`type i32 = integer size(4)` sets `forced_size = 4` on `i32`'s
+definition.  Struct-field allocation consults it via
+`src/typedef.rs::fill_database`'s `Type::Integer` arm:
+
+```rust
+let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
+let s = data.forced_size(alias).unwrap_or_else(|| a_type.size(field_nullable));
+```
+
+**But the Vector arm (line 325) never consults `forced_size`** — it
+uses `data.def(content_def_nr).known_type` which resolves to the
+8-byte base `integer` database type for every `Type::Integer`,
+regardless of the alias the user typed.  The alias info is already
+collapsed by the time `Type::Vector(content, _)` is constructed in
+`parse_type_full` / `sub_type`.
+
+Same issue affects `Type::Hash`, `Type::Sorted`, `Type::Index`.
+
+**Fix path (sketch):**
+
+1. **Parser** (`src/parser/definitions.rs::sub_type`): for collection
+   types over an integer alias, capture the alias's def_nr (e.g. via
+   a new `content_alias_d_nr` field on `Attribute` or a sticky field
+   on `Parser`, read by `parse_field` after `parse_type_full` returns).
+2. **Type resolver** (`src/typedef.rs::fill_database` Vector/Hash/
+   Sorted/Index arms): consult the content alias's `forced_size`
+   and call `database.byte/short/int()` for narrow content types
+   before calling `database.vector(c_tp)`.  This makes the database
+   register a narrow vector type (e.g. `vector<int<min,null>>`) with
+   4-byte element stride.
+3. **Read path** (`src/parser/fields.rs::parse_vector_index`): the
+   compile-time `elm_size` computation currently uses
+   `database.size(def(elm_td).known_type)` which also ignores the
+   narrow vector type.  Needs to look up the vector's actual db_tp
+   (from the expression's context) and use `Parts::Vector(content)`
+   → `database.size(content)` to get the real stride.  This is the
+   painful part of the fix — the parser doesn't have easy access to
+   the vector expression's db_tp at the indexing site.  Storing
+   `content_alias_d_nr` on the attribute allows the Read path to
+   mirror the Vector arm's logic.
+4. **Write path** (`src/state/io.rs::assemble_write_data`): already
+   uses `database.size(elem_tp)` so it will honour a narrow vector
+   type once the resolver creates one.  No change required there.
+5. **Vector append / OpAppendVector**: probably also needs a
+   narrow-stride path; audit `src/vector.rs::vector_append` callers
+   to confirm.
+
+**Tried and reverted** (2026-04-21): steps 1 + 2 in a single-session
+attempt — the fill_database narrowing landed but step 3 is
+non-trivial (indexer has a `code` expression, not an attribute
+handle).  A half-fix produces *worse* behaviour than the documented
+workaround: storage goes to 4 bytes but indexing still reads 8,
+returning `(v[i+1] << 32) | v[i]` for every element access.  Revert
+ed so users see the consistent-but-wide behaviour until a complete
+fix can land.
+
+**Workaround:** use `vector<integer>` (8-byte elements) and add
+explicit `as i32` casts at binary-write sites:
+
+```loft
+// Instead of: result: vector<i32> = []; result += [t.a]; ... f += result;
+for t in tris { f += t.a as i32; f += t.b as i32; f += t.c as i32; }
+```
+
+The fix in `lib/graphics/src/glb.loft` (`glb_write_indices` helper)
+uses this pattern — commits that tripped the bug replaced the
+`glb_idx_buf` → `vector<integer>` helper with an inline write loop
+that casts per element.
+
+**Discovered:** 2026-04-21 while fixing `test_map_export_glb_header`
+(BIN chunk double-counted bytes, tripping the header's `total_len`
+assertion).
+
+**Tests:** (see `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
+for the indirect regression guard — a direct `tests/issues.rs::p184_*`
+guard should land with the proper fix.)
 
 ---
 
