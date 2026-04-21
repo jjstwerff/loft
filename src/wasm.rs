@@ -625,6 +625,8 @@ pub fn compile_and_run(files_json: &str) -> String {
 /// Owns State and Data so raw pointers inside State remain valid.
 struct GameSession {
     state: crate::state::State,
+    // Kept alive for State's borrowed pointers; never read directly.
+    #[allow(dead_code)]
     data: crate::data::Data,
 }
 

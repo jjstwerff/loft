@@ -193,12 +193,15 @@ extern "C" fn handler(sig: libc::c_int, _info: *mut libc::siginfo_t, _ucontext: 
 
 // `Writer` and its methods are pure Rust — available on every
 // platform so the `#[cfg(test)]` unit tests compile uniformly.
-// Only the signal-handler path that invokes it is `#[cfg(unix)]`.
+// Only the signal-handler path that invokes it is `#[cfg(unix)]`,
+// so on non-unix non-test builds (e.g. WASM release) it looks dead.
+#[allow(dead_code)]
 struct Writer<'a> {
     buf: &'a mut [u8],
     pos: usize,
 }
 
+#[allow(dead_code)]
 impl<'a> Writer<'a> {
     fn new(buf: &'a mut [u8]) -> Self {
         Writer { buf, pos: 0 }

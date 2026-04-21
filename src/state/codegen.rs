@@ -1283,16 +1283,18 @@ impl State {
         // arg's store; freeing it would corrupt the caller.  Return-dep
         // inference already tags these returns correctly — we just need
         // to consult it here.
-        let is_borrowed_view = if let Value::Call(fn_nr, _) = value {
-            !stack.data.def(*fn_nr).returned.depend().is_empty()
-        } else {
-            false
-        };
         #[cfg(not(feature = "wasm"))]
-        let tp_with_free = if is_borrowed_view {
-            i32::from(tp_nr)
-        } else {
-            i32::from(tp_nr) | 0x8000
+        let tp_with_free = {
+            let is_borrowed_view = if let Value::Call(fn_nr, _) = value {
+                !stack.data.def(*fn_nr).returned.depend().is_empty()
+            } else {
+                false
+            };
+            if is_borrowed_view {
+                i32::from(tp_nr)
+            } else {
+                i32::from(tp_nr) | 0x8000
+            }
         };
         #[cfg(feature = "wasm")]
         let tp_with_free = i32::from(tp_nr);
