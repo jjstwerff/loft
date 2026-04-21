@@ -163,36 +163,45 @@ a separate PROBLEMS.md entry.
 
 ### C — Round 10c: remove `Type::Long` and widen default range
 
-Currently:
+**Status (2026-04-21):** Rust-side done — the `Type::Long` enum
+variant is deleted (commit `44b525c`), preceded by a parser-level
+collapse (`3e976b3`).  A new `data::I64` constant
+(`Type::Integer(i32::MIN+1, u32::MAX, false)`) represents the
+wide-range integer that all `long` source references now produce.
 
-- `Type::Long` is still a distinct enum variant in `src/data.rs`.
-- `Type::Integer` has a default range of `i32::MIN+1 .. i32::MAX`
-  (see `src/data.rs:32`, `src/parser/definitions.rs:1068`), so a
-  literal like `9_000_000_000` is auto-promoted to `Type::Long`.
-- `Type::Long ↔ Type::Integer` conversion is implicit — they're
-  the same thing at runtime, but the code paths stay split.
+Done:
 
-Steps to close:
+- Parser stops emitting `Type::Long` — `long` keyword → I64,
+  `integer limit(..., > i32::MAX)` → I64, `file#size / #index /
+  #next` → I64, LexItem::Long literal → I64, iter-state vars → I64.
+  (`3e976b3`)
+- `Type::Long` variant removed from `data::Type`; ~40 `Type::Long =>`
+  match arms deleted across parser/codegen/scopes/variables/debug
+  and native-emit paths.  Callers that differentiated Long from
+  Integer (native FFI, Fv* variant mapping, debug readout) now use
+  `Type::Integer(_, max, _) if *max > i32::MAX as u32` to pick
+  the i64 path.  (`44b525c`)
+- `convert()` Long↔Integer bidirectional arm removed (dead).
+- `Value::Long` retained as the IR payload for i64 literals — it
+  threads through the bytecode but its static type is now
+  `Type::Integer(wide)`, not `Type::Long`.
 
-1. Widen the default integer range to full i64 — literal
-   `9_000_000_000` should type-check as `Type::Integer`, not
-   promote to `Type::Long`.  Touches `src/parser/definitions.rs`
-   + `src/data.rs:I32` static.
-2. Change `Type::Long` into a deprecated alias (route-through in
-   the parser / type-checker) or delete the variant and collapse
-   all match arms.
-3. Clean up ~60 `Type::Long => …` match arms across the codebase
-   (`grep -rn "Type::Long" src/ | wc -l` currently: check before
-   starting — used to be ~60).
-4. Delete the `long` keyword from the parser's keyword table
-   (`src/lexer.rs`) with a final deprecation sweep of `.loft`
-   files.
+Deferred (cosmetic, non-blocking):
 
-Estimate: 3-5 hours; higher risk than 10b because the `Type` enum
-touches the parser, type-checker, bytecode, and native codegen.
-**Regression gate**: the existing `wrap::auto_convert` +
-`wrap::integers` suites cover the surface; any match-arm miss
-shows up as a missing case in the dispatch.
+- Remove `pub type long size(8);` from `default/01_code.loft`
+  (line 10) and the keyword from the parser (`definitions.rs:1033`
+  intercept) — `long` still parses as a deprecated alias with a
+  one-line warning.  40 sites across `lib/*.loft` and `default/*.loft`
+  would need `long` → `integer` sweeps.
+- Remaining Op*Long opcodes (`OpConstLong`, `OpVarLong`, `OpPutLong`,
+  `OpConvLongFromNull`, `OpConvLongFromInt`, `OpCastIntFromLong`,
+  `OpCastLongFromText`, `OpFormatLong`, `OpFormatStackLong`) — these
+  are still referenced by `src/parser/*` for 8-byte constant literal
+  / variable / field access and stay valid post-migration.
+
+**Regression gate**: full `find_problems.sh --wait` green at
+`44b525c`.  Wrap + issues + parse_errors + native + exit_codes all
+pass.  Clippy + fmt clean.
 
 ### D — Persisted-database migration tool (`--migrate-i64`)
 
