@@ -9949,3 +9949,35 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P184 Phase 6: `hash<Row[narrow_key]>` already works via the
+/// struct-field narrowing path — the key field's narrow storage
+/// is handled by the same `fill_database` Integer arm that
+/// Phase 0 extended.  Primitive-content `hash<i32>` /
+/// `sorted<i32>` / `index<i32>` are parse errors (the grammar
+/// requires a `[key]` suffix), so Phase 6 has no new narrowing
+/// code to add.  This guard locks down the happy path:
+/// `hash` + `sorted` collections with `u32`-typed key fields.
+#[test]
+fn p184_hash_sorted_narrow_key_field() {
+    code!(
+        "struct P184Row { rid: u32 not null, name: text }
+struct P184HashDb { rows: hash<P184Row[rid]> }
+struct P184SortedDb { rows: sorted<P184Row[rid]> }
+fn test() {
+    h = P184HashDb { rows: [] };
+    h.rows += [P184Row { rid: 42, name: \"forty-two\" }];
+    h.rows += [P184Row { rid: 7, name: \"seven\" }];
+    assert(h.rows[42].name == \"forty-two\", \"hash[42]\");
+    assert(h.rows[7].name == \"seven\", \"hash[7]\");
+    s = P184SortedDb { rows: [] };
+    s.rows += [P184Row { rid: 3, name: \"three\" }];
+    s.rows += [P184Row { rid: 1, name: \"one\" }];
+    s.rows += [P184Row { rid: 2, name: \"two\" }];
+    assert(s.rows[1].name == \"one\", \"sorted[1]\");
+    assert(s.rows[2].name == \"two\", \"sorted[2]\");
+    assert(s.rows[3].name == \"three\", \"sorted[3]\");
+}"
+    )
+    .result(Value::Null);
+}

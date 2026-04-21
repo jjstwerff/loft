@@ -31,7 +31,7 @@ carries an inline-cast workaround (`glb_write_indices`).
 | 4a | Short-encoding mismatch: `vector<u16>` / `vector<i16>` stay wide with consistent round-trip | [04-append-set.md](04-append-set.md) | open — uncommitted work in-tree | 5 |
 | 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | **blocked** — 2026-04-21 attempt hung in `native_dir::16-parser`; reverted. Bisect required before re-attempt. | 6 |
 | 5 | Apply narrow-vector registration at local-var, parameter, and return-type sites | [05-locals-returns.md](05-locals-returns.md) | open — **larger than planned** (needs code, not just tests) | 6 |
-| 6 | Extend to Hash / Sorted / Index | [06-hash-sorted-index.md](06-hash-sorted-index.md) | open — audit | — |
+| 6 | Extend to Hash / Sorted / Index | [06-hash-sorted-index.md](06-hash-sorted-index.md) | ✅ done 2026-04-22 — primitive-content forms are parse errors; struct-key narrowing works via the existing Phase 2 struct-field path; regression guard landed | — |
 
 ## Scope surprises found during implementation
 

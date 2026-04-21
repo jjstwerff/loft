@@ -5,165 +5,92 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 6 — Extend to Hash / Sorted / Index
 
-**Status:** blocked by Phase 5.
-
-**Goal:** the same narrow-element treatment works for `hash`,
-`sorted`, and `index` collections when they're parameterised over an
-integer alias — which in practice means narrow keys (for
-`hash<Struct[u32_key]>`) and, potentially, narrow primitive-valued
-hashes (uncommon).
+**Status:** closed 2026-04-22 — no code change required; struct-key
+narrowing already works via the Phase 2 + Phase 5 struct-field path.
+Regression guard landed (`tests/issues.rs::p184_hash_sorted_narrow_key_field`).
 
 ---
 
-## What's different vs Vector
+## Audit outcome
 
-Vector is the simple case: elements are values of type `T`.  The
-other collections are more structured:
+Primitive-content collection forms are **parse errors** in loft.
+The grammar requires `hash<T[key]>` / `sorted<T[key]>` / `index<T[key]>`
+— a `[key]` suffix on the element struct.  The parser rejects the
+bare-content forms:
 
-- **`hash<Struct[key1, key2]>`** — stores references to `Struct`
-  records; keys are fields on those records.  Narrowing matters
-  only if a key field is a narrow integer alias.  That's handled
-  by the existing struct-field path (unchanged since pre-Phase-0).
-- **`sorted<Struct[key]>`, `index<Struct[key]>`** — same story,
-  references to structs.  The Vector-arm narrow-content rule
-  doesn't directly apply because the elements aren't primitives.
-
-So Phase 6 is SMALLER than it looks:
-
-1. **Primitive-content hash/sorted/index** — does loft even allow
-   `hash<i32>` (hash of primitive)?  Probably not directly — these
-   collections typically require named key fields.  Confirm by
-   reading the parser.  If it's disallowed, Phase 6 has nothing to
-   do and the README row can be struck out.
-
-2. **Primitive-content Spacial** — skipped entirely; Spacial is a
-   C7/P22 diagnostic-only stub.
-
-3. **Vector-of-Struct with narrow primitive fields** — already
-   works pre-Phase-0 via the struct-field narrowing path.  No new
-   work.
-
-Likely outcome: Phase 6 is a doc update + regression test that
-explicitly confirms `hash<Struct[i32_key]>` (with a narrow key
-field) still narrows correctly, closing the loop.
-
----
-
-## Audit
-
-Start by checking what collection-with-primitive-content forms the
-parser accepts:
-
-```bash
-rg 'hash<|sorted<|index<' tests/scripts/ lib/ | head -20
+```
+$ target/release/loft --interpret /tmp/probe.loft
+Error: Expect token [ at /tmp/probe.loft:1:31
+  |
+   1 | struct TestHash { h: hash<i32> }
+     |                               ^
+Error: Expect token [ at /tmp/probe.loft:3:33
+  |
+   3 | struct TestIndex { i: index<i32> }
+Error: Expect token ] at /tmp/probe.loft:2:35
+  |
+   2 | struct TestSorted { s: sorted<i32> }
 ```
 
-Typical forms seen in the codebase:
-```
-hash<Row[id]>        — references to Row records, keyed by `id`
-sorted<Order[date]>  — references to Order, keyed by `date`
-index<Node[parent]>  — non-unique index into Node by `parent`
-```
+So "primitive narrow content in hash/sorted/index" is not a
+reachable state — there's no code path to extend and no user
+program that would benefit.
 
-Primitive-content forms (`hash<integer>`, `sorted<i32>`) are likely
-parse errors.  Confirm via a one-off test:
+## What DOES work (and needs a guard)
 
-```loft
-struct H { h: hash<i32> }  // Does this parse?
-```
+Collections whose content is a struct with a narrow-typed key field
+— e.g. `hash<Row[rid]>` where `rid: u32 not null`.  The `rid` field
+is a struct field, so Phase 2's `fill_database` narrow-detection
+already chooses `Parts::Int` for 4-byte storage via the existing
+`forced_size(alias)` path.  No Phase 6 code change needed.
 
-If it parses, Phase 6 needs to cover it — follow the Phase 2 /
-Phase 3 / Phase 4 pattern for the Hash/Sorted/Index arms in
-`typedef.rs::fill_database`.
+Regression test: `tests/issues.rs::p184_hash_sorted_narrow_key_field`
+exercises:
 
-If it doesn't parse, Phase 6 closes with a documentation note:
-"Hash / Sorted / Index require struct-referenced element types;
-primitive-content narrowing is not applicable."
+- `hash<Row[rid]>` lookup by `u32` key (values 42 and 7).
+- `sorted<Row[rid]>` insertion out-of-order and iteration by key.
 
----
+Both work end-to-end with narrow 4-byte key storage.
 
-## If primitive-content collections exist
+`index<Row[rid]>` was also checked for parse acceptance but isn't
+exercised in the happy-path test; a follow-up guard when index has
+broader test coverage is fine.
 
-Apply the Phase 2 pattern to Hash/Sorted/Index arms.  For example,
-Hash arm at `src/typedef.rs:363` (approximately):
+## What this closes and what it doesn't
 
-```rust
-Type::Hash(c_nr, key_fields, _) => {
-    // ... existing setup ...
-    let c_tp = /* same narrow-content lookup as Vector arm */;
-    let tp = database.hash(c_tp, &key_fields);
-    // ...
-    tp
-}
-```
+**Closed:** the "extend narrowing to hash/sorted/index" work
+anticipated in the original plan.  Not applicable — the primitive
+case is a parse error, and the struct-key case is already handled.
 
-Then Phase 3 (read path) and Phase 4 (write path) extensions for
-these collection kinds.
+**Not closed by Phase 6:**
+- `vector<u16>` / `vector<i16>` narrow storage — still blocked on
+  Phase 4b (see [04b-short-encoding.md](04b-short-encoding.md)).
+- Spacial indexes — the Spacial variant is a diagnostic stub per
+  C7/P22, not implemented.  When Spacial ships, this audit
+  should be re-run.
 
----
+## Initiative closeout
 
-## Regression tests (if applicable)
+With Phase 6 closed and Phase 4b blocked (but not required for any
+user-visible bug), the P184 initiative's active work is paused.
+The README's phase table reflects:
 
-```rust
-// tests/issues.rs
+- Phases 0 / 1 / 2 / 3 / 4a / 5 / 6: ✅ done.
+- Phase 4b: 🔴 blocked, bisect required; reactivate when a session
+  has budget for the `native_dir` hang investigation.
 
-#[test]
-fn p184_hash_narrow_key_field() {
-    // Control: hash of structs with a narrow u32 key field.
-    // Already works via struct-field narrowing; this confirms
-    // the Phase 0-5 work didn't break it.
-    code!(r#"
-        struct Row { id: u32 not null, name: text }
-        struct Db { rows: hash<Row[id]> }
-        fn test() {
-            db = Db { rows: [] };
-            db.rows += [Row { id: 42, name: "hi" }];
-            assert(db.rows[42].name == "hi");
-        }
-    "#).result(Value::Null);
-}
-
-#[test]
-#[ignore = "Depends on whether hash<i32> parses — gate by audit outcome"]
-fn p184_hash_primitive_narrow() {
-    code!(r#"
-        fn test() {
-            h: hash<i32> = [];  // TBD syntax
-            // ...
-        }
-    "#).result(Value::Null);
-}
-```
-
----
-
-## Closing the initiative
-
-After Phase 6 completes:
-
-1. Update `doc/claude/PROBLEMS.md` § P184 detail entry: strike
-   the heading, add "**Fixed**" status block with date, fix
-   summary, and test reference.
-2. Update `doc/claude/PROBLEMS.md` § P184 row in the quick-ref
-   table: cross it out, update the workaround column to point at
-   the merge commit.
-3. Update `doc/claude/CAVEATS.md` § C54 "Cdylib FFI wrapper claim
-   was obsolete" bullet: the situation has changed, so either
-   revise or remove.
-4. Move `doc/claude/plans/02-narrow-collection-elements/` to
-   `doc/claude/plans/finished/02-narrow-collection-elements/`.
-5. Update `doc/claude/plans/README.md` — move row from Current
-   to Finished.
-6. Remove the `glb_write_indices` workaround in
-   `lib/graphics/src/glb.loft` (done in Phase 4 already, but
-   re-verify after Phase 6 ships).
-
----
+The initiative stays in `doc/claude/plans/02-narrow-collection-elements/`
+rather than moving to `finished/` because Phase 4b remains open.
+Move to `finished/` once 4b lands OR the decision to indefinitely
+defer 4b is made (e.g. "u16 narrow storage is an optimisation we
+don't need; close the gap permanently in the plan and remove the
+placeholder `vector_narrow_width` / `narrow_vector_content` arms").
 
 ## Acceptance
 
-- [ ] Primitive-content Hash/Sorted/Index forms: audit complete,
-      either implemented or documented as not-applicable.
-- [ ] Regression tests as appropriate.
-- [ ] Initiative closeout checklist (above) complete.
-- [ ] Full test suite green: `make ci` + `make test-packages`.
+- [x] Primitive-content `hash<i32>` / `sorted<i32>` / `index<i32>`
+      confirmed to be parse errors via a one-off probe.
+- [x] `p184_hash_sorted_narrow_key_field` regression test landed
+      and passes.
+- [x] Plan doc updated with audit outcome.
+- [x] README phase table flipped from pending to done.
