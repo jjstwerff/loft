@@ -150,7 +150,8 @@ fn undefined_return() {
 
 #[test]
 fn undefined_as() {
-    code!("fn test(v: integer) -> long { v as V }").error("Undefined type V at undefined_as:1:39");
+    code!("fn test(v: integer) -> integer { v as V }")
+        .error("Undefined type V at undefined_as:1:42");
 }
 
 #[test]
@@ -880,7 +881,7 @@ fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:385:24 — pick a different name \
+         at default{s}01_code.loft:349:24 — pick a different name \
          at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -890,7 +891,7 @@ fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:385:24 — pick a different name \
+         at default{s}01_code.loft:349:24 — pick a different name \
          at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
     ));
 }
@@ -900,7 +901,7 @@ fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:385:24 — pick a different name \
+         at default{s}01_code.loft:349:24 — pick a different name \
          at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -910,7 +911,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:385:24 — pick a different name \
+         at default{s}01_code.loft:349:24 — pick a different name \
          at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
     ));
 }
@@ -1146,4 +1147,35 @@ fn emit_repro_produces_runnable_loft_file() {
         contents.contains("fn main() {") && contents.contains("test();"),
         "emit-repro: runnable `fn main() {{ test(); }}` tail missing from {path}:\n---\n{contents}"
     );
+}
+
+// ── Binary-format lint (Phase 2c post-migration hardening) ────────────
+//
+// `f += <integer>` without an explicit width cast writes 8 bytes post-2c,
+// which silently breaks pre-2c binary writers expecting 4-byte fields.
+// The parser warns when it sees a bare integer write to a file variable.
+// Explicit width casts (`as i32`, `as u8`, `as integer`, etc.) silence
+// the warning.
+
+#[test]
+fn binary_write_bare_integer_warns() {
+    code!("fn test() {\n  f = file(\"/tmp/lint_a.bin\");\n  f += 42;\n}").warning(
+        "`f += <integer>` without a width cast writes 8 bytes; for binary \
+             files (BigEndian / LittleEndian) add `as i8` / `as i16` / `as i32` \
+             / `as u8` / `as u16` / `as u32` to pick the exact byte width.  Use \
+             `as integer` to silence this warning when 8-byte writes are \
+             intentional at binary_write_bare_integer_warns:3:11",
+    );
+}
+
+#[test]
+fn binary_write_narrow_cast_silent() {
+    // `as i32` gives an explicit 4-byte width → no warning.
+    code!("fn test() {\n  f = file(\"/tmp/lint_b.bin\");\n  f += 42 as i32;\n}");
+}
+
+#[test]
+fn binary_write_integer_cast_silent() {
+    // `as integer` documents an intentional 8-byte write → no warning.
+    code!("fn test() {\n  f = file(\"/tmp/lint_c.bin\");\n  f += 42 as integer;\n}");
 }

@@ -650,7 +650,6 @@ const TY: &[&str] = &[
     "boolean",
     "float",
     "single",
-    "long",
     "character",
     "vector",
     "sorted",

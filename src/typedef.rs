@@ -28,10 +28,6 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Vector(Box::new(Type::Unknown(0)), Vec::new()));
             data.definitions[d_nr as usize].known_type = 7;
         }
-        "long" => {
-            data.set_returned(d_nr, Type::Long);
-            data.definitions[d_nr as usize].known_type = 1;
-        }
         "integer" => {
             data.set_returned(d_nr, I32.clone());
             data.definitions[d_nr as usize].known_type = 0;
@@ -346,11 +342,20 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                 }
                 Type::Integer(minimum, _, not_null) => {
                     let field_nullable = nullable && !not_null;
-                    let s = a_type.size(field_nullable);
+                    // Post-2c: if the field's alias has a forced size(N)
+                    // annotation, prefer it over the limit()-based heuristic.
+                    // The alias def_nr was captured in parse_field because
+                    // Type::Integer collapses alias names.
+                    let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
+                    let s = data
+                        .forced_size(alias)
+                        .unwrap_or_else(|| a_type.size(field_nullable));
                     if s == 1 {
                         database.byte(minimum, field_nullable)
                     } else if s == 2 {
                         database.short(minimum, field_nullable)
+                    } else if s == 4 {
+                        database.int(minimum, field_nullable)
                     } else {
                         database.name("integer")
                     }

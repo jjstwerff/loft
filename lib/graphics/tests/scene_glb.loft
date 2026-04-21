@@ -14,7 +14,7 @@ fn test_scene_glb_creates_file() {
   sg_mati = sg_s.add_material(scene::material("default"));
   sg_s.add_node(scene::node("cube", sg_mi, sg_mati));
   glb::save_scene_glb(sg_s, "test_sglb_a.glb");
-  assert(file("test_sglb_a.glb").size > 0l, "scene GLB created");
+  assert(file("test_sglb_a.glb").size > 0, "scene GLB created");
   delete("test_sglb_a.glb");
 }
 
@@ -31,7 +31,7 @@ fn test_scene_glb_header() {
    assert(sh_f#read(4) as i32 == 0x46546C67, "magic 'glTF'");
    assert(sh_f#read(4) as i32 == 2, "version 2");
    sh_total = sh_f#read(4) as i32;
-   assert(sh_total as long == sh_sz, "total_len matches file size={sh_sz}");
+   assert(sh_total as integer == sh_sz, "total_len matches file size={sh_sz}");
   }
   delete("test_sglb_b.glb");
 }
@@ -50,7 +50,7 @@ fn test_scene_glb_chunk_types() {
    sc_f#read(4) as i32;  // total_len
    sc_jlen = sc_f#read(4) as i32;
    assert(sc_f#read(4) as i32 == 0x4E4F534A, "JSON chunk type 'JSON'");
-   sc_f#next = (20 + sc_jlen) as long;
+   sc_f#next = (20 + sc_jlen) as integer;
    sc_f#read(4) as i32;  // BIN data length
    assert(sc_f#read(4) as i32 == 0x004E4942, "BIN chunk type 'BIN\\0'");
   }
@@ -79,7 +79,7 @@ fn test_scene_glb_bin_size_single_mesh() {
    sb_f#read(4) as i32;  // total_len
    sb_jlen = sb_f#read(4) as i32;
    sb_f#read(4) as i32;  // JSON chunk type
-   sb_f#next = (20 + sb_jlen) as long;
+   sb_f#next = (20 + sb_jlen) as integer;
    sb_blen = sb_f#read(4) as i32;
    assert(sb_blen == 108, "bin size for 3-vert 1-tri={sb_blen}");
   }
@@ -118,7 +118,7 @@ fn test_scene_glb_bin_size_two_meshes() {
    st_f#read(4) as i32;
    st_jlen = st_f#read(4) as i32;
    st_f#read(4) as i32;
-   st_f#next = (20 + st_jlen) as long;
+   st_f#next = (20 + st_jlen) as integer;
    st_blen = st_f#read(4) as i32;
    assert(st_blen == 216, "two-mesh bin size={st_blen}");
   }

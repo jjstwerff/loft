@@ -440,14 +440,14 @@ impl Output<'_> {
             s
         };
         // When the argument type is a narrow integer (u8/u16/i8/i16), the Rust binding
-        // would have a narrow type.  Pre-eval bindings must have type i32 so they
-        // compare correctly against i32 expressions.  Compute a separate bind_code that
-        // wraps the expression with `as i32`; the match_code (used for substitution)
+        // would have a narrow type.  Post-2c pre-eval bindings must have type i64 so
+        // they compare correctly against i64 expressions.  Compute a separate bind_code
+        // that wraps the expression with `as i64`; the match_code (used for substitution)
         // is left unchanged so string replacement in the outer code still works.
         let bind_code = if !substituted.is_empty() && substituted != "()" {
             if let Some(tp) = self.infer_type(arg) {
                 if narrow_int_cast(&tp).is_some() {
-                    format!("({substituted}) as i32")
+                    format!("({substituted}) as i64")
                 } else if matches!(tp, Type::Text(_))
                     && matches!(arg, Value::Call(d, _) if
                         matches!(self.data.def(*d).returned, Type::Text(_))
@@ -629,8 +629,9 @@ impl Output<'_> {
                 }
                 write!(w, ")")?;
                 // Add narrow-int cast if the user function returns a narrow int type.
+                // Post-2c: widen to i64 to match the default Integer width.
                 if narrow_int_cast(&self.data.def(*d_nr).returned).is_some() {
-                    write!(w, " as i32")?;
+                    write!(w, " as i64")?;
                 }
                 return Ok(());
             }

@@ -38,7 +38,7 @@ impl State {
     /// # Panics
     /// Always — `OpConstLongText` is obsolete; long strings now use `OpConstStoreText`.
     #[allow(clippy::unused_self)]
-    pub fn string_from_texts(&mut self, _start: i32, _size: i32) {
+    pub fn string_from_texts(&mut self, _start: i64, _size: i64) {
         panic!("OpConstLongText is obsolete — use OpConstStoreText");
     }
 
@@ -47,7 +47,7 @@ impl State {
     /// length at `get_int(rec, 4)`, bytes at `ptr + rec*8 + 8`.
     pub fn string_from_const_store(&mut self, rec: u32, _pos: u32) {
         let store = &self.database.allocations[crate::database::CONST_STORE as usize];
-        let len = store.get_int(rec, 4);
+        let len = store.get_u32_raw(rec, 4) as i32;
         let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         unsafe {
             self.set_string(len, ptr);
@@ -66,10 +66,10 @@ impl State {
     #[inline]
     pub fn length_character(&mut self) {
         let v_v1 = *self.get_stack::<char>();
-        let new_value = if v_v1 == char::from(0) {
+        let new_value: i64 = if v_v1 == char::from(0) {
             0
         } else {
-            v_v1.to_string().len() as i32
+            v_v1.to_string().len() as i64
         };
         self.put_stack(new_value);
     }
@@ -205,8 +205,8 @@ impl State {
 
     #[inline]
     pub fn get_text_sub(&mut self) {
-        let mut till = *self.get_stack::<i32>();
-        let mut from = *self.get_stack::<i32>();
+        let mut till = *self.get_stack::<i64>() as i32;
+        let mut from = *self.get_stack::<i64>() as i32;
         let v1 = self.string();
         if from < 0 || from >= v1.len as i32 {
             self.put_stack(Str {
@@ -349,69 +349,69 @@ impl State {
         self.put_var(pos, str_val); // writes Str at (stack_pos + 16 - pos) = elem_abs
     }
 
-    pub fn format_long(&mut self) {
+    pub fn format_int(&mut self) {
         let pos = *self.code::<u16>();
         let radix = *self.code::<u8>();
         let token = *self.code::<u8>();
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
         let dir = *self.code::<i8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
-        let s = self.string_mut(pos - 12);
+        let s = self.string_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
-    pub fn format_stack_long(&mut self) {
+    pub fn format_stack_int(&mut self) {
         let pos = *self.code::<u16>();
         let radix = *self.code::<u8>();
         let token = *self.code::<u8>();
         let plus = *self.code::<bool>();
         let note = *self.code::<bool>();
         let dir = *self.code::<i8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
-        let s = self.string_ref_mut(pos - 12);
+        let s = self.string_ref_mut(pos - 16);
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
     pub fn format_float(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
-        let s = self.string_mut(pos - 16);
+        let s = self.string_mut(pos - 24);
         ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_stack_float(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
-        let s = self.string_ref_mut(pos - 16); // f64(8)+i32(4)+i32(4) = 16 bytes popped
+        let s = self.string_ref_mut(pos - 24); // f64(8)+i64(8)+i64(8) = 24 bytes popped
         ops::format_float(s, val, width, precision, dir);
     }
 
     pub fn format_single(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_mut(pos - 12);
+        let s = self.string_mut(pos - 20);
         ops::format_single(s, val, width, precision, dir);
     }
 
     pub fn format_stack_single(&mut self) {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
-        let precision = *self.get_stack::<i32>();
-        let width = *self.get_stack::<i32>();
+        let precision = *self.get_stack::<i64>();
+        let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f32>();
-        let s = self.string_ref_mut(pos - 12);
+        let s = self.string_ref_mut(pos - 20);
         ops::format_single(s, val, width, precision, dir);
     }
 
@@ -419,9 +419,9 @@ impl State {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
         let token = *self.code::<u8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = self.string();
-        let s = self.string_mut(pos - 4 - size_ptr() as u16);
+        let s = self.string_mut(pos - 8 - size_ptr() as u16);
         ops::format_text(s, val.str(), width, dir, token);
     }
 
@@ -429,9 +429,9 @@ impl State {
         let pos = *self.code::<u16>();
         let dir = *self.code::<i8>();
         let token = *self.code::<u8>();
-        let width = *self.get_stack::<i32>();
+        let width = *self.get_stack::<i64>();
         let val = self.string();
-        let s = self.string_ref_mut(pos - 4 - size_ptr() as u16);
+        let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);
         ops::format_text(s, val.str(), width, dir, token);
     }
 }

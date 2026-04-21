@@ -55,7 +55,7 @@ pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
     }
     stores.clear(&db);
     let r = stores.claim(&db, u32::from(size));
-    stores.store_mut(&r).set_int(r.rec, 4, i32::from(db_tp));
+    stores.store_mut(&r).set_u32_raw(r.rec, 4, u32::from(db_tp));
     stores.set_default_value(db_tp, &r);
     db.store_nr = r.store_nr;
     db.rec = 1;
@@ -106,9 +106,9 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
         && db.rec != 0
         && let Some(&file_type) = stores.names.get("File")
     {
-        let stored_type = stores.store(&db).get_int(db.rec, 4) as u16;
+        let stored_type = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
         if stored_type == file_type {
-            let file_ref = stores.store(&db).get_int(db.rec, db.pos + 28);
+            let file_ref = stores.store(&db).get_i32_raw(db.rec, db.pos + 28);
             if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
                 stores.files[file_ref as usize] = None;
             }
@@ -171,9 +171,9 @@ pub fn OpGetRecord(
 ///
 /// Bytecode equivalent: `State::get_text_sub` in `src/state/text.rs`.
 #[must_use]
-pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
+pub fn OpGetTextSub(text: &str, from: i64, till: i64) -> &str {
     let bytes = text.as_bytes();
-    let len = bytes.len() as i32;
+    let len = bytes.len() as i64;
     if from < 0 || from >= len {
         return "";
     }
@@ -184,7 +184,7 @@ pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
     }
     // Resolve negative `till` to a forward byte offset.
     let t_raw = if till < 0 { len + till } else { till };
-    if t_raw <= f as i32 {
+    if t_raw <= f as i64 {
         return "";
     }
     // Clamp to string length.
@@ -200,12 +200,12 @@ pub fn OpGetTextSub(text: &str, from: i32, till: i32) -> &str {
 /// Return the byte size of a database record's type.
 /// Bytecode equivalent: `OpSizeofRef` in `src/state/io.rs:290`.
 #[must_use]
-pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i32 {
+pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i64 {
     if db.rec == 0 {
         0
     } else {
-        let tp = stores.store(&db).get_int(db.rec, 4) as u16;
-        i32::from(stores.size(tp))
+        let tp = stores.store(&db).get_u32_raw(db.rec, 4) as u16;
+        i64::from(stores.size(tp))
     }
 }
 
@@ -301,7 +301,7 @@ pub fn OpInsertVector(
     stores: &mut Stores,
     data: DbRef,
     size: i32,
-    index: i32,
+    index: i64,
     db_tp: i32,
 ) -> DbRef {
     let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
@@ -313,12 +313,12 @@ pub fn OpInsertVector(
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
 #[must_use]
-pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i32 {
+pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i64 {
     let ch = ops::to_char(c);
     if ch == '\0' {
         0
     } else {
-        i32::try_from(ch.len_utf8()).unwrap_or(0)
+        i64::try_from(ch.len_utf8()).unwrap_or(0)
     }
 }
 
@@ -512,11 +512,11 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
             let mut pos = cur as i32;
             vector::vector_next(&data, &mut pos, 4, all);
             let store = crate::keys::store(&data, all);
-            let vector = store.get_int(data.rec, data.pos) as u32;
+            let vector = store.get_u32_raw(data.rec, data.pos);
             let rec = if pos == i32::MAX {
                 0
             } else {
-                store.get_int(vector, pos as u32) as u32
+                store.get_u32_raw(vector, pos as u32)
             };
             cur = pos as u32;
             DbRef {
@@ -543,7 +543,7 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     content.clear();
@@ -569,7 +569,7 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
     if file.rec == 0 {
         return;
     }
-    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref == i32::MIN {
         stores
             .store_mut(&file)
@@ -596,7 +596,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     if let Ok(meta) = std::fs::metadata(&file_path) {
@@ -624,16 +624,16 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
     let file_path = {
         let store = stores.store(&file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     // Close any open handle so resize starts from a clean state.
-    let file_ref = stores.store(&file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(&file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN && (file_ref as usize) < stores.files.len() {
         stores.files[file_ref as usize] = None;
         stores
             .store_mut(&file)
-            .set_int(file.rec, file.pos + 28, i32::MIN);
+            .set_i32_raw(file.rec, file.pos + 28, i32::MIN);
         stores
             .store_mut(&file)
             .set_long(file.rec, file.pos + 8, i64::MIN);
@@ -661,7 +661,7 @@ pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
 #[cfg(not(feature = "wasm"))]
 fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN {
         return file_ref;
     }
@@ -669,7 +669,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
         let store = stores.store(file);
         (
             store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned(),
             store.get_byte(file.rec, file.pos + 32, 0),
         )
@@ -678,7 +678,7 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
         Ok(f) => {
             stores
                 .store_mut(file)
-                .set_int(file.rec, file.pos + 28, f_nr);
+                .set_i32_raw(file.rec, file.pos + 28, f_nr);
             // If the file was NotExists, mark it as TextFile now that it exists.
             if format == 5 {
                 stores
@@ -700,14 +700,14 @@ fn file_handle_write(stores: &mut Stores, file: &DbRef) -> i32 {
 #[cfg(not(feature = "wasm"))]
 fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 {
     let f_nr = stores.files.len() as i32;
-    let file_ref = stores.store(file).get_int(file.rec, file.pos + 28);
+    let file_ref = stores.store(file).get_i32_raw(file.rec, file.pos + 28);
     if file_ref != i32::MIN {
         return file_ref;
     }
     let file_name = {
         let store = stores.store(file);
         store
-            .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+            .get_str(store.get_u32_raw(file.rec, file.pos + 24))
             .to_owned()
     };
     match OpenOptions::new().read(true).open(&file_name) {
@@ -717,7 +717,7 @@ fn file_handle_read(stores: &mut Stores, file: &DbRef, initial_pos: i64) -> i32 
             }
             stores
                 .store_mut(file)
-                .set_int(file.rec, file.pos + 28, f_nr);
+                .set_i32_raw(file.rec, file.pos + 28, f_nr);
             stores.files.push(Some(f));
             f_nr
         }
@@ -838,26 +838,132 @@ impl FileVal for i32 {
 }
 
 impl FileVal for i64 {
-    fn file_to_bytes(&self, _stores: &Stores, _db_tp: i32, little_endian: bool) -> Vec<u8> {
-        if little_endian {
-            self.to_le_bytes().to_vec()
-        } else {
-            self.to_be_bytes().to_vec()
+    fn file_to_bytes(&self, stores: &Stores, db_tp: i32, little_endian: bool) -> Vec<u8> {
+        // Post-2c: `integer` is i64 on the loft stack, but file-width is
+        // still declared per field type — u8 writes 1 byte, u16 writes 2,
+        // i32 writes 4, long writes 8.  Dispatch on `db_tp` mirroring the
+        // `FileVal for i32` impl so narrow-typed writes emit the right
+        // byte count and the final file size matches the interpreter.
+        let mut out = Vec::new();
+        match db_tp {
+            0 | 1 => {
+                // integer | long — both 8 bytes post-2c.
+                let b = if little_endian {
+                    self.to_le_bytes()
+                } else {
+                    self.to_be_bytes()
+                };
+                out.extend_from_slice(&b);
+            }
+            6 => {
+                // character — 4-byte narrow (u32 code point).
+                let v = *self as u32;
+                let b = if little_endian {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                };
+                out.extend_from_slice(&b);
+            }
+            4 => out.push(*self as u8), // boolean
+            _ => match &stores.types[db_tp as usize].parts {
+                crate::database::Parts::Byte(_, _) => out.push(*self as u8),
+                crate::database::Parts::Short(_, _) => {
+                    let v = *self as i16;
+                    let b = if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+                crate::database::Parts::Int(_, _) => {
+                    let v = *self as i32;
+                    let b = if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+                _ => {
+                    let b = if little_endian {
+                        self.to_le_bytes()
+                    } else {
+                        self.to_be_bytes()
+                    };
+                    out.extend_from_slice(&b);
+                }
+            },
         }
+        out
     }
     fn file_from_bytes(
         &mut self,
-        _stores: &mut Stores,
-        _db_tp: i32,
+        stores: &mut Stores,
+        db_tp: i32,
         little_endian: bool,
         bytes: &[u8],
     ) {
-        if bytes.len() >= 8 {
-            *self = if little_endian {
-                i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
-            } else {
-                i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
-            };
+        match db_tp {
+            0 | 1 => {
+                if bytes.len() >= 8 {
+                    *self = if little_endian {
+                        i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                    } else {
+                        i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                    };
+                }
+            }
+            6 => {
+                if bytes.len() >= 4 {
+                    *self = i64::from(if little_endian {
+                        u32::from_le_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                    } else {
+                        u32::from_be_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                    });
+                }
+            }
+            4 => {
+                if let Some(&b) = bytes.first() {
+                    *self = i64::from(b);
+                }
+            }
+            _ => match &stores.types[db_tp as usize].parts {
+                crate::database::Parts::Byte(_, _) => {
+                    if let Some(&b) = bytes.first() {
+                        *self = i64::from(b);
+                    }
+                }
+                crate::database::Parts::Short(_, _) => {
+                    if bytes.len() >= 2 {
+                        let v = if little_endian {
+                            i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        } else {
+                            i16::from_be_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        };
+                        *self = i64::from(v);
+                    }
+                }
+                crate::database::Parts::Int(_, _) => {
+                    if bytes.len() >= 4 {
+                        *self = i64::from(if little_endian {
+                            i32::from_le_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                        } else {
+                            i32::from_be_bytes(bytes[..4].try_into().unwrap_or([0; 4]))
+                        });
+                    }
+                }
+                _ => {
+                    if bytes.len() >= 8 {
+                        *self = if little_endian {
+                            i64::from_le_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                        } else {
+                            i64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8]))
+                        };
+                    }
+                }
+            },
         }
     }
 }
@@ -938,9 +1044,9 @@ impl FileVal for DbRef {
         if let Some(tp_info) = stores.types.get(db_tp as usize) {
             if let Parts::Vector(elem_tp) = tp_info.parts {
                 let store = &stores.allocations[self.store_nr as usize];
-                let v_rec = store.get_int(self.rec, self.pos) as u32;
+                let v_rec = store.get_u32_raw(self.rec, self.pos);
                 if v_rec != 0 {
-                    let length = store.get_int(v_rec, 4) as u32;
+                    let length = store.get_u32_raw(v_rec, 4);
                     let elem_size = u32::from(stores.size(elem_tp));
                     for i in 0..length {
                         let elem = DbRef {
@@ -979,7 +1085,7 @@ impl FileVal for DbRef {
                     *self = stores.database(12);
                     // Zero-init the vector header slot so vector_append sees
                     // vec_rec=0 (no storage yet) instead of garbage memory.
-                    stores.store_mut(self).set_int(self.rec, self.pos, 0);
+                    stores.store_mut(self).set_u32_raw(self.rec, self.pos, 0);
                 }
                 let n_elems = bytes.len() / elem_size as usize;
                 for i in 0..n_elems {
@@ -1046,7 +1152,7 @@ pub fn OpReadFile<T: FileVal>(
     stores: &mut Stores,
     file: DbRef,
     val: &mut T,
-    bytes: i32,
+    bytes: i64,
     db_tp: i32,
 ) {
     if file.rec == 0 {
@@ -1098,7 +1204,7 @@ pub fn OpReadFile<T: FileVal>(
     _stores: &mut Stores,
     _file: DbRef,
     _val: &mut T,
-    _bytes: i32,
+    _bytes: i64,
     _db_tp: i32,
 ) {
 }
@@ -1112,6 +1218,22 @@ pub trait IterState {
         u32::MAX
     }
     fn set_finish(&mut self, _n: u32) {}
+    /// Plain-vector iteration: the whole state is a signed i64
+    /// counter (no packed finish-field semantics).  Default
+    /// implementation truncates to i32 and delegates to `set_cur`,
+    /// which is correct for the i32 impl.  The i64 impl overrides
+    /// to write the full 64-bit value — otherwise `set_cur(-1)`
+    /// would zero-extend 0xFFFFFFFF, which the generated loop then
+    /// treats as 4_294_967_295 and skips past the end of the
+    /// vector instead of decrementing to -1.
+    fn set_cur_i64_plain(&mut self, n: i64) {
+        self.set_cur(n as i32);
+    }
+    /// Plain-vector: read as i64 (sign-extends for i32 impl, raw for
+    /// i64 impl).  Used by `OpRemove` when `on = 0`.
+    fn get_cur_i64_plain(&self) -> i64 {
+        i64::from(self.get_cur())
+    }
 }
 
 impl IterState for i32 {
@@ -1137,6 +1259,12 @@ impl IterState for i64 {
     fn set_finish(&mut self, n: u32) {
         let cur = (*self as u64) as u32;
         *self = ((u64::from(n) << 32) | u64::from(cur)).cast_signed();
+    }
+    fn set_cur_i64_plain(&mut self, n: i64) {
+        *self = n;
+    }
+    fn get_cur_i64_plain(&self) -> i64 {
+        *self
     }
 }
 
@@ -1166,11 +1294,15 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
     let reverse = (on & 64) != 0;
     match on & 63 {
         0 => {
-            // plain vector: arg is the element type index
+            // plain vector: arg is the element type index.
+            // Use the i64-plain accessors so the generated code, which
+            // drives `var_INDEX` as a raw i64 counter (`var += 1`),
+            // sees a properly sign-extended value after `set_cur(-1)`.
             let elem_size = u32::from(stores.size(arg as u16));
-            let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, elem_size, cur, &mut stores.allocations);
-            state.set_cur(n);
+            let cur_i64 = state.get_cur_i64_plain();
+            let n = if reverse { cur_i64 + 1 } else { cur_i64 - 1 };
+            vector::remove_vector(&data, elem_size, cur_i64, &mut stores.allocations);
+            state.set_cur_i64_plain(n);
         }
         1 => {
             // index (red-black tree): arg is the type index; fields offset derived from it
@@ -1217,7 +1349,7 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
                 return;
             }
             let n = if reverse { cur + 1 } else { cur - 1 };
-            vector::remove_vector(&data, arg as u32, cur, &mut stores.allocations);
+            vector::remove_vector(&data, arg as u32, i64::from(cur), &mut stores.allocations);
             state.set_cur(n);
         }
         _ => {}
@@ -1236,13 +1368,13 @@ pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
 /// Append `count - 1` copies of the last element of `data`, expanding the vector.
 ///
 /// Bytecode equivalent: `State::append_copy` in `src/state/io.rs`.
-pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
+pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i64, tp: i32) {
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
     // Read v_rec before resize; from points to the last existing element.
     let v_rec_before =
-        crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
+        crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
     let from = DbRef {
         store_nr: data.store_nr,
         rec: v_rec_before,
@@ -1253,7 +1385,7 @@ pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i32, tp: i32) {
     vector::vector_append(&data, size, &mut stores.allocations);
     stores.vector_set_size(&data, multiply, size);
     // Re-read v_rec in case the resize moved the record.
-    let v_rec = crate::keys::store(&data, &stores.allocations).get_int(data.rec, data.pos) as u32;
+    let v_rec = crate::keys::store(&data, &stores.allocations).get_u32_raw(data.rec, data.pos);
     for i in 0..(multiply - 1) {
         let to = DbRef {
             store_nr: data.store_nr,
@@ -1274,7 +1406,7 @@ pub fn cr_rand_seed(seed: i64) {
     let _ = seed;
 }
 #[must_use]
-pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
+pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
     #[cfg(feature = "random")]
     {
         crate::ops::rand_int(lo, hi)
@@ -1282,7 +1414,7 @@ pub fn cr_rand_int(lo: i32, hi: i32) -> i32 {
     #[cfg(not(feature = "random"))]
     {
         let _ = (lo, hi);
-        i32::MIN
+        i64::MIN
     }
 }
 
@@ -1335,7 +1467,7 @@ pub fn n_path_sep(_stores: &mut Stores) -> i32 {
 /// path calls this with the hash's type id as a compile-time constant
 /// and iterates the result via Ordered (on=3).  Bytecode equivalent:
 /// `n_hash_sorted` in `src/native.rs`.
-pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i32) -> DbRef {
+pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i64) -> DbRef {
     stores.build_hash_sorted_vec(&h, tp as u16)
 }
 
@@ -1356,17 +1488,17 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) when `lo > hi`.
+/// Returns `i64::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
-pub fn n_rand(_stores: &mut Stores, lo: i32, hi: i32) -> i32 {
+pub fn n_rand(_stores: &mut Stores, lo: i64, hi: i64) -> i64 {
     cr_rand_int(lo, hi)
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
-    let count = if n == i32::MIN || n <= 0 {
+pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
+    let count = if n == i64::MIN || n <= 0 {
         0usize
     } else {
         n as usize
@@ -1387,11 +1519,11 @@ pub fn n_rand_indices(stores: &mut Stores, n: i32) -> DbRef {
     let header_rec = header_cr.rec;
     {
         let store = stores.store_mut(&base);
-        store.set_int(vec_rec, 4, count as i32);
+        store.set_u32_raw(vec_rec, 4, count as u32);
         for (i, &val) in indices.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, val);
+            store.set_i32_raw(vec_rec, 8 + i as u32 * 4, val);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: base.store_nr,
@@ -1431,8 +1563,8 @@ where
     let mut fld = 8u32;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1449,15 +1581,15 @@ where
                 store.set_byte(vec_rec, fld, 0, val as i32);
             }
             _ => {
-                store.set_int(vec_rec, fld, val as i32);
+                store.set_i32_raw(vec_rec, fld, val as i32);
             }
         }
         fld += return_sz;
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1489,8 +1621,8 @@ where
     let header_rec = header_cr.rec;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1500,12 +1632,12 @@ where
         let s = worker(stores, elm);
         let store = stores.store_mut(&result_db);
         let s_pos = store.set_str(&s);
-        store.set_int(vec_rec, 8 + (i as u32) * 4, s_pos as i32);
+        store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1544,8 +1676,8 @@ where
     let header_rec = header_cr.rec;
     for i in 0..n {
         let elm = {
-            let v_rec = crate::keys::store(&input, &stores.allocations)
-                .get_int(input.rec, input.pos) as u32;
+            let v_rec =
+                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
             DbRef {
                 store_nr: input.store_nr,
                 rec: v_rec,
@@ -1563,8 +1695,8 @@ where
     }
     {
         let store = stores.store_mut(&result_db);
-        store.set_int(vec_rec, 4, n as i32);
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(vec_rec, 4, n as u32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
     DbRef {
         store_nr: result_db.store_nr,
@@ -1576,7 +1708,7 @@ where
 /// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.
 /// Returns a `DbRef` pointing to the inline struct data at the given index.
 pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: i32) -> DbRef {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     DbRef {
         store_nr: r.store_nr,
         rec: v_rec,
@@ -1586,19 +1718,19 @@ pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: 
 
 /// Read an integer result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
             rec: v_rec,
             pos: 0,
         })
-        .get_int(v_rec, 8 + (idx as u32) * 4)
+        .get_i32_raw(v_rec, 8 + (idx as u32) * 4)
 }
 
 /// Read a long result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1610,7 +1742,7 @@ pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
 
 /// Read a float result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     let bits = stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1623,7 +1755,7 @@ pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
 
 /// Read a boolean result element from a `n_parallel_for_native` result vector.
 pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_int(r.rec, r.pos) as u32;
+    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
     stores
         .store(&DbRef {
             store_nr: r.store_nr,
@@ -1642,14 +1774,16 @@ pub const NATIVE_COROUTINE_STORE: u16 = 0xFFFD;
 
 /// Return value from `LoftCoroutine::next_i64` when the generator is exhausted.
 ///
-/// For integer-yielding generators (`iterator<integer>`), the for-loop termination
-/// uses `op_conv_bool_from_int(val as i32)`, which returns `false` only when
-/// `val as i32 == i32::MIN`.  Using `i32::MIN as i64` ensures the cast lands on
-/// the integer null sentinel so the loop breaks correctly.
-///
-/// (Long-yielding generators need `i64::MIN` instead; deferred to N8b.3 — only
-/// integer generators are tested by N8b.1/N8b.2.)
-pub const COROUTINE_EXHAUSTED: i64 = i32::MIN as i64;
+/// Post-2c the `integer` type is i64 — both integer- and long-yielding
+/// generators terminate on `op_conv_bool_from_int(val)` returning
+/// `false`, which happens exactly when `val == i64::MIN`.  Pre-2c this
+/// constant was `i32::MIN as i64` because the integer null sentinel was
+/// `i32::MIN`; that's now the wrong value — the sentinel moved to
+/// `i64::MIN` when Phase 2c widened integer storage, and
+/// `coroutine_next_i64` returning `i32::MIN as i64` was being
+/// interpreted as a real value by `op_conv_bool_from_int`, leaving the
+/// for-loop iterating forever.
+pub const COROUTINE_EXHAUSTED: i64 = i64::MIN;
 
 /// Trait implemented by every native generator (state-machine struct).
 /// The generated `fn {name}(stores, args) -> Box<dyn LoftCoroutine>` factory
@@ -1843,25 +1977,34 @@ pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
 
     let sf_elm = stores.name("StackFrame");
     let sf_size = u32::from(stores.size(sf_elm));
+    let fn_pos = u32::from(stores.position(sf_elm, "function"));
+    let file_pos = u32::from(stores.position(sf_elm, "file"));
+    let line_pos = u32::from(stores.position(sf_elm, "line"));
+    let args_pos = u32::from(stores.position(sf_elm, "arguments"));
+    let vars_pos = u32::from(stores.position(sf_elm, "variables"));
     let vec = stores.database(sf_size);
-    stores.store_mut(&vec).set_int(vec.rec, vec.pos, 0);
+    stores.store_mut(&vec).set_u32_raw(vec.rec, vec.pos, 0);
 
     for (fn_name, file, line) in &snapshot {
         let elm = crate::vector::vector_append(&vec, sf_size, &mut stores.allocations);
         let fn_str = stores.store_mut(&vec).set_str(fn_name);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos, fn_str as i32);
+            .set_u32_raw(elm.rec, elm.pos + fn_pos, fn_str);
         let file_str = stores.store_mut(&vec).set_str(file);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 4, file_str as i32);
+            .set_u32_raw(elm.rec, elm.pos + file_pos, file_str);
         stores
             .store_mut(&vec)
-            .set_int(elm.rec, elm.pos + 8, *line as i32);
+            .set_int(elm.rec, elm.pos + line_pos, i64::from(*line));
         // Zero the arguments and variables vector fields.
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 12, 0);
-        stores.store_mut(&vec).set_int(elm.rec, elm.pos + 16, 0);
+        stores
+            .store_mut(&vec)
+            .set_u32_raw(elm.rec, elm.pos + args_pos, 0);
+        stores
+            .store_mut(&vec)
+            .set_u32_raw(elm.rec, elm.pos + vars_pos, 0);
         crate::vector::vector_finish(&vec, &mut stores.allocations);
     }
     vec

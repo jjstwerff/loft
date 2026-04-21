@@ -207,7 +207,21 @@ impl Parser {
         _op: &str,
     ) -> Value {
         match name {
-            "OpGetInt" => self.cl("OpSetInt", &[args[0].clone(), args[1].clone(), code]),
+            "OpGetInt" => {
+                // f#next = pos: seek the file AND update the stored field.
+                if args[1] == Value::Int(16)
+                    && let Value::Var(v_nr) = &args[0]
+                    && self.is_file_var(*v_nr)
+                {
+                    let seek = self.cl("OpSeekFile", &[args[0].clone(), code.clone()]);
+                    let set = self.cl(
+                        "OpSetInt",
+                        &[args[0].clone(), args[1].clone(), code.clone()],
+                    );
+                    return Value::Insert(vec![seek, set]);
+                }
+                self.cl("OpSetInt", &[args[0].clone(), args[1].clone(), code])
+            }
             "OpGetByte" => self.cl(
                 "OpSetByte",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
@@ -217,21 +231,7 @@ impl Parser {
                 "OpSetShort",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
-            "OpGetLong" => {
-                // f#next = pos: seek the file AND update the stored field.
-                if args[1] == Value::Int(16)
-                    && let Value::Var(v_nr) = &args[0]
-                    && self.is_file_var(*v_nr)
-                {
-                    let seek = self.cl("OpSeekFile", &[args[0].clone(), code.clone()]);
-                    let set = self.cl(
-                        "OpSetLong",
-                        &[args[0].clone(), args[1].clone(), code.clone()],
-                    );
-                    return Value::Insert(vec![seek, set]);
-                }
-                self.cl("OpSetLong", &[args[0].clone(), args[1].clone(), code])
-            }
+            "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
             "OpGetFloat" => self.cl("OpSetFloat", &[args[0].clone(), args[1].clone(), code]),
             "OpGetSingle" => self.cl("OpSetSingle", &[args[0].clone(), args[1].clone(), code]),
             "OpGetField" => code,
@@ -578,6 +578,35 @@ impl Parser {
         }
     }
 
+    /// C54.G-hybrid helper: if `code` is a direct call to an arithmetic
+    /// opcode (`OpAddInt` / `OpMulInt` / etc. or their `*Long` siblings),
+    /// swap its def number to the Nullable variant (`OpAddIntNullable` /
+    /// `OpMulIntNullable` / …).  Only the outermost call is rewritten;
+    /// nested sub-expressions keep trap semantics.  No-op if the Nullable
+    /// variant isn't registered (defensive — should always be, via
+    /// `default/01_code.loft`).
+    fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
+        let Value::Call(def_nr, _) = code else {
+            return;
+        };
+        // `original_name()` on an operator returns the stripped form
+        // (e.g. "MulInt" for `OpMulInt`).  Match on that and look up the
+        // Nullable variant by its stripped name too.
+        let name = data.def(*def_nr).original_name();
+        let nullable_name = match name.as_str() {
+            "AddInt" => "OpAddIntNullable",
+            "MinInt" => "OpMinIntNullable",
+            "MulInt" => "OpMulIntNullable",
+            "DivInt" => "OpDivIntNullable",
+            "RemInt" => "OpRemIntNullable",
+            _ => return,
+        };
+        let new_nr = data.def_nr(nullable_name);
+        if new_nr != u32::MAX {
+            *def_nr = new_nr;
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn handle_operator(
         &mut self,
@@ -603,6 +632,14 @@ impl Parser {
                 );
             }
             self.expr_not_null = false;
+            // C54.G-hybrid: if the LHS is an immediate arithmetic call
+            // (`a + b` / `a - b` / etc.), swap it to the Nullable variant so
+            // overflow / div-zero produce `i32::MIN` instead of trapping —
+            // the `??` below then discharges the null to the RHS.  Only the
+            // outermost op gets swapped; nested sub-expressions still trap.
+            if !self.first_pass {
+                Self::rewrite_outer_arith_to_nullable(code, &self.data);
+            }
             let lhs_type = ctp.clone();
             if self.lexer.has_token("return") {
                 // `x ?? return ret_expr` — if LHS is null, return from the function.
@@ -680,6 +717,14 @@ impl Parser {
                         "Unknown cast from {} to {tps}",
                         &ctp.name(&self.data),
                     );
+                }
+                // Post-2c: remember the cast target alias so `f += x as i32`
+                // can narrow the file-serialisation width.  Only stored when
+                // the alias carries a `size(N)` annotation; otherwise
+                // `u32::MAX` = "no alias info".
+                let alias_nr = self.data.def_nr(&tps);
+                if alias_nr != u32::MAX && self.data.forced_size(alias_nr).is_some() {
+                    self.last_cast_alias = alias_nr;
                 }
                 let mut rt = tp;
                 for d in ctp.depend() {

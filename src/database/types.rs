@@ -470,6 +470,16 @@ impl Stores {
     pub fn index(&mut self, content: u16, key: &[(String, bool)]) -> u16 {
         let mut name = "index<".to_string() + &self.types[content as usize].name + "[";
         let key_nrs = self.create_key(content, key, &mut name);
+        // Dedup early.  Post-Category-D native codegen can call `db.index`
+        // for the same content/keys combination twice (once in Phase 1a's
+        // bare-io registration, once more during struct-field emission).
+        // The field appending below must run exactly ONCE per unique
+        // index type — otherwise the content struct accumulates stale
+        // `#left_N / #right_N / #color_N` triples that push real user
+        // fields to unexpected positions and break tree traversal.
+        if let Some(nr) = self.names.get(&name) {
+            return *nr;
+        }
         let int_c = self.name("integer");
         let bool_c = self.name("boolean");
         let mut nr = 1;
@@ -511,15 +521,11 @@ impl Stores {
         } else {
             u16::MAX
         };
-        if let Some(nr) = self.names.get(&name) {
-            *nr
-        } else {
-            let num = self.types.len() as u16;
-            self.types
-                .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
-            self.names.insert(name, num);
-            num
-        }
+        let num = self.types.len() as u16;
+        self.types
+            .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
+        self.names.insert(name, num);
+        num
     }
 
     pub(super) fn key_name(&mut self, content: u16, key: &[(u16, bool)], name: &mut String) {
@@ -603,6 +609,23 @@ impl Stores {
             let num = self.types.len() as u16;
             self.types
                 .push(Type::new(&name, Parts::Short(min, nullable), 2));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
+    /// 4-byte integer field type, used for `pub type T = integer size(4);`
+    /// subtypes (e.g. `i32`).  Stored raw (no +1 shift); `i32::MIN` reserved
+    /// as the null sentinel.  Stack values stay 8-byte i64 — narrowing
+    /// happens at the field boundary via OpSetInt4/OpGetInt4.
+    pub fn int(&mut self, min: i32, nullable: bool) -> u16 {
+        let name = format!("int<{min},{nullable}>");
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types
+                .push(Type::new(&name, Parts::Int(min, nullable), 4));
             self.names.insert(name, num);
             num
         }
@@ -709,14 +732,15 @@ impl Stores {
         }
         if known_type < 6 {
             match known_type {
-                0 | 6 => store.get_int(rec, pos) == i32::MIN,
+                0 => store.get_int(rec, pos) == i64::MIN,
+                6 => store.get_u32_raw(rec, pos) == u32::MAX,
                 1 => store.get_long(rec, pos) == i64::MIN,
                 2 => store.get_single(rec, pos).is_nan(),
                 3 => store.get_float(rec, pos).is_nan(),
                 4 => store.get_byte(rec, pos, 0) > 1,
                 5 => {
-                    store.get_int(rec, pos) == 0
-                        || store.get_str(store.get_int(rec, pos) as u32).is_empty()
+                    let text_nr = store.get_u32_raw(rec, pos);
+                    text_nr == 0 || store.get_str(text_nr).is_empty()
                 }
                 _ => false,
             }
@@ -727,7 +751,7 @@ impl Stores {
         {
             rec == 0
         } else if let Parts::Vector(_) = &self.types[known_type as usize].parts {
-            store.get_int(rec, pos) == 0
+            store.get_u32_raw(rec, pos) == 0
         } else if let Parts::Byte(from, nullable) = &self.types[known_type as usize].parts {
             let v = store.get_byte(rec, pos, *from);
             *nullable && v == 255

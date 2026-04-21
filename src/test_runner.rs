@@ -794,6 +794,7 @@ pub(crate) fn run_tests(
                             next_format_count: 0,
                             yield_collect: false,
                             fn_ref_context: false,
+                            i32_literal_context: false,
                             call_stack_prefix: None,
                             wasm_browser: false,
                         };

@@ -980,13 +980,23 @@ impl Lexer {
     }
 
     fn ret_number(&mut self, r: u64, p: Position, start_zero: bool) -> LexResult {
-        let max = i32::MAX as usize;
-        if let Some('l') = self.iter.peek() {
-            self.next_char();
-            LexResult::new(LexItem::Long(r), p)
-        } else if r > max as u64 {
-            self.err(Level::Error, "Problem parsing integer");
+        // Post-2c round 10c: `integer` is 8 bytes.  Values > i64::MAX
+        // (impossible to represent in i64) are rejected; values up to
+        // i32::MAX are emitted as LexItem::Integer, larger values as
+        // LexItem::Long so the parser carries the full i64 payload
+        // through to `Value::Long`.  Both land in a wide Type::Integer
+        // at the parser layer — the distinction is only about how
+        // many bytes of bytecode the literal consumes.
+        let i32_max = u64::from(i32::MAX as u32);
+        let i64_max = i64::MAX as u64;
+        if r > i64_max {
+            self.err(
+                Level::Error,
+                "Integer literal out of range (exceeds i64::MAX)",
+            );
             LexResult::new(LexItem::Integer(0, start_zero), p)
+        } else if r > i32_max {
+            LexResult::new(LexItem::Long(r), p)
         } else {
             LexResult::new(LexItem::Integer(r as u32, start_zero), p)
         }

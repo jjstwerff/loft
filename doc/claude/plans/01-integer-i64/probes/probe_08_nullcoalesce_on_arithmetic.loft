@@ -1,0 +1,14 @@
+// Probe 08 — THE DECISIVE PROBE.  `x = a * b ?? default` where a*b
+// overflows.  This is the G′ composition argument.  If `??` catches
+// the overflow → G′ is viable.  If not → G′ is unsafe; ship G.
+
+fn test_probe_08_nullcoalesce_on_arithmetic() {
+  p08_a = 2147483647;
+  // a * 2 overflows → expect null.  `?? 42` should produce 42 if `??`
+  // recognises the overflow null.  If it returns the sentinel instead,
+  // `??` failed to discharge.
+  p08_r = (p08_a * 2) ?? 42;
+  println("VERDICT: probe_08 (i32::MAX * 2) ?? 42 = {p08_r}");
+  // Expected CLEAN: p08_r == 42 (??-compose worked).
+  // Expected HOLE:  p08_r == i32::MIN or -2 (silent sentinel).
+}

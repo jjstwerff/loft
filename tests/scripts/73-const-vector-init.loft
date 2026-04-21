@@ -24,10 +24,10 @@ fn test_const_expr_vector() {
 }
 
 fn test_const_long_vector() {
-  v = [100l, 200l, 300l];
+  v = [100, 200, 300];
   assert(v.len() == 3, "long len");
-  assert(v[0] == 100l, "long first");
-  assert(v[2] == 300l, "long last");
+  assert(v[0] == 100, "long first");
+  assert(v[2] == 300, "long last");
 }
 
 fn test_const_float_vector() {

@@ -29,13 +29,14 @@ pub fn record() {
     stores.field(s, "percentage", stores.name("single"));
     stores.field(s, "calc", stores.name("long"));
     stores.finish();
-    assert_eq!(stores.size(stores.name("Data")), 29);
+    assert_eq!(stores.size(stores.name("Data")), 33);
     assert_eq!(stores.enum_val(e, 2), "Hourly");
-    assert_eq!(stores.position(s, "amount"), 0);
-    assert_eq!(stores.position(s, "category"), 28);
-    assert_eq!(stores.position(s, "size"), 20);
-    assert_eq!(stores.position(s, "percentage"), 24);
-    assert_eq!(stores.position(s, "calc"), 8);
+    assert_eq!(stores.position(s, "size"), 0);
+    assert_eq!(stores.position(s, "amount"), 8);
+    assert_eq!(stores.position(s, "calc"), 16);
+    assert_eq!(stores.position(s, "name"), 24);
+    assert_eq!(stores.position(s, "percentage"), 28);
+    assert_eq!(stores.position(s, "category"), 32);
     //stores.dump_types();
     let result = stores.database(1234);
     let test_string = "{ name: \"Hello World!\", category: Hourly, size: 12345, percentage: 0.15 }";
@@ -325,6 +326,7 @@ pub fn hash_records_sorted_single_field() {
     let keys = stores.keys(v).to_vec();
     let recs = hash::records_sorted(&into, &stores.allocations, &keys);
     // Resolve each rec-nr to its `name` field for an observable order.
+    let name_off = u32::from(stores.position(s, "name"));
     let names: Vec<String> = recs
         .iter()
         .map(|&r| {
@@ -333,9 +335,10 @@ pub fn hash_records_sorted_single_field() {
                 rec: r,
                 pos: 8,
             };
-            let name_pos = stores.allocations[rec.store_nr as usize].get_int(rec.rec, rec.pos);
+            let name_pos =
+                stores.allocations[rec.store_nr as usize].get_u32_raw(rec.rec, rec.pos + name_off);
             stores.allocations[rec.store_nr as usize]
-                .get_str(name_pos as u32)
+                .get_str(name_pos)
                 .to_string()
         })
         .collect();
@@ -374,7 +377,9 @@ pub fn hash_records_sorted_multi_field() {
     stores.parse(data, v, &into);
     let keys = stores.keys(v).to_vec();
     let recs = hash::records_sorted(&into, &stores.allocations, &keys);
-    let pairs: Vec<(String, i32)> = recs
+    let region_off = u32::from(stores.position(s, "region"));
+    let score_off = u32::from(stores.position(s, "score"));
+    let pairs: Vec<(String, i64)> = recs
         .iter()
         .map(|&r| {
             let rec = DbRef {
@@ -383,9 +388,9 @@ pub fn hash_records_sorted_multi_field() {
                 pos: 8,
             };
             let store = &stores.allocations[rec.store_nr as usize];
-            let region_pos = store.get_int(rec.rec, rec.pos);
-            let region = store.get_str(region_pos as u32).to_string();
-            let score = store.get_int(rec.rec, rec.pos + 4);
+            let region_pos = store.get_u32_raw(rec.rec, rec.pos + region_off);
+            let region = store.get_str(region_pos).to_string();
+            let score = store.get_int(rec.rec, rec.pos + score_off);
             (region, score)
         })
         .collect();
@@ -439,27 +444,28 @@ pub fn hash_sorted_vec_u32_layout() {
         "scratch must be allocated in the hash's store"
     );
     // Header: offset 4 holds the data-record number.
-    let data_rec = stores.allocations[result.store_nr as usize].get_int(result.rec, 4) as u32;
+    let data_rec = stores.allocations[result.store_nr as usize].get_u32_raw(result.rec, 4);
     assert_ne!(data_rec, 0, "header must point at a nonzero data record");
     // Data record: offset 4 = count.
-    let count = stores.allocations[result.store_nr as usize].get_int(data_rec, 4);
+    let count = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, 4);
     assert_eq!(count, 3, "expected 3 elements, got {count}");
     // Data record offset 8..8+12 holds 3 u32 rec-nrs at 4-byte stride.
     // Read each, resolve its `name` field, verify ascending order.
+    // Post-2c layout for Elm{name:text, value:integer}: value at 0 (8B), name at 8 (4B).
+    let name_pos = u32::from(stores.position(s, "name"));
     let mut names = Vec::new();
     for i in 0..3u32 {
         let base = 8 + i * 4;
-        let rec_nr = stores.allocations[result.store_nr as usize].get_int(data_rec, base) as u32;
+        let rec_nr = stores.allocations[result.store_nr as usize].get_u32_raw(data_rec, base);
         assert_ne!(rec_nr, 0, "element {i} rec-nr should be nonzero");
         let rec = DbRef {
             store_nr: into.store_nr,
             rec: rec_nr,
             pos: 8,
         };
-        // name field is at offset 0 of the record body (pos 8 + 0).
         let store = &stores.allocations[rec.store_nr as usize];
-        let name_off = store.get_int(rec.rec, rec.pos);
-        names.push(store.get_str(name_off as u32).to_string());
+        let name_off = store.get_u32_raw(rec.rec, rec.pos + name_pos);
+        names.push(store.get_str(name_off).to_string());
     }
     assert_eq!(names, vec!["apple", "mango", "zebra"]);
 }
@@ -478,7 +484,7 @@ pub fn array_record() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+        "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -515,7 +521,7 @@ pub fn ordered_record() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[8/4]: parents [Main 10]{n:text[0], c:integer[4]}"
+        "Elm[12/8]: parents [Main 10]{n:text[8], c:integer[0]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -557,7 +563,7 @@ pub fn index() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[17/4]: parents [Main 9]{n:text[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+        "Elm[29/8]: parents [Main 9]{n:text[24], c:integer[0], #left_1:integer[8], #right_1:integer[16], #color_1:boolean[28]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -611,7 +617,7 @@ pub fn index_deletions() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[17/4]: parents [Main 9]{k:integer[0], c:integer[4], #left_1:integer[8], #right_1:integer[12], #color_1:boolean[16]}"
+        "Elm[33/8]: parents [Main 9]{k:integer[0], c:integer[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[32]}"
     );
     let db = stores.database(2);
     let into = DbRef {
@@ -624,28 +630,31 @@ pub fn index_deletions() {
     let mut rng = Pcg64Mcg::seed_from_u64(42);
     let keys = stores.keys(v).to_vec();
     let elms = 100;
+    // Post-2c Elm layout: k:integer[0] c:integer[8] #left[16] #right[24] #color[32].
+    // User data starts at rec.pos=8; tree pointers at absolute byte rec.pos+16=24.
+    // Record needs 33 user bytes + 8 header = 41 bytes = 6 words.
     for i in 0..elms {
-        let rec = stores.claim(&db, 3);
-        assert!(rec.rec < i * 4 + 8, "Claimed record {} too high", rec.rec);
+        let rec = stores.claim(&db, 6);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_int(rec.rec, 4, key as i32);
-        s.set_int(rec.rec, 8, i as i32);
-        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        // Write k at rec.pos+0=8 (8 bytes), c at rec.pos+8=16 (8 bytes).
+        s.set_int(rec.rec, 8, i64::from(key));
+        s.set_int(rec.rec, 16, i64::from(i));
+        tree::add(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
         recs.push(rec);
     }
     for d in 0..500 {
         let i = rng.next_u64() % recs.len() as u64;
         let rec = recs[i as usize];
-        tree::remove(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        tree::remove(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
         let s = keys::mut_store(&rec, &mut stores.allocations);
         let key = rng.next_u32();
-        s.set_int(rec.rec, 4, key as i32);
-        s.set_int(rec.rec, 8, 100 + d);
-        tree::add(&into, &rec, 12, &mut stores.allocations, &keys);
-        tree::validate(&into, 12, &stores.allocations, &keys);
+        s.set_int(rec.rec, 8, i64::from(key));
+        s.set_int(rec.rec, 16, i64::from(100 + d));
+        tree::add(&into, &rec, 24, &mut stores.allocations, &keys);
+        tree::validate(&into, 24, &stores.allocations, &keys);
     }
 }
 
@@ -660,7 +669,7 @@ pub fn index_find() {
     stores.finish();
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[25/8]:{cat:integer[8], name:text[12], value:float[0], #left_1:integer[16], #right_1:integer[20], #color_1:boolean[24]}"
+        "Elm[37/8]:{cat:integer[0], name:text[32], value:float[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[36]}"
     );
     let db = stores.database(8);
     let into = DbRef {

@@ -133,9 +133,9 @@ impl State {
         if let Some(v) = self.calls.get(&def_nr) {
             let old = self.code_pos;
             for pos in v.clone() {
-                // skip opcode(1) + d_nr(4) + args_size(2) to reach the i32 target
-                self.code_pos = pos + 7;
-                self.code_add(start as i32);
+                // skip opcode(1) + d_nr(8) + args_size(2) to reach the i64 target
+                self.code_pos = pos + 11;
+                self.code_add(i64::from(start));
             }
             self.code_pos = old;
         }
@@ -182,7 +182,7 @@ impl State {
         match val {
             Value::Int(value) => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(*value);
+                self.code_add(i64::from(*value));
                 I32.clone()
             }
             Value::Enum(value, tp) => {
@@ -192,9 +192,9 @@ impl State {
                 Type::Enum(0, false, Vec::new())
             }
             Value::Long(value) => {
-                stack.add_op("OpConstLong", self);
+                stack.add_op("OpConstInt", self);
                 self.code_add(*value);
-                Type::Long
+                crate::data::I64.clone()
             }
             Value::Single(value) => {
                 stack.add_op("OpConstSingle", self);
@@ -292,7 +292,6 @@ impl State {
                         Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
-                        Type::Long => stack.add_op("OpGetLong", self),
                         Type::Float => stack.add_op("OpGetFloat", self),
                         Type::Single => stack.add_op("OpGetSingle", self),
                         Type::Character => stack.add_op("OpGetCharacter", self),
@@ -320,7 +319,6 @@ impl State {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
-                    Type::Long => stack.add_op("OpVarLong", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
                     Type::Single => stack.add_op("OpVarSingle", self),
                     Type::Character => stack.add_op("OpVarCharacter", self),
@@ -365,7 +363,6 @@ impl State {
                         Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
-                        Type::Long => stack.add_op("OpSetLong", self),
                         Type::Float => stack.add_op("OpSetFloat", self),
                         Type::Character => stack.add_op("OpSetCharacter", self),
                         _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
@@ -392,7 +389,6 @@ impl State {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
-                    Type::Long => stack.add_op("OpPutLong", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
                     Type::Single => stack.add_op("OpPutSingle", self),
                     Type::Character => stack.add_op("OpPutCharacter", self),
@@ -411,8 +407,8 @@ impl State {
                 // Uses existing OpConstInt + OpVarRef — no new opcode needed.
                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
                 stack.add_op("OpConstInt", self);
-                self.code_add(*d_nr);
-                // clos_pos computed after ConstInt advanced stack.position by 4.
+                self.code_add(i64::from(*d_nr));
+                // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
                 let clos_pos = stack.position - stack.function.stack(*clos_var);
                 stack.add_op("OpVarRef", self);
                 self.code_add(clos_pos);
@@ -430,10 +426,10 @@ impl State {
             let const_store = &mut self.database.allocations[crate::database::CONST_STORE as usize];
             let rec = const_store.set_str(value);
             stack.add_op("OpConstStoreText", self);
-            self.code_add(rec as i32);
+            self.code_add(i64::from(rec));
             // set_str stores length at (rec, 4); text bytes start at (rec, 8).
             // We encode the record position; the opcode reads length from the store.
-            self.code_add(0i32); // pos offset within the record (length is at rec+4)
+            self.code_add(0i64); // pos offset within the record (length is at rec+4)
         }
         Type::Text(Vec::new())
     }
@@ -723,14 +719,10 @@ impl State {
             match elem {
                 Type::Integer(_, _, _) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
-                    self.code_add(0i32);
+                    self.code_add(0i64);
                 }
                 Type::Boolean => {
                     stack.add_op("OpConstFalse", self);
-                }
-                Type::Long => {
-                    stack.add_op("OpConstLong", self);
-                    self.code_add(0i64);
                 }
                 Type::Single => {
                     stack.add_op("OpConstSingle", self);
@@ -788,13 +780,16 @@ impl State {
                 stack.add_op("OpVarRef", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
-                self.code_add(0);
-                stack.add_op("OpSetInt", self);
+                self.code_add(0i64);
+                // Vector header length field is 4 bytes (u32).  Post-2c
+                // `OpSetInt` writes 8 bytes and overflows into adjacent
+                // storage.  Use `OpSetInt4` to write only 4 bytes.
+                stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
                 stack.add_op("OpCreateStack", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
-                self.code_add(12);
+                self.code_add(12i64);
                 stack.add_op("OpSetByte", self);
                 self.code_add(4u16);
                 self.code_add(0u16);
@@ -822,10 +817,6 @@ impl State {
             }
             Type::Integer(_, _, _) | Type::Character => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
-            }
-            Type::Long => {
-                stack.add_op("OpConstLong", self);
                 self.code_add(i64::MIN);
             }
             Type::Float => {
@@ -838,7 +829,7 @@ impl State {
             }
             Type::Boolean => {
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
+                self.code_add(i64::MIN);
             }
             _ => {
                 // For other types, push a zero-filled DbRef as a generic null.
@@ -1132,13 +1123,13 @@ impl State {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
             if *value == Value::Null {
-                // pre-init a fn-ref slot with 16 null bytes.
-                // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
+                // pre-init a fn-ref slot with 20 null bytes.
+                // d_nr = i64::MIN (integer null sentinel) + closure = null DbRef (12B).
                 stack.add_op("OpConstInt", self);
-                self.code_add(i32::MIN);
+                self.code_add(i64::MIN);
                 stack.add_op("OpNullRefSentinel", self);
             } else {
-                // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+                // A5.6-1/A5.6-2: 20-byte fn-ref slot: [d_nr (8B)][closure DbRef (12B)].
                 // gen_fn_ref_value ensures every branch (including if-else) reaches the
                 // join point with a full 16-byte slot.
                 self.gen_fn_ref_value(value, stack);
@@ -1396,9 +1387,9 @@ impl State {
         {
             return Type::Void;
         }
-        // free the closure DbRef embedded at offset+4 in a 16-byte fn-ref
-        // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout is
-        // [d_nr 4B][closure DbRef 12B], so the closure is at var_pos - 4.
+        // free the closure DbRef embedded at offset+8 in a 20-byte fn-ref
+        // slot.  OpFreeRef normally reads from offset+0, but the fn-ref layout
+        // is [d_nr 8B][closure DbRef 12B], so the closure is at var_pos - 8.
         // OpNullRefSentinel produces store_nr=u16::MAX; database.free() is a no-op
         // for that sentinel, so non-capturing lambdas are safe.
         if stack.data.def(op).name == "OpFreeRef"
@@ -1407,7 +1398,7 @@ impl State {
         {
             let var_pos = stack.position - stack.function.stack(*v);
             stack.add_op("OpVarRef", self);
-            self.code_add(var_pos - 4);
+            self.code_add(var_pos - 8);
             stack.add_op("OpFreeRef", self);
             return Type::Void;
         }
@@ -1522,7 +1513,7 @@ impl State {
             // Return type is the yield type — inferred from value_size for now.
             return match value_size {
                 1 => Type::Boolean,
-                8 => Type::Long,
+                8 => crate::data::I64.clone(),
                 _ => I32.clone(),
             };
         }
@@ -1623,9 +1614,9 @@ impl State {
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {
-                    // Extra args are always integer (4 bytes) in the current implementation.
+                    // Extra args are always integer (8 bytes post-2c).
                     let _ = extra;
-                    stack.position -= 4;
+                    stack.position -= 8;
                 }
             }
             // add the result to the stack
@@ -1640,7 +1631,7 @@ impl State {
             } else {
                 stack.add_op("OpCall", self);
             }
-            self.code_add(op); // d_nr: u32
+            self.code_add(i64::from(op)); // d_nr: i64 (stdlib `const i32` widens post-2c)
             let args_size: u16 = stack
                 .data
                 .def(op)
@@ -1649,7 +1640,7 @@ impl State {
                 .map(|a| size(&a.typedef, &Context::Argument))
                 .sum();
             self.code_add(args_size);
-            self.code_add(stack.data.def(op).code_position as i32);
+            self.code_add(i64::from(stack.data.def(op).code_position));
             // remove the arguments that are already on the stack
             for a in &stack.data.def(op).attributes {
                 stack.position -= size(&a.typedef, &Context::Argument);
@@ -1791,12 +1782,17 @@ impl State {
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
             Type::Integer(_, _, _) => stack.add_op("OpVarInt", self),
-            Type::Function(_, _, _) => stack.add_op("OpVarFnRef", self),
+            Type::Function(_, _, _) => {
+                stack.add_op("OpVarFnRef", self);
+                // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
+                // signature returns `text` (16 B Str).  Add the 4-byte
+                // discrepancy to the compile-time stack tracker.
+                stack.position += 4;
+            }
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
             Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
             Type::Boolean => stack.add_op("OpVarBool", self),
-            Type::Long => stack.add_op("OpVarLong", self),
             Type::Single => stack.add_op("OpVarSingle", self),
             Type::Float => stack.add_op("OpVarFloat", self),
             Type::Text(_) => {
@@ -1842,7 +1838,6 @@ impl State {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
-                        Type::Long => stack.add_op("OpVarLong", self),
                         Type::Float => stack.add_op("OpVarFloat", self),
                         Type::Single => stack.add_op("OpVarSingle", self),
                         Type::Character => stack.add_op("OpVarCharacter", self),
@@ -1873,7 +1868,6 @@ impl State {
             match &**tp {
                 Type::Integer(_, _, _) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
-                Type::Long => stack.add_op("OpGetLong", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
                 Type::Float => stack.add_op("OpGetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpGetByte", self),
@@ -2023,7 +2017,9 @@ impl State {
             }
             Type::Integer(_, _, _) => {
                 if let Value::Int(nr) = p {
-                    self.code_add(*nr);
+                    self.code_add(i64::from(*nr));
+                } else if let Value::Long(val) = p {
+                    self.code_add(*val);
                 }
             }
             Type::Enum(_, _, _) => {
@@ -2039,11 +2035,6 @@ impl State {
             Type::Text(_) => {
                 if let Value::Text(s) = p {
                     self.code_add_str(s);
-                }
-            }
-            Type::Long => {
-                if let Value::Long(val) = p {
-                    self.code_add(*val);
                 }
             }
             Type::Float => {
@@ -2095,7 +2086,6 @@ impl State {
             match *tp {
                 Type::Integer(_, _, _) => stack.add_op("OpSetInt", self),
                 Type::Character => stack.add_op("OpSetCharacter", self),
-                Type::Long => stack.add_op("OpSetLong", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
                 Type::Float => stack.add_op("OpSetFloat", self),
                 Type::Enum(_, false, _) => stack.add_op("OpSetByte", self),
@@ -2124,11 +2114,16 @@ impl State {
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
             Type::Integer(_, _, _) => stack.add_op("OpPutInt", self),
-            Type::Function(_, _, _) => stack.add_op("OpPutFnRef", self),
+            Type::Function(_, _, _) => {
+                stack.add_op("OpPutFnRef", self);
+                // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
+                // signature pops `text` (16 B Str).  Subtract the 4-byte
+                // discrepancy from the compile-time stack tracker.
+                stack.position -= 4;
+            }
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
             Type::Boolean => stack.add_op("OpPutBool", self),
-            Type::Long => stack.add_op("OpPutLong", self),
             Type::Single => stack.add_op("OpPutSingle", self),
             Type::Float => stack.add_op("OpPutFloat", self),
             Type::Text(_) => {
@@ -2159,7 +2154,6 @@ impl State {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),
-                        Type::Long => stack.add_op("OpPutLong", self),
                         Type::Float => stack.add_op("OpPutFloat", self),
                         Type::Single => stack.add_op("OpPutSingle", self),
                         Type::Character => stack.add_op("OpPutCharacter", self),
@@ -2278,6 +2272,10 @@ fn print_ir(value: &Value, data: &crate::data::Data, vars: &Function, depth: usi
         Value::Line(_) => {} // source-line markers: skip
         Value::Var(n) => eprint!("{}", vars.name(*n)),
         Value::Break(n) => eprint!("break({n})"),
+        Value::BreakWith(n, inner) => {
+            eprint!("break({n}) ");
+            print_ir(inner, data, vars, depth);
+        }
         Value::Continue(n) => eprint!("continue({n})"),
         Value::Keys(keys) => eprint!("keys({keys:?})"),
         Value::Set(v, inner) => {

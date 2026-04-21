@@ -543,6 +543,20 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
+        // C54.A incremental 2a — if the variable carries an annotated
+        // target type `: Long` with a narrower `Integer` RHS
+        // (e.g. `x: u32 = 100` where `u32` promoted to Long), run
+        // `convert()` BEFORE `change_var` fires the "cannot change
+        // type" diagnostic.  Narrowly scoped to Integer → Long so
+        // other cross-category conversions (e.g. Enum → Integer via
+        // OpConvIntFromEnum, which would silently pass but IS a real
+        // type mismatch) still fall through to the existing error
+        // path.  Similar widens for single→float etc. stay handled
+        // by the later convert at op == "=".
+        // Post-2c round 10c: Type::Long was folded into Type::Integer;
+        // any Integer↔Integer assignment is a no-op and needs no early widen.
+        let _ = op;
+        let _ = f_type;
         self.change_var(to, &s_type);
         if matches!(f_type, Type::Text(_)) {
             // auto-promote text argument to local String on first mutation.
@@ -703,7 +717,6 @@ use a separate collection or add after the loop"
         let scalar_target = matches!(
             f_type,
             Type::Integer(_, _, _)
-                | Type::Long
                 | Type::Float
                 | Type::Single
                 | Type::Boolean
@@ -994,11 +1007,16 @@ use a separate collection or add after the loop"
     pub(crate) fn append_to_file(&mut self, code: &mut Value, file_v: u16) {
         let mut rhs_code = Value::Null;
         let mut unused = Type::Null; // parent_tp, this is normally used to unpack the vector fill
+        // Clear any leftover cast marker so we only pick up a cast parsed as
+        // part of THIS rhs expression.
+        self.last_cast_alias = u32::MAX;
         let mut rhs_type = self.parse_operators(&Type::Unknown(0), &mut rhs_code, &mut unused, 0);
         if let Type::Rewritten(tp) = rhs_type {
             rhs_type = *tp;
         }
-        *code = self.write_to_file(file_v, rhs_code, &rhs_type);
+        let cast_alias = self.last_cast_alias;
+        self.last_cast_alias = u32::MAX;
+        *code = self.write_to_file(file_v, rhs_code, &rhs_type, cast_alias);
     }
 
     /// Determine the variable number for an assignment target.

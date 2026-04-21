@@ -13,34 +13,12 @@ use std::fmt::Write as _;
 use std::io::{Error, Write};
 // Bytecode generation
 
-/// Create byte code.
+/// Create byte code from parsed Data.  Walks every user function,
+/// emits its bytecode into `state`, then materialises constant
+/// vectors into `CONST_STORE`.
 pub fn byte_code(state: &mut State, data: &mut Data) {
-    byte_code_with_cache(state, data, None, &[]);
-}
-
-/// Create byte code, optionally using a `.loftc` cache file.
-/// `cache_path` is the path to write/read the cache. When `None`, no caching.
-/// `sources` is the list of (filename, content) pairs used for the cache key.
-pub fn byte_code_with_cache(
-    state: &mut State,
-    data: &mut Data,
-    cache_file: Option<&str>,
-    sources: &[(&str, &str)],
-) {
     native::init(state);
     register_native_stubs(state, data);
-
-    // Try loading from cache.
-    if let Some(path) = cache_file {
-        let key = crate::cache::cache_key(sources);
-        if let Some(cached) = crate::cache::read_cache(path, &key)
-            && load_from_cache(state, data, &cached)
-        {
-            return;
-        }
-    }
-
-    // Full compilation.
     for d_nr in 0..data.definitions() {
         if !matches!(data.def(d_nr).def_type, DefType::Function) || data.def(d_nr).is_operator() {
             continue;
@@ -49,101 +27,6 @@ pub fn byte_code_with_cache(
     }
     build_const_vectors(state, data);
     state.database.allocations[crate::database::CONST_STORE as usize].lock();
-
-    // Write cache for next run.
-    if let Some(path) = cache_file {
-        let key = crate::cache::cache_key(sources);
-        let cache_data = crate::cache::collect_cache_data(state, data);
-        let _ = crate::cache::write_cache(path, &key, &cache_data);
-    }
-}
-
-/// Restore State + Data from cached compilation output. Returns true on success.
-fn load_from_cache(state: &mut State, data: &mut Data, cached: &crate::cache::CacheData) -> bool {
-    use std::sync::Arc;
-
-    // Restore bytecode.
-    state.bytecode = Arc::new(cached.bytecode.clone());
-
-    // Restore CONST_STORE buffer.
-    let cs_idx = crate::database::CONST_STORE as usize;
-    let cs = &mut state.database.allocations[cs_idx];
-    let words = cached.const_store_buf.len() / 8;
-    if words > 0 {
-        // Resize the store to fit the cached data, then copy.
-        if cs.capacity_words() < words as u32 {
-            cs.resize(0, words as u32);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                cached.const_store_buf.as_ptr(),
-                cs.ptr,
-                cached.const_store_buf.len(),
-            );
-        }
-    }
-    cs.lock();
-    cs.ref_count = u32::MAX / 2;
-
-    // Restore vector constant stores.
-    for vs in &cached.vector_stores {
-        let idx = vs.store_nr as usize;
-        // Ensure the allocations array is large enough.
-        while state.database.allocations.len() <= idx {
-            state.database.allocations.push(crate::store::Store::new(4));
-        }
-        let store = &mut state.database.allocations[idx];
-        store.free = false;
-        let words = vs.data.len() / 8;
-        if store.capacity_words() < words as u32 {
-            store.resize(0, words as u32);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(vs.data.as_ptr(), store.ptr, vs.data.len());
-        }
-        store.lock();
-        store.ref_count = u32::MAX / 2;
-        // Update max store index.
-        if vs.store_nr >= state.database.max {
-            state.database.max = vs.store_nr + 1;
-        }
-    }
-
-    // Restore const_refs.
-    let null_ref = DbRef {
-        store_nr: u16::MAX,
-        rec: 0,
-        pos: 0,
-    };
-    state
-        .const_refs
-        .resize(data.definitions() as usize, null_ref);
-    for cr in &cached.const_refs {
-        if (cr.d_nr as usize) < state.const_refs.len() {
-            state.const_refs[cr.d_nr as usize] = DbRef {
-                store_nr: cr.store_nr,
-                rec: cr.rec,
-                pos: cr.pos,
-            };
-            // Also set on the Definition for native codegen.
-            data.definitions[cr.d_nr as usize].const_ref = Some(DbRef {
-                store_nr: cr.store_nr,
-                rec: cr.rec,
-                pos: cr.pos,
-            });
-        }
-    }
-
-    // Restore function code positions.
-    for func in &cached.functions {
-        let idx = func.d_nr as usize;
-        if idx < data.definitions.len() {
-            data.definitions[idx].code_position = func.code_position;
-            data.definitions[idx].code_length = func.code_length;
-        }
-    }
-
-    true
 }
 
 /// Extract literal values from vector constant Block IR and build
@@ -186,7 +69,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         state
             .database
             .store_mut(&db)
-            .set_int(db.rec, 4, i32::from(vec_tp));
+            .set_u32_raw(db.rec, 4, u32::from(vec_tp));
         state.database.set_default_value(vec_tp, &db);
         let vec_ref = DbRef {
             store_nr: db.store_nr,
@@ -197,7 +80,10 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
             let rec = state.database.record_new(&vec_ref, vec_tp, 0);
             match val {
                 Value::Int(v) => {
-                    state.database.store_mut(&rec).set_int(rec.rec, rec.pos, *v);
+                    state
+                        .database
+                        .store_mut(&rec)
+                        .set_int(rec.rec, rec.pos, i64::from(*v));
                 }
                 Value::Float(v) => {
                     state
@@ -224,7 +110,7 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
                     // into the text field as an int pointer.
                     let store = state.database.store_mut(&rec);
                     let s_pos = store.set_str(v);
-                    store.set_int(rec.rec, rec.pos, s_pos as i32);
+                    store.set_u32_raw(rec.rec, rec.pos, s_pos);
                 }
                 _ => {}
             }
@@ -245,11 +131,10 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
         return vec![];
     };
     let mut values = Vec::new();
-    // Look for patterns: Call(OpSetInt/Float/Single/Long/Text, [_, Int(0), literal_value])
+    // Look for patterns: Call(OpSetInt/Float/Single/Text, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
-    let set_long_nr = data.def_nr("OpSetLong");
     let set_text_nr = data.def_nr("OpSetText");
     for op in &block.operators {
         let Value::Call(fn_nr, args) = op else {
@@ -261,7 +146,6 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
         if *fn_nr == set_int_nr
             || *fn_nr == set_float_nr
             || *fn_nr == set_single_nr
-            || *fn_nr == set_long_nr
             || *fn_nr == set_text_nr
         {
             match &args[2] {
@@ -391,15 +275,15 @@ pub fn build_opcode_len_table(data: &Data) -> [u8; 256] {
     table
 }
 
-/// Resolve opcode number by operator name.  Returns `u8::MAX` if not found.
+/// Resolve opcode number by operator name.  Returns `u16::MAX` if not found.
 #[must_use]
-pub fn opcode_by_name(data: &Data, name: &str) -> u8 {
+pub fn opcode_by_name(data: &Data, name: &str) -> u16 {
     for (&op, &d_nr) in &data.operators {
         if data.definitions[d_nr as usize].name == name {
             return op;
         }
     }
-    u8::MAX
+    u16::MAX
 }
 
 /// Disassemble bytecode for one function to `writer`.
@@ -432,9 +316,14 @@ pub fn disassemble(
     let mut pc = start;
     while pc < end && pc < bytecode.len() {
         let rel = pc - start;
-        let op = bytecode[pc];
-        let ilen = op_len[op as usize] as usize;
-        if ilen == 0 {
+        let first = bytecode[pc];
+        let (op, op_byte_len): (u16, usize) = if first == 255 && pc + 1 < bytecode.len() {
+            (255u16 + u16::from(bytecode[pc + 1]), 2)
+        } else {
+            (u16::from(first), 1)
+        };
+        let ilen = op_len[first as usize] as usize + (op_byte_len - 1);
+        if op_len[first as usize] == 0 {
             writeln!(writer, "{rel:4}: ??? (opcode {op})")?;
             break;
         }
@@ -442,7 +331,15 @@ pub fn disassemble(
             writeln!(writer, "  .L{rel}:")?;
         }
         let op_name = opcode_display_name(op, data);
-        let args = format_op_args(op, bytecode, pc, data, vars, start, op_name);
+        let args = format_op_args(
+            op,
+            bytecode,
+            pc + op_byte_len - 1,
+            data,
+            vars,
+            start,
+            op_name,
+        );
         writeln!(writer, "{rel:4}: {op_name}({args})")?;
         pc += ilen;
     }
@@ -463,8 +360,13 @@ fn collect_jump_targets(
     let mut targets = std::collections::BTreeSet::new();
     let mut pc = start;
     while pc < end && pc < bytecode.len() {
-        let op = bytecode[pc];
-        let ilen = op_len[op as usize] as usize;
+        let first = bytecode[pc];
+        let (op, op_bytes): (u16, usize) = if first == 255 && pc + 1 < bytecode.len() {
+            (255u16 + u16::from(bytecode[pc + 1]), 2)
+        } else {
+            (u16::from(first), 1)
+        };
+        let ilen = op_len[first as usize] as usize + (op_bytes - 1);
         if ilen == 0 {
             break;
         }
@@ -490,7 +392,7 @@ fn collect_jump_targets(
 
 /// Return the printable opcode name, stripping the `Op` prefix so the
 /// disassembly reads as `Call(...)` rather than `OpCall(...)`.
-fn opcode_display_name(op: u8, data: &Data) -> &str {
+fn opcode_display_name(op: u16, data: &Data) -> &str {
     if data.has_op(op) {
         let n = &data.operator(op).name;
         n.strip_prefix("Op").unwrap_or(n.as_str())
@@ -507,7 +409,7 @@ fn opcode_display_name(op: u8, data: &Data) -> &str {
 /// - word-sized slot indices resolved to their variable name
 /// - 32-bit call targets resolved to the function name at that address
 fn format_op_args(
-    op: u8,
+    op: u16,
     bytecode: &[u8],
     pc: usize,
     data: &Data,

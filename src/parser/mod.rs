@@ -168,6 +168,12 @@ pub struct Parser {
     /// Field-capture aliases created by `if expr is Variant { field } { body }`.
     /// Drained by `parse_if` after the body to restore previous name mappings.
     pub(crate) is_capture_aliases: Vec<(String, Option<u16>)>,
+    /// Post-2c: captures the most recently parsed `as <alias>` cast target's
+    /// def_nr when the alias has a `size(N)` annotation.  Consumed by
+    /// `append_to_file` so that `f += x as i32` narrows the serialised
+    /// payload to the alias's byte width.  Reset to `u32::MAX` at the start
+    /// of each top-level statement; irrelevant outside file-I/O `+=`.
+    pub(crate) last_cast_alias: u32,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches (P163).
@@ -335,6 +341,7 @@ impl Parser {
             in_par_body: false,
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
+            last_cast_alias: u32::MAX,
         }
     }
 
@@ -624,6 +631,7 @@ impl Parser {
         if matches!(is_type, Type::Never) {
             return true;
         }
+        let _ = code;
         // Struct-literal inline constructors are typed as Rewritten(Reference(...)); strip
         // the wrapper so method calls chained on the constructor are accepted correctly.
         if let Type::Rewritten(inner) = is_type {
@@ -1282,13 +1290,20 @@ impl Parser {
                     && (new_d as usize) < data.definitions.len()
                     && data.def(new_d).name == "OpGetVector"
                     && new_args.len() == 3
-                    && matches!(&new_args[1], Value::Int(0 | 12))
                 {
+                    let cur_size = if let Value::Int(n) = &new_args[1] {
+                        *n
+                    } else {
+                        0
+                    };
                     let elm_size = Self::type_element_size(concrete, data);
-                    let mut fixed = new_args;
-                    fixed[1] = Value::Int(elm_size);
-                    let call = Value::Call(new_d, fixed);
-                    return Self::wrap_vector_get_val(call, concrete, data);
+                    if elm_size != cur_size {
+                        let mut fixed = new_args;
+                        fixed[1] = Value::Int(elm_size);
+                        let call = Value::Call(new_d, fixed);
+                        return Self::wrap_vector_get_val(call, concrete, data);
+                    }
+                    return Self::wrap_vector_get_val(Value::Call(new_d, new_args), concrete, data);
                 }
                 // I9-text fixup: when a T-stub had an extra __work_1 parameter
                 // (for text-returning interface methods) but the concrete method
@@ -1361,14 +1376,20 @@ impl Parser {
 
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
+        // Post-2c: honor size(N) on integer aliases.
+        if matches!(tp, Type::Integer(_, _, _)) {
+            let alias_nr = data.type_elm(tp);
+            if let Some(n) = data.forced_size(alias_nr) {
+                return i32::from(n);
+            }
+        }
         match tp {
-            Type::Integer(_, _, _)
-            | Type::Single
+            Type::Single
             | Type::Boolean
             | Type::Character
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
-            Type::Long | Type::Float => 8,
+            Type::Integer(_, _, _) | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.
@@ -1400,7 +1421,6 @@ impl Parser {
         let p = Value::Int(0);
         let (op_name, extra) = match tp {
             Type::Integer(_, _, _) => ("OpGetInt", None),
-            Type::Long => ("OpGetLong", None),
             Type::Float => ("OpGetFloat", None),
             Type::Single => ("OpGetSingle", None),
             Type::Text(_) => ("OpGetText", None),
@@ -1536,18 +1556,38 @@ impl Parser {
             let nm = self.data.attr_name(d_nr, f_nr);
             self.database.position(self.data.def(d_nr).known_type, &nm)
         };
-        self.get_val(&tp, nullable, u32::from(pos), code)
+        // Post-2c: pass the field's alias def_nr so `get_val` can honor
+        // size(N) for integer subtypes (e.g. i32 → OpGetInt4).
+        let alias = if f_nr == usize::MAX {
+            u32::MAX
+        } else {
+            self.data.def(d_nr).attributes[f_nr].alias_d_nr
+        };
+        self.get_val(&tp, nullable, u32::from(pos), code, alias)
     }
 
-    fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value) -> Value {
+    fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
             Type::Integer(min, _, _) => {
-                let s = tp.size(nullable);
+                // Post-2c: honor size(N) on the captured alias; fall back to
+                // the limit()-based heuristic when no alias info available.
+                let s = self
+                    .data
+                    .forced_size(alias)
+                    .unwrap_or_else(|| tp.size(nullable));
+                debug_assert!(
+                    matches!(s, 1 | 2 | 4 | 8),
+                    "get_val: unexpected integer field width s={s} \
+                     (alias_d_nr={alias}) — only 1/2/4/8 are supported \
+                     by the OpGet* family"
+                );
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(*min)])
                 } else if s == 2 {
                     self.cl("OpGetShort", &[code, p, Value::Int(*min)])
+                } else if s == 4 {
+                    self.cl("OpGetInt4", &[code, p])
                 } else {
                     self.cl("OpGetInt", &[code, p])
                 }
@@ -1557,7 +1597,6 @@ impl Parser {
                 let val = self.cl("OpGetByte", &[code, p, Value::Int(0)]);
                 self.cl("OpEqInt", &[val, Value::Int(1)])
             }
-            Type::Long => self.cl("OpGetLong", &[code, p]),
             Type::Float => self.cl("OpGetFloat", &[code, p]),
             Type::Single => self.cl("OpGetSingle", &[code, p]),
             Type::Text(_) => self.cl("OpGetText", &[code, p]),
@@ -1641,11 +1680,40 @@ impl Parser {
         let set_op = match tp {
             Type::Integer(min, _, _) => {
                 let m = Value::Int(min);
-                let s = tp.size(self.data.attr_nullable(d_nr, f_nr));
+                // Post-2c: honor size(N) on the alias recorded during field
+                // parsing; fall back to the limit()-based heuristic.
+                let alias_nr = if f_nr == usize::MAX {
+                    u32::MAX
+                } else {
+                    self.data.def(d_nr).attributes[f_nr].alias_d_nr
+                };
+                let s = self
+                    .data
+                    .forced_size(alias_nr)
+                    .unwrap_or_else(|| tp.size(self.data.attr_nullable(d_nr, f_nr)));
+                // Size-consistency gate: the size resolved from
+                // `forced_size` / limit must be one of the four
+                // supported widths.  Any other value indicates a
+                // post-2c regression in `size()` or a novel alias that
+                // needs a matching Op emission branch here.
+                debug_assert!(
+                    matches!(s, 1 | 2 | 4 | 8),
+                    "set_field_check: unexpected integer field width \
+                     s={s} for {}.{} (alias_d_nr={alias_nr}) — only \
+                     1/2/4/8 are supported by the OpSet* family",
+                    self.data.def(d_nr).name,
+                    if f_nr == usize::MAX {
+                        "<unknown>".to_string()
+                    } else {
+                        self.data.def(d_nr).attributes[f_nr].name.clone()
+                    },
+                );
                 if s == 1 {
                     self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
                     self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
+                } else if s == 4 {
+                    self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
                 } else {
                     self.cl("OpSetInt", &[ref_code, pos_val, val_code])
                 }
@@ -1654,8 +1722,13 @@ impl Parser {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Spacial(_, _, _)
-            | Type::Sorted(_, _, _)
-            | Type::Character => self.cl("OpSetInt", &[ref_code, pos_val, val_code]),
+            | Type::Sorted(_, _, _) => {
+                // Collection header is a 4-byte u32 record pointer.  Post-2c
+                // `OpSetInt` writes 8 bytes (i64), which overflows into the
+                // next field.  Use `OpSetInt4` to write only 4 bytes.
+                self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
+            }
+            Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, _) => {
                 // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
                 // Copy the struct bytes into the embedded field instead.
@@ -1684,7 +1757,6 @@ impl Parser {
                 let v = v_if(val_code, Value::Int(1), Value::Int(0));
                 self.cl("OpSetByte", &[ref_code, pos_val, Value::Int(0), v])
             }
-            Type::Long => self.cl("OpSetLong", &[ref_code, pos_val, val_code]),
             Type::Float => self.cl("OpSetFloat", &[ref_code, pos_val, val_code]),
             Type::Single => self.cl("OpSetSingle", &[ref_code, pos_val, val_code]),
             Type::Text(_) => self.cl("OpSetText", &[ref_code, pos_val, val_code]),
@@ -2872,7 +2944,6 @@ impl Parser {
                 && matches!(
                     base_tp,
                     Type::Integer(_, _, _)
-                        | Type::Long
                         | Type::Float
                         | Type::Single
                         | Type::Boolean
@@ -2910,7 +2981,6 @@ impl Parser {
                 "OpConvEnumFromNull",
                 &[Value::Int(i32::from(self.data.def(*tp).known_type))],
             ),
-            Type::Long => self.cl("OpConvLongFromNull", &[]),
             Type::Float => self.cl("OpConvFloatFromNull", &[]),
             Type::Single => self.cl("OpConvSingleFromNull", &[]),
             Type::Text(_) => self.cl("OpConvTextFromNull", &[]),

@@ -68,13 +68,13 @@ fn main() {
 
   // ## Finding Dominant Channel
   // Walk every pixel and find which channel has the highest total value.
-  total_r = 0l;
-  total_g = 0l;
-  total_b = 0l;
+  total_r = 0;
+  total_g = 0;
+  total_b = 0;
   for ch_px in img.data {
-    total_r += ch_px.r as long;
-    total_g += ch_px.g as long;
-    total_b += ch_px.b as long;
+    total_r += ch_px.r as integer;
+    total_g += ch_px.g as integer;
+    total_b += ch_px.b as integer;
   }
   dominant = if total_r >= total_g and total_r >= total_b { "red" }
     else if total_g >= total_b { "green" }

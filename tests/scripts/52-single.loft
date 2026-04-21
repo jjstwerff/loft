@@ -45,7 +45,7 @@ fn main() {
   assert(2.0f as float == 2.0, "single as float");
   assert(3.7f as integer == 3, "single as integer truncates toward zero");
   assert(-3.7f as integer == -3, "single as integer negative truncates toward zero");
-  assert(3.7f as long == 3l, "single as long truncates toward zero");
+  assert(3.7f as integer == 3, "single as integer truncates toward zero");
   assert("2.5" as single == 2.5f, "text as single");
   assert("{2.5f}" == "2.5", "single to text format");
   // --- Formatting specifiers ---
@@ -56,5 +56,5 @@ fn main() {
   // --- Null cast results ---
   nan_s = zero / zero;
   assert(!(nan_s as integer), "single NaN as integer is null");
-  assert(!(nan_s as long), "single NaN as long is null");
+  assert(!(nan_s as integer), "single NaN as integer is null");
 }

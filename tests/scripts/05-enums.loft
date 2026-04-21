@@ -161,7 +161,7 @@ fn main() {
 }
 
 enum Content {
-  CLong { v: long },
+  CLong { v: integer },
   CFloat { v: float },
   CSingle { v: single },
   CText { v: text }
@@ -178,7 +178,7 @@ fn fill() -> Container {
     name: "testing",
     content: CSingle { v: 1234.56f },
     list: [
-      CLong { v: 9876543210l },
+      CLong { v: 9876543210 },
       CText { v: "An example sentence of text" },
       CFloat { v: 3.141592653589793 }
     ]

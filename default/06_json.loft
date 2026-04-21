@@ -78,7 +78,7 @@ pub fn as_number(self: JsonValue) -> float;
 
 /// Typed extractor — returns `null` on kind mismatch.  Truncates the
 /// underlying `float` toward zero before converting.
-pub fn as_long(self: JsonValue) -> long;
+pub fn as_long(self: JsonValue) -> integer;
 
 /// Typed extractor — returns `null` on kind mismatch.
 pub fn as_bool(self: JsonValue) -> boolean;

@@ -330,7 +330,7 @@ pub fn int(self: Lexer) -> integer {
 }
 // Get a long and skip it.
 
-pub fn long_int(self: Lexer) -> long {
+pub fn long_int(self: Lexer) -> integer {
   if self.scanned != Long && self.scanned != Integer {
     return null;
   }
@@ -338,7 +338,7 @@ pub fn long_int(self: Lexer) -> long {
   if self.data[to - 1] == 'l' {
     to -= 1;
   }
-  result = self.data[self.start..to] as long;
+  result = self.data[self.start..to] as integer;
   if result {
     self.scan();
     result

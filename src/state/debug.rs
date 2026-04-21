@@ -470,12 +470,13 @@ impl State {
         is_arg: bool,
     ) -> VariableValue {
         match tp {
+            // Post-2c round 10c: wide Type::Integer (former Type::Long) is i64.
+            Type::Integer(_, max, _) if *max > i32::MAX as u32 => self
+                .peek_at::<i64>(abs_pos)
+                .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
             Type::Integer(_, _, _) => self
                 .peek_at::<i32>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Integer),
-            Type::Long => self
-                .peek_at::<i64>(abs_pos)
-                .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
             Type::Single => self
                 .peek_at::<f32>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Single),
@@ -780,7 +781,13 @@ impl State {
         )?;
         while self.code_pos < start_pos + data.def(d_nr).code_length {
             let p = self.code_pos;
-            let op = *self.code::<u8>();
+            let first = *self.code::<u8>();
+            let op: u16 = if first == 255 {
+                let ext = *self.code::<u8>();
+                255u16 + u16::from(ext)
+            } else {
+                u16::from(first)
+            };
             assert!(
                 data.has_op(op),
                 "Unknown operator {op} in byte_code of {}",
@@ -838,7 +845,7 @@ impl State {
     }
 
     pub(super) fn fn_name(&mut self, f: &mut dyn Write, data: &Data) -> Result<(), Error> {
-        let addr = *self.code::<i32>() as u32;
+        let addr = *self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {
@@ -868,10 +875,9 @@ impl State {
             Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 => {
                 format!("{}", i32::from(*self.code::<i16>()))
             }
-            Type::Integer(_, _, _) => format!("{}", *self.code::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.code::<i64>()),
             Type::Boolean => format!("{}", *self.code::<u8>() == 1),
             Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
-            Type::Long => format!("{}", *self.code::<i64>()),
             Type::Single => format!("{}", *self.code::<f32>()),
             Type::Float => format!("{}", *self.code::<f64>()),
             Type::Text(_) => {
@@ -943,7 +949,19 @@ impl State {
         };
         while self.code_pos < self.bytecode.len() as u32 {
             let code = self.code_pos;
-            let op = *self.code::<u8>();
+            // 2-byte opcode handling — mirrors `state/mod.rs::execute`
+            // (see `emit_op` in `state/mod.rs:149`): opcodes ≥ 255 are
+            // encoded as `[255, op-255]`.  Without this branch the trace
+            // loop misreads the lead byte 255 as a single-byte opcode and
+            // dispatches through `OPERATORS[255]` instead of the intended
+            // handler.
+            let first = *self.code::<u8>();
+            let op = if first == 255 {
+                let ext = *self.code::<u8>();
+                255u16 + u16::from(ext)
+            } else {
+                u16::from(first)
+            };
             let op_name = data.operator(op).name.clone();
             let op_base = &op_name[2..]; // strip "Op" prefix
 
@@ -1096,12 +1114,12 @@ impl State {
     pub(super) fn log_step(
         &mut self,
         log: &mut dyn Write,
-        op: u8,
+        op: u16,
         code: u32,
         fn_ctx: &(u32, i64),
         config: &LogConfig,
         data: &Data,
-    ) -> Result<u8, Error> {
+    ) -> Result<u16, Error> {
         let (d_nr, frame_offset) = *fn_ctx;
         let cur = self.code_pos;
         let stack = self.stack_pos;
@@ -1228,7 +1246,7 @@ impl State {
             }
             let v = match key {
                 0 => self.dump_stack(&I32, u32::MAX, data),
-                1 => self.dump_stack(&Type::Long, u32::MAX, data),
+                1 => self.dump_stack(&crate::data::I64, u32::MAX, data),
                 2 => self.dump_stack(&Type::Single, u32::MAX, data),
                 3 => self.dump_stack(&Type::Float, u32::MAX, data),
                 4 => self.dump_stack(&Type::Boolean, u32::MAX, data),
@@ -1288,7 +1306,7 @@ impl State {
         a_nr: usize,
         data: &Data,
     ) {
-        let addr = *self.code::<i32>() as u32;
+        let addr = *self.code::<i64>() as u32;
         let mut name = format!("Unknown[{addr}]");
         for d in &data.definitions {
             if d.code_position == addr {
@@ -1301,7 +1319,7 @@ impl State {
     pub(super) fn log_result(
         &mut self,
         log: &mut dyn Write,
-        op: u8,
+        op: u16,
         code: u32,
         data: &Data,
     ) -> Result<(), Error> {
@@ -1349,7 +1367,7 @@ impl State {
             let stack = self.stack_pos;
             let known = *k;
             let res = match known {
-                0 => format!("{}", *self.get_stack::<i32>()), // integer
+                0 => format!("{}", *self.get_stack::<i64>()), // integer
                 1 => format!("{}", *self.get_stack::<i64>()), // long
                 2 => format!("{}", *self.get_stack::<f32>()), // single
                 3 => format!("{}", *self.get_stack::<f64>()), // float
@@ -1405,7 +1423,7 @@ impl State {
 
     pub(super) fn dump_stack(&mut self, typedef: &Type, code: u32, data: &Data) -> String {
         match typedef {
-            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i32>()),
+            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i64>()),
             Type::Character => {
                 let c = *self.get_stack::<char>();
                 if c == char::from(0) {
@@ -1429,7 +1447,6 @@ impl State {
                     format!("{}({val})", self.database.enum_val(known, val))
                 }
             }
-            Type::Long => format!("{}", *self.get_stack::<i64>()),
             Type::Single => format!("{}", *self.get_stack::<f32>()),
             Type::Float => format!("{}", *self.get_stack::<f64>()),
             Type::Text(_) => {

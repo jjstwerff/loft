@@ -12,7 +12,7 @@ use loft::ops::*;
 fn init(db: &mut Stores) {}
 
 fn test(stores: &mut Stores) -> i64 {
-    op_mul_long((10_i64), (op_conv_long_from_int(2_i32)))
+    op_mul_long((10_i64), (op_conv_long_from_int(2_i64)))
 }
 
 #[test]

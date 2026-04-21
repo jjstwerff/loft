@@ -74,7 +74,6 @@ pub mod parallel;
 pub mod platform;
 pub mod state;
 
-pub mod cache;
 pub mod compile;
 pub mod extensions;
 pub mod log_config;
@@ -85,6 +84,7 @@ mod stack;
 
 pub mod documentation;
 pub mod formatter;
+pub mod migrate_long;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

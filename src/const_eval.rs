@@ -101,16 +101,6 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
         ("OpNeInt", [Value::Int(a), Value::Int(b)]) => Some(Value::Boolean(*a != *b)),
         ("OpLtInt", [Value::Int(a), Value::Int(b)]) => Some(Value::Boolean(*a < *b)),
         ("OpLeInt", [Value::Int(a), Value::Int(b)]) => Some(Value::Boolean(*a <= *b)),
-        // --- long arithmetic ---
-        ("OpAddLong", [Value::Long(a), Value::Long(b)]) => Some(Value::Long(a.wrapping_add(*b))),
-        ("OpMinLong", [Value::Long(a), Value::Long(b)]) => Some(Value::Long(a.wrapping_sub(*b))),
-        ("OpMulLong", [Value::Long(a), Value::Long(b)]) => Some(Value::Long(a.wrapping_mul(*b))),
-        ("OpDivLong", [Value::Long(a), Value::Long(b)])
-            if *b != 0 && !(*a == i64::MIN && *b == -1) =>
-        {
-            Some(Value::Long(a / b))
-        }
-        ("OpMinSingleLong", [Value::Long(a)]) => Some(Value::Long(a.wrapping_neg())),
         // --- float arithmetic ---
         ("OpAddFloat", [Value::Float(a), Value::Float(b)]) => Some(Value::Float(a + b)),
         ("OpMinFloat", [Value::Float(a), Value::Float(b)]) => Some(Value::Float(a - b)),
@@ -124,12 +114,9 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
         ("OpDivSingle", [Value::Single(a), Value::Single(b)]) => Some(Value::Single(a / b)),
         ("OpMinSingleSingle", [Value::Single(a)]) => Some(Value::Single(-a)),
         // --- casts ---
-        ("OpConvLongFromInt", [Value::Int(a)]) => Some(Value::Long(i64::from(*a))),
         ("OpConvFloatFromInt", [Value::Int(a)]) => Some(Value::Float(f64::from(*a))),
-        ("OpConvIntFromLong", [Value::Long(a)]) => Some(Value::Int(*a as i32)),
         ("OpConvIntFromFloat", [Value::Float(a)]) if a.is_finite() => Some(Value::Int(*a as i32)),
         ("OpConvSingleFromInt", [Value::Int(a)]) => Some(Value::Single(*a as f32)),
-        ("OpConvFloatFromLong", [Value::Long(a)]) => Some(Value::Float(*a as f64)),
         // --- boolean ---
         ("OpNot", [Value::Boolean(a)]) => Some(Value::Boolean(!a)),
         _ => None,
@@ -187,14 +174,6 @@ mod tests {
         } else {
             panic!("expected Float");
         }
-    }
-
-    #[test]
-    fn fold_cast_int_to_long() {
-        assert_eq!(
-            fold_op("OpConvLongFromInt", &[Value::Int(42)]),
-            Some(Value::Long(42))
-        );
     }
 
     #[test]

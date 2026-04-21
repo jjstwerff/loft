@@ -282,8 +282,10 @@ memory-mapped files, the constant store can be written to disk alongside the
 program (e.g., `program.loft` -> `program.loftc` or `.loft/constants.store`)
 and mapped on subsequent runs, skipping reconstruction entirely.
 
-This is a stepping stone toward a full bytecode cache (`.loftc`), which the
-CLAUDE.md documentation index already references as a deferred design.
+(The earlier `.loftc` bytecode cache was removed in the integer-i64
+migration — its cache-key missed stdlib edits and it served no user
+audience yet.  Revisit the full-bytecode-cache design if/when external
+users arrive.)
 
 ### Platform support
 

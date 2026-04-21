@@ -1338,7 +1338,6 @@ fn is_value_return_type(tp: &Type) -> bool {
     matches!(
         tp,
         Type::Integer(_, _, _)
-            | Type::Long
             | Type::Float
             | Type::Single
             | Type::Boolean

@@ -470,7 +470,6 @@ impl Parser {
             }
             // scalar types — dispatch to scalar match handler.
             Type::Integer(_, _, _)
-            | Type::Long
             | Type::Float
             | Type::Single
             | Type::Boolean
@@ -1320,7 +1319,7 @@ impl Parser {
         } else if let Some(n) = self.lexer.has_long() {
             let v = n as i64;
             lit = Value::Long(if negate { -v } else { v });
-            Type::Long
+            crate::data::I64.clone()
         } else if let Some(n) = self.lexer.has_float() {
             lit = Value::Float(if negate { -n } else { n });
             Type::Float
@@ -1328,7 +1327,7 @@ impl Parser {
             lit = Value::Text(s);
             Type::Text(Vec::new())
         } else if let Some(c) = self.lexer.has_char() {
-            lit = Value::Int(c as i32);
+            lit = self.cl("OpConvCharacterFromInt", &[Value::Int(c as i32)]);
             Type::Character
         } else if self.lexer.has_token("true") {
             lit = Value::Boolean(true);
@@ -2241,7 +2240,7 @@ impl Parser {
             }
         } else if let Type::Text(_) = in_type {
             Type::Character
-        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) | Type::Long = in_type {
+        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) = in_type {
             // I13: check for custom iterator protocol before falling back.
             let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
             if next_d_nr != u32::MAX {
@@ -3101,8 +3100,15 @@ impl Parser {
                 } else if let Some(tp) = self.parse_type(u32::MAX, &id, false) {
                     found = true;
                     if !self.first_pass {
+                        // Post-2c: prefer the alias's forced size(N) annotation.
+                        // `d_nr` (local above) is the def_nr of the alias the user
+                        // typed — e.g. i32 — not the base integer it collapses to
+                        // via type_elm.  Only forced_size on the alias applies.
+                        let forced = self.data.forced_size(d_nr);
                         let packed = tp.size(false);
-                        *val = if packed > 0 {
+                        *val = if let Some(n) = forced {
+                            Value::Int(i32::from(n))
+                        } else if packed > 0 {
                             // Range-constrained integer: use packed field size
                             Value::Int(i32::from(packed))
                         } else {

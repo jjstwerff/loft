@@ -56,7 +56,7 @@ fn test_signed_format() {
 }
 
 fn test_long_formatting() {
-  fln_n = 1000000l;
+  fln_n = 1000000;
   assert("{fln_n}" == "1000000", "long default");
   assert("{fln_n:>10}" == "   1000000", "long right-aligned");
 }

@@ -14,6 +14,6 @@ fn main() {
   for nw_j in 0..n {
     acc += newton_sqrt((nw_j + 1) as float);
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {round(acc)}  time: {ms}ms");
 }

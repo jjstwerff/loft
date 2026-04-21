@@ -20,7 +20,7 @@ fn utf8_index() {
 fn string_scope() {
     expr!(
         "
-  a=1l;
+  a=1;
   b=\"\";
   for n in 1..4 {
     t=\"1\";
@@ -29,7 +29,7 @@ fn string_scope() {
       t+=\"2\";
     };
     b += t+\" \";
-    a += t as long
+    a += t as integer
   };
   \"{a} via {b}\"
 "

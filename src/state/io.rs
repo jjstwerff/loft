@@ -28,7 +28,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
@@ -52,7 +52,7 @@ impl State {
         #[cfg(all(not(target_arch = "wasm32"), not(feature = "wasm")))]
         {
             let store = self.database.store(&file);
-            let file_path = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+            let file_path = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
             let path_string = file_path.to_owned();
             let buf = self.database.store_mut(&r).addr_mut::<String>(r.rec, r.pos);
             if let Ok(mut f) = File::open(&path_string) {
@@ -89,18 +89,47 @@ impl State {
             let store = self.database.store(&val);
             let s: &String = store.addr::<String>(val.rec, val.pos);
             data.extend_from_slice(s.as_bytes());
+        } else if matches!(
+            &self.database.types[db_tp as usize].parts,
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
+        ) {
+            // Narrow-integer values sit in an 8B variable slot stored raw as i64
+            // (OpPutInt), not via the +1-encoded Parts::Byte/Short encoding that
+            // structs use (nor the i32::MIN null sentinel of Parts::Int).
+            // Read the raw i64 and serialise directly.
+            let v = self.database.store(&val).get_int(val.rec, val.pos);
+            match &self.database.types[db_tp as usize].parts {
+                Parts::Byte(_, _) => data.push(v as u8),
+                Parts::Short(_, _) => {
+                    let b = if little_endian {
+                        (v as u16).to_le_bytes()
+                    } else {
+                        (v as u16).to_be_bytes()
+                    };
+                    data.extend_from_slice(&b);
+                }
+                Parts::Int(_, _) => {
+                    let b = if little_endian {
+                        (v as i32).to_le_bytes()
+                    } else {
+                        (v as i32).to_be_bytes()
+                    };
+                    data.extend_from_slice(&b);
+                }
+                _ => unreachable!(),
+            }
         } else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
             let elem_tp = *elem_tp;
             let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
             let (v_ptr, store_nr) = {
                 let store = self.database.store(&vec_ref);
                 (
-                    store.get_int(vec_ref.rec, vec_ref.pos) as u32,
+                    store.get_u32_raw(vec_ref.rec, vec_ref.pos),
                     vec_ref.store_nr,
                 )
             };
             if v_ptr != 0 {
-                let length = self.database.allocations[store_nr as usize].get_int(v_ptr, 4) as u32;
+                let length = self.database.allocations[store_nr as usize].get_u32_raw(v_ptr, 4);
                 let elem_size = u32::from(self.database.size(elem_tp));
                 for i in 0..length {
                     let elem = DbRef {
@@ -148,7 +177,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, next_pos);
@@ -157,12 +186,15 @@ impl State {
         #[cfg(not(feature = "wasm"))]
         {
             let f_nr = self.database.files.len() as i32;
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             let file_ref = if file_ref == i32::MIN {
                 let file_name = {
                     let store = self.database.store(&file);
                     store
-                        .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                        .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                         .to_owned()
                 };
                 match File::create(&file_name) {
@@ -173,7 +205,7 @@ impl State {
                         }
                         self.database
                             .store_mut(&file)
-                            .set_int(file.rec, file.pos + 28, f_nr);
+                            .set_i32_raw(file.rec, file.pos + 28, f_nr);
                         if format == 5 {
                             self.database
                                 .store_mut(&file)
@@ -188,6 +220,11 @@ impl State {
                     }
                 }
             } else {
+                // Handle already open: sync OS handle with stored next_pos so
+                // the user can `f#next = N` to overwrite bytes in place.
+                if let Some(f) = &mut self.database.files[file_ref as usize] {
+                    let _ = f.seek(SeekFrom::Start(next_pos as u64));
+                }
                 file_ref
             };
             if let Some(f) = &mut self.database.files[file_ref as usize]
@@ -224,6 +261,37 @@ impl State {
                 let vec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
                 self.database
                     .write_data(&vec_ref, db_tp, little_endian, &data);
+            } else if matches!(
+                &self.database.types[db_tp as usize].parts,
+                Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
+            ) {
+                // Narrow-integer reads (byte/short/int) target a u8/u16/i32
+                // variable whose stack slot is 8 bytes (Phase 2c integer
+                // width) and holds a raw i64 — not the +1-encoded form that
+                // Parts::Byte/Short use in struct fields, nor the i32::MIN
+                // null sentinel Parts::Int uses.  Decode the bytes and store
+                // as a sign-extended i64.
+                let v: i64 = match &self.database.types[db_tp as usize].parts {
+                    Parts::Byte(_, _) => i64::from(data[0]),
+                    Parts::Short(_, _) => {
+                        let d: [u8; 2] = data[0..2].try_into().unwrap();
+                        if little_endian {
+                            i64::from(u16::from_le_bytes(d))
+                        } else {
+                            i64::from(u16::from_be_bytes(d))
+                        }
+                    }
+                    Parts::Int(_, _) => {
+                        let d: [u8; 4] = data[0..4].try_into().unwrap();
+                        if little_endian {
+                            i64::from(i32::from_le_bytes(d))
+                        } else {
+                            i64::from(i32::from_be_bytes(d))
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                self.database.store_mut(&val).set_int(val.rec, val.pos, v);
             } else {
                 self.database.write_data(&val, db_tp, little_endian, &data);
             }
@@ -231,7 +299,7 @@ impl State {
     }
 
     pub fn read_file(&mut self) {
-        let bytes = *self.get_stack::<i32>();
+        let bytes = *self.get_stack::<i64>() as i32;
         let val = *self.get_stack::<DbRef>();
         let file = *self.get_stack::<DbRef>();
         let db_tp = *self.code::<u16>();
@@ -259,7 +327,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, next_pos);
@@ -278,18 +346,22 @@ impl State {
         {
             let f_nr = self.database.files.len() as i32;
             let store = self.database.store_mut(&file);
-            let mut file_ref = store.get_int(file.rec, file.pos + 28);
+            let mut file_ref = store.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                let file_name = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+                let file_name = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
                 if let Ok(mut f) = File::open(file_name) {
                     // apply stored seek position on first open.
                     if next_pos != 0 {
                         let _ = f.seek(SeekFrom::Start(next_pos as u64));
                     }
-                    store.set_int(file.rec, file.pos + 28, f_nr);
+                    store.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.database.files.push(Some(f));
                 }
                 file_ref = f_nr;
+            } else if let Some(f) = &mut self.database.files[file_ref as usize] {
+                // Handle already open: user may have set #next explicitly to seek.
+                // Sync the OS file handle with the stored next_pos.
+                let _ = f.seek(SeekFrom::Start(next_pos as u64));
             }
             let is_text = self.database.is_text_type(db_tp);
             let mut data = vec![0u8; n];
@@ -331,7 +403,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             crate::wasm::host_fs_seek(&file_path, pos);
@@ -342,7 +414,10 @@ impl State {
         }
         #[cfg(not(feature = "wasm"))]
         {
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
                 // File not yet open — store the seek position in #next so the first
                 // read/write applies it after opening the file.
@@ -369,7 +444,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let size = crate::wasm::host_fs_file_size(&file_path);
@@ -380,7 +455,7 @@ impl State {
         {
             let store = self.database.store(&file);
             let file_path = store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned();
             let size = if let Ok(meta) = std::fs::metadata(&file_path) {
                 meta.len() as i64
@@ -404,7 +479,7 @@ impl State {
             let file_path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             let ok = if let Some(mut bytes) = crate::wasm::host_fs_read_binary(&file_path) {
@@ -423,17 +498,20 @@ impl State {
             let path = {
                 let store = self.database.store(&file);
                 store
-                    .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                    .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                     .to_owned()
             };
             // Close any open handle: the handle may be in read or write mode with a stale
             // position, and after resize the position might be beyond the new end of file.
-            let file_ref = self.database.store(&file).get_int(file.rec, file.pos + 28);
+            let file_ref = self
+                .database
+                .store(&file)
+                .get_i32_raw(file.rec, file.pos + 28);
             if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
                 self.database.files[file_ref as usize] = None;
                 self.database
                     .store_mut(&file)
-                    .set_int(file.rec, file.pos + 28, i32::MIN);
+                    .set_i32_raw(file.rec, file.pos + 28, i32::MIN);
                 self.database
                     .store_mut(&file)
                     .set_long(file.rec, file.pos + 8, i64::MIN);
@@ -470,9 +548,9 @@ impl State {
             && db.rec != 0
             && let Some(&file_type) = self.database.names.get("File")
         {
-            let stored_type = self.database.store(&db).get_int(db.rec, 4) as u16;
+            let stored_type = self.database.store(&db).get_u32_raw(db.rec, 4) as u16;
             if stored_type == file_type {
-                let file_ref = self.database.store(&db).get_int(db.rec, db.pos + 28);
+                let file_ref = self.database.store(&db).get_i32_raw(db.rec, db.pos + 28);
                 if file_ref != i32::MIN && (file_ref as usize) < self.database.files.len() {
                     self.database.files[file_ref as usize] = None;
                 }
@@ -495,11 +573,11 @@ impl State {
 
     pub fn sizeof_ref(&mut self) {
         let db = *self.get_stack::<DbRef>();
-        let new_value = if db.rec == 0 {
-            0i32
+        let new_value: i64 = if db.rec == 0 {
+            0
         } else {
             let db_tp = self.database.store(&db).get_int(db.rec, 4) as u16;
-            i32::from(self.database.size(db_tp))
+            i64::from(self.database.size(db_tp))
         };
         self.put_stack(new_value);
     }
@@ -561,7 +639,7 @@ impl State {
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
         self.database
             .store_mut(&r)
-            .set_int(r.rec, 4, i32::from(db_tp));
+            .set_u32_raw(r.rec, 4, u32::from(db_tp));
         self.database.set_default_value(db_tp, &r);
         let db = self.mut_var::<DbRef>(var);
         db.store_nr = r.store_nr;
@@ -675,9 +753,11 @@ impl State {
             2 => {
                 // sorted points to the position of the record inside the vector
                 // empty from/till arrays signal "no constraint on this side".
-                // S-lexer: get_int returns i32::MIN for unresolved-type fields;
+                // Phase 2c: sorted collection pointer is a 4-byte u32 — using
+                // `get_int` (8 bytes post-2c) overflows into the next field.
+                // get_i32_raw returns i32::MIN for unresolved-type fields;
                 // guard against negative values (0 = empty, i32::MIN = unresolved).
-                let sorted_rec_raw = all[data.store_nr as usize].get_int(data.rec, data.pos);
+                let sorted_rec_raw = all[data.store_nr as usize].get_i32_raw(data.rec, data.pos);
                 let sorted_rec = if sorted_rec_raw <= 0 {
                     0
                 } else {
@@ -686,7 +766,7 @@ impl State {
                 let vec_len = if sorted_rec == 0 {
                     0
                 } else {
-                    all[data.store_nr as usize].get_int(sorted_rec, 4) as u32
+                    all[data.store_nr as usize].get_u32_raw(sorted_rec, 4)
                 };
                 if reverse {
                     start = if till.is_empty() {
@@ -760,7 +840,7 @@ impl State {
                 break;
             }
             match k.type_nr.abs() {
-                1 => key.push(Content::Long(i64::from(*self.get_stack::<i32>()))),
+                1 => key.push(Content::Long(*self.get_stack::<i64>())),
                 2 => key.push(Content::Long(*self.get_stack::<i64>())),
                 3 => key.push(Content::Single(*self.get_stack::<f32>())),
                 4 => key.push(Content::Float(*self.get_stack::<f64>())),
@@ -850,11 +930,11 @@ impl State {
                 3 => {
                     let mut pos = cur as i32;
                     vector::vector_next(&data, &mut pos, 4, &self.database.allocations);
-                    let vector = store.get_int(data.rec, data.pos) as u32;
+                    let vector = store.get_u32_raw(data.rec, data.pos);
                     let rec = if pos == i32::MAX {
                         0
                     } else {
-                        store.get_int(vector, pos as u32) as u32
+                        store.get_u32_raw(vector, pos as u32)
                     };
                     self.put_var(state_var - 8, pos as u32);
                     DbRef {
@@ -898,10 +978,16 @@ impl State {
                 vector::remove_vector(
                     &data,
                     u32::from(self.database.size(tp)),
-                    cur,
+                    i64::from(cur),
                     &mut self.database.allocations,
                 );
-                self.put_var(state_var - 8, n);
+                // iter_var (#index) is i64 on stack post-2c.  Sign-extend n
+                // (may be −1 after remove-at-index-0) and write all 8 bytes
+                // so the high word doesn't leak a stale value into the next
+                // VarInt — otherwise −1 comes back as 0xFFFFFFFF = 2^32−1.
+                // put_var adds size_of::<T>(); switching i32→i64 shifts the
+                // target address up by 4 bytes, so pos moves from −8 to −4.
+                self.put_var(state_var - 4, i64::from(n));
             }
             1 => {
                 // Use the outer `cur` (read as i32 before the data DbRef was popped).
@@ -956,7 +1042,12 @@ impl State {
                     return;
                 }
                 let n = if reverse { cur + 1 } else { cur - 1 };
-                vector::remove_vector(&data, u32::from(tp), cur, &mut self.database.allocations);
+                vector::remove_vector(
+                    &data,
+                    u32::from(tp),
+                    i64::from(cur),
+                    &mut self.database.allocations,
+                );
                 self.put_var(state_var - 8, n);
             }
             3 => {
@@ -973,7 +1064,7 @@ impl State {
                 vector::remove_vector(
                     &data,
                     size,
-                    (cur - 8) / i32::from(tp),
+                    i64::from((cur - 8) / i32::from(tp)),
                     &mut self.database.allocations,
                 );
                 self.put_var(state_var - 8, n);
@@ -993,13 +1084,13 @@ impl State {
 
     pub fn append_copy(&mut self) {
         let tp = *self.code::<u16>();
-        let multiply = *self.get_stack::<i32>() as u32;
+        let multiply = *self.get_stack::<i64>() as u32;
         let data = *self.get_stack::<DbRef>();
         let ctp = self.database.content(tp);
         let size = u32::from(self.database.size(ctp));
         let length = vector::length_vector(&data, &self.database.allocations);
-        let v_rec = crate::keys::store(&data, &self.database.allocations)
-            .get_int(data.rec, data.pos) as u32;
+        let v_rec =
+            crate::keys::store(&data, &self.database.allocations).get_u32_raw(data.rec, data.pos);
         let from = DbRef {
             store_nr: data.store_nr,
             rec: v_rec,
@@ -1101,12 +1192,12 @@ impl State {
                 break;
             }
             match k {
-                0 | 6 => key.push(Content::Long(i64::from(*self.get_stack::<i32>()))),
-                1 => key.push(Content::Long(*self.get_stack::<i64>())),
+                0 | 1 => key.push(Content::Long(*self.get_stack::<i64>())),
                 2 => key.push(Content::Single(*self.get_stack::<f32>())),
                 3 => key.push(Content::Float(*self.get_stack::<f64>())),
                 4 => key.push(Content::Long(i64::from(*self.get_stack::<bool>()))),
                 5 => key.push(Content::Str(self.string())),
+                6 => key.push(Content::Long(i64::from(*self.get_stack::<u32>()))),
                 _ => key.push(Content::Long(i64::from(*self.get_stack::<u8>()))),
             }
             // We assume that all none-base types are enumerate types.
@@ -1140,7 +1231,7 @@ impl State {
     pub fn insert_vector(&mut self) {
         let size = *self.code::<u16>();
         let db_tp = *self.code::<u16>();
-        let index = *self.get_stack::<i32>();
+        let index = *self.get_stack::<i64>();
         let r = *self.get_stack::<DbRef>();
         let new_value =
             vector::insert_vector(&r, u32::from(size), index, &mut self.database.allocations);

@@ -54,8 +54,7 @@ and can emit Rust code for host integration.
 | Type        | Description                                      |
 |-------------|--------------------------------------------------|
 | `boolean`   | `true` / `false`                                 |
-| `integer`   | 32-bit signed integer (range can be constrained) |
-| `long`      | 64-bit signed integer; literals end with `l`     |
+| `integer`   | 64-bit signed integer end-to-end (stack, fields, arithmetic).  Range can be constrained with `limit(...)`; narrow widths (`u8`/`u16`/`i8`/`i16`/`i32`) keep compact storage.  Overflow traps.  See "Arithmetic safety" below. |
 | `float`     | 64-bit floating-point; literals contain a `.`    |
 | `single`    | 32-bit float; literals end with `f`              |
 | `character` | A single Unicode character                       |
@@ -70,20 +69,62 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 | Type | Null sentinel | Notes |
 |------|---------------|-------|
 | `boolean` | `false` | `!b` is true for both `null` and `false` |
-| `integer` | `i32::MIN` (-2 147 483 648) | See warning below |
-| `long` | `i64::MIN` | Same risk as integer at the `i64` boundary |
+| `integer` | `i64::MIN` | Post-2c (0.9.0): 8-byte storage, sentinel moved from `i32::MIN`.  Accidental sentinel collisions effectively vanish at the i64 boundary. |
 | `float` | `NaN` | IEEE 754: `NaN != NaN`, but `!f` correctly detects null |
 | `single` | `NaN` (32-bit) | Same as `float` |
 | `character` | `'\0'` (NUL) | The null character is not a valid loft character value |
 | `text` | internal null pointer | Opaque; `!t` detects it; `len(t)` returns null |
 | `reference` | record 0 | Opaque; `!r` detects it |
 | plain `enum` | byte `255` | Limits plain enums to 255 variants |
+| narrow int (`u8`/`u16`/`i8`/`i16`) | top of the packed range | e.g. `i8::MIN` for `i8`; stored compactly in `Parts::Byte`/`Short` |
+| `i32` / `integer size(4)` | `i32::MIN` | 4-byte storage via `Parts::Int`; widens to i64 on the stack |
 
-**Integer sentinel warning:** Arithmetic that produces exactly `i32::MIN` (e.g.
-`-2147483647 - 1`) becomes indistinguishable from `null`. Division by zero also
-returns `null` (`i32::MIN`). If a program needs the full 32-bit signed range, use
-`long` instead. For struct fields, `not null` reclaims the sentinel value for
-storage, allowing the full range.
+**Arithmetic safety (C54.G-hybrid, landed 0.9.0):** integer arithmetic that
+would overflow — `(i32::MAX + 1)`, `(i32::MIN - 1)`, `(i32::MAX * 2)` — now
+produces a **runtime trap** with source location, NOT a silent null.
+Division and modulo by zero also trap.  The trap message names the operator
+and the inputs, so the failing site is obvious.
+
+```loft
+a = 2147483647;
+b = a + 1;                  // TRAPS: "integer overflow: 2147483647 + 1"
+c = a / 0;                  // TRAPS: "integer division by zero"
+```
+
+**`??` discharge**: if the arithmetic's result is the *immediate* LHS of a
+`??`, the trap is suppressed and the op produces null — which `??` then
+catches.  Use this idiom when you want overflow to fall through to a
+default:
+
+```loft
+x = (a * b) ?? default;     // overflow → x = default, no trap
+// Note: only the OUTERMOST op gets the discharge.  Nested sub-
+// expressions still trap.  Split into stages if they need different
+// handling:
+inner = a * b;              // traps if this overflows
+x = (inner + c) ?? 0;       // outer + gets discharge
+```
+
+Explicit `i64::MIN` is the null sentinel for `integer` (post-2c).  The
+older `i32::MIN` sentinel survives on `i32` / `u8` / `u16` / `i8` / `i16`
+alias fields — those use their own narrow sentinel at storage time, but
+widen to i64 on the stack so arithmetic is uniform.  The interpreter
+and native backends both recognise `i64::MIN` as the integer null and
+don't produce it from arithmetic any more.
+
+**Legacy note:** before C54.G-hybrid, overflow silently produced the
+`i32::MIN` / `i64::MIN` sentinel.  Programs that relied on that
+behaviour should either use explicit guards (`if a > 0 && b > 0 && a <
+i64::MAX / b { a * b } else { default }`) or adopt the `?? default`
+idiom.
+
+**Binary file I/O caveat:** post-2c `f += <integer_expression>` on a
+`BigEndian` / `LittleEndian` file writes **8 bytes**.  Pre-2c
+wrote 4.  Writers of binary formats must add an explicit width
+cast — `f += 2 as i32;` for a 4-byte u32 field, `f += 0 as u8;`
+for a byte, `f += v as u16;` for a 2-byte field.  The GLB / PNG
+writers in the stdlib were updated accordingly; custom binary
+protocols need the same audit.
 
 **`!value` asymmetry — read carefully:** the unary `!` operator reads as "is null
 or default?" but the answer differs by type because the null sentinel is in-band.
@@ -112,12 +153,25 @@ integer limit(0, 65535)    // fits in a short
 
 The default library also defines convenient width-specific aliases:
 ```
-u8    // integer limit(0, 255)
-i8    // integer limit(-128, 127)
-u16   // integer limit(0, 65535)
-i16   // integer limit(-32768, 32767)
-i32   // integer (explicit 32-bit)
+u8    // integer limit(0, 255)              — 1 byte unsigned
+i8    // integer limit(-128, 127)           — 1 byte signed
+u16   // integer limit(0, 65535)            — 2 bytes unsigned
+i16   // integer limit(-32768, 32767)       — 2 bytes signed
+i32   // integer (explicit 32-bit)          — 4 bytes signed
+u32   // integer limit(0, 4_294_967_294)    — 4 bytes unsigned (post-2a)
 ```
+
+`u32` covers the `0 ..= 4_294_967_294` range (one sentinel reserved for
+null).  Values up to `u32::MAX - 1` round-trip through arithmetic and
+storage.  Typical use: RGBA pixels, large file offsets, bitmasks wider
+than i32.  `u32 not null` unlocks the full 2³² range when the field
+can't carry null.
+
+**Migration note:** the `long` type keyword and the `l` literal
+suffix (e.g. `42l`) were removed in 0.9.0.  There are no external
+users of pre-0.9.0 loft, so no migration path is needed in
+practice; the `loft --migrate-long <path>` CLI exists as an
+internal utility should one become necessary.
 
 ### Composite types
 
@@ -326,7 +380,7 @@ Simple variable reads skip the temporary since they have no side effects.
 
 Used for explicit type casts and conversions:
 ```
-10l as integer      // long to integer
+3.14 as integer          // float to integer (truncates toward zero)
 "json-text" as Program   // deserialize text as a struct
 ```
 
@@ -341,7 +395,6 @@ do by looking up the pair in this table:
 | From → To                          | Mode          | Notes |
 |------------------------------------|---------------|-------|
 | Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table |
-| `integer` ↔ `long`                 | Implicit      | Widens or narrows automatically; narrowing may null-trap at `i32::MIN` |
 | Integer ↔ `float` in arithmetic    | Implicit      | `3 + 1.5` is `4.5` — the integer widens to the float operand's width |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
 | `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
@@ -1164,7 +1217,7 @@ references, the size is computed at runtime from the actual variant.
 Three functions for pseudo-random integer generation. All use a thread-local PCG64 generator.
 
 ```loft
-rand_seed(seed: long)                      // seed the generator
+rand_seed(seed: integer)                   // seed the generator
 rand(lo: integer, hi: integer) -> integer  // uniform in [lo, hi]; null if lo > hi
 rand_indices(n: integer) -> vector<integer>// shuffled [0..n-1]
 ```

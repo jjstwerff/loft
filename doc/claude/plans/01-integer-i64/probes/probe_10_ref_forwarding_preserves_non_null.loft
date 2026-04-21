@@ -1,0 +1,16 @@
+// Probe 10 — `&integer` forwarding: does the reference mechanism
+// preserve the `not null` declaration across forwarding?
+
+fn p10_inner(x: &integer) {
+  x = x + 1;         // mutation satisfies the "& never modified" check
+}
+
+fn p10_outer(y: &integer not null) {
+  p10_inner(y);
+  println("VERDICT: probe_10 after inner, y = {y}");
+}
+
+fn test_probe_10_ref_forwarding() {
+  p10_v = 5;
+  p10_outer(p10_v);
+}

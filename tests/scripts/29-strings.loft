@@ -116,7 +116,7 @@ fn test_string_parse() {
 }
 
 fn test_string_scope() {
-  a = 1l;
+  a = 1;
   b = "";
   for n in 1..4 {
     t = "1";
@@ -125,7 +125,7 @@ fn test_string_scope() {
       t += "2";
     }
     b += t + " ";
-    a += t as long;
+    a += t as integer;
   }
   assert("{a} via {b}" == "136 via n:1=1 n:2=12 n:3=122 ", "string scope");
 }

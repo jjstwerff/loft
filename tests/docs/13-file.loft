@@ -51,12 +51,13 @@ fn main() {
   f += 1 as u8;
   f += 0x203 as u16;
   f += 0x4050607;
-  f += 0x8090a0b0c0d0e0fl;
+  f += 0x8090a0b0c0d0e0f;
   // `f#size` returns the total number of bytes written so far.
-  assert(f#size == 16l, "Should have written 16 bytes.");
+  // Post-2c: integer is 8 bytes, so total = 1 + 1 + 2 + 8 + 8 = 20.
+  assert(f#size == 20, "Should have written 20 bytes.");
   // Text is written as raw UTF-8 bytes with no length prefix.
   f += "Hello world!";
-  assert(f#size == 28l, "Size should be 28 bytes (16 + 12).");
+  assert(f#size == 32, "Size should be 32 bytes (20 + 12).");
  }  // The file closes when the handle goes out of scope.
   // `move(src, dst)` renames a file. It refuses if the destination already
   // exists or if either path would leave the project directory.
@@ -77,20 +78,21 @@ fn main() {
   // and confirms that the bytes were stored in the order you chose.
   v = f#read(4) as i32;
   assert(v == 0x3020100, "BigEndian bytes 0..3 read as LittleEndian i32.");
-  assert(f#index == 0l, "Last read started at byte 0.");
-  assert(f#next == 4l, "Next read starts at byte 4.");
-  // Seek to byte 16 to skip past the integers and read the text directly.
-  f#next = 16l;
+  assert(f#index == 0, "Last read started at byte 0.");
+  assert(f#next == 4, "Next read starts at byte 4.");
+  // Seek to byte 20 to skip past the integers and read the text directly.
+  // (Post-2c: i32+i64 header = 1+1+2+8+8 = 20 bytes before the text.)
+  f#next = 20;
   s = f#read(5) as text;
-  assert(s == "Hello", "Partial text read from offset 16.");
-  assert(f#index == 16l, "Last read started at byte 16.");
-  assert(f#next == 21l, "Next position after 5-byte text read.");
+  assert(s == "Hello", "Partial text read from offset 20.");
+  assert(f#index == 20, "Last read started at byte 20.");
+  assert(f#next == 25, "Next position after 5-byte text read.");
   // Requesting more bytes than remain simply returns whatever is left.
   rest = f#read(100) as text;
   assert(rest == " world!", "Read continues to end of file.");
   assert(f#next == f#size, "Position should be at end of file.");
   // You can seek back to any position and re-read.
-  f#next = 0l;
+  f#next = 0;
   assert(f#read(4) as i32 == 0x3020100, "Seek-and-reread matches original.");
  }
   assert(delete("test2.bin").ok(), "Could not remove the test file.");
@@ -103,10 +105,10 @@ fn main() {
   f#format = LittleEndian;
   ints =[1, 2, 3, 4];
   f += ints;
-  assert(f#size == 16l, "Four i32 values = 16 bytes");
+  assert(f#size == 32, "Four integers = 32 bytes (8 each, post-2c)");
   // Truncate to the first two integers.
-  f#size = 8l;
-  assert(f#size == 8l, "Truncated to 8 bytes");
+  f#size = 16;
+  assert(f#size == 16, "Truncated to 16 bytes");
  }
   assert(delete("buffer.bin").ok(), "Could not remove buffer.bin after vector write test.");
   // Write a count followed by individual float values. `sizeof(T)` returns

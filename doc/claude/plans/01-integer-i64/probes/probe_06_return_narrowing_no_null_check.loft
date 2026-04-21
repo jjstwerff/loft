@@ -1,0 +1,14 @@
+// Probe 06 — return narrowing: `fn foo(x: integer) -> integer not null { x }`
+// called with a nullable argument.  Tests whether the return-path enforces
+// non-null.
+
+fn p06_passthrough(x: integer) -> integer not null {
+  x
+}
+
+fn test_probe_06_return_narrowing() {
+  p06_a = 2147483647;
+  p06_null_val = p06_a + 1;   // overflow → null
+  p06_r = p06_passthrough(p06_null_val);
+  println("VERDICT: probe_06 passthrough(null) returned {p06_r}");
+}

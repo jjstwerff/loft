@@ -1,0 +1,17 @@
+// Probe 03 — field write through nested path: a.b.v = nullable.  Tests
+// whether nested field paths get the same enforcement as direct ones.
+
+struct P03B {
+  v: integer not null,
+}
+
+struct P03A {
+  b: P03B,
+}
+
+fn test_probe_03_field_write_nested_path() {
+  p03 = P03A { b: P03B { v: 1 } };
+  p03_a = 2147483647;
+  p03.b.v = p03_a + 1;
+  println("VERDICT: probe_03 a.b.v after overflow = {p03.b.v}");
+}

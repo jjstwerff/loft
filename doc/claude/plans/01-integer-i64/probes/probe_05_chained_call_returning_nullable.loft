@@ -1,0 +1,15 @@
+// Probe 05 — chained call: `foo(bar())` where bar returns nullable and
+// foo expects `not null`.  Tests transitive call enforcement.
+
+fn p05_bar() -> integer {
+  p05_a = 2147483647;
+  p05_a + 1     // returns null
+}
+
+fn p05_takes_not_null(x: integer not null) {
+  println("VERDICT: probe_05 received x = {x}");
+}
+
+fn test_probe_05_chained_call() {
+  p05_takes_not_null(p05_bar());
+}
