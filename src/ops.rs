@@ -32,9 +32,8 @@ thread_local! {
 /// Uniform behaviour across debug and release builds: silent-sentinel
 /// channel for overflow is closed.  The dual `checked_long_nullable!`
 /// preserves the old release behaviour for the G-hybrid `??`-context
-/// path, where the codegen emits `OpAddLongNullable` / etc. so `??`
-/// can discharge the null.  (`_int` variants were removed in Phase 2c —
-/// `op_*_int` functions now forward to `op_*_long`.)
+/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
+/// can discharge the null.
 macro_rules! checked_long {
     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
         let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
