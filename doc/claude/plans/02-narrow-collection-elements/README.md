@@ -24,13 +24,83 @@ carries an inline-cast workaround (`glb_write_indices`).
 
 | # | Phase | File | Status | Blocks |
 |---|---|---|---|---|
-| 0 | Representation — `Type::Integer(IntegerSpec)` named-struct carrier with bounds + `forced_size` | [00-representation.md](00-representation.md) | open | 1 |
-| 1 | Parser populates `IntegerSpec.forced_size` from the user-typed alias | [01-parser-populate.md](01-parser-populate.md) | blocked by 0 | 2 |
-| 2 | Resolver (`fill_database`) emits narrow vector database types | [02-resolver-narrow.md](02-resolver-narrow.md) | blocked by 1 | 3 |
-| 3 | Read path (`parse_vector_index` + iterator) uses narrow stride — **hardest** | [03-read-path.md](03-read-path.md) | blocked by 2 | 4 |
-| 4 | Append / Insert / Set / binary-file-write paths | [04-append-set.md](04-append-set.md) | blocked by 3 | 5 |
-| 5 | Local variables, parameters, return types | [05-locals-returns.md](05-locals-returns.md) | blocked by 4 | 6 |
-| 6 | Extend to Hash / Sorted / Index (audit — may be no-op) | [06-hash-sorted-index.md](06-hash-sorted-index.md) | blocked by 5 | — |
+| 0 | Representation — `Type::Integer(IntegerSpec)` named-struct carrier with bounds + `forced_size` | [00-representation.md](00-representation.md) | ✅ done — commit `d05c8b0` | 1 |
+| 1 | Parser populates `IntegerSpec.forced_size` from the user-typed alias | [01-parser-populate.md](01-parser-populate.md) | ✅ done — commit `bf4db07` | 2 |
+| 2 | Resolver (`fill_database`) emits narrow vector database types | [02-resolver-narrow.md](02-resolver-narrow.md) | ✅ done — commit `3b6fd43` (struct fields only; sizes 1 + 4) | 3 |
+| 3 | Read path (`parse_vector_index` + iterator) uses narrow stride | [03-read-path.md](03-read-path.md) | ✅ done — commit `3b6fd43` | 4a |
+| 4a | Short-encoding mismatch: `vector<u16>` / `vector<i16>` stay wide with consistent round-trip | [04-append-set.md](04-append-set.md) | open — uncommitted work in-tree | 5 |
+| 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | open — full plan | 6 |
+| 5 | Apply narrow-vector registration at local-var, parameter, and return-type sites | [05-locals-returns.md](05-locals-returns.md) | open — **larger than planned** (needs code, not just tests) | 6 |
+| 6 | Extend to Hash / Sorted / Index | [06-hash-sorted-index.md](06-hash-sorted-index.md) | open — audit | — |
+
+## Scope surprises found during implementation
+
+Documented here so the plan stays honest and future sessions have the
+right expectations.
+
+### Phase 4 split into 4a (shipped) and 4b (deferred)
+
+`Parts::Short` uses legacy `raw = val - min + 1` encoding (stored
+`u16` where raw 0 is the null sentinel).  This diverges from the
+raw-byte vector-copy path in `vector_add` (`src/database/structures.rs`)
+— bytes move from source to dest without applying the +1 shift, so
+reads decode garbage.  `Parts::Byte` and `Parts::Int` use direct
+`raw = val - min` / `raw = val` encoding that agrees with raw-byte
+copies, which is why 1-byte and 4-byte narrowing landed cleanly in
+Phase 2+3.
+
+**Phase 4a** (landing now) sidesteps the mismatch by gating
+`IntegerSpec::vector_narrow_width()` to `Some(1) | Some(4)` only;
+`u16` / `i16` vector fields stay at 8-byte wide storage and their
+reads use an 8-byte stride, keeping write + read in agreement.  The
+regression guard `p184_vector_u16_round_trip` confirms values
+round-trip cleanly through the wide fallback.
+
+**Phase 4b** (planned, no regressions allowed) introduces
+`Parts::ShortRaw` — a direct-encoded 2-byte variant parallel to
+`Parts::Int`.  It is strictly additive: existing `Parts::Short`
+consumers (struct fields with `u16` / `i16` / `integer limit(...)`)
+keep the legacy `raw = val - min + 1` encoding unchanged, while
+narrow vector elements route through the new raw variant that
+agrees with raw-byte copies.  Seven-step plan with acceptance
+criteria and a NO-CHANGE regression checklist.  Tracking:
+[04b-short-encoding.md](04b-short-encoding.md).
+
+### Phase 5 is larger than planned — real code, not just tests
+
+The original plan stated "Phase 5 is mostly a test phase — verify
+Phases 1-4 already covered these cases."  That was wrong.
+
+`typedef.rs::fill_database`, where Phase 2's narrow-vector-type
+registration lives, runs **only on struct definitions** (the first
+loop gate at the top of `fill_all`).  Local variables, function
+parameters, and return types that carry a `vector<i32>` type never
+reach that code path — they get the default wide (8-byte)
+`vector<integer>` registration at `parser/*.rs::database.vector(c_tp)`
+call sites instead.
+
+Evidence: attempting to revert `lib/graphics/src/glb.loft`'s
+`glb_write_indices` workaround to the natural form
+
+```loft
+fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<i32> {
+  result: vector<i32> = [];
+  for t in tris { result += [t.a as i32, t.b as i32, t.c as i32]; }
+  result
+}
+```
+
+fails `test_map_export_glb_header` with the same BIN-chunk double-
+counting as pre-P184: the **local** `result: vector<i32>` uses wide
+storage, so `f += result` writes 8 bytes per element while the
+header's `idx_bytes = nt * 3 * 4` computation assumes 4.
+
+Phase 5's real scope: extract Phase 2's narrow-detection logic into
+a helper (candidate name: `Data::narrow_vector_content`) and invoke
+it at every `database.vector(c_tp)` call site in `src/parser/` that
+currently uses `data.def(c_nr).known_type` as the content.  Roughly
+6 sites (see `grep 'database.vector' src/parser/`).  See
+[05-locals-returns.md](05-locals-returns.md).
 
 ## Ground rules
 

@@ -3,179 +3,156 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 4 — Append / Insert / Set / file-write paths
+# Phase 4a — Short-encoding gate + u16 round-trip guard
 
-**Status:** blocked by Phase 3.
+**Status:** open — uncommitted work in-tree, ready to land.
 
-**Goal:** every write-side opcode (`OpAppendVector`,
-`OpInsertVector`, `OpSetVector`, `OpClearVector`, `OpRemoveVector`)
-honours the narrow element stride for narrow vectors.  Plus: the
-binary-file write path already uses `database.size(elem_tp)` and
-should auto-honour the narrow type once Phase 2 creates it; verify
-end-to-end that `f += b.v` for `vector<i32>` writes exactly 4 bytes
-per element.
+**Goal:** lock down the `Parts::Short` legacy-encoding hazard so
+Phase 2/3's narrowing can NEVER accidentally cover a 2-byte element
+type until Phase 4b replaces the encoding.  Guarantee that
+`vector<u16>` / `vector<i16>` fields stay at wide (8-byte) storage
+with reads aligned to writes — correct but not optimal.
 
-After this phase, `lib/graphics/src/glb.loft::glb_write_indices` can
-revert to the natural `glb_idx_buf() -> vector<i32>` form.
+Original Phase 4 plan: "narrow storage + reads + writes for every
+alias".  Scope reduced after discovering `Parts::Short` uses
+`raw = val - min + 1` encoding while the raw-byte vector-copy path
+in `src/database/structures.rs::vector_add` moves bytes directly
+(no +1 shift).  The mismatch was already excluded from Phase 2 at
+commit `3b6fd43` (2-byte sizes skipped in `fill_database`'s narrow
+branch); Phase 4a closes the matching gap on the read side.
 
 ---
 
-## Sites to audit
+## The narrow-width gate
 
-### Parser-side emission of write opcodes
-
-`rg 'OpAppendVector|OpInsertVector|OpSetVector|OpClearVector|OpRemoveVector' src/parser/`:
-
-- `src/parser/collections.rs` — primary emission site for vector
-  literals and compound assignments.
-- `src/parser/expressions.rs::parse_assign_op` — rewrites field =
-  vec_var to OpClearVector + OpAppendVector (P152 fix).
-- `src/parser/objects.rs::handle_field` — struct-construction
-  vector initialisers.
-- `src/parser/builtins.rs` — parallel-for and friends.
-
-For each, find the `elm_size` / `size` computation and apply the
-same change as Phase 3: prefer `Type::Integer`'s forced_size over
-the base-integer heuristic.
-
-Use the `Data::element_width(elem_tp, nullable)` helper introduced
-in Phase 3.  Single-source of truth for element stride.
-
-### Runtime bytecode
-
-`rg 'OpAppendVector|fn append_vector|fn insert_vector|fn set_vector' src/fill.rs src/state/` returns the runtime handlers:
-
-- `src/fill.rs::append_vector` — reads the element size from the
-  code stream (baked at emit time).
-- `src/fill.rs::insert_vector` — same shape.
-- `src/fill.rs::set_vector` — same.
-- `src/fill.rs::clear_vector`, `remove_vector` — take size from code.
-
-Conclusion: **runtime is already correct** as long as the parser
-sites emit the right size.  No change in fill.rs.
-
-### Low-level helpers
-
-`src/vector.rs::vector_append`, `vector_finish` take a `size: u32`
-parameter from callers.  Audit each caller:
-
-`rg 'vector::vector_append' src/`:
-- `src/state/io.rs::append_copy` — uses `self.database.size(ctp)`
-  where `ctp = self.database.content(tp)` (the vector's content
-  type from the vector's db_tp).  Auto-honours narrow content
-  because `database.size(Parts::Int)` returns 4.  ✓ NO CHANGE.
-- `src/database/io.rs:*` — parser initialisation helpers; uses
-  `self.size(c)` from the database.  ✓ NO CHANGE.
-- `src/database/structures.rs:41/118/176` — generic vector ops.
-
-Confirm nothing hard-codes 4 or 8.
-
-### Native codegen
-
-`src/generation/emit.rs` / `src/generation/mod.rs` — vector append
-code emission.  Audit for cached sizes; apply
-`Data::element_width` where needed.
-
-`src/codegen_runtime.rs::cr_append_vector` and siblings — runtime
-helpers for `--native` mode.  These use `stores.size(elem_tp)`
-which auto-honours narrow content.  ✓ NO CHANGE.
-
-### File I/O — binary write
-
-`src/state/io.rs::assemble_write_data` line 121-143:
+`IntegerSpec::vector_narrow_width(&self) -> Option<u8>` on
+`src/data.rs` returns `Some(n)` iff `forced_size = Some(n)` and
+`n ∈ {1, 4}`.  Anything else (including `Some(2)` for `u16`) returns
+`None` — callers fall back to the default wide stride.
 
 ```rust
-} else if let Parts::Vector(elem_tp) = &self.database.types[db_tp as usize].parts {
-    let elem_tp = *elem_tp;
-    // ...
-    let elem_size = u32::from(self.database.size(elem_tp));
-    for i in 0..length {
-        let elem = DbRef { ..., pos: 8 + elem_size * i };
-        self.database.read_data(&elem, elem_tp, little_endian, &mut data);
+#[must_use]
+pub fn vector_narrow_width(&self) -> Option<u8> {
+    match self.forced_size?.get() {
+        1 => Some(1),
+        4 => Some(4),
+        _ => None,  // 2-byte deferred to Phase 4b
     }
 }
 ```
 
-`database.size(elem_tp)` returns 4 for `Parts::Int`-typed narrow
-content → reads 4 bytes per element → emits 4 bytes per element.
-✓ **This path auto-works once Phase 2 lands.**
-
-Actually VERIFY `read_data` for `Parts::Int`:
-- `src/state/io.rs::read_data` (or `database/io.rs`) should emit 4
-  bytes for a `Parts::Int` source.  That's the same code that
-  struct-field narrow integers use today, so it's exercised.
+This is the **single point of policy** for what widths Phase 2 will
+narrow.  If Phase 4b replaces the short encoding, the only change
+needed is adding `2 => Some(2)` here.
 
 ---
 
-## Expected revert in glb.loft
+## Read-side gate
 
-Once Phase 4 is green, this revert should land as the final commit
-of the initiative:
+Two sites were using `byte_width()` directly in Phase 3 and needed
+the gate:
 
-```loft
-// lib/graphics/src/glb.loft — restore the natural form
+### `src/parser/fields.rs::parse_vector_index`
 
-fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<i32> {
-  result: vector<i32> = [];
-  for t in tris {
-    result += [t.a as i32, t.b as i32, t.c as i32];
-  }
-  result
-}
+```rust
+// Before: narrow whenever forced_size is present (includes 2-byte).
+let elm_size = if let Type::Integer(spec) = etp {
+    i32::from(spec.byte_width(true))
+} else { /* heuristic */ };
 
-// Callers:
-//   f += glb_idx_buf(m.triangles);
+// After: narrow only for sizes Phase 2 actually registers.
+let elm_size = if let Type::Integer(spec) = etp
+    && let Some(n) = spec.vector_narrow_width()
+{
+    i32::from(n)
+} else { /* heuristic */ };
 ```
 
-Verify:
-- `lib/graphics/tests/glb.loft` passes.
-- `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
-  passes (the GLB header's `total_len` matches the real file size).
+### `src/parser/mod.rs::get_val`
+
+Three-way dispatch: struct-field path keeps its captured alias
+lookup; vector-element path (alias = `u32::MAX`) uses the narrow
+gate; everything else falls back to `byte_width(nullable)` for the
+plain-integer / `integer limit(...)` cases.
+
+```rust
+let s = if alias != u32::MAX {
+    // Struct field with captured alias (u8/u16/i32/...): use it.
+    self.data.forced_size(alias).unwrap_or_else(|| spec.byte_width(nullable))
+} else if spec.forced_size.is_some() {
+    // Vector-element context: mirror Phase 2's narrow-or-wide decision.
+    spec.vector_narrow_width().unwrap_or(8)
+} else {
+    // Plain `integer` / `integer limit(...)`: heuristic.
+    spec.byte_width(nullable)
+};
+```
+
+Without the `forced_size.is_some()` check, `integer limit(0, 255)`
+struct fields (which use `alias = u32::MAX`) would mis-dispatch to
+the vector narrow gate and always read 8 bytes — breaking
+`tests/scripts/06-structs.loft::Point`.  The three-way split keeps
+narrow struct-field reads (bounds-heuristic path) and narrow
+vector-element reads (Phase 2 gate) independently correct.
 
 ---
 
-## Test matrix
+## Test matrix landed in Phase 4a
 
-Extend `p184_*` from Phase 3 with write-side coverage:
-
-| Test                                  | Assertion                                    |
-|---------------------------------------|----------------------------------------------|
-| `p184_vector_i32_append_then_read`    | Append + index round-trip.                   |
-| `p184_vector_i32_binary_write_size`   | `f += b.v` writes `len × 4` bytes.           |
-| `p184_vector_integer_binary_write`    | Control: `vector<integer>` writes `len × 8`. |
-| `p184_vector_u8_binary_write`         | `vector<u8>` writes `len × 1` bytes.         |
-| `p184_glb_natural_form`               | Revert glb.loft workaround, assert GLB size matches header. |
+| Test                                     | Purpose                                                       |
+|------------------------------------------|---------------------------------------------------------------|
+| `p184_vector_i32_narrow_read`            | i32 vector field reads correct values (Phase 3 guard).        |
+| `p184_vector_u8_narrow_read`             | u8 vector field uses 1-byte narrow storage + reads.           |
+| `p184_vector_u16_round_trip` *(new 4a)*  | u16 stays wide (8-byte), reads + writes agree.  Non-optimal but correct. |
+| `p184_vector_integer_wide_control`       | Plain `vector<integer>` unchanged.                            |
 
 ---
 
-## Risks
+## Why Phase 4a is a separate commit from 4b
 
-- **Parallel vector write paths**.  `src/parser/builtins.rs::par`
-  (parallel-for) computes result-vector element sizes independently
-  from the main parser path.  Audit the `elem_size` argument to
-  `OpParallelFor` and similar.
-- **Vector-constant init**.  `src/compile.rs::build_const_vectors`
-  writes initial values at compile time via `OpSet*` calls.  If the
-  const-vector's content is narrow, these writes must also be
-  narrow — confirm via a test like `pub C: vector<i32> = [1, 2, 3];`
-  and assert `len(C) == 3` + `C[0] == 1` at runtime.
+Phase 4a is a **correctness** fix: without the gate, mid-session
+work in Phase 3 had narrow reads against wide storage for u16
+fields (`v[0] = 0` for stored value 1).  The gate closes that
+window AND adds a regression guard.
+
+Phase 4b is an **optimisation**: switch u16/i16 to 2-byte storage.
+Not required for any user-visible bug — the glTF case that triggered
+P184 resolves via `vector<i32>` narrowing, which is already working
+for struct fields and lands fully after Phase 5.
+
+Separating them lets Phase 4a ship with an immediate regression
+benefit and keeps Phase 4b's encoding-replacement risk isolated.
+
+---
+
+## What Phase 4a does NOT unlock
+
+- `lib/graphics/src/glb.loft::glb_write_indices` workaround can NOT
+  revert yet.  That requires Phase 5 — the helper uses a local
+  variable (`result: vector<i32> = []`), and locals don't narrow
+  until Phase 5.  A TODO note has been added to the workaround.
+- `vector<u16>` / `vector<i16>` memory density.  Users with
+  bit-packed 2-byte protocols will keep using the explicit
+  `f += val as u16` cast idiom documented in CAVEATS.md § C54.
 
 ---
 
 ## Acceptance
 
-- [ ] All Phase 3 tests remain green.
-- [ ] New p184_* write-side tests green.
-- [ ] glb.loft workaround reverted + still passes.
-- [ ] `make test-packages` green for graphics, moros_render.
+- [x] `vector_narrow_width()` method exists and gates 1-byte / 4-byte only.
+- [x] `parse_vector_index` and `get_val` use the gate.
+- [x] `get_val`'s three-way alias / vector / struct-field dispatch is correct
+      (no regression in `06-structs.loft`).
+- [x] `p184_vector_u16_round_trip` passes; u16 values round-trip through
+      wide storage.
+- [x] `p184_vector_i32_narrow_read` and `p184_vector_u8_narrow_read` still
+      pass.
+- [x] Full `cargo test --release --no-fail-fast` green.
 
 ---
 
 ## Rollback
 
-If a write-path bug surfaces mid-phase:
-- If the bug is isolated to one site (e.g. parallel-for), keep the
-  general fix but restore the pre-fix code at that specific site.
-- If the bug is systemic (e.g. every OpSetInt4 call is wrong),
-  revert Phase 4 AND Phase 3 AND Phase 2.  Return to the documented
-  workaround in `glb.loft`.
+Single-commit revert is safe — the gate is additive and defaults
+to "wide" for every unlisted size.  No data-format change, no
+schema migration.
