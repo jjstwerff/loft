@@ -8944,12 +8944,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:416:24 — pick a different name \
+         at default{s}01_code.loft:411:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:416:24) \
+         struct or enum (defined at default{s}01_code.loft:411:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }

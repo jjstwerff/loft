@@ -74,22 +74,29 @@ can't silently reintroduce the bugs this branch chased.
 
 ### B — Round 10b follow-up: deduplicate `Op*Long` family
 
-**Status (2026-04-20):** partial — `OpAbsLong` is removed (proof-of-
-concept deletion via `regen_fill_rs`).  A 22-op bulk batch (arithmetic
-+ bitwise + comparison + conversion Long ops) was attempted and
-passed `wrap` / `issues` / `parse_errors` / `clippy` / `fmt` but
-regressed `moros_glb_cli_end_to_end`: the native-CLI run SIGSEGVs at
-runtime (opcode dispatch) during JSON-driven moros_render pipeline
-execution.  Minimal reproducers with long arithmetic in isolation
-don't crash — the interaction is somewhere deeper (possibly
-arg-conversion across lib boundaries that still see `long` types but
-dispatch `OpXxxInt`).  The 22-op batch was reverted; B stays at 1/26.
+**Status (2026-04-21):** partial — 5/26 removed.  Safely deleted via
+`regen_fill_rs` + suite verify:
 
-Resume path: (a) identify the pc=84102 bytecode site in a freshly-
-compiled moros_glb run with `LOFT_LOG=static` and diff the emitted
-function body vs pre-B to find the pattern that changes; (b) when
-resolved, re-apply the 22-op batch with the fix, then the remaining
-~4 special-case ops (`OpConvLongFromInt`, `OpFormatLong`, etc.).
+- `OpAbsLong` (round 10b.1, commit `5b2c89c`)
+- `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong` (round 10b.2)
+
+**Blocker**: `OpSRightLong` deletion alone regresses
+`moros_glb_cli_end_to_end` with a runtime SIGSEGV (opcode dispatch,
+pc=84102, d_nr=897) — isolated via bisection across the 22-op bulk
+batch.  Minimal reproducers of the graphics.loft:31 pattern
+(`((x as long & 0xFF000000l) >> 24l) as integer`) pass in isolation;
+the crash only surfaces inside the moros_render JSON-driven pipeline.
+Root cause not yet identified — likely an emergent interaction with a
+`long` arg crossing library boundaries where the post-delete
+signature-matching picks `OpSRightInt` but some downstream consumer
+still expects Long typing.
+
+Resume path: (a) instrument the parser to log every `OpSRight*`
+emission site during a moros_glb run and compare pre- vs post-delete
+to find the changed callsite; (b) once fixed, also delete
+`OpLandLong`/`OpLorLong`/`OpEorLong`/`OpSLeftLong` (bitwise other
+than SRight — not tested individually since the regression was in
+this group), then arithmetic + nullable + unary + conv ops.
 
 Per `05-opcode-reclamation.md`, with `Type::Long` collapsed to
 `Type::Integer`, ~26 opcodes are duplicates:

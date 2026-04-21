@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 267] = &[
+pub const OPERATORS: &[fn(&mut State); 263] = &[
     goto,
     goto_word,
     goto_false,
@@ -86,10 +86,6 @@ pub const OPERATORS: &[fn(&mut State); 267] = &[
     eor_long,
     s_left_long,
     s_right_long,
-    eq_long,
-    ne_long,
-    lt_long,
-    le_long,
     format_long,
     format_stack_long,
     const_single,
@@ -774,34 +770,6 @@ fn s_right_long(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_shift_right_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn eq_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 == v_v2;
-    s.put_stack(new_value);
-}
-
-fn ne_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 != v_v2;
-    s.put_stack(new_value);
-}
-
-fn lt_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 < v_v2;
-    s.put_stack(new_value);
-}
-
-fn le_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 <= v_v2;
     s.put_stack(new_value);
 }
 

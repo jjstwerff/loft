@@ -256,14 +256,9 @@ fn OpSLeftLong(v1: long, v2: long) -> long;
 #rust"ops::op_shift_left_long(@v1, @v2)"
 fn OpSRightLong(v1: long, v2: long) -> long;
 #rust"ops::op_shift_right_long(@v1, @v2)"
-fn OpEqLong(v1: long, v2: long) -> boolean;
-#rust"@v1 == @v2"
-fn OpNeLong(v1: long, v2: long) -> boolean;
-#rust"@v1 != @v2"
-fn OpLtLong(v1: long, v2: long) -> boolean;
-#rust"@v1 < @v2"
-fn OpLeLong(v1: long, v2: long) -> boolean;
-#rust"@v1 <= @v2"
+// Post-2c round 10b: OpEqLong/OpNeLong/OpLtLong/OpLeLong deleted —
+// `long` operands auto-convert to `integer` in signature matching
+// and use the Int comparison variants (byte-identical at i64).
 fn OpFormatLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 fn OpFormatStackLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 // Single-precision (32-bit) floating-point math.
