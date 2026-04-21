@@ -575,6 +575,23 @@ Only add a new opcode when:
 - Performance is critical and the overhead of multiple opcodes is measurable
   and unacceptable (document the benchmark).
 
+**When you do add one**, follow the 10-step bootstrap procedure in
+[`plans/02-narrow-collection-elements/04b-short-encoding.md` §
+Opcode-addition procedure](plans/02-narrow-collection-elements/04b-short-encoding.md#opcode-addition-procedure-verified-2026-04-22).
+Short summary: add Store methods first, declare in `default/01_code.loft`,
+grow the `OPERATORS` array in `src/fill.rs` to match, append placeholder
+identifiers + empty function bodies, build, then `cargo test --test issues
+regen_fill_rs -- --ignored --nocapture` to regenerate `src/fill.rs`.
+Rebuild the WASM rlib and the `native_pkg` fixture cdylib (the
+freshness checks in `tests/html_wasm.rs` and `tests/native_loader.rs`
+catch this).  Audit `src/codegen_runtime.rs` manually — regen does
+NOT touch it.  **Run `cargo test --release --test native native_dir`
+before commit** to catch the silent-hang class of regression that
+bit the P184 Phase 4b attempt on 2026-04-21.  Never reorder existing
+opcode declarations while adding new ones — opcode numbers are
+positional and any reorder invalidates stored / pre-compiled
+packages that embed them.
+
 ---
 
 ## GitHub Issues and Releases — Hard Limits

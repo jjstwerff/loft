@@ -194,16 +194,105 @@ One line added.  Now `vector<u16>` / `vector<i16>` fields get
 These emit the narrow-stride read/write when used at vector
 indexing sites.
 
-`default/01_code.loft` (or the native-function registry):
+`default/01_code.loft`: add declarations mirroring `OpGetInt4` /
+`OpSetInt4`:
 
-- Register `OpGetShortRaw(pos: const u16) -> integer` — calls
-  `store.get_i16_raw` and widens to i64.
-- Register `OpSetShortRaw(pos: const u16, val: integer) -> void` —
-  narrows i64 to i16 via `as i16` and calls `store.set_i16_raw`.
+```loft
+fn OpGetShortRaw(v1: reference, fld: const u16, min: const i16) -> integer;
+#rust"{{let db = @v1; let raw = stores.store(&db).get_u16_raw(db.rec, db.pos + u32::from(@fld)); if @min < 0 {{ i64::from(raw as i16) }} else {{ i64::from(raw) }}}}"
+fn OpSetShortRaw(v1: reference, fld: const u16, min: const i16, val: integer);
+#rust"{{let db = @v1; let raw: u16 = if @min < 0 {{ (@val as i16) as u16 }} else {{ @val as u16 }}; stores.store_mut(&db).set_u16_raw(db.rec, db.pos + u32::from(@fld), raw);}}"
+```
 
-Implementation in `src/fill.rs`: mirror `get_int_4` / `set_int_4`
-but 2-byte.  Both opcodes need native codegen support in
-`src/codegen_runtime.rs`.
+`src/fill.rs` and native codegen (`src/codegen_runtime.rs`) are
+regenerated from the `#rust"…"` bodies.  See **Opcode-addition
+procedure** below for the exact bootstrap sequence — skipping any
+step produces the `Too many defined operators` panic or the
+`no method named 'get_u16_raw'` compile error the first 4b
+attempt hit.
+
+---
+
+### Opcode-addition procedure (verified 2026-04-22)
+
+New opcodes require a bootstrap because `regen_fill_rs` compiles
+`loft` in order to discover the declared ops, and `loft` cannot
+compile without the generated dispatch entries the regeneration
+produces.  The procedure is therefore:
+
+1. **Add any new Store/stores methods first.**  The `#rust"…"`
+   bodies you'll declare in the next step reference them.  E.g.
+   `Store::get_u16_raw` / `set_u16_raw` must exist in `src/store.rs`
+   before the regen can compile their callers.
+2. **Declare the opcodes in `default/01_code.loft`** with
+   `fn OpName(...) -> ret;` plus the `#rust"…"` body.  Keep the
+   declaration adjacent to the existing `Op*` family it extends
+   (e.g. new `OpGetShortRaw` next to `OpGetInt4`) so regen
+   output is readable.
+3. **Grow the `OPERATORS` array size in `src/fill.rs`** — change
+   `&[fn(&mut State); N]` to `&[fn(&mut State); N+k]` where `k`
+   is the number of new ops.  Without this, regen panics with
+   `Too many defined operators (N of N used)` before it writes
+   a single line.
+4. **Append placeholder identifiers at the bottom of the
+   `OPERATORS` array**, matching the snake_case form of the new
+   op names (e.g. `OpGetShortRaw` → `get_short_raw`).  Append in
+   the order declared in `default/01_code.loft` — the array
+   index becomes the opcode number and must match what the
+   parser emits via `data.def_nr("OpGetShortRaw")`.
+5. **Add placeholder function definitions with matching
+   signatures** at the end of `src/fill.rs`.  Empty bodies are
+   fine — regen overwrites them.  Required so the array
+   references resolve and the crate compiles.
+6. **Build**: `cargo build --release`.  Must succeed before
+   regen runs.
+7. **Regenerate**: `cargo test --release --test issues
+   regen_fill_rs -- --ignored --nocapture`.  This overwrites
+   `src/fill.rs` with canonical content derived from every
+   `#rust"…"` body in `default/*.loft`.  The OPERATORS array
+   shrinks to match what was declared — if you grew too much,
+   the regen reports the correct size.
+8. **Rebuild dependents**:
+   - `cargo build --release --lib` — refreshes the interpreter.
+   - `cargo build --release --target wasm32-unknown-unknown --lib
+     --no-default-features --features random` — refreshes the
+     WASM rlib.  The freshness check in `tests/html_wasm.rs`
+     catches this if you skip it.
+   - `(cd tests/lib/native_pkg/native && cargo build --release)`
+     — refreshes the fixture cdylib.  Same freshness check in
+     `tests/native_loader.rs`.
+9. **Audit native codegen** (`src/codegen_runtime.rs`):
+   regen_fill_rs does NOT touch this file.  Any `match parts`
+   that enumerates every `Parts::*` variant gets a non-exhaustive
+   warning when the new variant is added; add the new arm
+   manually.  For opcodes that add new `stores.method()` calls,
+   add equivalent calls in codegen_runtime.rs if the native
+   codegen path uses them (look for parallel `OpGetInt4` /
+   `OpSetInt4` handling and mirror).
+10. **Run `native_dir`** (`cargo test --release --test native
+    native_dir`) **before committing**.  The full-suite run is
+    ~5 min of pure native-mode test compilation; catches the
+    class of regression that bit the 2026-04-21 4b attempt where
+    every unit test passed but one native-compiled script hung.
+    Do NOT commit based on unit-test success alone.
+
+**Ordering constraint**: the opcode number is determined by the
+order entries appear in `OPERATORS`, which `regen_fill_rs`
+derives from the declaration order in `default/*.loft`.  Any
+reordering of existing opcodes in `default/*.loft` invalidates
+every `.loftc` cache and every pre-compiled native package that
+embeds the old numbers — NEVER reorder existing op declarations
+while adding new ones.  Append at the end of the relevant family.
+
+**Failure mode audit (2026-04-21)**: the first 4b attempt added
+opcodes to the BOTTOM of `default/01_code.loft` (after
+`const_store_text`).  Regen ran cleanly.  All `p184_*` unit
+tests passed.  `native_dir` hung on `tests/docs/16-parser.loft`
+for 20+ minutes of CPU.  The regeneration bootstrap itself is
+not the root cause — every step completed correctly — but
+step 10 (native_dir before commit) would have caught the
+regression before it shipped.  Adding it to the procedure above
+is the 2026-04-22 takeaway.
 
 ### Step 6 — Parser dispatch
 
