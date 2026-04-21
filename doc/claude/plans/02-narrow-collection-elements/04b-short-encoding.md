@@ -5,8 +5,68 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4b — Direct-encoded 2-byte storage for narrow vectors
 
-**Status:** open — full plan.  No-regression constraint: every
-existing `Parts::Short` consumer must continue working unchanged.
+**Status:** blocked — 2026-04-21 attempt reverted after regression
+surfaced in `tests/native.rs::native_dir` (the `16-parser.loft`
+native test ran into an infinite loop, >20 min CPU time).  Root
+cause not yet identified; the plan's no-regression ground rule
+forbids shipping this until the root cause is known and the
+regression has a regression guard.
+
+No-regression constraint: every existing `Parts::Short` consumer
+must continue working unchanged.
+
+## 2026-04-21 attempt — what went wrong
+
+The full 7-step implementation landed locally (new variant, Store
+`get_u16_raw` / `set_u16_raw`, database io arms, `narrow_vector_content`
+arm for size 2, `OpGetShortRaw` / `OpSetShortRaw` opcodes,
+`get_val` three-way dispatch with vector-narrow gate, codegen_runtime.rs
+ShortRaw byte-conversion arms).  All `p184_*` unit tests passed —
+including a new `p184_vector_u16_round_trip` guard for the u16
+narrow path.
+
+The full-suite run surfaced one hang: `tests/native.rs::native_dir`
+(which runs every `tests/docs/*.loft` via `loft --native`) got
+stuck compiling or executing `tests/docs/16-parser.loft`.  The
+native binary burned 20+ minutes of CPU without terminating.
+Killing it produced no diagnostic — exit code was signal 9 from
+the kill, not a panic or assert.
+
+Hypotheses not yet verified:
+
+1. **Opcode numbering collision** — the 7-step plan added
+   `OpGetShortRaw` + `OpSetShortRaw` as new opcodes.  The parser
+   test may have hit an opcode dispatch that the native codegen
+   produces with a stale library index.  Check whether
+   `tests/lib/native_pkg/native/target/release/libloft_native_test.so`
+   or the parser's emitted Rust ended up embedding a now-shifted
+   opcode number.
+2. **Infinite loop in inference** — the parser test likely
+   exercises `parse_type` for every alias it encounters; the new
+   `vector_narrow_width` returning `Some(2)` may route some
+   previously-unreachable branch of the resolver that loops.
+3. **Hang in `OpAppendVector` for short-stride elements** — the
+   raw-byte copy path in `vector_add` may misread `elem_size` for
+   `Parts::ShortRaw` vs `Parts::Short` and produce a zero-length
+   copy that the caller retries forever.
+
+Next investigation step: revert Step 7 only (gate stays at
+`{1, 4}`) and re-run `native_dir`.  If that passes, Steps 1-6
+are safe and Step 7's opening of the gate is the direct trigger.
+If native_dir still hangs, the problem is structural in the
+Phase 2-5 pipeline interacting with the new variant — back out
+further.
+
+Files reverted to the Phase 5 baseline state:
+- `default/01_code.loft`
+- `src/codegen_runtime.rs`
+- `src/data.rs`
+- `src/database/{format.rs, io.rs, mod.rs, search.rs, structures.rs, types.rs}`
+- `src/fill.rs`
+- `src/parser/{mod.rs, vectors.rs}`
+- `src/store.rs`
+- `tests/issues.rs` (the `p184_vector_i16_narrow_read` guard was
+  part of the revert; re-add when Phase 4b lands properly)
 
 **Goal:** land 2-byte narrow storage for `vector<u16>` / `vector<i16>`
 (and any `integer limit(...) size(2)` alias) without touching the

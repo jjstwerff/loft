@@ -29,7 +29,7 @@ carries an inline-cast workaround (`glb_write_indices`).
 | 2 | Resolver (`fill_database`) emits narrow vector database types | [02-resolver-narrow.md](02-resolver-narrow.md) | ✅ done — commit `3b6fd43` (struct fields only; sizes 1 + 4) | 3 |
 | 3 | Read path (`parse_vector_index` + iterator) uses narrow stride | [03-read-path.md](03-read-path.md) | ✅ done — commit `3b6fd43` | 4a |
 | 4a | Short-encoding mismatch: `vector<u16>` / `vector<i16>` stay wide with consistent round-trip | [04-append-set.md](04-append-set.md) | open — uncommitted work in-tree | 5 |
-| 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | open — full plan | 6 |
+| 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | **blocked** — 2026-04-21 attempt hung in `native_dir::16-parser`; reverted. Bisect required before re-attempt. | 6 |
 | 5 | Apply narrow-vector registration at local-var, parameter, and return-type sites | [05-locals-returns.md](05-locals-returns.md) | open — **larger than planned** (needs code, not just tests) | 6 |
 | 6 | Extend to Hash / Sorted / Index | [06-hash-sorted-index.md](06-hash-sorted-index.md) | open — audit | — |
 
