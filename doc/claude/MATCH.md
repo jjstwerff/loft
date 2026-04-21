@@ -99,5 +99,7 @@ See [PLANNING.md](PLANNING.md) for target milestone.
 
 - [LOFT.md](LOFT.md) — match expression syntax reference
 - [TUPLES.md](TUPLES.md) — tuple destructuring in match arms
+- [MATCH_PEG.md](MATCH_PEG.md) — L3 design: PEG-style sequence/alternation/optional with anchor-revert captures
+- [REGEX.md](REGEX.md) — standalone regex library for rich text matching (not a match-pattern kind)
 - [PLANNING.md](PLANNING.md) — L2 backlog entry
 - [INCONSISTENCIES.md](INCONSISTENCIES.md) — #26 (guarded arms and exhaustiveness)

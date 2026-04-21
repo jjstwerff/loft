@@ -1137,6 +1137,53 @@ Implement the suspend/resume cycle.
 
 ---
 
+## Relationship to Rust's `gen` / `async gen` (upstream status)
+
+Loft's coroutines do **not** depend on any unstable Rust feature.  The
+native backend (`src/generation/coroutine.rs`) compiles each generator
+function into a hand-written state machine: a Rust `enum` with one
+variant per yield point plus `Exhausted`, a wrapping `struct` carrying
+locals, and a `next()` method dispatching on the enum.  All on stable
+Rust.
+
+This is the same shape Rust's own `gen` blocks desugar to internally,
+but done by loft's own codegen.  The trade-off is deliberate:
+
+- **Pro:** ships on stable Rust *today*; no MSRV bump when the user's
+  toolchain is behind; full control over frame layout, drop order, and
+  error spans.
+- **Con:** a small amount of state-machine code lives in
+  `src/generation/` that rustc could eventually generate for us if we
+  opted into `gen`.
+
+### Upstream timeline (checked April 2026)
+
+- **Sync `gen` blocks** (rust-lang/rust#117078): active, not stabilised.
+  Edition-2024 keyword reservation done; `gen fn` + `FusedIterator`
+  implementation in place; unresolved design questions remain.  No
+  public stabilisation date.
+- **`AsyncIterator` / `Stream`** (rust-lang/rust#79024): still nightly.
+  API is being redesigned (PR #119550: rename back to `Stream`,
+  introduce AFIT-based `AsyncIterator`).  WG-async explicitly states
+  "no internal consensus on the right API".
+- **Async generators** (rust-lang/wg-async#301): "In Progress" under
+  a slipped "DRAFT: Async 2024" milestone.  WG-async's own language:
+  "far enough in the future that many details may change"; "if the
+  team did prioritize async generators, they would have to pick
+  something else to deprioritize".  **Realistic earliest: 2027+.**
+
+### Implication for loft
+
+- No reason to wait for sync `gen`.  When it stabilises, revisit
+  `src/generation/coroutine.rs` as a *maintenance* refactor — capability
+  is unchanged.
+- **Async gen is off the planning horizon.**  If loft adds async I/O
+  (see [WEB_SERVER_LIB.md](WEB_SERVER_LIB.md)), the implementation
+  will hand-roll async state machines the same way sync coroutines do
+  today — not wait for upstream.  The pattern is well understood.
+
+---
+
 ## Non-Goals
 
 - **Symmetric coroutines** — two coroutines transferring control directly to
