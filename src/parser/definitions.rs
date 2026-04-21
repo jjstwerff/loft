@@ -1025,17 +1025,22 @@ impl Parser {
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
-        // Phase 2c round 10b: `long` is deprecated — it now aliases `integer`
-        // (same i64 storage post-2c).  Emit a warning so users / stdlib
+        // Phase 2c round 10c: `long` is an alias for `integer` (both are
+        // i64 at rest post-2c).  Emit a warning so users / stdlib
         // maintainers can track remaining call sites.  Skip when parsing
-        // the default library (it still uses `long` in some signatures
-        // pending the round-10c sweep).
-        if type_name == "long" && !self.first_pass && !self.default {
-            diagnostic!(
-                self.lexer,
-                Level::Warning,
-                "type `long` is deprecated — use `integer` (both are 8 bytes post-2c)"
-            );
+        // the default library (stdlib still uses `long` in some
+        // signatures pending the keyword-removal sweep).  Return the
+        // wide Type::Integer directly — no Type::Long ever reaches
+        // downstream.
+        if type_name == "long" {
+            if !self.first_pass && !self.default {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "type `long` is deprecated — use `integer` (both are 8 bytes post-2c)"
+                );
+            }
+            return Some(crate::data::I64.clone());
         }
         let tp_nr = if self.lexer.has_token("::") {
             if let Some(name) = self.lexer.has_identifier() {
@@ -1077,16 +1082,11 @@ impl Parser {
                 false
             };
             if has_limit || not_null {
-                // C54.A incremental 2a — when `integer limit(lo, hi)` has
-                // bounds that exceed i32 range, promote to `Type::Long`
-                // (i64 storage + i64 arithmetic).  This is what makes
-                // `u32 = integer limit(0, 4_294_967_294)` round-trip
-                // correctly: values up to u32::MAX fit in an i64.
-                // Narrow-bounded integers (u8/u16/i8/i16/i32-range) stay
-                // as Type::Integer with packed storage.
-                if has_limit && i64::from(max) > i64::from(i32::MAX) {
-                    return Some(Type::Long);
-                }
+                // Phase 2c round 10c — all integer ranges stay as Type::Integer
+                // (i64 storage + i64 arithmetic at rest).  Narrow-bounded
+                // ranges (u8/u16/i8/i16/i32-range) get packed storage via
+                // `forced_size`; wide ranges (up to u32::MAX) use full
+                // 8-byte storage.  Type::Long is no longer produced.
                 return Some(Type::Integer(min, max, not_null));
             }
         }

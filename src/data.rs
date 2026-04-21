@@ -31,6 +31,17 @@ static OPERATORS: &[&str] = &[
 
 pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 
+/// Full-width integer (post-2c, 8 bytes, i64 range up to u32::MAX bound).
+/// Produced by the parser when it sees `long`, `integer limit(..., > i32::MAX)`,
+/// or an integer literal whose magnitude exceeds i32::MAX.  At rest: i64.
+///
+/// Phase 2c round 10c — replaces `Type::Long`.  The `max` field can't hold
+/// full i64::MAX (it's u32), so u32::MAX is used as a "wide" sentinel; all
+/// downstream code just observes "max - min >= 256" and picks 8-byte
+/// storage.  Type::Long remains as a dead enum variant that no parser path
+/// produces.
+pub static I64: Type = Type::Integer(i32::MIN + 1, u32::MAX, false);
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub name: &'static str,

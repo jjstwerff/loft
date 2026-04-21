@@ -279,15 +279,15 @@ impl Parser {
             *t = Type::Boolean;
         } else if self.lexer.has_keyword("size") {
             *code = self.cl("OpSizeFile", &[Value::Var(var_nr)]);
-            *t = Type::Long;
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("index") {
             // Read the current field at offset 8 (pre-2c layout restored now that i32 is 4B)
             *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(8)]);
-            *t = Type::Long;
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("next") {
             // Read the next field at offset 16 (pre-2c layout restored)
             *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
-            *t = Type::Long;
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("read") {
             self.lexer.token("(");
             let mut n_code = Value::Null;

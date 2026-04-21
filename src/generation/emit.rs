@@ -369,7 +369,7 @@ impl Output<'_> {
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
             Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32, false)),
-            Value::Long(_) => Some(Type::Long),
+            Value::Long(_) => Some(crate::data::I64.clone()),
             Value::Float(_) => Some(Type::Float),
             Value::Single(_) => Some(Type::Single),
             Value::Boolean(_) => Some(Type::Boolean),

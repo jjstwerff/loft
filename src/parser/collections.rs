@@ -175,7 +175,7 @@ impl Parser {
                         "{}#iter_state",
                         iter_base.strip_suffix("#index").unwrap_or(iter_base)
                     );
-                    let state_var = self.create_var(&iter_state_name, &Type::Long);
+                    let state_var = self.create_var(&iter_state_name, &crate::data::I64);
                     self.vars.defined(state_var);
                     let mut ls = Vec::new();
                     self.fill_iter(&mut ls, code, is_type, true, true);

@@ -194,7 +194,7 @@ impl State {
             Value::Long(value) => {
                 stack.add_op("OpConstLong", self);
                 self.code_add(*value);
-                Type::Long
+                crate::data::I64.clone()
             }
             Value::Single(value) => {
                 stack.add_op("OpConstSingle", self);
@@ -1525,7 +1525,7 @@ impl State {
             // Return type is the yield type — inferred from value_size for now.
             return match value_size {
                 1 => Type::Boolean,
-                8 => Type::Long,
+                8 => crate::data::I64.clone(),
                 _ => I32.clone(),
             };
         }

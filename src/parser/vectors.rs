@@ -273,7 +273,7 @@ impl Parser {
             I32.clone()
         } else if let Some(nr) = self.lexer.has_long() {
             *val = Value::Long(nr as i64);
-            Type::Long
+            crate::data::I64.clone()
         } else if let Some(nr) = self.lexer.has_float() {
             *val = Value::Float(nr);
             Type::Float

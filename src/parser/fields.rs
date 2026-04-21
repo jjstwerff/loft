@@ -544,7 +544,7 @@ impl Parser {
             } else {
                 self.lexer.has_token("=")
             };
-            let iter = self.create_unique("iter", &Type::Long);
+            let iter = self.create_unique("iter", &crate::data::I64);
             let mut ls = Vec::new();
             if !self.first_pass {
                 self.fill_iter(&mut ls, code, typedef, true, inclusive);
@@ -608,7 +608,7 @@ impl Parser {
             // partial-key match — rewrite idx[k1] as idx[k1..=k1].
             // Uses the existing inclusive-range iteration path with from=till=key.
             let inclusive = true;
-            let iter = self.create_unique("iter", &Type::Long);
+            let iter = self.create_unique("iter", &crate::data::I64);
             let mut ls = Vec::new();
             if !self.first_pass {
                 // fill_iter calls set_loop which requires an active loop context.
