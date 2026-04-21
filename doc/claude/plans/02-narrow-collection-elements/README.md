@@ -104,6 +104,18 @@ currently uses `data.def(c_nr).known_type` as the content.  Roughly
 
 ## Ground rules
 
+**Top-level rule (inherited from `doc/claude/plans/README.md`):
+plans never introduce regressions.**  Every phase preserves every
+currently-green test and user-facing behaviour.  If a step surfaces
+a scope surprise, the plan is re-scoped BEFORE the next commit —
+no degrade-now-fix-later.  Phase 4 was split into 4a (shipped) and
+4b (planned, additive `Parts::ShortRaw`) for exactly this reason:
+4a's read-side gate on its own would have regressed u16 fields
+without 4b's matching write-side support, so 4a was scoped down to
+"correctness for 1-byte and 4-byte narrowing; 2-byte stays wide".
+
+Per-initiative rules:
+
 1. **All or nothing per collection kind.**  Either every code path
    (storage, read, append, iterate, native codegen) honours the
    narrow content, or none do.  The 2026-04-21 half-fix narrowed
