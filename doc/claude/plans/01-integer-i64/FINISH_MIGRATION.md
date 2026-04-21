@@ -74,29 +74,41 @@ can't silently reintroduce the bugs this branch chased.
 
 ### B — Round 10b follow-up: deduplicate `Op*Long` family
 
-**Status (2026-04-21):** partial — 5/26 removed.  Safely deleted via
-`regen_fill_rs` + suite verify:
+**Status (2026-04-21):** shipping — 22/26 removed in round 10b.3.
+Safely deleted via `regen_fill_rs` + suite verify:
 
 - `OpAbsLong` (round 10b.1, commit `5b2c89c`)
-- `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong` (round 10b.2)
+- `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong` (round 10b.2, `fd09612`)
+- `OpMinSingleLong`, `OpConvFloatFromLong`, `OpConvBoolFromLong`,
+  `OpAdd/Min/Mul/Div/Rem Long` + `Nullable` variants,
+  `OpLand/Lor/Eor/SLeft/SRight Long` (round 10b.3)
 
-**Blocker**: `OpSRightLong` deletion alone regresses
-`moros_glb_cli_end_to_end` with a runtime SIGSEGV (opcode dispatch,
-pc=84102, d_nr=897) — isolated via bisection across the 22-op bulk
-batch.  Minimal reproducers of the graphics.loft:31 pattern
-(`((x as long & 0xFF000000l) >> 24l) as integer`) pass in isolation;
-the crash only surfaces inside the moros_render JSON-driven pipeline.
-Root cause not yet identified — likely an emergent interaction with a
-`long` arg crossing library boundaries where the post-delete
-signature-matching picks `OpSRightInt` but some downstream consumer
-still expects Long typing.
+OPERATORS table: 268 → 245 (-23, including the -1 from round 10b.1
+and -4 from round 10b.2).  Remaining Long ops kept for now:
+`OpConstLong`, `OpVarLong`, `OpPutLong`, `OpConvLongFromNull`,
+`OpConvLongFromInt`, `OpCastIntFromLong`, `OpCastLongFromText`,
+`OpFormatLong`, `OpFormatStackLong`.  These fold away in Phase C
+when `Type::Long` is removed.
 
-Resume path: (a) instrument the parser to log every `OpSRight*`
-emission site during a moros_glb run and compare pre- vs post-delete
-to find the changed callsite; (b) once fixed, also delete
-`OpLandLong`/`OpLorLong`/`OpEorLong`/`OpSLeftLong` (bitwise other
-than SRight — not tested individually since the regression was in
-this group), then arithmetic + nullable + unary + conv ops.
+**Root cause of the earlier "OpSRightLong regression"**: the
+`.loftc` bytecode cache key (`src/cache.rs:26`, `src/main.rs:1653`)
+hashes only `(version, build_id, top-level script content)` — it
+does NOT include `default/*.loft` or transitively-loaded library
+content.  When `default/01_code.loft` is edited in-tree, the cache
+key for `lib/moros_render/examples/moros_glb.loft` is unchanged,
+so `byte_code_with_cache` loads bytecode compiled against the
+*previous* opcode numbering.  The runtime then dispatches ops
+through a renumbered `OPERATORS` table, producing silent data
+corruption or SIGSEGV depending on how far the drift goes.  The
+bisection that pointed at `OpSRightLong` was a false lead: any
+deletion would have reproduced it, the cache just happened to
+hold bytecode that still worked for the other single-op tests.
+
+The fix for the migration itself is a one-liner: delete cached
+`.loftc` files after a stdlib edit (`find . -name '*.loftc'
+-not -path '*/target/*' -delete`).  The underlying cache-
+invalidation bug is orthogonal and deserves its own fix — see
+**§ B.postscript** below.
 
 Per `05-opcode-reclamation.md`, with `Type::Long` collapsed to
 `Type::Integer`, ~26 opcodes are duplicates:
@@ -124,6 +136,30 @@ Path to delete:
 Estimate: 2-3 hours of mechanical sweeps + one suite run.
 **Risk**: low — each `OpXxxLong` body already delegates to the
 i64 arithmetic.  The deduplication is a rename at call sites.
+
+#### B.postscript — cache-key bug (separate follow-up)
+
+`src/cache.rs::cache_key` at `src/main.rs:1653` is called with
+`sources = [(abs_file, source_content)]` — a one-element list
+holding only the top-level script.  When `default/*.loft` or a
+transitively-loaded library under `lib/<pkg>/src/` changes
+in-tree between runs of the *same* top-level script, the cache
+key stays the same and `read_cache` returns stale bytecode
+compiled against the previous stdlib opcode numbering.
+
+This is OK during normal development (the git commit changes,
+which bumps `LOFT_BUILD_ID` via `build.rs` and invalidates the
+cache) but goes wrong during *uncommitted* stdlib edits — exactly
+the loft-developer workflow.
+
+Fix: extend `sources` at the `main.rs:1653` call site to include
+every `default/*.loft` file and every `use`-imported lib module's
+source content.  The parser already tracks which files were read
+(it records `Position::file` in each diagnostic); thread that
+list into `byte_code_with_cache`.  Alternative: weaken by
+including just `default/*.loft` mtimes in the cache key — cheaper
+but coarser.  Neither is in scope for the i64 migration; file as
+a separate PROBLEMS.md entry.
 
 ### C — Round 10c: remove `Type::Long` and widen default range
 

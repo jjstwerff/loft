@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 263] = &[
+pub const OPERATORS: &[fn(&mut State); 245] = &[
     goto,
     goto_word,
     goto_false,
@@ -67,25 +67,7 @@ pub const OPERATORS: &[fn(&mut State); 263] = &[
     var_long,
     put_long,
     conv_long_from_null,
-    min_single_long,
     cast_int_from_long,
-    conv_float_from_long,
-    conv_bool_from_long,
-    add_long,
-    min_long,
-    mul_long,
-    div_long,
-    rem_long,
-    add_long_nullable,
-    min_long_nullable,
-    mul_long_nullable,
-    div_long_nullable,
-    rem_long_nullable,
-    land_long,
-    lor_long,
-    eor_long,
-    s_left_long,
-    s_right_long,
     format_long,
     format_stack_long,
     const_single,
@@ -644,132 +626,9 @@ fn conv_long_from_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn min_single_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_negate_long(v_v1);
-    s.put_stack(new_value);
-}
-
 fn cast_int_from_long(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_cast_int_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn conv_float_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_conv_float_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn conv_bool_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_conv_bool_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn add_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_add_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn min_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_min_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn mul_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_mul_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn div_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn rem_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn add_long_nullable(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_add_long_nullable(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn min_long_nullable(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_min_long_nullable(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn mul_long_nullable(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_mul_long_nullable(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn div_long_nullable(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_long_nullable(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn rem_long_nullable(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_long_nullable(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn land_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_logical_and_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn lor_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_logical_or_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn eor_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_exclusive_or_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn s_left_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_left_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn s_right_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_right_long(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
