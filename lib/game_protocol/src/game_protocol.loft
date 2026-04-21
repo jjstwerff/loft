@@ -64,7 +64,7 @@ pub fn msg_chat(sender: text, content: text) -> GameEnvelope {
   GameEnvelope {
     sender: sender,
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.ChatMessage, payload: content }
   }
@@ -75,7 +75,7 @@ pub fn msg_input(sender: text, input_data: text) -> GameEnvelope {
   GameEnvelope {
     sender: sender,
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.PlayerInput, payload: input_data }
   }
@@ -86,7 +86,7 @@ pub fn msg_state(state_data: text) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.StateFullSync, payload: state_data }
   }
@@ -97,7 +97,7 @@ pub fn msg_error(error_text: text) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.Error, payload: error_text }
   }

@@ -20,7 +20,7 @@ fn main() {
     }
     total += 1;
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   the_count = db.freq["the"].count;
   println("result: total={total} the={the_count}  time: {ms}ms");
 }

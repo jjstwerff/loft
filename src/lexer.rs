@@ -110,11 +110,6 @@ pub struct Lexer {
     /// After `}` closes the expression, resume with `backtick_string_resume()`
     /// instead of `string()`.
     in_backtick: bool,
-    /// Post-2c round 10b: emit a deprecation warning when the `l` literal
-    /// suffix is seen.  Suppressed (set to `false`) while parsing the
-    /// `default/*.loft` stdlib, which still contains stray `l` suffixes
-    /// pending the round-10c sweep.
-    pub warn_deprecated_long: bool,
     diagnostics: Diagnostics,
 }
 
@@ -240,7 +235,6 @@ impl Default for Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
-            warn_deprecated_long: true,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -280,7 +274,6 @@ impl Lexer {
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
-            warn_deprecated_long: true,
             diagnostics: Diagnostics::new(),
         };
         for s in TOKENS {
@@ -987,24 +980,15 @@ impl Lexer {
     }
 
     fn ret_number(&mut self, r: u64, p: Position, start_zero: bool) -> LexResult {
-        // Post-round-10: `integer` is 8 bytes.  The `l` suffix is accepted
-        // for backward compatibility but has no semantic effect — values
-        // >= 2^31 auto-promote to LexItem::Long regardless of suffix.
-        // Values > i64::MAX (impossible to represent in i64) are rejected.
+        // Post-2c round 10c: `integer` is 8 bytes.  Values > i64::MAX
+        // (impossible to represent in i64) are rejected; values up to
+        // i32::MAX are emitted as LexItem::Integer, larger values as
+        // LexItem::Long so the parser carries the full i64 payload
+        // through to `Value::Long`.  Both land in a wide Type::Integer
+        // at the parser layer — the distinction is only about how
+        // many bytes of bytecode the literal consumes.
         let i32_max = u64::from(i32::MAX as u32);
         let i64_max = i64::MAX as u64;
-        // Accept and drop the `l` suffix if present.  Post-2c round 10b:
-        // `integer` and `long` share i64 storage, so the suffix is a no-op.
-        // Warn so users can strip it from their code.
-        if let Some('l') = self.iter.peek() {
-            self.next_char();
-            if self.warn_deprecated_long {
-                self.err(
-                    Level::Warning,
-                    "the `l` literal suffix is deprecated — `integer` is now 8 bytes",
-                );
-            }
-        }
         if r > i64_max {
             self.err(
                 Level::Error,

@@ -22,6 +22,6 @@ fn main() {
       total += mandelbrot(cx, cy);
     }
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {total}  time: {ms}ms");
 }

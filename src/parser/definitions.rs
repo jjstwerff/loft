@@ -1025,30 +1025,10 @@ impl Parser {
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
-        // Phase 2c round 10c: `long` is an alias for `integer` (both are
-        // i64 at rest post-2c).  Emit a warning so users / stdlib
-        // maintainers can track remaining call sites.  Skip when parsing
-        // the default library (stdlib still uses `long` in some
-        // signatures pending the keyword-removal sweep).  Return the
-        // wide Type::Integer directly — no Type::Long ever reaches
-        // downstream.
-        if type_name == "long" {
-            if !self.first_pass && !self.default {
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    "type `long` is deprecated — use `integer` (both are 8 bytes post-2c)"
-                );
-            }
-            // Consume an optional `not null` after `long`.
-            let _not_null = if self.lexer.has_keyword("not") {
-                self.lexer.token("null");
-                true
-            } else {
-                false
-            };
-            return Some(crate::data::I64.clone());
-        }
+        // Phase 2c round 10c: `long` has been removed as a user-facing
+        // type.  Callers now use `integer` everywhere; if anyone still
+        // writes `long` it parses as an unknown identifier and fails
+        // normally via the standard `data.def_nr` lookup path below.
         let tp_nr = if self.lexer.has_token("::") {
             if let Some(name) = self.lexer.has_identifier() {
                 let source = self.data.get_source(type_name);

@@ -10,7 +10,7 @@ use glb;
 fn test_glb_creates_file() {
   gc_m = mesh::cube();
   glb::save_glb(gc_m, "test_glb_a.glb");
-  assert(file("test_glb_a.glb").size > 0l, "GLB file was created");
+  assert(file("test_glb_a.glb").size > 0, "GLB file was created");
   delete("test_glb_a.glb");
 }
 

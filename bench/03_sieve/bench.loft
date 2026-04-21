@@ -21,6 +21,6 @@ fn main() {
       count += 1;
     }
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {count}  time: {ms}ms");
 }

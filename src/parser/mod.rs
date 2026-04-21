@@ -357,7 +357,6 @@ impl Parser {
             return self.parse_virtual(&content, filename, default);
         }
         self.default = default;
-        self.lexer.warn_deprecated_long = false;
         self.vars.logging = false;
         self.lexer.switch(filename);
         self.first_pass = true;
@@ -371,7 +370,6 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
-            self.lexer.warn_deprecated_long = !self.default;
             self.reverse_iterator = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
@@ -499,7 +497,6 @@ impl Parser {
     #[cfg(feature = "wasm")]
     fn parse_virtual(&mut self, content: &str, filename: &str, default: bool) -> bool {
         self.default = default;
-        self.lexer.warn_deprecated_long = false;
         self.vars.logging = false;
         self.first_pass = true;
         self.pending_imports.clear();
@@ -513,7 +510,6 @@ impl Parser {
         let lvl = self.lexer.diagnostics().level();
         if lvl != Level::Error && lvl != Level::Fatal {
             self.first_pass = false;
-            self.lexer.warn_deprecated_long = !self.default;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
             self.data.reset();
@@ -595,7 +591,6 @@ impl Parser {
     pub fn parse_str(&mut self, text: &str, filename: &str, logging: bool) {
         self.first_pass = true;
         self.default = false;
-        self.lexer.warn_deprecated_long = false;
         self.vars.logging = logging;
         self.lexer.parse_string(text, filename);
         self.applied_imports.clear();
@@ -615,7 +610,6 @@ impl Parser {
         self.lambda_counter = 0;
         self.lexer.parse_string(text, filename);
         self.first_pass = false;
-        self.lexer.warn_deprecated_long = true;
         self.parse_file();
         self.resolve_deferred_unknowns();
         self.diagnostics.fill(self.lexer.diagnostics());

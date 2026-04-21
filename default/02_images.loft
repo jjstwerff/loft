@@ -63,16 +63,16 @@ fn OpGetDir(path: text, result: vector < File >) -> boolean;
 fn OpGetFileText(file: File, content:  & text);
 fn OpWriteFile(file: File, val: reference, db_tp: const u16);
 fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16);
-fn OpSeekFile(file: File, pos: long);
-fn OpSizeFile(file: File) -> long;
+fn OpSeekFile(file: File, pos: integer);
+fn OpSizeFile(file: File) -> integer;
 fn OpDelete(path: text) -> boolean;
 #rust"codegen_runtime::fs_delete(@path)"
 fn OpMoveFile(from: text, to: text) -> boolean;
 #rust"codegen_runtime::fs_move(@from, @to)"
-fn OpTruncateFile(self: File, size: long) -> boolean;
+fn OpTruncateFile(self: File, size: integer) -> boolean;
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
-// renumbering the operators defined earlier in this file.  Logically it belongs near
+// renumbering the operators defined earlier in this file.  Logically it beintegers near
 // OpCall in 01_code.loft; relocate it there if the operator numbering is ever rebuilt.
 // fn_var  — byte distance from the current stack top to the i32 d_nr slot.
 // arg_size — total byte size of the already-pushed arguments.
@@ -246,10 +246,10 @@ pub fn mkdir_all(path: text) -> FileResult {
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory
 // if the path is a directory; FileResult.Other if size is negative.
 
-pub fn set_file_size(self: File, size: long) -> FileResult {
+pub fn set_file_size(self: File, size: integer) -> FileResult {
   if self.format == Format.Directory { return FileResult.IsDirectory }
   if self.format == Format.NotExists { return FileResult.NotFound }
-  if size < 0l { return FileResult.Other }
+  if size < 0 { return FileResult.Other }
   if OpTruncateFile(self, size) { return FileResult.Ok }
   FileResult.Other
 }
@@ -281,10 +281,10 @@ pub fn env_variable(name: text) -> text;
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
 // (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
-pub fn now() -> long;
+pub fn now() -> integer;
 // Returns microseconds elapsed since program start (monotonic clock).
 // Unaffected by system clock adjustments. Use for benchmarks and frame timing.
-pub fn ticks() -> long;
+pub fn ticks() -> integer;
 
 // Clears the scratch buffer used by text-returning native functions (A8).
 // Emitted at statement boundaries by the compiler; not callable from user code.
@@ -329,7 +329,7 @@ fn OpPutFnRef(pos: const u16, _fnref: text);
 // P127: push a pre-built constant's DbRef from the constant store.
 fn OpConstRef(d_nr: const integer) -> reference;
 #rust"s.const_refs[@d_nr as usize]"
-// Push a Str pointing into the constant store for long string literals.
+// Push a Str pointing into the constant store for integer string literals.
 fn OpConstStoreText(rec: const integer, pos: const integer) -> text;
 #rust"s.string_from_const_store(@rec as u32, @pos as u32)"
 

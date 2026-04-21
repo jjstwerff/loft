@@ -708,7 +708,7 @@ fn test_map_export_glb_creates_file() {
   xf = file(xpath);
   assert(xf.exists(), "GLB file written at {xpath}");
   xsz = xf.size;
-  assert(xsz > 0l, "GLB file non-empty, got {xsz} bytes");
+  assert(xsz > 0, "GLB file non-empty, got {xsz} bytes");
 }
 
 // Verify the 12-byte GLB header: magic 'glTF', version 2, total length.

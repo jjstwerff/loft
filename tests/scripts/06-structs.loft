@@ -123,7 +123,6 @@ fn main() {
   // --- sizeof ---
   // Primitive types
   assert(sizeof(integer) == 8, "sizeof integer is 8");
-  assert(sizeof(long) == 8, "sizeof long is 8");
   assert(sizeof(float) == 8, "sizeof float is 8");
   assert(sizeof(boolean) == 1, "sizeof boolean is 1");
   // Range-constrained integer types return their packed size

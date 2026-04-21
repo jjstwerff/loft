@@ -14,7 +14,7 @@ fn test_scene_glb_creates_file() {
   sg_mati = sg_s.add_material(scene::material("default"));
   sg_s.add_node(scene::node("cube", sg_mi, sg_mati));
   glb::save_scene_glb(sg_s, "test_sglb_a.glb");
-  assert(file("test_sglb_a.glb").size > 0l, "scene GLB created");
+  assert(file("test_sglb_a.glb").size > 0, "scene GLB created");
   delete("test_sglb_a.glb");
 }
 
