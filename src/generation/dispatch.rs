@@ -359,8 +359,8 @@ impl Output<'_> {
         let def_fn = self.data.def(def_nr);
         let name: &str = &def_fn.name;
         match name {
-            "OpFormatLong" | "OpFormatStackLong" => {
-                return self.format_long(w, vals, name == "OpFormatStackLong");
+            "OpFormatInt" | "OpFormatStackInt" => {
+                return self.format_long(w, vals, name == "OpFormatStackInt");
             }
             "OpFormatFloat" | "OpFormatStackFloat" => {
                 return self.format_float(w, vals, name == "OpFormatStackFloat");

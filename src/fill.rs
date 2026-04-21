@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 245] = &[
+pub const OPERATORS: &[fn(&mut State); 234] = &[
     goto,
     goto_word,
     goto_false,
@@ -34,13 +34,11 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     conv_character_from_int,
     const_long_text,
     cast_int_from_text,
-    cast_long_from_text,
     cast_single_from_text,
     cast_float_from_text,
     abs_int,
     min_single_int,
     bit_not_single_int,
-    conv_long_from_int,
     conv_float_from_int,
     conv_single_from_int,
     conv_bool_from_int,
@@ -63,13 +61,8 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     ne_int,
     lt_int,
     le_int,
-    const_long,
-    var_long,
-    put_long,
-    conv_long_from_null,
-    cast_int_from_long,
-    format_long,
-    format_stack_long,
+    format_int,
+    format_stack_int,
     const_single,
     var_single,
     put_single,
@@ -77,7 +70,6 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     abs_single,
     min_single_single,
     cast_int_from_single,
-    cast_long_from_single,
     conv_float_from_single,
     conv_bool_from_single,
     add_single,
@@ -107,7 +99,6 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     min_single_float,
     cast_single_from_float,
     cast_int_from_float,
-    cast_long_from_float,
     conv_bool_from_float,
     add_float,
     min_float,
@@ -172,7 +163,6 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     get_field,
     get_int,
     get_character,
-    get_long,
     get_single,
     get_float,
     get_byte,
@@ -182,7 +172,6 @@ pub const OPERATORS: &[fn(&mut State); 245] = &[
     get_text,
     set_int,
     set_character,
-    set_long,
     set_single,
     set_float,
     set_byte,
@@ -410,12 +399,6 @@ fn cast_int_from_text(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn cast_long_from_text(s: &mut State) {
-    let v_v1 = s.string();
-    let new_value = v_v1.str().parse().unwrap_or(i64::MIN);
-    s.put_stack(new_value);
-}
-
 fn cast_single_from_text(s: &mut State) {
     let v_v1 = s.string();
     let new_value = v_v1.str().parse().unwrap_or(f32::NAN);
@@ -443,12 +426,6 @@ fn min_single_int(s: &mut State) {
 fn bit_not_single_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
     let new_value = !v_v1;
-    s.put_stack(new_value);
-}
-
-fn conv_long_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_conv_long_from_int(v_v1);
     s.put_stack(new_value);
 }
 
@@ -603,41 +580,12 @@ fn le_int(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn const_long(s: &mut State) {
-    let v_val = *s.code::<i64>();
-    let new_value = v_val;
-    s.put_stack(new_value);
+fn format_int(s: &mut State) {
+    s.format_int();
 }
 
-fn var_long(s: &mut State) {
-    let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<i64>(v_pos);
-    s.put_stack(new_value);
-}
-
-fn put_long(s: &mut State) {
-    let v_pos = *s.code::<u16>();
-    let v_value = *s.get_stack::<i64>();
-    s.put_var(v_pos, v_value);
-}
-
-fn conv_long_from_null(s: &mut State) {
-    let new_value = i64::MIN;
-    s.put_stack(new_value);
-}
-
-fn cast_int_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_cast_int_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn format_long(s: &mut State) {
-    s.format_long();
-}
-
-fn format_stack_long(s: &mut State) {
-    s.format_stack_long();
+fn format_stack_int(s: &mut State) {
+    s.format_stack_int();
 }
 
 fn const_single(s: &mut State) {
@@ -678,12 +626,6 @@ fn min_single_single(s: &mut State) {
 fn cast_int_from_single(s: &mut State) {
     let v_v1 = *s.get_stack::<f32>();
     let new_value = ops::op_cast_int_from_single(v_v1);
-    s.put_stack(new_value);
-}
-
-fn cast_long_from_single(s: &mut State) {
-    let v_v1 = *s.get_stack::<f32>();
-    let new_value = ops::op_cast_long_from_single(v_v1);
     s.put_stack(new_value);
 }
 
@@ -900,12 +842,6 @@ fn cast_single_from_float(s: &mut State) {
 fn cast_int_from_float(s: &mut State) {
     let v_v1 = *s.get_stack::<f64>();
     let new_value = ops::op_cast_int_from_float(v_v1);
-    s.put_stack(new_value);
-}
-
-fn cast_long_from_float(s: &mut State) {
-    let v_v1 = *s.get_stack::<f64>();
-    let new_value = ops::op_cast_long_from_float(v_v1);
     s.put_stack(new_value);
 }
 
@@ -1323,18 +1259,6 @@ fn get_character(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn get_long(s: &mut State) {
-    let v_fld = *s.code::<u16>();
-    let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = {
-        let db = v_v1;
-        s.database
-            .store(&db)
-            .get_long(db.rec, db.pos + u32::from(v_fld))
-    };
-    s.put_stack(new_value);
-}
-
 fn get_single(s: &mut State) {
     let v_fld = *s.code::<u16>();
     let v_v1 = *s.get_stack::<DbRef>();
@@ -1447,18 +1371,6 @@ fn set_character(s: &mut State) {
         s.database
             .store_mut(&db)
             .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val as u32);
-    }
-}
-
-fn set_long(s: &mut State) {
-    let v_fld = *s.code::<u16>();
-    let v_val = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<DbRef>();
-    {
-        let db = v_v1;
-        s.database
-            .store_mut(&db)
-            .set_long(db.rec, db.pos + u32::from(v_fld), v_val);
     }
 }
 

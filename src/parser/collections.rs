@@ -600,7 +600,7 @@ use #count instead"
         state: OutputState,
     ) {
         list.push(self.cl(
-            &(start.to_owned() + "Long"),
+            &(start.to_owned() + "Int"),
             &[
                 var,
                 fmt,

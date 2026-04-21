@@ -183,7 +183,7 @@ impl Output<'_> {
         panic!("Could not parse {vals:?}");
     }
 
-    /// Use this to emit `OpFormatLong` as a call to `ops::format_long`.
+    /// Use this to emit `OpFormatInt` as a call to `ops::format_long`.
     pub(super) fn format_long(
         &mut self,
         w: &mut dyn Write,

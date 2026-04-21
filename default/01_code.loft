@@ -134,8 +134,6 @@ fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
 #rust"@v1.parse().unwrap_or(i64::MIN)"
-fn OpCastLongFromText(v1: text) -> integer;
-#rust"@v1.parse().unwrap_or(i64::MIN)"
 fn OpCastSingleFromText(v1: text) -> single;
 #rust"@v1.parse().unwrap_or(f32::NAN)"
 fn OpCastFloatFromText(v1: text) -> float;
@@ -151,8 +149,6 @@ fn OpMinSingleInt(v1: integer) -> integer;
 #rust"ops::op_negate_int(@v1)"
 fn OpBitNotSingleInt(v1: integer) -> integer;
 #rust"!@v1"
-fn OpConvLongFromInt(v1: integer) -> integer;
-#rust"ops::op_conv_long_from_int(@v1)"
 fn OpConvFloatFromInt(v1: integer) -> float;
 #rust"ops::op_conv_float_from_int(@v1)"
 fn OpConvSingleFromInt(v1: integer) -> single;
@@ -199,26 +195,12 @@ fn OpLtInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 < @v2"
 fn OpLeInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 <= @v2"
-// 8-byte-wide integer operations.  OpXxxLong naming is historical;
-// post-2c all integers are i64 at rest.  These ops are emitted when
-// the compiler needs to encode a wide literal, a constant-load, or a
-// variable read/write that always spans 8 bytes (as opposed to the
-// narrow-aliased Byte / Short / Int4 variants).
-fn OpConstLong(val: const integer) -> integer;
-#rust"@val"
-fn OpVarLong(pos: const u16) -> integer;
-#rust"*s.get_var::<i64>(@pos)"
-fn OpPutLong(pos: const u16, value: integer);
-#rust"s.put_var(@pos, @value);"
-fn OpConvLongFromNull() -> integer;
-#rust"i64::MIN"
-fn OpCastIntFromLong(v1: integer) -> integer;
-#rust"ops::op_cast_int_from_long(@v1)"
-// Post-2c round 10b: the Op*Long arithmetic / comparison / bitwise /
-// unary / conversion family is removed — each had a byte-identical
-// OpXxxInt counterpart at the i64 level.
-fn OpFormatLong(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
-fn OpFormatStackLong(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+// Post-2c round 10d: OpConstLong/OpVarLong/OpPutLong/OpConvLongFromNull
+// / OpCastIntFromLong were duplicates of their OpXxxInt counterparts
+// (post-2c all integers are i64 at rest) — removed.  Format* renamed
+// from Long to Int.
+fn OpFormatInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+fn OpFormatStackInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 // Single-precision (32-bit) floating-point math.
 // Choose single for performance-sensitive work such as graphics.
 fn OpConstSingle(val: const single) -> single;
@@ -240,8 +222,6 @@ fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
 fn OpCastIntFromSingle(v1: single) -> integer;
 #rust"ops::op_cast_int_from_single(@v1)"
-fn OpCastLongFromSingle(v1: single) -> integer;
-#rust"ops::op_cast_long_from_single(@v1)"
 fn OpConvFloatFromSingle(v1: single) -> float;
 #rust"f64::from(@v1)"
 fn OpConvBoolFromSingle(v1: single) -> boolean;
@@ -486,8 +466,6 @@ fn OpCastSingleFromFloat(v1: float) -> single;
 #rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
 #rust"ops::op_cast_int_from_float(@v1)"
-fn OpCastLongFromFloat(v1: float) -> integer;
-#rust"ops::op_cast_long_from_float(@v1)"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
 #rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
@@ -717,8 +695,6 @@ fn OpGetInt(v1: reference, fld: const u16) -> integer;
 #rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
 #rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_u32_raw(db.rec, db.pos + u32::from(@fld))).unwrap_or(char::from(0)) }} }}"
-fn OpGetLong(v1: reference, fld: const u16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
 #rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
@@ -737,8 +713,6 @@ fn OpSetInt(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
 #rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val as u32);}}"
-fn OpSetLong(v1: reference, fld: const u16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
 #rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);

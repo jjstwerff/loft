@@ -192,7 +192,7 @@ impl State {
                 Type::Enum(0, false, Vec::new())
             }
             Value::Long(value) => {
-                stack.add_op("OpConstLong", self);
+                stack.add_op("OpConstInt", self);
                 self.code_add(*value);
                 crate::data::I64.clone()
             }

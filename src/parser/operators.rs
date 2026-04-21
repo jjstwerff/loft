@@ -207,7 +207,21 @@ impl Parser {
         _op: &str,
     ) -> Value {
         match name {
-            "OpGetInt" => self.cl("OpSetInt", &[args[0].clone(), args[1].clone(), code]),
+            "OpGetInt" => {
+                // f#next = pos: seek the file AND update the stored field.
+                if args[1] == Value::Int(16)
+                    && let Value::Var(v_nr) = &args[0]
+                    && self.is_file_var(*v_nr)
+                {
+                    let seek = self.cl("OpSeekFile", &[args[0].clone(), code.clone()]);
+                    let set = self.cl(
+                        "OpSetInt",
+                        &[args[0].clone(), args[1].clone(), code.clone()],
+                    );
+                    return Value::Insert(vec![seek, set]);
+                }
+                self.cl("OpSetInt", &[args[0].clone(), args[1].clone(), code])
+            }
             "OpGetByte" => self.cl(
                 "OpSetByte",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
@@ -218,21 +232,6 @@ impl Parser {
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
             "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
-            "OpGetLong" => {
-                // f#next = pos: seek the file AND update the stored field.
-                if args[1] == Value::Int(16)
-                    && let Value::Var(v_nr) = &args[0]
-                    && self.is_file_var(*v_nr)
-                {
-                    let seek = self.cl("OpSeekFile", &[args[0].clone(), code.clone()]);
-                    let set = self.cl(
-                        "OpSetLong",
-                        &[args[0].clone(), args[1].clone(), code.clone()],
-                    );
-                    return Value::Insert(vec![seek, set]);
-                }
-                self.cl("OpSetLong", &[args[0].clone(), args[1].clone(), code])
-            }
             "OpGetFloat" => self.cl("OpSetFloat", &[args[0].clone(), args[1].clone(), code]),
             "OpGetSingle" => self.cl("OpSetSingle", &[args[0].clone(), args[1].clone(), code]),
             "OpGetField" => code,

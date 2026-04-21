@@ -349,7 +349,7 @@ impl State {
         self.put_var(pos, str_val); // writes Str at (stack_pos + 16 - pos) = elem_abs
     }
 
-    pub fn format_long(&mut self) {
+    pub fn format_int(&mut self) {
         let pos = *self.code::<u16>();
         let radix = *self.code::<u8>();
         let token = *self.code::<u8>();
@@ -362,7 +362,7 @@ impl State {
         ops::format_long(s, val, radix, width, token, plus, note, dir);
     }
 
-    pub fn format_stack_long(&mut self) {
+    pub fn format_stack_int(&mut self) {
         let pos = *self.code::<u16>();
         let radix = *self.code::<u8>();
         let token = *self.code::<u8>();

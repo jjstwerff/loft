@@ -248,11 +248,10 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
         return vec![];
     };
     let mut values = Vec::new();
-    // Look for patterns: Call(OpSetInt/Float/Single/Long/Text, [_, Int(0), literal_value])
+    // Look for patterns: Call(OpSetInt/Float/Single/Text, [_, Int(0), literal_value])
     let set_int_nr = data.def_nr("OpSetInt");
     let set_float_nr = data.def_nr("OpSetFloat");
     let set_single_nr = data.def_nr("OpSetSingle");
-    let set_long_nr = data.def_nr("OpSetLong");
     let set_text_nr = data.def_nr("OpSetText");
     for op in &block.operators {
         let Value::Call(fn_nr, args) = op else {
@@ -264,7 +263,6 @@ fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
         if *fn_nr == set_int_nr
             || *fn_nr == set_float_nr
             || *fn_nr == set_single_nr
-            || *fn_nr == set_long_nr
             || *fn_nr == set_text_nr
         {
             match &args[2] {
