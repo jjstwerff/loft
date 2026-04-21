@@ -1351,43 +1351,24 @@ collapsed by the time `Type::Vector(content, _)` is constructed in
 
 Same issue affects `Type::Hash`, `Type::Sorted`, `Type::Index`.
 
-**Fix path (sketch):**
+**Fix path:** full phased plan in
+[`plans/02-narrow-collection-elements/README.md`](plans/02-narrow-collection-elements/README.md)
+— representation choice (preferred: extend `Type::Integer` with an
+`Option<NonZeroU8>` forced-size field so the alias signal flows
+through `Box<Type>` naturally), then Phase 1–6 covering parser
+population, resolver narrowing, read path (the hard one —
+`src/parser/fields.rs::parse_vector_index`'s compile-time
+`elm_size` has to look up the vector's real stride, not use a
+constant), append / insert / set paths, local variables and
+return types, and the hash / sorted / index extension.  Per-phase
+acceptance criteria and regression-test matrix spelled out there.
 
-1. **Parser** (`src/parser/definitions.rs::sub_type`): for collection
-   types over an integer alias, capture the alias's def_nr (e.g. via
-   a new `content_alias_d_nr` field on `Attribute` or a sticky field
-   on `Parser`, read by `parse_field` after `parse_type_full` returns).
-2. **Type resolver** (`src/typedef.rs::fill_database` Vector/Hash/
-   Sorted/Index arms): consult the content alias's `forced_size`
-   and call `database.byte/short/int()` for narrow content types
-   before calling `database.vector(c_tp)`.  This makes the database
-   register a narrow vector type (e.g. `vector<int<min,null>>`) with
-   4-byte element stride.
-3. **Read path** (`src/parser/fields.rs::parse_vector_index`): the
-   compile-time `elm_size` computation currently uses
-   `database.size(def(elm_td).known_type)` which also ignores the
-   narrow vector type.  Needs to look up the vector's actual db_tp
-   (from the expression's context) and use `Parts::Vector(content)`
-   → `database.size(content)` to get the real stride.  This is the
-   painful part of the fix — the parser doesn't have easy access to
-   the vector expression's db_tp at the indexing site.  Storing
-   `content_alias_d_nr` on the attribute allows the Read path to
-   mirror the Vector arm's logic.
-4. **Write path** (`src/state/io.rs::assemble_write_data`): already
-   uses `database.size(elem_tp)` so it will honour a narrow vector
-   type once the resolver creates one.  No change required there.
-5. **Vector append / OpAppendVector**: probably also needs a
-   narrow-stride path; audit `src/vector.rs::vector_append` callers
-   to confirm.
-
-**Tried and reverted** (2026-04-21): steps 1 + 2 in a single-session
-attempt — the fill_database narrowing landed but step 3 is
-non-trivial (indexer has a `code` expression, not an attribute
-handle).  A half-fix produces *worse* behaviour than the documented
-workaround: storage goes to 4 bytes but indexing still reads 8,
-returning `(v[i+1] << 32) | v[i]` for every element access.  Revert
-ed so users see the consistent-but-wide behaviour until a complete
-fix can land.
+**Tried and reverted** (2026-04-21): storage narrowing landed via
+`Attribute.content_alias_d_nr`, but the parser's `elm_size`
+computation at the indexing site stayed 8-byte — producing *worse*
+behaviour than leaving the bug (4-byte storage + 8-byte reads =
+garbage values).  Reverted entirely.  Detailed postmortem and the
+"all or nothing" rule in the plan file above.
 
 **Workaround:** use `vector<integer>` (8-byte elements) and add
 explicit `as i32` casts at binary-write sites:

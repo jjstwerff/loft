@@ -22,7 +22,7 @@ per phase.
 
 | Dir | Initiative | Current phase |
 |---|---|---|
-| — | (none open) | |
+| `02-narrow-collection-elements/` | Make `vector<i32>` / `hash<i32>` / `sorted<i32>` / `index<i32>` honour the `size(N)` annotation on integer aliases (P184 — post-C54 follow-up). | Phase 0 — representation choice (Type::Integer forced-size field) |
 
 ## Finished initiatives
 
