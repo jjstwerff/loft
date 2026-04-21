@@ -677,11 +677,16 @@ release-block ownership.
 
 ## Package / Multi-file
 
-### 142. `vector<T>` field panics when T is a struct from an imported file
+### ~~142~~. `vector<T>` field panics when T is a struct from an imported file — FIXED
 
-**Severity:** High — blocks multi-file library layout for any package that
-uses `vector<StructType>` fields where the struct is defined in a separate
-`.loft` file.
+**Status:** Fixed 2026-04-17 — plain `use` now imports all `pub` definitions
+via `import_all`, so `vector<T>` content types resolve correctly across files.
+Related to the P173 intra-package `use`-cycle fix.  Historical detail below
+kept for archaeology.
+
+**Severity (historical):** High — used to block multi-file library layout for
+any package that used `vector<StructType>` fields where the struct was defined
+in a separate `.loft` file.
 
 **Symptom:** The parser panics with:
 
@@ -904,9 +909,17 @@ bugs panic with diagnostics instead of SIGSEGVing.
 
 ---
 
-### 152. Whole-replacement assignment to a struct field is silently dropped (vector field) or undetected as a write (struct field)
+### ~~152~~. Whole-replacement assignment to a struct field is silently dropped (vector field) or undetected as a write (struct field) — FIXED
 
-**Severity:** High — silent data loss for vector/sorted/hash/index/spacial fields.
+**Status:** Fixed 2026-04-16.  `parse_assign_op` now rewrites `field = vec_var`
+to `OpClearVector + OpAppendVector` and `field = []` to `OpClearVector` alone;
+`find_written_vars` unifies `first_arg_write` so collection ops + `OpCopyRecord`
+count as writes through `OpGetField` destinations.
+Tests: `tests/issues.rs::p152_*` (4 regression guards, all passing, no `#[ignore]`).
+Follow-up P154 closed the RHS-eval ordering edge case introduced by this
+lowering.  Historical detail below kept for archaeology.
+
+**Severity (historical):** High — silent data loss for vector/sorted/hash/index/spacial fields.
 
 **Symptom (vector field):**
 
@@ -1077,9 +1090,20 @@ before struct construction).  Fixed: 2026-04-16.
 
 ---
 
-### 155. SIGSEGV in `OpGetVector` after push/undo/mid-assert/redo/final-read sequence
+### ~~155~~. SIGSEGV in `OpGetVector` after push/undo/mid-assert/redo/final-read sequence — FIXED
 
-**Severity:** High — reliable crash.
+**Status:** Fixed 2026-04-16.  The reassignment path in
+`src/state/codegen.rs::generate_set` (lines 891–932) emitted `OpCopyRecord`
+with the `0x8000` "free source" flag around a user-fn call, but without the
+`n_set_store_lock` bracket that `gen_set_first_ref_call_copy` uses on the
+first-assignment path.  When the callee returned a DbRef aliased with a
+caller arg, the free-source flag freed the caller's arg store; later uses
+SIGSEGV'd in `OpGetVector`.  Fix: port the lock/unlock bracket onto the
+reassignment path (same pattern as P143).
+Tests: `tests/issues.rs::p155_segv_undo_redo_midassert` (passing, no `#[ignore]`).
+Historical detail below kept for archaeology.
+
+**Severity (historical):** High — reliable crash.
 
 **Symptom:** The loft interpreter aborts with SIGSEGV at `OpGetVector`
 (op=194) when a function runs the shape "mutate a vector field via a
@@ -1140,9 +1164,18 @@ redo + batch test suite.
 
 ---
 
-### 156. `vector<T>` with a struct T that shadows a stdlib constant panics the parser
+### ~~156~~. `vector<T>` with a struct T that shadows a stdlib constant panics the parser — FIXED
 
-**Severity:** Low — clean error exists for other usages of the same shadowed struct name; only the vector-element-type path is broken.
+**Status:** Fixed 2026-04-16.  `parser/definitions.rs::sub_type` now checks the
+element def's `DefType` before descending into the collection branch — emits
+a proper diagnostic for `Constant` / `Function` / `Routine`.
+`typedef.rs::fill_database` soft-continues on an unresolved vector content
+type so undefined-element-type programs (`vector<Undef>`) also diagnose
+cleanly instead of panicking.
+Tests: `tests/issues.rs::p156_vector_element_shadows_constant` (passing, no `#[ignore]`).
+Historical detail below kept for archaeology.
+
+**Severity (historical):** Low — clean error existed for other usages of the same shadowed struct name; only the vector-element-type path was broken.
 
 **Symptom:**
 

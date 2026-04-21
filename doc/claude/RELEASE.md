@@ -96,9 +96,12 @@ character-interpolation, P136 harness, step-6 by design).
 **Remaining blockers for 0.8.4 tag:**
 - WASM-build + WASM-runtime gates — both verified green
   (run via `make wasm-html-test` to avoid the rlib-feature collision)
-- Crash bugs: none (B2-runtime, B3, B5, B7, P136 all closed)
-- Zero-leak gate (wrap-suite scripts 42/62/76, plus newly-spotted 95)
-- Zero-ignore baseline approval (down to 1 maintenance entry)
+- Crash bugs: none (B2-runtime, B3, B5, B7, P136, P142, P155 all closed)
+- Zero-leak gate — wrap-suite `loft_suite` currently emits no
+  `stores not freed` warnings across scripts 42/62/76/95; re-verify
+  on the tag candidate
+- Zero-ignore baseline approval — only the `regen_fill_rs`
+  maintenance entry remains (candidate for permanent exemption)
 
 Severity legend:
 - **H** — hard block.  Release cannot ship.
@@ -153,7 +156,7 @@ every release.
 
 | ID | H/M | Summary | Reference |
 |---|---|---|---|
-| **Zero-leak gate** | H | `State::check_store_leaks` must emit no `Warning: N stores not freed at program exit` lines across the full test suite AND a hands-on run of every `tests/scripts/*.loft`.  Today the wrap suite still reports leaks on at least `76-struct-vector-return.loft`, `42-file-result.loft`, and `62-index-range-queries.loft` (1 store each).  Each leak path must be traced and closed — not silenced via `is_locked()` or the `const_refs` skip. | `src/state/mod.rs:1486` check_store_leaks |
+| **Zero-leak gate** | H | `State::check_store_leaks` must emit no `Warning: N stores not freed at program exit` lines across the full test suite AND a hands-on run of every `tests/scripts/*.loft`.  As of 2026-04-21 the wrap suite's `loft_suite` produces no `stores not freed` warnings, and bare-interpret runs on the historically-flagged scripts (42, 62, 76, 95) are clean under `LOFT_STORES=warn` — the gate is currently green but must be re-verified on the tag candidate (including `LOFT_LOG=stores` on the parallel scripts, see below). | `src/state/mod.rs:1486` check_store_leaks |
 | **P122** | H | Store leak in game loops — struct/vector temps not freed at end-of-iteration.  Originally scoped as a Brick Buster ergonomics fix; **generalises** to any loop-body struct/vector construction.  Status-unknown (previously listed as "appears fixed"); must be re-verified in the zero-leak gate above. | PROBLEMS.md |
 | **Parallel leak audit** | M | `parallel { ... }` blocks — the A15 structured-concurrency path spawns workers that hold `ParallelCtx`; confirm no worker Stores remain after join.  Run the zero-leak gate with `LOFT_LOG=stores` on `tests/scripts/22-threading.loft`, `80-parallel-block.loft`. | THREADING.md |
 
@@ -171,19 +174,17 @@ and a linked issue**.
 | **Zero-ignore gate** | H | Every `#[ignore]` (and every `#[ignore = "..."]`) must either be (a) removed because the underlying bug is fixed, or (b) explicitly approved by the release owner with a one-line rationale in `tests/ignored_tests.baseline`.  The approval must cite the blocking issue ID (e.g. `B7 family — ...`, `CI harness SIGABRT (P136-adjacent)`) so the ignore traces back to the open bug.  Unreviewed ignores — where the reason is vague or the owner didn't sign off — block the release. | `tests/ignored_tests.baseline` + `tests/doc_hygiene.rs::ignored_tests_baseline_is_current` |
 | **Skip-list audit** | H | Every `SKIP` / `NATIVE_SKIP` / `SCRIPTS_NATIVE_SKIP` / `ignored_scripts()` entry must be traceable to a specific open blocker issue.  "Currently worked around by skipping" counts as an ignore and must appear in the same baseline approval flow. | `tests/native.rs`, `tests/wrap.rs::ignored_scripts`, `tests/native_loader.rs` |
 
-Baseline as of 2026-04-15 — only one entry remains:
+Baseline as of 2026-04-21 — only one entry remains:
 - `regen_fill_rs` → maintenance-only, not a test of runtime
   behaviour (regenerates `src/fill.rs`); candidate for
   explicit permanent exemption.
 
 (B5/B7 ignores all removed once the underlying bugs were
 confirmed closed; `file_content_nonexistent_trace` and
-`sigsegv_repro_79_alone` no longer carry `#[ignore]` attrs.)
-
-Plus `tests/wrap.rs::sigsegv_repro_79_alone` (standalone
-`#[ignore]`) and `tests/wrap.rs::ignored_scripts()` skipping
-`79-null-early-exit.loft` in `loft_suite` — both tracked under
-P136.
+`sigsegv_repro_79_alone` no longer carry `#[ignore]` attrs.
+`tests/wrap.rs::sigsegv_repro_79_alone` and the P136 skip of
+`79-null-early-exit.loft` in `loft_suite` are also gone —
+`cargo test --release --test wrap` reports 47 passed, 0 ignored.)
 
 ---
 
