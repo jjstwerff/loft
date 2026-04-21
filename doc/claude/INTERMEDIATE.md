@@ -113,11 +113,32 @@ pub enum Type {
 ### Integer Storage Size
 
 `Integer(min, max)` is stored compactly based on range:
-- range < 256  → 1 byte
-- range < 65536 → 2 bytes
-- otherwise    → 4 bytes
+- range < 256  → 1 byte (`Parts::Byte`)
+- range < 65536 → 2 bytes (`Parts::Short`)
+- `forced_size == 4` (e.g. `i32` alias) → 4 bytes (`Parts::Int`)
+- otherwise    → 8 bytes (post-2c: always i64 at rest)
 
 Nullable integers with range exactly 256 or 65536 also use 1 or 2 bytes respectively.
+
+### Content-type indexing — three numbering schemes
+
+Integer storage intersects three *different* index spaces that bit us
+twice during the Phase 2c migration.  Knowing which is which saves
+hours:
+
+| Scheme | Where | Numbering | Example |
+|---|---|---|---|
+| `field.content` (on a `Field` / `Attribute`) | `src/database/types.rs::Field::content` | **0-based** primitive-type index | `integer=0`, `long=1`, `single=2`, `float=3`, `boolean=4`, `text=5`, `character=6` |
+| `Key.type_nr` (on a `Key` in `keys_definition`) | `src/keys.rs::Key::type_nr` | **1-based** key-type discriminator | `integer=1`, `long=2`, `single=3`, `float=4`, `boolean=5`, `text=6`, `character=7` |
+| `Content::X` (runtime-dispatched key value) | `src/keys.rs::Content` | variant name | `Content::Long(i64)`, `Content::Single(f32)`, `Content::Float(f64)`, `Content::Str(Str)` — no separate Int variant, since post-2c all integer-family values dispatch through `Long(i64)` |
+
+When reading field values through the key-lookup path
+(`state/io.rs::io_push_keys`), the `Key.type_nr` → `Content::X`
+mapping is one hop; when reading via the attribute path
+(`OpGetInt` / `OpGetLong` / `OpGetInt4` etc.), `field.content` picks
+the opcode directly, so the two indices never meet at runtime.
+Mixing them up in a codegen fix *does* meet at runtime — with
+silent data corruption.
 
 ### Dependency Lists (`Vec<u16>`)
 

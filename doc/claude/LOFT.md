@@ -55,7 +55,6 @@ and can emit Rust code for host integration.
 |-------------|--------------------------------------------------|
 | `boolean`   | `true` / `false`                                 |
 | `integer`   | 64-bit signed integer end-to-end (stack, fields, arithmetic).  Range can be constrained with `limit(...)`; narrow widths (`u8`/`u16`/`i8`/`i16`/`i32`) keep compact storage.  Overflow traps.  See "Arithmetic safety" below. |
-| `long`      | **Deprecated alias for `integer`** — kept for backwards compatibility; emits a warning.  The `l` literal suffix is also deprecated.  Both will be removed in a future release. |
 | `float`     | 64-bit floating-point; literals contain a `.`    |
 | `single`    | 32-bit float; literals end with `f`              |
 | `character` | A single Unicode character                       |
@@ -71,7 +70,6 @@ Loft uses in-band sentinel values to represent `null`. Each type has a dedicated
 |------|---------------|-------|
 | `boolean` | `false` | `!b` is true for both `null` and `false` |
 | `integer` | `i64::MIN` | Post-2c (0.9.0): 8-byte storage, sentinel moved from `i32::MIN`.  Accidental sentinel collisions effectively vanish at the i64 boundary. |
-| `long` | `i64::MIN` | Alias for `integer`; same sentinel. |
 | `float` | `NaN` | IEEE 754: `NaN != NaN`, but `!f` correctly detects null |
 | `single` | `NaN` (32-bit) | Same as `float` |
 | `character` | `'\0'` (NUL) | The null character is not a valid loft character value |
@@ -169,11 +167,12 @@ storage.  Typical use: RGBA pixels, large file offsets, bitmasks wider
 than i32.  `u32 not null` unlocks the full 2³² range when the field
 can't carry null.
 
-**Migration note:** the `long` type and `l` literal suffix remain
-supported but are slated for removal.  Run `loft --migrate-long <path>`
-to rewrite `long` → `integer` and `42l` → `42` in user code; the tool
-preserves identifiers containing `long` (e.g. `long_value`), string
-literals, and comments.
+**Migration note:** the `long` type keyword and the `l` literal
+suffix (e.g. `42l`) have been **removed** in 0.9.0.  External code
+that still uses them won't parse — run `loft --migrate-long <path>`
+to rewrite `long` → `integer` and `42l` → `42`; the tool preserves
+identifiers containing `long` (e.g. `long_value`), string literals,
+and comments.
 
 ### Composite types
 
@@ -382,7 +381,7 @@ Simple variable reads skip the temporary since they have no side effects.
 
 Used for explicit type casts and conversions:
 ```
-10l as integer      // long to integer
+3.14 as integer          // float to integer (truncates toward zero)
 "json-text" as Program   // deserialize text as a struct
 ```
 
@@ -397,7 +396,6 @@ do by looking up the pair in this table:
 | From → To                          | Mode          | Notes |
 |------------------------------------|---------------|-------|
 | Any type → `boolean` (in `if`, `!v`, `while`, `assert`) | Implicit | `false` and null are falsy; integer `i32::MIN` is falsy; every other value is truthy.  See § Pattern matching for the null-sentinel table |
-| `integer` ↔ `long`                 | Implicit      | Widens or narrows automatically; narrowing may null-trap at `i32::MIN` |
 | Integer ↔ `float` in arithmetic    | Implicit      | `3 + 1.5` is `4.5` — the integer widens to the float operand's width |
 | `float` → integer                  | Explicit `as` | `pi as integer` truncates toward zero; preserves the current sentinel semantics |
 | `text` → integer / float           | Explicit `as` | `"42" as integer`; returns null on parse failure |
@@ -1220,7 +1218,7 @@ references, the size is computed at runtime from the actual variant.
 Three functions for pseudo-random integer generation. All use a thread-local PCG64 generator.
 
 ```loft
-rand_seed(seed: long)                      // seed the generator
+rand_seed(seed: integer)                   // seed the generator
 rand(lo: integer, hi: integer) -> integer  // uniform in [lo, hi]; null if lo > hi
 rand_indices(n: integer) -> vector<integer>// shuffled [0..n-1]
 ```

@@ -15,15 +15,18 @@ All notable changes to the loft language and interpreter.
 fields, in runtime arithmetic — across the interpreter, native
 codegen, and WASM backends.  Arithmetic that used to silently
 wrap at `i32::MIN / MAX` now traps (Phase 1 `?` / `??` dispatch
-from `925ee36`) or rounds trips correctly on i64.
+from `925ee36`) or round-trips correctly on i64.
 
 **What users see:**
 
 - `integer` literals beyond `i32::MAX` (e.g. `9_876_543_210`)
-  type-check without the `l` suffix.
-- The `l` literal suffix and the separate `long` keyword are
-  deprecation-warned; they now alias `integer` and map to the
-  same runtime width.
+  type-check without any suffix.
+- The `long` type keyword and the `l` literal suffix (`33l`,
+  `0xFFl`) are **gone**.  Writing `long` in a type position now
+  fails with `"Undefined type long"`; writing `33l` fails at the
+  lexer.  Use `integer` and plain `33` instead.  Both were
+  deprecation-warned in 0.9.0-early and fully removed in
+  0.9.0-final (commits `3e976b3`..`0c46abb`).
 - Narrow integer aliases — `u8`, `u16`, `i8`, `i16`, and `i32`
   — keep their compact field storage (`Parts::{Byte, Short,
   Int}`), with narrow↔wide conversion at read/write.  Pack
@@ -36,11 +39,18 @@ from `925ee36`) or rounds trips correctly on i64.
   writes 8 — silent regressions in existing binary writers
   are the most common footgun of this migration.
 
+**Migration aid:** the `loft --migrate-long <path>` CLI
+rewrites `long` → `integer` and strips `l` suffixes from
+external loft sources.  Use it once on every external
+`.loft` file after upgrading.
+
 **Downsides recorded** (`doc/claude/CAVEATS.md`): memory
 footprint of integer-heavy data structures roughly doubles;
-cross-crate cdylib packages keep 4-byte vector&lt;integer&gt;
-element storage; 26 duplicate `Op*Long` opcodes remain in the
-bytecode surface pending Phase 5 reclamation.
+cross-crate cdylib packages keep 4-byte `vector<integer>`
+element storage (narrow→wide conversion at the FFI boundary).
+The bytecode opcode table was reduced from 268 to 234 after
+the `Op*Long` family dedup (34 opcodes reclaimed across rounds
+10b.1–10b.4 and 10d).
 
 ### JSON support
 

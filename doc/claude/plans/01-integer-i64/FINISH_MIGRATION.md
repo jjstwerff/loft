@@ -23,15 +23,13 @@ This file captures everything needed to close the initiative.
 | 01 — checked arithmetic | **Done** (`925ee36`) |
 | 02 — i64 storage | **Done** (this branch) |
 | 03 — u32 type | **Done** (via Phase 2a) |
-| 04 — deprecate `long` | **Partial** — keyword aliases `integer`, `l` suffix deprecated.  Remove needed. |
-| 05 — opcode reclamation | **Not started** |
-| 06 — spec docs | **Not started** |
+| 04 — deprecate `long` | **Done** — `Type::Long` variant, `long` keyword, and `l` literal suffix all removed (commits `3e976b3`..`0c46abb`). |
+| 05 — opcode reclamation | **Done** — 34 `Op*Long` opcodes removed; OPERATORS table 268 → 234 (rounds 10b.1–10b.4 + 10d). |
+| 06 — spec docs | **Done** — `CHANGELOG.md`, `LOFT.md`, `CAVEATS.md § C54`, this file. |
 
-Remaining failure count: **0** (down from 59 at the start of this
-session).  Eleven single-point fixes in this session plus the
-earlier 2c rounds 1-10 turned the migration from "in-flight with
-silent data corruption risk" into "semantically complete but with
-duplicate code-paths to prune."
+Remaining failure count: **0**.  Every initially-surfaced regression
+(59 → 0) plus the follow-up hardening rounds in this session have
+landed.  The initiative is shipping end-to-end.
 
 ## What remains — prioritised
 
@@ -74,21 +72,24 @@ can't silently reintroduce the bugs this branch chased.
 
 ### B — Round 10b follow-up: deduplicate `Op*Long` family
 
-**Status (2026-04-21):** shipping — 22/26 removed in round 10b.3.
-Safely deleted via `regen_fill_rs` + suite verify:
+**Status (2026-04-21):** **Done** — 34 `Op*Long` opcodes removed
+across five commits.  OPERATORS table **268 → 234**.
 
-- `OpAbsLong` (round 10b.1, commit `5b2c89c`)
-- `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong` (round 10b.2, `fd09612`)
-- `OpMinSingleLong`, `OpConvFloatFromLong`, `OpConvBoolFromLong`,
-  `OpAdd/Min/Mul/Div/Rem Long` + `Nullable` variants,
-  `OpLand/Lor/Eor/SLeft/SRight Long` (round 10b.3)
+| Round | Commit | Opcodes removed |
+|---|---|---|
+| 10b.1 | `5b2c89c` | `OpAbsLong` |
+| 10b.2 | `fd09612` | `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong` |
+| 10b.3 | `cb0644c` | `OpMinSingleLong`, `OpConvFloatFromLong`, `OpConvBoolFromLong`, `OpAdd/Min/Mul/Div/Rem Long` + `Nullable` variants, `OpLand/Lor/Eor/SLeft/SRight Long` (18 ops) |
+| 10d   | `e5a4988` | `OpConstLong`, `OpVarLong`, `OpPutLong`, `OpConvLongFromNull`, `OpCastIntFromLong`, `OpConvLongFromInt`, `OpCastLongFromText`, `OpCastLongFromSingle`, `OpCastLongFromFloat`, `OpGetLong` → `OpGetInt`, `OpSetLong` → `OpSetInt`; `OpFormatLong`/`OpFormatStackLong` renamed to `OpFormatInt`/`OpFormatStackInt` (11 slots reclaimed) |
+| post  | `3b34f89` | Dead `OpXxxLong` match arms in `parser/operators.rs::rewrite_outer_arith_to_nullable` and `const_eval.rs::fold_op` cleaned up |
 
-OPERATORS table: 268 → 245 (-23, including the -1 from round 10b.1
-and -4 from round 10b.2).  Remaining Long ops kept for now:
-`OpConstLong`, `OpVarLong`, `OpPutLong`, `OpConvLongFromNull`,
-`OpConvLongFromInt`, `OpCastIntFromLong`, `OpCastLongFromText`,
-`OpFormatLong`, `OpFormatStackLong`.  These fold away in Phase C
-when `Type::Long` is removed.
+Parser emission sites rewired to the `Int` variants:
+`state/codegen.rs::Value::Long → OpConstInt`,
+`parser/operators.rs::call_to_set_op`'s f#next seek+set path,
+`parser/objects.rs::file#index/#next`,
+`parser/collections.rs::append_data_long` (suffix `"Long"` → `"Int"`),
+`generation/dispatch.rs::format_long`,
+`compile.rs::gather_const_literals` (OpSetLong dropped).
 
 **Root cause of the earlier "OpSRightLong regression"**: the
 `.loftc` bytecode cache key (`src/cache.rs:26`, `src/main.rs:1653`)
@@ -104,36 +105,24 @@ bisection that pointed at `OpSRightLong` was a false lead: any
 deletion would have reproduced it, the cache just happened to
 hold bytecode that still worked for the other single-op tests.
 
-The fix for the migration itself is a one-liner: delete cached
-`.loftc` files after a stdlib edit (`find . -name '*.loftc'
--not -path '*/target/*' -delete`).  The underlying cache-
-invalidation bug is orthogonal and deserves its own fix — see
-**§ B.postscript** below.
+**Workaround** (required for anyone editing `default/*.loft`
+between runs): delete cached `.loftc` files with
+`find . -name '*.loftc' -not -path '*/target/*' -delete`.  The
+underlying cache-invalidation bug is orthogonal to the migration
+and tracked in **§ B.postscript**.
 
-Per `05-opcode-reclamation.md`, with `Type::Long` collapsed to
-`Type::Integer`, ~26 opcodes are duplicates:
-
-- Arithmetic: `OpAddLong`, `OpMinLong`, `OpMulLong`, `OpDivLong`,
-  `OpRemLong`, `OpAddLongNn`, `OpMinLongNn`, `OpMulLongNn`,
-  `OpDivLongNn`, `OpRemLongNn`, `OpNegLongNn`.
-- Bitwise: `OpLandLong`, `OpLorLong`, `OpEorLong`, `OpSLeftLong`,
-  `OpSRightLong`.
-- Comparison: `OpEqLong`, `OpNeLong`, `OpLtLong`, `OpLeLong`,
-  `OpConvBoolFromLong`.
-- Conversion: `OpConvLongFromInt`, `OpConvLongFromSingle`,
-  `OpConvLongFromFloat`, `OpCastIntFromLong`, `OpCastLongFromInt`.
-
-Path to delete:
-
-1. Route every `default/*.loft` / `lib/*.loft` use of `OpXxxLong`
-   through the `OpXxxInt` equivalent (they're byte-identical
-   post-2c).
-2. Remove the `ops::op_xxx_long` functions from `src/ops.rs`
-   (after the parser stops emitting the Long-family ops).
-3. Remove the fill.rs dispatch entries — reclaims opcode slots.
-4. Update the `OPERATORS` table size constant in `src/fill.rs:10`.
-
-Estimate: 2-3 hours of mechanical sweeps + one suite run.
+**Remaining `Long`-suffixed names** (intentional, not user-visible):
+- `OpConstLongText` — unrelated ("const-long-text" = string from
+  stream).
+- `parallel_get_long` native FFI function — i64 signature distinct
+  from `parallel_get_int` (i32) at the FFI layer.
+- `FvLong` AST variant label in `lib/code.loft`.
+- `store.get_long` / `set_long` Rust methods on the raw store.
+- `op_*_long` helpers in `src/ops.rs` (internal; `op_*_int`
+  forwards).
+- `base_type("long", 8)` at database type index 1 (format
+  stability — `keys.rs` / `state/io.rs` key-comparators hardcode
+  this index).
 **Risk**: low — each `OpXxxLong` body already delegates to the
 i64 arithmetic.  The deduplication is a rename at call sites.
 
@@ -163,44 +152,37 @@ a separate PROBLEMS.md entry.
 
 ### C — Round 10c: remove `Type::Long` and widen default range
 
-**Status (2026-04-21):** Rust-side done — the `Type::Long` enum
-variant is deleted (commit `44b525c`), preceded by a parser-level
-collapse (`3e976b3`).  A new `data::I64` constant
-(`Type::Integer(i32::MIN+1, u32::MAX, false)`) represents the
-wide-range integer that all `long` source references now produce.
+**Status (2026-04-21):** **Done** across 5 commits.  The `long`
+type name, the `l` literal suffix, and every user-facing `Long`
+reference are gone from the loft source surface.  The Rust
+`Type::Long` enum variant is deleted; 40 `Type::Long =>` match arms
+across parser / codegen / scopes / variables / debug / native-FFI
+paths were pruned as dead code.  A new `data::I64` constant
+(`Type::Integer(i32::MIN+1, u32::MAX, false)`) is the wide-range
+integer that sites which used to produce `Type::Long` now produce
+instead.
 
-Done:
+| Commit | What landed |
+|---|---|
+| `3e976b3` | Parser stops emitting `Type::Long`: `long` keyword → I64, wide `integer limit(...)` → I64, `file#size/#index/#next` → I64, `LexItem::Long` literal → I64, iter-state vars → I64.  `Value::Long` is retained as the IR payload for i64 literals. |
+| `44b525c` | `Type::Long` variant deleted from `data::Type`.  Match arms updated: native FFI type selection, `FieldValue` (`FvLong`) variant mapping, and debug readout now use `Type::Integer(_, max, _) if *max > i32::MAX as u32` to pick the i64 path. |
+| `87ec05a` | Plan doc updated. |
+| `11e1d47` | 37 `long` / `as long` / `-> long` / `long not null` / `<long>` references swept in `lib/*.loft`, `default/02_images.loft`, `default/04_stacktrace.loft`, `default/06_json.loft`, and `lib/graphics/src/graphics.loft` (color_a simplified). |
+| `66c1146` | **Keyword removal** — `pub type long size(8);` deleted from `default/01_code.loft`; the `long` keyword intercept in `src/parser/definitions.rs` removed (writing `long` now fails with `"Undefined type long"`); the `l` literal suffix parsing in `src/lexer.rs::ret_number` dropped.  36 `Nl` literals swept across `bench/01..10`, stdlib, tests. |
+| `0c46abb` | Final Rust-side cleanup: dead `"long"` arm in `typedef.rs::complete_definition`, `"long"` entry in `documentation.rs`'s built-in type list. |
 
-- Parser stops emitting `Type::Long` — `long` keyword → I64,
-  `integer limit(..., > i32::MAX)` → I64, `file#size / #index /
-  #next` → I64, LexItem::Long literal → I64, iter-state vars → I64.
-  (`3e976b3`)
-- `Type::Long` variant removed from `data::Type`; ~40 `Type::Long =>`
-  match arms deleted across parser/codegen/scopes/variables/debug
-  and native-emit paths.  Callers that differentiated Long from
-  Integer (native FFI, Fv* variant mapping, debug readout) now use
-  `Type::Integer(_, max, _) if *max > i32::MAX as u32` to pick
-  the i64 path.  (`44b525c`)
-- `convert()` Long↔Integer bidirectional arm removed (dead).
-- `Value::Long` retained as the IR payload for i64 literals — it
-  threads through the bytecode but its static type is now
-  `Type::Integer(wide)`, not `Type::Long`.
+**Kept intentionally (not user-visible):**
 
-Deferred (cosmetic, non-blocking):
-
-- Remove `pub type long size(8);` from `default/01_code.loft`
-  (line 10) and the keyword from the parser (`definitions.rs:1033`
-  intercept) — `long` still parses as a deprecated alias with a
-  one-line warning.  40 sites across `lib/*.loft` and `default/*.loft`
-  would need `long` → `integer` sweeps.
-- Remaining Op*Long opcodes (`OpConstLong`, `OpVarLong`, `OpPutLong`,
-  `OpConvLongFromNull`, `OpConvLongFromInt`, `OpCastIntFromLong`,
-  `OpCastLongFromText`, `OpFormatLong`, `OpFormatStackLong`) — these
-  are still referenced by `src/parser/*` for 8-byte constant literal
-  / variable / field access and stay valid post-migration.
+- `base_type("long", 8)` at runtime type index 1 — `keys.rs` and
+  `state/io.rs` compare against hardcoded type indices, so the
+  slot label stays for format stability.
+- `kt_long` dispatch in `src/native.rs` JSON-to-struct populators
+  — defensive fallback, unreachable for parser-produced types.
+- `src/migrate_long.rs` — `loft --migrate-long <path>` CLI that
+  rewrites external loft sources (`long` → `integer`, `42l` → `42`).
 
 **Regression gate**: full `find_problems.sh --wait` green at
-`44b525c`.  Wrap + issues + parse_errors + native + exit_codes all
+`0c46abb`.  Wrap + issues + parse_errors + native + exit_codes all
 pass.  Clippy + fmt clean.
 
 ### D — Persisted-database migration tool (`--migrate-i64`)
@@ -241,15 +223,18 @@ Estimate: 2-3 hours of writing; no code changes.
 
 ## Recommended execution order
 
-1. **A1** (codegen assertions) — lowest risk, locks in the gains.
-   Same session as this plan.
-2. **A2** (binary-format audit) — same session, short sweep.
-3. **B** (Op*Long dedup) — next session; mechanical; ~3 hours.
-4. **C** (Type::Long removal) — session after B; higher risk.
-5. **E** (docs) — after C, when the invariants are final.
-6. **D** (migration tool) — defer until a user has a persisted DB
-   that needs it, OR lock it behind "must start with fresh DB"
-   in RELEASE.md.
+Historical execution order (all shipped except D):
+
+1. **A1** (codegen assertions) — commit `358c155`.
+2. **A2** (binary-format audit) — commit `74aefb4`.
+3. **B** (Op*Long dedup) — commits `5b2c89c`, `fd09612`, `cb0644c`,
+   `e5a4988`, `3b34f89`.  34 opcodes reclaimed.
+4. **C** (Type::Long removal) — commits `3e976b3`..`0c46abb`.
+5. **E** (docs) — this commit.
+6. **D** (migration tool) — deferred.  No known user with a
+   persisted database; document the incompatibility in
+   `RELEASE.md` and require fresh-DB start when an external
+   user first hits it.
 
 ## Downsides to document
 
@@ -269,9 +254,6 @@ these in `CAVEATS.md` so users aren't surprised:
   integers are i64.  Narrow→wide conversions happen at the
   boundary.  Do not "clean this up" without a coordinated
   cdylib rebuild.
-- **Opcode footprint**: 26 duplicate opcodes still live (B above
-  hasn't landed); interpreter dispatch table stays bloated until
-  round 10b closes.
 - **Narrow-int codegen surface**: `emit_field` needs
   `forced_size: Option<u8>` threaded in from `Attribute.alias_d_nr`.
   Any future codegen path that emits a field must do the same
