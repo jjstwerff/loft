@@ -33,26 +33,26 @@ fn main() {
   // === Text file write and read ===
  {f = file("test_loft_t.txt");
   f += "Hello World";
-  assert(f#size == 11l, "text write size 11");
-  assert(f#index == 0l, "text write #index is start of write");
-  assert(f#next == 11l, "text write #next at end");
+  assert(f#size == 11, "text write size 11");
+  assert(f#index == 0, "text write #index is start of write");
+  assert(f#next == 11, "text write #next at end");
  }
   assert(exists("test_loft_t.txt"), "text file created");
  {f = file("test_loft_t.txt");
   s = f#read(5) as text;
   assert(s == "Hello", "text read first 5");
-  assert(f#index == 0l, "text read #index after first");
-  assert(f#next == 5l, "text read #next after first");
+  assert(f#index == 0, "text read #index after first");
+  assert(f#next == 5, "text read #next after first");
   s2 = f#read(6) as text;
   assert(s2 == " World", "text read next 6");
-  assert(f#index == 5l, "text read #index after second");
-  assert(f#next == 11l, "text read #next after second");
+  assert(f#index == 5, "text read #index after second");
+  assert(f#next == 11, "text read #next after second");
   // Read past EOF returns partial
-  f#next = 8l;
+  f#next = 8;
   tail = f#read(100) as text;
   assert(tail == "rld", "text read past eof returns partial");
   // Seek back to start
-  f#next = 0l;
+  f#next = 0;
   again = f#read(5) as text;
   assert(again == "Hello", "text seek and reread");
  }
@@ -68,7 +68,7 @@ fn main() {
   // === Seek then overwrite: text file ===
  {f = file("test_loft_t.txt");
   f += "Hello";
-  f#next = 0l;
+  f#next = 0;
   f += "World";
  }
  {f = file("test_loft_t.txt");
@@ -88,12 +88,12 @@ fn main() {
   assert(sep == '/' || sep == '\\', "path_sep is slash or backslash");
   // === now: milliseconds since Unix epoch (non-negative, sanity check) ===
   ms = now();
-  assert(ms > 0l, "now() returns positive timestamp");
+  assert(ms > 0, "now() returns positive timestamp");
   // Rough sanity: 2020-01-01 = 1577836800000 ms
-  assert(ms > 1577836800000l, "now() is past year 2020");
+  assert(ms > 1577836800000, "now() is past year 2020");
   // === ticks: microseconds since program start (monotonic) ===
   t1 = ticks();
-  assert(t1 >= 0l, "ticks() returns non-negative value");
+  assert(t1 >= 0, "ticks() returns non-negative value");
   t2 = ticks();
   assert(t2 >= t1, "ticks() is monotonically non-decreasing");
   // === env_variable: returns empty text for unknown variable ===

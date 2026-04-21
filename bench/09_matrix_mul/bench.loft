@@ -9,6 +9,6 @@ fn main() {
   for dot_k in 0..n {
     dot += xs[dot_k] * ys[dot_k];
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {round(dot)}  time: {ms}ms");
 }

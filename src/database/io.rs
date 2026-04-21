@@ -50,9 +50,20 @@ impl Stores {
     pub fn read_data(&self, r: &DbRef, tp: u16, little_endian: bool, data: &mut Vec<u8>) {
         let store = &self.allocations[r.store_nr as usize];
         match tp {
-            0 | 6 => {
-                // integer | character
+            0 => {
+                // integer (i64 post-2c)
                 let v = store.get_int(r.rec, r.pos);
+                (if little_endian {
+                    v.to_le_bytes()
+                } else {
+                    v.to_be_bytes()
+                })
+                .iter()
+                .for_each(|&x| data.push(x));
+            }
+            6 => {
+                // character (u32)
+                let v = store.get_u32_raw(r.rec, r.pos);
                 (if little_endian {
                     v.to_le_bytes()
                 } else {
@@ -101,7 +112,7 @@ impl Stores {
             }
             5 => {
                 // text
-                let v = store.get_str(store.get_int(r.rec, r.pos) as u32);
+                let v = store.get_str(store.get_u32_raw(r.rec, r.pos));
                 v.as_bytes().iter().for_each(|&x| data.push(x));
             }
             _ => match self.types[tp as usize].parts.clone() {
@@ -122,10 +133,20 @@ impl Stores {
                     data.push(store.get_byte(r.rec, r.pos, 0) as u8);
                 }
                 Parts::Byte(_, _) => {
-                    data.push(store.get_int(r.rec, r.pos) as u8);
+                    data.push(store.get_byte(r.rec, r.pos, 0) as u8);
                 }
                 Parts::Short(_, _) => {
-                    let v = store.get_int(r.rec, r.pos) as i16;
+                    let v = store.get_short(r.rec, r.pos, 0) as i16;
+                    (if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    })
+                    .iter()
+                    .for_each(|&x| data.push(x));
+                }
+                Parts::Int(_, _) => {
+                    let v = store.get_i32_raw(r.rec, r.pos);
                     (if little_endian {
                         v.to_le_bytes()
                     } else {
@@ -137,13 +158,13 @@ impl Stores {
                 Parts::Vector(elem_tp) => {
                     let v_rec = {
                         let store = &self.allocations[r.store_nr as usize];
-                        store.get_int(r.rec, r.pos) as u32
+                        store.get_u32_raw(r.rec, r.pos)
                     };
                     let length = if v_rec == 0 {
                         0u32
                     } else {
                         let store = &self.allocations[r.store_nr as usize];
-                        store.get_int(v_rec, 4) as u32
+                        store.get_u32_raw(v_rec, 4)
                     };
                     let elem_size = u32::from(self.size(elem_tp));
                     let store_nr = r.store_nr;
@@ -159,15 +180,15 @@ impl Stores {
                 Parts::Array(elem_tp) => {
                     let store_nr = r.store_nr;
                     let store = &self.allocations[store_nr as usize];
-                    let v_rec = store.get_int(r.rec, r.pos) as u32;
+                    let v_rec = store.get_u32_raw(r.rec, r.pos);
                     let length = if v_rec == 0 {
                         0u32
                     } else {
-                        store.get_int(v_rec, 4) as u32
+                        store.get_u32_raw(v_rec, 4)
                     };
                     // Collect elm_recs before the mutable borrow in read_data.
                     let elm_recs: Vec<u32> = (0..length)
-                        .map(|i| store.get_int(v_rec, 8 + 4 * i) as u32)
+                        .map(|i| store.get_u32_raw(v_rec, 8 + 4 * i))
                         .collect();
                     for elm_rec in elm_recs {
                         let elem = DbRef {
@@ -200,8 +221,8 @@ impl Stores {
     /// Returns 0 for types whose binary size is variable (text) or unsupported (collections).
     fn binary_size(&self, tp: u16) -> usize {
         match tp {
-            0 | 2 | 6 => 4, // integer, single, character
-            1 | 3 => 8,     // long, float
+            2 | 6 => 4,     // single, character
+            0 | 1 | 3 => 8, // integer (post-2c i64), long, float
             4 => 1,         // boolean
             5 => 0,         // text: variable length
             _ => match &self.types[tp as usize].parts {
@@ -212,6 +233,7 @@ impl Stores {
                     .sum(),
                 Parts::Enum(_) | Parts::Byte(_, _) => 1,
                 Parts::Short(_, _) => 2,
+                Parts::Int(_, _) => 4,
                 _ => 0,
             },
         }
@@ -223,14 +245,24 @@ impl Stores {
     pub fn write_data(&mut self, r: &DbRef, tp: u16, little_endian: bool, data: &[u8]) {
         let store = &mut self.allocations[r.store_nr as usize];
         match tp {
-            0 | 6 => {
-                let d = data[0..4].try_into().unwrap();
+            0 => {
+                // integer (i64 post-2c)
+                let d = data[0..8].try_into().unwrap();
                 let v = if little_endian {
-                    i32::from_le_bytes(d)
+                    i64::from_le_bytes(d)
                 } else {
-                    i32::from_be_bytes(d)
+                    i64::from_be_bytes(d)
                 };
                 store.set_int(r.rec, r.pos, v);
+            }
+            6 => {
+                let d = data[0..4].try_into().unwrap();
+                let v = if little_endian {
+                    u32::from_le_bytes(d)
+                } else {
+                    u32::from_be_bytes(d)
+                };
+                store.set_u32_raw(r.rec, r.pos, v);
             }
             1 => {
                 // long
@@ -275,7 +307,7 @@ impl Stores {
                     String::from_utf8_unchecked(v)
                 };
                 let s = store.set_str(v.as_str());
-                store.set_int(r.rec, r.pos, s as i32);
+                store.set_u32_raw(r.rec, r.pos, s);
             }
             _ => match self.types[tp as usize].parts.clone() {
                 Parts::Struct(s) | Parts::EnumValue(_, s) => {
@@ -294,7 +326,7 @@ impl Stores {
                     }
                 }
                 Parts::Enum(_) | Parts::Byte(_, _) => {
-                    store.set_int(r.rec, r.pos, i32::from(data[0]));
+                    store.set_byte(r.rec, r.pos, 0, i32::from(data[0]));
                 }
                 Parts::Short(_, _) => {
                     let d: [u8; 2] = data[0..2].try_into().unwrap();
@@ -303,7 +335,16 @@ impl Stores {
                     } else {
                         i32::from(i16::from_be_bytes(d))
                     };
-                    store.set_int(r.rec, r.pos, v);
+                    store.set_short(r.rec, r.pos, 0, v);
+                }
+                Parts::Int(_, _) => {
+                    let d: [u8; 4] = data[0..4].try_into().unwrap();
+                    let v = if little_endian {
+                        i32::from_le_bytes(d)
+                    } else {
+                        i32::from_be_bytes(d)
+                    };
+                    store.set_i32_raw(r.rec, r.pos, v);
                 }
                 Parts::Vector(elem_tp) => {
                     let elem_size = u32::from(self.size(elem_tp));
@@ -343,7 +384,7 @@ impl Stores {
             return false;
         }
         let store = self.store_mut(file);
-        let filename = store.get_str(store.get_int(file.rec, file.pos + 24) as u32);
+        let filename = store.get_str(store.get_u32_raw(file.rec, file.pos + 24));
         let path = std::path::Path::new(filename);
         fill_file(path, store, file)
     }
@@ -377,7 +418,7 @@ impl Stores {
         let file_path = {
             let store = self.store_mut(file);
             store
-                .get_str(store.get_int(file.rec, file.pos + 24) as u32)
+                .get_str(store.get_u32_raw(file.rec, file.pos + 24))
                 .to_owned()
         };
         let store = self.store_mut(file);
@@ -421,8 +462,8 @@ impl Stores {
                 let elm = vector::vector_append(&vector, 33, &mut self.allocations);
                 let store = self.store_mut(result);
                 let name_pos = store.set_str(&name) as i32;
-                store.set_int(elm.rec, elm.pos + 24, name_pos);
-                store.set_int(elm.rec, elm.pos + 28, i32::MIN);
+                store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+                store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
                 // Initialize current and next to null (i64::MIN) so they're not shown
                 store.set_long(elm.rec, elm.pos + 8, i64::MIN);
                 store.set_long(elm.rec, elm.pos + 16, i64::MIN);
@@ -451,8 +492,8 @@ impl Stores {
             let elm = vector::vector_append(&vector, 33, &mut self.allocations);
             let store = self.store_mut(result);
             let name_pos = store.set_str(&full) as i32;
-            store.set_int(elm.rec, elm.pos + 24, name_pos);
-            store.set_int(elm.rec, elm.pos + 28, i32::MIN);
+            store.set_u32_raw(elm.rec, elm.pos + 24, name_pos as u32);
+            store.set_i32_raw(elm.rec, elm.pos + 28, i32::MIN);
             store.set_long(elm.rec, elm.pos + 8, i64::MIN);
             store.set_long(elm.rec, elm.pos + 16, i64::MIN);
             // Fill metadata for this entry.
@@ -485,10 +526,10 @@ impl Stores {
         if let Ok((img, width, height)) = crate::png_store::read(file_path, store) {
             if let Some(name) = std::path::Path::new(&file_path).file_name() {
                 let name_pos = store.set_str(name.to_str().unwrap());
-                store.set_int(result.rec, result.pos, name_pos as i32);
-                store.set_int(result.rec, result.pos + 4, width as i32);
-                store.set_int(result.rec, result.pos + 8, height as i32);
-                store.set_int(result.rec, result.pos + 12, img as i32);
+                store.set_u32_raw(result.rec, result.pos, name_pos);
+                store.set_int(result.rec, result.pos + 4, i64::from(width));
+                store.set_int(result.rec, result.pos + 8, i64::from(height));
+                store.set_u32_raw(result.rec, result.pos + 12, img);
                 true
             } else {
                 false
@@ -510,8 +551,7 @@ impl Stores {
             // FS-E: write text content via JS host bridge.
             let file_path = {
                 let s = self.store_mut(file);
-                s.get_str(s.get_int(file.rec, file.pos + 24) as u32)
-                    .to_owned()
+                s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned()
             };
             crate::wasm::host_fs_write_text(&file_path, v);
         }
@@ -519,11 +559,11 @@ impl Stores {
         {
             let f_nr = self.files.len() as i32;
             let s = self.store_mut(file);
-            let mut file_ref = s.get_int(file.rec, file.pos + 28);
+            let mut file_ref = s.get_i32_raw(file.rec, file.pos + 28);
             if file_ref == i32::MIN {
-                let file_name = s.get_str(s.get_int(file.rec, file.pos + 24) as u32);
+                let file_name = s.get_str(s.get_u32_raw(file.rec, file.pos + 24));
                 if let Ok(f) = std::fs::File::create(file_name) {
-                    s.set_int(file.rec, file.pos + 28, f_nr);
+                    s.set_i32_raw(file.rec, file.pos + 28, f_nr);
                     self.files.push(Some(f));
                 }
                 file_ref = f_nr;
@@ -551,24 +591,23 @@ mod tests {
         stores.field(pair_tp, "b", 0); // integer
         stores.finish();
 
-        // Allocate a record: 3 words = 24 bytes
-        //   word 0 byte 0..3: claim counter
-        //   word 0 byte 4..7: (header padding / parent ptr for top-level)
-        //   word 1 byte 0..3: field a  (pos 8 + struct-position 0 = 8)
-        //   word 1 byte 4..7: field b  (pos 8 + struct-position 4 = 12)
-        let db = stores.database(3);
+        // Allocate a record big enough for two 8-byte integers (post-2c).
+        //   word 0: header
+        //   field a at db.pos + 0  (struct-position 0)
+        //   field b at db.pos + 8  (struct-position 8, post-2c integer stride)
+        let db = stores.database(4);
         {
             let s = &mut stores.allocations[db.store_nr as usize];
             s.set_int(db.rec, db.pos, 10); // a = 10
-            s.set_int(db.rec, db.pos + 4, 20); // b = 20
+            s.set_int(db.rec, db.pos + 8, 20); // b = 20 — integer is 8B post-2c
         }
 
         let mut data = Vec::new();
         stores.read_data(&db, pair_tp, true, &mut data);
 
-        assert_eq!(data.len(), 8, "Pair binary size: 2 × i32 = 8 bytes");
-        let a_val = i32::from_le_bytes(data[0..4].try_into().unwrap());
-        let b_val = i32::from_le_bytes(data[4..8].try_into().unwrap());
+        assert_eq!(data.len(), 16, "Pair binary size: 2 × i64 = 16 bytes");
+        let a_val = i64::from_le_bytes(data[0..8].try_into().unwrap());
+        let b_val = i64::from_le_bytes(data[8..16].try_into().unwrap());
         assert_eq!(a_val, 10, "field a should be 10");
         assert_eq!(b_val, 20, "field b should be 20 (was 10 before fix)");
     }
@@ -583,18 +622,18 @@ mod tests {
         stores.field(pair_tp, "b", 0);
         stores.finish();
 
-        let db = stores.database(3);
-        // Write [a=77_le, b=99_le] into the struct
+        let db = stores.database(4);
+        // Write [a=77_le, b=99_le] into the struct — post-2c integer = 8B
         let bytes: Vec<u8> = {
-            let mut v = 77i32.to_le_bytes().to_vec();
-            v.extend_from_slice(&99i32.to_le_bytes());
+            let mut v = 77i64.to_le_bytes().to_vec();
+            v.extend_from_slice(&99i64.to_le_bytes());
             v
         };
         stores.write_data(&db, pair_tp, true, &bytes);
 
         let s = &stores.allocations[db.store_nr as usize];
         let a_val = s.get_int(db.rec, db.pos);
-        let b_val = s.get_int(db.rec, db.pos + 4);
+        let b_val = s.get_int(db.rec, db.pos + 8);
         assert_eq!(a_val, 77, "field a should be 77");
         assert_eq!(b_val, 99, "field b should be 99 (was 77 before fix)");
     }

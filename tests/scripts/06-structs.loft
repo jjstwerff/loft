@@ -122,8 +122,7 @@ fn main() {
   assert(p_def.y == 0, "default integer field y is 0");
   // --- sizeof ---
   // Primitive types
-  assert(sizeof(integer) == 4, "sizeof integer is 4");
-  assert(sizeof(long) == 8, "sizeof long is 8");
+  assert(sizeof(integer) == 8, "sizeof integer is 8");
   assert(sizeof(float) == 8, "sizeof float is 8");
   assert(sizeof(boolean) == 1, "sizeof boolean is 1");
   // Range-constrained integer types return their packed size
@@ -132,8 +131,8 @@ fn main() {
   assert(sizeof(i8) == 1, "sizeof i8 is 1");
   assert(sizeof(i16) == 2, "sizeof i16 is 2");
   assert(sizeof(i32) == 4, "sizeof i32 is 4");
-  // Struct sizes
-  assert(sizeof(Pos) == 8, "sizeof Pos (2x integer) is 8");
+  // Struct sizes — Pos uses `integer` (8B post-2c), so 2 × 8 = 16.
+  assert(sizeof(Pos) == 16, "sizeof Pos (2x integer) is 16");
   // Point has 3 fields of integer limit(0,255) — packed to 1 byte each in DB storage
   assert(sizeof(Point) == 3, "sizeof Point (3x limited-integer) is 3");
   // --- Pretty-print format (:#) ---

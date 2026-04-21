@@ -17,7 +17,7 @@ fn main() {
   // 'now()' returns the current time as milliseconds since 1970-01-01T00:00:00 UTC.
   // The value is always positive and grows over time.
   t = now();
-  assert(t > 0l, "now() must be positive");
+  assert(t > 0, "now() must be positive");
   // Two successive calls return non-decreasing values.
   t2 = now();
   assert(t2 >= t, "now() must be non-decreasing");
@@ -25,7 +25,7 @@ fn main() {
   // 'ticks()' measures microseconds since the program started.
   // It uses a monotonic clock so it never jumps backward.
   start = ticks();
-  assert(start >= 0l, "ticks() must be non-negative");
+  assert(start >= 0, "ticks() must be non-negative");
   end = ticks();
   assert(end >= start, "ticks() must be monotonically non-decreasing");
   // ## Measuring elapsed time
@@ -33,7 +33,7 @@ fn main() {
   // Divide by 1000 to convert to milliseconds.
   //
   //   elapsed_us  = end_ticks - start_ticks
-  //   elapsed_ms  = elapsed_us / 1000l
+  //   elapsed_ms  = elapsed_us / 1000
   //
   // Example: measure how long a loop takes.
   t_before = ticks();
@@ -43,12 +43,12 @@ fn main() {
   }
   t_after = ticks();
   elapsed = t_after - t_before;
-  assert(elapsed >= 0l, "elapsed time must be non-negative: {elapsed}");
+  assert(elapsed >= 0, "elapsed time must be non-negative: {elapsed}");
   assert(sum == 499500, "loop produced wrong sum: {sum}");
   // ## Common patterns
   //
   // Timestamp a log entry (seconds since epoch):
-  //   seconds = now() / 1000l
+  //   seconds = now() / 1000
   //
   // Seed the random number generator with the current time:
   //   rand_seed(now() as integer)
@@ -56,5 +56,5 @@ fn main() {
   // Simple stopwatch:
   //   start = ticks()
   //   ... do work ...
-  //   log_info("Done in {(ticks() - start) / 1000l} ms")
+  //   log_info("Done in {(ticks() - start) / 1000} ms")
 }

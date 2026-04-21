@@ -6,6 +6,6 @@ fn main() {
   for sb_i in 0..n {
     s += "item-{sb_i};";
   }
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {len(s)}  time: {ms}ms");
 }

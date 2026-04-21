@@ -25,7 +25,7 @@ fn main() {
   data = [for sort_i in 0..total { (sort_i * 31337 + 17) % 100000 }];
   t0 = ticks();
   insertion_sort(data);
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   checksum = data[0] + data[total - 1] + data[total / 2];
   ok = true;
   for sort_j in 1..total {

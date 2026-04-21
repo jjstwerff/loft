@@ -4,11 +4,11 @@ use game_protocol::msg_ping, msg_pong, msg_chat, msg_input, msg_state, msg_error
 use game_protocol::MsgType;
 
 fn test_ping_pong() {
-  ping = msg_ping(1l);
+  ping = msg_ping(1);
   assert(ping.message.msg_type == MsgType.Ping, "ping type");
-  assert(ping.sequence == 1l, "ping seq");
+  assert(ping.sequence == 1, "ping seq");
 
-  pong = msg_pong(1l);
+  pong = msg_pong(1);
   assert(pong.message.msg_type == MsgType.Pong, "pong type");
 }
 

@@ -96,45 +96,45 @@ fn sequential_file_blocks_read_conflict() {
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(2) as u16 == 0x0302, \"u16-le\"); }
   delete(\"slots_test_a.bin\");
-  {f = file(\"slots_test_a.bin\"); f#format = LittleEndian; f += 0x11223344; }
+  {f = file(\"slots_test_a.bin\"); f#format = LittleEndian; f += 0x11223344 as i32; }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(4) as i32 == 0x11223344, \"i32-le-rt\"); }
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
    assert(f#read(4) as i32 == 0x44332211, \"i32-le-as-be\"); }
   delete(\"slots_test_a.bin\");
-  {f = file(\"slots_test_a.bin\"); f#format = BigEndian; f += 0x11223344; }
+  {f = file(\"slots_test_a.bin\"); f#format = BigEndian; f += 0x11223344 as i32; }
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
    assert(f#read(4) as i32 == 0x11223344, \"i32-be-rt\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
-   f += 0x0102030405060708l; assert(f#size == 8l, \"long-sz\"); }
+   f += 0x0102030405060708 as integer; assert(f#size == 8, \"long-sz\"); }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
-   assert(f#read(8) as long == 0x0102030405060708l, \"long-rt\"); }
+   assert(f#read(8) as integer == 0x0102030405060708, \"long-rt\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian; f += 1.5f; }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(4) as single == 1.5f, \"single-rt\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
-   f += 3.14; assert(f#size == 8l, \"float-sz\"); }
+   f += 3.14; assert(f#size == 8, \"float-sz\"); }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(8) as float == 3.14, \"float-rt\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
-   f += \"Hello\"; assert(f#size == 5l, \"text-sz\"); }
+   f += \"Hello\"; assert(f#size == 5, \"text-sz\"); }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(5) as text == \"Hello\", \"text-rt\"); rest = f#read(100) as text; assert(rest == \"\", \"eof\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_b.bin\"); f#format = LittleEndian; f +=[1, 2]; }
   {f = file(\"slots_test_b.bin\"); f#format = LittleEndian;
-   f#read(4) as i32; assert(f#read(4) as i32 == 2, \"vec-2nd\"); }
+   f#read(8) as integer; assert(f#read(8) as integer == 2, \"vec-2nd\"); }
   delete(\"slots_test_b.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
-   f += 0 as u8; f += 1 as u8; f += 0x0203 as u16; f += 0x04050607;
-   f += 0x08090a0b0c0d0e0fl; f += \"Hello world!\"; }
+   f += 0 as u8; f += 1 as u8; f += 0x0203 as u16; f += 0x04050607 as i32;
+   f += 0x08090a0b0c0d0e0f as integer; f += \"Hello world!\"; }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(4) as i32 == 0x03020100, \"mixed-4\");
-   f#next = 16l;
+   f#next = 16;
    assert(f#read(5) as text == \"Hello\", \"mixed-seek\");
    rest = f#read(100) as text; assert(rest == \" world!\", \"mixed-tail\"); }
   delete(\"slots_test_a.bin\");

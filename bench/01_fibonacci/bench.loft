@@ -6,6 +6,6 @@ fn fib(n: integer) -> integer {
 fn main() {
   t0 = ticks();
   r = fib(38);
-  ms = (ticks() - t0) / 1000l;
+  ms = (ticks() - t0) / 1000;
   println("result: {r}  time: {ms}ms");
 }

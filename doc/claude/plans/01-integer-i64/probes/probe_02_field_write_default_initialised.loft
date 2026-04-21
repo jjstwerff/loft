@@ -1,0 +1,14 @@
+// Probe 02 — field write: later assignment of nullable into a `not null
+// = 0` default-initialised field.  Tests whether the default-initialiser
+// path adds any extra check.
+
+struct P02S {
+  v: integer not null = 0,
+}
+
+fn test_probe_02_field_write_default_initialised() {
+  p02_s = P02S { v: 5 };
+  p02_a = 2147483647;
+  p02_s.v = p02_a + 1;
+  println("VERDICT: probe_02 s.v after overflow = {p02_s.v}");
+}

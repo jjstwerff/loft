@@ -32,7 +32,6 @@
 #[macro_use]
 pub mod diagnostics;
 mod base64;
-mod cache;
 mod calc;
 mod codegen_runtime;
 mod compile;
@@ -460,12 +459,13 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         for attr in &def.attributes {
             let name = &attr.name;
             match &attr.typedef {
-                Type::Integer(_, _, _) | Type::Character => {
-                    c_params.push(format!("{name}: i32"));
+                // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
+                Type::Integer(_, max, _) if *max > i32::MAX as u32 => {
+                    c_params.push(format!("{name}: i64"));
                     param_names.push(name.clone());
                 }
-                Type::Long => {
-                    c_params.push(format!("{name}: i64"));
+                Type::Integer(_, _, _) | Type::Character => {
+                    c_params.push(format!("{name}: i32"));
                     param_names.push(name.clone());
                 }
                 Type::Float => {
@@ -523,8 +523,9 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         let ret_type_name = p.data.type_name_str(&def.returned);
         let ret_kind = match &def.returned {
             Type::Void | Type::Null => RetKind::None,
+            // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
+            Type::Integer(_, max, _) if *max > i32::MAX as u32 => RetKind::Scalar(" -> i64".into()),
             Type::Integer(_, _, _) | Type::Character => RetKind::Scalar(" -> i32".into()),
-            Type::Long => RetKind::Scalar(" -> i64".into()),
             Type::Float => RetKind::Scalar(" -> f64".into()),
             Type::Single => RetKind::Scalar(" -> f32".into()),
             Type::Boolean => RetKind::Scalar(" -> bool".into()),
@@ -657,7 +658,9 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         let sizes: Vec<(u16, u8)> = fields
             .iter()
             .map(|(_, _, tp)| match tp {
-                Type::Long | Type::Float => (8u16, 8u8),
+                // Post-2c round 10c: wide Type::Integer (former Type::Long) → 8 bytes.
+                Type::Integer(_, max, _) if *max > i32::MAX as u32 => (8u16, 8u8),
+                Type::Float => (8u16, 8u8),
                 Type::Integer(_, _, _) | Type::Character | Type::Single => (4, 4),
                 Type::Boolean | Type::Enum(_, false, _) => (1, 1),
                 // In the store, text/ref/vector/collections are stored as 4-byte record refs.
@@ -688,7 +691,6 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             let offset = positions[i];
             let type_comment = match tp {
                 Type::Integer(_, _, _) => "integer",
-                Type::Long => "long",
                 Type::Float => "float",
                 Type::Single => "single",
                 Type::Boolean => "boolean",
@@ -1166,6 +1168,37 @@ fn main() {
         if a == "--version" {
             println!("loft {}", env!("CARGO_PKG_VERSION"));
             return;
+        } else if a == "--migrate-long" {
+            // C54.B migration tool — rewrite `long` type references and
+            // `l` literal suffixes to their post-C54.A equivalents.
+            let dry_run = argv.get(i).is_some_and(|s| s == "--dry-run");
+            if dry_run {
+                i += 1;
+            }
+            let Some(target) = argv.get(i) else {
+                eprintln!("usage: loft --migrate-long [--dry-run] <path-or-dir>");
+                std::process::exit(1);
+            };
+            match loft::migrate_long::migrate_path(std::path::Path::new(target), dry_run) {
+                Ok((scanned, modified)) => {
+                    if dry_run {
+                        println!(
+                            "migrate-long (dry run): {scanned} file(s) scanned, \
+                             {modified} would be rewritten"
+                        );
+                    } else {
+                        println!(
+                            "migrate-long: {scanned} file(s) scanned, \
+                             {modified} rewritten"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("migrate-long error: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
         } else if a == "--path" {
             dir.clone_from(&argv[i]);
             i += 1;
@@ -1616,11 +1649,7 @@ fn main() {
         .unwrap_or_default();
     // store script-level arguments so arguments() returns only these.
     state.database.user_args.clone_from(&user_args);
-    // Bytecode cache: read source content for the cache key, use .loftc path.
-    let source_content = std::fs::read_to_string(&abs_file).unwrap_or_default();
-    let cache_file = cache::cache_path(&abs_file);
-    let sources = [(abs_file.as_str(), source_content.as_str())];
-    compile::byte_code_with_cache(&mut state, &mut p.data, Some(&cache_file), &sources);
+    compile::byte_code(&mut state, &mut p.data);
     // load native extension shared libraries registered during parsing.
     // Also include any native libs discovered via loft.toml auto-detection.
     let mut all_native_libs = std::mem::take(&mut p.pending_native_libs);
@@ -1677,6 +1706,7 @@ fn main() {
                 next_format_count: 0,
                 yield_collect: false,
                 fn_ref_context: false,
+                i32_literal_context: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };
@@ -1771,6 +1801,7 @@ fn main() {
                 next_format_count: 0,
                 yield_collect: false,
                 fn_ref_context: false,
+                i32_literal_context: false,
                 call_stack_prefix: None,
                 wasm_browser: true,
             };
@@ -1965,6 +1996,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 next_format_count: 0,
                 yield_collect: false,
                 fn_ref_context: false,
+                i32_literal_context: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };

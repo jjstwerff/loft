@@ -1,0 +1,14 @@
+// Probe 07 — happy-case `??`: return `x ?? default` should produce a
+// non-null.  Expected CLEAN — the `??` is the intended mechanism to
+// discharge nullability.
+
+fn p07_with_default(x: integer) -> integer not null {
+  x ?? 0
+}
+
+fn test_probe_07_nullcoalesce_discharges() {
+  p07_a = 2147483647;
+  p07_null_val = p07_a + 1;
+  p07_r = p07_with_default(p07_null_val);
+  println("VERDICT: probe_07 with_default(null) = {p07_r}");
+}

@@ -12,7 +12,7 @@ pub enum ArgValue {
   NullVal,
   BoolVal   { b: boolean },
   IntVal    { n: integer },
-  LongVal   { n: long },
+  LongVal   { n: integer },
   FloatVal  { f: float },
   SingleVal { f: single },
   CharVal   { c: character },

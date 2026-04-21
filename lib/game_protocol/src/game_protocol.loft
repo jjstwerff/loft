@@ -30,15 +30,15 @@ pub struct WsMessage {
 pub struct GameEnvelope {
   sender: text,
   recipient: text,
-  sequence: long,
-  timestamp: long,
+  sequence: integer,
+  timestamp: integer,
   message: WsMessage
 }
 
 // --- Message constructors ---
 
 // Create a ping message.
-pub fn msg_ping(seq: long) -> GameEnvelope {
+pub fn msg_ping(seq: integer) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
@@ -49,7 +49,7 @@ pub fn msg_ping(seq: long) -> GameEnvelope {
 }
 
 // Create a pong response.
-pub fn msg_pong(seq: long) -> GameEnvelope {
+pub fn msg_pong(seq: integer) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
@@ -64,7 +64,7 @@ pub fn msg_chat(sender: text, content: text) -> GameEnvelope {
   GameEnvelope {
     sender: sender,
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.ChatMessage, payload: content }
   }
@@ -75,7 +75,7 @@ pub fn msg_input(sender: text, input_data: text) -> GameEnvelope {
   GameEnvelope {
     sender: sender,
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.PlayerInput, payload: input_data }
   }
@@ -86,7 +86,7 @@ pub fn msg_state(state_data: text) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.StateFullSync, payload: state_data }
   }
@@ -97,7 +97,7 @@ pub fn msg_error(error_text: text) -> GameEnvelope {
   GameEnvelope {
     sender: "",
     recipient: "",
-    sequence: 0l,
+    sequence: 0,
     timestamp: now(),
     message: WsMessage { msg_type: MsgType.Error, payload: error_text }
   }

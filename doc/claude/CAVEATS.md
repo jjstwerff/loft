@@ -92,17 +92,47 @@ that reference each other via generic collection fields in the same
 **Regression guard:** none yet — needs a Rust-level test in
 `tests/package_layout.rs` with a two-file test package.
 
-### C54 — `integer` representation
-Silently returning null when arithmetic lands on `i32::MIN` (and
-debug-aborting) is actively hostile in a language pitched as "reads
-like Python".  **Decision:** switch `integer` from `i32` to `i64`.
-At 8 bytes per field the overhead is rounding error on today's
-machines; `i64::MIN` is `-9.2e18`, so accidental sentinel collisions
-effectively vanish.  `long` becomes a historical alias; future code
-writes `integer` and Just Works for any arithmetic.  Breaking change,
-so 0.9.0 is the right window (pre-1.0 stability contract).
-Bumping struct field sizes requires revisiting `size(Type::Integer)`
-in `src/database/mod.rs` and every schema layout test.
+### ~~C54~~ — `integer` representation — DONE 2026-04-20
+
+Shipped on branch `int_migrate`.  `integer` is i64 end-to-end
+(stack, struct fields, arithmetic) across all three backends.
+`long` keyword deprecation-warns and aliases `integer`; the `l`
+literal suffix is deprecated-warned and silently dropped.
+
+**Post-migration caveats — scheduled for 0.9.0 but kept open**:
+
+- **Binary-format writers need explicit width casts.**  Post-2c
+  `f += 2` on a `LittleEndian`/`BigEndian` file writes 8 bytes;
+  pre-2c wrote 4.  Every `f += <scalar_integer>` that targets a
+  u32/u16/u8 binary field must add `as i32` / `as u16` / `as u8`
+  explicitly.  Regression guard: `lib/graphics/src/glb.loft` was
+  the flagship fix (`74aefb4`) — its test
+  `moros_glb_cli_end_to_end` now gates this behaviour.  There is
+  NO linter yet for the pattern; users writing custom binary
+  protocols need to audit their writers.
+- **Cross-crate cdylib FFI stays on i32 vector&lt;integer&gt;
+  elements.**  `vector_elem_rust_type(Type::Integer) => "i32"`
+  preserves a 4-byte element layout for pre-compiled cdylib
+  packages (`lib/graphics/native`, `lib/moros_render`).
+  In-process loft integers remain i64; narrow↔wide conversion
+  happens at the FFI boundary.  Do not "clean this up" without
+  a coordinated cdylib rebuild.
+- **26 duplicate `Op*Long` opcodes still in the bytecode
+  surface.**  Phase 5 (opcode reclamation) deletes them; until
+  then dispatch table size stays 268 instead of 242.  Affects
+  no semantics; just dispatch cache density.
+- **`Type::Long` enum variant lives alongside `Type::Integer`.**
+  Functionally identical post-2c; removal is round 10c (see
+  `doc/claude/plans/01-integer-i64/FINISH_MIGRATION.md`).
+- **Memory footprint doubled for `integer` fields** (4 → 8
+  bytes).  Narrow fields (`u8 / u16 / i8 / i16 / i32`) stay
+  compact via `Parts::{Byte, Short, Int}` so pixel buffers,
+  bit-packed protocols, and RGBA data are unaffected.
+
+Regression guard for the overall migration:
+`tests/scripts/20-binary.loft`, `21-binary-ops.loft`,
+`89-sizeof.loft`; `tests/docs/13-file.loft`, `17-libraries.loft`;
+`tests/exit_codes.rs::moros_glb_cli_end_to_end`.
 
 ### ~~C60~~ — Hash iteration in key order — DONE 2026-04-13
 
@@ -480,7 +510,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | C3     | 1.1+      | Accepted — WASM threading deferred (Web Worker pool cost > benefit today) |
 | ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
 | C38    | —         | Accepted — value-semantic capture by design (like Rust `move`) |
-| C54    | 0.9.0     | **Switch `integer` from i32 to i64.** `long` becomes historical alias. Breaking change, pre-1.0 window |
+| ~~C54~~ | — | **Done** 2026-04-20 — `integer` is i64 end-to-end; `long` is a historical alias.  See CAVEATS.md § C54 long-form for post-migration footguns |
 | ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in OPENGL.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~C60~~ | — | **Done** 2026-04-13 — `for kv in hash` yields a `HashEntry` with `.key` / `.value` in insertion/deletion-aware order via the internal ordered index.  See CAVEATS.md § C60 long-form |
 | ~~C61.local~~ | — | **Done** — pass-1 reject via `was_loop_var`; stdlib docs cleaned up; unblocked by #139 |

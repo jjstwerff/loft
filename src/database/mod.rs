@@ -106,10 +106,11 @@ pub enum Parts {
     EnumValue(u8, Vec<Field>),         // Enumerate value with actual value for typed structures.
     Byte(i32, bool),                   // start number and nullable flag
     Short(i32, bool),                  // start number and nullable flag
-    Vector(u16),                       // The records are part of the vector
-    Array(u16),                        // The array holds references for each record
-    Sorted(u16, Vec<(u16, bool)>),     // Sorted vector on fields with an ascending flag
-    Ordered(u16, Vec<(u16, bool)>),    // Sorted array on fields with an ascending flag
+    Int(i32, bool), // 4-byte integer field (size(4) annotation). Null sentinel: i32::MIN.
+    Vector(u16),    // The records are part of the vector
+    Array(u16),     // The array holds references for each record
+    Sorted(u16, Vec<(u16, bool)>), // Sorted vector on fields with an ascending flag
+    Ordered(u16, Vec<(u16, bool)>), // Sorted array on fields with an ascending flag
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Spacial(u16, Vec<u16>),            // A spacial index with the listed coordinate fields as a key
@@ -356,7 +357,7 @@ impl Stores {
             closure_map: HashMap::new(),
             jnull_sentinel: None,
         };
-        result.base_type("integer", 4); // 0
+        result.base_type("integer", 8); // 0  (Phase 2c: widened from 4)
         result.base_type("long", 8); // 1
         result.base_type("single", 4); // 2
         result.base_type("float", 8); // 3
@@ -367,7 +368,7 @@ impl Stores {
     }
 
     #[must_use]
-    pub fn get<T>(&mut self, stack: &mut DbRef) -> &T {
+    pub fn get<T: 'static>(&mut self, stack: &mut DbRef) -> &T {
         debug_assert!(
             stack.pos >= size_of::<T>() as u32,
             "Stack underflow in get<{}>: stack.pos={} but need {} bytes",
@@ -376,10 +377,41 @@ impl Stores {
             size_of::<T>(),
         );
         stack.pos -= size_of::<T>() as u32;
-        self.store(stack).addr::<T>(stack.rec, stack.pos)
+        let r = self.store(stack).addr::<T>(stack.rec, stack.pos);
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(r as *const T as *const DbRef) };
+                debug_assert!(
+                    db.store_nr == u16::MAX || (db.store_nr as usize) < self.allocations.len(),
+                    "get<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                     rec={} pos={} — corrupt DbRef on stack",
+                    db.store_nr,
+                    self.allocations.len(),
+                    db.rec,
+                    db.pos,
+                );
+            }
+        }
+        r
     }
 
-    pub fn put<T>(&mut self, stack: &mut DbRef, val: T) {
+    pub fn put<T: 'static>(&mut self, stack: &mut DbRef, val: T) {
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&val as *const T as *const DbRef) };
+                debug_assert!(
+                    db.store_nr == u16::MAX || (db.store_nr as usize) < self.allocations.len(),
+                    "put<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                     rec={} pos={} — corrupt DbRef being pushed",
+                    db.store_nr,
+                    self.allocations.len(),
+                    db.rec,
+                    db.pos,
+                );
+            }
+        }
         let m = self.store_mut(stack).addr_mut::<T>(stack.rec, stack.pos);
         *m = val;
         stack.pos += size_of::<T>() as u32;

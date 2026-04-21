@@ -31,7 +31,7 @@ fn test_sort_floats() {
 }
 
 fn test_sort_longs() {
-  sl_v = [300l, 100l, 200l, 500l, 400l];
+  sl_v = [300, 100, 200, 500, 400];
   sort(sl_v);
   assert("{sl_v}" == "[100,200,300,400,500]", "sort longs: {sl_v}");
 }

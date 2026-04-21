@@ -89,7 +89,7 @@ fn test_undefined_type(v: V) -> V { v }
 fn test_undefined_return(v: integer) -> V { v }
 
 // @EXPECT_ERROR: Undefined type V
-fn test_undefined_as(v: integer) -> long { v as V }
+fn test_undefined_as(v: integer) -> integer { v as V }
 
 // @EXPECT_ERROR: Indexing a non vector
 fn test_index_non_indexable() {

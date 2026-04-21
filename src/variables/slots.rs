@@ -594,8 +594,8 @@ mod tests {
     #[test]
     fn no_conflict_adjacent_slots() {
         let mut f = Function::new("f", "test");
-        add_var(&mut f, &INT, 0, 0, 20); // slot [0, 4)
-        add_var(&mut f, &INT, 4, 0, 20); // slot [4, 8)
+        add_var(&mut f, &INT, 0, 0, 20); // slot [0, 8) — integer is 8 bytes post-2c
+        add_var(&mut f, &INT, 8, 0, 20); // slot [8, 16)
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
@@ -959,10 +959,10 @@ mod tests {
     #[test]
     fn assign_slots_sequential_long_reuse() {
         let mut f = Function::new("f", "test");
-        let v1 = f.add_unique("v1", &Type::Long, 0);
+        let v1 = f.add_unique("v1", &crate::data::I64, 0);
         f.variables[v1 as usize].first_def = 0;
         f.variables[v1 as usize].last_use = 10;
-        let v2 = f.add_unique("v2", &Type::Long, 0);
+        let v2 = f.add_unique("v2", &crate::data::I64, 0);
         f.variables[v2 as usize].first_def = 11;
         f.variables[v2 as usize].last_use = 20;
         run_assign_slots(&mut f, 0);
@@ -978,10 +978,10 @@ mod tests {
     #[test]
     fn assign_slots_concurrent_long_separate_slots() {
         let mut f = Function::new("f", "test");
-        let v1 = f.add_unique("v1", &Type::Long, 0);
+        let v1 = f.add_unique("v1", &crate::data::I64, 0);
         f.variables[v1 as usize].first_def = 0;
         f.variables[v1 as usize].last_use = 20;
-        let v2 = f.add_unique("v2", &Type::Long, 0);
+        let v2 = f.add_unique("v2", &crate::data::I64, 0);
         f.variables[v2 as usize].first_def = 5;
         f.variables[v2 as usize].last_use = 15;
         run_assign_slots(&mut f, 0);
@@ -1118,13 +1118,13 @@ mod tests {
         // Dead at seq 131 (non-loop scope → physically present until return)
         add_scoped_var(&mut f, "_elm_1", &ref_tp, 1, 12, 81);
         // First for-loop vars: scope 2 = non-loop block wrapper, scope 3 = loop body
-        add_scoped_var(&mut f, "e#iter_state_1", &Type::Long, 2, 95, 129);
+        add_scoped_var(&mut f, "e#iter_state_1", &crate::data::I64, 2, 95, 129);
         add_scoped_var(&mut f, "e#index_1", &INT, 2, 97, 129);
         add_scoped_var(&mut f, "e_1", &ref_tp, 3, 98, 115);
         // total: born after first loop, lives through second (non-loop scope)
         add_scoped_var(&mut f, "total", &INT, 1, 131, 174);
         // Second for-loop vars: scope 7 = non-loop block wrapper, scope 8 = loop body
-        add_scoped_var(&mut f, "e#iter_state_2", &Type::Long, 7, 142, 167);
+        add_scoped_var(&mut f, "e#iter_state_2", &crate::data::I64, 7, 142, 167);
         add_scoped_var(&mut f, "e#index_2", &INT, 7, 144, 167);
         add_scoped_var(&mut f, "e_2", &ref_tp, 8, 145, 163);
 

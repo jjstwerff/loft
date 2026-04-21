@@ -214,8 +214,9 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     let mut params = Vec::new();
     for attr in &def.attributes {
         let t = match &attr.typedef {
+            // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
+            Type::Integer(_, max, _) if *max > i32::MAX as u32 => ArgT::I64,
             Type::Integer(_, _, _) | Type::Character => ArgT::I32,
-            Type::Long => ArgT::I64,
             Type::Float => ArgT::F64,
             Type::Single => ArgT::F32,
             Type::Boolean => ArgT::Bool,
@@ -234,8 +235,9 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     }
     let ret = match &def.returned {
         Type::Void | Type::Null => None,
+        // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
+        Type::Integer(_, max, _) if *max > i32::MAX as u32 => Some(ArgT::I64),
         Type::Integer(_, _, _) | Type::Character => Some(ArgT::I32),
-        Type::Long => Some(ArgT::I64),
         Type::Float => Some(ArgT::F64),
         Type::Single => Some(ArgT::F32),
         Type::Boolean => Some(ArgT::Bool),
@@ -433,7 +435,13 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
     // Pop in reverse order (stack is LIFO).
     for &t in sig.params.iter().rev() {
         let val = match t {
-            ArgT::I32 => ArgVal::I32(*stores.get::<i32>(stack)),
+            // Post-2c: loft `integer` is i64 on stack (8 bytes) but the
+            // external C ABI may still declare `i32` — narrow here for
+            // the call, then widen back when writing the return value.
+            // Type::Character also maps to ArgT::I32 but is not currently
+            // used by any cdylib (the existing arm stays safe under this
+            // change because no Character parameter reaches here).
+            ArgT::I32 => ArgVal::I32(*stores.get::<i64>(stack) as i32),
             ArgT::I64 => ArgVal::I64(*stores.get::<i64>(stack)),
             ArgT::F32 => ArgVal::F32(*stores.get::<f64>(stack) as f32),
             ArgT::F64 => ArgVal::F64(*stores.get::<f64>(stack)),
@@ -455,7 +463,7 @@ fn native_auto_dispatch(stores: &mut crate::database::Stores, stack: &mut crate:
                 if r.rec == 0 || r.pos == 0 {
                     ArgVal::Ref(r.store_nr, 0, 0)
                 } else {
-                    let vec_rec = stores.store(&r).get_int(r.rec, r.pos) as u32;
+                    let vec_rec = stores.store(&r).get_u32_raw(r.rec, r.pos);
                     ArgVal::Ref(r.store_nr, vec_rec, 0)
                 }
             }
@@ -703,7 +711,7 @@ fn dispatch_call(
             pos: 0,
         };
         let header = stores.claim(&base, 1);
-        stores.store_mut(&base).set_int(header.rec, 4, r.rec as i32);
+        stores.store_mut(&base).set_u32_raw(header.rec, 4, r.rec);
         let dbref = crate::keys::DbRef {
             store_nr: r.store_nr,
             rec: header.rec,
@@ -721,7 +729,7 @@ fn dispatch_call(
         // () -> i32
         (&[], Some(ArgT::I32)) => {
             let f: extern "C" fn() -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f());
+            stores.put::<i64>(stack, i64::from(f()));
         }
         // () -> bool
         (&[], Some(ArgT::Bool)) => {
@@ -741,7 +749,7 @@ fn dispatch_call(
         // (i32) -> i32
         (&[ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0)));
+            stores.put::<i64>(stack, i64::from(f(i32_arg!(0))));
         }
         // (i32) -> bool
         (&[ArgT::I32], Some(ArgT::Bool)) => {
@@ -756,12 +764,12 @@ fn dispatch_call(
         // (i32, i32) -> i32
         (&[ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0), i32_arg!(1)));
+            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), i32_arg!(1))));
         }
         // (i32, f64) -> i32
         (&[ArgT::I32, ArgT::F64], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, f64) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0), f64_arg!(1)));
+            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), f64_arg!(1))));
         }
         // (i32, i32) -> void
         (&[ArgT::I32, ArgT::I32], None) => {
@@ -785,7 +793,7 @@ fn dispatch_call(
         (&[ArgT::Text], Some(ArgT::I32)) => {
             let f: extern "C" fn(*const u8, usize) -> i32 = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(0);
-            stores.put(stack, f(p, l));
+            stores.put::<i64>(stack, i64::from(f(p, l)));
         }
         // (text, text) -> i32
         (&[ArgT::Text, ArgT::Text], Some(ArgT::I32)) => {
@@ -793,7 +801,7 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             let (p0, l0) = text_arg!(0);
             let (p1, l1) = text_arg!(1);
-            stores.put(stack, f(p0, l0, p1, l1));
+            stores.put::<i64>(stack, i64::from(f(p0, l0, p1, l1)));
         }
         // (i32, i32, text) -> bool  (e.g. gl_create_window: u32,u32,text→bool)
         (&[ArgT::I32, ArgT::I32, ArgT::Text], Some(ArgT::Bool)) => {
@@ -822,12 +830,12 @@ fn dispatch_call(
         // (f64) -> i32
         (&[ArgT::F64], Some(ArgT::I32)) => {
             let f: extern "C" fn(f64) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(f64_arg!(0)));
+            stores.put::<i64>(stack, i64::from(f(f64_arg!(0))));
         }
         // (i32, i32, i32) -> i32
         (&[ArgT::I32, ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0), i32_arg!(1), i32_arg!(2)));
+            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), i32_arg!(1), i32_arg!(2))));
         }
         // (i32, i32, i32) -> void
         (&[ArgT::I32, ArgT::I32, ArgT::I32], None) => {
@@ -909,13 +917,16 @@ fn dispatch_call(
         // (i32, i32, i32, i32) -> i32
         (&[ArgT::I32, ArgT::I32, ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, i32, i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(i32_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3)));
+            stores.put::<i64>(
+                stack,
+                i64::from(f(i32_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3))),
+            );
         }
         // (i32, text) -> i32
         (&[ArgT::I32, ArgT::Text], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, *const u8, usize) -> i32 = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
-            stores.put(stack, f(i32_arg!(0), p, l));
+            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), p, l)));
         }
         // () -> i64
         (&[], Some(ArgT::I64)) => {
@@ -932,7 +943,7 @@ fn dispatch_call(
         (&[ArgT::Ref], Some(ArgT::I32)) => {
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, ref_arg!(0)));
+            stores.put::<i64>(stack, i64::from(f(ls, ref_arg!(0))));
         }
         // (Ref) -> Bool
         (&[ArgT::Ref], Some(ArgT::Bool)) => {
@@ -974,14 +985,14 @@ fn dispatch_call(
             let f: extern "C" fn(LoftStore, *const u8, usize, LoftRef) -> i32 =
                 unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(0);
-            stores.put(stack, f(ls, p, l, ref_arg!(1)));
+            stores.put::<i64>(stack, i64::from(f(ls, p, l, ref_arg!(1))));
         }
         // (I32, Ref) -> I32
         (&[ArgT::I32, ArgT::Ref], Some(ArgT::I32)) => {
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, i32, LoftRef) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, i32_arg!(0), ref_arg!(1)));
+            stores.put::<i64>(stack, i64::from(f(ls, i32_arg!(0), ref_arg!(1))));
         }
         // (I32, Ref) -> Bool
         (&[ArgT::I32, ArgT::Ref], Some(ArgT::Bool)) => {
@@ -995,7 +1006,7 @@ fn dispatch_call(
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef, i32) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, ref_arg!(0), i32_arg!(1)));
+            stores.put::<i64>(stack, i64::from(f(ls, ref_arg!(0), i32_arg!(1))));
         }
         // (Ref, I32) -> void
         (&[ArgT::Ref, ArgT::I32], None) => {
@@ -1055,7 +1066,10 @@ fn dispatch_call(
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, i32, LoftRef, i32) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2)));
+            stores.put::<i64>(
+                stack,
+                i64::from(f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2))),
+            );
         }
         // (I32, Ref, I32) -> void
         (&[ArgT::I32, ArgT::Ref, ArgT::I32], None) => {
@@ -1124,7 +1138,10 @@ fn dispatch_call(
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef, i32, i32) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2)));
+            stores.put::<i64>(
+                stack,
+                i64::from(f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2))),
+            );
         }
         // (Ref, I32, I32, I32) -> void  (e.g. set_pixel, blend_pixel)
         (&[ArgT::Ref, ArgT::I32, ArgT::I32, ArgT::I32], None) => {
@@ -1279,7 +1296,10 @@ fn dispatch_call(
             let f: extern "C" fn(LoftStore, i32, *const u8, usize, f64, LoftRef) -> i32 =
                 unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
-            stores.put(stack, f(ls, i32_arg!(0), p, l, f64_arg!(2), ref_arg!(3)));
+            stores.put::<i64>(
+                stack,
+                i64::from(f(ls, i32_arg!(0), p, l, f64_arg!(2), ref_arg!(3))),
+            );
         }
         // (Ref, I32, Text, F64, I32, I32, I32) -> void  (e.g. draw_text)
         (
@@ -1315,7 +1335,10 @@ fn dispatch_call(
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef, i32, f64) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put(stack, f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2)));
+            stores.put::<i64>(
+                stack,
+                i64::from(f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2))),
+            );
         }
         _ => {
             let sig_str: Vec<String> = params.iter().map(|t| format!("{t:?}")).collect();

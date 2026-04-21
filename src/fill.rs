@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 255] = &[
+pub const OPERATORS: &[fn(&mut State); 234] = &[
     goto,
     goto_word,
     goto_false,
@@ -31,15 +31,14 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     put_character,
     conv_int_from_null,
     conv_character_from_null,
+    conv_character_from_int,
     const_long_text,
     cast_int_from_text,
-    cast_long_from_text,
     cast_single_from_text,
     cast_float_from_text,
     abs_int,
     min_single_int,
     bit_not_single_int,
-    conv_long_from_int,
     conv_float_from_int,
     conv_single_from_int,
     conv_bool_from_int,
@@ -48,6 +47,11 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     mul_int,
     div_int,
     rem_int,
+    add_int_nullable,
+    min_int_nullable,
+    mul_int_nullable,
+    div_int_nullable,
+    rem_int_nullable,
     land_int,
     lor_int,
     eor_int,
@@ -57,31 +61,8 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     ne_int,
     lt_int,
     le_int,
-    const_long,
-    var_long,
-    put_long,
-    conv_long_from_null,
-    abs_long,
-    min_single_long,
-    cast_int_from_long,
-    conv_float_from_long,
-    conv_bool_from_long,
-    add_long,
-    min_long,
-    mul_long,
-    div_long,
-    rem_long,
-    land_long,
-    lor_long,
-    eor_long,
-    s_left_long,
-    s_right_long,
-    eq_long,
-    ne_long,
-    lt_long,
-    le_long,
-    format_long,
-    format_stack_long,
+    format_int,
+    format_stack_int,
     const_single,
     var_single,
     put_single,
@@ -89,7 +70,6 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     abs_single,
     min_single_single,
     cast_int_from_single,
-    cast_long_from_single,
     conv_float_from_single,
     conv_bool_from_single,
     add_single,
@@ -119,7 +99,6 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     min_single_float,
     cast_single_from_float,
     cast_int_from_float,
-    cast_long_from_float,
     conv_bool_from_float,
     add_float,
     min_float,
@@ -184,7 +163,6 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     get_field,
     get_int,
     get_character,
-    get_long,
     get_single,
     get_float,
     get_byte,
@@ -194,11 +172,12 @@ pub const OPERATORS: &[fn(&mut State); 255] = &[
     get_text,
     set_int,
     set_character,
-    set_long,
     set_single,
     set_float,
     set_byte,
     set_short,
+    get_int4,
+    set_int4,
     set_text,
     var_vector,
     length_vector,
@@ -292,9 +271,9 @@ fn goto_false_word(s: &mut State) {
 }
 
 fn call(s: &mut State) {
-    let v_d_nr = *s.code::<i32>();
+    let v_d_nr = *s.code::<i64>();
     let v_args_size = *s.code::<u16>();
-    let v_to = *s.code::<i32>();
+    let v_to = *s.code::<i64>();
     s.fn_call(v_d_nr as u32, v_args_size, v_to);
 }
 
@@ -351,26 +330,26 @@ fn not(s: &mut State) {
 }
 
 fn const_int(s: &mut State) {
-    let v_val = *s.code::<i32>();
+    let v_val = *s.code::<i64>();
     let new_value = v_val;
     s.put_stack(new_value);
 }
 
 fn const_short(s: &mut State) {
     let v_val = *s.code::<i16>();
-    let new_value = i32::from(v_val);
+    let new_value = i64::from(v_val);
     s.put_stack(new_value);
 }
 
 fn const_tiny(s: &mut State) {
     let v_val = *s.code::<i8>();
-    let new_value = i32::from(v_val);
+    let new_value = i64::from(v_val);
     s.put_stack(new_value);
 }
 
 fn var_int(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<i32>(v_pos);
+    let new_value = *s.get_var::<i64>(v_pos);
     s.put_stack(new_value);
 }
 
@@ -382,7 +361,7 @@ fn var_character(s: &mut State) {
 
 fn put_int(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let v_value = *s.get_stack::<i32>();
+    let v_value = *s.get_stack::<i64>();
     s.put_var(v_pos, v_value);
 }
 
@@ -393,7 +372,7 @@ fn put_character(s: &mut State) {
 }
 
 fn conv_int_from_null(s: &mut State) {
-    let new_value = i32::MIN;
+    let new_value = i64::MIN;
     s.put_stack(new_value);
 }
 
@@ -402,19 +381,19 @@ fn conv_character_from_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
+fn conv_character_from_int(s: &mut State) {
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = char::from_u32((v_v1) as u32).unwrap_or(char::from(0));
+    s.put_stack(new_value);
+}
+
 fn const_long_text(s: &mut State) {
-    let v_start = *s.code::<i32>();
-    let v_size = *s.code::<i32>();
+    let v_start = *s.code::<i64>();
+    let v_size = *s.code::<i64>();
     s.string_from_texts(v_start, v_size);
 }
 
 fn cast_int_from_text(s: &mut State) {
-    let v_v1 = s.string();
-    let new_value = v_v1.str().parse().unwrap_or(i32::MIN);
-    s.put_stack(new_value);
-}
-
-fn cast_long_from_text(s: &mut State) {
     let v_v1 = s.string();
     let new_value = v_v1.str().parse().unwrap_or(i64::MIN);
     s.put_stack(new_value);
@@ -433,302 +412,180 @@ fn cast_float_from_text(s: &mut State) {
 }
 
 fn abs_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_abs_int(v_v1);
     s.put_stack(new_value);
 }
 
 fn min_single_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_negate_int(v_v1);
     s.put_stack(new_value);
 }
 
 fn bit_not_single_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = !v_v1;
     s.put_stack(new_value);
 }
 
-fn conv_long_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
-    let new_value = ops::op_conv_long_from_int(v_v1);
-    s.put_stack(new_value);
-}
-
 fn conv_float_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_conv_float_from_int(v_v1);
     s.put_stack(new_value);
 }
 
 fn conv_single_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_conv_single_from_int(v_v1);
     s.put_stack(new_value);
 }
 
 fn conv_bool_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_conv_bool_from_int(v_v1);
     s.put_stack(new_value);
 }
 
 fn add_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_add_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn min_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_min_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn mul_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_mul_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn div_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_div_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn rem_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_rem_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
+fn add_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_add_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn min_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_min_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn mul_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_mul_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn div_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_div_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
+fn rem_int_nullable(s: &mut State) {
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = ops::op_rem_int_nullable(v_v1, v_v2);
+    s.put_stack(new_value);
+}
+
 fn land_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_logical_and_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn lor_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_logical_or_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn eor_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_exclusive_or_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn s_left_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_shift_left_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn s_right_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = ops::op_shift_right_int(v_v1, v_v2);
     s.put_stack(new_value);
 }
 
 fn eq_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = v_v1 == v_v2;
     s.put_stack(new_value);
 }
 
 fn ne_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = v_v1 != v_v2;
     s.put_stack(new_value);
 }
 
 fn lt_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = v_v1 < v_v2;
     s.put_stack(new_value);
 }
 
 fn le_int(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
-    let v_v1 = *s.get_stack::<i32>();
-    let new_value = v_v1 <= v_v2;
-    s.put_stack(new_value);
-}
-
-fn const_long(s: &mut State) {
-    let v_val = *s.code::<i64>();
-    let new_value = v_val;
-    s.put_stack(new_value);
-}
-
-fn var_long(s: &mut State) {
-    let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<i64>(v_pos);
-    s.put_stack(new_value);
-}
-
-fn put_long(s: &mut State) {
-    let v_pos = *s.code::<u16>();
-    let v_value = *s.get_stack::<i64>();
-    s.put_var(v_pos, v_value);
-}
-
-fn conv_long_from_null(s: &mut State) {
-    let new_value = i64::MIN;
-    s.put_stack(new_value);
-}
-
-fn abs_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_abs_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn min_single_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_negate_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn cast_int_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_cast_int_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn conv_float_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_conv_float_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn conv_bool_from_long(s: &mut State) {
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_conv_bool_from_long(v_v1);
-    s.put_stack(new_value);
-}
-
-fn add_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_add_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn min_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_min_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn mul_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_mul_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn div_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_div_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn rem_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_rem_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn land_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_logical_and_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn lor_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_logical_or_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn eor_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_exclusive_or_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn s_left_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_left_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn s_right_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_right_long(v_v1, v_v2);
-    s.put_stack(new_value);
-}
-
-fn eq_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 == v_v2;
-    s.put_stack(new_value);
-}
-
-fn ne_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 != v_v2;
-    s.put_stack(new_value);
-}
-
-fn lt_long(s: &mut State) {
-    let v_v2 = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<i64>();
-    let new_value = v_v1 < v_v2;
-    s.put_stack(new_value);
-}
-
-fn le_long(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
     let new_value = v_v1 <= v_v2;
     s.put_stack(new_value);
 }
 
-fn format_long(s: &mut State) {
-    s.format_long();
+fn format_int(s: &mut State) {
+    s.format_int();
 }
 
-fn format_stack_long(s: &mut State) {
-    s.format_stack_long();
+fn format_stack_int(s: &mut State) {
+    s.format_stack_int();
 }
 
 fn const_single(s: &mut State) {
@@ -769,12 +626,6 @@ fn min_single_single(s: &mut State) {
 fn cast_int_from_single(s: &mut State) {
     let v_v1 = *s.get_stack::<f32>();
     let new_value = ops::op_cast_int_from_single(v_v1);
-    s.put_stack(new_value);
-}
-
-fn cast_long_from_single(s: &mut State) {
-    let v_v1 = *s.get_stack::<f32>();
-    let new_value = ops::op_cast_long_from_single(v_v1);
     s.put_stack(new_value);
 }
 
@@ -994,12 +845,6 @@ fn cast_int_from_float(s: &mut State) {
     s.put_stack(new_value);
 }
 
-fn cast_long_from_float(s: &mut State) {
-    let v_v1 = *s.get_stack::<f64>();
-    let new_value = ops::op_cast_long_from_float(v_v1);
-    s.put_stack(new_value);
-}
-
 fn conv_bool_from_float(s: &mut State) {
     let v_v1 = *s.get_stack::<f64>();
     let new_value = !v_v1.is_nan();
@@ -1095,13 +940,13 @@ fn conv_text_from_null(s: &mut State) {
 
 fn length_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().len() as i32;
+    let new_value = v_v1.str().len() as i64;
     s.put_stack(new_value);
 }
 
 fn size_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().chars().count() as i32;
+    let new_value = v_v1.str().chars().count() as i64;
     s.put_stack(new_value);
 }
 
@@ -1132,7 +977,7 @@ fn get_text_sub(s: &mut State) {
 }
 
 fn text_character(s: &mut State) {
-    let v_v2 = *s.get_stack::<i32>();
+    let v_v2 = *s.get_stack::<i64>();
     let v_v1 = s.string();
     let new_value = ops::text_character(v_v1.str(), v_v2);
     s.put_stack(new_value);
@@ -1197,7 +1042,7 @@ fn text_compare(s: &mut State) {
 }
 
 fn cast_character_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
+    let v_v1 = *s.get_stack::<i64>();
     let new_value = char::from_u32(v_v1 as u32).unwrap_or(char::from(0));
     s.put_stack(new_value);
 }
@@ -1205,9 +1050,9 @@ fn cast_character_from_int(s: &mut State) {
 fn conv_int_from_character(s: &mut State) {
     let v_v1 = char::from_u32(*s.get_stack::<u32>()).unwrap_or('\0');
     let new_value = if v_v1 == char::from(0) {
-        i32::MIN
+        i64::MIN
     } else {
-        v_v1 as i32
+        i64::from(v_v1 as u32)
     };
     s.put_stack(new_value);
 }
@@ -1253,16 +1098,16 @@ fn cast_enum_from_text(s: &mut State) {
 fn conv_int_from_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<u8>();
     let new_value = if v_v1 == 255 {
-        i32::MIN
+        i64::MIN
     } else {
-        i32::from(v_v1)
+        i64::from(v_v1)
     };
     s.put_stack(new_value);
 }
 
 fn cast_enum_from_int(s: &mut State) {
-    let v_v1 = *s.get_stack::<i32>();
-    let new_value = if v_v1 == i32::MIN { 255 } else { v_v1 as u8 };
+    let v_v1 = *s.get_stack::<i64>();
+    let new_value = if v_v1 == i64::MIN { 255 } else { v_v1 as u8 };
     s.put_stack(new_value);
 }
 
@@ -1364,7 +1209,7 @@ fn set_ref(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val.rec as i32);
+            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val.rec);
     }
 }
 
@@ -1385,7 +1230,7 @@ fn get_int(s: &mut State) {
     let new_value = {
         let db = v_v1;
         if db.rec == 0 {
-            i32::MIN
+            i64::MIN
         } else {
             s.database
                 .store(&db)
@@ -1406,22 +1251,10 @@ fn get_character(s: &mut State) {
             char::from_u32(
                 s.database
                     .store(&db)
-                    .get_int(db.rec, db.pos + u32::from(v_fld)) as u32,
+                    .get_u32_raw(db.rec, db.pos + u32::from(v_fld)),
             )
             .unwrap_or(char::from(0))
         }
-    };
-    s.put_stack(new_value);
-}
-
-fn get_long(s: &mut State) {
-    let v_fld = *s.code::<u16>();
-    let v_v1 = *s.get_stack::<DbRef>();
-    let new_value = {
-        let db = v_v1;
-        s.database
-            .store(&db)
-            .get_long(db.rec, db.pos + u32::from(v_fld))
     };
     s.put_stack(new_value);
 }
@@ -1456,9 +1289,11 @@ fn get_byte(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+        i64::from(s.database.store(&db).get_byte(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+        ))
     };
     s.put_stack(new_value);
 }
@@ -1495,9 +1330,11 @@ fn get_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min))
+        i64::from(s.database.store(&db).get_short(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+        ))
     };
     s.put_stack(new_value);
 }
@@ -1508,14 +1345,14 @@ fn get_text(s: &mut State) {
     let new_value = {
         let db = v_v1;
         let store = s.database.store(&db);
-        Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(v_fld)) as u32))
+        Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(v_fld))))
     };
     s.put_stack(new_value);
 }
 
 fn set_int(s: &mut State) {
     let v_fld = *s.code::<u16>();
-    let v_val = *s.get_stack::<i32>();
+    let v_val = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
@@ -1533,19 +1370,7 @@ fn set_character(s: &mut State) {
         let db = v_v1;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val as i32);
-    }
-}
-
-fn set_long(s: &mut State) {
-    let v_fld = *s.code::<u16>();
-    let v_val = *s.get_stack::<i64>();
-    let v_v1 = *s.get_stack::<DbRef>();
-    {
-        let db = v_v1;
-        s.database
-            .store_mut(&db)
-            .set_long(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val as u32);
     }
 }
 
@@ -1576,7 +1401,7 @@ fn set_float(s: &mut State) {
 fn set_byte(s: &mut State) {
     let v_fld = *s.code::<u16>();
     let v_min = *s.code::<i16>();
-    let v_val = *s.get_stack::<i32>();
+    let v_val = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
@@ -1584,7 +1409,7 @@ fn set_byte(s: &mut State) {
             db.rec,
             db.pos + u32::from(v_fld),
             i32::from(v_min),
-            v_val,
+            v_val as i32,
         );
     }
 }
@@ -1592,7 +1417,7 @@ fn set_byte(s: &mut State) {
 fn set_short(s: &mut State) {
     let v_fld = *s.code::<u16>();
     let v_min = *s.code::<i16>();
-    let v_val = *s.get_stack::<i32>();
+    let v_val = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
@@ -1600,8 +1425,43 @@ fn set_short(s: &mut State) {
             db.rec,
             db.pos + u32::from(v_fld),
             i32::from(v_min),
-            v_val,
+            v_val as i32,
         );
+    }
+}
+
+fn get_int4(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r = s
+            .database
+            .store(&db)
+            .get_i32_raw(db.rec, db.pos + u32::from(v_fld));
+        if r == i32::MIN {
+            i64::MIN
+        } else {
+            i64::from(r)
+        }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_int4(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_val = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = if v_val == i64::MIN {
+            i32::MIN
+        } else {
+            v_val as i32
+        };
+        s.database
+            .store_mut(&db)
+            .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
     }
 }
 
@@ -1614,7 +1474,7 @@ fn set_text(s: &mut State) {
         let s_val = v_val.str().to_string();
         let store = s.database.store_mut(&db);
         let s_pos = store.set_str(&s_val);
-        store.set_int(db.rec, db.pos + u32::from(v_fld), s_pos as i32);
+        store.set_u32_raw(db.rec, db.pos + u32::from(v_fld), s_pos);
     }
 }
 
@@ -1626,7 +1486,7 @@ fn var_vector(s: &mut State) {
 
 fn length_vector(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = vector::length_vector(&v_r, &s.database.allocations) as i32;
+    let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 
@@ -1637,14 +1497,14 @@ fn clear_vector(s: &mut State) {
 
 fn get_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
-    let v_index = *s.get_stack::<i32>();
+    let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
     let new_value = vector::get_vector(&v_r, u32::from(v_size), v_index, &s.database.allocations);
     s.put_stack(new_value);
 }
 
 fn vector_ref(s: &mut State) {
-    let v_index = *s.get_stack::<i32>();
+    let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
     let new_value = s.database.get_ref(
         &vector::get_vector(&v_r, 4, v_index, &s.database.allocations),
@@ -1662,7 +1522,7 @@ fn cast_vector_from_text(s: &mut State) {
 
 fn remove_vector(s: &mut State) {
     let v_size = *s.code::<u16>();
-    let v_index = *s.get_stack::<i32>();
+    let v_index = *s.get_stack::<i64>();
     let v_r = *s.get_stack::<DbRef>();
     let new_value = vector::remove_vector(
         &v_r,
@@ -1911,9 +1771,9 @@ fn sort_vector(s: &mut State) {
 }
 
 fn coroutine_create(s: &mut State) {
-    let v_d_nr = *s.code::<i32>();
+    let v_d_nr = *s.code::<i64>();
     let v_args_size = *s.code::<u16>();
-    let v_to = *s.code::<i32>();
+    let v_to = *s.code::<i64>();
     s.coroutine_create(v_d_nr as u32, u32::from(v_args_size), v_to as u32);
 }
 
@@ -1940,26 +1800,26 @@ fn coroutine_exhausted(s: &mut State) {
 
 fn var_fn_ref(s: &mut State) {
     let v_pos = *s.code::<u16>();
-    let new_value = *s.get_var::<[i32; 4]>(v_pos);
+    let new_value = *s.get_var::<[u8; 20]>(v_pos);
     s.put_stack(new_value);
 }
 
 fn put_fn_ref(s: &mut State) {
     let v_pos = *s.code::<u16>();
     {
-        let v = *s.get_stack::<[i32; 4]>();
+        let v = *s.get_stack::<[u8; 20]>();
         s.put_var(v_pos, v);
     }
 }
 
 fn const_ref(s: &mut State) {
-    let v_d_nr = *s.code::<i32>();
+    let v_d_nr = *s.code::<i64>();
     let new_value = s.const_refs[v_d_nr as usize];
     s.put_stack(new_value);
 }
 
 fn const_store_text(s: &mut State) {
-    let v_rec = *s.code::<i32>();
-    let v_pos = *s.code::<i32>();
+    let v_rec = *s.code::<i64>();
+    let v_pos = *s.code::<i64>();
     s.string_from_const_store(v_rec as u32, v_pos as u32)
 }

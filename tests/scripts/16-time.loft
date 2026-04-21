@@ -4,7 +4,7 @@
 
 fn test_now_is_positive() {
   t = now();
-  assert(t > 946684800000l, "now() too small: {t}");
+  assert(t > 946684800000, "now() too small: {t}");
 }
 
 fn test_now_is_not_null() {

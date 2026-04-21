@@ -50,19 +50,19 @@ impl RadixIter {
 pub fn rtree_init(store: &mut Store, initial: u32) -> u32 {
     let tree = store.claim(2 + initial);
     let bits = store.claim(1 + initial / 8);
-    store.set_int(tree, RAD_TOP, 0);
-    store.set_int(tree, RAD_SIZE, 0);
-    store.set_int(tree, RAD_BITS, bits as i32);
+    store.set_i32_raw(tree, RAD_TOP, 0);
+    store.set_u32_raw(tree, RAD_SIZE, 0);
+    store.set_u32_raw(tree, RAD_BITS, bits);
     store.set_byte(bits, 4, 0, 0);
     tree
 }
 
 fn get_node(store: &Store, tree: u32, node: u32, bit: bool) -> i32 {
-    store.get_int(tree, if bit { RAD_TRUE } else { RAD_FALSE } + node * 8)
+    store.get_i32_raw(tree, if bit { RAD_TRUE } else { RAD_FALSE } + node * 8)
 }
 
 fn set_node(store: &mut Store, tree: u32, node: u32, bit: bool, val: i32) {
-    store.set_int(tree, if bit { RAD_TRUE } else { RAD_FALSE } + node * 8, val);
+    store.set_i32_raw(tree, if bit { RAD_TRUE } else { RAD_FALSE } + node * 8, val);
 }
 
 fn get_bits(store: &Store, bits: u32, node: u32) -> u32 {
@@ -96,7 +96,7 @@ fn straight(store: &Store, tree: u32, dir: bool) -> RadixIter {
         depth: 0,
         rec: 0,
     };
-    let mut node = store.get_int(tree, RAD_TOP);
+    let mut node = store.get_i32_raw(tree, RAD_TOP);
     while node < 0 {
         res.add(node, dir);
         node = get_node(store, tree, node as u32, dir);
@@ -110,17 +110,17 @@ pub fn rtree_find<F>(store: &Store, tree: u32, key: F) -> RadixIter
 where
     F: Fn(u32) -> bool,
 {
-    let bits = store.get_int(tree, RAD_BITS) as u32;
+    let bits = store.get_u32_raw(tree, RAD_BITS);
     let mut res = RadixIter {
         positions: [0; MAX_DEPTH],
         depth: 0,
         rec: 0,
     };
     // There are no nodes to check
-    if store.get_int(tree, RAD_SIZE) == 0 {
+    if store.get_u32_raw(tree, RAD_SIZE) == 0 {
         return res;
     }
-    let mut node = store.get_int(tree, RAD_TOP);
+    let mut node = store.get_i32_raw(tree, RAD_TOP);
     let mut bit = get_bits(store, bits, (-node) as u32);
     while node < 0 {
         let check = key(bit);
@@ -172,25 +172,25 @@ pub fn rtree_insert(
     rec: u32,
     key: fn(store: &Store, rec: u32, bit: u32) -> Option<bool>,
 ) {
-    let size = store.get_int(tree, RAD_SIZE);
-    store.set_int(tree, RAD_SIZE, size + 1);
+    let size = store.get_u32_raw(tree, RAD_SIZE);
+    store.set_u32_raw(tree, RAD_SIZE, size + 1);
     if size == 0 {
         // no node on first element
-        store.set_int(tree, RAD_TOP, rec as i32);
+        store.set_u32_raw(tree, RAD_TOP, rec);
         return;
     }
     let it = rtree_find(store, tree, |bit| key(store, rec, bit).unwrap_or(false));
     let cur = it.rec;
-    let bits = store.get_int(tree, RAD_BITS) as u32;
+    let bits = store.get_u32_raw(tree, RAD_BITS);
     // assume the new key is higher, so we place equal keys in order of entering
     let mut higher = true;
     let diff_bit = compare_bits(store, rec, cur, &mut higher, key);
     // Top node
     if size == 1 {
-        store.set_int(tree, RAD_TOP, -size);
-        set_node(store, tree, size as u32, higher, rec as i32);
-        set_node(store, tree, size as u32, !higher, cur as i32);
-        set_bits(store, bits, size as u32, 0);
+        store.set_i32_raw(tree, RAD_TOP, -(size as i32));
+        set_node(store, tree, size, higher, rec as i32);
+        set_node(store, tree, size, !higher, cur as i32);
+        set_bits(store, bits, size, 0);
         return;
     }
     // Find node to split, this is not necessarily the last
@@ -216,8 +216,8 @@ pub fn rtree_validate(
     tree: u32,
     _key: fn(store: &Store, rec: u32, bit: u32) -> Option<bool>,
 ) {
-    let size = store.get_int(tree, RAD_SIZE);
-    let bits = store.get_int(tree, RAD_BITS) as u32;
+    let size = store.get_u32_raw(tree, RAD_SIZE);
+    let bits = store.get_u32_raw(tree, RAD_BITS);
     let mut it = rtree_first(store, tree);
     let mut _rec = it.rec;
     let mut count = 0;

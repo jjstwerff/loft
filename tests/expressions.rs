@@ -67,9 +67,9 @@ fn tuple_element_offsets() {
         Type::Float,
     ];
     let offsets = element_offsets(&types);
-    // integer=4 at 0, text=Str size at 4, float=8 after text
+    // integer=8 at 0 (post-2c), text=Str size at 8, float=8 after text
     let text_sz = element_size(&Type::Text(vec![]));
-    assert_eq!(offsets, vec![0, 4, 4 + text_sz]);
+    assert_eq!(offsets, vec![0, 8, 8 + text_sz]);
 }
 
 #[test]

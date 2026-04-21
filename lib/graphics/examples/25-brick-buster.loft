@@ -706,7 +706,7 @@ fn main() {
   // to timeout when a cheat's side effects are broken.  expect==0
   // means "no cheat active, don't check"; deadline is absolute µs.
   br_watchdog_expect = 0;
-  br_watchdog_deadline = 0l;
+  br_watchdog_deadline = 0;
   br_cheat_k_was_down = false;
   br_cheat_x_was_down = false;
   br_cheat_u_was_down = false;
@@ -787,14 +787,14 @@ fn main() {
       if br_cheat_k_pressed {
         br_lost = true;
         br_watchdog_expect = 1;        // expect GS_GAME_OVER
-        br_watchdog_deadline = br_now + 2000000l;  // 2s (ticks() is µs)
+        br_watchdog_deadline = br_now + 2000000;  // 2s (ticks() is µs)
       }
       if br_cheat_x_pressed && br_paddle_state == 0 {
         // Force paddle-explosion phase: kill all active balls so the
         // normal "all balls lost" branch runs next frame.
         for br_ck_bi in 0..3 { br_ball_on[br_ck_bi] = 0; }
         br_watchdog_expect = 2;        // expect br_paddle_state != 0
-        br_watchdog_deadline = br_now + 2000000l;
+        br_watchdog_deadline = br_now + 2000000;
       }
       if br_cheat_u_pressed {
         // Spawn all 8 pickups, one of each type, distributed across the
@@ -806,7 +806,7 @@ fn main() {
           br_pk_on[br_ck_pi] = 1;
         }
         br_watchdog_expect = 3;        // expect br_pk_on[0] == 1
-        br_watchdog_deadline = br_now + 2000000l;
+        br_watchdog_deadline = br_now + 2000000;
       }
       if br_lost {
         br_game_state = GS_GAME_OVER;
@@ -891,11 +891,11 @@ fn main() {
       if br_mus_lvl != br_level {
         br_mus_lvl    = br_level;
         br_mus_played = 0;
-        br_mus_song   = ((br_now / 11l) as integer) % MUSIC_TRACKS;
+        br_mus_song   = ((br_now / 11) as integer) % MUSIC_TRACKS;
         br_mus_idx    = 0;
         br_mus_resting = true;
         // Random 2-6 s silence before the first song.
-        br_mus_t = 2.0f + (((br_now / 17l) as integer) % 4) as single;
+        br_mus_t = 2.0f + (((br_now / 17) as integer) % 4) as single;
       }
       br_mus_t -= br_dt as single;
       if br_mus_t <= 0.0f {
@@ -932,7 +932,7 @@ fn main() {
             if br_mus_played >= MUSIC_TRACKS {
               br_mus_t = 9999.0f;
             } else {
-              br_mus_t = 3.0f + (((br_now / 23l) as integer) % 5) as single;
+              br_mus_t = 3.0f + (((br_now / 23) as integer) % 5) as single;
             }
           }
         }
@@ -1167,7 +1167,7 @@ fn main() {
             br_pp_y[br_fi]    = PADDLE_Y;
             br_pp_w[br_fi]    = br_pp_step + 1.0;  // +1 px hides seams
             br_pp_on[br_fi]   = 1;
-            br_pp_cut[br_fi]  = (((br_now / 29l + br_fi as long * 7l) % 4l) as integer);
+            br_pp_cut[br_fi]  = (((br_now / 29 + br_fi as integer * 7) % 4) as integer);
             br_pp_rot[br_fi]  = 0.0;
             br_pp_drot[br_fi] = ((br_fi as float) - 5.5) * 0.7;
             // Group velocities — left plank flies left+up, middle
@@ -1260,12 +1260,12 @@ fn main() {
             br_paddle_state   = 1;
             br_explode_timer  = EXPLODE_DURATION;
             br_ex_step = br_pw / 12.0;
-            br_ex_seed = (br_now / 41l) % 64l;
+            br_ex_seed = (br_now / 41) % 64;
             for br_ei in 0..12 {
               br_pp_x[br_ei]    = br_px + (br_ei as float) * br_ex_step;
               br_pp_y[br_ei]    = PADDLE_Y;
               br_pp_w[br_ei]    = br_ex_step + 1.0;
-              br_pp_cut[br_ei]  = (((br_now / 37l + br_ei as long * 11l) % 4l) as integer);
+              br_pp_cut[br_ei]  = (((br_now / 37 + br_ei as integer * 11) % 4) as integer);
               br_pp_rot[br_ei]  = 0.0;
               br_pp_drot[br_ei] = ((br_ei as float) - 5.5) * 1.3;
               // Explode: larger outward vx, stronger upward kick.
@@ -1275,8 +1275,8 @@ fn main() {
               // Two pairs (bits 0,1) always hide to guarantee the
               // "7 visible" look; the remaining bit decides whether
               // a third pair hides.  Regardless, at least 5 are on.
-              br_ep_bit = (br_ex_seed >> (br_ei / 2)) & 1l;
-              if br_ep_bit == 1l { br_pp_on[br_ei] = 0; }
+              br_ep_bit = (br_ex_seed >> (br_ei / 2)) & 1;
+              if br_ep_bit == 1 { br_pp_on[br_ei] = 0; }
               else               { br_pp_on[br_ei] = 1; }
             }
             // Count-correct: force at least 7 visible by unhiding
@@ -1305,7 +1305,7 @@ fn main() {
           br_bl_x  = br_px + br_pw / 2.0 - BALLOON_W / 2.0;
           br_bl_y  = PADDLE_Y - BALLOON_H;
           br_bl_vy = BALLOON_RISE;
-          br_bl_seed = (br_now / 17l) % 200l;
+          br_bl_seed = (br_now / 17) % 200;
           br_bl_vx = ((br_bl_seed as float) / 100.0 - 1.0) * BALLOON_DRIFT;
           br_flash_timer = FLASH_DURATION;
           br_flash_r = 1.0; br_flash_g = 0.9; br_flash_b = 0.1;
@@ -1522,9 +1522,9 @@ fn main() {
       // Pseudo-random offsets keyed off br_now so neighbouring
       // frames get different values without the overhead of a real
       // RNG.  The modulus keeps the magnitude bounded.
-      br_sh_seed = br_now % 997l;
+      br_sh_seed = br_now % 997;
       br_shake_x = ((br_sh_seed as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
-      br_sh_seed2 = (br_now / 31l) % 997l;
+      br_sh_seed2 = (br_now / 31) % 997;
       br_shake_y = ((br_sh_seed2 as float) / 997.0 - 0.5) * 2.0 * br_shake_amp;
     }
 

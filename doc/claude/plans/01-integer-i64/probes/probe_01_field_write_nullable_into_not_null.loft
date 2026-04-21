@@ -1,0 +1,16 @@
+// Probe 01 — field write: nullable (overflow result) into `not null` field.
+// Shape: `s.v = a + b` where a+b overflows.
+// Expected HOLE: compiler accepts, runtime stores null silently.
+// Expected CLEAN: compile-time error OR runtime trap.
+
+struct P01S {
+  v: integer not null,
+}
+
+fn test_probe_01_field_write_nullable() {
+  p01_s = P01S { v: 1 };
+  p01_a = 2147483647;        // i32::MAX
+  p01_s.v = p01_a + 1;       // overflow → nullable expr assigned into `not null` field
+  println("VERDICT: probe_01 s.v after overflow assign = {p01_s.v}");
+  // If s.v prints as the sentinel / null → HOLE.
+}

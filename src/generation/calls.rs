@@ -98,10 +98,28 @@ impl Output<'_> {
                             matches!(self.data.def(*d).returned, Type::Text(_))
                             && self.data.def(*d).rust.is_empty()
                             && !self.data.def(*d).name.starts_with("Op"));
+                    // Post-2c: Op* runtime helpers (defined in
+                    // `src/codegen_runtime.rs`) keep hand-written i32 params
+                    // for tp-numbers / field offsets / flag enums.  When the
+                    // loft param is a narrow Integer (u8/u16/i8/i16), those
+                    // Op* signatures take `i32`.  Emit any descendant
+                    // Value::Int as `_i32` instead of the post-2c `_i64`
+                    // default so the literal lands at the expected width.
+                    // User-defined fns have their Rust signatures generated
+                    // from `rust_type`, which widens narrow Integer to i64
+                    // in Context::Argument — so this narrow-match only
+                    // applies to Op-prefixed runtime calls.
+                    let param_is_narrow = def_fn.name.starts_with("Op")
+                        && idx < def_fn.attributes.len()
+                        && narrow_int_cast(&def_fn.attributes[idx].typedef).is_some();
                     if needs_deref {
                         write!(w, "&*(")?;
                     }
-                    self.output_code_inner(w, v)?;
+                    if param_is_narrow {
+                        self.emit_i32_slot(w, v)?;
+                    } else {
+                        self.output_code_inner(w, v)?;
+                    }
                     if needs_deref {
                         write!(w, ")")?;
                     }
@@ -112,9 +130,10 @@ impl Output<'_> {
         if is_generator {
             write!(w, ")")?; // close alloc_coroutine(...)
         } else if narrow_int_cast(&def_fn.returned).is_some() {
-            // Narrow integer return types (u8/u16/i8/i16) must be widened to i32 so that
-            // assignments and comparisons with i32 expressions type-check in Rust.
-            write!(w, " as i32")?;
+            // Narrow integer return types (u8/u16/i8/i16) must be widened so that
+            // assignments and comparisons with default-Integer expressions type-check.
+            // Post-2c: widen to i64 (the default Integer width).
+            write!(w, " as i64")?;
         }
         Ok(())
     }
@@ -239,13 +258,15 @@ impl Output<'_> {
                 if res.contains(&u32_from_pat) {
                     res = res.replace(&u32_from_pat, &format!("({with}) as u32"));
                 } else {
-                    // When the template parameter expects a narrow unsigned integer (u8/u16),
-                    // native codegen emits i32 literals.  Add a cast so the types match.
+                    // When the template parameter expects a narrow integer (u8/u16/i8/i16),
+                    // native codegen's default emits the wrong width literal.  Patch the
+                    // suffix (`_i32` / `_i64`) to match the narrow type, or add an explicit
+                    // `as <narrow>` cast for non-literal expressions.
                     // Use Context::Result to get the precise narrow type (e.g. u16) since
-                    // Context::Variable returns i32 for narrow integers.
+                    // Context::Variable / Context::Argument widen to i32.
                     let tp_str = rust_type(&a.typedef, &Context::Result);
-                    if matches!(tp_str.as_str(), "u8" | "u16") {
-                        let typed_with = if with.ends_with("_i32") {
+                    if matches!(tp_str.as_str(), "u8" | "u16" | "i8" | "i16") {
+                        let typed_with = if with.ends_with("_i32") || with.ends_with("_i64") {
                             format!("{}_{tp_str}", &with[..with.len() - 4])
                         } else {
                             format!("({with}) as {tp_str}")
@@ -270,18 +291,18 @@ impl Output<'_> {
         res = res.replace("crate::state::", "loft::state::");
         // loft represents `character` as `i32`; template functions that return `char`
         // (like `ops::text_character`) need an explicit cast at the call site.
-        // Narrow integer returns (u8/u16/i8/i16) must be widened to i32 so that
+        // Narrow integer returns (u8/u16/i8/i16) must be widened so that
         // pre-eval bindings (`let _pre_N = narrow_func()`) do not cause type-mismatch
-        // errors when compared against i32 literals.
+        // errors when compared against the default Integer width (post-2c: i64).
         // Multi-statement template bodies (containing `;`) are wrapped in `{...}` so
         // they are valid in expression position when inlined as function arguments.
         if matches!(def_fn.returned, Type::Character) {
             write!(w, "({res}) as u32 as i32")
         } else if narrow_int_cast(&def_fn.returned).is_some() {
             if res.contains(';') {
-                write!(w, "({{{res}}}) as i32")
+                write!(w, "({{{res}}}) as i64")
             } else {
-                write!(w, "({res}) as i32")
+                write!(w, "({res}) as i64")
             }
         } else if res.contains(';') {
             write!(w, "{{{res}}}")

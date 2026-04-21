@@ -4,10 +4,8 @@
 // Primitive types built into lav.
 // True or false value.
 pub type boolean size(1);
-// 32-bit signed integer.
-pub type integer size(4);
-// 64-bit signed integer. Use when values exceed ~2 billion.
-pub type long size(8);
+// 64-bit signed integer.
+pub type integer size(8);
 // 32-bit floating-point. Good for graphics and performance-sensitive math.
 pub type single size(4);
 // 64-bit floating-point. Use when precision matters.
@@ -27,31 +25,37 @@ pub type u16 = integer limit(0, 65535) size(2);
 pub type i16 = integer limit(-32768, 32767) size(2);
 // Full 32-bit integer range, 4 bytes.
 pub type i32 = integer size(4);
+// 0 – 4_294_967_294, storage promotes to i64 (8 bytes) under Phase 2a's
+// "wide-limit → Long" rule so values up to u32::MAX round-trip.  One
+// sentinel (`i64::MIN`) reserved for null — `u32 not null` when the
+// full 2^32 range is needed.  RGBA pixel math, large file offsets,
+// and bitmasks wider than i32 all fit here.
+pub type u32 = integer limit(0, 4294967294);
 // --- Interfaces ---
 // Standard interfaces for bounded generic functions.
 // A type satisfies an interface by defining the required operator or method.
 
 // Types that support the `<` comparison operator.
-// Satisfied by integer, long, single, float, text, and any user type defining OpLt.
+// Satisfied by integer, single, float, text, and any user type defining OpLt.
 pub interface Ordered {
   op < (self: Self, other: Self) -> boolean
 }
 
 // Types that support the `==` equality operator.
-// Satisfied by integer, long, single, float, text, boolean, and user types defining OpEq.
+// Satisfied by integer, single, float, text, boolean, and user types defining OpEq.
 pub interface Equatable {
   op == (self: Self, other: Self) -> boolean
 }
 
 // Types that support the `+` addition operator, returning the same type.
-// Satisfied by integer, long, single, float, and user types defining OpAdd.
+// Satisfied by integer, single, float, and user types defining OpAdd.
 pub interface Addable {
   op + (self: Self, other: Self) -> Self
 }
 
 // Types that support `*` and `-` (unary negation).
 // Separate from `Addable` to allow fine-grained bounds without stub-name collisions.
-// Satisfied by integer, long, single, float, and user types defining OpMul and OpMin.
+// Satisfied by integer, single, float, and user types defining OpMul and OpMin.
 pub interface Numeric {
   op * (self: Self, other: Self) -> Self
   op - (self: Self) -> Self
@@ -79,7 +83,7 @@ fn OpGotoFalse(step: const i8, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
 fn OpGotoFalseWord(step: const i16, if_false: boolean);
 #rust"if !@if_false {{s.code_pos = (s.code_pos as i32 + i32::from(@step)) as u32;}}"
-fn OpCall(d_nr: const i32, args_size: const u16, to: const i32);
+fn OpCall(d_nr: const integer, args_size: const u16, to: const integer);
 #rust"s.fn_call(@d_nr as u32, @args_size, @to);"
 fn OpReturn(ret: const u16, value: const u8, discard: const u16);
 #rust"s.fn_return(@ret, @value, @discard);"
@@ -109,11 +113,11 @@ fn OpNot(v1: boolean) -> boolean;
 fn OpConstInt(val: const integer) -> integer;
 #rust"@val"
 fn OpConstShort(val: const i16) -> integer;
-#rust"i32::from(@val)"
+#rust"i64::from(@val)"
 fn OpConstTiny(val: const i8) -> integer;
-#rust"i32::from(@val)"
+#rust"i64::from(@val)"
 fn OpVarInt(pos: const u16) -> integer;
-#rust"*s.get_var::<i32>(@pos)"
+#rust"*s.get_var::<i64>(@pos)"
 fn OpVarCharacter(pos: const u16) -> character;
 #rust"*s.get_var::<char>(@pos)"
 fn OpPutInt(pos: const u16, value: integer);
@@ -121,14 +125,14 @@ fn OpPutInt(pos: const u16, value: integer);
 fn OpPutCharacter(pos: const u16, value: character);
 #rust"s.put_var(@pos, @value);"
 fn OpConvIntFromNull() -> integer;
-#rust"i32::MIN"
+#rust"i64::MIN"
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
-fn OpConstLongText(start: const i32, size: const i32) -> text;
+fn OpConvCharacterFromInt(v1: integer) -> character;
+#rust"char::from_u32((@v1) as u32).unwrap_or(char::from(0))"
+fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
-#rust"@v1.parse().unwrap_or(i32::MIN)"
-fn OpCastLongFromText(v1: text) -> long;
 #rust"@v1.parse().unwrap_or(i64::MIN)"
 fn OpCastSingleFromText(v1: text) -> single;
 #rust"@v1.parse().unwrap_or(f32::NAN)"
@@ -145,8 +149,6 @@ fn OpMinSingleInt(v1: integer) -> integer;
 #rust"ops::op_negate_int(@v1)"
 fn OpBitNotSingleInt(v1: integer) -> integer;
 #rust"!@v1"
-fn OpConvLongFromInt(v1: integer) -> long;
-#rust"ops::op_conv_long_from_int(@v1)"
 fn OpConvFloatFromInt(v1: integer) -> float;
 #rust"ops::op_conv_float_from_int(@v1)"
 fn OpConvSingleFromInt(v1: integer) -> single;
@@ -163,6 +165,18 @@ fn OpDivInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_div_int(@v1, @v2)"
 fn OpRemInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_rem_int(@v1, @v2)"
+// C54.G-hybrid — nullable integer arithmetic.  Emitted only when the op's
+// result is the immediate LHS of `??` so `??` can discharge the null.
+fn OpAddIntNullable(v1: integer, v2: integer) -> integer;
+#rust"ops::op_add_int_nullable(@v1, @v2)"
+fn OpMinIntNullable(v1: integer, v2: integer) -> integer;
+#rust"ops::op_min_int_nullable(@v1, @v2)"
+fn OpMulIntNullable(v1: integer, v2: integer) -> integer;
+#rust"ops::op_mul_int_nullable(@v1, @v2)"
+fn OpDivIntNullable(v1: integer, v2: integer) -> integer;
+#rust"ops::op_div_int_nullable(@v1, @v2)"
+fn OpRemIntNullable(v1: integer, v2: integer) -> integer;
+#rust"ops::op_rem_int_nullable(@v1, @v2)"
 fn OpLandInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_logical_and_int(@v1, @v2)"
 fn OpLorInt(v1: integer, v2: integer) -> integer;
@@ -181,60 +195,12 @@ fn OpLtInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 < @v2"
 fn OpLeInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 <= @v2"
-// Long operations
-fn OpConstLong(val: const long) -> long;
-#rust"@val"
-fn OpVarLong(pos: const u16) -> long;
-#rust"*s.get_var::<i64>(@pos)"
-fn OpPutLong(pos: const u16, value: long);
-#rust"s.put_var(@pos, @value);"
-fn OpConvLongFromNull() -> long;
-#rust"i64::MIN"
-fn OpAbsLong(v1: long) -> long;
-#rust"ops::op_abs_long(@v1)"
-// Absolute value for long integers.
-pub fn abs(both: long) -> long {
-  OpAbsLong(both)
-}
-
-fn OpMinSingleLong(v1: long) -> long;
-#rust"ops::op_negate_long(@v1)"
-fn OpCastIntFromLong(v1: long) -> integer;
-#rust"ops::op_cast_int_from_long(@v1)"
-fn OpConvFloatFromLong(v1: long) -> float;
-#rust"ops::op_conv_float_from_long(@v1)"
-fn OpConvBoolFromLong(v1: long) -> boolean;
-#rust"ops::op_conv_bool_from_long(@v1)"
-fn OpAddLong(v1: long, v2: long) -> long;
-#rust"ops::op_add_long(@v1, @v2)"
-fn OpMinLong(v1: long, v2: long) -> long;
-#rust"ops::op_min_long(@v1, @v2)"
-fn OpMulLong(v1: long, v2: long) -> long;
-#rust"ops::op_mul_long(@v1, @v2)"
-fn OpDivLong(v1: long, v2: long) -> long;
-#rust"ops::op_div_long(@v1, @v2)"
-fn OpRemLong(v1: long, v2: long) -> long;
-#rust"ops::op_rem_long(@v1, @v2)"
-fn OpLandLong(v1: long, v2: long) -> long;
-#rust"ops::op_logical_and_long(@v1, @v2)"
-fn OpLorLong(v1: long, v2: long) -> long;
-#rust"ops::op_logical_or_long(@v1, @v2)"
-fn OpEorLong(v1: long, v2: long) -> long;
-#rust"ops::op_exclusive_or_long(@v1, @v2)"
-fn OpSLeftLong(v1: long, v2: long) -> long;
-#rust"ops::op_shift_left_long(@v1, @v2)"
-fn OpSRightLong(v1: long, v2: long) -> long;
-#rust"ops::op_shift_right_long(@v1, @v2)"
-fn OpEqLong(v1: long, v2: long) -> boolean;
-#rust"@v1 == @v2"
-fn OpNeLong(v1: long, v2: long) -> boolean;
-#rust"@v1 != @v2"
-fn OpLtLong(v1: long, v2: long) -> boolean;
-#rust"@v1 < @v2"
-fn OpLeLong(v1: long, v2: long) -> boolean;
-#rust"@v1 <= @v2"
-fn OpFormatLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
-fn OpFormatStackLong(pos: const u16, val: long, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+// Post-2c round 10d: OpConstLong/OpVarLong/OpPutLong/OpConvLongFromNull
+// / OpCastIntFromLong were duplicates of their OpXxxInt counterparts
+// (post-2c all integers are i64 at rest) — removed.  Format* renamed
+// from Long to Int.
+fn OpFormatInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+fn OpFormatStackInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 // Single-precision (32-bit) floating-point math.
 // Choose single for performance-sensitive work such as graphics.
 fn OpConstSingle(val: const single) -> single;
@@ -256,8 +222,6 @@ fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
 fn OpCastIntFromSingle(v1: single) -> integer;
 #rust"ops::op_cast_int_from_single(@v1)"
-fn OpCastLongFromSingle(v1: single) -> long;
-#rust"ops::op_cast_long_from_single(@v1)"
 fn OpConvFloatFromSingle(v1: single) -> float;
 #rust"f64::from(@v1)"
 fn OpConvBoolFromSingle(v1: single) -> boolean;
@@ -502,8 +466,6 @@ fn OpCastSingleFromFloat(v1: float) -> single;
 #rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
 #rust"ops::op_cast_int_from_float(@v1)"
-fn OpCastLongFromFloat(v1: float) -> long;
-#rust"ops::op_cast_long_from_float(@v1)"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
 #rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
@@ -556,35 +518,9 @@ pub fn max(both: integer, b: integer) -> integer {
 pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
   min(max(both, lo), hi)
 }
-// Smallest of two long values.
+// Post-2c round 10c: `long` is no longer a separate type — `integer`
+// is 8 bytes at rest and covers all the former `long` uses.
 
-pub fn min(both: long, b: long) -> long {
-  if !both || !b {
-    return null;
-  }
-  if both <= b {
-    both
-  } else {
-    b
-  }
-}
-// Largest of two long values.
-
-pub fn max(both: long, b: long) -> long {
-  if !both || !b {
-    return null;
-  }
-  if both >= b {
-    both
-  } else {
-    b
-  }
-}
-// Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
-
-pub fn clamp(both: long, lo: long, hi: long) -> long {
-  min(max(both, lo), hi)
-}
 // Smallest of two single-precision float values.
 
 pub fn min(both: single, b: single) -> single {
@@ -654,14 +590,14 @@ fn OpConstText(_value: const text) -> text;
 #rust"s.string_from_code();"
 fn OpConvTextFromNull() -> text;
 fn OpLengthText(v1: text) -> integer;
-#rust"@v1.len() as i32"
+#rust"@v1.len() as i64"
 // Number of bytes in the text. Use for bounds checks and iteration limits.
 pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
 
 fn OpSizeText(v1: text) -> integer;
-#rust"@v1.chars().count() as i32"
+#rust"@v1.chars().count() as i64"
 // Number of Unicode code points (characters) in the text.
 pub fn size(both: text) -> integer {
   OpSizeText(both)
@@ -700,7 +636,7 @@ fn OpTextCompare(v1: text, v2: character) -> i32;
 fn OpCastCharacterFromInt(v1: i32) -> character;
 #rust"char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
 fn OpConvIntFromCharacter(v1: character) -> i32;
-#rust"if @v1 == char::from(0) {{ i32::MIN }} else {{ @v1 as i32 }}"
+#rust"if @v1 == char::from(0) {{ i64::MIN }} else {{ i64::from(@v1 as u32) }}"
 type enumerate size(1);
 fn OpVarEnum(pos: const u16) -> enumerate;
 #rust"*s.get_var::<u8>(@pos)"
@@ -715,9 +651,9 @@ fn OpCastTextFromEnum(v1: enumerate, enum_tp: const u16) -> text;
 fn OpCastEnumFromText(v1: text, enum_tp: const u16) -> enumerate;
 #rust"s.database.to_enum(@enum_tp, @v1)"
 fn OpConvIntFromEnum(v1: enumerate) -> integer;
-#rust"if @v1 == 255 {{ i32::MIN }} else {{ i32::from(@v1) }}"
+#rust"if @v1 == 255 {{ i64::MIN }} else {{ i64::from(@v1) }}"
 fn OpCastEnumFromInt(v1: integer) -> enumerate;
-#rust"if @v1 == i32::MIN {{ 255 }} else {{ @v1 as u8 }}"
+#rust"if @v1 == i64::MIN {{ 255 }} else {{ @v1 as u8 }}"
 fn OpConvEnumFromNull() -> enumerate;
 #rust"255u8"
 // A reference to a record, this can 'live' inside an array
@@ -748,7 +684,7 @@ fn OpNeRef(v1: reference, v2: reference) -> boolean;
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
 #rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val.rec as i32);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val.rec);}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
@@ -756,41 +692,44 @@ fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
 // Simple type value write and read, vector elements always have fld=0.
 // All these types are passed by value instead of by reference.
 fn OpGetInt(v1: reference, fld: const u16) -> integer;
-#rust"{{let db = @v1; if db.rec == 0 {{ i32::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld))}} }}"
 fn OpGetCharacter(v1: reference, fld: const u16) -> character;
-#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_int(db.rec, db.pos + u32::from(@fld)) as u32).unwrap_or(char::from(0)) }} }}"
-fn OpGetLong(v1: reference, fld: const u16) -> long;
-#rust"{{let db = @v1; stores.store(&db).get_long(db.rec, db.pos + u32::from(@fld))}}"
+#rust"{{let db = @v1; if db.rec == 0 {{ char::from(0) }} else {{ char::from_u32(stores.store(&db).get_u32_raw(db.rec, db.pos + u32::from(@fld))).unwrap_or(char::from(0)) }} }}"
 fn OpGetSingle(v1: reference, fld: const u16) -> single;
 #rust"{{let db = @v1; stores.store(&db).get_single(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetFloat(v1: reference, fld: const u16) -> float;
 #rust"{{let db = @v1; stores.store(&db).get_float(db.rec, db.pos + u32::from(@fld))}}"
 fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; i64::from(stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
 #rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }}}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
 #rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min))}}"
+#rust"{{let db = @v1; i64::from(stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
-#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_int(db.rec, db.pos + u32::from(@fld)) as u32))}}"
+#rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(@fld))))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val as i32);}}"
-fn OpSetLong(v1: reference, fld: const u16, val: long);
-#rust"{{let db = @v1; stores.store_mut(&db).set_long(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val as u32);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
 #rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
 #rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val);}}"
+#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
+// 4-byte integer field read/write (post-2c `integer size(4)` subtypes).
+// Raw i32 storage with i32::MIN as the null sentinel; the stack value
+// stays i64 (widen on load, narrow on store).
+fn OpGetInt4(v1: reference, fld: const u16) -> integer;
+#rust"{{let db = @v1; let r = stores.store(&db).get_i32_raw(db.rec, db.pos + u32::from(@fld)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }}}}"
+fn OpSetInt4(v1: reference, fld: const u16, val: integer);
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_i32_raw(db.rec, db.pos + u32::from(@fld), v);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
-#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_int(db.rec, db.pos + u32::from(@fld), s_pos as i32);}}"
+#rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + u32::from(@fld), s_pos);}}"
 // --- Collections ---
 // Operations on vector<T> — the primary ordered collection type.
 // Vectors are grown by appending with += and elements are accessed by index.
@@ -802,7 +741,7 @@ fn OpVarVector(pos: const u16) -> vector;
 #rust"*s.get_var::<DbRef>(@pos)"
 // The length of vectors is written at the start of their allocation.
 fn OpLengthVector(r: vector) -> integer;
-#rust"vector::length_vector(&@r, &s.database.allocations) as i32"
+#rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
 // Number of elements in the vector. Use in loop bounds: for i in 0..v.len().
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)
@@ -886,7 +825,7 @@ pub fn println(v1: text) {
 }
 
 type keys_definition;
-fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> long;
+fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> integer;
 fn OpStep(state_var: const u16, data: reference, on: const u8, arg: const u16) -> reference[data];
 fn OpRemove(state_var: const u16, data: reference, on: const u8, tp: const u16);
 fn OpClear(data: reference, tp: const u16);
@@ -965,7 +904,7 @@ fn parallel_for_light(input: reference, element_size: integer, return_size: inte
 // Internal: read element idx from a parallel_for result reference.
 // Emitted by the compiler for the `par(...)` syntax; do not call directly.
 fn parallel_get_int(r: reference, idx: integer) -> integer;
-fn parallel_get_long(r: reference, idx: integer) -> long;
+fn parallel_get_long(r: reference, idx: integer) -> integer;
 fn parallel_get_float(r: reference, idx: integer) -> float;
 fn parallel_get_bool(r: reference, idx: integer) -> boolean;
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
@@ -1007,7 +946,7 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
 pub enum FieldValue {
   FvBool   { v: boolean },
   FvInt    { v: integer },
-  FvLong   { v: long },
+  FvLong   { v: integer },
   FvFloat  { v: float },
   FvSingle { v: single },
   FvChar   { v: character },

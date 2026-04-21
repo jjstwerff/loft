@@ -433,7 +433,15 @@ impl Parser {
         }
         if self.lexer.has_keyword("size") {
             self.lexer.token("(");
-            self.lexer.has_integer();
+            if let Some(n) = self.lexer.has_integer() {
+                // Only 1/2/4/8 are meaningful for integer subtypes.  Larger
+                // values (e.g. size(12) on the built-in `reference` alias)
+                // are accepted silently — forced_size is only consulted for
+                // integer types, so non-integer annotations are harmless.
+                if matches!(n, 1 | 2 | 4 | 8) && self.first_pass && d_nr != u32::MAX {
+                    self.data.definitions[d_nr as usize].forced_size = Some(n as u8);
+                }
+            }
             self.lexer.token(")");
         }
         if self.first_pass {
@@ -1017,6 +1025,10 @@ impl Parser {
         type_name: &str,
         returned: bool,
     ) -> Option<Type> {
+        // Phase 2c round 10c: `long` has been removed as a user-facing
+        // type.  Callers now use `integer` everywhere; if anyone still
+        // writes `long` it parses as an unknown identifier and fails
+        // normally via the standard `data.def_nr` lookup path below.
         let tp_nr = if self.lexer.has_token("::") {
             if let Some(name) = self.lexer.has_identifier() {
                 let source = self.data.get_source(type_name);
@@ -1057,6 +1069,11 @@ impl Parser {
                 false
             };
             if has_limit || not_null {
+                // Phase 2c round 10c — all integer ranges stay as Type::Integer
+                // (i64 storage + i64 arithmetic at rest).  Narrow-bounded
+                // ranges (u8/u16/i8/i16/i32-range) get packed storage via
+                // `forced_size`; wide ranges (up to u32::MAX) use full
+                // 8-byte storage.  Type::Long is no longer produced.
                 return Some(Type::Integer(min, max, not_null));
             }
         }
@@ -1297,8 +1314,15 @@ impl Parser {
                 *min = if min_neg { -(nr as i32) } else { nr as i32 };
             }
             self.lexer.token(",");
+            // C54.A incremental 2a — accept both Integer and Long literals.
+            // Values > i32::MAX now tokenise as Long (so u32-range bounds
+            // like `limit(0, 4_294_967_294)` work).  Truncate to u32
+            // (current `max: u32` param); future phases can widen to i64
+            // if signed-bound support for > i32 ranges is needed.
             if let Some(nr) = self.lexer.has_integer() {
                 *max = nr;
+            } else if let Some(nr) = self.lexer.has_long() {
+                *max = nr as u32;
             }
             self.lexer.token(")");
             true
@@ -1588,6 +1612,10 @@ impl Parser {
         let mut nullable = true;
         let mut is_computed = false;
         let mut is_init = false;
+        // Post-2c: remember the integer alias name the user typed (e.g. `i32`)
+        // so `fill_database` / codegen can consult `forced_size(alias)` even
+        // though the resolved Type::Integer collapses the alias info.
+        let mut alias_d_nr: u32 = u32::MAX;
         loop {
             if self.lexer.has_keyword("not") {
                 // This field cannot be null, this allows for 256 values in a byte
@@ -1626,6 +1654,13 @@ impl Parser {
                     // redundant-null-check warnings work correctly.
                     if let Type::Integer(_, _, true) = &tp {
                         nullable = false;
+                    }
+                    // Capture the alias def_nr for size(N) routing.  Only
+                    // real aliases (i32, u8, etc.) — "integer" is the base type
+                    // and its forced_size is 8, which would override the narrow
+                    // limit()-based heuristic for `integer limit(0, 255)`.
+                    if matches!(tp, Type::Integer(_, _, _)) && id != "integer" {
+                        alias_d_nr = self.data.def_nr(&id);
                     }
                     a_type = tp;
                     // '= expr' shorthand for a field default value
@@ -1675,6 +1710,9 @@ impl Parser {
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);
             self.data.set_attr_nullable(d_nr, a, nullable);
             self.data.set_attr_value(d_nr, a, value);
+            if alias_d_nr != u32::MAX {
+                self.data.definitions[d_nr as usize].attributes[a].alias_d_nr = alias_d_nr;
+            }
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
             }

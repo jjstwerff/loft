@@ -1112,7 +1112,51 @@ impl Store {
     }
 
     #[inline]
-    pub fn get_int(&self, rec: u32, fld: u32) -> i32 {
+    pub fn get_int(&self, rec: u32, fld: u32) -> i64 {
+        if rec != 0 && self.valid(rec, fld) {
+            *self.addr(rec, fld)
+        } else {
+            i64::MIN
+        }
+    }
+
+    #[inline]
+    pub fn set_int(&mut self, rec: u32, fld: u32, val: i64) -> bool {
+        if rec != 0 && self.valid(rec, fld) {
+            *self.addr_mut(rec, fld) = val;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 4-byte unsigned raw read — for internal collection headers
+    /// (vector `[rec:u32][len:u32]`, hash buckets, tree node ptrs,
+    /// string-record lengths).  NOT for user `integer` fields.
+    #[inline]
+    pub fn get_u32_raw(&self, rec: u32, fld: u32) -> u32 {
+        if rec != 0 && self.valid(rec, fld) {
+            *self.addr(rec, fld)
+        } else {
+            0
+        }
+    }
+
+    /// 4-byte unsigned raw write — counterpart of [`get_u32_raw`].
+    #[inline]
+    pub fn set_u32_raw(&mut self, rec: u32, fld: u32, val: u32) -> bool {
+        if rec != 0 && self.valid(rec, fld) {
+            *self.addr_mut(rec, fld) = val;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 4-byte signed raw read — for internal type tags and sentinel
+    /// comparisons that must stay `i32::MIN`-relative (e.g. `File.ref`).
+    #[inline]
+    pub fn get_i32_raw(&self, rec: u32, fld: u32) -> i32 {
         if rec != 0 && self.valid(rec, fld) {
             *self.addr(rec, fld)
         } else {
@@ -1120,8 +1164,9 @@ impl Store {
         }
     }
 
+    /// 4-byte signed raw write — counterpart of [`get_i32_raw`].
     #[inline]
-    pub fn set_int(&mut self, rec: u32, fld: u32, val: i32) -> bool {
+    pub fn set_i32_raw(&mut self, rec: u32, fld: u32, val: i32) -> bool {
         if rec != 0 && self.valid(rec, fld) {
             *self.addr_mut(rec, fld) = val;
             true
@@ -1212,8 +1257,8 @@ impl Store {
         if rec == 0 || rec > i32::MAX as u32 {
             return crate::state::STRING_NULL;
         }
-        let len = self.get_int(rec, 4);
-        if len < 0 || (len / 8) as u32 + rec > self.size {
+        let len = self.get_u32_raw(rec, 4);
+        if (len / 8) + rec > self.size {
             return crate::state::STRING_NULL;
         }
         unsafe {
@@ -1227,7 +1272,7 @@ impl Store {
     #[inline]
     pub fn set_str(&mut self, val: &str) -> u32 {
         let res = self.claim(((val.len() + 15) / 8) as u32);
-        self.set_int(res, 4, val.len() as i32);
+        self.set_u32_raw(res, 4, val.len() as u32);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 val.as_ptr(),
@@ -1241,7 +1286,7 @@ impl Store {
     #[inline]
     pub fn set_str_ptr(&mut self, ptr: *const u8, len: usize) -> u32 {
         let res = self.claim(((len + 15) / 8) as u32);
-        self.set_int(res, 4, len as i32);
+        self.set_u32_raw(res, 4, len as u32);
         unsafe {
             std::ptr::copy_nonoverlapping(ptr, self.ptr.offset(res as isize * 8 + 8), len);
         }
@@ -1250,7 +1295,7 @@ impl Store {
 
     #[inline]
     pub fn append_str(&mut self, record: u32, val: &str) -> u32 {
-        let prev = self.get_int(record, 4);
+        let prev = self.get_u32_raw(record, 4);
         let result = self.resize(record, (prev as usize + val.len()).div_ceil(8) as u32);
         unsafe {
             std::ptr::copy_nonoverlapping(

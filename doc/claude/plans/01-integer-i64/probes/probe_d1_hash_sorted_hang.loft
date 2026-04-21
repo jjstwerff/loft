@@ -1,0 +1,8 @@
+struct Poss { length: integer, token: text }
+struct Tok { start: character, possible: sorted<Poss[-length, token]> }
+struct Db { items: hash<Tok[start]> }
+fn main() {
+  db = Db { };
+  db.items += [Tok { start: 'x', possible: [] }];
+  println("G done");
+}

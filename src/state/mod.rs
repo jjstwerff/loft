@@ -254,7 +254,7 @@ impl State {
     ///
     /// # Panics
     /// When call depth exceeds `MAX_CALL_DEPTH` (possible infinite recursion).
-    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i32) {
+    pub fn fn_call(&mut self, d_nr: u32, args_size: u16, to: i64) {
         let args_base = self.stack_pos - u32::from(args_size);
         // Find the nearest source line at or before the current code position.
         // line_numbers entries are emitted before the first instruction on each line,
@@ -292,32 +292,32 @@ impl State {
     /// Panics if `fn_var < 16` (the fn-ref slot is 16 bytes: `d_nr` + closure `DbRef`), or if
     /// the slot holds a negative definition number (un-initialised / null sentinel).
     pub fn fn_call_ref(&mut self, fn_var: u16, arg_size: u16) {
-        // fn-ref slot is 16B ([d_nr:i32][closure:DbRef]); fn_var must be ≥ 16.
+        // fn-ref slot is 20B ([d_nr:i64][closure:DbRef]); fn_var must be ≥ 20.
         assert!(
-            fn_var >= 16,
-            "fn_call_ref: fn_var={fn_var} < 16 — fn-ref slot is 16B (d_nr + closure DbRef)"
+            fn_var >= 20,
+            "fn_call_ref: fn_var={fn_var} < 20 — fn-ref slot is 20B (d_nr i64 + closure DbRef)"
         );
-        let d_nr_i32 = *self.get_var::<i32>(fn_var);
-        // Negative d_nr = un-initialised slot (integer null sentinel = i32::MIN).
+        let d_nr_i64 = *self.get_var::<i64>(fn_var);
+        // Negative d_nr = un-initialised slot (integer null sentinel = i64::MIN).
         assert!(
-            d_nr_i32 >= 0,
-            "fn_call_ref: d_nr={d_nr_i32} is negative — fn-ref slot was never assigned"
+            d_nr_i64 >= 0,
+            "fn_call_ref: d_nr={d_nr_i64} is negative — fn-ref slot was never assigned"
         );
-        let d_nr = d_nr_i32 as usize;
+        let d_nr = d_nr_i64 as usize;
         assert!(
             d_nr < self.fn_positions.len(),
             "fn_call_ref: d_nr={d_nr} out of range (fn_positions.len={})",
             self.fn_positions.len()
         );
-        // Read closure DbRef from bytes 4..16 of the fn-ref slot.
-        // fn_var is distance from fn_ref slot START to TOS; slot+4 = TOS-(fn_var-4).
-        let closure = *self.get_var::<DbRef>(fn_var - 4);
+        // Read closure DbRef from bytes 8..20 of the fn-ref slot.
+        // fn_var is distance from fn_ref slot START to TOS; slot+8 = TOS-(fn_var-8).
+        let closure = *self.get_var::<DbRef>(fn_var - 8);
         let has_closure = closure.rec != 0;
         if has_closure {
             self.put_stack(closure);
         }
         let total = arg_size + if has_closure { 12 } else { 0 };
-        let code_pos = self.fn_positions[d_nr] as i32;
+        let code_pos = i64::from(self.fn_positions[d_nr]);
         self.fn_call(d_nr as u32, total, code_pos);
     }
 
@@ -1277,7 +1277,7 @@ impl State {
     When the stack has no values left
     */
     #[must_use]
-    pub fn get_stack<T>(&mut self) -> &T {
+    pub fn get_stack<T: 'static>(&mut self) -> &T {
         assert!(
             (size_of::<T>() as u32) < self.stack_pos,
             "No elements left on the stack {} < {}",
@@ -1285,9 +1285,35 @@ impl State {
             size_of::<T>() as u32
         );
         self.stack_pos -= size_of::<T>() as u32;
-        self.database
+        let r = self
+            .database
             .store(&self.stack_cur)
-            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos)
+            .addr::<T>(self.stack_cur.rec, self.stack_cur.pos + self.stack_pos);
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(r as *const T as *const DbRef) };
+                if !(db.store_nr == u16::MAX
+                    || (db.store_nr as usize) < self.database.allocations.len())
+                {
+                    let (op_pc, op_code, fn_d_nr) = crate::crash_report::last_context();
+                    panic!(
+                        "get_stack<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                         rec={} pos={} code_pos={} — corrupt DbRef on interpreter stack \
+                         [last op: pc={} op_code={} fn_d_nr={}]",
+                        db.store_nr,
+                        self.database.allocations.len(),
+                        db.rec,
+                        db.pos,
+                        self.code_pos,
+                        op_pc,
+                        op_code,
+                        fn_d_nr,
+                    );
+                }
+            }
+        }
+        r
     }
 
     /// `parallel {}` — read the arm count for `parallel_arm`/`parallel_join`.
@@ -1357,7 +1383,31 @@ impl State {
         ) = value;
     }
 
-    pub fn put_stack<T>(&mut self, val: T) {
+    pub fn put_stack<T: 'static>(&mut self, val: T) {
+        #[cfg(debug_assertions)]
+        {
+            if std::any::TypeId::of::<T>() == std::any::TypeId::of::<DbRef>() {
+                let db: &DbRef = unsafe { &*(&val as *const T as *const DbRef) };
+                if !(db.store_nr == u16::MAX
+                    || (db.store_nr as usize) < self.database.allocations.len())
+                {
+                    let (op_pc, op_code, fn_d_nr) = crate::crash_report::last_context();
+                    panic!(
+                        "put_stack<DbRef>: OOB store_nr={} (allocations.len()={}) \
+                         rec={} pos={} code_pos={} — corrupt DbRef being pushed \
+                         [last op: pc={} op_code={} fn_d_nr={}]",
+                        db.store_nr,
+                        self.database.allocations.len(),
+                        db.rec,
+                        db.pos,
+                        self.code_pos,
+                        op_pc,
+                        op_code,
+                        fn_d_nr,
+                    );
+                }
+            }
+        }
         let m = self
             .database
             .store_mut(&self.stack_cur)
@@ -1644,7 +1694,7 @@ impl State {
     ///
     /// # Panics
     /// Panics if the worker executes more than 10 000 000 operations (infinite-loop guard).
-    pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i32 {
+    pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i64 {
         // Fix #92: propagate data_ptr, stack_trace_lib_nr, and fn_positions from
         // ParallelCtx so that stack_trace() works inside parallel workers called via
         // n_parallel_for_int.  When parallel_ctx is None (direct run_parallel_* path),
@@ -1689,7 +1739,7 @@ impl State {
                 break;
             }
         }
-        *self.get_stack::<i32>()
+        *self.get_stack::<i64>()
     }
 
     /// Execute a worker function at `fn_pos`, return raw result bits as `u64`.
@@ -1727,8 +1777,8 @@ impl State {
         // Element arg (DbRef) occupies the first parameter slot; extras follow.
         self.put_stack(*arg); // 12 bytes
         for &extra in extra_args {
-            // Push each extra as a raw i32 (integer context args).
-            self.put_stack(extra as i32);
+            // Push each extra as a raw i64 (integer context args, post-2c).
+            self.put_stack(extra as i64);
         }
         self.put_stack(u32::MAX); // return address sentinel
         self.code_pos = fn_pos;
@@ -1782,7 +1832,7 @@ impl State {
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
-            self.put_stack(extra as i32);
+            self.put_stack(extra as i64);
         }
         self.put_stack(u32::MAX);
         self.code_pos = fn_pos;
@@ -1853,7 +1903,7 @@ impl State {
         self.stack_pos = 4;
         self.put_stack(*arg);
         for &extra in extra_args {
-            self.put_stack(extra as i32);
+            self.put_stack(extra as i64);
         }
         // Push the work buffer DbRefs as the hidden parameters.
         for cr in &work_crs {

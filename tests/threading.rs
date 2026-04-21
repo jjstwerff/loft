@@ -37,12 +37,12 @@ fn compile(code: &str) -> (State, loft::data::Data) {
 /// Build an integer vector in a fresh store inside `stores` and return the
 /// `DbRef` pointing to the vector "header" field (as `parallel_for_int` expects).
 ///
-/// Element size is 4 bytes (a single `integer` per element).
+/// Element size is 8 bytes post-2c (a single `integer` = i64 per element).
 fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {
     let db = stores.null(); // allocate an empty store
     let n = values.len() as u32;
-    // Vector data record: fld=4 count, fld=8+ elements.
-    let vec_words = (n * 4 + 15) / 8;
+    // Vector data record: fld=4 count, fld=8+ elements (8B stride post-2c).
+    let vec_words = (n * 8 + 15) / 8;
     let vec_words = vec_words.max(1);
     let vec_cr = stores.claim(&db, vec_words);
     let vec_rec = vec_cr.rec;
@@ -52,11 +52,11 @@ fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {
 
     {
         let store = stores.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n);
         for (i, &v) in values.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 4, v);
+            store.set_int(vec_rec, 8 + i as u32 * 8, i64::from(v));
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     DbRef {
@@ -90,9 +90,10 @@ fn worker_id(r: const Num) -> integer { r.v }
     let fn_pos = data.def(d_nr).code_position;
 
     let program = worker_program(&state);
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 1);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 1);
+    let results_i32: Vec<i32> = results.iter().map(|&v| v as i32).collect();
 
-    assert_eq!(results, values, "single-thread results mismatch");
+    assert_eq!(results_i32, values, "single-thread results mismatch");
 }
 
 #[test]
@@ -111,9 +112,10 @@ fn worker_id(r: const Num) -> integer { r.v }
 
     let program = worker_program(&state);
     // Use 4 threads for 20 elements.
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 4);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 4);
+    let results_i32: Vec<i32> = results.iter().map(|&v| v as i32).collect();
 
-    assert_eq!(results, values, "multi-thread results mismatch");
+    assert_eq!(results_i32, values, "multi-thread results mismatch");
 }
 
 #[test]
@@ -129,7 +131,7 @@ fn worker_id(r: const Num) -> integer { r.v }
     let fn_pos = data.def(d_nr).code_position;
 
     let program = worker_program(&state);
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 2);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 2);
 
     assert!(results.is_empty(), "empty input should give empty output");
 }
@@ -142,12 +144,12 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
 "#;
     let (mut state, data) = compile(code);
 
-    // Element size for Pair: 2 integers = 8 bytes.
-    // We'll manually build the vector with Pair elements (a, b) at offsets 0, 4.
+    // Post-2c Pair: 2 integers × 8 bytes = 16 bytes per element.
+    // We'll manually build the vector with Pair elements (a, b) at offsets 0, 8.
     let db = state.database.null();
     let n: u32 = 4;
-    // vec_words: 4(count) + 4*8(elements) = 36 bytes → ceil(36/8) = 5 words
-    let vec_words = (n * 8 + 15) / 8;
+    // vec_words: 8(count+hdr) + 4*16(elements) = 72 bytes → ceil(72/8) = 9 words
+    let vec_words = (n * 16 + 15) / 8;
     let vec_cr = state.database.claim(&db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = state.database.claim(&db, 1);
@@ -155,14 +157,14 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n);
         // Pairs: (1,2), (3,4), (5,6), (7,8)
-        let pairs = [(1i32, 2i32), (3, 4), (5, 6), (7, 8)];
+        let pairs = [(1i64, 2i64), (3, 4), (5, 6), (7, 8)];
         for (i, (a, b)) in pairs.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *a); // field a at offset 0
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *b); // field b at offset 4
+            store.set_int(vec_rec, 8 + i as u32 * 16, *a); // field a at offset 0 (8B)
+            store.set_int(vec_rec, 8 + i as u32 * 16 + 8, *b); // field b at offset 8 (8B)
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -175,7 +177,7 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 2);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 16, 2);
 
     assert_eq!(results, vec![3, 7, 11, 15], "expression results mismatch");
 }
@@ -228,10 +230,10 @@ fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
 "#;
     let (mut state, data) = compile(code);
 
-    // Element size: 3 × 4 bytes = 12 bytes.
+    // Post-2c: 3 integers × 8B = 24 bytes per element.
     let db = state.database.null();
     let n: u32 = 4;
-    let vec_words = (n * 12 + 15) / 8;
+    let vec_words = (n * 24 + 15) / 8;
     let vec_cr = state.database.claim(&db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = state.database.claim(&db, 1);
@@ -239,16 +241,17 @@ fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n);
+        // Post-2c: 3 integers × 8B = 24B stride.
         // Triples: (1,2,3), (4,5,6), (7,8,9), (10,11,12)
-        let triples = [(1i32, 2, 3), (4, 5, 6), (7, 8, 9), (10, 11, 12)];
+        let triples = [(1i64, 2i64, 3i64), (4, 5, 6), (7, 8, 9), (10, 11, 12)];
         for (i, (a, b, c)) in triples.iter().enumerate() {
-            let off = 8 + i as u32 * 12;
+            let off = 8 + i as u32 * 24;
             store.set_int(vec_rec, off, *a);
-            store.set_int(vec_rec, off + 4, *b);
-            store.set_int(vec_rec, off + 8, *c);
+            store.set_int(vec_rec, off + 8, *b);
+            store.set_int(vec_rec, off + 16, *c);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -260,7 +263,7 @@ fn sum3(r: const Triple) -> integer { r.a + r.b + r.c }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 12, 2);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 24, 2);
     assert_eq!(results, vec![6, 15, 24, 33], "three-field sum");
 }
 
@@ -274,10 +277,10 @@ fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
 "#;
     let (mut state, data) = compile(code);
 
-    // Element size: 2 × 4 = 8 bytes.
+    // Post-2c: 2 × 8 = 16 bytes per element.
     let db = state.database.null();
     let n: u32 = 5;
-    let vec_words = (n * 8 + 15) / 8;
+    let vec_words = (n * 16 + 15) / 8;
     let vec_cr = state.database.claim(&db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = state.database.claim(&db, 1);
@@ -285,14 +288,14 @@ fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
+        store.set_u32_raw(vec_rec, 4, n);
         // (value, factor) pairs; factor is context shared per-element
-        let pairs: [(i32, i32); 5] = [(3, 2), (5, 3), (7, 4), (2, 10), (1, 0)];
+        let pairs: [(i64, i64); 5] = [(3, 2), (5, 3), (7, 4), (2, 10), (1, 0)];
         for (i, (v, f)) in pairs.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *f);
+            store.set_int(vec_rec, 8 + i as u32 * 16, *v);
+            store.set_int(vec_rec, 8 + i as u32 * 16 + 8, *f);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -304,7 +307,7 @@ fn apply_factor(r: const Scaled) -> integer { r.value * r.factor }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 3);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 16, 3);
     assert_eq!(results, vec![6, 15, 28, 20, 0], "value * factor");
 }
 
@@ -322,7 +325,7 @@ fn clamp_lo(r: const Thresh) -> integer {
 
     let db = state.database.null();
     let n: u32 = 6;
-    let vec_words = (n * 8 + 15) / 8;
+    let vec_words = (n * 16 + 15) / 8;
     let vec_cr = state.database.claim(&db, vec_words.max(1));
     let vec_rec = vec_cr.rec;
     let header_cr = state.database.claim(&db, 1);
@@ -330,14 +333,14 @@ fn clamp_lo(r: const Thresh) -> integer {
 
     {
         let store = state.database.store_mut(&db);
-        store.set_int(vec_rec, 4, n as i32);
-        // (value, threshold)
-        let rows: [(i32, i32); 6] = [(10, 5), (3, 5), (5, 5), (0, 1), (100, 50), (49, 50)];
+        store.set_u32_raw(vec_rec, 4, n);
+        // (value, threshold) — post-2c: 2 × 8B = 16B stride
+        let rows: [(i64, i64); 6] = [(10, 5), (3, 5), (5, 5), (0, 1), (100, 50), (49, 50)];
         for (i, (v, t)) in rows.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, *v);
-            store.set_int(vec_rec, 8 + i as u32 * 8 + 4, *t);
+            store.set_int(vec_rec, 8 + i as u32 * 16, *v);
+            store.set_int(vec_rec, 8 + i as u32 * 16 + 8, *t);
         }
-        store.set_int(header_rec, 4, vec_rec as i32);
+        store.set_u32_raw(header_rec, 4, vec_rec);
     }
 
     let input = DbRef {
@@ -349,7 +352,7 @@ fn clamp_lo(r: const Thresh) -> integer {
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 2);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 16, 2);
     assert_eq!(results, vec![10, 0, 5, 0, 100, 0], "threshold clamp");
 }
 
@@ -364,7 +367,7 @@ use loft::parallel::run_parallel_raw;
 fn parallel_long_return_type() {
     let code = r#"
 struct Num { v: integer }
-fn to_long(r: const Num) -> long { r.v as long * 1000000000l }
+fn to_long(r: const Num) -> integer { r.v as integer * 1000000000 }
 "#;
     let (mut state, data) = compile(code);
 
@@ -374,7 +377,7 @@ fn to_long(r: const Num) -> long { r.v as long * 1000000000l }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 8, 2, &[]);
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 8, 8, 2, &[]);
     let longs: Vec<i64> = raw.iter().map(|&r| r as i64).collect();
     assert_eq!(
         longs,
@@ -398,7 +401,7 @@ fn is_even(r: const Num) -> boolean { r.v % 2 == 0 }
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
 
-    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 4, 1, 1, &[]);
+    let raw = run_parallel_raw(&state.database, program, fn_pos, &input, 8, 1, 1, &[]);
     let bools: Vec<bool> = raw.iter().map(|&r| r != 0).collect();
     assert_eq!(
         bools,
@@ -445,7 +448,7 @@ fn label(r: const Num) -> text { "v{r.v}" }
         program,
         fn_pos,
         &input,
-        4,
+        8,
         1,
         &[],
         n_rows,
@@ -509,7 +512,7 @@ fn count_frames(r: const Num) -> integer { frames = stack_trace(); len(frames) +
     let fn_pos = data.def(d_nr).code_position;
 
     let program = worker_program(&state);
-    let results = run_parallel_int(&state.database, program, fn_pos, &input, 4, 1);
+    let results = run_parallel_int(&state.database, program, fn_pos, &input, 8, 1);
 
     for (i, &n) in results.iter().enumerate() {
         assert!(

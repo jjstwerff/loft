@@ -9,6 +9,50 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Integer → i64 migration (Phase 2c)
+
+`integer` is now 8 bytes end-to-end — on the stack, in struct
+fields, in runtime arithmetic — across the interpreter, native
+codegen, and WASM backends.  Arithmetic that used to silently
+wrap at `i32::MIN / MAX` now traps (Phase 1 `?` / `??` dispatch
+from `925ee36`) or round-trips correctly on i64.
+
+**What users see:**
+
+- `integer` literals beyond `i32::MAX` (e.g. `9_876_543_210`)
+  type-check without any suffix.
+- The `long` type keyword and the `l` literal suffix (`33l`,
+  `0xFFl`) are **gone**.  Writing `long` in a type position now
+  fails with `"Undefined type long"`; writing `33l` fails at the
+  lexer.  Use `integer` and plain `33` instead.  Both were
+  deprecation-warned in 0.9.0-early and fully removed in
+  0.9.0-final (commits `3e976b3`..`0c46abb`).
+- Narrow integer aliases — `u8`, `u16`, `i8`, `i16`, and `i32`
+  — keep their compact field storage (`Parts::{Byte, Short,
+  Int}`), with narrow↔wide conversion at read/write.  Pack
+  density is preserved for image buffers, pixel arrays, and
+  other bit-bounded data.
+- File I/O for binary formats now **requires an explicit
+  width cast** on scalar integer writes, e.g.
+  `f += 2 as i32;` (4-byte GLB version), `f += 0 as u8;`
+  (1-byte pixel).  Pre-2c `f += 2` wrote 4 bytes; post-2c
+  writes 8 — silent regressions in existing binary writers
+  are the most common footgun of this migration.
+
+**Migration aid:** no external users of pre-0.9.0 loft exist,
+so no migration path is needed in practice.  The internal
+`loft --migrate-long <path>` CLI is retained as a utility
+that rewrites `long` → `integer` and strips `l` suffixes, in
+case an external user surfaces later.
+
+**Downsides recorded** (`doc/claude/CAVEATS.md`): memory
+footprint of integer-heavy data structures roughly doubles;
+cross-crate cdylib packages keep 4-byte `vector<integer>`
+element storage (narrow→wide conversion at the FFI boundary).
+The bytecode opcode table was reduced from 268 to 234 after
+the `Op*Long` family dedup (34 opcodes reclaimed across rounds
+10b.1–10b.4 and 10d).
+
 ### JSON support
 
 Loft now has built-in JSON parsing and generation.

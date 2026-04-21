@@ -273,10 +273,10 @@ impl Output<'_> {
                 {
                     write!(w, " as u32")?;
                 } else if to != &Value::Null && narrow_int_cast(variables.tp(var)).is_some() {
-                    // Variable is a narrow integer type (stored as i32), but the RHS expression
+                    // Variable is a narrow integer type, but the RHS expression
                     // (a function returning u16 or an iterator block returning as u16) produces
-                    // the narrow type. Add an explicit `as i32` cast.
-                    write!(w, " as i32")?;
+                    // the narrow type.  Post-2c: widen to i64 to match the default Integer.
+                    write!(w, " as i64")?;
                 } else if let Value::Call(d_nr, _) = to {
                     // When the variable type and the called function's return type differ
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),
@@ -359,8 +359,8 @@ impl Output<'_> {
         let def_fn = self.data.def(def_nr);
         let name: &str = &def_fn.name;
         match name {
-            "OpFormatLong" | "OpFormatStackLong" => {
-                return self.format_long(w, vals, name == "OpFormatStackLong");
+            "OpFormatInt" | "OpFormatStackInt" => {
+                return self.format_long(w, vals, name == "OpFormatStackInt");
             }
             "OpFormatFloat" | "OpFormatStackFloat" => {
                 return self.format_float(w, vals, name == "OpFormatStackFloat");
@@ -506,7 +506,7 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     self.output_code_inner(w, dst)?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, tp_val)?;
+                    self.emit_i32_slot(w, tp_val)?;
                     write!(w, ")")?;
                 }
                 return Ok(());
@@ -547,7 +547,7 @@ impl Output<'_> {
                     write!(w, " = OpDatabase(stores, ")?;
                     self.output_code_inner(w, var_val)?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, tp_val)?;
+                    self.emit_i32_slot(w, tp_val)?;
                     write!(w, ")")?;
                 }
                 return Ok(());
@@ -566,9 +566,9 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     self.output_code_inner(w, record_val)?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, tp_val)?;
+                    self.emit_i32_slot(w, tp_val)?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, fmt_val)?;
+                    self.emit_i32_slot(w, fmt_val)?;
                     write!(w, ")")?;
                 }
                 return Ok(());
@@ -627,9 +627,9 @@ impl Output<'_> {
                     write!(w, "OpIterate(stores, ")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[1])?;
+                    self.emit_i32_slot(w, &vals[1])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[2])?;
+                    self.emit_i32_slot(w, &vals[2])?;
                     write!(w, ", &[")?;
                     for (i, k) in keys.iter().enumerate() {
                         if i > 0 {
@@ -675,9 +675,9 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     self.output_code_inner(w, &vals[1])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[2])?;
+                    self.emit_i32_slot(w, &vals[2])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[3])?;
+                    self.emit_i32_slot(w, &vals[3])?;
                     write!(w, ")")?;
                     return Ok(());
                 }
@@ -696,9 +696,9 @@ impl Output<'_> {
                     write!(w, ", ")?;
                     self.output_code_inner(w, &vals[1])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[2])?;
+                    self.emit_i32_slot(w, &vals[2])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[3])?;
+                    self.emit_i32_slot(w, &vals[3])?;
                     write!(w, ")")?;
                     return Ok(());
                 }
@@ -732,7 +732,7 @@ impl Output<'_> {
                     write!(w, "{par_fn}(stores, ")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", ")?;
-                    self.output_code_inner(w, &vals[1])?;
+                    self.emit_i32_slot(w, &vals[1])?;
                     write!(w, ", ")?;
                     if is_ref {
                         // For ref mode, pass struct_size and known_type instead of return_size.
@@ -745,10 +745,10 @@ impl Output<'_> {
                             };
                         write!(w, "{struct_size}, {known_type}, ")?;
                     } else {
-                        self.output_code_inner(w, &vals[2])?;
+                        self.emit_i32_slot(w, &vals[2])?;
                         write!(w, ", ")?;
                     }
-                    self.output_code_inner(w, &vals[3])?;
+                    self.emit_i32_slot(w, &vals[3])?;
                     // Build the extra arg list for the worker call inside the closure.
                     let extras = {
                         use std::fmt::Write;

@@ -158,22 +158,22 @@ fn test_set_int_field_null_direct() {
   assert(s.cur == null, "expected null after direct");
 }
 
-struct NullLS { val: long }
+struct NullLS { val: integer }
 
 fn nls_clear(self: NullLS) { self.val = null }
 
 fn test_set_long_field_null_via_ref() {
-  s = NullLS { val: 1000000l };
+  s = NullLS { val: 1000000 };
   nls_clear(s);
   assert(s.val == null, "expected null");
 }
 
-struct NullMS { a: integer, b: long }
+struct NullMS { a: integer, b: integer }
 
 fn nms_clear(self: NullMS) { self.a = null; self.b = null; }
 
 fn test_set_multiple_scalar_fields_null() {
-  s = NullMS { a: 1, b: 2l };
+  s = NullMS { a: 1, b: 2 };
   nms_clear(s);
   assert(s.a == null, "a should be null");
   assert(s.b == null, "b should be null");

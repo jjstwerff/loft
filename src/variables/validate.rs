@@ -22,7 +22,6 @@ fn short_type(tp: &Type) -> String {
         Type::Void | Type::Never => "void".to_string(),
         Type::Integer(_, _, _) => "int".to_string(),
         Type::Boolean => "bool".to_string(),
-        Type::Long => "long".to_string(),
         Type::Float => "float".to_string(),
         Type::Single => "single".to_string(),
         Type::Character => "char".to_string(),

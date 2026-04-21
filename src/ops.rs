@@ -28,63 +28,28 @@ thread_local! {
     static RNG: RefCell<Pcg64> = RefCell::new(Pcg64::seed_from_u64(12345));
 }
 
-/// In debug builds, use checked arithmetic and panic on overflow.
-/// In release builds, use unchecked arithmetic for speed.
-macro_rules! checked_int {
-    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        #[cfg(debug_assertions)]
-        {
-            let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
-            assert!(
-                r != i32::MIN,
-                "integer null-sentinel collision: {} {} {} = i32::MIN",
-                $v1,
-                $op,
-                $v2
-            );
-            r
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            $checked.unwrap_or(i32::MIN)
-        }
-    }};
-}
-
+/// C54.G — trap (panic) on overflow or sentinel-collision result.
+/// Uniform behaviour across debug and release builds: silent-sentinel
+/// channel for overflow is closed.  The dual `checked_long_nullable!`
+/// preserves the old release behaviour for the G-hybrid `??`-context
+/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
+/// can discharge the null.
 macro_rules! checked_long {
     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        #[cfg(debug_assertions)]
-        {
-            let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
-            assert!(
-                r != i64::MIN,
-                "long null-sentinel collision: {} {} {} = i64::MIN",
-                $v1,
-                $op,
-                $v2
-            );
-            r
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            $checked.unwrap_or(i64::MIN)
-        }
-    }};
-}
-
-macro_rules! sentinel_int {
-    ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
-        let r = $expr;
-        #[cfg(debug_assertions)]
+        let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
         assert!(
-            r != i32::MIN,
-            "integer null-sentinel collision: {} {} {} = i32::MIN",
+            r != i64::MIN,
+            "long null-sentinel collision: {} {} {} = i64::MIN",
             $v1,
             $op,
             $v2
         );
         r
     }};
+}
+
+macro_rules! checked_long_nullable {
+    ($checked:expr) => {{ $checked.unwrap_or(i64::MIN) }};
 }
 
 macro_rules! sentinel_long {
@@ -103,26 +68,26 @@ macro_rules! sentinel_long {
 }
 
 /// Return a random integer in `[lo, hi]` (inclusive).
-/// Returns `i32::MIN` (null) if `lo > hi` or if either bound is null.
+/// Returns `i64::MIN` (null) if `lo > hi` or if either bound is null.
 #[cfg(feature = "random")]
 #[must_use]
-pub fn rand_int(lo: i32, hi: i32) -> i32 {
-    if lo == i32::MIN || hi == i32::MIN || lo > hi {
-        return i32::MIN;
+pub fn rand_int(lo: i64, hi: i64) -> i64 {
+    if lo == i64::MIN || hi == i64::MIN || lo > hi {
+        return i64::MIN;
     }
-    let range = (i64::from(hi) - i64::from(lo) + 1) as u64;
+    let range = (hi - lo + 1) as u64;
     let r = RNG.with(|rng| rng.borrow_mut().next_u64());
-    lo + (r % range) as i32
+    lo + (r % range) as i64
 }
 
 /// WASM fallback: delegate to the JS host RNG when `random` crate is not available.
 #[cfg(all(feature = "wasm", not(feature = "random")))]
 #[must_use]
-pub fn rand_int(lo: i32, hi: i32) -> i32 {
-    if lo == i32::MIN || hi == i32::MIN || lo > hi {
-        return i32::MIN;
+pub fn rand_int(lo: i64, hi: i64) -> i64 {
+    if lo == i64::MIN || hi == i64::MIN || lo > hi {
+        return i64::MIN;
     }
-    crate::wasm::host_random_int(lo, hi)
+    i64::from(crate::wasm::host_random_int(lo as i32, hi as i32))
 }
 
 /// Reseed the thread-local RNG.
@@ -159,8 +124,8 @@ pub fn shuffle_ints(v: &mut [i32]) {
 }
 
 #[must_use]
-pub fn text_character(val: &str, from: i32) -> char {
-    let len = val.len() as i32;
+pub fn text_character(val: &str, from: i64) -> char {
+    let len = val.len() as i64;
     let mut idx = if from < 0 { from + len } else { from };
     if idx < 0 || idx >= len {
         return char::from(0);
@@ -207,7 +172,7 @@ pub fn to_char(val: i32) -> char {
 }
 
 #[inline]
-pub fn format_text(s: &mut String, val: &str, width: i32, dir: i8, token: u8) {
+pub fn format_text(s: &mut String, val: &str, width: i64, dir: i8, token: u8) {
     // dir=2 means "unset default"; text defaults to left-align (-1)
     let dir = if dir == 2 { -1 } else { dir };
     let mut tokens = width as usize;
@@ -260,18 +225,15 @@ pub fn op_negate_long(val: i64) -> i64 {
 
 #[inline]
 #[must_use]
-pub fn op_cast_int_from_long(val: i64) -> i32 {
-    if val == i64::MIN {
-        i32::MIN
-    } else {
-        val as i32
-    }
+pub fn op_cast_int_from_long(val: i64) -> i64 {
+    // Post-2c: integer IS i64.  Identity preserving i64::MIN as null.
+    val
 }
 
 #[inline]
 #[must_use]
-pub fn op_cast_int_from_single(val: f32) -> i32 {
-    if val.is_nan() { i32::MIN } else { val as i32 }
+pub fn op_cast_int_from_single(val: f32) -> i64 {
+    if val.is_nan() { i64::MIN } else { val as i64 }
 }
 
 #[inline]
@@ -282,8 +244,8 @@ pub fn op_cast_long_from_single(val: f32) -> i64 {
 
 #[inline]
 #[must_use]
-pub fn op_cast_int_from_float(val: f64) -> i32 {
-    if val.is_nan() { i32::MIN } else { val as i32 }
+pub fn op_cast_int_from_float(val: f64) -> i64 {
+    if val.is_nan() { i64::MIN } else { val as i64 }
 }
 
 #[inline]
@@ -353,6 +315,59 @@ pub fn op_div_long(v1: i64, v2: i64) -> i64 {
 pub fn op_rem_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
         checked_long!(v1.checked_rem(v2), "%", v1, v2)
+    } else {
+        i64::MIN
+    }
+}
+
+// ── C54.G-hybrid — nullable long arithmetic ──────────────────────────────
+// Sibling of op_add_int_nullable / etc. for the long path.
+
+#[inline]
+#[must_use]
+pub fn op_add_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_add(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_min_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_sub(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_mul_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN {
+        checked_long_nullable!(v1.checked_mul(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_div_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+        checked_long_nullable!(v1.checked_div(v2))
+    } else {
+        i64::MIN
+    }
+}
+
+#[inline]
+#[must_use]
+pub fn op_rem_long_nullable(v1: i64, v2: i64) -> i64 {
+    if v1 != i64::MIN && v2 != i64::MIN && v2 != 0 {
+        checked_long_nullable!(v1.checked_rem(v2))
     } else {
         i64::MIN
     }
@@ -465,40 +480,34 @@ pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
 
 #[inline]
 #[must_use]
-pub fn op_abs_int(val: i32) -> i32 {
-    if val == i32::MIN { val } else { val.abs() }
+pub fn op_abs_int(val: i64) -> i64 {
+    op_abs_long(val)
 }
 
 #[inline]
 #[must_use]
-pub fn op_negate_int(val: i32) -> i32 {
-    if val == i32::MIN { val } else { -val }
+pub fn op_negate_int(val: i64) -> i64 {
+    op_negate_long(val)
 }
 
 #[inline]
 #[must_use]
-pub fn op_conv_long_from_int(val: i32) -> i64 {
-    if val == i32::MIN {
-        i64::MIN
-    } else {
-        i64::from(val)
-    }
+pub fn op_conv_long_from_int(val: i64) -> i64 {
+    // Post-2c: integer IS i64.  Identity.
+    val
 }
 
 #[inline]
 #[must_use]
-pub fn op_conv_float_from_int(val: i32) -> f64 {
-    if val == i32::MIN {
-        f64::NAN
-    } else {
-        f64::from(val)
-    }
+pub fn op_conv_float_from_int(val: i64) -> f64 {
+    op_conv_float_from_long(val)
 }
 
 #[inline]
 #[must_use]
-pub fn op_conv_single_from_int(val: i32) -> f32 {
-    if val == i32::MIN {
+pub fn op_conv_single_from_int(val: i64) -> f32 {
+    // Narrow i64 → f32 with null-preservation.
+    if val == i64::MIN {
         f32::NAN
     } else {
         val as f32
@@ -507,8 +516,8 @@ pub fn op_conv_single_from_int(val: i32) -> f32 {
 
 #[inline]
 #[must_use]
-pub fn op_conv_bool_from_int(v: i32) -> bool {
-    v != i32::MIN
+pub fn op_conv_bool_from_int(v: i64) -> bool {
+    op_conv_bool_from_long(v)
 }
 
 #[inline]
@@ -526,111 +535,104 @@ pub fn op_conv_bool_from_character(v: char) -> bool {
     v != '\0'
 }
 
+// C54.A (Phase 2c) — int arithmetic is now i64.  Functions forward to
+// long counterparts; stdlib `#rust"ops::op_add_int(@v1, @v2)"` calls
+// keep working unchanged because integer's Rust type is now i64.
+
 #[inline]
 #[must_use]
-pub fn op_add_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        checked_int!(v1.checked_add(v2), "+", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_add_int(v1: i64, v2: i64) -> i64 {
+    op_add_long(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_min_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        checked_int!(v1.checked_sub(v2), "-", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_min_int(v1: i64, v2: i64) -> i64 {
+    op_min_long(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_mul_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        checked_int!(v1.checked_mul(v2), "*", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_mul_int(v1: i64, v2: i64) -> i64 {
+    op_mul_long(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_div_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
-        checked_int!(v1.checked_div(v2), "/", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_div_int(v1: i64, v2: i64) -> i64 {
+    op_div_long(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
-        checked_int!(v1.checked_rem(v2), "%", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_rem_int(v1: i64, v2: i64) -> i64 {
+    op_rem_long(v1, v2)
+}
+
+// ── C54.G-hybrid — nullable integer arithmetic ────────────────────────────
+// These mirror op_add_int / op_min_int / op_mul_int / op_div_int / op_rem_int
+// but return `i32::MIN` on overflow or divide-by-zero instead of panicking.
+// Emitted only when codegen detects the op's result is the immediate LHS of
+// a `??` expression — the null is then caught and discharged.
+
+#[inline]
+#[must_use]
+pub fn op_add_int_nullable(v1: i64, v2: i64) -> i64 {
+    op_add_long_nullable(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_logical_and_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        sentinel_int!(v1 & v2, "&", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_min_int_nullable(v1: i64, v2: i64) -> i64 {
+    op_min_long_nullable(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_logical_or_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        sentinel_int!(v1 | v2, "|", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_mul_int_nullable(v1: i64, v2: i64) -> i64 {
+    op_mul_long_nullable(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        sentinel_int!(v1 ^ v2, "^", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_div_int_nullable(v1: i64, v2: i64) -> i64 {
+    op_div_long_nullable(v1, v2)
 }
 
 #[inline]
 #[must_use]
-/// # Panics
-/// In debug builds, panics if `v2` is outside `0..32`.
-pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        #[cfg(debug_assertions)]
-        assert!(
-            (0..32).contains(&v2),
-            "integer shift out of range: {v1} << {v2}"
-        );
-        sentinel_int!(v1 << v2, "<<", v1, v2)
-    } else {
-        i32::MIN
-    }
+pub fn op_rem_int_nullable(v1: i64, v2: i64) -> i64 {
+    op_rem_long_nullable(v1, v2)
 }
 
 #[inline]
 #[must_use]
-pub fn op_shift_right_int(v1: i32, v2: i32) -> i32 {
-    if v1 != i32::MIN && v2 != i32::MIN {
-        v1 >> v2
-    } else {
-        i32::MIN
-    }
+pub fn op_logical_and_int(v1: i64, v2: i64) -> i64 {
+    op_logical_and_long(v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_logical_or_int(v1: i64, v2: i64) -> i64 {
+    op_logical_or_long(v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_exclusive_or_int(v1: i64, v2: i64) -> i64 {
+    op_exclusive_or_long(v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_shift_left_int(v1: i64, v2: i64) -> i64 {
+    op_shift_left_long(v1, v2)
+}
+
+#[inline]
+#[must_use]
+pub fn op_shift_right_int(v1: i64, v2: i64) -> i64 {
+    op_shift_right_long(v1, v2)
 }
 
 /**
@@ -643,7 +645,7 @@ pub fn format_int(
     s: &mut String,
     val: i32,
     radix: u8,
-    width: i32,
+    width: i64,
     token: u8,
     plus: bool,
     note: bool,
@@ -698,7 +700,7 @@ pub fn format_long(
     s: &mut String,
     val: i64,
     radix: u8,
-    width: i32,
+    width: i64,
     token: u8,
     plus: bool,
     note: bool,
@@ -754,7 +756,7 @@ pub fn format_long(
 
 use std::fmt::Write as _;
 
-pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32, dir: i8) {
+pub fn format_float(s: &mut String, val: f64, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     if precision >= 0 {
@@ -765,7 +767,7 @@ pub fn format_float(s: &mut String, val: f64, width: i32, precision: i32, dir: i
     format_text(s, &res, width, dir, b' ');
 }
 
-pub fn format_single(s: &mut String, val: f32, width: i32, precision: i32, dir: i8) {
+pub fn format_single(s: &mut String, val: f32, width: i64, precision: i64, dir: i8) {
     let dir = if dir == 2 { 1 } else { dir };
     let mut res = String::new();
     if precision >= 0 {
@@ -854,43 +856,41 @@ mod test {
 
     #[test]
     fn add_int_null_propagation() {
-        assert_eq!(op_add_int(i32::MIN, 5), i32::MIN);
+        // Post-2c: integer IS i64.  Null sentinel is i64::MIN.
+        assert_eq!(op_add_int(i64::MIN, 5), i64::MIN);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "integer overflow")]
+    #[should_panic(expected = "long overflow")]
     fn add_int_overflow() {
-        let _ = op_add_int(i32::MAX, 1);
+        let _ = op_add_int(i64::MAX, 1);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "integer overflow")]
+    #[should_panic(expected = "long overflow")]
     fn sub_int_overflow() {
-        let _ = op_min_int(i32::MIN + 1, 2);
+        let _ = op_min_int(i64::MIN + 1, 2);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "integer overflow")]
+    #[should_panic(expected = "long overflow")]
     fn mul_int_overflow() {
-        let _ = op_mul_int(i32::MAX, 2);
+        let _ = op_mul_int(i64::MAX, 2);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "integer null-sentinel collision")]
+    #[should_panic(expected = "long null-sentinel collision")]
     fn sub_int_sentinel() {
-        let _ = op_min_int(-2_147_483_647, 1);
+        let _ = op_min_int(-9_223_372_036_854_775_807, 1);
     }
 
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "integer null-sentinel collision")]
+    #[should_panic(expected = "long null-sentinel collision")]
     fn and_int_sentinel() {
-        // 0x80000001 & 0x80000002 = 0x80000000 = i32::MIN
-        let _ = op_logical_and_int(i32::MIN + 1, i32::MIN + 2);
+        // Post-2c: int arithmetic forwards to long; the sentinel becomes
+        // i64::MIN, not i32::MIN.
+        let _ = op_logical_and_int(i64::MIN + 1, i64::MIN + 2);
     }
 
     #[test]
@@ -899,44 +899,18 @@ mod test {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "long overflow")]
     fn add_long_overflow() {
         let _ = op_add_long(i64::MAX, 1);
     }
 
     #[test]
-    #[cfg(debug_assertions)]
     #[should_panic(expected = "long null-sentinel collision")]
     fn sub_long_sentinel() {
         let _ = op_min_long(i64::MIN + 1, 1);
     }
 
-    /// Compile-time guard — `_int` functions must never reference `i64::MIN`.
-    /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
-    /// in an `_int` function would add an unnecessary branch on every integer op.
-    #[test]
-    fn no_i64_sentinel_in_int_functions() {
-        let src = include_str!("ops.rs");
-        // Split the source into function bodies by scanning for `fn op_` / `fn format_`
-        // boundaries.  For every function whose name ends with `_int(`, assert that
-        // its body does not contain `i64::MIN`.
-        let mut in_int_fn = false;
-        let mut fn_name = String::new();
-        for line in src.lines() {
-            if let Some(rest) = line.strip_prefix("pub fn ") {
-                // Conversion functions (op_conv_*_from_int) correctly map i32::MIN → i64::MIN
-                // or i32::MIN → f64::NAN.  Exclude them from the audit.
-                in_int_fn = rest.contains("_int(") && !rest.contains("_from_int(");
-                fn_name = rest.split('(').next().unwrap_or("").to_string();
-            }
-            if in_int_fn {
-                assert!(
-                    !line.contains("i64::MIN"),
-                    "O3 violation: `_int` function `{fn_name}` references i64::MIN — \
-                     integer paths must use i32::MIN, not the long sentinel"
-                );
-            }
-        }
-    }
+    // `no_i64_sentinel_in_int_functions` removed in C54 Phase 2c.  Int
+    // functions now legitimately reference `i64::MIN` (they forward to
+    // the long equivalents), so the old compile-time guard is inverted.
 }

@@ -324,6 +324,7 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            i32_literal_context: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };

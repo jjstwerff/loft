@@ -31,6 +31,16 @@ static OPERATORS: &[&str] = &[
 
 pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 
+/// Full-width integer (post-2c, 8 bytes, i64 range up to u32::MAX bound).
+/// Produced by the parser when it sees `long`, `integer limit(..., > i32::MAX)`,
+/// or an integer literal whose magnitude exceeds i32::MAX.  At rest: i64.
+///
+/// Phase 2c round 10c — replaces the former `Type::Long` variant.  The `max`
+/// field can't hold full i64::MAX (it's u32), so u32::MAX is used as a
+/// "wide" sentinel; all downstream code just observes "max - min >= 256"
+/// and picks 8-byte storage.
+pub static I64: Type = Type::Integer(i32::MIN + 1, u32::MAX, false);
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub name: &'static str,
@@ -139,7 +149,6 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Spacial(_, _, _) => Value::Int(0),
-        Type::Long => Value::Long(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         Type::Text(_) => Value::Text(String::new()),
@@ -172,7 +181,6 @@ pub enum Type {
     Integer(i32, u32, bool),
     /// A store with the given base record type. (nullable)
     Boolean,
-    Long,
     Float,
     Single,
     Character,
@@ -397,7 +405,8 @@ impl Type {
             } else if c_max - c_min < 65536 || (nullable && c_max - c_min == 65536) {
                 2
             } else {
-                4
+                // Phase 2c: integer is stored as 8-byte i64 by default.
+                8
             }
         } else {
             0
@@ -526,8 +535,8 @@ impl Type {
 pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _, _) | Type::Character => 4,
-        Type::Long | Type::Float => 8,
+        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Integer(_, _, _) | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
@@ -631,6 +640,11 @@ pub struct Attribute {
     pub check: Value,
     /// Optional message for a failed constraint check.
     pub check_message: Value,
+    /// Post-2c: when the field's declared type was an integer alias with a
+    /// `size(N)` annotation (e.g. `i32`), this holds the alias def_nr so
+    /// `fill_database` / codegen can consult `forced_size(alias_nr)`.  `0`
+    /// means "no alias" — fall back to the limit()-based heuristic.
+    pub alias_d_nr: u32,
 }
 
 impl Debug for Attribute {
@@ -722,6 +736,11 @@ pub struct Definition {
     /// DbRef into CONST_STORE for pre-built vector constants.
     /// `None` for non-constant definitions or constants that couldn't be pre-built.
     pub const_ref: Option<crate::keys::DbRef>,
+    /// Post-2c: explicit `size(N)` annotation on an integer subtype
+    /// (e.g. `pub type i32 = integer size(4);`).  `None` means use the
+    /// limit()-based heuristic; `Some(n)` forces the stored-width to n
+    /// bytes (n ∈ {1, 2, 4, 8}).
+    pub forced_size: Option<u8>,
 }
 
 impl Definition {
@@ -805,7 +824,7 @@ pub struct Data {
     statics: Vec<u8>,
     pub(crate) op_codes: u16,
     possible: HashMap<String, Vec<u32>>,
-    pub(crate) operators: HashMap<u8, u32>,
+    pub(crate) operators: HashMap<u16, u32>,
     /// PKG.4: native function symbols — loft function name → Rust symbol path.
     /// Populated when packages with `[native.functions]` are loaded.
     /// Keys are the user-facing loft names (e.g. `save_png`), not the internal
@@ -974,6 +993,7 @@ impl Data {
             value: Value::Null,
             check: Value::Null,
             check_message: Value::Null,
+            alias_d_nr: u32::MAX,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];
@@ -1018,6 +1038,7 @@ impl Data {
             closure_record: u32::MAX,
             bounds: Vec::new(),
             const_ref: None,
+            forced_size: None,
         };
         self.definitions.push(new_def);
         rec
@@ -1044,7 +1065,7 @@ impl Data {
             self.op_codes
         );
         self.definitions[def_nr as usize].op_code = self.op_codes;
-        self.operators.insert(self.op_codes as u8, def_nr);
+        self.operators.insert(self.op_codes, def_nr);
         self.op_codes += 1;
     }
 
@@ -1701,6 +1722,18 @@ impl Data {
         &self.definitions[dnr as usize]
     }
 
+    /// Post-2c: return the explicit `size(N)` annotation on the definition,
+    /// if any.  Used by field allocation and sizeof() to honor `pub type i32 =
+    /// integer size(4);` — the size overrides the limit()-based heuristic.
+    /// Returns `None` when no annotation was provided (use the heuristic).
+    #[must_use]
+    pub fn forced_size(&self, dnr: u32) -> Option<u8> {
+        if dnr == u32::MAX || (dnr as usize) >= self.definitions.len() {
+            return None;
+        }
+        self.definitions[dnr as usize].forced_size
+    }
+
     /// Return the `def_nr`s of all definitions whose `parent` field equals `parent_nr`.
     /// Used by the interface satisfaction checker (I6) to enumerate an interface's method stubs.
     pub fn children_of(&self, parent_nr: u32) -> impl Iterator<Item = u32> + '_ {
@@ -1719,12 +1752,12 @@ impl Data {
     }
 
     #[must_use]
-    pub fn has_op(&self, op: u8) -> bool {
+    pub fn has_op(&self, op: u16) -> bool {
         self.operators.contains_key(&op)
     }
 
     #[must_use]
-    pub fn operator(&self, op: u8) -> &Definition {
+    pub fn operator(&self, op: u16) -> &Definition {
         self.def(self.operators[&op])
     }
 
@@ -1741,7 +1774,6 @@ impl Data {
         match tp {
             Type::Rewritten(t) => self.type_def_nr(t),
             Type::Integer(_, _, _) => self.source_nr(0, "integer"),
-            Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1768,7 +1800,6 @@ impl Data {
         match tp {
             Type::Rewritten(t) => self.type_elm(t),
             Type::Integer(_, _, _) => self.source_nr(0, "integer"),
-            Type::Long => self.source_nr(0, "long"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1802,7 +1833,6 @@ impl Data {
             }
             Type::Integer(_, _, _) => "integer".to_string(),
             Type::Boolean => "boolean".to_string(),
-            Type::Long => "long".to_string(),
             Type::Float => "float".to_string(),
             Type::Single => "single".to_string(),
             Type::Character => "character".to_string(),
@@ -1855,11 +1885,10 @@ impl Data {
             }
             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
-            Type::Integer(_, _, _) => "i32",
+            Type::Integer(_, _, _) => "i64",
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",
-            Type::Long => "i64",
             Type::Boolean => "bool",
             Type::Float => "f64",
             Type::Single => "f32",

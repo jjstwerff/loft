@@ -273,7 +273,7 @@ impl Parser {
             I32.clone()
         } else if let Some(nr) = self.lexer.has_long() {
             *val = Value::Long(nr as i64);
-            Type::Long
+            crate::data::I64.clone()
         } else if let Some(nr) = self.lexer.has_float() {
             *val = Value::Float(nr);
             Type::Float
@@ -283,7 +283,7 @@ impl Parser {
         } else if let Some(s) = self.lexer.has_cstring() {
             self.parse_string(val, &s)
         } else if let Some(nr) = self.lexer.has_char() {
-            *val = Value::Int(nr as i32);
+            *val = self.cl("OpConvCharacterFromInt", &[Value::Int(nr as i32)]);
             Type::Character
         } else if self.lexer.has_token("true") {
             *val = Value::Boolean(true);
@@ -1567,7 +1567,6 @@ impl Parser {
                 _ => self.database.name("integer"),
             },
             Type::Character => self.database.name("integer"),
-            Type::Long => self.database.name("long"),
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
             Type::Text(_) => self.database.name("text"),

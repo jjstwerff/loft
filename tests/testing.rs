@@ -134,7 +134,7 @@ impl Test {
 
     fn test(&self) -> String {
         let mut res = match &self.result {
-            Value::Long(v) => v.to_string() + "l",
+            Value::Long(v) => v.to_string(),
             Value::Int(v) => v.to_string(),
             Value::Enum(v, _) => v.to_string(),
             Value::Boolean(v) if *v => "true".to_string(),
@@ -403,6 +403,7 @@ impl Test {
             next_format_count: 0,
             yield_collect: false,
             fn_ref_context: false,
+            i32_literal_context: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -470,7 +471,7 @@ impl Test {
             if let Value::Int(_) = self.result {
                 Type::Integer(i32::MIN, i32::MAX as u32, false)
             } else if let Value::Long(_) = self.result {
-                Type::Long
+                loft::data::I64.clone()
             } else if let Value::Text(_) = self.result {
                 Type::Text(Vec::new())
             } else if let Value::Float(_) = self.result {
@@ -487,8 +488,6 @@ impl Test {
             "integer"
         } else if let Type::Text(_) = tp {
             "text"
-        } else if let Type::Long = tp {
-            "long"
         } else if let Type::Boolean = tp {
             "boolean"
         } else if let Type::Float = tp {

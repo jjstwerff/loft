@@ -8,9 +8,9 @@ fn maybe_int(x: integer) -> integer {
   x * 2
 }
 
-fn maybe_long(x: integer) -> long {
+fn maybe_long(x: integer) -> integer {
   if x < 0 { return null; }
-  x as long * 1000000l
+  x as integer * 1000000
 }
 
 fn maybe_float(x: integer) -> float {
@@ -54,7 +54,7 @@ fn main() {
   assert(!maybe_int(-1), "int null");
 
   // long
-  assert(maybe_long(3) == 3000000l, "long non-null: {maybe_long(3)}");
+  assert(maybe_long(3) == 3000000, "long non-null: {maybe_long(3)}");
   assert(!maybe_long(-1), "long null");
 
   // float

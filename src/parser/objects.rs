@@ -279,15 +279,15 @@ impl Parser {
             *t = Type::Boolean;
         } else if self.lexer.has_keyword("size") {
             *code = self.cl("OpSizeFile", &[Value::Var(var_nr)]);
-            *t = Type::Long;
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("index") {
-            // Read the current field at offset 8
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(8)]);
-            *t = Type::Long;
+            // Read the current field at offset 8 (pre-2c layout restored now that i32 is 4B)
+            *code = self.cl("OpGetInt", &[Value::Var(var_nr), Value::Int(8)]);
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("next") {
-            // Read the next field at offset 16
-            *code = self.cl("OpGetLong", &[Value::Var(var_nr), Value::Int(16)]);
-            *t = Type::Long;
+            // Read the next field at offset 16 (pre-2c layout restored)
+            *code = self.cl("OpGetInt", &[Value::Var(var_nr), Value::Int(16)]);
+            *t = crate::data::I64.clone();
         } else if self.lexer.has_keyword("read") {
             self.lexer.token("(");
             let mut n_code = Value::Null;
@@ -296,6 +296,8 @@ impl Parser {
             // Determine read type from optional "as T"
             let (read_type, db_tp) = if self.lexer.has_token("as") {
                 if let Some(type_name) = self.lexer.has_identifier() {
+                    // Capture the alias def_nr so size(N) can pick Parts::Int.
+                    let alias_nr = self.data.def_nr(&type_name);
                     let tp = self
                         .parse_type(u32::MAX, &type_name, false)
                         .unwrap_or(Type::Text(vec![]));
@@ -312,7 +314,35 @@ impl Parser {
                         );
                     }
                     self.ensure_io_type(&tp.clone());
-                    let id = self.get_type(&tp);
+                    // Post-2c: honor `as i32` by routing to Parts::Int (4B) when
+                    // the alias has size(4).
+                    let id = if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(4)
+                    {
+                        if self.first_pass {
+                            u16::MAX
+                        } else {
+                            self.database.int(*min, false)
+                        }
+                    } else if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(1)
+                    {
+                        if self.first_pass {
+                            u16::MAX
+                        } else {
+                            self.database.byte(*min, false)
+                        }
+                    } else if let Type::Integer(min, _, _) = &tp
+                        && self.data.forced_size(alias_nr) == Some(2)
+                    {
+                        if self.first_pass {
+                            u16::MAX
+                        } else {
+                            self.database.short(*min, false)
+                        }
+                    } else {
+                        self.get_type(&tp)
+                    };
                     (tp, id)
                 } else {
                     let text_tp = Type::Text(vec![]);
@@ -393,7 +423,13 @@ impl Parser {
         None
     }
 
-    pub(crate) fn write_to_file(&mut self, file_var: u16, val: Value, val_type: &Type) -> Value {
+    pub(crate) fn write_to_file(
+        &mut self,
+        file_var: u16,
+        val: Value,
+        val_type: &Type,
+        cast_alias: u32,
+    ) -> Value {
         if let Type::Reference(d_nr, _) = val_type
             && let Some(field) = Self::first_collection_field(*d_nr, &self.data)
         {
@@ -409,7 +445,48 @@ impl Parser {
         }
         let val_type_clone = val_type.clone();
         self.ensure_io_type(&val_type_clone);
-        let db_tp = self.get_type(val_type);
+        // Post-2c: if the value was written as `… as <alias>` and the alias
+        // has size(N), narrow the serialisation to the alias's db type.
+        let db_tp = if let Type::Integer(min, _, _) = val_type
+            && let Some(n) = self.data.forced_size(cast_alias)
+        {
+            if self.first_pass {
+                u16::MAX
+            } else {
+                match n {
+                    1 => self.database.byte(*min, false),
+                    2 => self.database.short(*min, false),
+                    4 => self.database.int(*min, false),
+                    _ => self.get_type(val_type),
+                }
+            }
+        } else {
+            // Post-2c lint: a bare `f += <integer>` writes 8 bytes.  For
+            // binary file formats (BigEndian / LittleEndian) that silently
+            // breaks record alignment with older specs that assumed i32;
+            // for text files 8 bytes of decimal is fine.  We can't tell
+            // the file format at parse time, so warn generically — the
+            // user silences the lint by writing `f += x as i32` (or the
+            // correct byte-width alias).  Skip on the stdlib (`!self.default`)
+            // and on explicit `as integer` (full 8-byte) where `cast_alias`
+            // is the integer base — those are intentional wide writes.
+            if !self.first_pass
+                && !self.default
+                && matches!(val_type, Type::Integer(_, _, _))
+                && cast_alias == u32::MAX
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`f += <integer>` without a width cast writes 8 bytes; \
+                     for binary files (BigEndian / LittleEndian) add `as i8` \
+                     / `as i16` / `as i32` / `as u8` / `as u16` / `as u32` to \
+                     pick the exact byte width.  Use `as integer` to silence \
+                     this warning when 8-byte writes are intentional"
+                );
+            }
+            self.get_type(val_type)
+        };
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);
         for d in val_type.depend() {
             self.vars.depend(temp_var, d);
@@ -1114,8 +1191,10 @@ impl Parser {
             | Type::Enum(_, true, _)
             | Type::Index(_, _, _) = td
             {
+                // Collection/enum-big header is a 4-byte u32 record pointer.
+                // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
                 list.push(self.cl(
-                    "OpSetInt",
+                    "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
                 ));
                 self.cl(

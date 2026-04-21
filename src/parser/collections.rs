@@ -175,7 +175,7 @@ impl Parser {
                         "{}#iter_state",
                         iter_base.strip_suffix("#index").unwrap_or(iter_base)
                     );
-                    let state_var = self.create_var(&iter_state_name, &Type::Long);
+                    let state_var = self.create_var(&iter_state_name, &crate::data::I64);
                     self.vars.defined(state_var);
                     let mut ls = Vec::new();
                     self.fill_iter(&mut ls, code, is_type, true, true);
@@ -600,7 +600,7 @@ use #count instead"
         state: OutputState,
     ) {
         list.push(self.cl(
-            &(start.to_owned() + "Long"),
+            &(start.to_owned() + "Int"),
             &[
                 var,
                 fmt,
@@ -672,10 +672,6 @@ use #count instead"
         }
         match tp {
             Type::Integer(_, _, _) => {
-                let value = self.cl("OpConvLongFromInt", std::slice::from_ref(format));
-                self.append_data_long(list, start, var, value, state);
-            }
-            Type::Long => {
                 self.append_data_long(list, start, var, format.clone(), state);
             }
             Type::Boolean => {
@@ -1739,8 +1735,10 @@ use #count instead"
 
             let variant_name = match &attr_type {
                 Type::Boolean => "FvBool",
+                // Post-2c round 10c: wide Type::Integer (former Type::Long)
+                // maps to FvLong; narrow range maps to FvInt.
+                Type::Integer(_, max, _) if *max > i32::MAX as u32 => "FvLong",
                 Type::Integer(_, _, _) => "FvInt",
-                Type::Long => "FvLong",
                 Type::Float => "FvFloat",
                 Type::Single => "FvSingle",
                 Type::Character => "FvChar",
@@ -1791,6 +1789,14 @@ use #count instead"
     /// Compute the in-store byte size of a vector element type.
     pub(crate) fn element_store_size(&self, elm: &Type) -> i32 {
         let elm_td = self.data.type_elm(elm);
+        // Post-2c: honor size(N) on integer aliases.  Must run before the
+        // generic `known_type → database.size(...)` path below, because
+        // database.size for the 8-byte integer base returns 8 regardless.
+        if matches!(elm, Type::Integer(_, _, _))
+            && let Some(n) = self.data.forced_size(elm_td)
+        {
+            return i32::from(n);
+        }
         // B5 (2026-04-13): for a mixed struct-enum element type
         // (`Type::Enum(_, true, _)`), the parent enum's `known_type` is
         // a byte-sized enumerate (size 1) — wrong for vector storage,
@@ -1826,12 +1832,8 @@ use #count instead"
         }
         // Fallback for primitive types
         match elm {
-            Type::Integer(_, _, _)
-            | Type::Single
-            | Type::Boolean
-            | Type::Character
-            | Type::Text(_) => 4,
-            Type::Long | Type::Float => 8,
+            Type::Single | Type::Boolean | Type::Character | Type::Text(_) => 4,
+            Type::Integer(_, _, _) | Type::Float => 8,
             _ => 12, // DbRef size for reference types
         }
     }
@@ -1854,7 +1856,7 @@ use #count instead"
         if let Type::Vector(elm, _) = &types[0] {
             if !matches!(
                 elm.as_ref(),
-                Type::Integer(_, _, _) | Type::Long | Type::Float | Type::Single
+                Type::Integer(_, _, _) | Type::Float | Type::Single
             ) {
                 diagnostic!(
                     self.lexer,

@@ -92,11 +92,11 @@ fn gl_call(_method: &str, _args: &()) -> i32 {
 fn extract_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Array {
     let allocs = &stores.allocations;
     let store = &allocs[vref.store_nr as usize];
-    let v_rec = store.get_int(vref.rec, vref.pos) as u32;
+    let v_rec = store.get_u32_raw(vref.rec, vref.pos);
     if v_rec == 0 {
         return js_sys::Float32Array::new_with_length(0);
     }
-    let len = store.get_int(v_rec, 4) as u32;
+    let len = store.get_u32_raw(v_rec, 4);
     // Elements stored at byte offset 8+ within the vector data record.
     let arr = js_sys::Float32Array::new_with_length(len);
     for i in 0..len {
@@ -112,11 +112,11 @@ fn extract_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Array {
 fn extract_f64_as_f32_vector(stores: &Stores, vref: &DbRef) -> js_sys::Float32Array {
     let allocs = &stores.allocations;
     let store = &allocs[vref.store_nr as usize];
-    let v_rec = store.get_int(vref.rec, vref.pos) as u32;
+    let v_rec = store.get_u32_raw(vref.rec, vref.pos);
     if v_rec == 0 {
         return js_sys::Float32Array::new_with_length(0);
     }
-    let len = store.get_int(v_rec, 4) as u32;
+    let len = store.get_u32_raw(v_rec, 4);
     // Each f64 is 8 bytes, stored at byte offset 8+ within the vector data record.
     let arr = js_sys::Float32Array::new_with_length(len);
     for i in 0..len {
@@ -196,12 +196,12 @@ fn wgl_create_shader(stores: &mut Stores, stack: &mut DbRef) {
         let frag_patched = patch_shader(frag.str());
         let args = js_sys::Array::of2(&vert_patched.into(), &frag_patched.into());
         let result = gl_call("gl_create_shader", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (vert, frag);
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -261,12 +261,12 @@ fn wgl_upload_vertices(stores: &mut Stores, stack: &mut DbRef) {
         let data = extract_f32_vector(stores, &data_ref);
         let args = js_sys::Array::of2(&data.into(), &stride.into());
         let result = gl_call("gl_upload_vertices", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (stride, data_ref);
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -483,10 +483,10 @@ fn wgl_create_framebuffer(stores: &mut Stores, stack: &mut DbRef) {
     {
         let args = js_sys::Array::new();
         let result = gl_call("gl_create_framebuffer", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
-    stores.put(stack, -1i32);
+    stores.put(stack, -1i64);
 }
 
 fn wgl_bind_framebuffer(_stores: &mut Stores, stack: &mut DbRef) {
@@ -520,12 +520,12 @@ fn wgl_create_depth_texture(stores: &mut Stores, stack: &mut DbRef) {
     {
         let args = js_sys::Array::of2(&width.into(), &height.into());
         let result = gl_call("gl_create_depth_texture", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (width, height);
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -536,12 +536,12 @@ fn wgl_create_color_texture(stores: &mut Stores, stack: &mut DbRef) {
     {
         let args = js_sys::Array::of2(&width.into(), &height.into());
         let result = gl_call("gl_create_color_texture", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (width, height);
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -555,12 +555,12 @@ fn wgl_load_texture(stores: &mut Stores, stack: &mut DbRef) {
         // the image via the browser's native image decoder.
         let args = js_sys::Array::of1(&path.str().into());
         let result = gl_call("gl_load_texture", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = path;
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -573,25 +573,26 @@ fn wgl_upload_canvas(stores: &mut Stores, stack: &mut DbRef) {
         // Extract vector<integer> as Uint32Array and pass to JS
         let allocs = &stores.allocations;
         let store = &allocs[data_ref.store_nr as usize];
-        let v_rec = store.get_int(data_ref.rec, data_ref.pos) as u32;
+        let v_rec = store.get_u32_raw(data_ref.rec, data_ref.pos);
         let len = if v_rec == 0 {
             0
         } else {
-            store.get_int(v_rec, 4) as u32
+            store.get_u32_raw(v_rec, 4)
         };
         let arr = js_sys::Uint32Array::new_with_length(len);
         for i in 0..len {
-            let val = store.get_int(v_rec, 8 + i * 4) as u32;
+            // Post-2c: vector<integer> elements are 8 bytes; read low 32.
+            let val = store.get_int(v_rec, 8 + i * 8) as u32;
             arr.set_index(i, val);
         }
         let args = js_sys::Array::of3(&arr.into(), &width.into(), &height.into());
         let result = gl_call("gl_upload_canvas", &args);
-        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(-1.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (data_ref, width, height);
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -697,10 +698,10 @@ fn wgl_mouse_button(stores: &mut Stores, stack: &mut DbRef) {
     {
         let args = js_sys::Array::new();
         let result = gl_call("gl_mouse_button", &args);
-        stores.put(stack, result.as_f64().unwrap_or(0.0) as i32);
+        stores.put(stack, result.as_f64().unwrap_or(0.0) as i64);
     }
     #[cfg(not(feature = "wasm"))]
-    stores.put(stack, 0i32);
+    stores.put(stack, 0i64);
 }
 
 // ── GL7.2: PNG save ──────────────────────────────────────────────────────────
@@ -716,15 +717,16 @@ fn wgl_save_png(stores: &mut Stores, stack: &mut DbRef) {
         // Extract pixel data and pass to JS for download.
         let allocs = &stores.allocations;
         let store = &allocs[data_ref.store_nr as usize];
-        let v_rec = store.get_int(data_ref.rec, data_ref.pos) as u32;
+        let v_rec = store.get_u32_raw(data_ref.rec, data_ref.pos);
         let len = if v_rec == 0 {
             0
         } else {
-            store.get_int(v_rec, 4) as u32
+            store.get_u32_raw(v_rec, 4)
         };
         let arr = js_sys::Uint32Array::new_with_length(len);
         for i in 0..len {
-            let val = store.get_int(v_rec, 8 + i * 4) as u32;
+            // Post-2c: vector<integer> elements are 8 bytes; read low 32.
+            let val = store.get_int(v_rec, 8 + i * 8) as u32;
             arr.set_index(i, val);
         }
         let args = js_sys::Array::new();
@@ -769,20 +771,20 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
             None
         };
         let Some(bytes) = data else {
-            stores.put(stack, -1i32);
+            stores.put(stack, -1i64);
             return;
         };
         let font =
             match fontdue::Font::from_bytes(bytes.as_slice(), fontdue::FontSettings::default()) {
                 Ok(f) => f,
                 Err(_) => {
-                    stores.put(stack, -1i32);
+                    stores.put(stack, -1i64);
                     return;
                 }
             };
         let idx = FONTS.with(|fonts| {
             let mut fonts = fonts.borrow_mut();
-            let idx = fonts.len() as i32;
+            let idx = fonts.len() as i64;
             fonts.push(font);
             idx
         });
@@ -791,7 +793,7 @@ fn wgl_load_font(stores: &mut Stores, stack: &mut DbRef) {
     #[cfg(not(feature = "wasm"))]
     {
         let _ = path;
-        stores.put(stack, -1i32);
+        stores.put(stack, -1i64);
     }
 }
 
@@ -829,7 +831,7 @@ fn wgl_measure_text(stores: &mut Stores, stack: &mut DbRef) {
 fn wgl_text_height(stores: &mut Stores, stack: &mut DbRef) {
     let size = *stores.get::<f64>(stack);
     let _font_idx = *stores.get::<i32>(stack);
-    stores.put(stack, (size * 1.2) as i32);
+    stores.put(stack, (size * 1.2) as i64);
 }
 
 /// Rasterize_text_into(font, content, size, buf) -> integer (width)
@@ -843,7 +845,7 @@ fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
     #[cfg(not(feature = "wasm"))]
     {
         let _ = (buf_ref, size, content, font_idx);
-        stores.put(stack, 0i32);
+        stores.put(stack, 0i64);
     }
 
     #[cfg(feature = "wasm")]
@@ -893,22 +895,22 @@ fn wgl_rasterize_text_into(stores: &mut Stores, stack: &mut DbRef) {
         });
 
         if bw == 0 || pixels.is_empty() {
-            stores.put(stack, 0i32);
+            stores.put(stack, 0i64);
             return;
         }
 
         // Write alpha values into the loft vector<integer> buffer.
         let allocs = &mut stores.allocations;
         let store = &mut allocs[buf_ref.store_nr as usize];
-        let v_rec = store.get_int(buf_ref.rec, buf_ref.pos) as u32;
+        let v_rec = store.get_u32_raw(buf_ref.rec, buf_ref.pos);
         if v_rec != 0 {
-            let buf_len = store.get_int(v_rec, 4) as u32;
+            let buf_len = store.get_u32_raw(v_rec, 4);
             let count = pixels.len().min(buf_len as usize);
             for i in 0..count {
-                store.set_int(v_rec, 8 + i as u32 * 4, i32::from(pixels[i]));
+                store.set_int(v_rec, 8 + i as u32 * 8, i64::from(pixels[i]));
             }
         }
 
-        stores.put(stack, bw as i32);
+        stores.put(stack, bw as i64);
     } // cfg(feature = "wasm")
 }

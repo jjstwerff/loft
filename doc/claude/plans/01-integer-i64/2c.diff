@@ -1,0 +1,611 @@
+diff --git a/default/01_code.loft b/default/01_code.loft
+index c0b6b79..3a183f3 100644
+--- a/default/01_code.loft
++++ b/default/01_code.loft
+@@ -5,7 +5,7 @@
+ // True or false value.
+ pub type boolean size(1);
+ // 32-bit signed integer.
+-pub type integer size(4);
++pub type integer size(8);
+ // 64-bit signed integer. Use when values exceed ~2 billion.
+ pub type long size(8);
+ // 32-bit floating-point. Good for graphics and performance-sensitive math.
+diff --git a/src/data.rs b/src/data.rs
+index 3bc0796..0bba1d4 100644
+--- a/src/data.rs
++++ b/src/data.rs
+@@ -526,8 +526,8 @@ impl Type {
+ pub fn element_size(t: &Type) -> usize {
+     match t {
+         Type::Boolean | Type::Enum(_, false, _) => 1,
+-        Type::Integer(_, _, _) | Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+-        Type::Long | Type::Float => 8,
++        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
++        Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
+         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
+         Type::Reference(_, _)
+         | Type::Vector(_, _)
+@@ -1855,7 +1855,7 @@ impl Data {
+             }
+             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
+             Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
+-            Type::Integer(_, _, _) => "i32",
++            Type::Integer(_, _, _) => "i64",
+             Type::Enum(_, false, _) => "u8",
+             Type::Text(_) if context == &Context::Variable => "String",
+             Type::Text(_) => "Str",
+diff --git a/src/ops.rs b/src/ops.rs
+index e46f3bb..089da3b 100644
+--- a/src/ops.rs
++++ b/src/ops.rs
+@@ -30,24 +30,11 @@ thread_local! {
+ 
+ /// C54.G — trap (panic) on overflow or sentinel-collision result.
+ /// Uniform behaviour across debug and release builds: silent-sentinel
+-/// channel for overflow is closed.  The dual `checked_int_nullable!`
++/// channel for overflow is closed.  The dual `checked_long_nullable!`
+ /// preserves the old release behaviour for the G-hybrid `??`-context
+-/// path, where the codegen emits `OpAddIntNullable` / etc. so `??`
+-/// can discharge the null.
+-macro_rules! checked_int {
+-    ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+-        let r = $checked.unwrap_or_else(|| panic!("integer overflow: {} {} {}", $v1, $op, $v2));
+-        assert!(
+-            r != i32::MIN,
+-            "integer null-sentinel collision: {} {} {} = i32::MIN",
+-            $v1,
+-            $op,
+-            $v2
+-        );
+-        r
+-    }};
+-}
+-
++/// path, where the codegen emits `OpAddLongNullable` / etc. so `??`
++/// can discharge the null.  (`_int` variants were removed in Phase 2c —
++/// `op_*_int` functions now forward to `op_*_long`.)
+ macro_rules! checked_long {
+     ($checked:expr, $op:expr, $v1:expr, $v2:expr) => {{
+         let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
+@@ -62,34 +49,10 @@ macro_rules! checked_long {
+     }};
+ }
+ 
+-/// C54.G-hybrid nullable variant — returns the null sentinel on overflow
+-/// or sentinel-collision result.  Used when the caller has committed to
+-/// discharging the null via `??`.  Compile-time picked in
+-/// `src/parser/operators.rs::handle_operator` when the arithmetic op's
+-/// result is the immediate LHS of a `??`.
+-macro_rules! checked_int_nullable {
+-    ($checked:expr) => {{ $checked.unwrap_or(i32::MIN) }};
+-}
+-
+ macro_rules! checked_long_nullable {
+     ($checked:expr) => {{ $checked.unwrap_or(i64::MIN) }};
+ }
+ 
+-macro_rules! sentinel_int {
+-    ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+-        let r = $expr;
+-        #[cfg(debug_assertions)]
+-        assert!(
+-            r != i32::MIN,
+-            "integer null-sentinel collision: {} {} {} = i32::MIN",
+-            $v1,
+-            $op,
+-            $v2
+-        );
+-        r
+-    }};
+-}
+-
+ macro_rules! sentinel_long {
+     ($expr:expr, $op:expr, $v1:expr, $v2:expr) => {{
+         let r = $expr;
+@@ -263,18 +226,15 @@ pub fn op_negate_long(val: i64) -> i64 {
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_cast_int_from_long(val: i64) -> i32 {
+-    if val == i64::MIN {
+-        i32::MIN
+-    } else {
+-        val as i32
+-    }
++pub fn op_cast_int_from_long(val: i64) -> i64 {
++    // Post-2c: integer IS i64.  Identity preserving i64::MIN as null.
++    val
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_cast_int_from_single(val: f32) -> i32 {
+-    if val.is_nan() { i32::MIN } else { val as i32 }
++pub fn op_cast_int_from_single(val: f32) -> i64 {
++    if val.is_nan() { i64::MIN } else { val as i64 }
+ }
+ 
+ #[inline]
+@@ -285,8 +245,8 @@ pub fn op_cast_long_from_single(val: f32) -> i64 {
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_cast_int_from_float(val: f64) -> i32 {
+-    if val.is_nan() { i32::MIN } else { val as i32 }
++pub fn op_cast_int_from_float(val: f64) -> i64 {
++    if val.is_nan() { i64::MIN } else { val as i64 }
+ }
+ 
+ #[inline]
+@@ -521,40 +481,34 @@ pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_abs_int(val: i32) -> i32 {
+-    if val == i32::MIN { val } else { val.abs() }
++pub fn op_abs_int(val: i64) -> i64 {
++    op_abs_long(val)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_negate_int(val: i32) -> i32 {
+-    if val == i32::MIN { val } else { -val }
++pub fn op_negate_int(val: i64) -> i64 {
++    op_negate_long(val)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_conv_long_from_int(val: i32) -> i64 {
+-    if val == i32::MIN {
+-        i64::MIN
+-    } else {
+-        i64::from(val)
+-    }
++pub fn op_conv_long_from_int(val: i64) -> i64 {
++    // Post-2c: integer IS i64.  Identity.
++    val
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_conv_float_from_int(val: i32) -> f64 {
+-    if val == i32::MIN {
+-        f64::NAN
+-    } else {
+-        f64::from(val)
+-    }
++pub fn op_conv_float_from_int(val: i64) -> f64 {
++    op_conv_float_from_long(val)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_conv_single_from_int(val: i32) -> f32 {
+-    if val == i32::MIN {
++pub fn op_conv_single_from_int(val: i64) -> f32 {
++    // Narrow i64 → f32 with null-preservation.
++    if val == i64::MIN {
+         f32::NAN
+     } else {
+         val as f32
+@@ -563,8 +517,8 @@ pub fn op_conv_single_from_int(val: i32) -> f32 {
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_conv_bool_from_int(v: i32) -> bool {
+-    v != i32::MIN
++pub fn op_conv_bool_from_int(v: i64) -> bool {
++    op_conv_bool_from_long(v)
+ }
+ 
+ #[inline]
+@@ -582,54 +536,38 @@ pub fn op_conv_bool_from_character(v: char) -> bool {
+     v != '\0'
+ }
+ 
++// C54.A (Phase 2c) — int arithmetic is now i64.  Functions forward to
++// long counterparts; stdlib `#rust"ops::op_add_int(@v1, @v2)"` calls
++// keep working unchanged because integer's Rust type is now i64.
++
+ #[inline]
+ #[must_use]
+-pub fn op_add_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int!(v1.checked_add(v2), "+", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_add_int(v1: i64, v2: i64) -> i64 {
++    op_add_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_min_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int!(v1.checked_sub(v2), "-", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_min_int(v1: i64, v2: i64) -> i64 {
++    op_min_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_mul_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int!(v1.checked_mul(v2), "*", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_mul_int(v1: i64, v2: i64) -> i64 {
++    op_mul_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_div_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+-        checked_int!(v1.checked_div(v2), "/", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_div_int(v1: i64, v2: i64) -> i64 {
++    op_div_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+-        checked_int!(v1.checked_rem(v2), "%", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_rem_int(v1: i64, v2: i64) -> i64 {
++    op_rem_long(v1, v2)
+ }
+ 
+ // ── C54.G-hybrid — nullable integer arithmetic ────────────────────────────
+@@ -640,109 +578,62 @@ pub fn op_rem_int(v1: i32, v2: i32) -> i32 {
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_add_int_nullable(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int_nullable!(v1.checked_add(v2))
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_add_int_nullable(v1: i64, v2: i64) -> i64 {
++    op_add_long_nullable(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_min_int_nullable(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int_nullable!(v1.checked_sub(v2))
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_min_int_nullable(v1: i64, v2: i64) -> i64 {
++    op_min_long_nullable(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_mul_int_nullable(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        checked_int_nullable!(v1.checked_mul(v2))
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_mul_int_nullable(v1: i64, v2: i64) -> i64 {
++    op_mul_long_nullable(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_div_int_nullable(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+-        checked_int_nullable!(v1.checked_div(v2))
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_div_int_nullable(v1: i64, v2: i64) -> i64 {
++    op_div_long_nullable(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_rem_int_nullable(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN && v2 != 0 {
+-        checked_int_nullable!(v1.checked_rem(v2))
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_rem_int_nullable(v1: i64, v2: i64) -> i64 {
++    op_rem_long_nullable(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_logical_and_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        sentinel_int!(v1 & v2, "&", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_logical_and_int(v1: i64, v2: i64) -> i64 {
++    op_logical_and_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_logical_or_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        sentinel_int!(v1 | v2, "|", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_logical_or_int(v1: i64, v2: i64) -> i64 {
++    op_logical_or_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_exclusive_or_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        sentinel_int!(v1 ^ v2, "^", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_exclusive_or_int(v1: i64, v2: i64) -> i64 {
++    op_exclusive_or_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-/// # Panics
+-/// In debug builds, panics if `v2` is outside `0..32`.
+-pub fn op_shift_left_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        #[cfg(debug_assertions)]
+-        assert!(
+-            (0..32).contains(&v2),
+-            "integer shift out of range: {v1} << {v2}"
+-        );
+-        sentinel_int!(v1 << v2, "<<", v1, v2)
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_shift_left_int(v1: i64, v2: i64) -> i64 {
++    op_shift_left_long(v1, v2)
+ }
+ 
+ #[inline]
+ #[must_use]
+-pub fn op_shift_right_int(v1: i32, v2: i32) -> i32 {
+-    if v1 != i32::MIN && v2 != i32::MIN {
+-        v1 >> v2
+-    } else {
+-        i32::MIN
+-    }
++pub fn op_shift_right_int(v1: i64, v2: i64) -> i64 {
++    op_shift_right_long(v1, v2)
+ }
+ 
+ /**
+@@ -966,42 +857,41 @@ mod test {
+ 
+     #[test]
+     fn add_int_null_propagation() {
+-        assert_eq!(op_add_int(i32::MIN, 5), i32::MIN);
++        // Post-2c: integer IS i64.  Null sentinel is i64::MIN.
++        assert_eq!(op_add_int(i64::MIN, 5), i64::MIN);
+     }
+ 
+     #[test]
+-    #[should_panic(expected = "integer overflow")]
++    #[should_panic(expected = "long overflow")]
+     fn add_int_overflow() {
+-        let _ = op_add_int(i32::MAX, 1);
++        let _ = op_add_int(i64::MAX, 1);
+     }
+ 
+     #[test]
+-    #[should_panic(expected = "integer overflow")]
++    #[should_panic(expected = "long overflow")]
+     fn sub_int_overflow() {
+-        let _ = op_min_int(i32::MIN + 1, 2);
++        let _ = op_min_int(i64::MIN + 1, 2);
+     }
+ 
+     #[test]
+-    #[should_panic(expected = "integer overflow")]
++    #[should_panic(expected = "long overflow")]
+     fn mul_int_overflow() {
+-        let _ = op_mul_int(i32::MAX, 2);
++        let _ = op_mul_int(i64::MAX, 2);
+     }
+ 
+     #[test]
+-    #[should_panic(expected = "integer null-sentinel collision")]
++    #[should_panic(expected = "long null-sentinel collision")]
+     fn sub_int_sentinel() {
+-        let _ = op_min_int(-2_147_483_647, 1);
++        let _ = op_min_int(-9_223_372_036_854_775_807, 1);
+     }
+ 
+     #[test]
+     #[cfg(debug_assertions)]
+-    #[should_panic(expected = "integer null-sentinel collision")]
++    #[should_panic(expected = "long null-sentinel collision")]
+     fn and_int_sentinel() {
+-        // 0x80000001 & 0x80000002 = 0x80000000 = i32::MIN
+-        // Uses sentinel_int! which only asserts in debug builds.  C54.G
+-        // tightens arithmetic (checked_int!) to always trap; bitwise ops
+-        // are a separate concern tracked by `sentinel_int!`.
+-        let _ = op_logical_and_int(i32::MIN + 1, i32::MIN + 2);
++        // Post-2c: int arithmetic forwards to long; the sentinel becomes
++        // i64::MIN, not i32::MIN.
++        let _ = op_logical_and_int(i64::MIN + 1, i64::MIN + 2);
+     }
+ 
+     #[test]
+@@ -1021,31 +911,7 @@ mod test {
+         let _ = op_min_long(i64::MIN + 1, 1);
+     }
+ 
+-    /// Compile-time guard — `_int` functions must never reference `i64::MIN`.
+-    /// Integer paths use `i32::MIN` as their null sentinel.  Any `i64::MIN` check
+-    /// in an `_int` function would add an unnecessary branch on every integer op.
+-    #[test]
+-    fn no_i64_sentinel_in_int_functions() {
+-        let src = include_str!("ops.rs");
+-        // Split the source into function bodies by scanning for `fn op_` / `fn format_`
+-        // boundaries.  For every function whose name ends with `_int(`, assert that
+-        // its body does not contain `i64::MIN`.
+-        let mut in_int_fn = false;
+-        let mut fn_name = String::new();
+-        for line in src.lines() {
+-            if let Some(rest) = line.strip_prefix("pub fn ") {
+-                // Conversion functions (op_conv_*_from_int) correctly map i32::MIN → i64::MIN
+-                // or i32::MIN → f64::NAN.  Exclude them from the audit.
+-                in_int_fn = rest.contains("_int(") && !rest.contains("_from_int(");
+-                fn_name = rest.split('(').next().unwrap_or("").to_string();
+-            }
+-            if in_int_fn {
+-                assert!(
+-                    !line.contains("i64::MIN"),
+-                    "O3 violation: `_int` function `{fn_name}` references i64::MIN — \
+-                     integer paths must use i32::MIN, not the long sentinel"
+-                );
+-            }
+-        }
+-    }
++    // `no_i64_sentinel_in_int_functions` removed in C54 Phase 2c.  Int
++    // functions now legitimately reference `i64::MIN` (they forward to
++    // the long equivalents), so the old compile-time guard is inverted.
+ }
+diff --git a/src/state/codegen.rs b/src/state/codegen.rs
+index 10ec7a5..ee84f71 100644
+--- a/src/state/codegen.rs
++++ b/src/state/codegen.rs
+@@ -182,7 +182,7 @@ impl State {
+         match val {
+             Value::Int(value) => {
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(*value);
++                self.code_add(i64::from(*value));
+                 I32.clone()
+             }
+             Value::Enum(value, tp) => {
+@@ -411,8 +411,8 @@ impl State {
+                 // Uses existing OpConstInt + OpVarRef — no new opcode needed.
+                 // add_op → operator() already advances stack.position; no manual +4/+12 needed.
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(*d_nr);
+-                // clos_pos computed after ConstInt advanced stack.position by 4.
++                self.code_add(i64::from(*d_nr));
++                // clos_pos computed after ConstInt advanced stack.position by 8 (post-2c).
+                 let clos_pos = stack.position - stack.function.stack(*clos_var);
+                 stack.add_op("OpVarRef", self);
+                 self.code_add(clos_pos);
+@@ -723,7 +723,7 @@ impl State {
+             match elem {
+                 Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                     stack.add_op("OpConstInt", self);
+-                    self.code_add(0i32);
++                    self.code_add(0i64);
+                 }
+                 Type::Boolean => {
+                     stack.add_op("OpConstFalse", self);
+@@ -788,13 +788,13 @@ impl State {
+                 stack.add_op("OpVarRef", self);
+                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(0);
++                self.code_add(0i64);
+                 stack.add_op("OpSetInt", self);
+                 self.code_add(4u16);
+                 stack.add_op("OpCreateStack", self);
+                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(12);
++                self.code_add(12i64);
+                 stack.add_op("OpSetByte", self);
+                 self.code_add(4u16);
+                 self.code_add(0u16);
+@@ -822,7 +822,7 @@ impl State {
+             }
+             Type::Integer(_, _, _) | Type::Character => {
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(i32::MIN);
++                self.code_add(i64::MIN);
+             }
+             Type::Long => {
+                 stack.add_op("OpConstLong", self);
+@@ -838,7 +838,7 @@ impl State {
+             }
+             Type::Boolean => {
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(i32::MIN);
++                self.code_add(i64::MIN);
+             }
+             _ => {
+                 // For other types, push a zero-filled DbRef as a generic null.
+@@ -1135,7 +1135,7 @@ impl State {
+                 // pre-init a fn-ref slot with 16 null bytes.
+                 // d_nr = i32::MIN (integer null sentinel) + closure = null DbRef.
+                 stack.add_op("OpConstInt", self);
+-                self.code_add(i32::MIN);
++                self.code_add(i64::MIN);
+                 stack.add_op("OpNullRefSentinel", self);
+             } else {
+                 // A5.6-1/A5.6-2: 16-byte fn-ref slot: [d_nr (4B)][closure DbRef (12B)].
+diff --git a/src/store.rs b/src/store.rs
+index 2afdcc7..f12e5e1 100644
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -1112,16 +1112,16 @@ impl Store {
+     }
+ 
+     #[inline]
+-    pub fn get_int(&self, rec: u32, fld: u32) -> i32 {
++    pub fn get_int(&self, rec: u32, fld: u32) -> i64 {
+         if rec != 0 && self.valid(rec, fld) {
+             *self.addr(rec, fld)
+         } else {
+-            i32::MIN
++            i64::MIN
+         }
+     }
+ 
+     #[inline]
+-    pub fn set_int(&mut self, rec: u32, fld: u32, val: i32) -> bool {
++    pub fn set_int(&mut self, rec: u32, fld: u32, val: i64) -> bool {
+         if rec != 0 && self.valid(rec, fld) {
+             *self.addr_mut(rec, fld) = val;
+             true
+diff --git a/src/variables/mod.rs b/src/variables/mod.rs
+index f345101..a8af386 100644
+--- a/src/variables/mod.rs
++++ b/src/variables/mod.rs
+@@ -1260,9 +1260,9 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
+             2
+         }
+         Type::Boolean | Type::Enum(_, false, _) => 1,
+-        Type::Integer(_, _, _) | Type::Single | Type::Character => 4,
++        Type::Single | Type::Character => 4,
++        Type::Integer(_, _, _) | Type::Long | Type::Float => 8,
+         Type::Function(_, _, _) => 16,
+-        Type::Long | Type::Float => 8,
+         Type::Text(_) if context == &Context::Variable => size_of::<String>() as u16,
+         Type::Text(_) => size_of::<&str>() as u16,
+         Type::RefVar(_)

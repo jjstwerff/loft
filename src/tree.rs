@@ -32,7 +32,7 @@ pub fn find(
     key: &[Content],
 ) -> u32 {
     let store = keys::store(data, stores);
-    let mut rec = store.get_int(data.rec, data.pos) as u32;
+    let mut rec = store.get_i32_raw(data.rec, data.pos) as u32;
     let mut result = DbRef {
         store_nr: data.store_nr,
         rec: 0,
@@ -52,7 +52,7 @@ pub fn find(
         } else {
             cmp
         };
-        let to = store.get_int(
+        let to = store.get_i32_raw(
             rec,
             u32::from(fields)
                 + if action == Ordering::Less {
@@ -80,19 +80,19 @@ pub fn add(data: &DbRef, record: &DbRef, fields: u16, stores: &mut [Store], keys
     let mut rec = *record;
     rec.pos = u32::from(fields);
     store.set_byte(rec.rec, rec.pos + RB_FLAG, 0, 0);
-    store.set_int(rec.rec, rec.pos + RB_LEFT, 0);
-    store.set_int(rec.rec, rec.pos + RB_RIGHT, 0);
-    let new_top = if store.get_int(data.rec, data.pos) == 0 {
+    store.set_i32_raw(rec.rec, rec.pos + RB_LEFT, 0);
+    store.set_i32_raw(rec.rec, rec.pos + RB_RIGHT, 0);
+    let new_top = if store.get_i32_raw(data.rec, data.pos) == 0 {
         rec.rec
     } else {
-        let top = store.get_int(data.rec, data.pos);
+        let top = store.get_i32_raw(data.rec, data.pos);
         put(0, top, &rec, 0, 0, keys, stores) as u32
     };
     if new_top == 0 || new_top == u32::MAX {
         return; // problem encountered: probably duplicate key
     }
     let store = keys::mut_store(data, stores);
-    store.set_int(data.rec, data.pos, new_top as i32);
+    store.set_i32_raw(data.rec, data.pos, new_top as i32);
     store.set_byte(new_top, rec.pos + RB_FLAG, 0, 0);
 }
 
@@ -110,9 +110,9 @@ pub fn last(data: &DbRef, fields: u16, stores: &[Store]) -> DbRef {
 
 fn end(data: &DbRef, fields: u16, stores: &[Store], forward: u32) -> DbRef {
     let store = keys::store(data, stores);
-    let mut i = store.get_int(data.rec, data.pos);
-    while i > 0 && store.get_int(i as u32, u32::from(fields) + forward) > 0 {
-        i = store.get_int(i as u32, u32::from(fields) + forward);
+    let mut i = store.get_i32_raw(data.rec, data.pos);
+    while i > 0 && store.get_i32_raw(i as u32, u32::from(fields) + forward) > 0 {
+        i = store.get_i32_raw(i as u32, u32::from(fields) + forward);
     }
     DbRef {
         store_nr: data.store_nr,
@@ -122,11 +122,11 @@ fn end(data: &DbRef, fields: u16, stores: &[Store], forward: u32) -> DbRef {
 }
 
 fn left(store: &Store, r: &DbRef) -> i32 {
-    store.get_int(r.rec, r.pos + RB_LEFT)
+    store.get_i32_raw(r.rec, r.pos + RB_LEFT)
 }
 
 fn right(store: &Store, r: &DbRef) -> i32 {
-    store.get_int(r.rec, r.pos + RB_RIGHT)
+    store.get_i32_raw(r.rec, r.pos + RB_RIGHT)
 }
 
 fn flag(store: &Store, r: &DbRef) -> bool {
@@ -134,11 +134,11 @@ fn flag(store: &Store, r: &DbRef) -> bool {
 }
 
 fn set_left(store: &mut Store, r: &DbRef, to: i32) {
-    store.set_int(r.rec, r.pos + RB_LEFT, to);
+    store.set_i32_raw(r.rec, r.pos + RB_LEFT, to);
 }
 
 fn set_right(store: &mut Store, r: &DbRef, to: i32) {
-    store.set_int(r.rec, r.pos + RB_RIGHT, to);
+    store.set_i32_raw(r.rec, r.pos + RB_RIGHT, to);
 }
 
 fn set_flag(store: &mut Store, r: &DbRef, to: bool) {
@@ -608,10 +608,10 @@ fn moving(store: &Store, rec: &DbRef, first: u32, second: u32) -> u32 {
     if rec.rec == 0 {
         return 0;
     }
-    let mut r = store.get_int(rec.rec, rec.pos + first);
+    let mut r = store.get_i32_raw(rec.rec, rec.pos + first);
     let mut depth = 0;
-    while r > 0 && store.get_int(r as u32, rec.pos + second) > 0 {
-        r = store.get_int(r as u32, rec.pos + second);
+    while r > 0 && store.get_i32_raw(r as u32, rec.pos + second) > 0 {
+        r = store.get_i32_raw(r as u32, rec.pos + second);
         if depth > RB_MAX_DEPTH {
             return 0;
         }
@@ -639,7 +639,7 @@ pub fn validate(data: &DbRef, fields: u16, stores: &[Store], keys: &[Key]) {
     let store = keys::store(data, stores);
     let rec = DbRef {
         store_nr: data.store_nr,
-        rec: store.get_int(data.rec, data.pos) as u32,
+        rec: store.get_i32_raw(data.rec, data.pos) as u32,
         pos: u32::from(fields),
     };
     if rec.rec == 0 {
@@ -663,7 +663,7 @@ pub fn validate(data: &DbRef, fields: u16, stores: &[Store], keys: &[Key]) {
 
 pub fn remove(data: &DbRef, rec: &DbRef, fields: u16, stores: &mut [Store], keys: &[Key]) {
     let mut black = false;
-    let top = keys::store(data, stores).get_int(data.rec, data.pos) as u32;
+    let top = keys::store(data, stores).get_i32_raw(data.rec, data.pos) as u32;
     let r = DbRef {
         store_nr: rec.store_nr,
         rec: rec.rec,
@@ -674,7 +674,7 @@ pub fn remove(data: &DbRef, rec: &DbRef, fields: u16, stores: &mut [Store], keys
     // Always update the root pointer — when new_top == 0 the tree is now empty
     // and the old root must be cleared; skipping this update caused T0-3 (off-by-one
     // "phantom record" after removing all elements).
-    s.set_int(data.rec, data.pos, new_top as i32);
+    s.set_i32_raw(data.rec, data.pos, new_top as i32);
     if new_top > 0 {
         s.set_byte(new_top, u32::from(fields) + RB_FLAG, 0, 0);
     }
