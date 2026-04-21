@@ -1,7 +1,7 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use crate::data::{Context, Data, DefType, Type, Value};
+use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
@@ -235,18 +235,10 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        Type::Integer(from, to, _)
-            if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
-        {
-            Some("u8")
-        }
-        Type::Integer(from, to, _)
-            if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
-        {
-            Some("u16")
-        }
-        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => Some("i8"),
-        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => Some("i16"),
+        Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
+        Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
+        Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
+        Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
         _ => None,
     }
 }
@@ -273,33 +265,19 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         // cascading type-mismatch errors when the variable is passed to a template
         // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
         // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
-        Type::Integer(from, to, _)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 255
-                && i64::from(*from) >= 0 =>
-        {
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 && s.min >= 0 => {
             "u8"
         }
-        Type::Integer(from, to, _)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 65536
-                && i64::from(*from) >= 0 =>
+        Type::Integer(s)
+            if context == &Context::Result && s.range() - 1 <= 65536 && s.min >= 0 =>
         {
             "u16"
         }
-        Type::Integer(from, to, _)
-            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 255 =>
-        {
-            "i8"
-        }
-        Type::Integer(from, to, _)
-            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 65536 =>
-        {
-            "i16"
-        }
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 => "i8",
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 65536 => "i16",
         Type::Enum(_, false, _) => "u8",
         Type::Character | Type::Null => "i32",
-        Type::Integer(_, _, _) => "i64",
+        Type::Integer(_) => "i64",
         // null is represented as the null sentinel of the target type
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
@@ -476,7 +454,7 @@ extern crate loft;"
                         }
                         // Post-2c round 10c: wide Type::Integer (former Type::Long)
                         // passes as i64 — range > i32::MAX can't fit in i32.
-                        Type::Integer(_, max, _) if *max > i32::MAX as u32 => {
+                        Type::Integer(s) if s.is_wide() => {
                             let _ = write!(params, "{name}: i64");
                         }
                         Type::Float => {
@@ -496,8 +474,8 @@ extern crate loft;"
                 let ret = match &def.returned {
                     Type::Void => String::new(),
                     // Post-2c round 10c: wide Type::Integer returns as i64.
-                    Type::Integer(_, max, _) if *max > i32::MAX as u32 => " -> i64".to_string(),
-                    Type::Integer(_, _, _) | Type::Character => " -> i32".to_string(),
+                    Type::Integer(s) if s.is_wide() => " -> i64".to_string(),
+                    Type::Integer(_) | Type::Character => " -> i32".to_string(),
                     Type::Float => " -> f64".to_string(),
                     Type::Single => " -> f32".to_string(),
                     Type::Boolean => " -> bool".to_string(),
@@ -1207,7 +1185,7 @@ extern crate loft;"
             }
             return Ok(());
         }
-        if let Type::Integer(min, _, _) = typedef {
+        if let Type::Integer(IntegerSpec { min, .. }) = typedef {
             // Post-2c: the field's size may come from the integer alias's
             // `size(N)` annotation (captured in `Attribute.alias_d_nr` →
             // `Data::forced_size`) OR from the `Type::Integer` range.
@@ -1578,7 +1556,7 @@ extern crate loft;"
             }
         }
 
-        let needs_ret_cast = matches!(&def.returned, Type::Integer(_, _, _));
+        let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
         if needs_ret_cast {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
         } else {
@@ -1606,7 +1584,7 @@ extern crate loft;"
                     first = false;
                     write!(w, "_vp_{var}, _vc_{var}")?;
                 }
-                Type::Integer(_, _, _) | Type::Character => {
+                Type::Integer(_) | Type::Character => {
                     if !first {
                         write!(w, ", ")?;
                     }
@@ -1654,7 +1632,7 @@ extern crate loft;"
             Type::Single => "f32",
             Type::Float => "f64",
             // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-            Type::Integer(_, max, _) if *max > i32::MAX as u32 => "i64",
+            Type::Integer(s) if s.is_wide() => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
             // Vector<integer> keeps 4-byte packed element storage — this is
@@ -1664,7 +1642,7 @@ extern crate loft;"
             // narrow→wide conversion happens at read / write sites via
             // `ops::read_int_at` / `set_i32_raw`, so the in-memory element
             // layout can stay i32.
-            Type::Integer(_, _, _) => "i32",
+            Type::Integer(_) => "i32",
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }

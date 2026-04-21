@@ -1,6 +1,7 @@
 // Copyright (c) 2022-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+use crate::data::IntegerSpec;
 use std::collections::HashSet;
 
 use super::{
@@ -244,7 +245,9 @@ impl Parser {
                 .iter()
                 .zip(expected.iter())
                 .map(|(te, ex)| {
-                    if matches!(te, Type::Null) && matches!(ex, Type::Integer(_, _, true)) {
+                    if matches!(te, Type::Null)
+                        && matches!(ex, Type::Integer(IntegerSpec { not_null: true, .. }))
+                    {
                         fixed = true;
                         ex.clone()
                     } else {
@@ -256,7 +259,7 @@ impl Parser {
                 let expected = expected.clone();
                 for (elem_val, elem_tp) in elems.iter_mut().zip(expected.iter()) {
                     if matches!(elem_val, Value::Null)
-                        && matches!(elem_tp, Type::Integer(_, _, true))
+                        && matches!(elem_tp, Type::Integer(IntegerSpec { not_null: true, .. }))
                     {
                         specific!(
                             &mut self.lexer,
@@ -469,7 +472,7 @@ impl Parser {
                 (*d_nr, true, true, true)
             }
             // scalar types — dispatch to scalar match handler.
-            Type::Integer(_, _, _)
+            Type::Integer(_)
             | Type::Float
             | Type::Single
             | Type::Boolean
@@ -1315,7 +1318,7 @@ impl Parser {
         let lit_type = if let Some(n) = self.lexer.has_integer() {
             let v = n as i32;
             lit = Value::Int(if negate { -v } else { v });
-            Type::Integer(i32::MIN + 1, i32::MAX as u32, false)
+            Type::Integer(IntegerSpec::signed32())
         } else if let Some(n) = self.lexer.has_long() {
             let v = n as i64;
             lit = Value::Long(if negate { -v } else { v });
@@ -1587,7 +1590,20 @@ impl Parser {
                         cond.get_or_insert(Value::Null),
                         "<=",
                         &[Value::Int(fixed), len_call],
-                        &[Type::Integer(0, 0, false), Type::Integer(0, 0, false)],
+                        &[
+                            Type::Integer(IntegerSpec {
+                                min: 0,
+                                max: 0,
+                                not_null: false,
+                                forced_size: None,
+                            }),
+                            Type::Integer(IntegerSpec {
+                                min: 0,
+                                max: 0,
+                                not_null: false,
+                                forced_size: None,
+                            }),
+                        ],
                     );
                 } else {
                     // length == fixed
@@ -1595,7 +1611,20 @@ impl Parser {
                         cond.get_or_insert(Value::Null),
                         "==",
                         &[len_call, Value::Int(fixed)],
-                        &[Type::Integer(0, 0, false), Type::Integer(0, 0, false)],
+                        &[
+                            Type::Integer(IntegerSpec {
+                                min: 0,
+                                max: 0,
+                                not_null: false,
+                                forced_size: None,
+                            }),
+                            Type::Integer(IntegerSpec {
+                                min: 0,
+                                max: 0,
+                                not_null: false,
+                                forced_size: None,
+                            }),
+                        ],
                     );
                 }
                 // Bind head elements: head[i] = v[i]
@@ -2240,7 +2269,7 @@ impl Parser {
             }
         } else if let Type::Text(_) = in_type {
             Type::Character
-        } else if let Type::Reference(_, _) | Type::Integer(_, _, _) = in_type {
+        } else if let Type::Reference(_, _) | Type::Integer(_) = in_type {
             // I13: check for custom iterator protocol before falling back.
             let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
             if next_d_nr != u32::MAX {
@@ -2421,7 +2450,7 @@ impl Parser {
             {
                 for (elem_val, elem_tp) in elems.iter().zip(expected.iter()) {
                     if matches!(elem_val, Value::Null)
-                        && matches!(elem_tp, Type::Integer(_, _, true))
+                        && matches!(elem_tp, Type::Integer(IntegerSpec { not_null: true, .. }))
                     {
                         specific!(
                             &mut self.lexer,

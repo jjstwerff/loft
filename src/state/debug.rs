@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{STRING_NULL, State};
-use crate::data::{Attribute, Context, Data, DefType, Definition, I32, Type};
+use crate::data::{Attribute, Context, Data, DefType, Definition, I32, IntegerSpec, Type};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Key};
 use crate::log_config::{LogConfig, TailBuffer};
@@ -471,10 +471,10 @@ impl State {
     ) -> VariableValue {
         match tp {
             // Post-2c round 10c: wide Type::Integer (former Type::Long) is i64.
-            Type::Integer(_, max, _) if *max > i32::MAX as u32 => self
+            Type::Integer(s) if s.is_wide() => self
                 .peek_at::<i64>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Long),
-            Type::Integer(_, _, _) => self
+            Type::Integer(_) => self
                 .peek_at::<i32>(abs_pos)
                 .map_or(VariableValue::Unreadable("oob"), VariableValue::Integer),
             Type::Single => self
@@ -735,7 +735,13 @@ impl State {
         } else if a_nr == 0
             && !a.mutable
             && a.name == "pos"
-            && a.typedef == Type::Integer(0, 65535, false)
+            && a.typedef
+                == Type::Integer(IntegerSpec {
+                    min: 0,
+                    max: 65535,
+                    not_null: false,
+                    forced_size: None,
+                })
             && self.stack.contains_key(&p)
         {
             let pos = i32::from(*self.code::<u16>());
@@ -863,19 +869,19 @@ impl State {
     */
     pub(super) fn dump_attribute(&mut self, a: &Attribute) -> String {
         match a.typedef {
-            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 256 && min == 0 => {
+            Type::Integer(s) if s.range() - 1 <= 256 && s.min == 0 => {
                 format!("{}", i32::from(*self.code::<u8>()))
             }
-            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 && min == 0 => {
+            Type::Integer(s) if s.range() - 1 <= 65536 && s.min == 0 => {
                 format!("{}", i32::from(*self.code::<u16>()))
             }
-            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 256 => {
+            Type::Integer(s) if s.range() - 1 <= 256 => {
                 format!("{}", i32::from(*self.code::<i8>()))
             }
-            Type::Integer(min, max, _) if i64::from(max) - i64::from(min) <= 65536 => {
+            Type::Integer(s) if s.range() - 1 <= 65536 => {
                 format!("{}", i32::from(*self.code::<i16>()))
             }
-            Type::Integer(_, _, _) => format!("{}", *self.code::<i64>()),
+            Type::Integer(_) => format!("{}", *self.code::<i64>()),
             Type::Boolean => format!("{}", *self.code::<u8>() == 1),
             Type::Enum(_, false, _) => format!("{}", *self.code::<u8>()),
             Type::Single => format!("{}", *self.code::<f32>()),
@@ -1170,7 +1176,13 @@ impl State {
                     return Ok(op);
                 } else if a_nr == 0
                     && a.name == "pos"
-                    && a.typedef == Type::Integer(0, 65535, false)
+                    && a.typedef
+                        == Type::Integer(IntegerSpec {
+                            min: 0,
+                            max: 65535,
+                            not_null: false,
+                            forced_size: None,
+                        })
                 {
                     let pos = *self.code::<u16>();
                     assert!(
@@ -1423,7 +1435,7 @@ impl State {
 
     pub(super) fn dump_stack(&mut self, typedef: &Type, code: u32, data: &Data) -> String {
         match typedef {
-            Type::Integer(_, _, _) => format!("{}", *self.get_stack::<i64>()),
+            Type::Integer(_) => format!("{}", *self.get_stack::<i64>()),
             Type::Character => {
                 let c = *self.get_stack::<char>();
                 if c == char::from(0) {

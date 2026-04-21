@@ -215,8 +215,8 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     for attr in &def.attributes {
         let t = match &attr.typedef {
             // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
-            Type::Integer(_, max, _) if *max > i32::MAX as u32 => ArgT::I64,
-            Type::Integer(_, _, _) | Type::Character => ArgT::I32,
+            Type::Integer(s) if s.is_wide() => ArgT::I64,
+            Type::Integer(_) | Type::Character => ArgT::I32,
             Type::Float => ArgT::F64,
             Type::Single => ArgT::F32,
             Type::Boolean => ArgT::Bool,
@@ -236,8 +236,8 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
     let ret = match &def.returned {
         Type::Void | Type::Null => None,
         // Post-2c round 10c: wide Type::Integer (former Type::Long) → I64.
-        Type::Integer(_, max, _) if *max > i32::MAX as u32 => Some(ArgT::I64),
-        Type::Integer(_, _, _) | Type::Character => Some(ArgT::I32),
+        Type::Integer(s) if s.is_wide() => Some(ArgT::I64),
+        Type::Integer(_) | Type::Character => Some(ArgT::I32),
         Type::Float => Some(ArgT::F64),
         Type::Single => Some(ArgT::F32),
         Type::Boolean => Some(ArgT::Bool),

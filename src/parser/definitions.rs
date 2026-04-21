@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Argument, DefType, Function, HashMap, HashSet, Level, Link, Parser, Position, ToString, Type,
-    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, rename,
-    v_block, v_if,
+    Argument, DefType, Function, HashMap, HashSet, IntegerSpec, Level, Link, Parser, Position,
+    ToString, Type, Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op,
+    is_upper, rename, v_block, v_if,
 };
 
 impl Parser {
@@ -1074,7 +1074,12 @@ impl Parser {
                 // ranges (u8/u16/i8/i16/i32-range) get packed storage via
                 // `forced_size`; wide ranges (up to u32::MAX) use full
                 // 8-byte storage.  Type::Long is no longer produced.
-                return Some(Type::Integer(min, max, not_null));
+                return Some(Type::Integer(IntegerSpec {
+                    min,
+                    max,
+                    not_null,
+                    forced_size: None,
+                }));
             }
         }
         let dt = self.data.def_type(tp_nr);
@@ -1652,14 +1657,14 @@ impl Parser {
                     // If the type carries a not-null flag (e.g. integer not null),
                     // propagate it to the field's nullable flag so is_null and
                     // redundant-null-check warnings work correctly.
-                    if let Type::Integer(_, _, true) = &tp {
+                    if let Type::Integer(IntegerSpec { not_null: true, .. }) = &tp {
                         nullable = false;
                     }
                     // Capture the alias def_nr for size(N) routing.  Only
                     // real aliases (i32, u8, etc.) — "integer" is the base type
                     // and its forced_size is 8, which would override the narrow
                     // limit()-based heuristic for `integer limit(0, 255)`.
-                    if matches!(tp, Type::Integer(_, _, _)) && id != "integer" {
+                    if matches!(tp, Type::Integer(_)) && id != "integer" {
                         alias_d_nr = self.data.def_nr(&id);
                     }
                     a_type = tp;

@@ -433,7 +433,7 @@ fn format_op_args(
                 args.push_str(", ");
             }
             match a_size {
-                1 if matches!(a.typedef, Type::Integer(_, _, _)) => {
+                1 if matches!(a.typedef, Type::Integer(_)) => {
                     let v = bytecode[cursor] as i8;
                     if op_name.contains("Goto") {
                         let target = (cursor as i32 + 1 + i32::from(v)) as usize - start;

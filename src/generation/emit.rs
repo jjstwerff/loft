@@ -3,7 +3,7 @@
 
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
-use crate::data::{Block, Context, Type, Value};
+use crate::data::{Block, Context, IntegerSpec, Type, Value};
 use std::io::Write;
 
 use super::text::count_format_ops;
@@ -368,7 +368,7 @@ impl Output<'_> {
     /// Infer the result type of an expression for generating typed null defaults.
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
-            Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32, false)),
+            Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
             Value::Long(_) => Some(crate::data::I64.clone()),
             Value::Float(_) => Some(Type::Float),
             Value::Single(_) => Some(Type::Single),
@@ -402,7 +402,7 @@ impl Output<'_> {
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
             Type::Character => write!(w, "i32::MIN"),
-            Type::Integer(_, _, _) => write!(w, "i64::MIN"),
+            Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
             Type::Boolean => write!(w, "false"),

@@ -3,6 +3,7 @@
 //! Type definitions and type metadata for the database.
 
 use crate::calc;
+use crate::data::IntegerSpec;
 use crate::database::{Field, Parts, Stores};
 use crate::keys::Content;
 use std::collections::HashSet;
@@ -659,7 +660,11 @@ impl Stores {
 
     pub fn db_type(&mut self, tp: &crate::data::Type, data: &crate::data::Data) -> u16 {
         match tp {
-            crate::data::Type::Integer(minimum, _, not_null) => {
+            crate::data::Type::Integer(IntegerSpec {
+                min: minimum,
+                not_null,
+                ..
+            }) => {
                 let nullable = !not_null;
                 let s = tp.size(nullable);
                 if s == 1 {

@@ -20,7 +20,7 @@ fn short_type(tp: &Type) -> String {
         Type::Unknown(_) => "?".to_string(),
         Type::Null => "null".to_string(),
         Type::Void | Type::Never => "void".to_string(),
-        Type::Integer(_, _, _) => "int".to_string(),
+        Type::Integer(_) => "int".to_string(),
         Type::Boolean => "bool".to_string(),
         Type::Float => "float".to_string(),
         Type::Single => "single".to_string(),

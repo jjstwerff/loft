@@ -5,7 +5,8 @@
 //! Including type checking.
 
 use crate::data::{
-    Argument, Context, Data, DefType, I32, Type, Value, to_default, v_block, v_if, v_loop, v_set,
+    Argument, Context, Data, DefType, I32, IntegerSpec, Type, Value, to_default, v_block, v_if,
+    v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
@@ -855,7 +856,7 @@ impl Parser {
             {
                 return true;
             }
-            if let (Type::Enum(_, false, _), Type::Integer(_, _, _)) = (test_type, should) {
+            if let (Type::Enum(_, false, _), Type::Integer(_)) = (test_type, should) {
                 return true;
             }
             if let Type::Reference(r, _) = should
@@ -1377,7 +1378,7 @@ impl Parser {
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
         // Post-2c: honor size(N) on integer aliases.
-        if matches!(tp, Type::Integer(_, _, _)) {
+        if matches!(tp, Type::Integer(_)) {
             let alias_nr = data.type_elm(tp);
             if let Some(n) = data.forced_size(alias_nr) {
                 return i32::from(n);
@@ -1389,7 +1390,7 @@ impl Parser {
             | Type::Character
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
-            Type::Integer(_, _, _) | Type::Float => 8,
+            Type::Integer(_) | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.
@@ -1420,7 +1421,7 @@ impl Parser {
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
         let (op_name, extra) = match tp {
-            Type::Integer(_, _, _) => ("OpGetInt", None),
+            Type::Integer(_) => ("OpGetInt", None),
             Type::Float => ("OpGetFloat", None),
             Type::Single => ("OpGetSingle", None),
             Type::Text(_) => ("OpGetText", None),
@@ -1569,7 +1570,7 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
-            Type::Integer(min, _, _) => {
+            Type::Integer(IntegerSpec { min, .. }) => {
                 // Post-2c: honor size(N) on the captured alias; fall back to
                 // the limit()-based heuristic when no alias info available.
                 let s = self
@@ -1678,7 +1679,7 @@ impl Parser {
             None
         };
         let set_op = match tp {
-            Type::Integer(min, _, _) => {
+            Type::Integer(IntegerSpec { min, .. }) => {
                 let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
@@ -2049,7 +2050,7 @@ impl Parser {
                 actual.push(actual_code);
                 continue;
             }
-            if let (Type::Integer(_, _, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
+            if let (Type::Integer(_), Type::Enum(_, true, _)) = (&tp, actual_type) {
                 let cd = if matches!(actual_code, Value::Enum(_, _)) {
                     actual_code
                 } else {
@@ -2943,11 +2944,7 @@ impl Parser {
                 && !written.contains(&(a_nr as u16))
                 && matches!(
                     base_tp,
-                    Type::Integer(_, _, _)
-                        | Type::Float
-                        | Type::Single
-                        | Type::Boolean
-                        | Type::Character
+                    Type::Integer(_) | Type::Float | Type::Single | Type::Boolean | Type::Character
                 )
             {
                 let src = self.vars.var_source(a_nr as u16);
@@ -2966,7 +2963,7 @@ impl Parser {
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
         match tp {
-            Type::Integer(_, _, _) | Type::Character => self.cl("OpConvIntFromNull", &[]),
+            Type::Integer(_) | Type::Character => self.cl("OpConvIntFromNull", &[]),
             Type::Boolean => {
                 if !self.first_pass {
                     diagnostic!(

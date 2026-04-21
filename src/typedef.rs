@@ -14,7 +14,7 @@
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.
 
-use crate::data::{Data, DefType, I32, Type, Value};
+use crate::data::{Data, DefType, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
 use crate::lexer::Lexer;
@@ -340,7 +340,11 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     data.check_vector(c_nr, tp, &data.def(d_nr).position.clone());
                     tp
                 }
-                Type::Integer(minimum, _, not_null) => {
+                Type::Integer(IntegerSpec {
+                    min: minimum,
+                    not_null,
+                    ..
+                }) => {
                     let field_nullable = nullable && !not_null;
                     // Post-2c: if the field's alias has a forced size(N)
                     // annotation, prefer it over the limit()-based heuristic.

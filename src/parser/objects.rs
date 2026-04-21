@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    DefType, HashSet, I32, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT, OutputState, Parser,
-    SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format, to_default, v_block, v_if,
-    v_set,
+    DefType, HashSet, I32, IntegerSpec, Level, LexItem, LexResult, Mode, OUTPUT_DEFAULT,
+    OutputState, Parser, SKIP_TOKEN, SKIP_WIDTH, ToString, Type, Value, diagnostic_format,
+    to_default, v_block, v_if, v_set,
 };
 
 // Variable resolution, struct construction, and object parsing.
@@ -72,7 +72,12 @@ impl Parser {
                 let et = self.expression(&mut p);
                 self.lexer.token(")");
                 let tp = self.data.def(self.data.type_def_nr(&et)).known_type;
-                t = Type::Integer(0, 65536, false);
+                t = Type::Integer(IntegerSpec {
+                    min: 0,
+                    max: 65536,
+                    not_null: false,
+                    forced_size: None,
+                });
                 *code = Value::Int(i32::from(tp));
             } else {
                 t = self.parse_call(code, source, &nm);
@@ -316,7 +321,7 @@ impl Parser {
                     self.ensure_io_type(&tp.clone());
                     // Post-2c: honor `as i32` by routing to Parts::Int (4B) when
                     // the alias has size(4).
-                    let id = if let Type::Integer(min, _, _) = &tp
+                    let id = if let Type::Integer(IntegerSpec { min, .. }) = &tp
                         && self.data.forced_size(alias_nr) == Some(4)
                     {
                         if self.first_pass {
@@ -324,7 +329,7 @@ impl Parser {
                         } else {
                             self.database.int(*min, false)
                         }
-                    } else if let Type::Integer(min, _, _) = &tp
+                    } else if let Type::Integer(IntegerSpec { min, .. }) = &tp
                         && self.data.forced_size(alias_nr) == Some(1)
                     {
                         if self.first_pass {
@@ -332,7 +337,7 @@ impl Parser {
                         } else {
                             self.database.byte(*min, false)
                         }
-                    } else if let Type::Integer(min, _, _) = &tp
+                    } else if let Type::Integer(IntegerSpec { min, .. }) = &tp
                         && self.data.forced_size(alias_nr) == Some(2)
                     {
                         if self.first_pass {
@@ -391,7 +396,7 @@ impl Parser {
     /// Ensure byte/short integer types used in file I/O are registered in the database.
     pub(crate) fn ensure_io_type(&mut self, t: &Type) {
         match t {
-            Type::Integer(min, _, _) => match t.size(false) {
+            Type::Integer(IntegerSpec { min, .. }) => match t.size(false) {
                 1 => {
                     self.database.byte(*min, false);
                 }
@@ -447,7 +452,7 @@ impl Parser {
         self.ensure_io_type(&val_type_clone);
         // Post-2c: if the value was written as `… as <alias>` and the alias
         // has size(N), narrow the serialisation to the alias's db type.
-        let db_tp = if let Type::Integer(min, _, _) = val_type
+        let db_tp = if let Type::Integer(IntegerSpec { min, .. }) = val_type
             && let Some(n) = self.data.forced_size(cast_alias)
         {
             if self.first_pass {
@@ -472,7 +477,7 @@ impl Parser {
             // is the integer base — those are intentional wide writes.
             if !self.first_pass
                 && !self.default
-                && matches!(val_type, Type::Integer(_, _, _))
+                && matches!(val_type, Type::Integer(_))
                 && cast_alias == u32::MAX
             {
                 diagnostic!(

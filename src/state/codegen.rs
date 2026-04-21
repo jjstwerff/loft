@@ -13,7 +13,7 @@
 //! (control flow).
 
 use super::State;
-use crate::data::{Block, Context, Data, I32, Type, Value};
+use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
@@ -289,7 +289,7 @@ impl State {
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
                     match &elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                        Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpGetInt", self);
                         }
                         Type::Float => stack.add_op("OpGetFloat", self),
@@ -315,7 +315,7 @@ impl State {
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
                 match &elem_tp {
-                    Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                    Type::Integer(_) | Type::Function(_, _, _) => {
                         stack.add_op("OpVarInt", self);
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
@@ -360,7 +360,7 @@ impl State {
                     self.code_add(var_pos);
                     self.generate(value, stack, false);
                     match &elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                        Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpSetInt", self);
                         }
                         Type::Float => stack.add_op("OpSetFloat", self),
@@ -385,7 +385,7 @@ impl State {
                 let elem_abs_pos = tuple_var_base + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 match &elem_tp {
-                    Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                    Type::Integer(_) | Type::Function(_, _, _) => {
                         stack.add_op("OpPutInt", self);
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
@@ -717,7 +717,7 @@ impl State {
         };
         for elem in &elems {
             match elem {
-                Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                Type::Integer(_) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
                     self.code_add(0i64);
                 }
@@ -815,7 +815,7 @@ impl State {
             Type::Reference(_, _) | Type::Enum(_, true, _) => {
                 stack.add_op("OpConvRefFromNull", self);
             }
-            Type::Integer(_, _, _) | Type::Character => {
+            Type::Integer(_) | Type::Character => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
             }
@@ -1781,7 +1781,7 @@ impl State {
         let code = self.code_pos;
         self.vars.insert(code, variable);
         match stack.function.tp(variable) {
-            Type::Integer(_, _, _) => stack.add_op("OpVarInt", self),
+            Type::Integer(_) => stack.add_op("OpVarInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpVarFnRef", self);
                 // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
@@ -1834,7 +1834,7 @@ impl State {
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp {
-                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                        Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpVarInt", self);
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
@@ -1866,7 +1866,7 @@ impl State {
         if let Type::RefVar(tp) = stack.function.tp(variable) {
             let txt = matches!(**tp, Type::Text(_));
             match &**tp {
-                Type::Integer(_, _, _) => stack.add_op("OpGetInt", self),
+                Type::Integer(_) => stack.add_op("OpGetInt", self),
                 Type::Character => stack.add_op("OpGetCharacter", self),
                 Type::Single => stack.add_op("OpGetSingle", self),
                 Type::Float => stack.add_op("OpGetFloat", self),
@@ -1992,17 +1992,25 @@ impl State {
 
     pub(super) fn add_const(&mut self, tp: &Type, p: &Value, stack: &Stack, before_stack: u16) {
         match tp {
-            Type::Integer(0, 255, _) => {
+            Type::Integer(IntegerSpec {
+                min: 0, max: 255, ..
+            }) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u8);
                 }
             }
-            Type::Integer(-128, 127, _) => {
+            Type::Integer(IntegerSpec {
+                min: -128,
+                max: 127,
+                ..
+            }) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i8);
                 }
             }
-            Type::Integer(0, 65535, _) => {
+            Type::Integer(IntegerSpec {
+                min: 0, max: 65535, ..
+            }) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as u16);
                 } else if let Value::Var(v) = p {
@@ -2010,12 +2018,16 @@ impl State {
                     self.code_add(before_stack - r);
                 }
             }
-            Type::Integer(-32768, 32767, _) => {
+            Type::Integer(IntegerSpec {
+                min: -32768,
+                max: 32767,
+                ..
+            }) => {
                 if let Value::Int(nr) = p {
                     self.code_add(*nr as i16);
                 }
             }
-            Type::Integer(_, _, _) => {
+            Type::Integer(_) => {
                 if let Value::Int(nr) = p {
                     self.code_add(i64::from(*nr));
                 } else if let Value::Long(val) = p {
@@ -2084,7 +2096,7 @@ impl State {
             self.code_add(var_pos);
             self.generate(value, stack, false);
             match *tp {
-                Type::Integer(_, _, _) => stack.add_op("OpSetInt", self),
+                Type::Integer(_) => stack.add_op("OpSetInt", self),
                 Type::Character => stack.add_op("OpSetCharacter", self),
                 Type::Single => stack.add_op("OpSetSingle", self),
                 Type::Float => stack.add_op("OpSetFloat", self),
@@ -2113,7 +2125,7 @@ impl State {
         self.generate(value, stack, false);
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
-            Type::Integer(_, _, _) => stack.add_op("OpPutInt", self),
+            Type::Integer(_) => stack.add_op("OpPutInt", self),
             Type::Function(_, _, _) => {
                 stack.add_op("OpPutFnRef", self);
                 // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
@@ -2150,7 +2162,7 @@ impl State {
                     // After popping previous elements, adjust position.
                     let pos = stack.position - elem_abs;
                     match &elems[i] {
-                        Type::Integer(_, _, _) | Type::Function(_, _, _) => {
+                        Type::Integer(_) | Type::Function(_, _, _) => {
                             stack.add_op("OpPutInt", self);
                         }
                         Type::Boolean => stack.add_op("OpPutBool", self),

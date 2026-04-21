@@ -671,7 +671,7 @@ use #count instead"
             }
         }
         match tp {
-            Type::Integer(_, _, _) => {
+            Type::Integer(_) => {
                 self.append_data_long(list, start, var, format.clone(), state);
             }
             Type::Boolean => {
@@ -1150,7 +1150,7 @@ use #count instead"
         // never runs `a` directly — the parallel map handles that.)
         let elem_var_nr = self.create_var(elem_var, &elem_tp);
         self.vars.defined(elem_var_nr);
-        if matches!(elem_tp, Type::Integer(_, _, _)) {
+        if matches!(elem_tp, Type::Integer(_)) {
             self.vars.in_use(elem_var_nr, true);
         }
 
@@ -1266,7 +1266,7 @@ use #count instead"
         };
         let b_var = self.create_var(result_name, &b_type);
         self.vars.defined(b_var);
-        if matches!(b_type, Type::Integer(_, _, _) | Type::Unknown(_)) {
+        if matches!(b_type, Type::Integer(_) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
         }
         // Reference return: b_var borrows from the result vector — must not be freed.
@@ -1737,8 +1737,8 @@ use #count instead"
                 Type::Boolean => "FvBool",
                 // Post-2c round 10c: wide Type::Integer (former Type::Long)
                 // maps to FvLong; narrow range maps to FvInt.
-                Type::Integer(_, max, _) if *max > i32::MAX as u32 => "FvLong",
-                Type::Integer(_, _, _) => "FvInt",
+                Type::Integer(s) if s.is_wide() => "FvLong",
+                Type::Integer(_) => "FvInt",
                 Type::Float => "FvFloat",
                 Type::Single => "FvSingle",
                 Type::Character => "FvChar",
@@ -1792,7 +1792,7 @@ use #count instead"
         // Post-2c: honor size(N) on integer aliases.  Must run before the
         // generic `known_type → database.size(...)` path below, because
         // database.size for the 8-byte integer base returns 8 regardless.
-        if matches!(elm, Type::Integer(_, _, _))
+        if matches!(elm, Type::Integer(_))
             && let Some(n) = self.data.forced_size(elm_td)
         {
             return i32::from(n);
@@ -1833,7 +1833,7 @@ use #count instead"
         // Fallback for primitive types
         match elm {
             Type::Single | Type::Boolean | Type::Character | Type::Text(_) => 4,
-            Type::Integer(_, _, _) | Type::Float => 8,
+            Type::Integer(_) | Type::Float => 8,
             _ => 12, // DbRef size for reference types
         }
     }
@@ -1854,10 +1854,7 @@ use #count instead"
             return Type::Void;
         }
         if let Type::Vector(elm, _) = &types[0] {
-            if !matches!(
-                elm.as_ref(),
-                Type::Integer(_, _, _) | Type::Float | Type::Single
-            ) {
+            if !matches!(elm.as_ref(), Type::Integer(_) | Type::Float | Type::Single) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,

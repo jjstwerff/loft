@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Argument, DefType, Function, I32, Level, Parser, ToString, Type, Value, diagnostic_format,
-    field_id, v_block, v_if, v_loop, v_set,
+    Argument, DefType, Function, I32, IntegerSpec, Level, Parser, ToString, Type, Value,
+    diagnostic_format, field_id, v_block, v_if, v_loop, v_set,
 };
 
 // Lambda and vector expression parsing.
@@ -859,7 +859,7 @@ impl Parser {
         // O8.5: try const-unrolling for [for i in A..B [if cond] { expr(i) }].
         // If the range bounds are const and the body folds for every i,
         // emit a pre-computed literal vector instead of a runtime loop.
-        if matches!(in_t, Type::Integer(_, _, _))
+        if matches!(in_t, Type::Integer(_))
             && let Some(unrolled) =
                 self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
         {
@@ -1263,7 +1263,7 @@ impl Parser {
     pub(crate) fn parse_multiply(&mut self, res: &mut Vec<Value>) -> Option<Type> {
         let mut code = Value::Null;
         let tp = self.parse_operators(&Type::Unknown(0), &mut code, &mut Type::Null, 0);
-        if !matches!(tp, Type::Integer(_, _, _)) {
+        if !matches!(tp, Type::Integer(_)) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -1560,7 +1560,7 @@ impl Parser {
             return u16::MAX;
         }
         match in_t {
-            Type::Integer(min, _, _) => match in_t.size(false) {
+            Type::Integer(IntegerSpec { min, .. }) => match in_t.size(false) {
                 1 if *min == 0 => self.database.name("byte"),
                 1 => self.database.name(&format!("byte<{min},false>")),
                 2 => self.database.name(&format!("short<{min},false>")),
