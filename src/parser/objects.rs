@@ -461,6 +461,30 @@ impl Parser {
                 }
             }
         } else {
+            // Post-2c lint: a bare `f += <integer>` writes 8 bytes.  For
+            // binary file formats (BigEndian / LittleEndian) that silently
+            // breaks record alignment with older specs that assumed i32;
+            // for text files 8 bytes of decimal is fine.  We can't tell
+            // the file format at parse time, so warn generically — the
+            // user silences the lint by writing `f += x as i32` (or the
+            // correct byte-width alias).  Skip on the stdlib (`!self.default`)
+            // and on explicit `as integer` (full 8-byte) where `cast_alias`
+            // is the integer base — those are intentional wide writes.
+            if !self.first_pass
+                && !self.default
+                && matches!(val_type, Type::Integer(_, _, _))
+                && cast_alias == u32::MAX
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`f += <integer>` without a width cast writes 8 bytes; \
+                     for binary files (BigEndian / LittleEndian) add `as i8` \
+                     / `as i16` / `as i32` / `as u8` / `as u16` / `as u32` to \
+                     pick the exact byte width.  Use `as integer` to silence \
+                     this warning when 8-byte writes are intentional"
+                );
+            }
             self.get_type(val_type)
         };
         let temp_var = self.vars.unique("wf", val_type, &mut self.lexer);

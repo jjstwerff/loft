@@ -107,7 +107,7 @@ fn sequential_file_blocks_read_conflict() {
    assert(f#read(4) as i32 == 0x11223344, \"i32-be-rt\"); }
   delete(\"slots_test_a.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
-   f += 0x0102030405060708; assert(f#size == 8, \"long-sz\"); }
+   f += 0x0102030405060708 as integer; assert(f#size == 8, \"long-sz\"); }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(8) as integer == 0x0102030405060708, \"long-rt\"); }
   delete(\"slots_test_a.bin\");
@@ -131,7 +131,7 @@ fn sequential_file_blocks_read_conflict() {
   delete(\"slots_test_b.bin\");
   {f = file(\"slots_test_a.bin\"); f#format = BigEndian;
    f += 0 as u8; f += 1 as u8; f += 0x0203 as u16; f += 0x04050607 as i32;
-   f += 0x08090a0b0c0d0e0f; f += \"Hello world!\"; }
+   f += 0x08090a0b0c0d0e0f as integer; f += \"Hello world!\"; }
   {f = file(\"slots_test_a.bin\"); f#format = LittleEndian;
    assert(f#read(4) as i32 == 0x03020100, \"mixed-4\");
    f#next = 16;

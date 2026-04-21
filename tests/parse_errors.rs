@@ -1148,3 +1148,35 @@ fn emit_repro_produces_runnable_loft_file() {
         "emit-repro: runnable `fn main() {{ test(); }}` tail missing from {path}:\n---\n{contents}"
     );
 }
+
+// ── Binary-format lint (Phase 2c post-migration hardening) ────────────
+//
+// `f += <integer>` without an explicit width cast writes 8 bytes post-2c,
+// which silently breaks pre-2c binary writers expecting 4-byte fields.
+// The parser warns when it sees a bare integer write to a file variable.
+// Explicit width casts (`as i32`, `as u8`, `as integer`, etc.) silence
+// the warning.
+
+#[test]
+fn binary_write_bare_integer_warns() {
+    code!("fn test() {\n  f = file(\"/tmp/lint_a.bin\");\n  f += 42;\n}")
+        .warning(
+            "`f += <integer>` without a width cast writes 8 bytes; for binary \
+             files (BigEndian / LittleEndian) add `as i8` / `as i16` / `as i32` \
+             / `as u8` / `as u16` / `as u32` to pick the exact byte width.  Use \
+             `as integer` to silence this warning when 8-byte writes are \
+             intentional at binary_write_bare_integer_warns:3:11",
+        );
+}
+
+#[test]
+fn binary_write_narrow_cast_silent() {
+    // `as i32` gives an explicit 4-byte width → no warning.
+    code!("fn test() {\n  f = file(\"/tmp/lint_b.bin\");\n  f += 42 as i32;\n}");
+}
+
+#[test]
+fn binary_write_integer_cast_silent() {
+    // `as integer` documents an intentional 8-byte write → no warning.
+    code!("fn test() {\n  f = file(\"/tmp/lint_c.bin\");\n  f += 42 as integer;\n}");
+}
