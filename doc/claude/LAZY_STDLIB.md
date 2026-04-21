@@ -7,9 +7,9 @@
 Design note: load `default/*.loft` modules and their Rust backing
 **only when the user's code references them**, instead of always.
 
-Status: **design, not implemented.**  Regex (see MATCH.md Tier 1) is
-the first concrete consumer that motivates the mechanism; the design
-stands on its own and generalises to many other features.
+Status: **design, not implemented.**  Regex (see [REGEX.md](REGEX.md))
+is the first concrete consumer that motivates the mechanism; the
+design stands on its own and generalises to many other features.
 
 ---
 
@@ -51,12 +51,10 @@ encounters a trigger, it loads the module before resuming.
 
 | Trigger kind | Example | Consumer |
 |---|---|---|
-| **Token** | `r"..."` raw-regex literal | `regex` |
-| **Type reference** | `Date`, `Time` | `datetime` |
+| **Type reference** | `Date`, `Time`, `Regex` | `datetime`, `regex` |
 | **Identifier reference** | `http.get(...)` | `http` (client) |
-| **Match pattern kind** | regex arm in `match` | `regex` |
 | **Construction** | `Scene { ... }` | `renderer` |
-| **Function call** | `play(sound)` | `audio` |
+| **Function call** | `play(sound)`, `regex(...)` | `audio`, `regex` |
 
 All triggers resolve through a single `load_module(name)` call that
 is idempotent — once loaded, the module stays for the rest of the
@@ -135,7 +133,7 @@ Sub-modules are the right shape whenever:
 | `images` (02) | always-load core | (always) |
 | `text` (03) | always-load core | (always) |
 | `json` | currently always-loaded | `JsonValue` reference; `json_parse` / `json_stringify` call |
-| `regex` | **new** — first lazy consumer | `r"..."` literal; regex arm in `match` |
+| `regex` | **new** — first lazy consumer | `Regex` type reference; `regex(...)` compile call |
 | `datetime` | planned — **two-tier** case study (see below) | core: `Date` / `Time` / `DateTime` / `Duration` / `Instant` / `Period` type reference.  Sub-module `tzdata`: `TimeZone` / `ZoneId` reference or zone-aware conversion.  Sub-module `locale`: locale-aware format/parse call. |
 | `http_client` | planned (BROADENING.md) | `http.get` / `http.post` / `http.Client` reference |
 | `server` | planned (WEB_SERVER_LIB.md) | `Server` / `Route` type reference |
@@ -160,8 +158,8 @@ closes the loop on the mechanism without shipping a new feature.
   penalty.  Users get regex, datetime, HTTP, crypto "for free" in
   source — no `use x;` boilerplate, no tax when unused.
 - **Library upgrades become invisible.**  Swapping the regex engine
-  (e.g. linear-time → compile-generated DFA, MATCH.md Tier 2) does
-  not change the user's source.
+  (e.g. linear-time NFA → compile-generated DFA, see
+  [REGEX.md](REGEX.md)) does not change the user's source.
 - **Bytecode / `.loftc` size scales with usage.**  Matters for WASM
   (HTML_EXPORT.md) where payload size affects load time.
 - **Template for external packages** (PACKAGES.md).  The same
@@ -651,9 +649,12 @@ datetime, http, ...) reuses the mechanism.
    `#[cfg(feature = "wasm")]`.  Measure WASM artifact delta.
    Validates the **host-bridge layer** on an existing feature
    before any new modules ship.
-3. **Ship regex (MATCH.md Tier 1) as the first new consumer.**
-   Validates token-level triggers and single-module payloads
-   (code-only; no host bridge needed).
+3. **Ship regex (see [REGEX.md](REGEX.md)) as the first new consumer.**
+   Validates type-reference and function-call triggers, plus
+   single-module payloads (code-only; no host bridge needed).
+   Regex is a **standalone library** — no embedding into `match`
+   syntax; users call `regex(...)`, match on its capture struct, or
+   pipe the captures into a regular `match` arm.
 4. **Ship datetime core + `tzdata` sub-module, with tzdata bridged
    to `Intl.DateTimeFormat` on WASM.**  Validates type-reference
    triggers, sub-module loading, external-blob data on native, and
@@ -686,7 +687,9 @@ datetime, http, ...) reuses the mechanism.
 
 ## Related documents
 
-- [MATCH.md](MATCH.md) — regex in `match`, the first consumer.
+- [REGEX.md](REGEX.md) — regex library design; the first lazy consumer.
+- [MATCH.md](MATCH.md) — base match semantics (regex is a library, not
+  a match-pattern kind).
 - [BROADENING.md](BROADENING.md) — why cold-start matters for
   loft's non-game reach.
 - [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — `.loftc` cache design
