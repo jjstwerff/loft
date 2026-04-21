@@ -51,7 +51,14 @@ pub static I64: Type = Type::Integer(IntegerSpec::wide());
 /// that diagnostic output was built around.  The optional
 /// `forced_size` is printed only when present, as a trailing
 /// `, size(N)`.
-#[derive(PartialEq, Eq, Clone, Copy, Hash)]
+///
+/// `PartialEq` / `Eq` / `Hash` are implemented manually to ignore
+/// `forced_size` — the annotation is a storage hint, not a value-type
+/// difference, and the rest of the compiler uses `==` / `is_equal`
+/// to match integer-valued types uniformly.  Code that cares about
+/// the storage width reads `spec.forced_size` or calls
+/// `spec.byte_width()` directly.
+#[derive(Clone, Copy)]
 pub struct IntegerSpec {
     /// Inclusive lower bound.  `i32::MIN` is reserved as the null
     /// sentinel; plain-integer templates use `i32::MIN + 1`.
@@ -208,6 +215,29 @@ impl Debug for IntegerSpec {
             write!(f, ", size({})", n.get())?;
         }
         Ok(())
+    }
+}
+
+impl PartialEq for IntegerSpec {
+    /// Equality ignores `forced_size`: the annotation is a storage
+    /// hint, not a semantic difference.  `vector<i32>` and
+    /// `vector<integer limit(-2147483647, 2147483647)>` have the same
+    /// value-type even though the former is stored in 4 bytes.  Code
+    /// that needs the storage distinction reads `spec.forced_size`
+    /// or calls `spec.byte_width()`.
+    fn eq(&self, other: &Self) -> bool {
+        self.min == other.min && self.max == other.max && self.not_null == other.not_null
+    }
+}
+
+impl Eq for IntegerSpec {}
+
+impl std::hash::Hash for IntegerSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.min.hash(state);
+        self.max.hash(state);
+        self.not_null.hash(state);
+        // forced_size intentionally omitted — see PartialEq.
     }
 }
 

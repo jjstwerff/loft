@@ -1096,7 +1096,27 @@ impl Parser {
             } else if matches!(self.data.def(tp_nr).returned, Type::Text(_)) {
                 Some(Type::Text(dep))
             } else {
-                Some(self.data.def(tp_nr).returned.clone())
+                // P184 Phase 1: when a user-typed integer alias carries an
+                // explicit `size(N)` annotation (e.g. `i32`, `u8`, `u16`),
+                // stamp the forced width onto the returned Type::Integer so
+                // the signal flows through `Box<Type>` in `Type::Vector` /
+                // `Hash` / `Sorted` / `Index` to the element resolver
+                // (Phase 2) and the indexing codegen (Phase 3).
+                //
+                // Skip the base `integer` primitive: its `forced_size = 8`
+                // matches the default heuristic; stamping would clutter
+                // every `Type::Integer` with `Some(8)` for no benefit.
+                let mut tp = self.data.def(tp_nr).returned.clone();
+                if type_name != "integer"
+                    && let Type::Integer(mut spec) = tp
+                    && let Some(forced) = self.data.forced_size(tp_nr)
+                    && let Some(nz) = std::num::NonZeroU8::new(forced)
+                    && forced != 8
+                {
+                    spec.forced_size = Some(nz);
+                    tp = Type::Integer(spec);
+                }
+                Some(tp)
             }
         } else {
             None
