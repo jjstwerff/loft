@@ -21,7 +21,7 @@ fn decode_into_store<R: std::io::Read>(
     // Allocate with 8-byte vector header: [next:4][length:4][pixel data...]
     let img = store.claim((buf_size / 8) as u32 + 2);
     let pixel_count = buf_size / 3; // 3 bytes per Pixel (r, g, b as u8)
-    store.set_int(img, 4, pixel_count as i32);
+    store.set_int(img, 4, pixel_count as i64);
     // Decode PNG directly into offset 8 (after the vector header).
     let buf = store.buffer(img);
     let header_bytes = 8;
