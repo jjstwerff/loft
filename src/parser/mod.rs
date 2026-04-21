@@ -1570,13 +1570,17 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
-            Type::Integer(IntegerSpec { min, .. }) => {
-                // Post-2c: honor size(N) on the captured alias; fall back to
-                // the limit()-based heuristic when no alias info available.
+            Type::Integer(spec) => {
+                // Post-2c: honour size(N) on the captured alias first.  P184
+                // Phase 3 adds a second fallback to `IntegerSpec.forced_size`
+                // (stamped by Phase 1 from user-typed integer aliases like
+                // `i32`) so callers that pass `alias = u32::MAX` — e.g. the
+                // vector-indexing codegen in `parser/fields.rs` — still see
+                // the correct narrow width.  Final fallback: bounds heuristic.
                 let s = self
                     .data
                     .forced_size(alias)
-                    .unwrap_or_else(|| tp.size(nullable));
+                    .unwrap_or_else(|| spec.byte_width(nullable));
                 debug_assert!(
                     matches!(s, 1 | 2 | 4 | 8),
                     "get_val: unexpected integer field width s={s} \
@@ -1584,9 +1588,9 @@ impl Parser {
                      by the OpGet* family"
                 );
                 if s == 1 {
-                    self.cl("OpGetByte", &[code, p, Value::Int(*min)])
+                    self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
                 } else if s == 2 {
-                    self.cl("OpGetShort", &[code, p, Value::Int(*min)])
+                    self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
                 } else if s == 4 {
                     self.cl("OpGetInt4", &[code, p])
                 } else {

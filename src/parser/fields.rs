@@ -409,7 +409,18 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        let elm_size = i32::from(self.database.size(known));
+        // P184 Phase 3: honour `Type::Integer`'s forced_size when present
+        // (Phase 1 stamped it from the user-typed alias).  Without this,
+        // `elm_size` defaults to the base `integer`'s 8-byte stride and
+        // indexing `vector<i32>[i]` reads 8 bytes from a 4-byte-stride
+        // storage, returning `(v[i+1] << 32) | v[i]`.  The helper
+        // `IntegerSpec::byte_width` is the single source of truth —
+        // falls back to the bounds heuristic when forced_size is None.
+        let elm_size = if let Type::Integer(spec) = etp {
+            i32::from(spec.byte_width(true))
+        } else {
+            i32::from(self.database.size(known))
+        };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 // Linked structs: array stores 4-byte record pointers → use OpVectorRef

@@ -9831,3 +9831,55 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P184: `vector<i32>` honours the `size(4)` annotation on the alias.
+/// Before Phase 3, indexing returned `(v[i+1] << 32) | v[i]` because
+/// storage was 4-byte stride but `OpGetVector` / `get_val` emitted
+/// 8-byte reads.
+#[test]
+fn p184_vector_i32_narrow_read() {
+    code!(
+        "struct P184Box { v: vector<i32> }
+fn test() {
+    b = P184Box { v: [] };
+    b.v += [1 as i32, 2 as i32, 3 as i32];
+    assert(b.v[0] == 1, \"v[0] expected 1, got {b.v[0]}\");
+    assert(b.v[1] == 2, \"v[1] expected 2, got {b.v[1]}\");
+    assert(b.v[2] == 3, \"v[2] expected 3, got {b.v[2]}\");
+    assert(len(b.v) == 3, \"len expected 3, got {len(b.v)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 control: `vector<integer>` still uses 8-byte-stride storage.
+#[test]
+fn p184_vector_integer_wide_control() {
+    code!(
+        "struct P184WideBox { v: vector<integer> }
+fn test() {
+    b = P184WideBox { v: [] };
+    b.v += [1, 2, 3];
+    assert(b.v[0] == 1, \"v[0] expected 1, got {b.v[0]}\");
+    assert(b.v[1] == 2, \"v[1] expected 2, got {b.v[1]}\");
+    assert(b.v[2] == 3, \"v[2] expected 3, got {b.v[2]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184: `vector<u8>` narrow storage — 1-byte stride.
+#[test]
+fn p184_vector_u8_narrow_read() {
+    code!(
+        "struct P184U8Box { v: vector<u8> }
+fn test() {
+    b = P184U8Box { v: [] };
+    b.v += [1 as u8, 2 as u8, 255 as u8];
+    assert(b.v[0] == 1, \"v[0]\");
+    assert(b.v[1] == 2, \"v[1]\");
+    assert(b.v[2] == 255, \"v[2]\");
+}"
+    )
+    .result(Value::Null);
+}
