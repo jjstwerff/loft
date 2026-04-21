@@ -1863,7 +1863,8 @@ use #count instead"
                 );
                 return Type::Void;
             }
-            *val = self.cl("OpSortVector", &[list[0].clone(), self.type_info(elm)]);
+            let info = self.type_info(elm);
+            *val = self.cl("OpSortVector", &[list[0].clone(), info]);
         } else {
             diagnostic!(self.lexer, Level::Error, "sort requires a vector argument");
         }

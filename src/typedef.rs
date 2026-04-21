@@ -331,35 +331,10 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if c_nr == u32::MAX {
                         continue;
                     }
-                    // P184 Phase 2: when the content Type::Integer carries a
-                    // forced_size annotation (Phase 1 stamped it from the
-                    // user-typed alias), register a narrow database element
-                    // type so vector storage uses the right stride.  Without
-                    // this, `vector<i32>` elements stay at 8-byte (default
-                    // `integer`) stride even though the alias demands 4.
-                    let narrow_c_tp = if let Type::Integer(spec) = &*c_type
-                        && let Some(forced) = spec.forced_size
-                    {
-                        // Vector elements are not nullable (unlike struct
-                        // fields, which honour their attr-level nullable
-                        // flag) — the bounds set the full representable
-                        // range, and there's no per-element null sentinel.
-                        //
-                        // Store byte + int4 slots use direct raw encoding;
-                        // vector-literal writes (Phase 4) agree with Phase 3
-                        // reads.  Short (Parts::Short) still uses the legacy
-                        // `raw = val - min + 1` encoding that diverges from
-                        // raw-byte vector copy paths — narrow `vector<u16>`
-                        // / `vector<i16>` awaits Phase 4's write-path work.
-                        match forced.get() {
-                            1 => Some(database.byte(spec.min, false)),
-                            4 => Some(database.int(spec.min, false)),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-                    let c_tp = if let Some(narrow) = narrow_c_tp {
+                    // P184 Phase 5: route through the shared helper so locals,
+                    // parameters, and return types (Phase 5 migrations below)
+                    // use the same narrow-detection logic as struct fields.
+                    let c_tp = if let Some(narrow) = data.narrow_vector_content(&c_type, database) {
                         narrow
                     } else {
                         let mut c_tp = data.def(c_nr).known_type;

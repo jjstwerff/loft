@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Argument, DefType, Function, I32, IntegerSpec, Level, Parser, ToString, Type, Value,
-    diagnostic_format, field_id, v_block, v_if, v_loop, v_set,
+    Argument, DefType, Function, I32, Level, Parser, ToString, Type, Value, diagnostic_format,
+    field_id, v_block, v_if, v_loop, v_set,
 };
 
 // Lambda and vector expression parsing.
@@ -1403,18 +1403,13 @@ impl Parser {
             self.lexer.pos()
         );
         for p in res {
-            let elem_known =
-                if ed_nr == u32::from(u16::MAX) || self.data.def(ed_nr).known_type == u16::MAX {
-                    0
-                } else if let Type::Vector(elem_tp, _) = in_t {
-                    // For vector-typed elements, resolve the inner vector's database
-                    // type correctly (not the generic "vector" definition's known_type).
-                    let ek = self.database.db_type(elem_tp, &self.data);
-                    self.database.vector(ek)
-                } else {
-                    self.data.def(ed_nr).known_type
-                };
-            let known = Value::Int(i32::from(self.database.vector(elem_known)));
+            // P184 Phase 5: route through `vector_of` so narrow integer
+            // aliases (i32, u8) produce the same narrow-element vector
+            // db type as struct fields get via `fill_database`.  Without
+            // this the literal-append path would register
+            // `vector<integer>` (8-byte stride) into a narrow-registered
+            // local, and reads would mis-align with writes.
+            let known = Value::Int(i32::from(self.vector_of(in_t)));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()
@@ -1551,21 +1546,41 @@ impl Parser {
         db
     }
 
-    pub(crate) fn type_info(&self, in_t: &Type) -> Value {
+    pub(crate) fn type_info(&mut self, in_t: &Type) -> Value {
         Value::Int(i32::from(self.get_type(in_t)))
     }
 
-    pub(crate) fn get_type(&self, in_t: &Type) -> u16 {
+    pub(crate) fn get_type(&mut self, in_t: &Type) -> u16 {
         if self.first_pass {
             return u16::MAX;
         }
         match in_t {
-            Type::Integer(IntegerSpec { min, .. }) => match in_t.size(false) {
-                1 if *min == 0 => self.database.name("byte"),
-                1 => self.database.name(&format!("byte<{min},false>")),
-                2 => self.database.name(&format!("short<{min},false>")),
-                _ => self.database.name("integer"),
-            },
+            Type::Integer(spec) => {
+                // P184 Phase 5: honour `forced_size` via the
+                // `vector_narrow_width` gate (1 and 4 today — 2 opens
+                // only when Phase 4b replaces `Parts::Short`'s legacy
+                // encoding).  Narrow path registers on demand so
+                // locals / params / returns don't depend on a
+                // struct field having registered the name first.
+                // Non-narrow path falls back to the bounds heuristic
+                // (pre-P184 behaviour) for plain `integer` /
+                // `integer limit(...)` and for u16/i16 until 4b.
+                if let Some(n) = spec.vector_narrow_width() {
+                    match n {
+                        1 => self.database.byte(spec.min, false),
+                        4 => self.database.int(spec.min, false),
+                        _ => self.database.name("integer"),
+                    }
+                } else {
+                    // Bounds heuristic (pre-P184 behaviour).
+                    match in_t.size(false) {
+                        1 if spec.min == 0 => self.database.name("byte"),
+                        1 => self.database.name(&format!("byte<{},false>", spec.min)),
+                        2 => self.database.name(&format!("short<{},false>", spec.min)),
+                        _ => self.database.name("integer"),
+                    }
+                }
+            }
             Type::Character => self.database.name("integer"),
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
@@ -1598,13 +1613,16 @@ impl Parser {
                 self.database.name(&name)
             }
             Type::Vector(tp, _) => {
-                let elem_tp = self.get_type(tp);
-                let vec_name = if elem_tp == u16::MAX {
-                    "vector".to_string()
-                } else {
-                    format!("vector<{}>", self.database.types[elem_tp as usize].name)
-                };
-                self.database.name(&vec_name)
+                // P184 Phase 5: route through `vector_of` so narrow-alias
+                // content (vector<i32>, vector<u8>) registers the same
+                // narrow vector db_tp that `fill_database` registers for
+                // struct fields.  Without this, locals / returns / file
+                // writes fall back to `database.name(...)` which only
+                // succeeds for pre-registered type names and returns
+                // `u16::MAX` otherwise — triggering an index-out-of-bounds
+                // in `assemble_write_data` when the resulting db_tp is
+                // passed to the write path.
+                self.vector_of(tp)
             }
             _ => u16::MAX,
         }

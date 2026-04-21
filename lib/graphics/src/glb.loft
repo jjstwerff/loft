@@ -34,24 +34,18 @@ fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
   result
 }
 
-// Write the uint32 index buffer directly to a binary file (3 indices
-// per triangle, 4 bytes each per glTF spec).  Post-C54 `integer` is
-// 8-byte i64; emitting `f += t.a as i32` forces the 4-byte width.
-// A `vector<integer>`-returning helper would silently write 8 bytes
-// per index and bloat the BIN chunk, tripping
-// `test_map_export_glb_header`.  Written inline so the cast is
-// visible at the write site.
-//
-// TODO (P184 Phase 5): once local variables like `result: vector<i32> = []`
-// get narrow storage, restore the natural `glb_idx_buf() -> vector<i32>`
-// helper form.  Struct-field `vector<i32>` already works (Phases 2+3),
-// but locals still fall back to wide storage.
-fn glb_write_indices(f: File, tris: vector<mesh::Triangle>) {
+// Build the uint32 index buffer (3 indices per triangle: a, b, c).
+// Element type is `i32` so P184 Phases 2+3+5 register 4-byte narrow
+// storage + stride + reads.  `f += glb_idx_buf(...)` emits 4 bytes
+// per index matching the glTF BIN chunk-size accounting.  Pre-P184
+// Phase 5 this used an inline `glb_write_indices(f, tris)` helper
+// with per-element `as i32` casts because locals didn't narrow.
+fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<i32> {
+  result: vector<i32> = [];
   for t in tris {
-    f += t.a as i32;
-    f += t.b as i32;
-    f += t.c as i32;
+    result += [t.a as i32, t.b as i32, t.c as i32];
   }
+  result
 }
 
 // Compute the minimum position across all vertices (component-wise).

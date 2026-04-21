@@ -1202,13 +1202,10 @@ impl Parser {
                     "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
                 ));
+                let info = self.type_info(&td);
                 self.cl(
                     "OpGetField",
-                    &[
-                        code.clone(),
-                        Value::Int(i32::from(pos)),
-                        self.type_info(&td),
-                    ],
+                    &[code.clone(), Value::Int(i32::from(pos)), info],
                 )
             } else {
                 Value::Null
@@ -1455,8 +1452,13 @@ impl Parser {
                     let pos = self
                         .database
                         .position(self.data.def(td_nr).known_type, field);
-                    let elem_tp = self.data.def(self.data.type_def_nr(content)).known_type;
-                    let vec_tp = self.database.vector(elem_tp);
+                    // P184 Phase 5: `vector_of` consults
+                    // `Data::narrow_vector_content` and registers a
+                    // narrow element type when the content is a narrow
+                    // alias (i32, u8).  `elem_tp` is the narrow type
+                    // (Parts::Byte / Parts::Int) when applicable.
+                    let vec_tp = self.vector_of(content);
+                    let elem_tp = self.database.content(vec_tp);
                     let field_ref = self.cl(
                         "OpGetField",
                         &[

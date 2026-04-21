@@ -1129,6 +1129,45 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
+    /// P184 Phase 5: map a vector's content `Type` to a narrow
+    /// database element type-nr when the content is a `Type::Integer`
+    /// with a `forced_size` annotation that [`IntegerSpec::vector_narrow_width`]
+    /// accepts (currently 1 and 4 bytes; 2 opens in Phase 4b).
+    ///
+    /// Returns `None` for:
+    /// - non-Integer content (structs, enums, nested vectors, …);
+    /// - `Type::Integer` without `forced_size` (plain `integer`,
+    ///   `integer limit(...)`);
+    /// - `forced_size` values outside the narrow gate (today `Some(2)`
+    ///   and larger).
+    ///
+    /// The caller falls back to the default wide storage (the
+    /// content's own `known_type`, or the plain-`integer` slot) when
+    /// this returns `None`.  Single source of truth for narrow
+    /// detection — invoked by `typedef.rs::fill_database`'s Vector
+    /// arm for struct fields AND by `Parser::vector_of` for locals,
+    /// parameters, return types, and literals.
+    // `self` is not currently read but the helper belongs on `Data`
+    // semantically — future refactors (e.g. looking up an alias's
+    // captured forced_size via a Data-side registry) will need it.
+    #[allow(clippy::unused_self)]
+    pub fn narrow_vector_content(
+        &self,
+        content: &Type,
+        database: &mut crate::database::Stores,
+    ) -> Option<u16> {
+        let Type::Integer(spec) = content else {
+            return None;
+        };
+        let n = spec.vector_narrow_width()?;
+        match n {
+            1 => Some(database.byte(spec.min, false)),
+            4 => Some(database.int(spec.min, false)),
+            // Phase 4b will add: 2 => Some(database.short_raw(spec.min, false))
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn new() -> Data {
         Data {

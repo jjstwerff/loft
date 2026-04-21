@@ -620,6 +620,34 @@ impl Parser {
     // * Helper functions *
     // ********************
 
+    /// P184 Phase 5: canonical entry point for building a vector
+    /// database type from a content `Type`.  Consults
+    /// `Data::narrow_vector_content` first (single source of truth
+    /// for narrow-detection; shared with `typedef.rs::fill_database`
+    /// for struct fields).  Falls back to the content's own
+    /// `known_type` when narrow doesn't apply, or to the default
+    /// `integer` slot (0) when the content has no registered type
+    /// yet.  Every `database.vector(...)` call in `src/parser/`
+    /// should route through this helper so locals, parameters,
+    /// returns, and literals get the same narrow storage that
+    /// struct fields get via fill_database.
+    pub(crate) fn vector_of(&mut self, content: &Type) -> u16 {
+        if let Some(narrow) = self.data.narrow_vector_content(content, &mut self.database) {
+            return self.database.vector(narrow);
+        }
+        let c_nr = self.data.type_elm(content);
+        if c_nr == u32::MAX {
+            return self.database.vector(u16::MAX);
+        }
+        let c_tp = self.data.def(c_nr).known_type;
+        // Known_type may be unset for forward references; fall back to
+        // the default integer slot (0) so the vector type still
+        // registers correctly.  The content's own fill pass will
+        // update once it runs.
+        let resolved = if c_tp == u16::MAX { 0 } else { c_tp };
+        self.database.vector(resolved)
+    }
+
     /// Get an iterator.
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.
@@ -759,7 +787,11 @@ impl Parser {
         let mut should_nr = self.data.type_def_nr(should);
         if let Type::Vector(c_tp, _) = should {
             let c_nr = self.data.type_def_nr(c_tp);
-            let tp = self.database.vector(self.data.def(c_nr).known_type);
+            // P184 Phase 5: route through `vector_of` so narrow aliases
+            // (vector<i32>, vector<u8>) get the correct narrow element
+            // type — matching what fill_database registers for struct
+            // fields.
+            let tp = self.vector_of(c_tp);
             should_nr = self.data.check_vector(c_nr, tp, self.lexer.pos());
         }
         let should_kt = if should_nr == u32::MAX {
@@ -1623,12 +1655,16 @@ impl Parser {
             | Type::Spacial(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _)
-            | Type::Vector(_, _) => self.cl("OpGetField", &[code, p, self.type_info(tp)]),
+            | Type::Vector(_, _) => {
+                let info = self.type_info(tp);
+                self.cl("OpGetField", &[code, p, info])
+            }
             Type::Reference(_, _) => {
                 // Inline struct field: OpGetField adds the field offset to the base ref.
                 // Linked/base type dereference is handled at the call site (fields.rs)
                 // using OpVectorRef, which combines the 4-byte pointer read + deref.
-                self.cl("OpGetField", &[code, p, self.type_info(tp)])
+                let info = self.type_info(tp);
+                self.cl("OpGetField", &[code, p, info])
             }
             _ => {
                 diagnostic!(

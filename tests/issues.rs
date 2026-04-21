@@ -9905,3 +9905,47 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P184 Phase 5: `vector<i32>` as a LOCAL variable narrows to 4-byte
+/// storage.  Before Phase 5 locals fell back to wide (8-byte) storage
+/// because `fill_database` only ran on struct definitions — the
+/// literal-append path in `parser/vectors.rs::build_vector_code` and
+/// `get_type`'s Type::Vector arm used the default wide `integer` slot.
+/// Phase 5 routes both paths through `Parser::vector_of` which
+/// consults `Data::narrow_vector_content`.
+#[test]
+fn p184_vector_i32_local_narrow_read() {
+    code!(
+        "fn test() {
+    result: vector<i32> = [];
+    result += [1 as i32, 2 as i32, 3 as i32];
+    assert(result[0] == 1, \"r[0] expected 1, got {result[0]}\");
+    assert(result[1] == 2, \"r[1] expected 2, got {result[1]}\");
+    assert(result[2] == 3, \"r[2] expected 3, got {result[2]}\");
+    assert(len(result) == 3, \"len\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 Phase 5: `vector<i32>` as a function RETURN type narrows.
+/// The caller sees 4-byte-stride storage because `parse_type`'s
+/// alias-resolution path stamps forced_size and `get_type` /
+/// `vector_of` register the narrow vector db type on demand.
+#[test]
+fn p184_vector_i32_return_narrow_read() {
+    code!(
+        "fn make_i32_vec() -> vector<i32> {
+    result: vector<i32> = [];
+    result += [10 as i32, 20 as i32, 30 as i32];
+    result
+}
+fn test() {
+    v = make_i32_vec();
+    assert(v[0] == 10, \"v[0]\");
+    assert(v[1] == 20, \"v[1]\");
+    assert(v[2] == 30, \"v[2]\");
+}"
+    )
+    .result(Value::Null);
+}
