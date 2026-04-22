@@ -52,7 +52,9 @@ the canonical example of this discipline in action.
 
 ## Current initiatives
 
-*(none — all open initiatives closed 2026-04-22)*
+| Dir | Initiative | Current phase |
+|---|---|---|
+| `04-slot-assignment-redesign/` | Replace the two-zone slot allocator + orphan-placement post-pass with a single-pass liveness-driven algorithm.  Driven by a recurring class of heap-corruption bugs (P178, P185) that each required a targeted patch on top of the existing heuristics. | Phase 0 — characterize current behaviour with an exhaustive fixture catalogue |
 
 ## Finished initiatives
 
