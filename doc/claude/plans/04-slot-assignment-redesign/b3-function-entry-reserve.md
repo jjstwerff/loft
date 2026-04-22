@@ -5,10 +5,133 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase B.3 — Function-entry frame reserve (slot-aware refactor)
 
-**Status:** designed, not yet implemented.  Requires care — the
-slot-move in `gen_set_first_at_tos` is load-bearing under the
-current per-block-reserve model, and Phase B.2.a's `_copy` rewrites
-silently depend on it.
+**Status:** partially landed.  B.3.a–f + B.3.h.3 + B.3.h.4 on
+`origin/develop` through `343d67c`.  Remaining work (B.3.h / B.3.i
+/ B.3.j) deferred — see "Session 2026-04-22 findings" below.
+
+## Session 2026-04-22 findings — atomic-bundle required
+
+Initial design split B.3 into 10 small commits (B.3.a through
+B.3.j) under the premise that each step was independently
+behavior-preserving.  During implementation this proved correct
+for B.3.a–f + B.3.h.3 + B.3.h.4 (slot-aware `_copy` fallback
+paths + O-B2 / O-B1 shortcuts).  It broke down at B.3.h.5 when
+the fall-through path in `gen_set_first_at_tos` hit a **semantic
+model conflict**:
+
+- **Old model** (slot-move + per-block `OpReserveFrame`): zone-1
+  vars get slots via block-entry `OpReserveFrame(block.var_size)`.
+  Zone-2 vars (large types) get slots via first-Set push — the
+  push itself IS the slot creation.  `stack.position` grows by
+  `size(v)` per zone-2 first-Set.
+- **New model** (function-entry reserve + no slot-move): ALL
+  slots pre-reserved at function entry.  First-Set values are
+  written into pre-reserved slots via positional `OpPut*` ops
+  that pop from TOS.  `stack.position` is unchanged by first-Sets.
+
+Attempting to add `OpPut*` to push-based paths (fall-through,
+`gen_set_first_vector_null`, `gen_set_first_tuple_null`,
+`gen_fn_ref_value` callsite) under the old model caused SIGSEGVs
+in cases like `c60_hash_iter_empty` and
+`p139_enum_vec_same_type_write_through_loop` — specifically
+because the runtime `put_var` math assumes pre-reserved memory
+at `stack_pos + size - pos`, which under the old model is
+memory that doesn't exist (the push "creates" it, the pop
+"destroys" it, and the put writes into now-reclaimed territory).
+
+**Therefore B.3.h (slot-move deletion), B.3.i (function-entry
+reserve), and all remaining push-based path fixes must land as
+one atomic commit.**  Any intermediate state is broken.
+
+## Remaining work (as one atomic commit)
+
+All of these must ship together:
+
+1. Rewrite `gen_set_first_vector_null` (4 branches) to write
+   the DbRef at v's slot directly.
+   - `skip_free` / `inline_ref` branches: `OpInitRefSentinel(slot_offset)`.
+   - `dep_empty` branch (multi-op vector header init): replace
+     the initial `emit_push_null_ref + OpDatabase(12)` with
+     `OpInitRef(slot_offset) + OpDatabase(slot_offset, known)`;
+     subsequent multi-op sequence operates on a pushed copy via
+     `OpVarRef(slot_offset)` and is otherwise unchanged.
+   - `dep non-empty` branch: `OpInitCreateStack(slot_offset, dep_offset)`.
+2. Rewrite `gen_set_first_tuple_null` to write each element
+   directly at `tuple_base + elem_offset`.  Pattern mirrors
+   `set_var`'s tuple reassign handling (codegen.rs:2322).
+3. In `gen_set_first_at_tos`:
+   - Delete slot-move (`set_stack_pos(v, stack.position)` for
+     `pos < TOS`) and gap-fill.
+   - Add `OpPut*` after the O-B2 adopt path (line ~1199):
+     `OpPutRef(slot_offset)` after `self.generate(value, stack,
+     false);`.
+   - Add `OpPutFnRef(slot_offset)` after both fn-ref branches
+     (Null at line ~1209; non-Null at line ~1216).  The `-4`
+     stack-position adjustment mirrors `set_var` line 2287.
+   - Add `OpPut*` in fall-through (line ~1219), dispatching by
+     v's type (Integer/Character/Enum/Boolean/Single/Float/
+     Text/Vector/Reference/etc.).  Mirrors `set_var`'s match
+     at line 2285.
+4. In `def_code` (codegen.rs:~122): emit
+   `OpReserveFrame(frame_hwm)` once after the argument + return-
+   address prefix.  `Function::frame_hwm(&Context::Variable)` was
+   landed in B.3.a (`eb21a6a`).
+5. In `generate_block` (codegen.rs:~2010): delete the per-block
+   `if block.var_size > 0 { OpReserveFrame(block.var_size); }`.
+   The per-block `OpFreeStack` at exit stays — it still discards
+   eval-stack residue above the block's result value.
+
+## Why it must be atomic
+
+Under the old model, zone-2 slots are push-created.  Adding
+`OpPut*` to push-based paths pops the push, destroying the slot
+— the value lands in non-reserved memory.  Simultaneously,
+removing slot-move breaks the `v.stack_pos == stack.position`
+invariant that the push-create logic depends on.  Simultaneously,
+deleting per-block `OpReserveFrame` breaks the zone-1 reserve.
+Only a function-entry `OpReserveFrame(frame_hwm)` creates the
+frame memory that the new positional-init + `OpPut*` model
+assumes.
+
+All three changes are entangled.  The 10-step decomposition only
+worked for the `_copy` paths because those already had an
+allocate-then-set pattern (via `OpDatabase`) that was orthogonal
+to slot-move.
+
+## Estimated effort for the atomic commit
+
+**1–2 days of focused work.**  The scope is:
+- ~50 lines added to `gen_set_first_vector_null` (4 branches
+  rewritten).
+- ~30 lines added to `gen_set_first_tuple_null` (per-element
+  writes).
+- ~40 lines added/modified in `gen_set_first_at_tos` (delete
+  slot-move + gap-fill; add `OpPut*` after 4 push-based paths).
+- ~8 lines added to `def_code` (frame-entry reserve).
+- ~6 lines removed from `generate_block` (per-block reserve).
+- Snapshot test updates (`tests/dumps/*.txt`) — regeneration
+  likely.
+
+Test verification via the same canary set: `p162`, `p178`,
+`p181`, `fn_ref_basic_call`, `p139_enum_vec_*`, `c60_hash_*`,
+plus `./scripts/find_problems.sh --bg --wait` at the end.
+
+## What's landed so far (`origin/develop` through `343d67c`)
+
+- ✅ `Function::frame_hwm(&Context)` helper (`eb21a6a`).
+- ✅ `gen_set_first_ref_copy` fallback slot-aware (`98ef8c8`).
+- ✅ `gen_set_first_ref_var_copy` fallback slot-aware (`bb33a04`).
+- ✅ `gen_set_first_ref_tuple_copy` slot-aware (`db4d24e`).
+- ✅ `gen_set_first_ref_call_copy` slot-aware (`101dba2`).
+- ✅ Reassign deep-copy branch slot-aware (`2d8b509`).
+- ✅ `gen_set_first_ref_copy` O-B2 shortcut: `OpPutRef` after
+  adopted call result (`a76f9fd`).
+- ✅ `gen_set_first_ref_var_copy` O-B1 shortcut: `OpPutRef`
+  after last-use-move push (`343d67c`).
+
+These paths are behavior-preserving under slot-move (the extra
+`OpPut*` is a self-copy) and become essential when slot-move is
+deleted in the atomic bundle.
 
 ## Context
 
