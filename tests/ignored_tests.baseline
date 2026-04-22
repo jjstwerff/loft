@@ -6,4 +6,5 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+p185_slot_alias_on_late_local_in_nested_for	P185 — slot aliasing; see PROBLEMS.md
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

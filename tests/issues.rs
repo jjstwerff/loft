@@ -9981,3 +9981,45 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P185 — slot-aliasing bug: a local (`key`) declared AFTER an inner
+/// `body += <format-string>` accumulator loop, inside an outer
+/// `for _ in file(...).files()` that uses an inline temporary as the
+/// iterator source, gets assigned a slot that overlaps a still-live
+/// text buffer.  Scope teardown runs `OpFreeText` (fill.rs op 118)
+/// on the aliased slot → SIGSEGV or `realloc(): invalid pointer`.
+///
+/// Two independent workarounds (each alone suppresses the crash):
+///   (a) hoist `key` above the inner loop;
+///   (b) hoist `file(...)` into a named variable `d`.
+///
+/// Same class as P178 (orphan-placer reused argument slots).  The
+/// structural fix is a rework of slot allocation — see
+/// `doc/claude/plans/04-slot-assignment-redesign/`.
+///
+/// The test depends on `tests/docs/*.loft` existing (it does in-tree)
+/// because the bug requires a real `file(...).files()` iterator —
+/// synthetic vector iteration doesn't reproduce the slot overlap.
+#[test]
+#[ignore = "P185 — slot aliasing; see PROBLEMS.md"]
+fn p185_slot_alias_on_late_local_in_nested_for() {
+    code!(
+        "fn test() {
+    out = file(\"/tmp/p185_out.txt\");
+    for f in file(\"tests/docs\").files() {
+        path = \"{f.path}\";
+        if !path.ends_with(\".loft\") or path.ends_with(\"/.loft\") { continue; }
+        body = \"\";
+        for i in 0..3 {
+            body += \"{i}\";
+        }
+        key = path[path.find(\"/\") + 1..path.len() - 5];
+        out += `
+          {key}
+        `;
+        break;
+    }
+}"
+    )
+    .result(Value::Null);
+}
