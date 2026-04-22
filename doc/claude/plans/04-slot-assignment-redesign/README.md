@@ -5,15 +5,97 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 04 — Slot assignment redesign
 
-**Status:** open — Phase 0 ready to start.
+## Status — 2026-04-22 retraction + revised close-out
 
-**Goal:** replace the current two-zone slot allocator plus orphan-
-placement post-pass with a single algorithm that assigns every local
-variable a slot in one deterministic pass.  The current design has
-produced a recurring class of safety bugs (P178, P185, and likely
-more) that each required a targeted patch on top of the existing
-heuristics.  The redesign removes the heuristics rather than patching
-them one at a time.
+**Phases 0, 1, 2 landed as design + shadow-validated V2.  Phase 2h
+(codegen-is-allocator) and the subsequent V2-drive attempt are
+retracted.  V1 remains the production allocator.**
+
+**Revised close-out — two phases, both under plan-04:**
+
+- **Phase A (landed):** V1 revert + invariant **I7 — scope-frame
+  consistency** in `validate.rs`.  Converts the "`Incorrect var
+  X[slot] versus TOS`" runtime-panic class for zone-1 placements
+  into a compile-time `[I7]` diagnostic.
+- **Phase B (in progress):** **clean opcode architecture + function-entry
+  frame reserve.**  Separate "advance stack pointer" from "write init
+  value": `OpReserveFrame(n)` (already exists) becomes the sole
+  stack-push primitive; every init-at-slot is a positional
+  `OpInit*(pos)` op.  Every compound push-and-init op is deleted:
+  `OpText`, `OpConvRefFromNull`, `OpNullRefSentinel`, `OpCreateStack`
+  (4 removed).  Positional init ops: `OpInitText(pos)` +
+  `OpInitRef(pos)` (from 2h.1) plus new `OpInitRefSentinel(pos)` +
+  `OpInitCreateStack(pos, dep_pos)`.  Net opcode delta: **−2**.
+  Bytecode shrinks further because per-block `OpReserveFrame` +
+  matching `OpFreeStack` are replaced by one function-entry
+  `OpReserveFrame(hwm)`.  `gen_set_first_at_tos` loses its
+  slot-move, gap-fill, and TOS-match assert; slots become
+  authoritative.
+  Sub-phases: B.1 add 2 new positional ops · B.2 rewire all call
+  sites + delete 4 compound ops · B.3 function-entry
+  `OpReserveFrame(hwm)` · B.4 docs.  Realistic scope: **1–2 weeks
+  focused work.**
+
+Phase B stays under plan-04 — no plan-06 spin-out.  The 2h.3
+"function-entry-only `OpReserveFrame(hwm)` optimisation" and the
+2h.1 positional-primitive idea are both delivered here, extended
+to eliminate the compound ops entirely, but **without the V1
+retirement** that 2h.3 bundled.
+
+Both retirement routes — the 2h pivot and the direct V2-drive — share
+a hidden failure mode: variables whose declared scope is an outer block
+but whose first `Set` lands inside a nested block get placed at the
+inner TOS.  A sibling inner block that re-Sets or reads the same
+variable sees the slot above its own TOS → `generate_var` panics with
+`Incorrect var X[slot] versus TOS`.  Concrete surfacing:
+`tests/issues.rs::p162_return_match_struct_enum_native`
+(`_mv_width_3` declared at body scope, first-Set in match_arm(4)).
+
+V1 handles this correctly via its **zone-1 pre-pass**: before
+descending into any child scope, V1 collects every variable whose
+`scope == current_block.scope` and greedy-colours their slots at the
+parent's frame_base.  V2's IR-walk algorithm doesn't scope-filter —
+the 02c "99.8 % byte-identical" shadow report missed this because
+invariants I1–I6 check slot *validity*, not codegen-consumability
+under drive.
+
+**What survives:**
+- V1 continues to drive codegen untouched.
+- V2 remains as a shadow-mode validator (`LOFT_SLOT_V2=validate`)
+  — its output passes I1–I6 on the corpus, which is a meaningful
+  correctness gate against future V1 edits.
+- Invariants I1–I6 from `validate.rs` now run automatically at the
+  end of every codegen pass (debug / test builds) against V1's
+  actual output.
+- **New: I7 scope-frame invariant** — catches the "slot outside
+  declared-scope frame" class of bug at compile time with a named
+  diagnostic instead of the runtime `Incorrect var X[…]` panic.
+- The SPEC.md / walkthroughs.md / fixture-catalogue artefacts
+  remain as reference for plan-05 (see below).
+
+**What's deferred:**
+- **P185 un-ignore** — moved to plan-05.
+- Orphan-placer elimination — moved to plan-05.
+
+See [`doc/claude/plans/05-orphan-placer-elimination/`](../05-orphan-placer-elimination/README.md)
+for the targeted follow-up: extend V1's main walk to cover the three
+IR shapes currently orphaned (Insert-rooted bodies, parent-scope
+Set inside child-Block operators, Insert preambles), then delete
+`place_orphaned_vars`.  Companion invariant **I8 —
+orphan-iterator-alias** catches P185's dep-chain-aware aliasing at
+compile time.
+
+---
+
+## Original goal (superseded)
+
+Replace the current two-zone slot allocator plus orphan-placement
+post-pass with a single algorithm that assigns every local variable
+a slot in one deterministic pass.  The current design has produced a
+recurring class of safety bugs (P178, P185, and likely more) that
+each required a targeted patch on top of the existing heuristics.
+The redesign removes the heuristics rather than patching them one
+at a time.
 
 ## Context
 
@@ -59,17 +141,46 @@ regression in this class; the pattern makes another one likely.
   `p178_*`, `p185_*`, and SLOTS.md pattern-tests table would grow
   indefinitely under the patch-by-patch approach.
 
-## Design direction (not locked)
+## Design direction (resolved)
 
-Single-pass placement driven by liveness intervals:
+Full specification: [**SPEC.md**](SPEC.md).
+Per-fixture walk-throughs and invariant table: [**walkthroughs.md**](walkthroughs.md).
+Spec-critique log: [**SPEC_GAPS.md**](SPEC_GAPS.md).
 
-1. Compute live intervals for every local (already done — see
-   `src/variables/intervals.rs`).
-2. Sort intervals by start, assign each the lowest slot not occupied
-   by a live-overlapping interval of incompatible size.
-3. Emit `OpReserveFrame(hwm)` once at function entry; loops inherit
-   the function-level frame.
-4. Codegen reads slots as today.
+### Headlines
+
+- **V1 is not V2's reference.**  V2's placements are the new truth.
+  The correctness gate is invariant-based (SPEC § 5a): every
+  function satisfies I1 (no-overlap) through I6
+  (loop-iteration-safety), and the test suite stays green.  Byte-
+  match against V1 is explicitly *not* a goal — V1 has legacy
+  quirks (zone split, per-scope islands, Inline-size-match) that
+  V2 is designed to replace, not replicate.
+- **The algorithm is one pass, nine unconditional steps.**  Sort by
+  `(live_start, var_nr)`, greedy-place with interval-overlap and
+  `SlotKind` compatibility checks.  No branches on variable size,
+  scope kind, or set cardinality.  `SlotKind` (Inline vs RefSlot)
+  is the one structural axis, corresponding to the runtime's
+  `OpFreeRef` / `OpFreeText` drop distinction.
+- **Block-return aliasing handled by codegen, not the allocator.**
+  V2 places `Set(v, Block([…, r]))` as two independent slots;
+  codegen generalises the existing Text copy-path to every
+  non-Inline block-return.  Removes a whole class of V1 bug
+  (P122 frame-share family).
+- **`per_block_var_size` preserved as a compatibility surface.**
+  V2 outputs `(slots, hwm, per_block_var_size)` so the existing
+  bytecode codegen path (`OpReserveFrame(var_size)` per block)
+  is unchanged in Phase 2.  The function-entry-only
+  `OpReserveFrame(hwm)` optimisation is a Phase 3+ cleanup.
+- **Invariant testing replaces byte-match fixtures.**  The 24
+  `.slots(…)`-locked fixtures in `tests/slot_v2_baseline.rs`
+  become `.invariants_pass()` assertions in Phase 2.  The `.loft`
+  snippets and structural rationales (`walkthroughs.md` § 4)
+  survive; the numeric layout locks go.
+- **P185 gets un-ignored.**  V1's layout for that fixture fails
+  invariant I1 (overlap-on-aliased-slot).  V2 passes
+  structurally.  The `#[ignore]` is removed in the same commit
+  as V2's switchover.
 
 ### Hard constraint — uniform placement
 
@@ -112,6 +223,44 @@ Ergonomic exceptions the constraint does NOT rule out:
   to that contract through its output, not by simulating it
   internally with a size-based split.
 
+### Carve-out — `SlotKind` for drop-opcode semantics
+
+**Permitted:** exactly one structural axis — `SlotKind`
+(`Inline` vs `RefSlot`) — reflecting runtime drop-opcode semantics
+(no drop / `OpFreeRef` / `OpFreeText`).  Within the `RefSlot`
+axis, size comparison is permitted to keep drop-opcode reads
+type-compatible (a slot previously holding a 24-B `String` cannot
+be reused by a 12-B `DbRef` even with disjoint lifetimes — the
+scope-exit drop would read the wrong bytes).
+
+**Scope of the carve-out (what it does NOT permit):**
+- No branches on scope kind (Block / Loop / If / Match), set
+  cardinality, IR shape, or "orphan-ness."
+- No size-based dispatch *outside* the `RefSlot` reuse-safety
+  check.  Inline slots of any size reuse freely when lifetimes
+  allow.
+
+**Why the carve-out is bounded.**  `SlotKind` has exactly two
+values and three drop opcodes (none / `OpFreeRef` / `OpFreeText`).
+Adding a third kind requires adding a real runtime drop opcode —
+it cannot slip in as a quiet allocator patch.  Phase 4's lint
+(`slot_allocator_has_no_size_or_shape_branches`) recognises the
+one permitted `match self.kind` and rejects every other size /
+shape branch.
+
+**Why the carve-out is necessary.**  V2 cannot eliminate the
+branch without one of:
+- A runtime change so a single drop opcode handles all kinds
+  (invasive, outside plan-04's scope).
+- Pessimising to "no slot reuse ever" (throws away the whole
+  point of the redesign).
+- A two-pool design (one pool per kind, coloured independently) —
+  loses the single-pool goal and re-creates a zone-split in all
+  but name.
+
+None of these is better than allowing one typed axis with a
+documented runtime contract.
+
 ### Key design questions to resolve in Phase 1
 
 - **Loop-scope lifetime.**  Loops currently need sequential
@@ -148,11 +297,48 @@ full test suite green.  No "rewrite everything then fix the fallout"
 
 | # | Phase | File | Status | Blocks |
 |---|---|---|---|---|
-| 0 | **Characterize** — lock current behaviour with tests (P178, P185, every SLOTS.md pattern as an explicit assertion), audit every `place_orphaned_vars` call site, produce a fixture catalogue. | [00-characterize.md](00-characterize.md) | open | 1 |
-| 1 | **Design** — write `SPEC.md` with the single-pass algorithm, resolve the three design questions, walk the spec through every Phase 0 fixture by hand.  No code changes. | [01-design.md](01-design.md) | blocked by 0 | 2 |
-| 2 | **Parallel implementation** — build V2 in `src/variables/slots_v2.rs`, add an equivalence harness behind `LOFT_SLOT_V2=validate`, iterate until the whole suite passes with the harness on.  Codegen still uses V1. | [02-parallel-impl.md](02-parallel-impl.md) | blocked by 1 | 3 |
-| 3 | **Switch** — flip codegen to V2, un-ignore P178 / P185, delete V1 (`place_orphaned_vars`, zone split, `LOFT_SLOT_V1` fallback) in one commit. | [03-switch.md](03-switch.md) | blocked by 2 | 4 |
-| 4 | **Cleanup** — rewrite SLOTS.md for V2, land the `slot_allocator_has_no_size_or_shape_branches` doc_hygiene lint, mark P178/P185 fixed, move initiative to `plans/finished/`. | [04-cleanup.md](04-cleanup.md) | blocked by 3 | — |
+| 0 | **Characterize** — lock current behaviour with tests (P178, P185, every SLOTS.md pattern as an explicit assertion), audit every `place_orphaned_vars` call site, produce a fixture catalogue. | [00-characterize.md](00-characterize.md) | ✅ done | — |
+| 1 | **Design** — write `SPEC.md` with the single-pass algorithm, resolve the three design questions, walk the spec through every Phase 0 fixture by hand.  No code changes. | [01-design.md](01-design.md) | ✅ done | — |
+| 2 | **Parallel implementation** — build V2 in `src/variables/slots_v2.rs`, add an equivalence harness behind `LOFT_SLOT_V2=validate`, iterate until the whole suite passes with the harness on.  Codegen still uses V1. | [02-parallel-impl.md](02-parallel-impl.md) | ✅ done | — |
+| 2h | **Codegen refactor** — would have broken `OpText` / `OpConvRefFromNull` to accept a slot position, retired the codegen fixup, deleted V1, un-ignored P185. | [02h-codegen-refactor.md](02h-codegen-refactor.md) | ❌ retracted — see file header for why | — |
+| 2v | **V2-drive (alternative to 2h)** — tried making V2 the authoritative allocator instead of the codegen-is-allocator pivot.  Same failure mode as 2h: V2's IR-walk doesn't scope-filter. | — | ❌ retracted | — |
+| 3 | Original "switch" plan (V1→V2).  Never revisited after 2h/V2-drive both failed. | [03-switch.md](03-switch.md) | ❌ retracted | — |
+| 4 | Cleanup (rewrite SLOTS.md for V2, add `slot_allocator_has_no_size_or_shape_branches` lint, move to `plans/finished/`). | [04-cleanup.md](04-cleanup.md) | ❌ retracted | — |
+| 2+ | **Expanded invariant validation (close-out)** — add I7 scope-frame check to `validate.rs`.  Catches the `Incorrect var X[slot] versus TOS` runtime panic class at compile time. | — | 🆕 landed as part of this retraction | — |
+
+**Phase 0 artefacts:**
+- 26 fixtures in `tests/slot_v2_baseline.rs` (24 passing, 2 `#[ignore]`-d — P185 and a par-codegen pre-existing issue).
+- `SLOTS.md` § "Phase 0 Fixture Catalogue" + § "Scope shapes and orphan placement".
+- `00a-audit.md` — 20 size/scope/shape dispatch points V2 must subsume.
+- Side discovery: P186 (struct-typed block expressions rejected) — fixed inline; no longer blocks the redesign.
+
+**Phase 1 artefacts:**
+- [`SPEC.md`](SPEC.md) — allocator input/output, 9-step algorithm,
+  three design decisions resolved, invariant-based correctness gate,
+  implementation sketch.
+- [`walkthroughs.md`](walkthroughs.md) — three end-to-end traces
+  (P178, P185, `zone1_reuse_two_ints_same_block`) plus a per-fixture
+  structural-rationale table mapping each fixture to the invariants
+  it exercises.
+- [`SPEC_GAPS.md`](SPEC_GAPS.md) — nine critical-review gaps,
+  six resolved, one moot, one deferred, one pending user signoff
+  on a README wording change (SlotKind carve-out).
+
+**Phase 2 artefacts:**
+- `src/variables/validate.rs` — extended `validate_slots` with
+  invariants I2–I6 (distinct `[I1]`…`[I6]` panic prefixes);
+  10 unit tests in `mod invariant_tests` covering each failure path.
+- `src/variables/slots_v2.rs` — V2 algorithm per SPEC § 2, with
+  5 walk-through unit tests.
+- `src/scopes.rs` — `LOFT_SLOT_V2` shadow plumbing (`validate` /
+  `report` / `drive` modes).
+- `tests/slot_v2_baseline.rs` — 29 fixtures transitioned from
+  `.slots(…)` layout locks to `.invariants_pass()`.
+- `tests/testing.rs` — `.invariants_pass()` helper.
+- [`02c-optimality-report.md`](02c-optimality-report.md) — corpus-wide
+  O1 measurement: **99.8 % of 10,352 functions are byte-for-byte
+  identical between V1 and V2**; 17 tighter, 2 looser, net −100 bytes.
+  Zero invariant violations under `LOFT_SLOT_V2=validate`.
 
 Phase 0 is the one that unlocks the rest — without an exhaustive
 fixture catalogue there's no way to show Phase 2's equivalence

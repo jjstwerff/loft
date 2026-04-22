@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 236] = &[
+pub const OPERATORS: &[fn(&mut State); 240] = &[
     goto,
     goto_word,
     goto_false,
@@ -120,6 +120,7 @@ pub const OPERATORS: &[fn(&mut State); 236] = &[
     length_character,
     conv_bool_from_text,
     text,
+    init_text,
     append_text,
     put_text,
     get_text_sub,
@@ -151,7 +152,9 @@ pub const OPERATORS: &[fn(&mut State); 236] = &[
     format_stack_database,
     conv_bool_from_ref,
     conv_ref_from_null,
+    init_ref,
     null_ref_sentinel,
+    init_ref_sentinel,
     free_ref,
     sizeof_ref,
     var_ref,
@@ -209,6 +212,7 @@ pub const OPERATORS: &[fn(&mut State); 236] = &[
     copy_record,
     static_call,
     create_stack,
+    init_create_stack,
     get_stack_text,
     get_stack_ref,
     set_stack_ref,
@@ -966,6 +970,10 @@ fn text(s: &mut State) {
     s.text();
 }
 
+fn init_text(s: &mut State) {
+    s.init_text();
+}
+
 fn append_text(s: &mut State) {
     s.append_text();
 }
@@ -1141,6 +1149,10 @@ fn conv_ref_from_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
+fn init_ref(s: &mut State) {
+    s.init_ref();
+}
+
 fn null_ref_sentinel(s: &mut State) {
     let new_value = DbRef {
         store_nr: u16::MAX,
@@ -1148,6 +1160,10 @@ fn null_ref_sentinel(s: &mut State) {
         pos: 0,
     };
     s.put_stack(new_value);
+}
+
+fn init_ref_sentinel(s: &mut State) {
+    s.init_ref_sentinel();
 }
 
 fn free_ref(s: &mut State) {
@@ -1673,6 +1689,10 @@ fn static_call(s: &mut State) {
 
 fn create_stack(s: &mut State) {
     s.create_stack();
+}
+
+fn init_create_stack(s: &mut State) {
+    s.init_create_stack();
 }
 
 fn get_stack_text(s: &mut State) {

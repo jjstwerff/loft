@@ -331,6 +331,27 @@ impl State {
         self.stack_pos += size_str();
     }
 
+    /// Plan-04 Phase 2h: positional variant of `text()`.  Writes a
+    /// fresh empty `String` at the frame slot reached by
+    /// `self.stack_pos - pos` (matches the addressing convention of
+    /// `clear_text`, `append_text`, and the other `_text` ops).
+    /// Does NOT advance `stack_pos` — the frame is assumed to be
+    /// already reserved.
+    ///
+    /// `pos` is read from the bytecode stream as a `const u16`.
+    pub fn init_text(&mut self) {
+        let pos = *self.code::<u16>();
+        if cfg!(debug_assertions) {
+            self.text_positions
+                .insert(self.stack_cur.pos + self.stack_pos - u32::from(pos));
+        }
+        let v = self.string_mut(pos);
+        let s = String::new();
+        unsafe {
+            core::ptr::write(v, s);
+        }
+    }
+
     pub fn var_text(&mut self) {
         let pos = *self.code::<u16>();
         let new_value = Str::new(self.get_var::<String>(pos));

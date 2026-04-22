@@ -30,12 +30,27 @@
 
 mod intervals;
 mod slots;
+mod slots_v2;
 mod validate;
 
 pub use intervals::compute_intervals;
 pub use slots::assign_slots;
+// Phase 2b: V2 scaffolding.  Re-export the types so Phase 2c can
+// hook them into the `LOFT_SLOT_V2=validate` shadow path without
+// another mod-public-ing pass.
+#[allow(unused_imports)]
+pub use slots_v2::{
+    AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result,
+    assign_slots_v2, v2_report_enabled, v2_validate_enabled,
+};
 pub use validate::dump_variables;
-#[cfg(any(debug_assertions, test))]
+// Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
+// shadow mode can invoke it from any build profile (integration
+// tests compile against loft without debug_assertions).  The
+// call site in state/codegen.rs remains gated on
+// `#[cfg(any(debug_assertions, test))]` — validate_slots is
+// unconditionally *compiled*, but only *called* automatically
+// during unit tests; shadow mode opts in at runtime via env var.
 pub use validate::validate_slots;
 
 use crate::data::{Context, Data, Type, Value};
@@ -500,7 +515,7 @@ impl Function {
         self.loop_seq_ranges.insert(scope, (seq_start, seq_end));
     }
 
-    #[cfg(any(debug_assertions, test))]
+    #[allow(dead_code)] // used from integration tests (tests/testing.rs)
     pub fn loop_seq_range(&self, scope: u16) -> Option<(u32, u32)> {
         self.loop_seq_ranges.get(&scope).copied()
     }
@@ -1227,6 +1242,20 @@ impl Function {
 
     pub fn set_type(&mut self, var_nr: u16, tp: Type) {
         self.variables[var_nr as usize].type_def = tp;
+    }
+
+    /// Reset every non-argument variable's `stack_pos` and
+    /// `pre_assigned_pos` to `u16::MAX`.  Called by V1's
+    /// `assign_slots` inline; V2's caller calls this explicitly
+    /// before invoking `assign_slots_v2` so a stale state from
+    /// an earlier pass does not leak.
+    pub fn reset_local_slots(&mut self) {
+        for v in &mut self.variables {
+            if !v.argument {
+                v.stack_pos = u16::MAX;
+                v.pre_assigned_pos = u16::MAX;
+            }
+        }
     }
 
     pub fn var_type(&self, var_nr: u16) -> &Type {

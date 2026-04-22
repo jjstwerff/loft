@@ -612,6 +612,10 @@ pub fn len(both: character) -> integer {
 fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
 fn OpText();
+// Plan-04 Phase 2h: positional init-op; writes an empty String at
+// the frame slot `stack_pos - pos`.  Does not advance the eval stack.
+// Complements `OpText` for writes to pre-reserved slots.
+fn OpInitText(pos: const u16);
 fn OpAppendText(pos: const u16, v1: text);
 fn OpPutText(pos: const u16, value: text);
 fn OpGetTextSub(v1: text, from: integer, till: integer) -> text[v1];
@@ -668,8 +672,19 @@ fn OpConvBoolFromRef(val: reference) -> boolean;
 #rust"@val.rec != 0"
 fn OpConvRefFromNull() -> reference;
 #rust"stores.null()"
+// Plan-04 Phase 2h: positional init-op; writes a null DbRef at the
+// frame slot `stack_pos - pos`.  Does not push onto the eval stack.
+// Complements `OpConvRefFromNull` for writes to pre-reserved slots.
+fn OpInitRef(pos: const u16);
 fn OpNullRefSentinel() -> reference;
 #rust"DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }}"
+// Plan-04 Phase B: positional sentinel init — writes
+// DbRef{store_nr: u16::MAX, rec: 0, pos: 0} at frame slot
+// `stack_pos - pos`.  Does not push onto the eval stack.  Paired
+// with `OpReserveFrame(12)` to recreate the OpNullRefSentinel
+// push-and-init effect when needed; or used alone for first-init
+// to a pre-reserved slot.
+fn OpInitRefSentinel(pos: const u16);
 fn OpFreeRef(v1: reference);
 fn OpSizeofRef(val: reference) -> integer;
 fn OpVarRef(pos: const u16) -> reference;
@@ -871,6 +886,14 @@ fn OpStaticCall(call: const u16);
 //     pointer into the dep variable's own slot.  Using the raw variable number
 //     instead of this offset (the old pre-fix bug) produces a garbage DbRef.
 fn OpCreateStack(pos: const u16) -> reference;
+// Plan-04 Phase B: positional variant of OpCreateStack — writes a
+// stack-frame DbRef pointing into dep's slot (`stack_pos - dep_pos`)
+// at frame slot `stack_pos - pos`.  Does not push onto the eval
+// stack.  Paired with `OpReserveFrame(12)` for push-and-init, or
+// used alone for first-init to a pre-reserved slot.  The DbRef
+// must be overwritten by OpPutRef before any field access (same
+// contract as OpCreateStack).
+fn OpInitCreateStack(pos: const u16, dep_pos: const u16);
 // Read a text from a stack position.
 fn OpGetStackText(r: reference) -> text[r];
 // Read a reference from a stack position.

@@ -34,6 +34,7 @@ existing entry, not re-open it as a bug.
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
 | 184 | `vector<i32>` ignores the `size(4)` annotation — elements stored + accessed as 8-byte i64 (same for `u32`, and symmetrically for `hash<i32>` / `sorted<i32>` / `index<i32>`) | Medium | **Workaround:** use `vector<integer>` and emit explicit `as i32` casts at binary-write sites (`f += val as i32`).  The type annotation looks narrower but storage + reads are both 8 bytes — trust the `integer` name and cast at boundaries. |
 | P185 | Slot-aliasing SIGSEGV / heap corruption — a local declared AFTER an inner `body += <format-string>` accumulator, inside a `for _ in file(...).files()` loop (inline temporary, not a named var), gets assigned a slot that overlaps a still-live text buffer.  Teardown trips `OpFreeText` (op 118) on the aliased slot → SIGSEGV or `realloc(): invalid pointer`.  Discovered while debugging why `scripts/build-playground-examples.loft` corrupts its own output file mid-run. | **High** (safety: heap corruption) | **Workarounds** (both work): (a) declare the late local BEFORE the inner loop, or (b) hoist `file(...)` into a named variable (`d = file(...); for f in d.files()`).  Both nudge slot assignment away from the bad overlap. |
+| ~~P186~~ | Struct-typed block / if expressions rejected as `void` | — | **Fixed 2026-04-22** — `parse_block` now preserves `Type::Rewritten(_)` across Insert-flattening (first_pass struct literals emit `Insert` + `Rewritten(Reference)`, which used to be clobbered to `Void`) and disambiguates struct-body `{ field: val, … }` from block-expression `{ expr }` by peeking `ident :` / `ident ,`.  Tests: `tests/issues.rs::p186_struct_typed_block_expressions` (4 shapes). |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
@@ -1465,11 +1466,18 @@ writes to `out` via a backtick-block append.  Result: truncated
 build-playground-examples` (or any direct `loft scripts/build-
 playground-examples.loft`) reproduces.
 
-**Fix path:** the plan at `doc/claude/plans/04-slot-assignment-
-redesign/` covers a broader rework of slot allocation to eliminate
-the "orphan vars fall through to the wrong allocator" class of
-bugs (P178, P185, and likely others).  Until that lands, the two
-workarounds above are the user-facing guidance.
+**Fix path:** plan-04 (`doc/claude/plans/04-slot-assignment-redesign/`)
+aimed for a broader rework but was retracted in 2026-04-22 — both
+the codegen-is-allocator pivot and V2-drive failed on a shared
+outer-scope / inner-Set failure mode.  V1 remains the allocator.
+The targeted P185 fix is now scoped under plan-05
+(`doc/claude/plans/05-orphan-placer-elimination/`): extend V1's
+main walk to cover the three IR shapes currently orphaned
+(Insert-rooted bodies, parent-scope Set in child-Block, Insert
+preambles), delete `place_orphaned_vars`, and add invariant I8
+(dep-chain-aware aliasing check) so the SIGSEGV becomes a named
+compile-time panic.  Until plan-05 lands, the two workarounds
+above are the user-facing guidance.
 
 **Tests:** `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
 — currently `#[ignore = "P185 — slot aliasing; see PROBLEMS.md"]`;

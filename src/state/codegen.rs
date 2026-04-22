@@ -849,13 +849,17 @@ impl State {
             stack.function.set_stack_allocated(v);
             return;
         }
+        // Plan-04 Phase 2h.3: codegen is the allocator.  For a
+        // first-assignment, `stack_pos` is still `u16::MAX` here —
+        // `gen_set_first_at_tos` claims the slot at current TOS
+        // below.  Only on the reassignment branch is `pos` read.
         let pos = stack.function.stack(v);
-        assert!(
-            pos != u16::MAX,
-            "variable '{}' never assigned a slot",
-            stack.function.name(v)
-        );
         if stack.function.is_stack_allocated(v) {
+            debug_assert!(
+                pos != u16::MAX,
+                "variable '{}' flagged stack_allocated but has no slot",
+                stack.function.name(v)
+            );
             // Reassignment — variable already on the stack.
             if matches!(stack.function.tp(v), Type::Text(_)) {
                 let var_pos = stack.position - pos;

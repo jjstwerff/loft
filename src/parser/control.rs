@@ -78,9 +78,32 @@ impl Parser {
             && let Type::Reference(r, _) = self.vars.tp(*v).clone()
             && context == "block"
         {
-            // We actually scan a record here instead of a block of statement
-            self.parse_object(r, val);
-            return Type::Reference(r, Vec::new());
+            // We actually scan a record here instead of a block of statements
+            // — the LHS is a pre-typed struct variable and `{ ... }` is its
+            // body.  P186: disambiguate between struct-body `{ field: val, ... }`
+            // and block-expression `{ expr }` (e.g. `{ S { a: 3 } }`) by peeking
+            // at the first two tokens after `{`:
+            //   - `ident :`  — struct body (canonical form).
+            //   - `ident ,`  — likely struct-body typo (missing colons); keep
+            //                  the struct-body path so parse_object's failure
+            //                  produces the historical "Expect token ;"
+            //                  diagnostic at the first bare identifier (test
+            //                  INC#30 locks this wording).
+            //   - anything else (e.g. `ident =`, `ident {`, `[`, a literal) —
+            //                  block expression; fall through.
+            let link = self.lexer.link();
+            self.lexer.token("{");
+            let looks_like_struct_body = self
+                .lexer
+                .has_identifier()
+                .is_some()
+                && ((self.lexer.peek_token(":") && !self.lexer.peek_token(":="))
+                    || self.lexer.peek_token(","));
+            self.lexer.revert(link);
+            if looks_like_struct_body {
+                self.parse_object(r, val);
+                return Type::Reference(r, Vec::new());
+            }
         }
         self.lexer.token("{");
         if self.lexer.has_token("}") {
@@ -186,7 +209,19 @@ impl Parser {
             }
             if let Value::Insert(ls) = n {
                 Self::move_insert_elements(&mut l, ls);
-                t = Type::Void;
+                // P186: preserve `Type::Rewritten(_)` when flattening an
+                // Insert.  A first-pass `parse_object` struct literal
+                // returns `Type::Rewritten(Type::Reference(_))` together
+                // with a Value::Insert body that has no terminating
+                // Var — the Rewritten tag is the only signal that a
+                // value of that type is produced.  Blindly resetting
+                // `t = Void` here caused `x = { S { a: 3 } }` to infer
+                // `x: void` in first_pass, which then tripped the
+                // "cannot change type from void to S" diagnostic in
+                // second_pass when the real Reference(S) type arrived.
+                if !matches!(t, Type::Rewritten(_)) {
+                    t = Type::Void;
+                }
             } else if !matches!(t, Type::Void | Type::Never)
                 && (self.lexer.peek_token(";") || *result == Type::Void)
             {

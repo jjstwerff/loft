@@ -10023,3 +10023,48 @@ fn p185_slot_alias_on_late_local_in_nested_for() {
     )
     .result(Value::Null);
 }
+
+/// P186 — struct-typed block / if expressions rejected as `void`.
+///
+/// `x = { S { ... } }`, `x = { mk() }` (where `mk()` returns a struct),
+/// `if cond { S {…} } else { S {…} }`, and blocks with intermediate
+/// statements before a struct-literal result all used to fail with
+/// `Variable 'x' cannot change type from void to S` (CLI) or a
+/// cascade of `Unknown type void` errors (test harness).
+///
+/// Root cause: `parse_object` in first_pass returns
+/// `Type::Rewritten(Type::Reference(_))` with `*code = Value::Insert(…)`
+/// because the struct-init IR can't be fully materialised until type
+/// resolution in second_pass.  `parse_block`'s Insert-flattening then
+/// unconditionally reset `t = Type::Void`, discarding the Rewritten
+/// tag, so the block's inferred type was `void` in first_pass.
+/// Second_pass then produced the real `Reference(S)` and
+/// `change_var_type` fired the "cannot change type from void" error.
+///
+/// Fix: `src/parser/control.rs::parse_block` preserves the Rewritten
+/// type across Insert flattening.  A companion fix in the same
+/// function disambiguates struct-body `{ field: val, … }` from
+/// block-expression `{ expr }` by peeking the first two tokens after
+/// `{` — only `ident :` / `ident ,` route to `parse_object`.
+///
+/// The four shapes below reproduce the four PROBLEMS.md variants;
+/// they must all compile and execute cleanly.
+#[test]
+fn p186_struct_typed_block_expressions() {
+    code!(
+        "struct P04Sb { sb_a: integer not null, sb_b: integer not null }
+fn p04_mkbox(n: integer) -> P04Sb { P04Sb { sb_a: n, sb_b: n * 2 } }
+fn test() {
+    b1 = { P04Sb { sb_a: 3, sb_b: 4 } };
+    assert(b1.sb_a == 3 and b1.sb_b == 4, \"b1\");
+    b2 = { n = 5; P04Sb { sb_a: n, sb_b: n + 1 } };
+    assert(b2.sb_a == 5 and b2.sb_b == 6, \"b2\");
+    b3 = { p04_mkbox(7) };
+    assert(b3.sb_a == 7 and b3.sb_b == 14, \"b3\");
+    cond = true;
+    b4 = if cond { P04Sb { sb_a: 1, sb_b: 2 } } else { P04Sb { sb_a: 0, sb_b: 0 } };
+    assert(b4.sb_a == 1 and b4.sb_b == 2, \"b4\");
+}"
+    )
+    .result(Value::Null);
+}
