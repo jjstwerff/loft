@@ -15,7 +15,15 @@ left-click that calls `tool_apply` at the avatar's hex.  Scene
 rebuilds + re-uploads after any edit.
 
 **Phase 3b** — panel overlay (this file's remaining scope) —
-**designed 2026-04-22, implementation open**.
+**done 2026-04-22** (commit `0abc056`).  `lib/graphics/examples/
+moros_editor.loft` now renders the `moros_ui::Panel` as a 2D
+overlay after the 3D scene and routes clicks via `editor_click`.
+`render_frame` was split into `render_frame_no_swap` (3D pass
+only) + wrapper that swaps, so overlays can layer between 3D and
+swap without touching existing callers.  Landed with a native
+codegen fix for the `s.const_refs` / `s.string_from_const_store`
+gap that previously blocked any loft function reconstructing
+constants under `--native`.
 
 ---
 

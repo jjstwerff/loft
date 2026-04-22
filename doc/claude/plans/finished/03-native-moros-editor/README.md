@@ -5,7 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 03 — Native Moros editor (OpenGL, windowed + fullscreen)
 
-**Status:** open — Phase 0 ready to start.
+**Status:** done 2026-04-22 — all seven phases landed; deferred
+Phase 5 polish items (FPS counter, resize, avatar, hex-pick
+highlight) are not blockers and roll forward into follow-up
+work.
 
 **Goal:** the Moros hex scene editor runs end-to-end as a native
 OpenGL program (windowed or fullscreen) from a single
@@ -48,11 +51,11 @@ constants, new variants) — no signature changes on already-shipped
 
 | # | Phase | File | Status | Blocks |
 |---|---|---|---|---|
-| 0 | Fullscreen support in `gl_create_window` | [00-fullscreen.md](00-fullscreen.md) | open | 2 |
-| 1 | Native input API gaps — scroll wheel + expanded key codes | [01-input.md](01-input.md) | open | 2 |
-| 2 | Minimal native editor driver (window, camera, WASD, quit) | [02-driver.md](02-driver.md) | open | 3 |
-| 3a | `editor_tick` + tool select + paint-on-click | [03-panel.md](03-panel.md) | ✅ done 2026-04-22 — commit pending | — |
-| 3b | Panel UI overlay (2D panel after 3D scene, click routing) | [03-panel.md](03-panel.md) | open | 4 |
+| 0 | Fullscreen support in `gl_create_window` | [00-fullscreen.md](00-fullscreen.md) | ✅ done 2026-04-22 | 2 |
+| 1 | Native input API gaps — scroll wheel + expanded key codes | [01-input.md](01-input.md) | ✅ done 2026-04-22 | 2 |
+| 2 | Minimal native editor driver (window, camera, WASD, quit) | [02-driver.md](02-driver.md) | ✅ done 2026-04-22 | 3 |
+| 3a | `editor_tick` + tool select + paint-on-click | [03-panel.md](03-panel.md) | ✅ done 2026-04-22 | — |
+| 3b | Panel UI overlay (2D panel after 3D scene, click routing) | [03-panel.md](03-panel.md) | ✅ done 2026-04-22 | 4 |
 | 4 | Save/load (F5/F9) + fullscreen toggle (F11) | [04-persistence.md](04-persistence.md) | ✅ done 2026-04-22 | 5 |
 | 5 | Polish — real dt + `gl_create_window`-failure hint (done); FPS counter / resize / avatar / hex-pick highlight deferred | [05-polish.md](05-polish.md) | partial ✅ 2026-04-22 | 6 |
 | 6 | Standalone compiled application — `make editor-dist` produces a shippable `dist/moros-editor/` directory; binary runs from a fresh location without `loft` on the machine | [06-standalone.md](06-standalone.md) | ✅ done 2026-04-22 | — |
