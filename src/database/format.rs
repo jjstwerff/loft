@@ -555,6 +555,14 @@ impl ShowDb<'_> {
                         write!(s, "{v}").unwrap();
                     }
                 }
+                Parts::ShortRaw(from, nullable) => {
+                    let v = self.store().get_i16_raw(self.rec, self.pos, *from);
+                    if *nullable && v == i32::MIN {
+                        s.push_str("null");
+                    } else {
+                        write!(s, "{v}").unwrap();
+                    }
+                }
                 Parts::Int(_, nullable) => {
                     let v = self.store().get_i32_raw(self.rec, self.pos);
                     if *nullable && v == i32::MIN {
@@ -955,6 +963,14 @@ impl DumpDb<'_> {
             Parts::Short(from, nullable) => {
                 let v = self.store().get_short(self.rec, self.pos, *from);
                 if *nullable && v == 65535 {
+                    s.push_str("null");
+                } else {
+                    write!(s, "{v}").unwrap();
+                }
+            }
+            Parts::ShortRaw(from, nullable) => {
+                let v = self.store().get_i16_raw(self.rec, self.pos, *from);
+                if *nullable && v == i32::MIN {
                     s.push_str("null");
                 } else {
                     write!(s, "{v}").unwrap();

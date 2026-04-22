@@ -763,7 +763,7 @@ impl FileVal for i32 {
             4 => out.push(*self as u8), // boolean — 1 byte
             _ => match &stores.types[db_tp as usize].parts {
                 crate::database::Parts::Byte(_, _) => out.push(*self as u8),
-                crate::database::Parts::Short(_, _) => {
+                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
                     let v = *self as i16;
                     let b = if little_endian {
                         v.to_le_bytes()
@@ -813,7 +813,7 @@ impl FileVal for i32 {
                         *self = i32::from(b);
                     }
                 }
-                crate::database::Parts::Short(_, _) => {
+                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
                     if bytes.len() >= 2 {
                         let v = if little_endian {
                             i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
@@ -868,7 +868,7 @@ impl FileVal for i64 {
             4 => out.push(*self as u8), // boolean
             _ => match &stores.types[db_tp as usize].parts {
                 crate::database::Parts::Byte(_, _) => out.push(*self as u8),
-                crate::database::Parts::Short(_, _) => {
+                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
                     let v = *self as i16;
                     let b = if little_endian {
                         v.to_le_bytes()
@@ -935,7 +935,7 @@ impl FileVal for i64 {
                         *self = i64::from(b);
                     }
                 }
-                crate::database::Parts::Short(_, _) => {
+                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
                     if bytes.len() >= 2 {
                         let v = if little_endian {
                             i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))

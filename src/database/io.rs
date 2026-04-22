@@ -145,6 +145,16 @@ impl Stores {
                     .iter()
                     .for_each(|&x| data.push(x));
                 }
+                Parts::ShortRaw(from, _) => {
+                    let v = store.get_i16_raw(r.rec, r.pos, from) as i16;
+                    (if little_endian {
+                        v.to_le_bytes()
+                    } else {
+                        v.to_be_bytes()
+                    })
+                    .iter()
+                    .for_each(|&x| data.push(x));
+                }
                 Parts::Int(_, _) => {
                     let v = store.get_i32_raw(r.rec, r.pos);
                     (if little_endian {
@@ -232,7 +242,7 @@ impl Stores {
                     .map(|f| self.binary_size(f.content))
                     .sum(),
                 Parts::Enum(_) | Parts::Byte(_, _) => 1,
-                Parts::Short(_, _) => 2,
+                Parts::Short(_, _) | Parts::ShortRaw(_, _) => 2,
                 Parts::Int(_, _) => 4,
                 _ => 0,
             },
@@ -336,6 +346,15 @@ impl Stores {
                         i32::from(i16::from_be_bytes(d))
                     };
                     store.set_short(r.rec, r.pos, 0, v);
+                }
+                Parts::ShortRaw(from, _) => {
+                    let d: [u8; 2] = data[0..2].try_into().unwrap();
+                    let v = if little_endian {
+                        i32::from(i16::from_le_bytes(d))
+                    } else {
+                        i32::from(i16::from_be_bytes(d))
+                    };
+                    store.set_i16_raw(r.rec, r.pos, from, v);
                 }
                 Parts::Int(_, _) => {
                     let d: [u8; 4] = data[0..4].try_into().unwrap();

@@ -1461,6 +1461,35 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
+            } else if let Type::Integer(spec) = in_t
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                // P184 Phase 4b: narrow integer element write.
+                // `set_field(ed_nr=INTEGER_DEF, f_nr=usize::MAX, …)`
+                // dispatches through the wide `integer`'s `returned`
+                // type and emits `OpSetInt` (8 bytes).  That works
+                // for `Parts::Byte` / `Parts::Int` by coincidence
+                // (their direct encoding matches the low bytes of a
+                // wide little-endian write), and now works for
+                // `Parts::ShortRaw` (which is also direct).  Emit
+                // the narrow-width opcode directly so writes encode
+                // correctly for all narrow widths — defensive against
+                // future changes where the wide-write coincidence
+                // might break.
+                let pos = Value::Int(0);
+                let op = match n {
+                    1 => {
+                        let m = Value::Int(spec.min);
+                        self.cl("OpSetByte", &[Value::Var(elm), pos, m, p.clone()])
+                    }
+                    2 => {
+                        let m = Value::Int(spec.min);
+                        self.cl("OpSetShortRaw", &[Value::Var(elm), pos, m, p.clone()])
+                    }
+                    4 => self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]),
+                    _ => self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()),
+                };
+                ls.push(op);
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
@@ -1556,18 +1585,19 @@ impl Parser {
         }
         match in_t {
             Type::Integer(spec) => {
-                // P184 Phase 5: honour `forced_size` via the
-                // `vector_narrow_width` gate (1 and 4 today — 2 opens
-                // only when Phase 4b replaces `Parts::Short`'s legacy
-                // encoding).  Narrow path registers on demand so
-                // locals / params / returns don't depend on a
-                // struct field having registered the name first.
-                // Non-narrow path falls back to the bounds heuristic
-                // (pre-P184 behaviour) for plain `integer` /
-                // `integer limit(...)` and for u16/i16 until 4b.
+                // P184 Phase 4b: honour `forced_size` via
+                // `vector_narrow_width`.  Gate covers 1/2/4 bytes.
+                // 2-byte uses `Parts::ShortRaw` (direct encoding) —
+                // parallel to `Parts::Byte` / `Parts::Int` so that
+                // source literal vectors and destination fields share
+                // encoding and `vector_add`'s raw-byte copy stays
+                // valid.  Narrow path registers on demand so locals /
+                // params / returns don't depend on a struct field
+                // having registered the name first.
                 if let Some(n) = spec.vector_narrow_width() {
                     match n {
                         1 => self.database.byte(spec.min, false),
+                        2 => self.database.short_raw(spec.min, false),
                         4 => self.database.int(spec.min, false),
                         _ => self.database.name("integer"),
                     }

@@ -745,7 +745,20 @@ impl Output<'_> {
                     // int casts: the return statement carries the right type.
                     let value_is_return = matches!(v, Value::Return(_));
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
-                    let narrow_cast = if is_return_expr && !value_is_return {
+                    // Iterator-next blocks (name "iter next" / "sorted iter next")
+                    // return their element value OR `i64::MIN` as the
+                    // end-of-iteration sentinel.  Wrapping the result in
+                    // `as u16` / `as u8` for narrow element types truncates
+                    // `i64::MIN` to `0`, destroying the sentinel — the
+                    // subsequent `!op_conv_bool_from_int(var_x)` break check
+                    // compares `0 != i64::MIN` → true, inverted to false,
+                    // never breaking.  `for x in vector<u16>` then loops
+                    // forever printing `x=0`.  Skip the narrow cast for
+                    // iterator-next blocks so `i64::MIN` survives intact;
+                    // the consuming variable assignment applies its own
+                    // `as i64` widening which is a no-op for i64 values.
+                    let is_iter_next = bl.name.contains("iter next");
+                    let narrow_cast = if is_return_expr && !value_is_return && !is_iter_next {
                         narrow_int_cast(&bl.result)
                     } else {
                         None

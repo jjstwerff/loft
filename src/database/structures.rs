@@ -389,6 +389,17 @@ impl Stores {
                     .set_short(to.rec, to.pos, from, *n as i32);
                 Ok(())
             }
+            Parts::ShortRaw(from, _null) => {
+                let crate::json::Parsed::Number(n) = parsed else {
+                    return Err(WalkErr {
+                        at: 0,
+                        path: path.clone(),
+                    });
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                self.store_mut(to).set_i16_raw(to.rec, to.pos, from, *n as i32);
+                Ok(())
+            }
             Parts::Int(_from, _null) => {
                 let crate::json::Parsed::Number(n) = parsed else {
                     return Err(WalkErr {
@@ -598,6 +609,10 @@ impl Stores {
             Parts::Short(_, null) => {
                 self.store_mut(rec)
                     .set_short(rec.rec, rec.pos, 0, if null { 65535 } else { 0 });
+            }
+            Parts::ShortRaw(from, null) => {
+                self.store_mut(rec)
+                    .set_i16_raw(rec.rec, rec.pos, from, if null { i32::MIN } else { from });
             }
             Parts::Int(_, null) => {
                 self.store_mut(rec)

@@ -96,8 +96,18 @@ impl Parser {
                     let i = Value::Var(iter_var);
                     let vec_tp = self.data.type_def_nr(vtp);
                     let db_tp = self.data.def(vec_tp).known_type;
+                    // P184 Phase 4b: narrow vector element iteration uses
+                    // the forced_size stride so the generated
+                    // `vector::get_vector(size, idx)` matches the actual
+                    // 1/2/4-byte storage.  Without this, `database.size(db_tp)`
+                    // returns 8 (plain `integer`) and reads stray across
+                    // element boundaries.
                     let size = if self.database.is_linked(db_tp) {
                         4
+                    } else if let Type::Integer(spec) = &**vtp
+                        && let Some(n) = spec.vector_narrow_width()
+                    {
+                        u16::from(n)
                     } else {
                         self.database.size(db_tp)
                     };
@@ -110,7 +120,15 @@ impl Parser {
                             ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
                         }
                     } else {
-                        ref_expr = self.get_field(vec_tp, usize::MAX, ref_expr);
+                        // P184: route through `get_val` with the full
+                        // element Type — preserves `IntegerSpec.forced_size`
+                        // so narrow vectors dispatch to `OpGetShortRaw` /
+                        // `OpGetByte` / `OpGetInt4` via the narrow_vec
+                        // split.  Previously via `get_field(vec_tp, MAX)`
+                        // which looked up `def(integer).returned` and lost
+                        // the forced_size → emitted `OpGetInt` (8 bytes)
+                        // into a 2-byte slot, producing off-bytes reads.
+                        ref_expr = self.get_val(vtp, false, 0, ref_expr, u32::MAX);
                     }
                     let mut tp = *vtp.clone();
                     for d in dep {

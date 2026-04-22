@@ -179,15 +179,22 @@ impl IntegerSpec {
         }
     }
 
-    /// P184 Phase 4-gate: element stride for narrow vectors, matching
-    /// what `typedef.rs::fill_database`'s Vector arm actually registers
-    /// in the database.  Returns `Some(n)` only when `n ∈ {1, 4}` —
-    /// `Parts::Byte` and `Parts::Int` use direct raw encoding that
-    /// agrees with the raw-byte copy path in `vector_add`.  Returns
-    /// `None` for 2-byte (`Parts::Short` uses legacy `val - min + 1`
-    /// encoding — deferred to a later Phase 4 round) and for any Type
-    /// without a `forced_size` annotation (the caller falls back to
-    /// the default wide-integer stride).
+    /// P184 Phase 4b: element stride for narrow vectors, matching
+    /// what `typedef.rs::fill_database`'s Vector arm registers.
+    /// Returns `Some(n)` for the direct-encoded widths:
+    /// - 1 → `Parts::Byte` (u8 / i8)
+    /// - 2 → `Parts::ShortRaw` (u16 / i16, P184 Phase 4b)
+    /// - 4 → `Parts::Int` (i32)
+    ///
+    /// All three use direct raw encoding (no `+1` shift), so
+    /// `vector_add`'s raw-byte copy path works across source literal
+    /// vectors and destination fields without re-encoding.
+    ///
+    /// Returns `None` for any Type without a `forced_size` annotation
+    /// (caller falls back to the default wide-integer stride) and for
+    /// `forced_size` values outside the narrow gate.  `u16` struct
+    /// fields continue to use `Parts::Short` (the legacy `+1` encoding)
+    /// via the `alias != u32::MAX` path in `get_val` / `set_field_check`.
     ///
     /// Callers use this at compile time to emit matching `elm_size` in
     /// `OpGetVector` / `OpSetVector`, and in `get_val` to choose the
@@ -198,6 +205,7 @@ impl IntegerSpec {
     pub fn vector_narrow_width(&self) -> Option<u8> {
         match self.forced_size?.get() {
             1 => Some(1),
+            2 => Some(2),
             4 => Some(4),
             _ => None,
         }
@@ -1162,8 +1170,8 @@ impl Data {
         let n = spec.vector_narrow_width()?;
         match n {
             1 => Some(database.byte(spec.min, false)),
+            2 => Some(database.short_raw(spec.min, false)),
             4 => Some(database.int(spec.min, false)),
-            // Phase 4b will add: 2 => Some(database.short_raw(spec.min, false))
             _ => None,
         }
     }

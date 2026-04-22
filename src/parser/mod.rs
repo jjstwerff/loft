@@ -1617,6 +1617,17 @@ impl Parser {
                 // * `alias == u32::MAX` AND no forced_size → bounds
                 //   heuristic (struct-field path for plain or limited
                 //   `integer`).
+                // Narrow-vec path: alias is absent AND spec carries a
+                // forced_size AND the gate is open.  This branch maps
+                // to `Parts::ShortRaw` for 2-byte (Phase 4b) and to
+                // `Parts::Byte` / `Parts::Int` for 1/4-byte (Phase 4a).
+                // When the gate is CLOSED for a given forced_size
+                // (fallback), storage stays wide (8-byte) and the
+                // read must match — use `unwrap_or(8)` so closed-gate
+                // forced_size reads dispatch to `OpGetInt`.
+                let narrow_vec = alias == u32::MAX
+                    && spec.forced_size.is_some()
+                    && spec.vector_narrow_width().is_some();
                 let s = if alias != u32::MAX {
                     self.data
                         .forced_size(alias)
@@ -1634,7 +1645,12 @@ impl Parser {
                 );
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
+                } else if s == 2 && narrow_vec {
+                    // P184 Phase 4b: narrow vector element, direct encoding.
+                    self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
                 } else if s == 2 {
+                    // Struct field with u16/i16 alias OR bounds-heuristic
+                    // landing at 2 bytes: legacy `Parts::Short` `+1` encoding.
                     self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
                 } else if s == 4 {
                     self.cl("OpGetInt4", &[code, p])
@@ -1732,7 +1748,8 @@ impl Parser {
             None
         };
         let set_op = match tp {
-            Type::Integer(IntegerSpec { min, .. }) => {
+            Type::Integer(ref spec) => {
+                let IntegerSpec { min, .. } = *spec;
                 let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
@@ -1741,10 +1758,25 @@ impl Parser {
                 } else {
                     self.data.def(d_nr).attributes[f_nr].alias_d_nr
                 };
+                // P184 Phase 4b: narrow-vec path mirrors `get_val`.
+                // Reached by `insert(vector<u16>, ...)` where
+                // `set_field` is invoked with `f_nr == usize::MAX` and
+                // `tp` is the narrow element Type.  Struct-field
+                // writes (alias_nr != u32::MAX) stay on the legacy
+                // `OpSetShort` / `Parts::Short` `+1` encoding path.
+                let narrow_vec = alias_nr == u32::MAX
+                    && spec.forced_size.is_some()
+                    && spec.vector_narrow_width().is_some();
                 let s = self
                     .data
                     .forced_size(alias_nr)
-                    .unwrap_or_else(|| tp.size(self.data.attr_nullable(d_nr, f_nr)));
+                    .unwrap_or_else(|| {
+                        if narrow_vec {
+                            spec.vector_narrow_width().unwrap()
+                        } else {
+                            tp.size(self.data.attr_nullable(d_nr, f_nr))
+                        }
+                    });
                 // Size-consistency gate: the size resolved from
                 // `forced_size` / limit must be one of the four
                 // supported widths.  Any other value indicates a
@@ -1764,6 +1796,8 @@ impl Parser {
                 );
                 if s == 1 {
                     self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
+                } else if s == 2 && narrow_vec {
+                    self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
                     self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
                 } else if s == 4 {

@@ -91,7 +91,7 @@ impl State {
             data.extend_from_slice(s.as_bytes());
         } else if matches!(
             &self.database.types[db_tp as usize].parts,
-            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
         ) {
             // Narrow-integer values sit in an 8B variable slot stored raw as i64
             // (OpPutInt), not via the +1-encoded Parts::Byte/Short encoding that
@@ -100,7 +100,7 @@ impl State {
             let v = self.database.store(&val).get_int(val.rec, val.pos);
             match &self.database.types[db_tp as usize].parts {
                 Parts::Byte(_, _) => data.push(v as u8),
-                Parts::Short(_, _) => {
+                Parts::Short(_, _) | Parts::ShortRaw(_, _) => {
                     let b = if little_endian {
                         (v as u16).to_le_bytes()
                     } else {
@@ -263,7 +263,7 @@ impl State {
                     .write_data(&vec_ref, db_tp, little_endian, &data);
             } else if matches!(
                 &self.database.types[db_tp as usize].parts,
-                Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _)
+                Parts::Byte(_, _) | Parts::Short(_, _) | Parts::ShortRaw(_, _) | Parts::Int(_, _)
             ) {
                 // Narrow-integer reads (byte/short/int) target a u8/u16/i32
                 // variable whose stack slot is 8 bytes (Phase 2c integer
@@ -273,7 +273,7 @@ impl State {
                 // as a sign-extended i64.
                 let v: i64 = match &self.database.types[db_tp as usize].parts {
                     Parts::Byte(_, _) => i64::from(data[0]),
-                    Parts::Short(_, _) => {
+                    Parts::Short(_, _) | Parts::ShortRaw(_, _) => {
                         let d: [u8; 2] = data[0..2].try_into().unwrap();
                         if little_endian {
                             i64::from(u16::from_le_bytes(d))

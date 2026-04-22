@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 234] = &[
+pub const OPERATORS: &[fn(&mut State); 236] = &[
     goto,
     goto_word,
     goto_false,
@@ -178,6 +178,8 @@ pub const OPERATORS: &[fn(&mut State); 234] = &[
     set_short,
     get_int4,
     set_int4,
+    get_short_raw,
+    set_short_raw,
     set_text,
     var_vector,
     length_vector,
@@ -1462,6 +1464,46 @@ fn set_int4(s: &mut State) {
         s.database
             .store_mut(&db)
             .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
+    }
+}
+
+fn get_short_raw(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_min = *s.code::<i16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let r =
+            s.database
+                .store(&db)
+                .get_i16_raw(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
+        if r == i32::MIN {
+            i64::MIN
+        } else {
+            i64::from(r)
+        }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_short_raw(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_min = *s.code::<i16>();
+    let v_val = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = if v_val == i64::MIN {
+            i32::MIN
+        } else {
+            v_val as i32
+        };
+        s.database.store_mut(&db).set_i16_raw(
+            db.rec,
+            db.pos + u32::from(v_fld),
+            i32::from(v_min),
+            v,
+        );
     }
 }
 

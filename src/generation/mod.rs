@@ -633,6 +633,7 @@ extern crate loft;"
         enum BareIo {
             Byte(i32, bool),
             Short(i32, bool),
+            ShortRaw(i32, bool),
             Int(i32, bool),
             Vector(u16),
             Sorted(u16, Vec<(u16, bool)>),
@@ -651,6 +652,9 @@ extern crate loft;"
                 }
                 crate::database::Parts::Short(min, nullable) => {
                     bare_io.push((tid, BareIo::Short(*min, *nullable)));
+                }
+                crate::database::Parts::ShortRaw(min, nullable) => {
+                    bare_io.push((tid, BareIo::ShortRaw(*min, *nullable)));
                 }
                 crate::database::Parts::Int(min, nullable) => {
                     bare_io.push((tid, BareIo::Int(*min, *nullable)));
@@ -805,6 +809,9 @@ extern crate loft;"
                     BareIo::Short(min, nullable) => {
                         writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
                     }
+                    BareIo::ShortRaw(min, nullable) => {
+                        writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
+                    }
                     BareIo::Int(min, nullable) => {
                         writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
                     }
@@ -864,6 +871,9 @@ extern crate loft;"
                 }
                 BareIo::Short(min, nullable) => {
                     writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
+                }
+                BareIo::ShortRaw(min, nullable) => {
+                    writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
                 }
                 BareIo::Int(min, nullable) => {
                     writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
@@ -1067,7 +1077,17 @@ extern crate loft;"
         } else if def.def_type == DefType::Enum {
             writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;
         } else if def.def_type == DefType::Vector {
-            let content_known = if def.parent != u32::MAX {
+            // P184 Phase 4b: prefer the actual registered Parts::Vector
+            // content from `stores.types[type_id]` — that's what
+            // `fill_database` stored, including narrow-integer content
+            // via `narrow_vector_content`.  Falling back to
+            // `def.parent.known_type` resolves any Type::Integer to the
+            // plain `integer` slot (0) and breaks narrow vectors.
+            let content_known = if let crate::database::Parts::Vector(c) =
+                self.stores.types[type_id as usize].parts
+            {
+                c
+            } else if def.parent != u32::MAX {
                 self.data.def(def.parent).known_type
             } else if let Type::Vector(ref c_type, _) = def.returned {
                 let c_dnr = self.data.type_def_nr(c_type);
@@ -1171,6 +1191,46 @@ extern crate loft;"
         forced_size: Option<u8>,
     ) -> std::io::Result<()> {
         if let Type::Vector(c, _) = typedef {
+            // P184 Phase 4b: when the element `Type::Integer` carries a
+            // `forced_size` annotation that `vector_narrow_width`
+            // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
+            // content type-nr that `fill_database` already registered
+            // via `narrow_vector_content`.  Without this,
+            // `data.type_def_nr(c)` resolves any `Type::Integer` to
+            // the plain `integer` def-nr → wide `vector<integer>`.
+            // The wrapper's `main_vector<T>` struct field would end up
+            // with 8-byte stride even though `fill_database` narrowed
+            // the actual runtime Parts, corrupting reads/writes.
+            if let Type::Integer(spec) = &**c
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                let name = match n {
+                    1 => {
+                        if spec.min == 0 {
+                            "byte".to_string()
+                        } else {
+                            format!("byte<{},false>", spec.min)
+                        }
+                    }
+                    2 => format!("short_raw<{},false>", spec.min),
+                    4 => format!("int<{},false>", spec.min),
+                    _ => String::new(),
+                };
+                if !name.is_empty() {
+                    let narrow = self.stores.name(&name);
+                    if narrow != u16::MAX {
+                        let content_ref = type_id_ref(narrow);
+                        emit_db_field(
+                            w,
+                            s_var,
+                            field_name,
+                            "vec",
+                            &format!("db.vector({content_ref})"),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;

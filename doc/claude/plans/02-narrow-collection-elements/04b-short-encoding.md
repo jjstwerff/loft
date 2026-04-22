@@ -5,12 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4b — Direct-encoded 2-byte storage for narrow vectors
 
-**Status:** blocked — 2026-04-21 attempt reverted after regression
-surfaced in `tests/native.rs::native_dir` (the `16-parser.loft`
-native test ran into an infinite loop, >20 min CPU time).  Root
-cause not yet identified; the plan's no-regression ground rule
-forbids shipping this until the root cause is known and the
-regression has a regression guard.
+**Status:** ✅ landed 2026-04-22 via Option L-minimal (Parts::ShortRaw
++ iter-next guard + emit_field/emit_type_creation narrow lookup +
+build_vector_code narrow-write hook + iter collection narrow-stride
++ get_val/set_field_check s==2 split).  All `p184_vector_*` tests
+green; `tests/native.rs::native_dir` green; 28 of 29 test binaries
+green (the 1 failing binary is pre-existing `50-tuples.loft` native
+tests hitting a linker disk-space issue, unrelated to P184).
 
 No-regression constraint: every existing `Parts::Short` consumer
 must continue working unchanged.
@@ -32,30 +33,182 @@ native binary burned 20+ minutes of CPU without terminating.
 Killing it produced no diagnostic — exit code was signal 9 from
 the kill, not a panic or assert.
 
-Hypotheses not yet verified:
+**Root cause (identified 2026-04-22)**: `get_val` (`src/parser/mod.rs`)
+routes ALL `s == 2` reads to a single opcode, but three distinct
+paths can land on `s == 2`:
 
-1. **Opcode numbering collision** — the 7-step plan added
-   `OpGetShortRaw` + `OpSetShortRaw` as new opcodes.  The parser
-   test may have hit an opcode dispatch that the native codegen
-   produces with a stale library index.  Check whether
-   `tests/lib/native_pkg/native/target/release/libloft_native_test.so`
-   or the parser's emitted Rust ended up embedding a now-shifted
-   opcode number.
-2. **Infinite loop in inference** — the parser test likely
-   exercises `parse_type` for every alias it encounters; the new
-   `vector_narrow_width` returning `Some(2)` may route some
-   previously-unreachable branch of the resolver that loops.
-3. **Hang in `OpAppendVector` for short-stride elements** — the
-   raw-byte copy path in `vector_add` may misread `elem_size` for
-   `Parts::ShortRaw` vs `Parts::Short` and produce a zero-length
-   copy that the caller retries forever.
+1. **Struct field with `u16` / `i16` alias** (`alias != u32::MAX`,
+   `forced_size(alias) == Some(2)`) — storage is `Parts::Short` via
+   the bounds-heuristic `byte_width(nullable)` path in
+   `fill_database` for struct fields.  **Uses `+1` encoding.**
+2. **Struct field with `integer limit(...)` bounds that fit in 2
+   bytes** (no alias forced_size, `byte_width(nullable) == 2`) —
+   storage is `Parts::Short` via bounds heuristic.  **Uses `+1`
+   encoding.**
+3. **Vector element read when `vector_narrow_width` opens to 2**
+   (`alias == u32::MAX`, `spec.forced_size == Some(2)`) — storage
+   would be `Parts::ShortRaw` (direct, no `+1`).
 
-Next investigation step: revert Step 7 only (gate stays at
-`{1, 4}`) and re-run `native_dir`.  If that passes, Steps 1-6
-are safe and Step 7's opening of the gate is the direct trigger.
-If native_dir still hangs, the problem is structural in the
-Phase 2-5 pipeline interacting with the new variant — back out
-further.
+The original Step 6 (below) replaced the `s == 2` arm with
+`OpGetShortRaw` unconditionally.  That correctly handled path 3
+but broke paths 1 and 2.  `lib/parser.loft::Parser::prio: u16` and
+`lib/code.loft::Block { length: u16 }` (and many others) are path
+1 — every u16 struct field read returned `stored - 1`.  The parser
+library uses those indices as pointers into its own AST
+structures; off-by-one indices corrupted traversal and produced
+infinite loops at runtime.  All unit tests passed because the
+p184 tests exercised fresh programs without u16 struct fields in
+their hot paths; `16-parser.loft` invokes the parser library
+itself at runtime, which IS the hot path for u16 struct fields.
+
+**Fix** (folded into the Step 6 revision below): split the
+`s == 2` dispatch into vector-narrow vs. legacy-struct based on
+which branch of `get_val` chose `s`.  Only vector-narrow goes to
+`OpGetShortRaw`; struct fields keep `OpGetShort`.
+
+**Bisect option retained**: if a future regression has no obvious
+dispatch-side explanation, apply Steps 1-6 with the gate closed
+(`vector_narrow_width` returning `None` for 2), run `native_dir`,
+then open Step 7.  That confirms whether the issue is structural
+in Steps 1-6 or only triggered by Step 7.
+
+## 2026-04-22 Option D attempt — also failed, deeper invariant broken
+
+A second re-implementation attempt tried a simpler design:
+
+**Option D** — reuse the existing `Parts::Short` for narrow 2-byte
+vector content (not a new variant).  Three changes:
+1. `src/data.rs::vector_narrow_width` opens `2 => Some(2)`.
+2. `src/data.rs::narrow_vector_content` adds
+   `2 => Some(database.short(spec.min, false))`.
+3. `src/parser/vectors.rs::get_type` adds
+   `2 => self.database.short(spec.min, false)`.
+
+Hypothesis: source literals and destination fields both register
+`Parts::Short`, their `+1` encoding matches, `vector_add`'s
+raw-byte copy stays valid, `OpGetShort` / `OpSetShort` already
+dispatch correctly in `get_val` / `set_field_check` at `s == 2`.
+No new opcodes, no bootstrap.
+
+**What actually happened:**
+
+1. `p184_vector_u16_round_trip` failed at `v[0] == 1` (got 0).
+   The `build_vector_code` write path in `src/parser/vectors.rs`
+   calls `set_field(ed_nr = type_def_nr(in_t), f_nr = usize::MAX, …)`.
+   `type_def_nr(Type::Integer(u16_spec))` returns the PLAIN
+   `integer` def_nr (see `src/data.rs:2047`), so `attr_type`
+   gives back the wide `integer`'s returned type (no
+   `forced_size`), and `set_field_check` picks `s = 8` →
+   emits `OpSetInt` (8-byte write).
+
+2. **Why this accidentally worked for `u8`/`i32` and breaks for
+   `u16`**: `Parts::Byte` and `Parts::Int` use DIRECT encoding
+   (no `+1` shift).  An 8-byte little-endian write's low 1 or 4
+   bytes coincide with the correct raw content for the narrow
+   slot.  `Parts::Short`'s `+1` encoding expects `raw = val + 1`;
+   the low 2 bytes of a wide write carry just `val`, so
+   `get_short` decodes `val - 1` (off by one).  The pre-P184
+   `u8`/`i32` narrow storage has been relying on this
+   accidental encoding symmetry the whole time.
+
+3. Adding a narrow-write hook in `build_vector_code` (emit
+   `OpSetByte` / `OpSetShort` / `OpSetInt4` directly when
+   `in_t` has `vector_narrow_width == Some(n)`) fixed the
+   `p184_vector_u16_round_trip` test — writes encode correctly.
+
+4. **But** `native_dir::16-parser` STILL hung.  Deeper
+   investigation: `lib/parser.loft::type_def` returns `u16` and
+   the parser library has a local `parameters = []; parameters
+   += [p]` where `p: u16`.  The native codegen registered this
+   vector wrapper as `main_vector<integer(0, 65535)>` with
+   content type `t0` (the WIDE `integer`, not `Parts::Short`).
+   So storage was 8-byte-stride, but my narrow-write hook keyed
+   off `in_t`'s `forced_size == Some(2)` and emitted `OpSetShort`
+   into an 8-byte slot — writing `+1`-encoded 2-byte values into
+   wide slots with 6 trailing zero bytes.  Reads via `OpGetVector`
+   with `elm_size = 2` got the `+1`-encoded u16 correctly, decoded
+   via `get_short` to `val - 1 + 1 = val` — no wait, both would be
+   off if the stride was 8-byte.  Actual effect: parser AST u16
+   indices came back off by one, corrupting the parser's internal
+   record pointers and looping infinitely.
+
+## Root architectural finding
+
+There are **at least two independent registration paths** for
+vector content types in the compiler:
+
+- **Path 1 — `typedef.rs::fill_database` Vector arm + `Parser::vector_of`**.
+  Consults `Data::narrow_vector_content` (Phase 5 canonical).
+  Registers `Parts::Short` / `Parts::Byte` / `Parts::Int` when
+  narrow content applies.
+- **Path 2 — `main_vector<T>` wrapper-struct field registration**.
+  Used for local vector variables.  Registers the wrapper's
+  `vector` field with content type `t0` (wide integer) for
+  `vector<u16>` locals — it does NOT consult
+  `narrow_vector_content`.  The name "main_vector<integer(0, 65535)>"
+  (bounds-based, not forced_size-based) is the visible tell.
+
+When Path 1 and Path 2 disagree about the content encoding,
+`vector_add`'s raw-byte copy and every write/read opcode see a
+mix of `Parts::Short` sources and wide destinations (or vice
+versa).  The `u8`/`i32` cases happen to work because direct
+encoding tolerates the mismatch on the low bytes.  `Parts::Short`
+exposes it because `+1` encoding does not.
+
+**This is the same root-cause class as the 2026-04-21 attempt**,
+just manifesting one layer up from `get_val`'s dispatch.  Fixing
+Step 6 is necessary but not sufficient.
+
+## Path forward — what 4b actually needs
+
+Phase 4b cannot safely land without ONE of:
+
+**Option E — Unify the registration paths.**  Route every vector
+creation site (including the `main_vector<T>` wrapper's field
+registration) through `Data::narrow_vector_content`.  Audit every
+`database.vector(...)` call plus every
+`database.structure("main_vector<T>", 0)` + `db.field(..., vec_vector)`
+emission in `src/generation/mod.rs`.  Estimated scope: 6 direct
+call sites in `src/parser/` + a larger audit of
+`src/generation/mod.rs::init()` emission for `main_vector<T>`
+structs.  Preserves Option D's simplicity (no new variant)
+but widens the refactor.
+
+**Option B-revisited — `Parts::ShortRaw` with direct encoding.**
+The original 7-step plan.  Direct encoding tolerates the Path 1 vs
+Path 2 mismatch the same way `Parts::Byte` / `Parts::Int` do
+today.  Requires the 10-step opcode bootstrap, but is more
+robust to the "multiple registration paths" architectural
+weakness.  Must still use the corrected Step 6 dispatch
+(split `s==2` into vector-narrow vs struct-legacy) per the
+2026-04-22 root cause analysis above.
+
+**Option F — narrow element writes by consulting storage, not
+type annotation.**  Change `build_vector_code`'s narrow-write
+hook to check the ACTUAL registered vector content
+(`database.types[vec_db_tp].parts`), not `in_t`'s `forced_size`.
+If content is `Parts::Short`, emit `OpSetShort`; if `Parts::Int`,
+`OpSetInt4`; etc.  This treats storage as the source of truth
+and gracefully handles Path 1 vs Path 2 divergence.  Less
+invasive than Option E, but harder to reason about: future
+storage-path changes could silently re-break the read/write
+consistency.
+
+Recommendation: **Option E** — it removes the architectural
+weakness rather than tolerating it.  Option B-revisited is the
+fallback if Option E turns out to be larger than expected.
+
+## 2026-04-22 Option D revert
+
+Source changes reverted to Phase 4a baseline:
+- `src/data.rs::vector_narrow_width` → `{1, 4}` only
+- `src/data.rs::narrow_vector_content` → `1 and 4` arms only
+- `src/parser/vectors.rs::get_type` → `1 and 4` arms only
+- `src/parser/vectors.rs::build_vector_code` → no narrow-write hook
+
+All `p184_vector_*` tests green.  `tests/docs/16-parser.loft`
+under `loft --native` completes successfully.  Plan's
+no-regression rule preserved.
 
 Files reverted to the Phase 5 baseline state:
 - `default/01_code.loft`
@@ -294,20 +447,49 @@ step 10 (native_dir before commit) would have caught the
 regression before it shipped.  Adding it to the procedure above
 is the 2026-04-22 takeaway.
 
-### Step 6 — Parser dispatch
+### Step 6 — Parser dispatch (corrected 2026-04-22)
 
-`src/parser/mod.rs::get_val`:
+Three paths can land on `s == 2`:
+
+- **Path A — struct field with `u16` / `i16` alias** (`alias != u32::MAX`,
+  `forced_size(alias) == Some(2)`).  Storage is `Parts::Short`.  Must
+  dispatch to **`OpGetShort` / `OpSetShort`** (legacy `+1` encoding).
+- **Path B — struct field bounds-heuristic landing at 2 bytes**
+  (`alias == u32::MAX`, `spec.forced_size.is_none()`, `byte_width == 2`).
+  Storage is `Parts::Short`.  Must dispatch to **`OpGetShort` /
+  `OpSetShort`** (legacy encoding).
+- **Path C — vector element with narrow forced_size**
+  (`alias == u32::MAX`, `spec.forced_size == Some(2)`,
+  `vector_narrow_width == Some(2)`).  Storage is `Parts::ShortRaw`.
+  Must dispatch to **`OpGetShortRaw` / `OpSetShortRaw`** (direct
+  encoding).
+
+The first 4b attempt dispatched ALL `s == 2` to `OpGetShortRaw`,
+regressing paths A and B.  `lib/parser.loft::Parser::prio: u16` is
+path A; `lib/code.loft::Block { length: u16 }` is path A.  Every
+u16 struct-field read returned `stored - 1`, producing off-by-one
+indices that caused infinite loops in parser AST traversal — the
+`16-parser.loft` native hang.
+
+**`src/parser/mod.rs::get_val`** — track which branch picked `s`
+so the `s == 2` case can split:
 
 ```rust
+let (s, narrow_vec) = if alias != u32::MAX {
+    (self.data.forced_size(alias)
+         .unwrap_or_else(|| spec.byte_width(nullable)), false)
+} else if let Some(n) = spec.forced_size.and_then(|_| spec.vector_narrow_width()) {
+    (n, true)  // Path C — vector-narrow
+} else {
+    (spec.byte_width(nullable), false)  // Path B
+};
+// …
 if s == 1 {
     self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
-} else if s == 2 {
-    // P184 Phase 4b: narrow 2-byte vector element read.
-    // NOT OpGetShort — that uses the legacy +1 encoding for
-    // `Parts::Short`.  OpGetShortRaw matches the direct-encoded
-    // `Parts::ShortRaw` that Phase 2 now registers for narrow
-    // vector contents.
+} else if s == 2 && narrow_vec {
     self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
+} else if s == 2 {
+    self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
 } else if s == 4 {
     self.cl("OpGetInt4", &[code, p])
 } else {
@@ -315,15 +497,35 @@ if s == 1 {
 }
 ```
 
-**Critical correctness constraint:** only vector-element reads
-(`alias == u32::MAX` branch) should reach this `s == 2` case, and
-only if `vector_narrow_width()` returns `Some(2)`.  Struct-field
-reads with `alias != u32::MAX` still emit `OpGetShort` via the
-captured-alias path — those continue using `Parts::Short` legacy
-encoding on struct fields that opted into `size(2)`.
+**`src/parser/mod.rs::set_field_check`** — symmetric fix for the
+write side.  `insert(vector<u16>, idx, x)` routes through
+`set_field(ed_nr=<u16 elem>, f_nr=usize::MAX, …)` which currently
+takes `alias_nr == u32::MAX` and lands at `tp.size(nullable)` via
+bounds heuristic — path B.  Add a path-C branch:
 
-This is why the `get_val` three-way dispatch (kept from Phase 4a)
-is load-bearing: it routes each call to the correct encoding.
+```rust
+let (s, narrow_vec) = if alias_nr != u32::MAX {
+    (self.data.forced_size(alias_nr).unwrap_or_else(|| tp.size(nullable)), false)
+} else if let Type::Integer(spec) = tp
+    && let Some(n) = spec.forced_size.and_then(|_| spec.vector_narrow_width())
+{
+    (n, true)
+} else {
+    (tp.size(nullable), false)
+};
+// …
+if s == 2 && narrow_vec {
+    self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
+} else if s == 2 {
+    self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
+} else …
+```
+
+**Invariant:** `narrow_vec == true` iff the underlying storage is
+`Parts::ShortRaw` iff the read/write opcode MUST use direct
+encoding.  Every opcode choice is now driven by the same predicate
+`narrow_vec` that the resolver uses to pick `Parts::ShortRaw` over
+`Parts::Short` — single source of truth.
 
 ### Step 7 — `vector_narrow_width` gate opens to 2
 
