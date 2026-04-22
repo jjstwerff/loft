@@ -897,3 +897,109 @@ fn inc_numbers_in_table(section: &str) -> Vec<u32> {
     }
     out
 }
+
+/// RAII guard that restores a file's contents on drop.  The staleness
+/// tests below have to let the generator overwrite the real
+/// `doc/examples.js` on disk (the script hard-codes that relative
+/// path), so this guard makes sure the working tree ends up exactly
+/// as it was before the test ran — whether the test panicked, failed,
+/// or passed.
+struct FileGuard {
+    path: std::path::PathBuf,
+    original: Vec<u8>,
+}
+
+impl FileGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        let original = fs::read(&path)
+            .unwrap_or_else(|e| panic!("cannot read {} for backup: {e}", path.display()));
+        Self { path, original }
+    }
+}
+
+impl Drop for FileGuard {
+    fn drop(&mut self) {
+        // Best-effort restore; panicking in Drop would obscure the
+        // original test failure.
+        let _ = fs::write(&self.path, &self.original);
+    }
+}
+
+/// Regenerates `output_relative` by running `script` through the
+/// release `loft` binary and fails with a clear remediation message
+/// if the result differs from the committed version.
+fn assert_generator_output_matches_committed(script: &str, output_relative: &str) {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output_path = root.join(output_relative);
+    let guard = FileGuard::new(output_path.clone());
+
+    let loft_bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"));
+    let out = std::process::Command::new(&loft_bin)
+        .arg("--interpret")
+        .arg(script)
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|e| panic!("spawn {} failed: {e}", loft_bin.display()));
+    assert!(
+        out.status.success(),
+        "generator `{script}` exited non-zero: {}\nstdout:\n{}\nstderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let regenerated = fs::read(&output_path)
+        .unwrap_or_else(|e| panic!("generator did not write {output_relative}: {e}"));
+    if regenerated != guard.original {
+        let mut first_diff_line = 0usize;
+        let a = String::from_utf8_lossy(&regenerated);
+        let b = String::from_utf8_lossy(&guard.original);
+        for (i, (l, r)) in a.lines().zip(b.lines()).enumerate() {
+            if l != r {
+                first_diff_line = i + 1;
+                break;
+            }
+        }
+        let a_lines = a.lines().count();
+        let b_lines = b.lines().count();
+        panic!(
+            "\n{output_relative} is stale.\n\nFix:  loft --interpret {script}\nThen: git add {output_relative} && commit\n\n\
+             regenerated={a_lines} lines, committed={b_lines} lines, first diff at line {first_diff_line}.\n"
+        );
+    }
+}
+
+/// `doc/examples.js` is committed but auto-generated from
+/// `tests/docs/*.loft` by `scripts/build-playground-examples.loft`.
+/// Nothing automates the regeneration, so any change to
+/// `tests/docs/*.loft` that ships without running the generator
+/// leaves GitHub Pages serving stale content.  This test is the
+/// guard.
+///
+/// **Currently ignored:** `build-playground-examples.loft` crashes
+/// with SIGSEGV partway through its `for f in file("tests/docs").files()`
+/// loop (reproduced on clean `develop` branched from `1753615`; see
+/// PROBLEMS.md § "playground generator SIGSEGV").  Until that's
+/// fixed, running this test would corrupt `doc/examples.js` on disk
+/// (the script opens the file, writes a partial stream, then dies).
+/// Remove `#[ignore]` once the generator completes cleanly.
+#[test]
+#[ignore = "generator SIGSEGV truncates output — see PROBLEMS.md"]
+fn doc_examples_js_is_up_to_date() {
+    assert_generator_output_matches_committed(
+        "scripts/build-playground-examples.loft",
+        "doc/examples.js",
+    );
+}
+
+/// `doc/gallery-examples.js` is committed but auto-generated from
+/// `lib/graphics/examples/*.loft` by
+/// `scripts/build-gallery-examples.loft`.  Same drift risk as
+/// `doc/examples.js` — this guard catches it.
+#[test]
+fn doc_gallery_examples_js_is_up_to_date() {
+    assert_generator_output_matches_committed(
+        "scripts/build-gallery-examples.loft",
+        "doc/gallery-examples.js",
+    );
+}
