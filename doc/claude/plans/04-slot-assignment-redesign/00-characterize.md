@@ -57,6 +57,24 @@ V1 in the cases V2 authors happened to think of."
    IR shape → does it hit the orphan placer?" so Phase 1 can design
    a single-pass algorithm that covers every shape without a fallback.
 
+5. **Catalogue every size-or-shape branch in today's allocator.**
+   Per the hard constraint in the README, V2 is not allowed to
+   branch on variable size, scope kind, or set cardinality.  That
+   means every such branch in V1 is a fixture target — V2 has to
+   produce the same placement without the branch.  Grep for:
+   - `size() > 8`, `size() <= 8`, `v_size > 8`, etc.
+   - `Value::Block(_)` vs `Value::Loop(_)` dispatch in placement.
+   - `place_orphaned_vars` call sites (the whole orphan path is a
+     shape-dispatched branch).
+   - `zone1_hwm`, `zone2_hwm`, `var_size` split points.
+   - Any "if this scope has only one variable" / "if this scope
+     has more than one variable" logic.
+
+   Output: a table mapping each branch → the IR shape that exercises
+   it → the fixture test that locks the observed placement.  Phase 1
+   uses this table to prove the single-pass algorithm covers every
+   row without re-introducing a dispatch.
+
 ## What we don't do in this phase
 
 - No algorithmic changes to `assign_slots`.

@@ -71,21 +71,72 @@ Single-pass placement driven by liveness intervals:
    the function-level frame.
 4. Codegen reads slots as today.
 
-Key design questions to resolve in Phase 1:
-- Can we drop the small/large zone split entirely?  (Loops currently
-  need zone-2 sequential placement because `OpFreeStack` inside a
-  loop doesn't work.  If function-entry `OpReserveFrame` replaces
-  per-block reservation, this restriction goes away.)
-- What replaces the "Block-return shares its parent's slot" special
-  case?  Liveness says the parent local and the block-result local
-  have overlapping lifetimes, so they can't share — unless the
-  IR-walk preserves the semantic that the block writes through the
-  parent's slot.  Either the IR is rewritten to remove the implicit
-  sharing, or the slot allocator keeps a notion of "aliased pair."
-- Argument slots: today args occupy `stack_pos == u16::MAX` until
-  codegen fills them in.  Either finalise arg slots during
-  `assign_slots`, or pre-reserve the arg region and have the allocator
-  start placement above it.
+### Hard constraint — uniform placement
+
+**Every local goes through the same placement path.**  The redesign
+is explicitly illegal if it:
+
+- treats **small variables** (≤ 8 B — `integer`, `boolean`,
+  `character`, enum values, references-as-handles) differently from
+  **large variables** (text, vectors, structs, anything via
+  `Store::alloc`);
+- treats **individual variables** differently from **sets of
+  variables** (all locals in a Block, all locals in a Loop, all
+  orphaned locals, the args + return-address prefix);
+- carries any branch of the form "if this variable's size is N" or
+  "if this scope contains more than one variable" or "if this
+  variable's scope-shape is X."
+
+The algorithm must accept a flat list of `(live_interval, size,
+alignment)` triples and emit `slot_position` for each, with the same
+code path producing the result whether the input has one variable
+or five hundred, and whether each one is one byte or one kilobyte.
+
+This constraint is deliberately stronger than "simpler."  The
+recurring bug pattern (P178, P185, and the P122p/q/r series before
+them) is that size-based or shape-based branches accumulate filters
+every time a new aliasing case surfaces.  Making it **illegal** for
+the new algorithm to branch on size or group membership is the
+structural guarantee that the next aliasing case has nowhere to
+hide — it either breaks the one placement path (loud failure), or
+it doesn't exist.
+
+Ergonomic exceptions the constraint does NOT rule out:
+- Reading size + alignment from the input triple is fine — the
+  constraint is against *branching* on them, not against *reading*
+  them (an interval-graph-colouring step that looks at size to
+  pick the lowest non-overlapping slot is one branch-free formula,
+  not "zone 1 vs zone 2").
+- The runtime still has its own notion of frame layout
+  (`OpReserveFrame`, return-address offset).  The allocator speaks
+  to that contract through its output, not by simulating it
+  internally with a size-based split.
+
+### Key design questions to resolve in Phase 1
+
+- **Loop-scope lifetime.**  Loops currently need sequential
+  placement because per-block `OpFreeStack` inside a loop corrupts
+  the iteration.  Under the uniform-placement rule, loops and
+  blocks must share the algorithm — so the runtime contract has
+  to change: one function-entry `OpReserveFrame(hwm)` covers the
+  whole function, and neither blocks nor loops `OpFreeStack`.  The
+  cost is that block-scope slot reuse across sibling blocks has to
+  come out of liveness analysis (which it already does) rather
+  than out of `OpReserveFrame` / `OpFreeStack` bookkeeping.
+- **Block-return aliasing.**  Today `Set(v, Block([..., result]))`
+  implicitly writes `result` through `v`'s slot — treating the
+  Block's locals as a set with shared placement.  Under the
+  constraint, "the block writes through v's slot" has to be
+  expressed in the IR (e.g. rewrite to `Block([..., Set(v,
+  result)])`) rather than as a placement-time special case.
+- **Arguments.**  The args + return-address prefix is currently a
+  pre-reserved region that placement avoids.  Options that respect
+  the constraint: (a) finalise arg positions by extending the same
+  liveness graph to include args as "live from entry to last use";
+  (b) keep arg placement as a runtime-layout concern owned by
+  codegen, with the allocator producing slots that start at an
+  offset the allocator doesn't know or care about.  Phase 1 picks
+  one — no mixed approach.
 
 ## Ground rule — no regressions
 
@@ -135,6 +186,16 @@ assertion is meaningful.
    switch).
 5. `tests/issues.rs` slot-related `#[ignore]` count stays at zero
    after Phase 3.
+6. **Uniform-placement audit:** grep the post-switch `slots.rs`
+   (and any files it delegates to) for branches on variable size,
+   scope kind (Block vs Loop vs "orphan"), or set cardinality.
+   Every hit either (a) has a rationale documented in the code
+   explaining why it is NOT size/shape-based placement dispatch
+   (e.g. an interval-graph colouring step that reads size to
+   compute overlap), or (b) is a regression against the hard
+   constraint and must be removed.  This check lands as a
+   `tests/doc_hygiene.rs::slot_allocator_has_no_size_or_shape_branches`
+   lint in Phase 4.
 
 ## Related
 
