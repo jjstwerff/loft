@@ -611,10 +611,10 @@ pub fn len(both: character) -> integer {
 
 fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
-fn OpText();
-// Plan-04 Phase 2h: positional init-op; writes an empty String at
+// Plan-04 Phase B: positional init-op; writes an empty String at
 // the frame slot `stack_pos - pos`.  Does not advance the eval stack.
-// Complements `OpText` for writes to pre-reserved slots.
+// Replaces the removed `OpText` compound op — callers combine with
+// `OpReserveFrame(24)` when a stack push is needed.
 fn OpInitText(pos: const u16);
 fn OpAppendText(pos: const u16, v1: text);
 fn OpPutText(pos: const u16, value: text);

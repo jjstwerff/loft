@@ -565,7 +565,7 @@ impl State {
             let before = stack.position;
             self.generate(value, stack, false);
             if stack.position - before < 16 {
-                stack.add_op("OpNullRefSentinel", self);
+                self.emit_push_sentinel(stack);
             }
         }
     }
@@ -659,6 +659,48 @@ impl State {
         // Patch skip goto
         let end_pos = self.code_pos;
         self.code_put(goto_skip_pos, (end_pos - goto_skip_base) as i16);
+    }
+
+    /// Plan-04 Phase B.2: push a `DbRef{store_nr: u16::MAX, …}` sentinel
+    /// onto the eval stack.  Runtime-equivalent to `OpNullRefSentinel`,
+    /// decomposed into `OpReserveFrame(12) + OpInitRefSentinel(12)` so
+    /// that "advance the stack pointer" and "write the sentinel value"
+    /// are distinct primitives.
+    fn emit_push_sentinel(&mut self, stack: &mut Stack) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(ref_size);
+    }
+
+    /// Plan-04 Phase B.2: push a null-state `DbRef` (allocates a store
+    /// via `database.null()`) onto the eval stack.  Runtime-equivalent
+    /// to `OpConvRefFromNull`, decomposed into `OpReserveFrame(12) +
+    /// OpInitRef(12)`.
+    fn emit_push_null_ref(&mut self, stack: &mut Stack) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRef", self);
+        self.code_add(ref_size);
+    }
+
+    /// Plan-04 Phase B.2: push a stack-frame `DbRef` pointing at
+    /// `dep_offset` below the pre-op TOS.  Runtime-equivalent to
+    /// `OpCreateStack(dep_offset)`, decomposed into `OpReserveFrame(12) +
+    /// OpInitCreateStack(12, dep_offset + 12)`.  Caller computes
+    /// `dep_offset = stack.position_before - dep.stack_pos`.
+    fn emit_push_create_stack(&mut self, stack: &mut Stack, dep_offset: u16) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitCreateStack", self);
+        self.code_add(ref_size);
+        self.code_add(dep_offset + ref_size);
     }
 
     pub(super) fn gen_set_first_text(&mut self, stack: &mut Stack, v: u16, value: &Value) {
@@ -769,7 +811,7 @@ impl State {
                     // at null-init time.  Using OpConvRefFromNull here would leak a
                     // store because the tuple scope-exit skip (scopes.rs:587) never
                     // frees tuple elements.
-                    stack.add_op("OpNullRefSentinel", self);
+                    self.emit_push_sentinel(stack);
                 }
                 Type::Text(_) => {
                     stack.add_op("OpConvTextFromNull", self);
@@ -784,7 +826,7 @@ impl State {
             // skip_free variables are match-arm bindings that borrow from the
             // subject — don't allocate a store, just push a null sentinel.
             if stack.function.is_skip_free(v) {
-                stack.add_op("OpNullRefSentinel", self);
+                self.emit_push_sentinel(stack);
             } else if stack.function.is_inline_ref(v) {
                 // Lift temporaries (scopes.rs scan_args) are always assigned
                 // from a call result before first read; the null-init only
@@ -792,10 +834,10 @@ impl State {
                 // OpFreeRef along an un-taken path is a no-op.  Skipping the
                 // full pre-alloc avoids a dangling vector store (P54-B/Q2
                 // chain-leak fix).
-                stack.add_op("OpNullRefSentinel", self);
+                self.emit_push_sentinel(stack);
             } else if dep.is_empty() {
                 // TODO move this convoluted implementation to a new operator.
-                stack.add_op("OpConvRefFromNull", self);
+                self.emit_push_null_ref(stack);
                 stack.add_op("OpDatabase", self);
                 self.code_add(size_of::<crate::keys::DbRef>() as u16);
                 let name = format!("main_vector<{}>", elm_tp.name(stack.data));
@@ -816,8 +858,10 @@ impl State {
                 // storage.  Use `OpSetInt4` to write only 4 bytes.
                 stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
-                stack.add_op("OpCreateStack", self);
-                self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                // OpCreateStack(12) — dep is the DbRef pushed by the
+                // surrounding pattern's OpConvRefFromNull (now a
+                // push-sentinel), 12 bytes below current TOS.
+                self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
                 stack.add_op("OpConstInt", self);
                 self.code_add(12i64);
                 stack.add_op("OpSetByte", self);
@@ -825,12 +869,11 @@ impl State {
                 self.code_add(0u16);
             } else {
                 // Same pre-init logic as for borrowed Reference types above:
-                // OpCreateStack produces a stack-frame DbRef pointing into dep's slot.
+                // a stack-frame DbRef pointing into dep's slot.
                 // Must be overwritten by OpPutRef before any field access.
-                stack.add_op("OpCreateStack", self);
                 let dep_pos = stack.function.stack(dep[0]);
-                let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-                self.code_add(before_stack - dep_pos);
+                let dep_offset = stack.position - dep_pos;
+                self.emit_push_create_stack(stack, dep_offset);
             }
         }
     }
@@ -843,7 +886,7 @@ impl State {
                 stack.add_op("OpConvTextFromNull", self);
             }
             Type::Reference(_, _) | Type::Enum(_, true, _) => {
-                stack.add_op("OpConvRefFromNull", self);
+                self.emit_push_null_ref(stack);
             }
             Type::Integer(_) | Type::Character => {
                 stack.add_op("OpConstInt", self);
@@ -863,7 +906,7 @@ impl State {
             }
             _ => {
                 // For other types, push a zero-filled DbRef as a generic null.
-                stack.add_op("OpNullRefSentinel", self);
+                self.emit_push_sentinel(stack);
             }
         }
     }
@@ -929,7 +972,7 @@ impl State {
                 {
                     let tp_nr = stack.data.def(d_nr).known_type;
                     // Allocate fresh store, put it in v's slot.
-                    stack.add_op("OpConvRefFromNull", self);
+                    self.emit_push_null_ref(stack);
                     stack.add_op("OpDatabase", self);
                     self.code_add(size_of::<crate::keys::DbRef>() as u16);
                     self.code_add(tp_nr);
@@ -1161,7 +1204,7 @@ impl State {
                 // d_nr = i64::MIN (integer null sentinel) + closure = null DbRef (12B).
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
-                stack.add_op("OpNullRefSentinel", self);
+                self.emit_push_sentinel(stack);
             } else {
                 // A5.6-1/A5.6-2: 20-byte fn-ref slot: [d_nr (8B)][closure DbRef (12B)].
                 // gen_fn_ref_value ensures every branch (including if-else) reaches the
@@ -1409,9 +1452,8 @@ impl State {
         for arg_val in &inner_args {
             self.generate(arg_val, stack, false);
         }
-        stack.add_op("OpCreateStack", self);
-        let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-        self.code_add(before_stack - stack.function.stack(dest_var));
+        let dep_offset = stack.position - stack.function.stack(dest_var);
+        self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
         for attr_type in &inner_attrs {
@@ -1494,7 +1536,7 @@ impl State {
                     if matches!(a.typedef, Type::Function(_, _, _))
                         && stack.position - stack_before < 16
                     {
-                        stack.add_op("OpNullRefSentinel", self);
+                        self.emit_push_sentinel(stack);
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -1619,8 +1661,8 @@ impl State {
             && !matches!(&parameters[0], Value::Var(_))
         {
             self.generate(&parameters[0], stack, false);
-            stack.add_op("OpCreateStack", self);
-            self.code_add(size_of::<crate::keys::DbRef>() as u16);
+            // Dep is the 12-byte DbRef just pushed by generate(parameters[0]).
+            self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
             return stack.data.def(op).returned.clone();
         }
         if stack.data.def(op).is_operator() {
@@ -2011,9 +2053,9 @@ impl State {
             } else if matches!(&block.result, Type::Function(_, _, _)) && stack.position < after {
                 // a fn-ref block result is 16 bytes ([d_nr 4B][closure DbRef 12B]).
                 // If the block only pushed 4 bytes (d_nr via OpConstInt), pad to 16 with
-                // OpNullRefSentinel so both branches of an if-else reach the join point with
-                // the same stack delta.
-                stack.add_op("OpNullRefSentinel", self);
+                // a null-ref sentinel so both branches of an if-else reach the join point
+                // with the same stack delta.
+                self.emit_push_sentinel(stack);
             }
             stack.position = after;
         }
@@ -2273,9 +2315,8 @@ impl State {
         for arg_val in args {
             self.generate(arg_val, stack, false);
         }
-        stack.add_op("OpCreateStack", self);
-        let before_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-        self.code_add(before_stack - stack.function.stack(var));
+        let dep_offset = stack.position - stack.function.stack(var);
+        self.emit_push_create_stack(stack, dep_offset);
         stack.add_op("OpStaticCall", self);
         self.code_add(lib_nr);
         for attr_type in &attr_types {

@@ -318,20 +318,7 @@ impl State {
             .addr_mut::<String>(r.rec, r.pos)
     }
 
-    pub fn text(&mut self) {
-        if cfg!(debug_assertions) {
-            self.text_positions
-                .insert(self.stack_cur.pos + self.stack_pos);
-        }
-        let v = self.string_mut(0);
-        let s = String::new();
-        unsafe {
-            core::ptr::write(v, s);
-        }
-        self.stack_pos += size_str();
-    }
-
-    /// Plan-04 Phase 2h: positional variant of `text()`.  Writes a
+    /// Plan-04 Phase 2h: positional variant of the removed `text()`.  Writes a
     /// fresh empty `String` at the frame slot reached by
     /// `self.stack_pos - pos` (matches the addressing convention of
     /// `clear_text`, `append_text`, and the other `_text` ops).

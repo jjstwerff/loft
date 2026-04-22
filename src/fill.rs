@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 240] = &[
+pub const OPERATORS: &[fn(&mut State); 239] = &[
     goto,
     goto_word,
     goto_false,
@@ -119,7 +119,6 @@ pub const OPERATORS: &[fn(&mut State); 240] = &[
     size_text,
     length_character,
     conv_bool_from_text,
-    text,
     init_text,
     append_text,
     put_text,
@@ -964,10 +963,6 @@ fn conv_bool_from_text(s: &mut State) {
     let v_v1 = s.string();
     let new_value = v_v1.str() != crate::state::STRING_NULL;
     s.put_stack(new_value);
-}
-
-fn text(s: &mut State) {
-    s.text();
 }
 
 fn init_text(s: &mut State) {
