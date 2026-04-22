@@ -1253,10 +1253,18 @@ impl State {
                 .any(|a| matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _)));
             if !has_ref_params {
                 // Safe: function has no Reference params, cannot return an aliased store.
-                // Generate just the inner call — its result DbRef becomes v's value.
-                // (Under slot-move, result lands at v's slot by construction; B.3.h
-                //  may need an OpPutRef here once slot-move is removed.)
+                // Generate just the inner call — its result DbRef is on the eval stack.
+                // Plan-04 Phase B.3.h.3: slot-aware.  Move the pushed DbRef to
+                // v's slot via OpPutRef(slot_offset).  Under slot-move (still
+                // active through B.3.h), slot_offset equals 12 after the push,
+                // so OpPutRef copies the DbRef bytes onto themselves — harmless
+                // bytecode-level overhead.  Once slot-move is removed, the
+                // OpPutRef becomes the mechanism that lands the result in v's
+                // actual slot.
                 self.generate(&args[0], stack, false);
+                let var_pos = stack.position - stack.function.stack(v);
+                stack.add_op("OpPutRef", self);
+                self.code_add(var_pos);
                 return;
             }
         }
