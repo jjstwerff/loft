@@ -1650,19 +1650,32 @@ impl State {
         } else {
             self.library_names.get(lib_lookup).copied()
         };
-        // P160: OpCreateStack with a non-Var expression argument (e.g.
-        // OpGetVector result).  The runtime reads a u16 offset from the code
-        // stream, but add_const writes nothing for Type::Reference args.
-        // Handle here: generate the expression (pushes a 12-byte DbRef),
-        // then emit OpCreateStack with the offset pointing at the just-
-        // pushed result.
-        if name == "OpCreateStack"
-            && !parameters.is_empty()
-            && !matches!(&parameters[0], Value::Var(_))
-        {
-            self.generate(&parameters[0], stack, false);
-            // Dep is the 12-byte DbRef just pushed by generate(parameters[0]).
-            self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
+        // Plan-04 Phase B.2.c: compound push-and-init ops emitted by the
+        // parser (via `self.cl("OpName", ...)` in parser/mod.rs etc.) are
+        // decomposed here into the positional `OpReserveFrame(n) +
+        // OpInit*(n)` form.  This lets the parser keep emitting the
+        // familiar compound names while the runtime path uses the clean
+        // primitives.
+        if name == "OpNullRefSentinel" {
+            self.emit_push_sentinel(stack);
+            return stack.data.def(op).returned.clone();
+        }
+        if name == "OpConvRefFromNull" {
+            self.emit_push_null_ref(stack);
+            return stack.data.def(op).returned.clone();
+        }
+        if name == "OpCreateStack" && !parameters.is_empty() {
+            if let Value::Var(wv) = &parameters[0] {
+                // Dep is the named variable at wv.stack_pos.
+                let dep_offset = stack.position - stack.function.stack(*wv);
+                self.emit_push_create_stack(stack, dep_offset);
+            } else {
+                // P160: OpCreateStack with a non-Var expression (e.g.
+                // OpGetVector result).  Generate the expression to push
+                // a 12-byte DbRef, then point OpInitCreateStack at it.
+                self.generate(&parameters[0], stack, false);
+                self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
+            }
             return stack.data.def(op).returned.clone();
         }
         if stack.data.def(op).is_operator() {
