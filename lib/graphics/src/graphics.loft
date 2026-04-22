@@ -622,6 +622,50 @@ KEY_RIGHT = 131;
 KEY_SHIFT = 132;
 KEY_CTRL = 133;
 
+// Initiative 03 Phase 1: extra keys for the editor hotkey set.
+// Digits route through ASCII (`gl_key_pressed(KEY_1)` etc).
+KEY_0 = 48;
+KEY_1 = 49;
+KEY_2 = 50;
+KEY_3 = 51;
+KEY_4 = 52;
+KEY_5 = 53;
+KEY_6 = 54;
+KEY_7 = 55;
+KEY_8 = 56;
+KEY_9 = 57;
+
+// Common editor hotkey letters (lowercase ASCII; `gl_key_pressed` is
+// case-insensitive — the native key_index lowercases).
+KEY_O = 111;  // occlusion toggle
+KEY_R = 114;  // raise-layer
+KEY_F = 102;  // lower-layer
+KEY_Z = 122;  // undo (with Ctrl)
+KEY_Y = 121;  // redo (with Ctrl)
+
+// Bracket keys for wall-direction cycling.
+KEY_LBRACKET = 91;   // [
+KEY_RBRACKET = 93;   // ]
+
+// Tab for camera-mode toggle.
+KEY_TAB = 9;
+
+// F-key range for save / load / fullscreen-toggle.  Values match
+// `lib/graphics/native/src/lib.rs::key_index` mapping of
+// `NamedKey::F1..F12` → 135..146.
+KEY_F1  = 135;
+KEY_F2  = 136;
+KEY_F3  = 137;
+KEY_F4  = 138;
+KEY_F5  = 139;
+KEY_F6  = 140;
+KEY_F7  = 141;
+KEY_F8  = 142;
+KEY_F9  = 143;
+KEY_F10 = 144;
+KEY_F11 = 145;
+KEY_F12 = 146;
+
 // Returns true if the key is currently pressed (use KEY_* constants).
 pub fn gl_key_pressed(key_code: integer) -> boolean;
 #native "loft_gl_key_pressed"
@@ -637,6 +681,13 @@ pub fn gl_mouse_y() -> float;
 // Mouse button bitmask: 1=left, 2=right, 4=middle.
 pub fn gl_mouse_button() -> integer;
 #native "loft_gl_mouse_button"
+
+// Scroll-wheel delta accumulated since the last call (positive = up).
+// Reset on read.  Use per-frame to drive the editor's `InputState.in_wheel`
+// or any other scroll-driven UI.  Pixel-delta trackpad scrolling is
+// quantised at 20 px/line.
+pub fn gl_mouse_wheel() -> integer;
+#native "loft_gl_mouse_wheel"
 
 // --- Text rendering (GL3) ---
 
