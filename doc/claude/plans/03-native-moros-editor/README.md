@@ -51,7 +51,8 @@ constants, new variants) — no signature changes on already-shipped
 | 0 | Fullscreen support in `gl_create_window` | [00-fullscreen.md](00-fullscreen.md) | open | 2 |
 | 1 | Native input API gaps — scroll wheel + expanded key codes | [01-input.md](01-input.md) | open | 2 |
 | 2 | Minimal native editor driver (window, camera, WASD, quit) | [02-driver.md](02-driver.md) | open | 3 |
-| 3 | Panel UI overlay (2D panel after 3D scene, click routing) | [03-panel.md](03-panel.md) | open | 4 |
+| 3a | `editor_tick` + tool select + paint-on-click | [03-panel.md](03-panel.md) | ✅ done 2026-04-22 — commit pending | — |
+| 3b | Panel UI overlay (2D panel after 3D scene, click routing) | [03-panel.md](03-panel.md) | open | 4 |
 | 4 | Save/load (F5/F9) + fullscreen toggle (F11) | [04-persistence.md](04-persistence.md) | open | 5 |
 | 5 | Polish — FPS counter, resize, error diagnostics, avatar render, hex-pick highlight | [05-polish.md](05-polish.md) | open | 6 |
 | 6 | Standalone compiled application — `make native-editor` produces a shippable `dist/moros-editor/` directory; binary runs from a fresh location without `loft` on the machine | [06-standalone.md](06-standalone.md) | open | — |

@@ -1,25 +1,38 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// Native Moros editor — Phase 2 viewer foundation.
+// Native Moros editor.
 //
-// Wires the Moros library stack (moros_map + moros_render) into a
-// native OpenGL program.  Today it's a viewer, not a fully
-// interactive editor — Phase 3 adds editor_tick, tool selection,
-// and click-to-paint.  Already useful: loads a seed map, renders
-// the 3D scene, WASD orbits the camera, Esc quits.
+// Phase 2: renderer + camera orbit.  Phase 3a (this revision):
+// `EditorState` + `editor_tick` + `input_from_keys` wired, tool
+// select via number keys, undo/redo via Ctrl-Z/Y, left-click
+// applies the current tool at the avatar's hex.  No panel overlay
+// yet — Phase 3b.
 //
-// Usage:
-//   loft --native-release --path <repo>/ --lib <repo>/lib \
-//       lib/moros_editor/examples/native_editor.loft
+// Controls
+//   WASD / Arrows      Camera orbit (azimuth / elevation via
+//                      right-click drag in future; for now WASD
+//                      steers the avatar, camera follows).
+//   Mouse wheel        Camera zoom.
+//   Tab                Toggle follow / overview camera mode.
+//   1 .. 6             Select tool (None / Raise / Lower / Stencil
+//                      / Item / Wall).
+//   [  /  ]            Cycle wall direction (prev / next).
+//   R  /  F            Overlay layer up / down.
+//   O                  Toggle occlusion (see-through).
+//   Ctrl-Z / Ctrl-Y    Undo / redo.
+//   Left-click         Apply current tool at the avatar's hex.
+//   Esc                Quit.
 //
-// Or for a fullscreen session:
-//   loft --native-release --path <repo>/ --lib <repo>/lib \
-//       lib/moros_editor/examples/native_editor.loft --fullscreen
+// Build & run
+//   loft --native --path <repo>/ --lib <repo>/lib \
+//       lib/graphics/examples/moros_editor.loft
 //
 // @ARGS: --lib lib
 use moros_map;
 use moros_render;
+use moros_sim;
+use moros_editor;
 use graphics;
 use render;
 use scene;
@@ -27,13 +40,7 @@ use math;
 
 WINDOW_W = 1024;
 WINDOW_H = 768;
-
-// Camera orbit speed (radians of azimuth/elevation per frame while
-// the key is held).  Matches the ~0.6 rad/s / 36°/s feel of most
-// 3D editors.
-ORBIT_SPEED = 0.015;
-// Camera zoom speed (world units per wheel tick).
-ZOOM_STEP = 0.5;
+FRAME_DT = 1.0 / 60.0;   // Fixed step for Phase 3a; real `dt` in Phase 5.
 
 fn seed_starter_map() -> Map {
   // 7×7 flat grid at cy=0, alternating materials for a visible
@@ -47,87 +54,141 @@ fn seed_starter_map() -> Map {
       map_paint_material(sm, q, r, 0, mat);
     }
   }
-  // A small central rise (hex (3,3) gets height 2) so the
-  // renderer has to emit wall slabs too.
   map_set_height(sm, 3, 3, 0, 2);
   sm
 }
 
+// ── Input polling ──────────────────────────────────────────────────
+
+// Scan each hotkey known to `moros_sim::input_from_keys` and return
+// the subset currently pressed, as loft text keys.  Matches the
+// string constants `input_from_keys` matches on.
+fn poll_held_keys() -> vector<text> {
+  k: vector<text> = [];
+  if graphics::gl_key_pressed(graphics::KEY_W) { k += ["w"]; }
+  if graphics::gl_key_pressed(graphics::KEY_A) { k += ["a"]; }
+  if graphics::gl_key_pressed(graphics::KEY_S) { k += ["s"]; }
+  if graphics::gl_key_pressed(graphics::KEY_D) { k += ["d"]; }
+  if graphics::gl_key_pressed(graphics::KEY_SPACE) { k += ["space"]; }
+  if graphics::gl_key_pressed(graphics::KEY_1) { k += ["1"]; }
+  if graphics::gl_key_pressed(graphics::KEY_2) { k += ["2"]; }
+  if graphics::gl_key_pressed(graphics::KEY_3) { k += ["3"]; }
+  if graphics::gl_key_pressed(graphics::KEY_4) { k += ["4"]; }
+  if graphics::gl_key_pressed(graphics::KEY_5) { k += ["5"]; }
+  if graphics::gl_key_pressed(graphics::KEY_6) { k += ["6"]; }
+  if graphics::gl_key_pressed(graphics::KEY_TAB) { k += ["tab"]; }
+  if graphics::gl_key_pressed(graphics::KEY_O) { k += ["o"]; }
+  if graphics::gl_key_pressed(graphics::KEY_R) { k += ["r"]; }
+  if graphics::gl_key_pressed(graphics::KEY_F) { k += ["f"]; }
+  if graphics::gl_key_pressed(graphics::KEY_Z) { k += ["z"]; }
+  if graphics::gl_key_pressed(graphics::KEY_Y) { k += ["y"]; }
+  if graphics::gl_key_pressed(graphics::KEY_LBRACKET) { k += ["["]; }
+  if graphics::gl_key_pressed(graphics::KEY_RBRACKET) { k += ["]"]; }
+  k
+}
+
+// ── Camera translation ────────────────────────────────────────────
+
+// Convert `moros_render::RenderCamera` (spherical orbit around a
+// target) into the `scene::Camera` shape that `render_frame`
+// consumes.  `editor_tick` mutates the RenderCamera via
+// `camera_apply_input`; we re-derive the scene camera each frame.
+fn apply_render_camera(cam: &scene::Camera, rc: moros_render::RenderCamera) {
+  cam.position = moros_render::camera_eye(rc);
+  cam.target = rc.target;
+  cam.fov = rc.fov_y;
+  cam.near = rc.near;
+  cam.far = rc.far;
+}
+
+// ── Main ───────────────────────────────────────────────────────────
+
 fn main() {
-  // `render::create_renderer` opens the window internally via
-  // `graphics::gl_create_window`, compiles PBR + shadow shaders,
-  // and allocates the shadow-map FBO.
-  //
-  // Fullscreen at boot is deferred to Phase 4 — `render.loft` would
-  // need a sibling constructor that calls `gl_create_fullscreen_window`
-  // instead of `gl_create_window`.  The building blocks (Phase 0)
-  // are in place; wiring is a follow-up.  For now the driver always
-  // opens a 1024×768 window.
   rnd = render::create_renderer(WINDOW_W, WINDOW_H, "Moros editor");
 
-  // Build the scene — map_build_scene adds a default directional
-  // light and a "default" grey material, so the PBR pass has
-  // everything it needs.  Future phases that mutate the map will
-  // need to rebuild + re-upload; for the viewer it's one-shot.
-  // Variable name `scn` avoids shadowing the `scene` module identifier.
-  scn = moros_render::map_build_scene(seed_starter_map());
+  st = moros_sim::editor_default();
+  st.es_map = seed_starter_map();
+  // Place the avatar in the centre of the grid, a bit above the
+  // ground so the camera's orbit doesn't clip into the hex columns.
+  st.es_player.pl_pos = math::vec3(3.0, 0.5, 3.0);
+
+  // Build + upload the scene.  `needs_rebuild` forces a fresh
+  // upload after any edit — Phase 2's one-shot upload turns stale
+  // the first time `tool_apply` mutates the map.
+  scn = moros_render::map_build_scene(st.es_map);
   render::upload_scene(rnd, scn);
+  needs_rebuild = false;
 
-  // Build a camera for the scene.  `scene::camera(name)` returns
-  // sensible defaults; WASD / arrow keys below adjust its position
-  // via spherical orbit coords around the grid centre.
   cam = scene::camera("editor");
-  cam.target = math::vec3(3.0, 0.0, 3.0);  // centre-ish of the 7×7 grid
+  apply_render_camera(cam, st.es_camera);
 
-  // Orbit state — keep the camera rotation in spherical coords and
-  // rebuild cam.position each frame so arrow / WASD / wheel keys
-  // stay decoupled from the scene::Camera struct shape.
-  orbit_az = 0.8;       // radians; ≈45°
-  orbit_el = 0.5;       // radians; ≈30°
-  orbit_dist = 15.0;
+  prev_held: vector<text> = [];
+  prev_mx = 0;
+  prev_my = 0;
+  prev_mx_btn = 0;
 
-  for _ in 0..100000000 {
+  for _ in 0..1000000000 {
     if !graphics::gl_poll_events() { break; }
     if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
 
-    // Camera orbit — A/D rotate, W/S raise/lower, arrow keys mirror
-    // them for users without a QWERTY layout.
-    if graphics::gl_key_pressed(graphics::KEY_A) or
-       graphics::gl_key_pressed(graphics::KEY_LEFT) {
-      orbit_az -= ORBIT_SPEED;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_D) or
-       graphics::gl_key_pressed(graphics::KEY_RIGHT) {
-      orbit_az += ORBIT_SPEED;
-    }
-    if graphics::gl_key_pressed(graphics::KEY_W) or
-       graphics::gl_key_pressed(graphics::KEY_UP) {
-      orbit_el += ORBIT_SPEED;
-      // Cap elevation so the camera never flips past the poles.
-      if orbit_el > 1.5 { orbit_el = 1.5; }
-    }
-    if graphics::gl_key_pressed(graphics::KEY_S) or
-       graphics::gl_key_pressed(graphics::KEY_DOWN) {
-      orbit_el -= ORBIT_SPEED;
-      if orbit_el < -0.2 { orbit_el = -0.2; }
-    }
-    // Scroll wheel zooms (Phase 1's new API).
+    // ── Build InputState from the window's polled state ──
+    held = poll_held_keys();
+    pressed = moros_sim::keys_pressed_since(prev_held, held);
+    mx = graphics::gl_mouse_x() as integer;
+    my = graphics::gl_mouse_y() as integer;
+    mbtn = graphics::gl_mouse_button();
+    ctrl = graphics::gl_key_pressed(graphics::KEY_CTRL);
     wheel = graphics::gl_mouse_wheel();
-    if wheel != 0 {
-      orbit_dist -= (wheel as float) * ZOOM_STEP;
-      if orbit_dist < 2.0 { orbit_dist = 2.0; }
-      if orbit_dist > 50.0 { orbit_dist = 50.0; }
-    }
+    clicked = (mbtn & 1) != 0;
+    rclicked = (mbtn & 2) != 0;
+    // Was this LEFT-click the first frame it went down?  We only
+    // apply the tool on the rising edge — holding the button must
+    // not spam the undo stack or repeat-paint.
+    left_edge = clicked && !(prev_mx_btn & 1 != 0);
+    prev_mx_btn = mbtn;
 
-    // Re-derive cam.position from spherical coords.
-    ca_horiz = orbit_dist * cos(orbit_el);
-    cam.position = math::vec3(
-      cam.target.x + ca_horiz * cos(orbit_az),
-      cam.target.y + orbit_dist * sin(orbit_el),
-      cam.target.z + ca_horiz * sin(orbit_az),
+    input = moros_sim::input_from_keys(
+      held, pressed,
+      mx, my,
+      mx - prev_mx, my - prev_my,
+      wheel,
+      clicked, rclicked,
+      ctrl,
     );
 
+    // ── Step the editor simulation ──
+    moros_sim::editor_tick(st, input, FRAME_DT);
+
+    // ── Apply tool on the RISING edge of left-click ──
+    // (Phase 3b will route this through `editor_click` once the
+    // panel exists and can claim the click first.)
+    if left_edge && st.es_tools.ts_current != ToolKind.None {
+      batch_begin(st.es_undo);
+      undo_push(st.es_undo, st.es_map,
+        world_to_hex(st.es_player.pl_pos.x, st.es_player.pl_pos.z).ha_q,
+        world_to_hex(st.es_player.pl_pos.x, st.es_player.pl_pos.z).ha_r,
+        st.es_overlay_cy);
+      tool_apply(st.es_player.pl_pos, st.es_overlay_cy, st.es_map, st.es_tools);
+      batch_end(st.es_undo);
+      needs_rebuild = true;
+    }
+
+    // ── Rebuild the scene if the map mutated ──
+    // Cheap for small maps — full rebuild, full re-upload.  Phase 5
+    // can replace with incremental mesh updates if perf matters.
+    if needs_rebuild {
+      scn = moros_render::map_build_scene(st.es_map);
+      render::upload_scene(rnd, scn);
+      needs_rebuild = false;
+    }
+
+    // ── Translate camera + render ──
+    apply_render_camera(cam, st.es_camera);
     if !render::render_frame(rnd, scn, cam) { break; }
+
+    prev_held = held;
+    prev_mx = mx;
+    prev_my = my;
   }
 
   render::destroy(rnd);
