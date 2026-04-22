@@ -1,0 +1,134 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Native Moros editor — Phase 2 viewer foundation.
+//
+// Wires the Moros library stack (moros_map + moros_render) into a
+// native OpenGL program.  Today it's a viewer, not a fully
+// interactive editor — Phase 3 adds editor_tick, tool selection,
+// and click-to-paint.  Already useful: loads a seed map, renders
+// the 3D scene, WASD orbits the camera, Esc quits.
+//
+// Usage:
+//   loft --native-release --path <repo>/ --lib <repo>/lib \
+//       lib/moros_editor/examples/native_editor.loft
+//
+// Or for a fullscreen session:
+//   loft --native-release --path <repo>/ --lib <repo>/lib \
+//       lib/moros_editor/examples/native_editor.loft --fullscreen
+//
+// @ARGS: --lib lib
+use moros_map;
+use moros_render;
+use graphics;
+use render;
+use scene;
+use math;
+
+WINDOW_W = 1024;
+WINDOW_H = 768;
+
+// Camera orbit speed (radians of azimuth/elevation per frame while
+// the key is held).  Matches the ~0.6 rad/s / 36°/s feel of most
+// 3D editors.
+ORBIT_SPEED = 0.015;
+// Camera zoom speed (world units per wheel tick).
+ZOOM_STEP = 0.5;
+
+fn seed_starter_map() -> Map {
+  // 7×7 flat grid at cy=0, alternating materials for a visible
+  // checkerboard pattern.  Height bump in the middle so the camera
+  // shows surface + wall geometry (the grand arc stair renderer
+  // kicks in for adjacent height deltas).
+  sm = map_empty();
+  for q in 0..7 {
+    for r in 0..7 {
+      mat = if (q + r) % 2 == 0 { 1 } else { 2 };
+      map_paint_material(sm, q, r, 0, mat);
+    }
+  }
+  // A small central rise (hex (3,3) gets height 2) so the
+  // renderer has to emit wall slabs too.
+  map_set_height(sm, 3, 3, 0, 2);
+  sm
+}
+
+fn main() {
+  // `render::create_renderer` opens the window internally via
+  // `graphics::gl_create_window`, compiles PBR + shadow shaders,
+  // and allocates the shadow-map FBO.
+  //
+  // Fullscreen at boot is deferred to Phase 4 — `render.loft` would
+  // need a sibling constructor that calls `gl_create_fullscreen_window`
+  // instead of `gl_create_window`.  The building blocks (Phase 0)
+  // are in place; wiring is a follow-up.  For now the driver always
+  // opens a 1024×768 window.
+  rnd = render::create_renderer(WINDOW_W, WINDOW_H, "Moros editor");
+
+  // Build the scene — map_build_scene adds a default directional
+  // light and a "default" grey material, so the PBR pass has
+  // everything it needs.  Future phases that mutate the map will
+  // need to rebuild + re-upload; for the viewer it's one-shot.
+  // Variable name `scn` avoids shadowing the `scene` module identifier.
+  scn = moros_render::map_build_scene(seed_starter_map());
+  render::upload_scene(rnd, scn);
+
+  // Build a camera for the scene.  `scene::camera(name)` returns
+  // sensible defaults; WASD / arrow keys below adjust its position
+  // via spherical orbit coords around the grid centre.
+  cam = scene::camera("editor");
+  cam.target = math::vec3(3.0, 0.0, 3.0);  // centre-ish of the 7×7 grid
+
+  // Orbit state — keep the camera rotation in spherical coords and
+  // rebuild cam.position each frame so arrow / WASD / wheel keys
+  // stay decoupled from the scene::Camera struct shape.
+  orbit_az = 0.8;       // radians; ≈45°
+  orbit_el = 0.5;       // radians; ≈30°
+  orbit_dist = 15.0;
+
+  for _ in 0..100000000 {
+    if !graphics::gl_poll_events() { break; }
+    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
+
+    // Camera orbit — A/D rotate, W/S raise/lower, arrow keys mirror
+    // them for users without a QWERTY layout.
+    if graphics::gl_key_pressed(graphics::KEY_A) or
+       graphics::gl_key_pressed(graphics::KEY_LEFT) {
+      orbit_az -= ORBIT_SPEED;
+    }
+    if graphics::gl_key_pressed(graphics::KEY_D) or
+       graphics::gl_key_pressed(graphics::KEY_RIGHT) {
+      orbit_az += ORBIT_SPEED;
+    }
+    if graphics::gl_key_pressed(graphics::KEY_W) or
+       graphics::gl_key_pressed(graphics::KEY_UP) {
+      orbit_el += ORBIT_SPEED;
+      // Cap elevation so the camera never flips past the poles.
+      if orbit_el > 1.5 { orbit_el = 1.5; }
+    }
+    if graphics::gl_key_pressed(graphics::KEY_S) or
+       graphics::gl_key_pressed(graphics::KEY_DOWN) {
+      orbit_el -= ORBIT_SPEED;
+      if orbit_el < -0.2 { orbit_el = -0.2; }
+    }
+    // Scroll wheel zooms (Phase 1's new API).
+    wheel = graphics::gl_mouse_wheel();
+    if wheel != 0 {
+      orbit_dist -= (wheel as float) * ZOOM_STEP;
+      if orbit_dist < 2.0 { orbit_dist = 2.0; }
+      if orbit_dist > 50.0 { orbit_dist = 50.0; }
+    }
+
+    // Re-derive cam.position from spherical coords.
+    ca_horiz = orbit_dist * cos(orbit_el);
+    cam.position = math::vec3(
+      cam.target.x + ca_horiz * cos(orbit_az),
+      cam.target.y + orbit_dist * sin(orbit_el),
+      cam.target.z + ca_horiz * sin(orbit_az),
+    );
+
+    if !render::render_frame(rnd, scn, cam) { break; }
+  }
+
+  render::destroy(rnd);
+}

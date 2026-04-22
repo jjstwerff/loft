@@ -7,6 +7,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status:** open.  **Depends on:** Phase 0 (fullscreen), Phase 1 (input).
 
+**Scope re-framed 2026-04-22:** Phase 2 is now a *native viewer
+foundation*, not the full `editor_tick`-wired editor.  The
+editor_tick + tool + panel integration shifts to Phase 3 because
+it requires a `RenderCamera` ↔ `scene::Camera` adapter layer that's
+cleaner to land as its own commit.  Phase 2 proves the end-to-end
+native GL pipeline with `loft --native` producing a runnable
+window that renders the Moros hex map — the smallest useful native
+deliverable.
+
 ## Scope
 
 Write the first native `fn main()` that wires:
@@ -114,22 +123,16 @@ fn keys_held_this_frame() -> vector<text> {
 
 ## What's out of scope for Phase 2
 
-- **No UI panel overlay.**  Pure 3D scene + camera.  Phase 3 adds
-  the panel.
-- **No save/load.**  Edits are lost on quit.  Phase 4 adds F5/F9.
-- **No tool-apply at world click.**  `editor_click` dispatch requires
-  the panel for hit-testing (panel-first routing) — Phase 3.  In
-  Phase 2 the user can SELECT tools with number keys, move the
-  avatar with WASD, and camera-orbit with right-drag, but
-  left-clicking a hex doesn't paint yet.  **Exception**: because the
-  MVP acceptance criterion is "left-click to paint at the avatar's
-  hex", we add a Phase-2-specific shortcut that calls
-  `tool_apply(st.es_player.pl_pos, st.es_overlay_cy, st.es_map,
-  st.es_tools)` directly on left-click without panel routing.  This
-  matches what editor_click does in the avatar-centric path when no
-  panel widget is hit.
-- **No fullscreen.**  Starts windowed.  Phase 4 adds F11 toggle.
-- **Fixed `dt`**.  Real dt from a monotonic clock is Phase 5.
+- **No `editor_tick` / `InputState` wiring.**  Phase 3 adds it.
+  Phase 2 drives the camera directly from polled keys.
+- **No UI panel overlay.**  Pure 3D scene + camera.  Phase 3.
+- **No save/load.**  Phase 4.
+- **No tool-apply at world click.**  Phase 3.
+- **No fullscreen toggle at runtime.**  Phase 4 adds F11.  Phase 0's
+  `gl_create_fullscreen_window` is selectable via an `--fullscreen`
+  command-line argument read at boot.
+- **No avatar render.**  Phase 5.
+- **Fixed `dt`**.  Real `dt` from `ticks()` is Phase 5.
 
 ## Test plan
 

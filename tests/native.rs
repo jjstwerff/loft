@@ -714,3 +714,14 @@ fn native_tuple_return_script() -> std::io::Result<()> {
     );
     run_native_job(&job)
 }
+
+// Initiative 03 Phase 2: the native Moros editor driver lives at
+// `lib/graphics/examples/moros_editor.loft` and compiles end-to-end
+// via `loft --native --path <repo>/ --lib <repo>/lib`.  Manual
+// verification on a machine with a display server: the binary opens
+// a 1024×768 window rendering the 7×7 hex starter map; WASD orbits
+// the camera; Esc exits.  An automated compile-regression needs the
+// `prepare_native_test` harness to pass `--path <repo>` for sibling-
+// module resolution (`use render;` works only from inside the
+// graphics package's own src/ or examples/ dirs) — deferred to
+// Phase 5 polish; see doc/claude/plans/03-native-moros-editor/.
