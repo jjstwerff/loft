@@ -47,14 +47,36 @@ scaffolding that already exists elsewhere.
 
 ## Loft-script vs Rust tests
 
-- **Rust regression guards** — use `code!` / `result` / `run_native_test`
-  helpers in `tests/*.rs`.  Each `#[test]` fn is the canonical shape.
-- **Loft fixture tests** — `.loft` files in `tests/lib/`, invoked by
-  a Rust wrapper in the same binary.  Use when the reproducer is
-  genuinely a multi-function loft program.
-- **Script walkthrough tests** — `tests/scripts/*.loft` are run by
-  `tests/wrap.rs::loft_suite`.  Don't add new files here unless
-  you're testing a feature the suite explicitly covers.
+**Prefer `tests/scripts/*.loft` style tests by default.**  They run
+under the same harness for both `--interpret` and `--native` modes,
+exercise the full compiler + runtime pipeline end-to-end, and don't
+require Rust boilerplate.  Use them whenever a behaviour can be
+expressed as a self-contained loft program.
+
+- **`tests/scripts/*.loft` (PREFERRED)** — run by
+  `tests/wrap.rs::loft_suite` (and `tests/native.rs::native_scripts`
+  for native mode).  Write a `fn test() { ... }` or `fn main() { ... }`
+  with `assert(...)` calls.  Every script gets both interpreter and
+  native coverage for free — higher signal per line of test code.
+  Append to an existing script whose topic matches (e.g.
+  `07-vector.loft` for vector behaviours); add a new numbered file
+  only when the topic is genuinely new.
+- **Rust regression guards (`tests/issues.rs`)** — reach for when
+  the behaviour can ONLY be observed from Rust: exit-code assertions,
+  panic-catching, `Value::*` inspection, harness-specific failure
+  modes, or cross-cutting setup that a script can't express.  Each
+  `#[test]` fn uses the existing `code!` / `result` /
+  `run_native_test` helpers.
+- **Loft fixture tests (`tests/lib/*.loft`)** — multi-file programs
+  that exercise the `use` import mechanism or cross-file type
+  resolution.  Invoked by a Rust wrapper in the same test binary.
+- **`tests/docs/*.loft`** — reserved for reference-manual snippets
+  that also validate.  Don't add new ones unless the user explicitly
+  asks; `tests/scripts/` is the default loft-script home.
+
+When you hesitate between a `tests/scripts/*.loft` test and a
+`tests/issues.rs` entry, pick scripts first.  Drop back to issues.rs
+only if the script can't express the assertion.
 
 ## Loft-language test idioms
 
