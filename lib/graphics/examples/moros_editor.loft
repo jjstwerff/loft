@@ -43,7 +43,6 @@ use math;
 
 WINDOW_W = 1024;
 WINDOW_H = 768;
-FRAME_DT = 1.0 / 60.0;   // Fixed step for Phase 3a; real `dt` in Phase 5.
 
 fn seed_starter_map() -> Map {
   // 7×7 flat grid at cy=0, alternating materials for a visible
@@ -108,6 +107,19 @@ fn apply_render_camera(cam: &scene::Camera, rc: moros_render::RenderCamera) {
 
 fn main() {
   rnd = render::create_renderer(WINDOW_W, WINDOW_H, "Moros editor");
+  // Phase 5: defensive check.  `create_renderer` silently returns an
+  // empty `Renderer {}` when `gl_create_window` fails (no display,
+  // driver too old, X11/Wayland handshake broken, etc).  Detect via
+  // the width field — the Renderer default is 0; a successful
+  // create_renderer stores WINDOW_W.
+  if rnd.width == 0 {
+    println("moros_editor: could not open an OpenGL window.");
+    println("  Common causes on this host:");
+    println("    - No display server (DISPLAY / WAYLAND_DISPLAY unset — run in a desktop session).");
+    println("    - OpenGL 3.3 not supported by the GPU / driver.");
+    println("    - X11 / Wayland dev headers missing at build time — re-run `make editor-dist` after fixing.");
+    return;
+  }
 
   st = moros_sim::editor_default();
   st.es_map = seed_starter_map();
@@ -135,6 +147,11 @@ fn main() {
   prev_f9 = false;
   prev_f11 = false;
   is_fullscreen = false;
+  // Phase 5: real `dt` from a monotonic clock.  `ticks()` returns
+  // microseconds since program start on both native and WASM; we
+  // clamp dt to 50 ms so a stall (e.g. window drag on some WMs)
+  // doesn't teleport the avatar across the map.
+  prev_ticks = ticks();
 
   for _ in 0..1000000000 {
     if !graphics::gl_poll_events() { break; }
@@ -199,7 +216,12 @@ fn main() {
     prev_f11 = f11_now;
 
     // ── Step the editor simulation ──
-    moros_sim::editor_tick(st, input, FRAME_DT);
+    now_ticks = ticks();
+    dt = (now_ticks - prev_ticks) as float / 1000000.0;
+    if dt > 0.05 { dt = 0.05; }
+    if dt <= 0.0 { dt = 1.0 / 60.0; }  // first frame / ticks jitter
+    prev_ticks = now_ticks;
+    moros_sim::editor_tick(st, input, dt);
 
     // ── Apply tool on the RISING edge of left-click ──
     // (Phase 3b will route this through `editor_click` once the
