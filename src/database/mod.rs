@@ -108,8 +108,8 @@ pub enum Parts {
     Short(i32, bool),                  // start number and nullable flag
     Int(i32, bool), // 4-byte integer field (size(4) annotation). Null sentinel: i32::MIN.
     ShortRaw(i32, bool), // P184 Phase 4b: 2-byte narrow vector element. Direct encoding (no +1 shift). Null sentinel: i16::MIN.
-    Vector(u16),    // The records are part of the vector
-    Array(u16),     // The array holds references for each record
+    Vector(u16),         // The records are part of the vector
+    Array(u16),          // The array holds references for each record
     Sorted(u16, Vec<(u16, bool)>), // Sorted vector on fields with an ascending flag
     Ordered(u16, Vec<(u16, bool)>), // Sorted array on fields with an ascending flag
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
@@ -390,7 +390,7 @@ impl Stores {
     #[must_use]
     pub fn string_from_const_store(&self, rec: u32, _pos: u32) -> crate::keys::Str {
         let store = &self.allocations[CONST_STORE as usize];
-        let len = store.get_u32_raw(rec, 4) as u32;
+        let len = store.get_u32_raw(rec, 4);
         let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
         crate::keys::Str { ptr, len }
     }

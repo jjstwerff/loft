@@ -948,9 +948,9 @@ extern crate loft;"
         // Short-circuit if nothing references const_refs (avoids
         // emitting an unused `db.const_refs.resize(...)` that'd
         // produce a dead-code warning under `-D warnings`).
-        let have_any = (0..till)
-            .any(|d| self.data.def(d).def_type == DefType::Constant
-                    && self.data.def(d).const_ref.is_some());
+        let have_any = (0..till).any(|d| {
+            self.data.def(d).def_type == DefType::Constant && self.data.def(d).const_ref.is_some()
+        });
         if !have_any {
             return Ok(());
         }
@@ -964,18 +964,30 @@ extern crate loft;"
         )?;
         for d_nr in 0..till {
             let def = self.data.def(d_nr);
-            if def.def_type != DefType::Constant { continue; }
-            if def.const_ref.is_none() { continue; }
-            let crate::data::Type::Vector(ref elem_tp_box, _) = def.returned else { continue; };
+            if def.def_type != DefType::Constant {
+                continue;
+            }
+            if def.const_ref.is_none() {
+                continue;
+            }
+            let crate::data::Type::Vector(ref elem_tp_box, _) = def.returned else {
+                continue;
+            };
             let elem_tp = (**elem_tp_box).clone();
             let values = crate::compile::extract_literal_values_public(&def.code, self.data);
-            if values.is_empty() { continue; }
+            if values.is_empty() {
+                continue;
+            }
             let vec_struct_name = format!("main_vector<{}>", elem_tp.name(self.data));
             let vec_struct_dnr = self.data.def_nr(&vec_struct_name);
-            if vec_struct_dnr == u32::MAX { continue; }
+            if vec_struct_dnr == u32::MAX {
+                continue;
+            }
             let vec_tp = self.data.def(vec_struct_dnr).known_type;
-            if vec_tp == u16::MAX { continue; }
-            let size = u16::from(self.stores.size(vec_tp));
+            if vec_tp == u16::MAX {
+                continue;
+            }
+            let size = self.stores.size(vec_tp);
             writeln!(w, "    {{ // const d_nr={d_nr}")?;
             writeln!(w, "        let cv = db.database({size}_u32);")?;
             writeln!(
@@ -1028,10 +1040,7 @@ extern crate loft;"
                 writeln!(w, "            db.record_finish(&cvr, &rec, {vec_tp}, 0);")?;
                 writeln!(w, "        }}")?;
             }
-            writeln!(
-                w,
-                "        db.allocations[cv.store_nr as usize].lock();"
-            )?;
+            writeln!(w, "        db.allocations[cv.store_nr as usize].lock();")?;
             writeln!(
                 w,
                 "        db.allocations[cv.store_nr as usize].ref_count = u32::MAX / 2;"

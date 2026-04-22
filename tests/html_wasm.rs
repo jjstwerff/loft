@@ -351,8 +351,7 @@ fn main() {
     println("depth={d} mat={h}");
 }
 "#;
-    let Some((stdout, stderr, ok)) =
-        run_html_wasm_with_libs("moros_editor_smoke", src, &["lib"])
+    let Some((stdout, stderr, ok)) = run_html_wasm_with_libs("moros_editor_smoke", src, &["lib"])
     else {
         return;
     };

@@ -1767,16 +1767,13 @@ impl Parser {
                 let narrow_vec = alias_nr == u32::MAX
                     && spec.forced_size.is_some()
                     && spec.vector_narrow_width().is_some();
-                let s = self
-                    .data
-                    .forced_size(alias_nr)
-                    .unwrap_or_else(|| {
-                        if narrow_vec {
-                            spec.vector_narrow_width().unwrap()
-                        } else {
-                            tp.size(self.data.attr_nullable(d_nr, f_nr))
-                        }
-                    });
+                let s = self.data.forced_size(alias_nr).unwrap_or_else(|| {
+                    if narrow_vec {
+                        spec.vector_narrow_width().unwrap()
+                    } else {
+                        tp.size(self.data.attr_nullable(d_nr, f_nr))
+                    }
+                });
                 // Size-consistency gate: the size resolved from
                 // `forced_size` / limit must be one of the four
                 // supported widths.  Any other value indicates a

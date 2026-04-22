@@ -294,7 +294,10 @@ impl Output<'_> {
         // Translate template references so OpConstRef / OpConstStoreText
         // resolve under `&mut Stores` in native code.
         res = res.replace("s.const_refs", "stores.const_refs");
-        res = res.replace("s.string_from_const_store", "stores.string_from_const_store");
+        res = res.replace(
+            "s.string_from_const_store",
+            "stores.string_from_const_store",
+        );
         // loft represents `character` as `i32`; template functions that return `char`
         // (like `ops::text_character`) need an explicit cast at the call site.
         // Narrow integer returns (u8/u16/i8/i16) must be widened so that
