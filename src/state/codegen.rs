@@ -971,14 +971,29 @@ impl State {
                     })
                 {
                     let tp_nr = stack.data.def(d_nr).known_type;
-                    // Allocate fresh store, put it in v's slot.
-                    self.emit_push_null_ref(stack);
+                    // Plan-04 Phase B.3.f: allocate fresh store directly
+                    // at v's slot.  Old pattern emitted
+                    // `emit_push_null_ref + OpDatabase(12, tp) + OpPutRef`
+                    // which pushed a DbRef at TOS, allocated there, then
+                    // moved the DbRef to v's slot.  Slot-aware pattern
+                    // uses positional `OpInitRef(slot_offset) +
+                    // OpDatabase(slot_offset, tp)` — the allocator
+                    // operates directly on v's slot; the trailing
+                    // `OpPutRef` is redundant and dropped.
+                    let ref_size = size_of::<crate::keys::DbRef>() as u16;
+                    let slot_end = stack.function.stack(v).saturating_add(ref_size);
+                    if stack.position < slot_end {
+                        let bump = slot_end - stack.position;
+                        stack.add_op("OpReserveFrame", self);
+                        self.code_add(bump);
+                        stack.position += bump;
+                    }
+                    let slot_offset = stack.position - stack.function.stack(v);
+                    stack.add_op("OpInitRef", self);
+                    self.code_add(slot_offset);
                     stack.add_op("OpDatabase", self);
-                    self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                    self.code_add(slot_offset);
                     self.code_add(tp_nr);
-                    let var_pos = stack.position - stack.function.stack(v);
-                    stack.add_op("OpPutRef", self);
-                    self.code_add(var_pos);
                     // Call, deep-copy into v.  Free the source only if the
                     // callee has no hidden Ref params (the source is a fresh
                     // store from O-B2 adoption).  When hidden Ref params exist,
