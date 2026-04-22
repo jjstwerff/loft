@@ -111,6 +111,15 @@ export to GLB. Web only — multiplayer comes in 1.0.0.
 
 Design: `../moros/doc/claude/`
 
+**Native editor (shipped, independent of this milestone):** a standalone
+OpenGL editor now also ships via
+`lib/graphics/examples/moros_editor.loft` and is packaged with
+`make editor-dist` into a self-contained `dist/moros-editor/` directory
+that runs without `loft` on the machine.  It provides fullscreen support
+(`gl_create_fullscreen_window`), scroll-wheel + expanded key codes,
+panel UI overlay, and `editor_click` routing.  See
+`doc/claude/plans/finished/03-native-moros-editor/README.md`.
+
 ### Must-fix blockers (share the Moros editor's code paths)
 
 All blockers cleared; Moros editor's loft-side libraries can ship

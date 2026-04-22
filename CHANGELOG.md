@@ -142,6 +142,30 @@ score persistence, and faster ball/paddle speed.
   test suite in the background; `--peek` to check progress,
   `--wait` for the summary. Stale caches are cleaned automatically.
 
+### Native Moros editor
+
+A native OpenGL editor for the Moros hex RPG now ships as a standalone
+application, independent of the browser shell:
+
+- **Entry point:** `lib/graphics/examples/moros_editor.loft` — run with
+  `loft --native --path . lib/graphics/examples/moros_editor.loft`.
+- **Fullscreen support:** new `gl_create_fullscreen_window` API; F11
+  toggles fullscreen at runtime.
+- **Input:** scroll-wheel events + expanded key codes (Home, End,
+  PageUp/Down, F1–F12, arrow modifiers) now reach loft programs.
+- **Panel UI overlay:** 2D panel drawn after the 3D scene pass;
+  `editor_click` routes mouse events to the correct panel or 3D pick.
+- **Standalone packaging:** `make editor-dist` produces a self-contained
+  `dist/moros-editor/` directory; the binary runs on a machine without
+  `loft` installed.
+- **Native codegen fix:** functions that reconstruct constants
+  (const_refs) now compile correctly under `loft --native`.  This was
+  the sole native-codegen regression surfaced during Phase 3b.
+
+All seven phases of the initiative landed on 2026-04-22.  Deferred polish
+items (FPS counter, resize handling, avatar, hex-pick highlight) roll into
+follow-up work and are not blockers.
+
 ### Brick Buster 0.8.4 polish pass
 
 Gameplay feel:
