@@ -662,8 +662,24 @@ impl State {
     }
 
     pub(super) fn gen_set_first_text(&mut self, stack: &mut Stack, v: u16, value: &Value) {
-        stack.add_op("OpText", self);
-        stack.position += super::size_str() as u16;
+        // Plan-04 Phase B.2: positional init.  Emit OpReserveFrame(n) +
+        // OpInitText(slot_offset) instead of the compound OpText.  This
+        // decouples "advance the stack pointer" from "write the empty
+        // String at a slot".  Net runtime effect is identical to OpText
+        // (TOS += size_str, empty String written at (new_TOS - slot_offset)).
+        let pos = stack.function.stack(v);
+        let size = super::size_str() as u16;
+        // Advance TOS so that stack.position >= pos + size (slot fits).
+        let slot_end = pos + size;
+        if stack.position < slot_end {
+            let advance = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(advance);
+            stack.position += advance;
+        }
+        let slot_offset = stack.position - pos;
+        stack.add_op("OpInitText", self);
+        self.code_add(slot_offset);
         if let Value::Text(s) = value {
             if !s.is_empty() {
                 self.set_var(stack, v, value);
@@ -674,6 +690,19 @@ impl State {
     }
 
     pub(super) fn gen_set_first_ref_null(&mut self, stack: &mut Stack, v: u16) {
+        // Plan-04 Phase B.2: positional init.  Each branch emits
+        // `OpReserveFrame(12) + OpInit*(slot_offset)` instead of the
+        // compound push-and-init ops.  Net runtime effect is identical.
+        let pos = stack.function.stack(v);
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = pos + ref_size;
+        if stack.position < slot_end {
+            let advance = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(advance);
+            stack.position += advance;
+        }
+        let slot_offset = stack.position - pos;
         let dep = match stack.function.tp(v).clone() {
             Type::Reference(_, d) | Type::Enum(_, _, d) => d,
             _ => Vec::new(),
@@ -682,31 +711,32 @@ impl State {
             if stack.function.is_inline_ref(v) {
                 // Inline-ref temporaries must not allocate a database store at null-init
                 // time.  A real store is assigned later via OpPutRef when the method
-                // returns.  OpNullRefSentinel places DbRef{store_nr:u16::MAX} in the
-                // slot; Stores::free treats it as a no-op if the var is never assigned.
-                stack.add_op("OpNullRefSentinel", self);
+                // returns.  Writes DbRef{store_nr:u16::MAX} at slot; Stores::free
+                // treats it as a no-op if the var is never assigned.
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
             } else {
-                stack.add_op("OpConvRefFromNull", self);
+                stack.add_op("OpInitRef", self);
+                self.code_add(slot_offset);
             }
         } else {
-            // Pre-init a borrowed Reference with a null-state DbRef pointing into dep's slot.
-            // The DbRef uses stack_cur.store_nr (the stack-frame store) — it is NOT a valid
-            // data-store pointer and must be overwritten by OpPutRef before any field access.
-            // See State::create_stack() and ASSIGNMENT.md §"Option A sub-option 3" for details.
-            //
-            // Argument: pos = (stack.position before this op) - dep[0].stack_pos
-            //   → result.pos = stack_cur.pos + dep[0].stack_pos (points into dep's slot)
+            // Pre-init a borrowed Reference with a null-state DbRef pointing
+            // into dep's slot.  The DbRef uses stack_cur.store_nr (the
+            // stack-frame store) — it is NOT a valid data-store pointer and
+            // must be overwritten by OpPutRef before any field access.
             let dep_pos = stack.function.stack(dep[0]);
-            let before_stack = stack.position;
-            if dep_pos > before_stack {
-                // Dependency not yet on the stack — use a null sentinel instead of
-                // CreateStack.  The variable will be overwritten by OpPutRef before
-                // any field access (e.g. loop variable assigned from iterator next).
-                stack.add_op("OpNullRefSentinel", self);
+            if dep_pos > stack.position {
+                // Dependency not yet on the stack — use a sentinel instead of
+                // CreateStack.  The variable will be overwritten by OpPutRef
+                // before any field access (e.g. loop variable assigned from
+                // iterator next).
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
             } else {
-                stack.add_op("OpCreateStack", self);
-                let after_stack = stack.position - size_of::<crate::keys::DbRef>() as u16;
-                self.code_add(after_stack - dep_pos);
+                stack.add_op("OpInitCreateStack", self);
+                self.code_add(slot_offset);
+                let dep_offset = stack.position - dep_pos;
+                self.code_add(dep_offset);
             }
         }
     }
@@ -1170,9 +1200,15 @@ impl State {
             }
         }
         // Fallback: allocate fresh store + deep copy (source store may alias a parameter).
-        stack.add_op("OpConvRefFromNull", self);
+        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRef", self);
+        self.code_add(ref_size);
         stack.add_op("OpDatabase", self);
-        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(ref_size);
         let tp_nr = stack.data.def(d_nr).known_type;
         self.code_add(tp_nr);
         self.generate(value, stack, false);
@@ -1194,9 +1230,15 @@ impl State {
             return;
         }
         let tp_nr = stack.data.def(d_nr).known_type;
-        stack.add_op("OpConvRefFromNull", self);
+        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRef", self);
+        self.code_add(ref_size);
         stack.add_op("OpDatabase", self);
-        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(ref_size);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         let copy_val = Value::Call(
@@ -1215,9 +1257,15 @@ impl State {
         d_nr: u32,
     ) {
         let tp_nr = stack.data.def(d_nr).known_type;
-        stack.add_op("OpConvRefFromNull", self);
+        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRef", self);
+        self.code_add(ref_size);
         stack.add_op("OpDatabase", self);
-        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(ref_size);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         let copy_val = Value::Call(
@@ -1242,9 +1290,15 @@ impl State {
     ///   touch program-lifetime locked stores (rc >= u32::MAX/2).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
-        stack.add_op("OpConvRefFromNull", self);
+        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        stack.add_op("OpReserveFrame", self);
+        self.code_add(ref_size);
+        stack.position += ref_size;
+        stack.add_op("OpInitRef", self);
+        self.code_add(ref_size);
         stack.add_op("OpDatabase", self);
-        self.code_add(size_of::<crate::keys::DbRef>() as u16);
+        self.code_add(ref_size);
         self.code_add(tp_nr);
 
         // Collect ref-typed args of the call to bracket with lock/unlock
