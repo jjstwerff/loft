@@ -237,7 +237,7 @@ impl Output<'_> {
                 }
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
-                if matches!(a.typedef, Type::Integer(_, _, _)) {
+                if matches!(a.typedef, Type::Integer(_)) {
                     let val_is_char = match &vals[a_nr] {
                         Value::Var(n) => {
                             matches!(self.data.def(self.def_nr).variables.tp(*n), Type::Character)
@@ -289,6 +289,15 @@ impl Output<'_> {
         res = res.replace("s.database.", "stores.");
         res = res.replace("s.db_from_text(", "db_from_text(stores, ");
         res = res.replace("crate::state::", "loft::state::");
+        // Initiative 03 Phase 3b: const_refs lives on both `State`
+        // (interpreter path) and `Stores` (mirrored for native).
+        // Translate template references so OpConstRef / OpConstStoreText
+        // resolve under `&mut Stores` in native code.
+        res = res.replace("s.const_refs", "stores.const_refs");
+        res = res.replace(
+            "s.string_from_const_store",
+            "stores.string_from_const_store",
+        );
         // loft represents `character` as `i32`; template functions that return `char`
         // (like `ops::text_character`) need an explicit cast at the call site.
         // Narrow integer returns (u8/u16/i8/i16) must be widened so that

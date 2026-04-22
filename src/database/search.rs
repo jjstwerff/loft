@@ -228,6 +228,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::Spacial(_, _) => panic!(
                 "find called on non-collection type: {} (db={})",
@@ -415,6 +416,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::Hash(_, _)
             | Parts::Spacial(_, _) => panic!(
@@ -480,6 +482,7 @@ impl Stores {
             | Parts::EnumValue(_, _)
             | Parts::Byte(_, _)
             | Parts::Short(_, _)
+            | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::Spacial(_, _) => panic!(
                 "remove called on non-collection type: {} (db={})",

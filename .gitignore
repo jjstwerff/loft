@@ -22,3 +22,6 @@ test_scene_debug.loft
 *.loftc
 .claude/scheduled_tasks.lock
 lib/graphics/native/libloft_graphics_native.so
+# Initiative 03 Phase 6: `make editor-dist` writes a shippable
+# native editor bundle here.  Build artefact; regenerable from source.
+dist/

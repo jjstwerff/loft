@@ -79,6 +79,12 @@ thread_local! {
     static MOUSE_X: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static MOUSE_Y: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static MOUSE_BTN: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// Initiative 03 Phase 1: scroll-wheel accumulator.  `MouseWheel`
+    /// events add to this cell; `loft_gl_mouse_wheel` reads-and-resets.
+    /// Positive = scroll up.  Pixel deltas are converted to integer
+    /// line counts via a 20-px-per-line heuristic — winit reports
+    /// either `LineDelta` (mouse) or `PixelDelta` (trackpad).
+    static WHEEL_ACCUM: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
     /// Pending resize from a WindowEvent::Resized, applied after pump_app_events.
     static PENDING_RESIZE: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
@@ -95,12 +101,29 @@ fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
             NamedKey::Space => Some(b' '),
             NamedKey::Enter => Some(b'\r'),
             NamedKey::Escape => Some(27),
+            NamedKey::Tab => Some(9),
             NamedKey::ArrowUp => Some(128),
             NamedKey::ArrowDown => Some(129),
             NamedKey::ArrowLeft => Some(130),
             NamedKey::ArrowRight => Some(131),
             NamedKey::Shift => Some(132),
             NamedKey::Control => Some(133),
+            // Initiative 03 Phase 1: F-keys for editor hotkeys.
+            // F5 / F9 / F11 land at 134 / 138 / 140; siblings are
+            // reserved even though the current editor only binds
+            // F5 / F9 / F11, so later additions don't shift indices.
+            NamedKey::F1 => Some(135),
+            NamedKey::F2 => Some(136),
+            NamedKey::F3 => Some(137),
+            NamedKey::F4 => Some(138),
+            NamedKey::F5 => Some(139),
+            NamedKey::F6 => Some(140),
+            NamedKey::F7 => Some(141),
+            NamedKey::F8 => Some(142),
+            NamedKey::F9 => Some(143),
+            NamedKey::F10 => Some(144),
+            NamedKey::F11 => Some(145),
+            NamedKey::F12 => Some(146),
             _ => None,
         },
         _ => None,
@@ -137,6 +160,19 @@ impl ApplicationHandler for JsonApp {
                     else { c.set(c.get() & !bit); }
                 });
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                use winit::event::MouseScrollDelta;
+                let ticks: i64 = match delta {
+                    MouseScrollDelta::LineDelta(_dx, dy) => dy as i64,
+                    // Trackpad pixel-delta: convert with a 20 px/line
+                    // heuristic; matches the default scroll granularity
+                    // most 3D apps use.
+                    MouseScrollDelta::PixelDelta(p) => (p.y / 20.0) as i64,
+                };
+                if ticks != 0 {
+                    WHEEL_ACCUM.with(|c| c.set(c.get() + ticks));
+                }
+            }
             WindowEvent::Resized(size) => {
                 let w = size.width;
                 let h = size.height;
@@ -170,6 +206,47 @@ pub extern "C" fn loft_gl_create_window(
             false
         }
     }
+}
+
+/// Initiative 03 Phase 0: borderless fullscreen companion to
+/// `loft_gl_create_window`.  Opens on the primary monitor at its
+/// native resolution.  Returns `true` on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_fullscreen_window(
+    title_ptr: *const u8,
+    title_len: usize,
+) -> bool {
+    let title = unsafe { loft_ffi::text(title_ptr, title_len) };
+    match window::create_gl_state_fullscreen(title) {
+        Ok(state) => {
+            GL.with(|cell| *cell.borrow_mut() = Some(state));
+            GL_READY.with(|c| c.set(true));
+            true
+        }
+        Err(e) => {
+            eprintln!("loft_gl_create_fullscreen_window: {e}");
+            false
+        }
+    }
+}
+
+/// Initiative 03 Phase 4: toggle fullscreen on the existing window.
+/// Cheaper than destroying + recreating the GL context — winit flips
+/// the window mode at runtime and all GL resources (textures, VAOs,
+/// shaders, FBOs) survive.  Pass `true` for borderless fullscreen on
+/// the current monitor, `false` to return to the windowed size
+/// `gl_create_window` originally opened.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
+    use winit::window::Fullscreen;
+    with_gl(|s| {
+        if on {
+            s.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+        } else {
+            s.window.set_fullscreen(None);
+        }
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -677,6 +754,19 @@ pub extern "C" fn loft_gl_mouse_y() -> f64 { MOUSE_Y.with(|c| c.get()) }
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_button() -> i32 { MOUSE_BTN.with(|c| c.get() as i32) }
 
+/// Initiative 03 Phase 1: accumulated scroll-wheel ticks since the
+/// last call (positive = scroll up).  Reset on read so each call
+/// returns only the delta since the previous one — suitable for the
+/// editor's per-frame `InputState.in_wheel` field.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_mouse_wheel() -> i64 {
+    WHEEL_ACCUM.with(|c| {
+        let v = c.get();
+        c.set(0);
+        v
+    })
+}
+
 // ── Indexed drawing (EBO) ─────────────────────────────────────────────
 
 /// Upload vertex data + index buffer. Returns VAO handle.
@@ -987,6 +1077,9 @@ pub extern "C" fn loft_gl_point_size(size: f64) {
 
 loft_ffi::loft_register! {
     loft_gl_create_window,
+    loft_gl_create_fullscreen_window,
+    loft_gl_set_fullscreen,
+    loft_gl_mouse_wheel,
     loft_gl_poll_events,
     loft_gl_swap_buffers,
     loft_gl_clear,

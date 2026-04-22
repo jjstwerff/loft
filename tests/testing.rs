@@ -40,7 +40,7 @@ macro_rules! expr {
 }
 
 use common::cached_default;
-use loft::data::{Type, Value};
+use loft::data::{IntegerSpec, Type, Value};
 use loft::diagnostics::Level;
 use loft::parser::Parser;
 use loft::state::State;
@@ -142,7 +142,7 @@ impl Test {
             Value::Text(v) => replace_tokens(v),
             Value::Float(v) => v.to_string(),
             Value::Single(v) => v.to_string(),
-            Value::Null if matches!(self.tp, Type::Text(_) | Type::Integer(_, _, _)) => {
+            Value::Null if matches!(self.tp, Type::Text(_) | Type::Integer(_)) => {
                 "null".to_string()
             }
             Value::Null if !matches!(self.tp, Type::Text(_)) => {
@@ -469,7 +469,12 @@ impl Test {
     fn return_type(&self) -> &str {
         let tp = if self.tp.is_unknown() {
             if let Value::Int(_) = self.result {
-                Type::Integer(i32::MIN, i32::MAX as u32, false)
+                Type::Integer(IntegerSpec {
+                    min: i32::MIN,
+                    max: i32::MAX as u32,
+                    not_null: false,
+                    forced_size: None,
+                })
             } else if let Value::Long(_) = self.result {
                 loft::data::I64.clone()
             } else if let Value::Text(_) = self.result {
@@ -484,7 +489,7 @@ impl Test {
         } else {
             self.tp.clone()
         };
-        if let Type::Integer(_, _, _) = tp {
+        if let Type::Integer(_) = tp {
             "integer"
         } else if let Type::Text(_) = tp {
             "text"

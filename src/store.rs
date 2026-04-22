@@ -1225,6 +1225,51 @@ impl Store {
         }
     }
 
+    /// P184 Phase 4b: direct 2-byte read for `Parts::ShortRaw` vector
+    /// elements, with `min`-shifted encoding mirroring `get_byte`:
+    /// stored value is `(val - min)` as `u16`; returns `read + min`.
+    /// Unlike `get_short` (which applies `+1` encoding with `raw=0`
+    /// null sentinel), direct encoding keeps the raw-byte-copy path
+    /// in `vector_add` valid.  `u16::MAX` (raw) is the null sentinel
+    /// — returned as `i32::MIN`.  For `u16` elements (`min=0`, `max=
+    /// 65535`), values 0..65534 round-trip; 65535 collides with the
+    /// null sentinel (pre-existing limitation shared with `u16`
+    /// struct fields).  For `i16` elements (`min=-32768`), the full
+    /// range -32768..32767 round-trips because `(val - min)` maps
+    /// those into `u16` 0..65535 without hitting the `u16::MAX`
+    /// sentinel.
+    #[inline]
+    pub fn get_i16_raw(&self, rec: u32, fld: u32, min: i32) -> i32 {
+        if rec != 0 && self.valid(rec, fld) {
+            let read: u16 = *self.addr(rec, fld);
+            if read == u16::MAX {
+                i32::MIN
+            } else {
+                i32::from(read) + min
+            }
+        } else {
+            i32::MIN
+        }
+    }
+
+    /// P184 Phase 4b: direct 2-byte write for `Parts::ShortRaw` vector
+    /// elements.  Mirrors `set_byte`: stores `(val - min) as u16`.
+    /// `val == i32::MIN` stores as `u16::MAX` (null sentinel).
+    #[inline]
+    pub fn set_i16_raw(&mut self, rec: u32, fld: u32, min: i32, val: i32) -> bool {
+        if rec != 0 && self.valid(rec, fld) {
+            let v: u16 = if val == i32::MIN {
+                u16::MAX
+            } else {
+                (val - min) as u16
+            };
+            *self.addr_mut(rec, fld) = v;
+            true
+        } else {
+            false
+        }
+    }
+
     #[inline]
     pub fn get_byte(&self, rec: u32, fld: u32, min: i32) -> i32 {
         if rec != 0 && self.valid(rec, fld) {

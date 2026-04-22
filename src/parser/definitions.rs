@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Argument, DefType, Function, HashMap, HashSet, Level, Link, Parser, Position, ToString, Type,
-    Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op, is_upper, rename,
-    v_block, v_if,
+    Argument, DefType, Function, HashMap, HashSet, IntegerSpec, Level, Link, Parser, Position,
+    ToString, Type, Value, complete_definition, diagnostic_format, is_camel, is_lower, is_op,
+    is_upper, rename, v_block, v_if,
 };
 
 impl Parser {
@@ -1074,7 +1074,12 @@ impl Parser {
                 // ranges (u8/u16/i8/i16/i32-range) get packed storage via
                 // `forced_size`; wide ranges (up to u32::MAX) use full
                 // 8-byte storage.  Type::Long is no longer produced.
-                return Some(Type::Integer(min, max, not_null));
+                return Some(Type::Integer(IntegerSpec {
+                    min,
+                    max,
+                    not_null,
+                    forced_size: None,
+                }));
             }
         }
         let dt = self.data.def_type(tp_nr);
@@ -1091,7 +1096,27 @@ impl Parser {
             } else if matches!(self.data.def(tp_nr).returned, Type::Text(_)) {
                 Some(Type::Text(dep))
             } else {
-                Some(self.data.def(tp_nr).returned.clone())
+                // P184 Phase 1: when a user-typed integer alias carries an
+                // explicit `size(N)` annotation (e.g. `i32`, `u8`, `u16`),
+                // stamp the forced width onto the returned Type::Integer so
+                // the signal flows through `Box<Type>` in `Type::Vector` /
+                // `Hash` / `Sorted` / `Index` to the element resolver
+                // (Phase 2) and the indexing codegen (Phase 3).
+                //
+                // Skip the base `integer` primitive: its `forced_size = 8`
+                // matches the default heuristic; stamping would clutter
+                // every `Type::Integer` with `Some(8)` for no benefit.
+                let mut tp = self.data.def(tp_nr).returned.clone();
+                if type_name != "integer"
+                    && let Type::Integer(mut spec) = tp
+                    && let Some(forced) = self.data.forced_size(tp_nr)
+                    && let Some(nz) = std::num::NonZeroU8::new(forced)
+                    && forced != 8
+                {
+                    spec.forced_size = Some(nz);
+                    tp = Type::Integer(spec);
+                }
+                Some(tp)
             }
         } else {
             None
@@ -1652,14 +1677,14 @@ impl Parser {
                     // If the type carries a not-null flag (e.g. integer not null),
                     // propagate it to the field's nullable flag so is_null and
                     // redundant-null-check warnings work correctly.
-                    if let Type::Integer(_, _, true) = &tp {
+                    if let Type::Integer(IntegerSpec { not_null: true, .. }) = &tp {
                         nullable = false;
                     }
                     // Capture the alias def_nr for size(N) routing.  Only
                     // real aliases (i32, u8, etc.) — "integer" is the base type
                     // and its forced_size is 8, which would override the narrow
                     // limit()-based heuristic for `integer limit(0, 255)`.
-                    if matches!(tp, Type::Integer(_, _, _)) && id != "integer" {
+                    if matches!(tp, Type::Integer(_)) && id != "integer" {
                         alias_d_nr = self.data.def_nr(&id);
                     }
                     a_type = tp;

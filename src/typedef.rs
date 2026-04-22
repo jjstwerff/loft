@@ -14,7 +14,7 @@
 //!   write the type schema into `Stores`.
 //! - [`complete_definition`] — finalise a single definition's field layout.
 
-use crate::data::{Data, DefType, I32, Type, Value};
+use crate::data::{Data, DefType, I32, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use crate::diagnostics::Level;
 use crate::lexer::Lexer;
@@ -331,16 +331,28 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if c_nr == u32::MAX {
                         continue;
                     }
-                    let mut c_tp = data.def(c_nr).known_type;
-                    if c_tp == u16::MAX {
-                        fill_database(data, database, c_nr);
-                        c_tp = data.def(c_nr).known_type;
-                    }
+                    // P184 Phase 5: route through the shared helper so locals,
+                    // parameters, and return types (Phase 5 migrations below)
+                    // use the same narrow-detection logic as struct fields.
+                    let c_tp = if let Some(narrow) = data.narrow_vector_content(&c_type, database) {
+                        narrow
+                    } else {
+                        let mut c_tp = data.def(c_nr).known_type;
+                        if c_tp == u16::MAX {
+                            fill_database(data, database, c_nr);
+                            c_tp = data.def(c_nr).known_type;
+                        }
+                        c_tp
+                    };
                     let tp = database.vector(c_tp);
                     data.check_vector(c_nr, tp, &data.def(d_nr).position.clone());
                     tp
                 }
-                Type::Integer(minimum, _, not_null) => {
+                Type::Integer(IntegerSpec {
+                    min: minimum,
+                    not_null,
+                    ..
+                }) => {
                     let field_nullable = nullable && !not_null;
                     // Post-2c: if the field's alias has a forced size(N)
                     // annotation, prefer it over the limit()-based heuristic.

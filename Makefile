@@ -62,7 +62,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play help
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -364,6 +364,97 @@ play:
 	@./target/release/loft --native \
 	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
 	    lib/graphics/examples/25-brick-buster.loft
+
+# ── Native Moros editor ────────────────────────────────────────────
+#
+# make native-editor  — build + run from source.  Same checklist as
+#                       `make play` (host loft + graphics cdylib +
+#                       display server).  Opens a 1024x768 window
+#                       with the 7x7 starter map.
+#
+# make editor-dist    — package a relocatable `dist/moros-editor/`
+#                       directory: the optimised binary, the
+#                       loft_graphics_native.so, any fonts / assets,
+#                       and `rpath=$$ORIGIN` so the binary finds the
+#                       .so without LD_LIBRARY_PATH.  A user can copy
+#                       the entire `dist/moros-editor/` dir anywhere
+#                       and run `./moros-editor` without having loft
+#                       or the graphics cdylib installed.
+native-editor:
+	@echo "  [1/3] building loft binary + cdylib ..."
+	@cargo build --release -q --lib --bin loft 2>/tmp/loft_editor_host.log || { \
+	    echo "    FAIL: host cargo build — see /tmp/loft_editor_host.log"; \
+	    tail -20 /tmp/loft_editor_host.log; exit 1; }
+	@cd lib/graphics/native && cargo build --release -q 2>/tmp/loft_editor_graphics.log || { \
+	    echo "    FAIL: lib/graphics/native — see /tmp/loft_editor_graphics.log"; \
+	    tail -20 /tmp/loft_editor_graphics.log; exit 1; }
+	@echo "  [2/3] checking display available ..."
+	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ]; then \
+	    echo "    FAIL: no \$$DISPLAY / \$$WAYLAND_DISPLAY set"; \
+	    echo "    run on a desktop session or prefix with 'xvfb-run -a'"; \
+	    exit 1; \
+	fi
+	@echo "  [3/3] launching Moros editor ..."
+	@echo "    Controls: WASD move / Arrows camera / 1-6 tools / Ctrl-Z undo"
+	@echo "              Left-click paint / F5 save / F9 load / F11 fullscreen / Esc quit"
+	@./target/release/loft --native \
+	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
+	    lib/graphics/examples/moros_editor.loft
+
+editor-dist:
+	@echo "  [1/5] building loft binary + cdylib (release-optimised) ..."
+	@cargo build --release -q --lib --bin loft 2>/tmp/loft_dist_host.log || { \
+	    echo "    FAIL: host cargo build — see /tmp/loft_dist_host.log"; \
+	    tail -20 /tmp/loft_dist_host.log; exit 1; }
+	@cd lib/graphics/native && cargo build --release -q 2>/tmp/loft_dist_graphics.log || { \
+	    echo "    FAIL: graphics cdylib — see /tmp/loft_dist_graphics.log"; \
+	    tail -20 /tmp/loft_dist_graphics.log; exit 1; }
+	@echo "  [2/5] compiling native_editor.loft with --native-release ..."
+	@./target/release/loft --native-release \
+	    --path "$$(pwd)/" --lib "$$(pwd)/lib/" \
+	    --native-emit /tmp/moros_editor_dist.rs \
+	    lib/graphics/examples/moros_editor.loft >/dev/null
+	@# Find the cached binary — `loft --native` caches into
+	@# <script_dir>/.loft/cache/<stem>-<hash>.  The hash changes
+	@# with source, so a glob finds the freshest file.
+	@CACHED=$$(ls -t lib/graphics/examples/.loft/cache/moros_editor-* 2>/dev/null | head -1); \
+	if [ -z "$$CACHED" ]; then \
+	    echo "    FAIL: loft --native-release did not produce a cached binary"; \
+	    echo "    looked in lib/graphics/examples/.loft/cache/"; \
+	    exit 1; \
+	fi; \
+	echo "    cached binary: $$CACHED"; \
+	echo "  [3/5] assembling dist/moros-editor/ ..."; \
+	rm -rf dist/moros-editor; \
+	mkdir -p dist/moros-editor/assets; \
+	cp "$$CACHED" dist/moros-editor/moros-editor; \
+	cp lib/graphics/native/target/release/libloft_graphics_native.so \
+	    dist/moros-editor/ 2>/dev/null || \
+	cp lib/graphics/native/target/release/libloft_graphics_native.dylib \
+	    dist/moros-editor/ 2>/dev/null || \
+	cp lib/graphics/native/target/release/loft_graphics_native.dll \
+	    dist/moros-editor/ 2>/dev/null || { \
+	    echo "    FAIL: graphics cdylib artefact missing"; exit 1; }; \
+	cp lib/graphics/examples/DejaVuSans-Bold.ttf \
+	    dist/moros-editor/assets/; \
+	echo "  [4/5] patching rpath = \$$ORIGIN (Linux / macOS) ..."; \
+	if command -v patchelf >/dev/null 2>&1; then \
+	    patchelf --set-rpath '$$ORIGIN' dist/moros-editor/moros-editor \
+	        && echo "    patchelf ok"; \
+	elif command -v install_name_tool >/dev/null 2>&1; then \
+	    install_name_tool -add_rpath @executable_path \
+	        dist/moros-editor/moros-editor 2>/dev/null \
+	        && echo "    install_name_tool ok"; \
+	else \
+	    echo "    note: neither patchelf nor install_name_tool available"; \
+	    echo "    binary will require LD_LIBRARY_PATH=./dist/moros-editor at runtime"; \
+	fi
+	@echo "  [5/5] distributable layout:"
+	@find dist/moros-editor -maxdepth 2 -type f -printf "    %p  (%s bytes)\n" 2>/dev/null || \
+	    find dist/moros-editor -maxdepth 2 -type f -exec ls -l {} \; | awk '{printf "    %s  (%s bytes)\n", $$9, $$5}'
+	@echo ""
+	@echo "  Distributable:  dist/moros-editor/"
+	@echo "  Run:            ./dist/moros-editor/moros-editor"
 
 # wasm-html-test: run the WASM-runtime safety gate (tests/html_wasm.rs).
 #

@@ -67,30 +67,21 @@ Buster's atlas (the only loft program with a non-trivial layout).
 
 ## Scheduled — 0.9.0
 
-### P142 — `vector<T>` field panics when T is from an imported file
+### ~~P142~~ — `vector<T>` field panics when T is from an imported file — FIXED 2026-04-17
 
-A struct field of type `vector<T>` (or `hash<T>`, `index<T>`,
-`sorted<T>`) panics during type resolution when `T` is defined in a
-different `.loft` file loaded via `use`.  The panic is in
-`src/typedef.rs::fill_all` — the vector content type is resolved
-before the imported struct's def-nr is registered.
+Plain `use` now imports all `pub` definitions via `import_all`, so
+`vector<T>` / `hash<T>` / `index<T>` / `sorted<T>` content types
+resolve correctly across files.  The original reproducer (four-file
+Moros-style `types.loft` + `palette.loft` + `spawn.loft` + `map.loft`
+layout with cross-file `vector<StructType>` fields) exits 0 and reads
+back expected values.
 
-**Reproducer:**
-```
-# inner.loft
-pub struct Inner { val: integer not null }
-
-# outer.loft
-use inner
-pub struct Outer { items: vector<Inner> }
-```
-
-Same-file definition works fine.  **Workaround:** keep all structs
-that reference each other via generic collection fields in the same
-`.loft` file.  Applied in the Moros `moros_map` package.
-
-**Regression guard:** none yet — needs a Rust-level test in
-`tests/package_layout.rs` with a two-file test package.
+**Gap:** no dedicated Rust-level regression guard exists yet for the
+multi-file `vector<T>` case.  The adjacent P143 guard
+(`tests/lib/p143_*.loft` + `tests/issues.rs::p143_default_struct_return_from_nested_vector_use`)
+exercises overlapping code paths but does not specifically cover the
+original P142 panic shape.  Worth adding a one-file-per-struct guard
+before 1.0 to keep the fix from silently regressing.
 
 ### ~~C54~~ — `integer` representation — DONE 2026-04-20
 
@@ -128,6 +119,35 @@ literal suffix is deprecated-warned and silently dropped.
   bytes).  Narrow fields (`u8 / u16 / i8 / i16 / i32`) stay
   compact via `Parts::{Byte, Short, Int}` so pixel buffers,
   bit-packed protocols, and RGBA data are unaffected.
+- **Stale derived artefacts after the migration (discovered
+  2026-04-21).**  Neither `cargo test` nor `make ci` rebuilds
+  `target/wasm32-unknown-unknown/release/libloft.rlib` or
+  `tests/lib/native_pkg/native/target/release/libloft_native_test.so`.
+  A developer who runs `cargo test --release` against a
+  post-migration source tree but pre-migration artefacts will see
+  **5 html_wasm failures + 6 native_loader failures** that look
+  like real regressions:
+    * `--html` rustc errors cite `codegen_runtime.rs:1244` (old
+      `cr_rand_int` position) vs. current line 1409.
+    * `native_loader::scalar_before_vec` reports
+      `offset_sum: expected 106, got 103` because the .so still
+      reads elements as 4-byte i32 from the now-8-byte-stride
+      memory.
+  Rebuild commands are in `DEVELOPMENT.md § Common pitfalls`.
+  This class of tripwire is a general post-migration risk, not a
+  language bug.
+- **Cdylib FFI wrapper claim in this file was obsolete.**  The
+  previous bullet above ("`vector_elem_rust_type(Type::Integer) =>
+  "i32"` preserves a 4-byte element layout") describes what
+  codegen *emits* but does NOT match what `Type::size()` now
+  returns for `Type::Integer` (8 bytes, post-2c) — which is what
+  `vector_append` actually strides by.  The test fixture
+  (`tests/lib/native_pkg/native/src/lib.rs`) was updated to
+  `*const i64` in commit `864dafe` and passes; real production
+  cdylibs (`lib/graphics/native`, `lib/moros_render`) still
+  declare `*const i32` and need a coordinated rebuild + audit
+  before 0.9.0 to avoid silent half-stride reads.  Tracking
+  follow-up: verify every `vector_data_ptr` call site in `lib/*/native/`.
 
 Regression guard for the overall migration:
 `tests/scripts/20-binary.loft`, `21-binary-ops.loft`,

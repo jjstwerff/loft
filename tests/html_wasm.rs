@@ -62,10 +62,88 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Compare the mtime of a derived artefact against a set of source
+/// files.  Returns `Err(msg)` describing the newest out-of-date source
+/// and the rebuild command, or `Ok(())` when the artefact is fresh.
+///
+/// Neither `cargo test` nor `make ci` rebuilds the
+/// `wasm32-unknown-unknown` rlib or the fixture cdylibs.  Without this
+/// check, a stale artefact silently masquerades as a code regression —
+/// `--html` fails with rustc errors citing pre-migration line numbers,
+/// or `native_loader::*` mis-reads vector elements and reports
+/// "expected N, got M".
+fn artefact_staleness(artefact: &std::path::Path, sources: &[&std::path::Path]) -> Option<String> {
+    let Ok(art_md) = std::fs::metadata(artefact) else {
+        return Some(format!("artefact missing: {}", artefact.display()));
+    };
+    let Ok(art_mtime) = art_md.modified() else {
+        return None;
+    };
+    let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+    for s in sources {
+        let Ok(md) = std::fs::metadata(s) else {
+            continue;
+        };
+        let Ok(mtime) = md.modified() else { continue };
+        if mtime > art_mtime && newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
+            newest = Some(((*s).to_path_buf(), mtime));
+        }
+    }
+    newest.map(|(src, _)| {
+        format!(
+            "source newer than artefact: {} is newer than {}",
+            src.display(),
+            artefact.display()
+        )
+    })
+}
+
+/// Panic with an actionable rebuild command when the
+/// `wasm32-unknown-unknown` rlib is stale vs. key runtime sources.
+/// Called before invoking `loft --html` so a mismatch fails fast
+/// rather than surfacing as confusing rustc errors.
+fn assert_wasm_rlib_fresh() {
+    let rlib = repo_root().join("target/wasm32-unknown-unknown/release/libloft.rlib");
+    if !rlib.exists() {
+        return; // first run — the --html driver will build it
+    }
+    let root = repo_root();
+    let sources = [
+        root.join("src/codegen_runtime.rs"),
+        root.join("src/ops.rs"),
+        root.join("src/data.rs"),
+        root.join("src/lib.rs"),
+        root.join("src/generation/mod.rs"),
+    ];
+    let source_refs: Vec<&std::path::Path> =
+        sources.iter().map(std::path::PathBuf::as_path).collect();
+    if let Some(reason) = artefact_staleness(&rlib, &source_refs) {
+        panic!(
+            "stale wasm32-unknown-unknown rlib — {reason}\n\
+             Rebuild:\n  \
+               cargo build --release --target wasm32-unknown-unknown \\\n             \
+                 --lib --no-default-features --features random\n\
+             (Do NOT use --features wasm — that pulls in wasm-bindgen and\n \
+              the resulting bundle imports from __wbindgen_placeholder__.)\n"
+        );
+    }
+}
+
 /// Build a loft program via `--html`, extract the WASM, run it via the
 /// Node repro harness with stub imports, and return (stdout, stderr,
 /// exit_status).  Returns None when prerequisites are missing.
 fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
+    run_html_wasm_with_libs(name, source, &[])
+}
+
+/// Same as `run_html_wasm` but also passes a `--lib <dir>` for each
+/// entry in `lib_dirs`.  Needed for programs that `use <pkg>;` out of
+/// a local library tree (e.g. `use moros_editor;` from `lib/`).
+fn run_html_wasm_with_libs(
+    name: &str,
+    source: &str,
+    lib_dirs: &[&str],
+) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
         return None;
@@ -81,6 +159,8 @@ fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
         return None;
     }
 
+    assert_wasm_rlib_fresh();
+
     let tmp = std::env::temp_dir();
     let src = tmp.join(format!("{name}.loft"));
     let html = tmp.join(format!("{name}.html"));
@@ -92,16 +172,18 @@ fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
     // `/tmp/loft_html.rs` path, so parallel test invocations would
     // overwrite each other's emitted Rust mid-build.
     let _guard = build_lock().lock().unwrap();
-    let status = Command::new(&loft_bin)
-        .args([
-            "--html",
-            html.to_str().unwrap(),
-            "--path",
-            &format!("{}/", repo_root().display()),
-            src.to_str().unwrap(),
-        ])
-        .status()
-        .expect("invoke loft --html");
+    let mut cmd = Command::new(&loft_bin);
+    cmd.args([
+        "--html",
+        html.to_str().unwrap(),
+        "--path",
+        &format!("{}/", repo_root().display()),
+    ]);
+    for dir in lib_dirs {
+        cmd.arg("--lib").arg(repo_root().join(dir));
+    }
+    cmd.arg(src.to_str().unwrap());
+    let status = cmd.status().expect("invoke loft --html");
     assert!(status.success(), "loft --html failed for {name}");
     drop(_guard);
 
@@ -237,6 +319,46 @@ fn p137_html_vector_iteration_runs() {
     assert!(
         stdout.contains("total=60"),
         "expected 'total=60' in output.\nstdout: {stdout}"
+    );
+}
+
+/// ROADMAP 0.8.5 end-to-end smoke: `lib/moros_editor` (which imports
+/// `lib/moros_map`) runs cleanly under `--html`.  Exercises the full
+/// edit pipeline the browser scene editor drives — paint, height, wall,
+/// batched stencil stamp, undo — across the loft-side library + WASM
+/// host bridge.  If any moros_editor code path traps under wasm32
+/// (e.g. a future change hits a non-wasm32-safe std call), this catches
+/// it before the browser build ships.
+#[test]
+fn moros_editor_html_smoke() {
+    let src = r#"use moros_editor;
+fn main() {
+    m = map_empty();
+    us = undo_empty();
+
+    paint_material_with_undo(us, m, 0, 0, 0, 1);
+    set_height_with_undo(us, m, 0, 0, 0, 3);
+    set_wall_with_undo(us, m, 0, 0, 0, 0, 7);
+
+    batch_begin(us);
+    stencil_stamp_with_undo(us, m, stencil_house_small(), 2, 2, 0, 0);
+    batch_end(us);
+
+    undo_pop(us, m);
+
+    d = undo_depth(us);
+    h = map_get_hex(m, 0, 0, 0).h_material;
+    println("depth={d} mat={h}");
+}
+"#;
+    let Some((stdout, stderr, ok)) = run_html_wasm_with_libs("moros_editor_smoke", src, &["lib"])
+    else {
+        return;
+    };
+    assert!(ok, "moros_editor smoke trapped under --html.\n{stderr}");
+    assert!(
+        stdout.contains("depth=3 mat=1"),
+        "expected 'depth=3 mat=1'.\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
 

@@ -3,7 +3,7 @@
 
 //! Core IR-to-Rust emission: translates `Value` IR nodes into Rust source.
 
-use crate::data::{Block, Context, Type, Value};
+use crate::data::{Block, Context, IntegerSpec, Type, Value};
 use std::io::Write;
 
 use super::text::count_format_ops;
@@ -368,7 +368,7 @@ impl Output<'_> {
     /// Infer the result type of an expression for generating typed null defaults.
     pub(super) fn infer_type(&self, v: &Value) -> Option<Type> {
         match v {
-            Value::Int(_) => Some(Type::Integer(i32::MIN + 1, i32::MAX as u32, false)),
+            Value::Int(_) => Some(Type::Integer(IntegerSpec::signed32())),
             Value::Long(_) => Some(crate::data::I64.clone()),
             Value::Float(_) => Some(Type::Float),
             Value::Single(_) => Some(Type::Single),
@@ -402,7 +402,7 @@ impl Output<'_> {
     pub(super) fn write_typed_null(w: &mut dyn Write, tp: &Type) -> std::io::Result<()> {
         match tp {
             Type::Character => write!(w, "i32::MIN"),
-            Type::Integer(_, _, _) => write!(w, "i64::MIN"),
+            Type::Integer(_) => write!(w, "i64::MIN"),
             Type::Float => write!(w, "f64::NAN"),
             Type::Single => write!(w, "f32::NAN"),
             Type::Boolean => write!(w, "false"),
@@ -745,7 +745,20 @@ impl Output<'_> {
                     // int casts: the return statement carries the right type.
                     let value_is_return = matches!(v, Value::Return(_));
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
-                    let narrow_cast = if is_return_expr && !value_is_return {
+                    // Iterator-next blocks (name "iter next" / "sorted iter next")
+                    // return their element value OR `i64::MIN` as the
+                    // end-of-iteration sentinel.  Wrapping the result in
+                    // `as u16` / `as u8` for narrow element types truncates
+                    // `i64::MIN` to `0`, destroying the sentinel — the
+                    // subsequent `!op_conv_bool_from_int(var_x)` break check
+                    // compares `0 != i64::MIN` → true, inverted to false,
+                    // never breaking.  `for x in vector<u16>` then loops
+                    // forever printing `x=0`.  Skip the narrow cast for
+                    // iterator-next blocks so `i64::MIN` survives intact;
+                    // the consuming variable assignment applies its own
+                    // `as i64` widening which is a no-op for i64 values.
+                    let is_iter_next = bl.name.contains("iter next");
+                    let narrow_cast = if is_return_expr && !value_is_return && !is_iter_next {
                         narrow_int_cast(&bl.result)
                     } else {
                         None

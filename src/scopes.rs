@@ -1337,7 +1337,7 @@ fn expr_ends_in_return(expr: &Value) -> bool {
 fn is_value_return_type(tp: &Type) -> bool {
     matches!(
         tp,
-        Type::Integer(_, _, _)
+        Type::Integer(_)
             | Type::Float
             | Type::Single
             | Type::Boolean

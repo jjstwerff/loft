@@ -360,7 +360,17 @@ impl Output<'_> {
                         && def_fn.rust.matches(placeholder.as_str()).count() > 1
                         && self.needs_pre_eval(&vals[i])
                 });
-                let template_uses_stores = def_fn.rust.contains("stores");
+                // Templates that touch `s.database.…`, `s.const_refs`, or
+                // `s.string_from_const_store` get substituted to the
+                // `stores` binding in native code (src/generation/calls.rs).
+                // Treat any of these the same as an explicit `stores`
+                // reference for pre-eval purposes so nested user-fn args
+                // (which also take `&mut stores`) get hoisted into bindings
+                // and avoid double-borrow.
+                let template_uses_stores = def_fn.rust.contains("stores")
+                    || def_fn.rust.contains("s.database.")
+                    || def_fn.rust.contains("s.const_refs")
+                    || def_fn.rust.contains("s.string_from_const_store");
                 let needs_pre_eval_args = block_count > 0
                     || user_fn_count > 1
                     || (template_uses_stores && user_fn_count > 0)

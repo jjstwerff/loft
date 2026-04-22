@@ -728,6 +728,17 @@ fn OpGetInt4(v1: reference, fld: const u16) -> integer;
 #rust"{{let db = @v1; let r = stores.store(&db).get_i32_raw(db.rec, db.pos + u32::from(@fld)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }}}}"
 fn OpSetInt4(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_i32_raw(db.rec, db.pos + u32::from(@fld), v);}}"
+// 2-byte narrow-vector-element read/write (P184 Phase 4b `vector<u16>` /
+// `vector<i16>` / `vector<integer limit(...) size(2)>`).  Direct
+// `(val - min)` encoding parallel to `OpGetByte` / `OpSetByte`, so
+// `vector_add`'s raw-byte copy works unchanged.  `u16::MAX` (raw) is
+// the null sentinel, widened to `i64::MIN` on load.  Struct fields
+// with `u16` / `i16` continue to use `OpGetShort` / `OpSetShort` (the
+// legacy `+1` encoding with `raw=0` null sentinel).
+fn OpGetShortRaw(v1: reference, fld: const u16, min: const i16) -> integer;
+#rust"{{let db = @v1; let r = stores.store(&db).get_i16_raw(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }}}}"
+fn OpSetShortRaw(v1: reference, fld: const u16, min: const i16, val: integer);
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; stores.store_mut(&db).set_i16_raw(db.rec, db.pos + u32::from(@fld), i32::from(@min), v);}}"
 fn OpSetText(v1: reference, fld: const u16, val: text);
 #rust"{{let db = @v1; let s_val = @val.to_string(); let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + u32::from(@fld), s_pos);}}"
 // --- Collections ---

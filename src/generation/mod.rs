@@ -1,7 +1,7 @@
 // Copyright (c) 2024-2025 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-use crate::data::{Context, Data, DefType, Type, Value};
+use crate::data::{Context, Data, DefType, IntegerSpec, Type, Value};
 use crate::database::Stores;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
@@ -235,18 +235,10 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        Type::Integer(from, to, _)
-            if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
-        {
-            Some("u8")
-        }
-        Type::Integer(from, to, _)
-            if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
-        {
-            Some("u16")
-        }
-        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => Some("i8"),
-        Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => Some("i16"),
+        Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
+        Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
+        Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
+        Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
         _ => None,
     }
 }
@@ -273,33 +265,19 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         // cascading type-mismatch errors when the variable is passed to a template
         // operation (e.g. `set_short`) that expects `i32`.  The `return` site adds an
         // explicit `as u16` / `as u8` cast (see `narrow_int_cast`).
-        Type::Integer(from, to, _)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 255
-                && i64::from(*from) >= 0 =>
-        {
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 && s.min >= 0 => {
             "u8"
         }
-        Type::Integer(from, to, _)
-            if context == &Context::Result
-                && i64::from(*to) - i64::from(*from) <= 65536
-                && i64::from(*from) >= 0 =>
+        Type::Integer(s)
+            if context == &Context::Result && s.range() - 1 <= 65536 && s.min >= 0 =>
         {
             "u16"
         }
-        Type::Integer(from, to, _)
-            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 255 =>
-        {
-            "i8"
-        }
-        Type::Integer(from, to, _)
-            if context == &Context::Result && i64::from(*to) - i64::from(*from) <= 65536 =>
-        {
-            "i16"
-        }
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 255 => "i8",
+        Type::Integer(s) if context == &Context::Result && s.range() - 1 <= 65536 => "i16",
         Type::Enum(_, false, _) => "u8",
         Type::Character | Type::Null => "i32",
-        Type::Integer(_, _, _) => "i64",
+        Type::Integer(_) => "i64",
         // null is represented as the null sentinel of the target type
         Type::Text(_) if context == &Context::Variable => "String",
         Type::Text(_) if context == &Context::Argument => "&str",
@@ -476,7 +454,7 @@ extern crate loft;"
                         }
                         // Post-2c round 10c: wide Type::Integer (former Type::Long)
                         // passes as i64 — range > i32::MAX can't fit in i32.
-                        Type::Integer(_, max, _) if *max > i32::MAX as u32 => {
+                        Type::Integer(s) if s.is_wide() => {
                             let _ = write!(params, "{name}: i64");
                         }
                         Type::Float => {
@@ -496,8 +474,8 @@ extern crate loft;"
                 let ret = match &def.returned {
                     Type::Void => String::new(),
                     // Post-2c round 10c: wide Type::Integer returns as i64.
-                    Type::Integer(_, max, _) if *max > i32::MAX as u32 => " -> i64".to_string(),
-                    Type::Integer(_, _, _) | Type::Character => " -> i32".to_string(),
+                    Type::Integer(s) if s.is_wide() => " -> i64".to_string(),
+                    Type::Integer(_) | Type::Character => " -> i32".to_string(),
                     Type::Float => " -> f64".to_string(),
                     Type::Single => " -> f32".to_string(),
                     Type::Boolean => " -> bool".to_string(),
@@ -568,7 +546,12 @@ extern crate loft;"
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
-        writeln!(w, "    db.finish();\n}}\n")?;
+        writeln!(w, "    db.finish();")?;
+        // Initiative 03 Phase 3b: emit code to build CONST_STORE
+        // vectors and populate `db.const_refs` — mirrors the
+        // interpreter path in `compile::build_const_vectors`.
+        self.emit_const_vectors(w, till)?;
+        writeln!(w, "}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
@@ -655,6 +638,7 @@ extern crate loft;"
         enum BareIo {
             Byte(i32, bool),
             Short(i32, bool),
+            ShortRaw(i32, bool),
             Int(i32, bool),
             Vector(u16),
             Sorted(u16, Vec<(u16, bool)>),
@@ -673,6 +657,9 @@ extern crate loft;"
                 }
                 crate::database::Parts::Short(min, nullable) => {
                     bare_io.push((tid, BareIo::Short(*min, *nullable)));
+                }
+                crate::database::Parts::ShortRaw(min, nullable) => {
+                    bare_io.push((tid, BareIo::ShortRaw(*min, *nullable)));
                 }
                 crate::database::Parts::Int(min, nullable) => {
                     bare_io.push((tid, BareIo::Int(*min, *nullable)));
@@ -827,6 +814,9 @@ extern crate loft;"
                     BareIo::Short(min, nullable) => {
                         writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
                     }
+                    BareIo::ShortRaw(min, nullable) => {
+                        writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
+                    }
                     BareIo::Int(min, nullable) => {
                         writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
                     }
@@ -887,6 +877,9 @@ extern crate loft;"
                 BareIo::Short(min, nullable) => {
                     writeln!(w, "    let t{tid} = db.short({min}, {nullable});")?;
                 }
+                BareIo::ShortRaw(min, nullable) => {
+                    writeln!(w, "    let t{tid} = db.short_raw({min}, {nullable});")?;
+                }
                 BareIo::Int(min, nullable) => {
                     writeln!(w, "    let t{tid} = db.int({min}, {nullable});")?;
                 }
@@ -937,6 +930,123 @@ extern crate loft;"
             if self.data.def(dnr).def_type == DefType::Enum {
                 self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::EnumValues)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Initiative 03 Phase 3b: emit Rust code that rebuilds every
+    /// `pub CONST: vector<T> = [...]` constant inside `init()`.
+    /// Mirrors `compile::build_const_vectors` — for each DefType::
+    /// Constant definition with vector content and literal values,
+    /// allocates a fresh store, writes the elements, and records
+    /// the DbRef in `db.const_refs[d_nr]`.  The `#rust"…"` template
+    /// for `OpConstRef` is `s.const_refs[@d_nr as usize]`; native
+    /// codegen translates `s.const_refs` → `stores.const_refs`
+    /// (`src/generation/calls.rs`), so the emitted user functions
+    /// find these DbRefs at call time.
+    fn emit_const_vectors(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
+        // Short-circuit if nothing references const_refs (avoids
+        // emitting an unused `db.const_refs.resize(...)` that'd
+        // produce a dead-code warning under `-D warnings`).
+        let have_any = (0..till).any(|d| {
+            self.data.def(d).def_type == DefType::Constant && self.data.def(d).const_ref.is_some()
+        });
+        if !have_any {
+            return Ok(());
+        }
+        writeln!(
+            w,
+            "    // Initiative 03 Phase 3b — const_refs: mirror compile::build_const_vectors.",
+        )?;
+        writeln!(
+            w,
+            "    db.const_refs.resize({till}, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }});"
+        )?;
+        for d_nr in 0..till {
+            let def = self.data.def(d_nr);
+            if def.def_type != DefType::Constant {
+                continue;
+            }
+            if def.const_ref.is_none() {
+                continue;
+            }
+            let crate::data::Type::Vector(ref elem_tp_box, _) = def.returned else {
+                continue;
+            };
+            let elem_tp = (**elem_tp_box).clone();
+            let values = crate::compile::extract_literal_values_public(&def.code, self.data);
+            if values.is_empty() {
+                continue;
+            }
+            let vec_struct_name = format!("main_vector<{}>", elem_tp.name(self.data));
+            let vec_struct_dnr = self.data.def_nr(&vec_struct_name);
+            if vec_struct_dnr == u32::MAX {
+                continue;
+            }
+            let vec_tp = self.data.def(vec_struct_dnr).known_type;
+            if vec_tp == u16::MAX {
+                continue;
+            }
+            let size = self.stores.size(vec_tp);
+            writeln!(w, "    {{ // const d_nr={d_nr}")?;
+            writeln!(w, "        let cv = db.database({size}_u32);")?;
+            writeln!(
+                w,
+                "        db.store_mut(&cv).set_u32_raw(cv.rec, 4, {vec_tp}_u32);"
+            )?;
+            writeln!(w, "        db.set_default_value({vec_tp}, &cv);")?;
+            writeln!(
+                w,
+                "        let cvr = loft::keys::DbRef {{ store_nr: cv.store_nr, rec: 1, pos: 8 }};"
+            )?;
+            for val in &values {
+                writeln!(w, "        {{ let rec = db.record_new(&cvr, {vec_tp}, 0);")?;
+                match val {
+                    crate::data::Value::Int(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_int(rec.rec, rec.pos, {v}_i64);"
+                        )?;
+                    }
+                    crate::data::Value::Long(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_long(rec.rec, rec.pos, {v}_i64);"
+                        )?;
+                    }
+                    crate::data::Value::Float(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_float(rec.rec, rec.pos, {v}_f64);"
+                        )?;
+                    }
+                    crate::data::Value::Single(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_single(rec.rec, rec.pos, {v}_f32);"
+                        )?;
+                    }
+                    crate::data::Value::Text(v) => {
+                        let esc = v.replace('\\', "\\\\").replace('"', "\\\"");
+                        writeln!(
+                            w,
+                            "            {{ let store = db.store_mut(&rec); \
+                             let s_pos = store.set_str(\"{esc}\"); \
+                             store.set_u32_raw(rec.rec, rec.pos, s_pos); }}"
+                        )?;
+                    }
+                    _ => {}
+                }
+                writeln!(w, "            db.record_finish(&cvr, &rec, {vec_tp}, 0);")?;
+                writeln!(w, "        }}")?;
+            }
+            writeln!(w, "        db.allocations[cv.store_nr as usize].lock();")?;
+            writeln!(
+                w,
+                "        db.allocations[cv.store_nr as usize].ref_count = u32::MAX / 2;"
+            )?;
+            writeln!(w, "        db.const_refs[{d_nr}] = cvr;")?;
+            writeln!(w, "    }}")?;
         }
         Ok(())
     }
@@ -1089,7 +1199,17 @@ extern crate loft;"
         } else if def.def_type == DefType::Enum {
             writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;
         } else if def.def_type == DefType::Vector {
-            let content_known = if def.parent != u32::MAX {
+            // P184 Phase 4b: prefer the actual registered Parts::Vector
+            // content from `stores.types[type_id]` — that's what
+            // `fill_database` stored, including narrow-integer content
+            // via `narrow_vector_content`.  Falling back to
+            // `def.parent.known_type` resolves any Type::Integer to the
+            // plain `integer` slot (0) and breaks narrow vectors.
+            let content_known = if let crate::database::Parts::Vector(c) =
+                self.stores.types[type_id as usize].parts
+            {
+                c
+            } else if def.parent != u32::MAX {
                 self.data.def(def.parent).known_type
             } else if let Type::Vector(ref c_type, _) = def.returned {
                 let c_dnr = self.data.type_def_nr(c_type);
@@ -1193,6 +1313,46 @@ extern crate loft;"
         forced_size: Option<u8>,
     ) -> std::io::Result<()> {
         if let Type::Vector(c, _) = typedef {
+            // P184 Phase 4b: when the element `Type::Integer` carries a
+            // `forced_size` annotation that `vector_narrow_width`
+            // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
+            // content type-nr that `fill_database` already registered
+            // via `narrow_vector_content`.  Without this,
+            // `data.type_def_nr(c)` resolves any `Type::Integer` to
+            // the plain `integer` def-nr → wide `vector<integer>`.
+            // The wrapper's `main_vector<T>` struct field would end up
+            // with 8-byte stride even though `fill_database` narrowed
+            // the actual runtime Parts, corrupting reads/writes.
+            if let Type::Integer(spec) = &**c
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                let name = match n {
+                    1 => {
+                        if spec.min == 0 {
+                            "byte".to_string()
+                        } else {
+                            format!("byte<{},false>", spec.min)
+                        }
+                    }
+                    2 => format!("short_raw<{},false>", spec.min),
+                    4 => format!("int<{},false>", spec.min),
+                    _ => String::new(),
+                };
+                if !name.is_empty() {
+                    let narrow = self.stores.name(&name);
+                    if narrow != u16::MAX {
+                        let content_ref = type_id_ref(narrow);
+                        emit_db_field(
+                            w,
+                            s_var,
+                            field_name,
+                            "vec",
+                            &format!("db.vector({content_ref})"),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
             let c_def = self.data.type_def_nr(c);
             if c_def != u32::MAX {
                 let content = self.data.def(c_def).known_type;
@@ -1207,7 +1367,7 @@ extern crate loft;"
             }
             return Ok(());
         }
-        if let Type::Integer(min, _, _) = typedef {
+        if let Type::Integer(IntegerSpec { min, .. }) = typedef {
             // Post-2c: the field's size may come from the integer alias's
             // `size(N)` annotation (captured in `Attribute.alias_d_nr` →
             // `Data::forced_size`) OR from the `Type::Integer` range.
@@ -1578,7 +1738,7 @@ extern crate loft;"
             }
         }
 
-        let needs_ret_cast = matches!(&def.returned, Type::Integer(_, _, _));
+        let needs_ret_cast = matches!(&def.returned, Type::Integer(_));
         if needs_ret_cast {
             write!(w, "  (unsafe {{ {qualified_symbol}(")?;
         } else {
@@ -1606,7 +1766,7 @@ extern crate loft;"
                     first = false;
                     write!(w, "_vp_{var}, _vc_{var}")?;
                 }
-                Type::Integer(_, _, _) | Type::Character => {
+                Type::Integer(_) | Type::Character => {
                     if !first {
                         write!(w, ", ")?;
                     }
@@ -1654,7 +1814,7 @@ extern crate loft;"
             Type::Single => "f32",
             Type::Float => "f64",
             // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-            Type::Integer(_, max, _) if *max > i32::MAX as u32 => "i64",
+            Type::Integer(s) if s.is_wide() => "i64",
             Type::Boolean => "u8",
             Type::Character => "u32",
             // Vector<integer> keeps 4-byte packed element storage — this is
@@ -1664,7 +1824,7 @@ extern crate loft;"
             // narrow→wide conversion happens at read / write sites via
             // `ops::read_int_at` / `set_i32_raw`, so the in-memory element
             // layout can stay i32.
-            Type::Integer(_, _, _) => "i32",
+            Type::Integer(_) => "i32",
             // Fallback for struct/enum elements: opaque bytes.
             _ => "u8",
         }

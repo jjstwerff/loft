@@ -460,11 +460,11 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             let name = &attr.name;
             match &attr.typedef {
                 // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-                Type::Integer(_, max, _) if *max > i32::MAX as u32 => {
+                Type::Integer(s) if s.is_wide() => {
                     c_params.push(format!("{name}: i64"));
                     param_names.push(name.clone());
                 }
-                Type::Integer(_, _, _) | Type::Character => {
+                Type::Integer(_) | Type::Character => {
                     c_params.push(format!("{name}: i32"));
                     param_names.push(name.clone());
                 }
@@ -524,8 +524,8 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         let ret_kind = match &def.returned {
             Type::Void | Type::Null => RetKind::None,
             // Post-2c round 10c: wide Type::Integer (former Type::Long) → i64.
-            Type::Integer(_, max, _) if *max > i32::MAX as u32 => RetKind::Scalar(" -> i64".into()),
-            Type::Integer(_, _, _) | Type::Character => RetKind::Scalar(" -> i32".into()),
+            Type::Integer(s) if s.is_wide() => RetKind::Scalar(" -> i64".into()),
+            Type::Integer(_) | Type::Character => RetKind::Scalar(" -> i32".into()),
             Type::Float => RetKind::Scalar(" -> f64".into()),
             Type::Single => RetKind::Scalar(" -> f32".into()),
             Type::Boolean => RetKind::Scalar(" -> bool".into()),
@@ -659,9 +659,9 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             .iter()
             .map(|(_, _, tp)| match tp {
                 // Post-2c round 10c: wide Type::Integer (former Type::Long) → 8 bytes.
-                Type::Integer(_, max, _) if *max > i32::MAX as u32 => (8u16, 8u8),
+                Type::Integer(s) if s.is_wide() => (8u16, 8u8),
                 Type::Float => (8u16, 8u8),
-                Type::Integer(_, _, _) | Type::Character | Type::Single => (4, 4),
+                Type::Integer(_) | Type::Character | Type::Single => (4, 4),
                 Type::Boolean | Type::Enum(_, false, _) => (1, 1),
                 // In the store, text/ref/vector/collections are stored as 4-byte record refs.
                 Type::Text(_)
@@ -690,7 +690,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
         for (i, (fname, _, tp)) in fields.iter().enumerate() {
             let offset = positions[i];
             let type_comment = match tp {
-                Type::Integer(_, _, _) => "integer",
+                Type::Integer(_) => "integer",
                 Type::Float => "float",
                 Type::Single => "single",
                 Type::Boolean => "boolean",

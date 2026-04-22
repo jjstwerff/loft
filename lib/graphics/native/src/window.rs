@@ -14,15 +14,33 @@ use raw_window_handle::HasWindowHandle;
 use std::num::NonZeroU32;
 use winit::dpi::LogicalSize;
 use winit::event_loop::EventLoop;
-use winit::window::WindowAttributes;
+use winit::window::{Fullscreen, WindowAttributes};
 
 pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, String> {
-    let event_loop = EventLoop::new().map_err(|e| format!("EventLoop: {e}"))?;
-
-    let window_attrs = WindowAttributes::default()
+    let attrs = WindowAttributes::default()
         .with_title(title)
         .with_transparent(false)
         .with_inner_size(LogicalSize::new(width, height));
+    create_gl_state_with_attrs(attrs, Some((width, height)))
+}
+
+/// P184-era initiative 03: borderless-fullscreen window on the
+/// primary monitor.  The GL viewport is sized from the actual window
+/// size after creation (monitor native resolution), so callers don't
+/// need to query the resolution up front.
+pub fn create_gl_state_fullscreen(title: &str) -> Result<GlState, String> {
+    let attrs = WindowAttributes::default()
+        .with_title(title)
+        .with_transparent(false)
+        .with_fullscreen(Some(Fullscreen::Borderless(None)));
+    create_gl_state_with_attrs(attrs, None)
+}
+
+fn create_gl_state_with_attrs(
+    window_attrs: WindowAttributes,
+    initial_viewport: Option<(u32, u32)>,
+) -> Result<GlState, String> {
+    let event_loop = EventLoop::new().map_err(|e| format!("EventLoop: {e}"))?;
 
     let config_template = ConfigTemplateBuilder::new();
 
@@ -83,9 +101,20 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
             .cast()
     });
 
+    // Viewport size: caller's hint for windowed mode, or the actual
+    // post-creation window size for fullscreen (winit honours
+    // `Fullscreen::Borderless(None)` at native monitor resolution).
+    let (vw, vh) = match initial_viewport {
+        Some((w, h)) => (w, h),
+        None => {
+            let sz = window.inner_size();
+            (sz.width.max(1), sz.height.max(1))
+        }
+    };
+
     unsafe {
         gl::Enable(gl::DEPTH_TEST);
-        gl::Viewport(0, 0, width as i32, height as i32);
+        gl::Viewport(0, 0, vw as i32, vh as i32);
         // Clear both front and back buffers to opaque black before the window
         // becomes visible, preventing see-through artifacts on compositors.
         gl::ClearColor(0.0, 0.0, 0.0, 1.0);

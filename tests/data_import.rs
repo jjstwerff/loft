@@ -9,7 +9,7 @@
 
 extern crate loft;
 
-use loft::data::{Data, DefType, Position, Type};
+use loft::data::{Data, DefType, IntegerSpec, Position, Type};
 
 fn pos() -> Position {
     Position {
@@ -163,13 +163,18 @@ fn rewrite_leaves_unrelated_alone() {
     let stub = add_stub(&mut d, 2, "Player");
     d.source = 2;
     let fn_nr = d.add_def("count", &pos(), DefType::Function);
-    d.definitions[fn_nr as usize].returned = Type::Integer(0, 0, true);
+    d.definitions[fn_nr as usize].returned = Type::Integer(IntegerSpec {
+        min: 0,
+        max: 0,
+        not_null: true,
+        forced_size: None,
+    });
 
     d.rewrite_unknown_refs(stub, real_player);
 
     assert!(matches!(
         d.definitions[fn_nr as usize].returned,
-        Type::Integer(_, _, _)
+        Type::Integer(_)
     ));
 }
 
@@ -181,15 +186,22 @@ fn rewrite_replaces_tuple_element() {
     let stub = add_stub(&mut d, 2, "Player");
     d.source = 2;
     let fn_nr = d.add_def("pair", &pos(), DefType::Function);
-    d.definitions[fn_nr as usize].returned =
-        Type::Tuple(vec![Type::Integer(0, 0, true), Type::Unknown(stub)]);
+    d.definitions[fn_nr as usize].returned = Type::Tuple(vec![
+        Type::Integer(IntegerSpec {
+            min: 0,
+            max: 0,
+            not_null: true,
+            forced_size: None,
+        }),
+        Type::Unknown(stub),
+    ]);
 
     d.rewrite_unknown_refs(stub, real_player);
 
     match d.definitions[fn_nr as usize].returned.clone() {
         Type::Tuple(elems) => {
             assert_eq!(elems.len(), 2);
-            assert!(matches!(elems[0], Type::Integer(_, _, _)));
+            assert!(matches!(elems[0], Type::Integer(_)));
             assert!(matches!(elems[1], Type::Reference(def, _) if def == real_player));
         }
         other => panic!("expected Tuple, got {other:?}"),

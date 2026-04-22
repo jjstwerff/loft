@@ -1249,19 +1249,11 @@ impl Function {
 
 pub fn size(tp: &Type, context: &Context) -> u16 {
     match tp {
-        Type::Integer(min, max, _)
-            if context == &Context::Constant && i64::from(*max) - i64::from(*min) <= 256 =>
-        {
-            1
-        }
-        Type::Integer(min, max, _)
-            if context == &Context::Constant && i64::from(*max) - i64::from(*min) <= 65536 =>
-        {
-            2
-        }
+        Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 256 => 1,
+        Type::Integer(s) if context == &Context::Constant && s.range() - 1 <= 65536 => 2,
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
-        Type::Integer(_, _, _) | Type::Float => 8,
+        Type::Integer(_) | Type::Float => 8,
         Type::Function(_, _, _) => 20, // Phase 2c: 8B d_nr (i64) + 12B closure DbRef
         Type::Text(_) if context == &Context::Variable => size_of::<String>() as u16,
         Type::Text(_) => size_of::<&str>() as u16,

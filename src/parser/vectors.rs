@@ -859,7 +859,7 @@ impl Parser {
         // O8.5: try const-unrolling for [for i in A..B [if cond] { expr(i) }].
         // If the range bounds are const and the body folds for every i,
         // emit a pre-computed literal vector instead of a runtime loop.
-        if matches!(in_t, Type::Integer(_, _, _))
+        if matches!(in_t, Type::Integer(_))
             && let Some(unrolled) =
                 self.try_const_unroll_comprehension(for_var, &create_iter, &body, &if_step, in_t)
         {
@@ -1263,7 +1263,7 @@ impl Parser {
     pub(crate) fn parse_multiply(&mut self, res: &mut Vec<Value>) -> Option<Type> {
         let mut code = Value::Null;
         let tp = self.parse_operators(&Type::Unknown(0), &mut code, &mut Type::Null, 0);
-        if !matches!(tp, Type::Integer(_, _, _)) {
+        if !matches!(tp, Type::Integer(_)) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -1403,18 +1403,13 @@ impl Parser {
             self.lexer.pos()
         );
         for p in res {
-            let elem_known =
-                if ed_nr == u32::from(u16::MAX) || self.data.def(ed_nr).known_type == u16::MAX {
-                    0
-                } else if let Type::Vector(elem_tp, _) = in_t {
-                    // For vector-typed elements, resolve the inner vector's database
-                    // type correctly (not the generic "vector" definition's known_type).
-                    let ek = self.database.db_type(elem_tp, &self.data);
-                    self.database.vector(ek)
-                } else {
-                    self.data.def(ed_nr).known_type
-                };
-            let known = Value::Int(i32::from(self.database.vector(elem_known)));
+            // P184 Phase 5: route through `vector_of` so narrow integer
+            // aliases (i32, u8) produce the same narrow-element vector
+            // db type as struct fields get via `fill_database`.  Without
+            // this the literal-append path would register
+            // `vector<integer>` (8-byte stride) into a narrow-registered
+            // local, and reads would mis-align with writes.
+            let known = Value::Int(i32::from(self.vector_of(in_t)));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()
@@ -1466,6 +1461,35 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
+            } else if let Type::Integer(spec) = in_t
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                // P184 Phase 4b: narrow integer element write.
+                // `set_field(ed_nr=INTEGER_DEF, f_nr=usize::MAX, …)`
+                // dispatches through the wide `integer`'s `returned`
+                // type and emits `OpSetInt` (8 bytes).  That works
+                // for `Parts::Byte` / `Parts::Int` by coincidence
+                // (their direct encoding matches the low bytes of a
+                // wide little-endian write), and now works for
+                // `Parts::ShortRaw` (which is also direct).  Emit
+                // the narrow-width opcode directly so writes encode
+                // correctly for all narrow widths — defensive against
+                // future changes where the wide-write coincidence
+                // might break.
+                let pos = Value::Int(0);
+                let op = match n {
+                    1 => {
+                        let m = Value::Int(spec.min);
+                        self.cl("OpSetByte", &[Value::Var(elm), pos, m, p.clone()])
+                    }
+                    2 => {
+                        let m = Value::Int(spec.min);
+                        self.cl("OpSetShortRaw", &[Value::Var(elm), pos, m, p.clone()])
+                    }
+                    4 => self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]),
+                    _ => self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()),
+                };
+                ls.push(op);
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
@@ -1551,21 +1575,42 @@ impl Parser {
         db
     }
 
-    pub(crate) fn type_info(&self, in_t: &Type) -> Value {
+    pub(crate) fn type_info(&mut self, in_t: &Type) -> Value {
         Value::Int(i32::from(self.get_type(in_t)))
     }
 
-    pub(crate) fn get_type(&self, in_t: &Type) -> u16 {
+    pub(crate) fn get_type(&mut self, in_t: &Type) -> u16 {
         if self.first_pass {
             return u16::MAX;
         }
         match in_t {
-            Type::Integer(min, _, _) => match in_t.size(false) {
-                1 if *min == 0 => self.database.name("byte"),
-                1 => self.database.name(&format!("byte<{min},false>")),
-                2 => self.database.name(&format!("short<{min},false>")),
-                _ => self.database.name("integer"),
-            },
+            Type::Integer(spec) => {
+                // P184 Phase 4b: honour `forced_size` via
+                // `vector_narrow_width`.  Gate covers 1/2/4 bytes.
+                // 2-byte uses `Parts::ShortRaw` (direct encoding) —
+                // parallel to `Parts::Byte` / `Parts::Int` so that
+                // source literal vectors and destination fields share
+                // encoding and `vector_add`'s raw-byte copy stays
+                // valid.  Narrow path registers on demand so locals /
+                // params / returns don't depend on a struct field
+                // having registered the name first.
+                if let Some(n) = spec.vector_narrow_width() {
+                    match n {
+                        1 => self.database.byte(spec.min, false),
+                        2 => self.database.short_raw(spec.min, false),
+                        4 => self.database.int(spec.min, false),
+                        _ => self.database.name("integer"),
+                    }
+                } else {
+                    // Bounds heuristic (pre-P184 behaviour).
+                    match in_t.size(false) {
+                        1 if spec.min == 0 => self.database.name("byte"),
+                        1 => self.database.name(&format!("byte<{},false>", spec.min)),
+                        2 => self.database.name(&format!("short<{},false>", spec.min)),
+                        _ => self.database.name("integer"),
+                    }
+                }
+            }
             Type::Character => self.database.name("integer"),
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
@@ -1598,13 +1643,16 @@ impl Parser {
                 self.database.name(&name)
             }
             Type::Vector(tp, _) => {
-                let elem_tp = self.get_type(tp);
-                let vec_name = if elem_tp == u16::MAX {
-                    "vector".to_string()
-                } else {
-                    format!("vector<{}>", self.database.types[elem_tp as usize].name)
-                };
-                self.database.name(&vec_name)
+                // P184 Phase 5: route through `vector_of` so narrow-alias
+                // content (vector<i32>, vector<u8>) registers the same
+                // narrow vector db_tp that `fill_database` registers for
+                // struct fields.  Without this, locals / returns / file
+                // writes fall back to `database.name(...)` which only
+                // succeeds for pre-registered type names and returns
+                // `u16::MAX` otherwise — triggering an index-out-of-bounds
+                // in `assemble_write_data` when the resulting db_tp is
+                // passed to the write path.
+                self.vector_of(tp)
             }
             _ => u16::MAX,
         }

@@ -447,7 +447,7 @@ fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::Block;
+    use crate::data::{Block, IntegerSpec};
     use crate::keys::DbRef;
     use crate::variables::intervals::compute_intervals;
     use crate::variables::validate::find_conflict;
@@ -456,7 +456,7 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    const INT: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
+    const INT: Type = Type::Integer(IntegerSpec::signed32());
 
     /// Wrap `assign_slots` for unit tests: builds a minimal flat Block (scope 0) with
     /// `Value::Set` nodes for every non-argument large (>8 B) variable so Zone 2 can

@@ -22,6 +22,7 @@ use crate::variables::Function;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::io::{Result, Write};
+use std::num::NonZeroU8;
 
 static OPERATORS: &[&str] = &[
     "OpAdd", "OpMin", "OpMul", "OpDiv", "OpRem", "OpPow", "OpNot", "OpBitNot", "OpLand", "OpLor",
@@ -29,7 +30,7 @@ static OPERATORS: &[&str] = &[
     "OpConv", "OpCast",
 ];
 
-pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
+pub static I32: Type = Type::Integer(IntegerSpec::signed32());
 
 /// Full-width integer (post-2c, 8 bytes, i64 range up to u32::MAX bound).
 /// Produced by the parser when it sees `long`, `integer limit(..., > i32::MAX)`,
@@ -39,7 +40,238 @@ pub static I32: Type = Type::Integer(i32::MIN + 1, i32::MAX as u32, false);
 /// field can't hold full i64::MAX (it's u32), so u32::MAX is used as a
 /// "wide" sentinel; all downstream code just observes "max - min >= 256"
 /// and picks 8-byte storage.
-pub static I64: Type = Type::Integer(i32::MIN + 1, u32::MAX, false);
+pub static I64: Type = Type::Integer(IntegerSpec::wide());
+
+/// Specification of an `integer`-family type — bounds, nullability,
+/// and optional forced storage width (P184).
+///
+/// `Debug` is implemented manually (instead of derived) so
+/// `format!("{tp:?}")` on `Type::Integer(spec)` prints
+/// `Integer(min, max, not_null)` — matching the pre-P184 tuple shape
+/// that diagnostic output was built around.  The optional
+/// `forced_size` is printed only when present, as a trailing
+/// `, size(N)`.
+///
+/// `PartialEq` / `Eq` / `Hash` are implemented manually to ignore
+/// `forced_size` — the annotation is a storage hint, not a value-type
+/// difference, and the rest of the compiler uses `==` / `is_equal`
+/// to match integer-valued types uniformly.  Code that cares about
+/// the storage width reads `spec.forced_size` or calls
+/// `spec.byte_width()` directly.
+#[derive(Clone, Copy)]
+pub struct IntegerSpec {
+    /// Inclusive lower bound.  `i32::MIN` is reserved as the null
+    /// sentinel; plain-integer templates use `i32::MIN + 1`.
+    pub min: i32,
+    /// Inclusive upper bound.  `u32` to allow the wide / former-`long`
+    /// template to use `u32::MAX` as a "wider than i32" sentinel.
+    pub max: u32,
+    /// When true, the value cannot be null — frees the null sentinel
+    /// and widens the usable range by 1 on narrow types.
+    pub not_null: bool,
+    /// When `Some(n)`, storage width is `n` bytes regardless of
+    /// bounds.  Set by the parser from an integer alias's `size(N)`
+    /// annotation (`i32` → `Some(4)`, `u8` → `Some(1)`).  `None`
+    /// means "use the bounds-range heuristic in `byte_width()`".
+    pub forced_size: Option<NonZeroU8>,
+}
+
+impl IntegerSpec {
+    // ── Canonical templates (constructors) ──────────────────────────────
+
+    /// Plain `integer` / former `long`: full i64 range, 8-byte storage
+    /// via the default heuristic.  No forced size.
+    pub const fn wide() -> Self {
+        IntegerSpec {
+            min: i32::MIN + 1,
+            max: u32::MAX,
+            not_null: false,
+            forced_size: None,
+        }
+    }
+
+    /// The I32 template — i32 bounds, nullable, no forced size.
+    pub const fn signed32() -> Self {
+        IntegerSpec {
+            min: i32::MIN + 1,
+            max: i32::MAX as u32,
+            not_null: false,
+            forced_size: None,
+        }
+    }
+
+    /// `u8` alias — `0..=255`, forced 1-byte storage.
+    pub fn u8() -> Self {
+        IntegerSpec {
+            min: 0,
+            max: 255,
+            not_null: false,
+            forced_size: NonZeroU8::new(1),
+        }
+    }
+
+    /// `i8` alias — `-128..=127`, forced 1-byte storage.
+    pub fn i8() -> Self {
+        IntegerSpec {
+            min: -128,
+            max: 127,
+            not_null: false,
+            forced_size: NonZeroU8::new(1),
+        }
+    }
+
+    /// `u16` alias — `0..=65535`, forced 2-byte storage.
+    pub fn u16() -> Self {
+        IntegerSpec {
+            min: 0,
+            max: 65535,
+            not_null: false,
+            forced_size: NonZeroU8::new(2),
+        }
+    }
+
+    /// `i16` alias — `-32768..=32767`, forced 2-byte storage.
+    pub fn i16() -> Self {
+        IntegerSpec {
+            min: -32768,
+            max: 32767,
+            not_null: false,
+            forced_size: NonZeroU8::new(2),
+        }
+    }
+
+    /// `i32` alias — full i32 range, forced 4-byte storage.
+    pub fn i32() -> Self {
+        IntegerSpec {
+            min: i32::MIN + 1,
+            max: i32::MAX as u32,
+            not_null: false,
+            forced_size: NonZeroU8::new(4),
+        }
+    }
+
+    /// `u32` alias — `0..=u32::MAX - 1`, wide storage.
+    pub fn u32() -> Self {
+        IntegerSpec {
+            min: 0,
+            max: u32::MAX - 1,
+            not_null: false,
+            forced_size: None,
+        }
+    }
+
+    // ── Query methods (consolidate scattered bounds arithmetic) ─────────
+
+    /// Storage width in bytes — honours `forced_size` first, falls back
+    /// to the bounds-range heuristic otherwise.
+    #[must_use]
+    pub fn byte_width(&self, nullable: bool) -> u8 {
+        if let Some(n) = self.forced_size {
+            return n.get();
+        }
+        let range = self.range();
+        if range <= 256 || (nullable && range == 257) {
+            1
+        } else if range <= 65536 || (nullable && range == 65537) {
+            2
+        } else {
+            8
+        }
+    }
+
+    /// P184 Phase 4b: element stride for narrow vectors, matching
+    /// what `typedef.rs::fill_database`'s Vector arm registers.
+    /// Returns `Some(n)` for the direct-encoded widths:
+    /// - 1 → `Parts::Byte` (u8 / i8)
+    /// - 2 → `Parts::ShortRaw` (u16 / i16, P184 Phase 4b)
+    /// - 4 → `Parts::Int` (i32)
+    ///
+    /// All three use direct raw encoding (no `+1` shift), so
+    /// `vector_add`'s raw-byte copy path works across source literal
+    /// vectors and destination fields without re-encoding.
+    ///
+    /// Returns `None` for any Type without a `forced_size` annotation
+    /// (caller falls back to the default wide-integer stride) and for
+    /// `forced_size` values outside the narrow gate.  `u16` struct
+    /// fields continue to use `Parts::Short` (the legacy `+1` encoding)
+    /// via the `alias != u32::MAX` path in `get_val` / `set_field_check`.
+    ///
+    /// Callers use this at compile time to emit matching `elm_size` in
+    /// `OpGetVector` / `OpSetVector`, and in `get_val` to choose the
+    /// right-width scalar-read opcode.  Keeping the predicate in one
+    /// place avoids the narrow-read / wide-storage skew that bit the
+    /// first Phase 3 attempt.
+    #[must_use]
+    pub fn vector_narrow_width(&self) -> Option<u8> {
+        match self.forced_size?.get() {
+            1 => Some(1),
+            2 => Some(2),
+            4 => Some(4),
+            _ => None,
+        }
+    }
+
+    /// True when the value range exceeds the signed-32-bit range.
+    #[must_use]
+    pub fn is_wide(&self) -> bool {
+        self.max > i32::MAX as u32
+    }
+
+    /// Number of distinct representable values (inclusive range + 1).
+    #[must_use]
+    pub fn range(&self) -> i64 {
+        i64::from(self.max) - i64::from(self.min) + 1
+    }
+
+    /// True when this is the I32 template (plain `integer` post-2c).
+    #[must_use]
+    pub fn is_signed32_template(&self) -> bool {
+        self.min == i32::MIN + 1 && self.max == i32::MAX as u32
+    }
+
+    /// True when this is the wide I64 template.
+    #[must_use]
+    pub fn is_wide_template(&self) -> bool {
+        self.min == i32::MIN + 1 && self.max == u32::MAX
+    }
+}
+
+impl Debug for IntegerSpec {
+    /// Matches the pre-P184 `Integer(min, max, not_null)` tuple shape
+    /// so the `Display for Type` fallback (`format!("{self:?}").to_lowercase()`)
+    /// and any other `{:?}` consumer keeps producing the same output.
+    /// A `forced_size` annotation, when present, is appended as `, size(N)`.
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, {}, {}", self.min, self.max, self.not_null)?;
+        if let Some(n) = self.forced_size {
+            write!(f, ", size({})", n.get())?;
+        }
+        Ok(())
+    }
+}
+
+impl PartialEq for IntegerSpec {
+    /// Equality ignores `forced_size`: the annotation is a storage
+    /// hint, not a semantic difference.  `vector<i32>` and
+    /// `vector<integer limit(-2147483647, 2147483647)>` have the same
+    /// value-type even though the former is stored in 4 bytes.  Code
+    /// that needs the storage distinction reads `spec.forced_size`
+    /// or calls `spec.byte_width()`.
+    fn eq(&self, other: &Self) -> bool {
+        self.min == other.min && self.max == other.max && self.not_null == other.not_null
+    }
+}
+
+impl Eq for IntegerSpec {}
+
+impl std::hash::Hash for IntegerSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.min.hash(state);
+        self.max.hash(state);
+        self.not_null.hash(state);
+        // forced_size intentionally omitted — see PartialEq.
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
@@ -143,7 +375,7 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
     match tp {
         Type::Boolean => Value::Boolean(false),
         Type::Enum(tp, _, _) => Value::Enum(0, data.def(*tp).known_type),
-        Type::Integer(_, _, _)
+        Type::Integer(_)
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
@@ -176,9 +408,9 @@ pub enum Type {
     Void,
     /// Divergent expression (return/break/continue) — compatible with any type.
     Never,
-    /// The given definition might hold restrictions on this number.
-    /// (minimum, maximum, `not_null`).
-    Integer(i32, u32, bool),
+    /// Integer type carrying bounds, null-flag, and optional forced
+    /// storage width.  See [`IntegerSpec`].
+    Integer(IntegerSpec),
     /// A store with the given base record type. (nullable)
     Boolean,
     Float,
@@ -363,7 +595,7 @@ impl Type {
             || (matches!(self, Type::Enum(_, _, _)) && matches!(other, Type::Enum(_, _, _)))
             || (matches!(self, Type::Reference(_, _)) && matches!(other, Type::Reference(_, _)))
             || (matches!(self, Type::Vector(_, _)) && matches!(other, Type::Vector(_, _)))
-            || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
+            || (matches!(self, Type::Integer(_)) && matches!(other, Type::Integer(_)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
     }
 
@@ -391,13 +623,13 @@ impl Type {
             _ => {}
         }
         self == other
-            || (matches!(self, Type::Integer(_, _, _)) && matches!(other, Type::Integer(_, _, _)))
+            || (matches!(self, Type::Integer(_)) && matches!(other, Type::Integer(_)))
             || (matches!(self, Type::Text(_)) && matches!(other, Type::Text(_)))
     }
 
     #[must_use]
     pub fn size(&self, nullable: bool) -> u8 {
-        if let Type::Integer(min, max, _) = self {
+        if let Type::Integer(IntegerSpec { min, max, .. }) = self {
             let c_min = i64::from(*min);
             let c_max = i64::from(*max);
             if c_max - c_min < 256 || (nullable && c_max - c_min == 256) {
@@ -536,7 +768,7 @@ pub fn element_size(t: &Type) -> usize {
     match t {
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Function(_, _, _) | Type::Character => 4,
-        Type::Integer(_, _, _) | Type::Float => 8,
+        Type::Integer(_) | Type::Float => 8,
         Type::Text(_) => std::mem::size_of::<crate::keys::Str>(),
         Type::Reference(_, _)
         | Type::Vector(_, _)
@@ -593,11 +825,11 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Integer(min, max, _) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
-                f.write_str("integer")
+            Type::Integer(s) if s.is_signed32_template() => f.write_str("integer"),
+            Type::Integer(s) if s.min == 0 && s.max == 256 => f.write_str("byte"),
+            Type::Integer(IntegerSpec { min, max, .. }) => {
+                f.write_str(&format!("integer({min}, {max})"))
             }
-            Type::Integer(min, max, _) if *min == 0 && *max == 256 => f.write_str("byte"),
-            Type::Integer(min, max, _) => f.write_str(&format!("integer({min}, {max})")),
             Type::Vector(tp, link) if matches!(tp as &Type, Type::Unknown(_)) => {
                 f.write_str(&format!("vector#{link:?}"))
             }
@@ -905,6 +1137,45 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
+    /// P184 Phase 5: map a vector's content `Type` to a narrow
+    /// database element type-nr when the content is a `Type::Integer`
+    /// with a `forced_size` annotation that [`IntegerSpec::vector_narrow_width`]
+    /// accepts (currently 1 and 4 bytes; 2 opens in Phase 4b).
+    ///
+    /// Returns `None` for:
+    /// - non-Integer content (structs, enums, nested vectors, …);
+    /// - `Type::Integer` without `forced_size` (plain `integer`,
+    ///   `integer limit(...)`);
+    /// - `forced_size` values outside the narrow gate (today `Some(2)`
+    ///   and larger).
+    ///
+    /// The caller falls back to the default wide storage (the
+    /// content's own `known_type`, or the plain-`integer` slot) when
+    /// this returns `None`.  Single source of truth for narrow
+    /// detection — invoked by `typedef.rs::fill_database`'s Vector
+    /// arm for struct fields AND by `Parser::vector_of` for locals,
+    /// parameters, return types, and literals.
+    // `self` is not currently read but the helper belongs on `Data`
+    // semantically — future refactors (e.g. looking up an alias's
+    // captured forced_size via a Data-side registry) will need it.
+    #[allow(clippy::unused_self)]
+    pub fn narrow_vector_content(
+        &self,
+        content: &Type,
+        database: &mut crate::database::Stores,
+    ) -> Option<u16> {
+        let Type::Integer(spec) = content else {
+            return None;
+        };
+        let n = spec.vector_narrow_width()?;
+        match n {
+            1 => Some(database.byte(spec.min, false)),
+            2 => Some(database.short_raw(spec.min, false)),
+            4 => Some(database.int(spec.min, false)),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn new() -> Data {
         Data {
@@ -1773,7 +2044,7 @@ impl Data {
     pub fn type_def_nr(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_def_nr(t),
-            Type::Integer(_, _, _) => self.source_nr(0, "integer"),
+            Type::Integer(_) => self.source_nr(0, "integer"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1799,7 +2070,7 @@ impl Data {
     pub fn type_elm(&self, tp: &Type) -> u32 {
         match tp {
             Type::Rewritten(t) => self.type_elm(t),
-            Type::Integer(_, _, _) => self.source_nr(0, "integer"),
+            Type::Integer(_) => self.source_nr(0, "integer"),
             Type::Boolean => self.source_nr(0, "boolean"),
             Type::Float => self.source_nr(0, "float"),
             Type::Text(_) => self.source_nr(0, "text"),
@@ -1828,10 +2099,8 @@ impl Data {
             Type::Null => "null".to_string(),
             Type::Void => "void".to_string(),
             Type::Never => "never".to_string(),
-            Type::Integer(min, max, _) if *min == i32::MIN + 1 && *max == i32::MAX as u32 => {
-                "integer".to_string()
-            }
-            Type::Integer(_, _, _) => "integer".to_string(),
+            Type::Integer(s) if s.is_signed32_template() => "integer".to_string(),
+            Type::Integer(_) => "integer".to_string(),
             Type::Boolean => "boolean".to_string(),
             Type::Float => "float".to_string(),
             Type::Single => "single".to_string(),
@@ -1873,19 +2142,11 @@ impl Data {
             return result;
         }
         match tp {
-            Type::Integer(from, to, _)
-                if i64::from(*to) - i64::from(*from) <= 255 && i64::from(*from) >= 0 =>
-            {
-                "u8"
-            }
-            Type::Integer(from, to, _)
-                if i64::from(*to) - i64::from(*from) <= 65536 && i64::from(*from) >= 0 =>
-            {
-                "u16"
-            }
-            Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 255 => "i8",
-            Type::Integer(from, to, _) if i64::from(*to) - i64::from(*from) <= 65536 => "i16",
-            Type::Integer(_, _, _) => "i64",
+            Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => "u8",
+            Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => "u16",
+            Type::Integer(s) if s.range() - 1 <= 255 => "i8",
+            Type::Integer(s) if s.range() - 1 <= 65536 => "i16",
+            Type::Integer(_) => "i64",
             Type::Enum(_, false, _) => "u8",
             Type::Text(_) if context == &Context::Variable => "String",
             Type::Text(_) => "Str",

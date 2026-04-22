@@ -68,6 +68,12 @@ fn parser_native_pkg_parses_without_error() {
 // ---------------------------------------------------------------------------
 
 /// Helper: resolve the test fixture cdylib path.  Returns None if not built.
+///
+/// Also verifies the cdylib is fresher than its Rust source.  Neither
+/// `cargo test` nor `make ci` rebuilds this `.so`; a stale artefact
+/// after a core-layout change (e.g. the C54 Phase 2c i32→i64 element
+/// stride swap) silently masquerades as a vector-marshalling
+/// regression.  On stale detection we panic with the rebuild command.
 fn fixture_lib_path() -> Option<String> {
     let path = if cfg!(target_os = "macos") {
         "tests/lib/native_pkg/native/target/release/libloft_native_test.dylib"
@@ -76,11 +82,28 @@ fn fixture_lib_path() -> Option<String> {
     } else {
         "tests/lib/native_pkg/native/target/release/libloft_native_test.so"
     };
-    if std::path::Path::new(path).exists() {
-        Some(path.to_string())
-    } else {
-        None
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return None;
     }
+    let src = std::path::Path::new("tests/lib/native_pkg/native/src/lib.rs");
+    if let (Ok(art_md), Ok(src_md)) = (p.metadata(), src.metadata())
+        && let (Ok(art_mtime), Ok(src_mtime)) = (art_md.modified(), src_md.modified())
+        && src_mtime > art_mtime
+    {
+        panic!(
+            "stale fixture cdylib — source newer than artefact:\n  \
+               source:   {} (mtime={:?})\n  \
+               artefact: {} (mtime={:?})\n\
+             Rebuild:\n  \
+               (cd tests/lib/native_pkg/native && cargo build --release)\n",
+            src.display(),
+            src_mtime,
+            p.display(),
+            art_mtime,
+        );
+    }
+    Some(path.to_string())
 }
 
 /// A7.2.3: `extensions::load_one` loads a cdylib and registers its functions.

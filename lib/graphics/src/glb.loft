@@ -35,10 +35,15 @@ fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
 }
 
 // Build the uint32 index buffer (3 indices per triangle: a, b, c).
-fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<integer> {
-  result = [];
+// Element type is `i32` so P184 Phases 2+3+5 register 4-byte narrow
+// storage + stride + reads.  `f += glb_idx_buf(...)` emits 4 bytes
+// per index matching the glTF BIN chunk-size accounting.  Pre-P184
+// Phase 5 this used an inline `glb_write_indices(f, tris)` helper
+// with per-element `as i32` casts because locals didn't narrow.
+fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<i32> {
+  result: vector<i32> = [];
   for t in tris {
-    result += [t.a, t.b, t.c];
+    result += [t.a as i32, t.b as i32, t.c as i32];
   }
   result
 }

@@ -3,6 +3,7 @@
 //! Type definitions and type metadata for the database.
 
 use crate::calc;
+use crate::data::IntegerSpec;
 use crate::database::{Field, Parts, Stores};
 use crate::keys::Content;
 use std::collections::HashSet;
@@ -614,6 +615,25 @@ impl Stores {
         }
     }
 
+    /// P184 Phase 4b: 2-byte narrow vector-element field type, used for
+    /// `vector<u16>` / `vector<i16>` / `vector<integer limit(...) size(2)>`.
+    /// Stored raw (no `+1` shift) so `vector_add`'s raw-byte copy works
+    /// unchanged.  `i16::MIN` reserved as the null sentinel.  Struct
+    /// fields with `u16` / `i16` continue to use `Parts::Short` (the
+    /// legacy `+1` encoding with raw=0 null sentinel).
+    pub fn short_raw(&mut self, min: i32, nullable: bool) -> u16 {
+        let name = format!("short_raw<{min},{nullable}>");
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types
+                .push(Type::new(&name, Parts::ShortRaw(min, nullable), 2));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
     /// 4-byte integer field type, used for `pub type T = integer size(4);`
     /// subtypes (e.g. `i32`).  Stored raw (no +1 shift); `i32::MIN` reserved
     /// as the null sentinel.  Stack values stay 8-byte i64 — narrowing
@@ -659,7 +679,11 @@ impl Stores {
 
     pub fn db_type(&mut self, tp: &crate::data::Type, data: &crate::data::Data) -> u16 {
         match tp {
-            crate::data::Type::Integer(minimum, _, not_null) => {
+            crate::data::Type::Integer(IntegerSpec {
+                min: minimum,
+                not_null,
+                ..
+            }) => {
                 let nullable = !not_null;
                 let s = tp.size(nullable);
                 if s == 1 {
@@ -758,6 +782,9 @@ impl Stores {
         } else if let Parts::Short(from, nullable) = &self.types[known_type as usize].parts {
             let v = store.get_short(rec, pos, *from);
             *nullable && v == 65535
+        } else if let Parts::ShortRaw(from, nullable) = &self.types[known_type as usize].parts {
+            let v = store.get_i16_raw(rec, pos, *from);
+            *nullable && v == i32::MIN
         } else {
             false
         }

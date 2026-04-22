@@ -1,0 +1,430 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Native Moros editor.
+//
+// Full feature set (Phases 0..6 of initiative 03):
+//   Phase 2  renderer + camera orbit
+//   Phase 3a editor_tick + tool select + paint-on-click
+//   Phase 3b panel UI overlay + editor_click routing       ← THIS FILE
+//   Phase 4  F5 save / F9 load / F11 fullscreen toggle
+//   Phase 5  real dt + create_window failure diagnostics
+//   Phase 6  dist/moros-editor/ standalone packaging
+//
+// Controls
+//   WASD / Arrows      Camera orbit / avatar move.
+//   Mouse wheel        Camera zoom.
+//   Tab                Toggle follow / overview camera mode.
+//   1 .. 6             Select tool (None / Raise / Lower / Stencil
+//                      / Item / Wall).
+//   [  /  ]            Cycle wall direction (prev / next).
+//   R  /  F            Overlay layer up / down.
+//   O                  Toggle occlusion (see-through).
+//   Ctrl-Z / Ctrl-Y    Undo / redo.
+//   Left-click         Panel widget OR apply tool at avatar's hex.
+//   F5                 Save map to ./moros_map.json.
+//   F9                 Load ./moros_map.json (clears undo stack).
+//   F11                Toggle fullscreen.
+//   Esc                Quit.
+//
+// Build & run
+//   loft --native --path <repo>/ --lib <repo>/lib \
+//       lib/graphics/examples/moros_editor.loft
+//
+// @ARGS: --lib lib
+use moros_map;
+use moros_render;
+use moros_sim;
+use moros_editor;
+use moros_ui;
+use graphics;
+use render;
+use scene;
+use math;
+
+WINDOW_W = 1024;
+WINDOW_H = 768;
+
+fn seed_starter_map() -> Map {
+  // 7×7 flat grid at cy=0, alternating materials for a visible
+  // checkerboard pattern.  Height bump in the middle so the camera
+  // shows surface + wall geometry (the grand arc stair renderer
+  // kicks in for adjacent height deltas).
+  sm = map_empty();
+  for q in 0..7 {
+    for r in 0..7 {
+      mat = if (q + r) % 2 == 0 { 1 } else { 2 };
+      map_paint_material(sm, q, r, 0, mat);
+    }
+  }
+  map_set_height(sm, 3, 3, 0, 2);
+  sm
+}
+
+// ── Input polling ──────────────────────────────────────────────────
+
+// Scan each hotkey known to `moros_sim::input_from_keys` and return
+// the subset currently pressed, as loft text keys.  Matches the
+// string constants `input_from_keys` matches on.
+fn poll_held_keys() -> vector<text> {
+  k: vector<text> = [];
+  if graphics::gl_key_pressed(graphics::KEY_W) { k += ["w"]; }
+  if graphics::gl_key_pressed(graphics::KEY_A) { k += ["a"]; }
+  if graphics::gl_key_pressed(graphics::KEY_S) { k += ["s"]; }
+  if graphics::gl_key_pressed(graphics::KEY_D) { k += ["d"]; }
+  if graphics::gl_key_pressed(graphics::KEY_SPACE) { k += ["space"]; }
+  if graphics::gl_key_pressed(graphics::KEY_1) { k += ["1"]; }
+  if graphics::gl_key_pressed(graphics::KEY_2) { k += ["2"]; }
+  if graphics::gl_key_pressed(graphics::KEY_3) { k += ["3"]; }
+  if graphics::gl_key_pressed(graphics::KEY_4) { k += ["4"]; }
+  if graphics::gl_key_pressed(graphics::KEY_5) { k += ["5"]; }
+  if graphics::gl_key_pressed(graphics::KEY_6) { k += ["6"]; }
+  if graphics::gl_key_pressed(graphics::KEY_TAB) { k += ["tab"]; }
+  if graphics::gl_key_pressed(graphics::KEY_O) { k += ["o"]; }
+  if graphics::gl_key_pressed(graphics::KEY_R) { k += ["r"]; }
+  if graphics::gl_key_pressed(graphics::KEY_F) { k += ["f"]; }
+  if graphics::gl_key_pressed(graphics::KEY_Z) { k += ["z"]; }
+  if graphics::gl_key_pressed(graphics::KEY_Y) { k += ["y"]; }
+  if graphics::gl_key_pressed(graphics::KEY_LBRACKET) { k += ["["]; }
+  if graphics::gl_key_pressed(graphics::KEY_RBRACKET) { k += ["]"]; }
+  k
+}
+
+// ── Camera translation ────────────────────────────────────────────
+
+// Convert `moros_render::RenderCamera` (spherical orbit around a
+// target) into the `scene::Camera` shape that `render_frame`
+// consumes.  `editor_tick` mutates the RenderCamera via
+// `camera_apply_input`; we re-derive the scene camera each frame.
+fn apply_render_camera(cam: &scene::Camera, rc: moros_render::RenderCamera) {
+  cam.position = moros_render::camera_eye(rc);
+  cam.target = rc.target;
+  cam.fov = rc.fov_y;
+  cam.near = rc.near;
+  cam.far = rc.far;
+}
+
+// ── Panel labels (Phase 3b) ────────────────────────────────────────
+
+// Pre-baked text textures for the toolbar's 6 buttons.  Each button
+// has a hotkey digit ("1".."6") and a label ("None", "Raise", …).
+// Rasterised once at startup via `create_text_texture` and reused
+// every frame — cheap since the strings never change.
+pub struct PanelLabels {
+  pl_hotkeys: vector<integer>,  // 6 entries, idx = btn_id
+  pl_labels:  vector<integer>,  // 6 entries, idx = btn_id
+  pl_font:    integer not null, // font handle (0 = none loaded)
+}
+
+// Try the dist layout, source-tree layout, and a script-relative
+// fallback.  Returns 0 on total failure — caller falls back to a
+// label-less panel (rects still draw, just no text).
+fn load_editor_font() -> integer {
+  candidates = [
+    "assets/DejaVuSans-Bold.ttf",
+    "lib/graphics/examples/DejaVuSans-Bold.ttf",
+  ];
+  for lef_path in candidates {
+    f = graphics::gl_load_font(lef_path);
+    if f != 0 { return f; }
+  }
+  println("moros_editor: no font loaded — panel labels will be hidden.");
+  0
+}
+
+fn bake_static_labels(font: integer) -> PanelLabels {
+  white = graphics::rgba(230, 230, 230, 255);
+  hk: vector<integer> = [];
+  lb: vector<integer> = [];
+  names = ["None", "Raise", "Lower", "Stencil", "Item", "Wall"];
+  for i in 0..6 {
+    hk_s = "{i + 1}";
+    hk_tex = if font != 0 {
+      graphics::create_text_texture(font, hk_s, 12.0, white)
+    } else { 0 };
+    lbl_tex = if font != 0 {
+      graphics::create_text_texture(font, names[i], 14.0, white)
+    } else { 0 };
+    hk += [hk_tex];
+    lb += [lbl_tex];
+  }
+  PanelLabels { pl_hotkeys: hk, pl_labels: lb, pl_font: font }
+}
+
+// ── Panel rendering (Phase 3b) ─────────────────────────────────────
+
+// State threaded through `render_panel` so the status-line text
+// texture is only regenerated when the string changes.
+pub struct PanelCache {
+  pc_status_tex:   integer not null,   // 0 = no texture yet
+  pc_status_text:  text,                // last rasterised status content
+}
+
+fn panel_cache_empty() -> PanelCache {
+  PanelCache { pc_status_tex: 0, pc_status_text: "" }
+}
+
+// Draw one panel per frame.  The order matters — background first,
+// then widgets on top, so transparent widgets blend against the
+// background rather than the 3D scene.
+fn render_panel(
+  painter: const graphics::Painter2D,
+  labels: const PanelLabels,
+  cache: &PanelCache,
+  p: Panel,
+) {
+  white = graphics::rgba(230, 230, 230, 255);
+
+  // 1. Panel background — semi-transparent dark rectangle so the
+  //    3D scene is faintly visible through it (orientation cue).
+  graphics::draw_rect_at(painter,
+    p.p_rect.r_x as float, p.p_rect.r_y as float,
+    p.p_rect.r_w as float, p.p_rect.r_h as float,
+    0.08, 0.09, 0.12, 0.85);
+
+  // 2. Toolbar buttons.
+  for b in p.p_toolbar {
+    bg_r = if b.btn_selected { 0.25 } else { 0.15 };
+    bg_g = if b.btn_selected { 0.45 } else { 0.18 };
+    bg_b = if b.btn_selected { 0.55 } else { 0.22 };
+    graphics::draw_rect_at(painter,
+      b.btn_rect.r_x as float, b.btn_rect.r_y as float,
+      b.btn_rect.r_w as float, b.btn_rect.r_h as float,
+      bg_r, bg_g, bg_b, 1.0);
+    if labels.pl_font != 0 {
+      hk_tex = labels.pl_hotkeys[b.btn_id];
+      lbl_tex = labels.pl_labels[b.btn_id];
+      graphics::draw_texture_at(painter, hk_tex,
+        (b.btn_rect.r_x + 10) as float, (b.btn_rect.r_y + 8) as float,
+        14.0, 16.0);
+      graphics::draw_texture_at(painter, lbl_tex,
+        (b.btn_rect.r_x + 40) as float, (b.btn_rect.r_y + 8) as float,
+        70.0, 16.0);
+    }
+  }
+
+  // 3. List box — background + per-item rasters.  MVP re-rasterises
+  //    each item every frame; Phase 3b-follow-up adds a text cache.
+  graphics::draw_rect_at(painter,
+    p.p_list.lb_rect.r_x as float, p.p_list.lb_rect.r_y as float,
+    p.p_list.lb_rect.r_w as float, p.p_list.lb_rect.r_h as float,
+    0.05, 0.06, 0.09, 1.0);
+  item_y = p.p_list.lb_rect.r_y + 4 - p.p_list.lb_scroll;
+  for rp_idx in 0..len(p.p_list.lb_items) {
+    if rp_idx == p.p_list.lb_selected {
+      graphics::draw_rect_at(painter,
+        p.p_list.lb_rect.r_x as float, item_y as float,
+        p.p_list.lb_rect.r_w as float, p.p_list.lb_item_height as float,
+        0.20, 0.35, 0.55, 1.0);
+    }
+    if labels.pl_font != 0 {
+      item_tex = graphics::create_text_texture(
+        labels.pl_font, p.p_list.lb_items[rp_idx], 13.0, white);
+      graphics::draw_texture_at(painter, item_tex,
+        (p.p_list.lb_rect.r_x + 6) as float, item_y as float,
+        (p.p_list.lb_rect.r_w - 12) as float,
+        p.p_list.lb_item_height as float);
+      graphics::gl_delete_texture(item_tex);
+    }
+    item_y += p.p_list.lb_item_height;
+  }
+
+  // 4. Status strip — cached texture, regenerated only on change.
+  graphics::draw_rect_at(painter,
+    p.p_status.ss_rect.r_x as float, p.p_status.ss_rect.r_y as float,
+    p.p_status.ss_rect.r_w as float, p.p_status.ss_rect.r_h as float,
+    0.03, 0.04, 0.06, 1.0);
+  if labels.pl_font != 0 {
+    if p.p_status.ss_text != cache.pc_status_text {
+      if cache.pc_status_tex != 0 {
+        graphics::gl_delete_texture(cache.pc_status_tex);
+      }
+      cache.pc_status_tex = graphics::create_text_texture(
+        labels.pl_font, p.p_status.ss_text, 13.0, white);
+      cache.pc_status_text = p.p_status.ss_text;
+    }
+    graphics::draw_texture_at(painter, cache.pc_status_tex,
+      (p.p_status.ss_rect.r_x + 8) as float,
+      (p.p_status.ss_rect.r_y + 5) as float,
+      (p.p_status.ss_rect.r_w - 16) as float,
+      14.0);
+  }
+}
+
+// ── Main ───────────────────────────────────────────────────────────
+
+fn main() {
+  rnd = render::create_renderer(WINDOW_W, WINDOW_H, "Moros editor");
+  // Phase 5: defensive check.  `create_renderer` silently returns an
+  // empty `Renderer {}` when `gl_create_window` fails (no display,
+  // driver too old, X11/Wayland handshake broken, etc).  Detect via
+  // the width field — the Renderer default is 0; a successful
+  // create_renderer stores WINDOW_W.
+  if rnd.width == 0 {
+    println("moros_editor: could not open an OpenGL window.");
+    println("  Common causes on this host:");
+    println("    - No display server (DISPLAY / WAYLAND_DISPLAY unset — run in a desktop session).");
+    println("    - OpenGL 3.3 not supported by the GPU / driver.");
+    println("    - X11 / Wayland dev headers missing at build time — re-run `make editor-dist` after fixing.");
+    return;
+  }
+
+  // Phase 3b: 2D painter + font + pre-baked static labels.
+  painter = graphics::create_painter_2d(WINDOW_W as float, WINDOW_H as float);
+  font = load_editor_font();
+  labels = bake_static_labels(font);
+  cache = panel_cache_empty();
+
+  st = moros_sim::editor_default();
+  st.es_map = seed_starter_map();
+  // Place the avatar in the centre of the grid, a bit above the
+  // ground so the camera's orbit doesn't clip into the hex columns.
+  st.es_player.pl_pos = math::vec3(3.0, 0.5, 3.0);
+
+  // Build + upload the scene.  `needs_rebuild` forces a fresh
+  // upload after any edit — Phase 2's one-shot upload turns stale
+  // the first time `tool_apply` mutates the map.
+  scn = moros_render::map_build_scene(st.es_map);
+  render::upload_scene(rnd, scn);
+  needs_rebuild = false;
+
+  cam = scene::camera("editor");
+  apply_render_camera(cam, st.es_camera);
+
+  prev_held: vector<text> = [];
+  prev_mx = 0;
+  prev_my = 0;
+  prev_mx_btn = 0;
+  // Edge-detect F5 / F9 / F11 (save / load / fullscreen toggle) so
+  // one press = one action; holding the key doesn't spam saves.
+  prev_f5 = false;
+  prev_f9 = false;
+  prev_f11 = false;
+  is_fullscreen = false;
+  // Phase 5: real `dt` from a monotonic clock.  `ticks()` returns
+  // microseconds since program start on both native and WASM; we
+  // clamp dt to 50 ms so a stall (e.g. window drag on some WMs)
+  // doesn't teleport the avatar across the map.
+  prev_ticks = ticks();
+  // Phase 3b: fps smoothing for the panel status strip.  Exponential
+  // moving average so the number stays readable across frame-time
+  // jitter.
+  fps_ema = 60.0;
+  fps_int = 60;
+
+  for _ in 0..1000000000 {
+    if graphics::gl_key_pressed(graphics::KEY_ESCAPE) { break; }
+
+    // ── Build InputState from the window's polled state ──
+    held = poll_held_keys();
+    pressed = moros_sim::keys_pressed_since(prev_held, held);
+    mx = graphics::gl_mouse_x() as integer;
+    my = graphics::gl_mouse_y() as integer;
+    mbtn = graphics::gl_mouse_button();
+    ctrl = graphics::gl_key_pressed(graphics::KEY_CTRL);
+    wheel = graphics::gl_mouse_wheel();
+    clicked = (mbtn & 1) != 0;
+    rclicked = (mbtn & 2) != 0;
+    left_edge = clicked && !(prev_mx_btn & 1 != 0);
+    prev_mx_btn = mbtn;
+
+    input = moros_sim::input_from_keys(
+      held, pressed,
+      mx, my,
+      mx - prev_mx, my - prev_my,
+      wheel,
+      clicked, rclicked,
+      ctrl,
+    );
+
+    // ── F5 / F9 / F11 edge-triggered file / window controls ──
+    f5_now = graphics::gl_key_pressed(graphics::KEY_F5);
+    if f5_now && !prev_f5 {
+      file("./moros_map.json").write(map_to_json(st.es_map));
+      println("moros_editor: saved to ./moros_map.json");
+    }
+    prev_f5 = f5_now;
+
+    f9_now = graphics::gl_key_pressed(graphics::KEY_F9);
+    if f9_now && !prev_f9 {
+      load_file = file("./moros_map.json");
+      load_text = load_file.content();
+      if load_text.len() > 0 {
+        st.es_map = map_from_json(load_text);
+        st.es_undo = undo_empty();
+        needs_rebuild = true;
+        println("moros_editor: loaded ./moros_map.json");
+      } else {
+        println("moros_editor: ./moros_map.json empty or missing — skipping load");
+      }
+    }
+    prev_f9 = f9_now;
+
+    f11_now = graphics::gl_key_pressed(graphics::KEY_F11);
+    if f11_now && !prev_f11 {
+      is_fullscreen = !is_fullscreen;
+      graphics::gl_set_fullscreen(is_fullscreen);
+    }
+    prev_f11 = f11_now;
+
+    // ── Step the editor simulation ──
+    now_ticks = ticks();
+    dt = (now_ticks - prev_ticks) as float / 1000000.0;
+    if dt > 0.05 { dt = 0.05; }
+    if dt <= 0.0 { dt = 1.0 / 60.0; }
+    prev_ticks = now_ticks;
+    // EMA the frame rate — weights recent frames at 10 %, older at
+    // 90 % so the panel's fps number doesn't flicker.
+    if dt > 0.0 {
+      fps_ema = fps_ema * 0.9 + (1.0 / dt) * 0.1;
+      fps_int = fps_ema as integer;
+    }
+    moros_sim::editor_tick(st, input, dt);
+
+    // ── Rising-edge left-click → editor_click dispatch ──
+    // Phase 3b: the panel claims the click first.  Panel widgets
+    // (toolbar + list) mutate tool state in place via `route_click`
+    // inside `editor_click`; world hits push an undo entry and
+    // invoke `tool_apply` at the avatar's hex.  Only world hits
+    // flip `needs_rebuild`.
+    if left_edge {
+      panel = editor_panel(st, rnd.width, rnd.height, fps_int);
+      hit = editor_click(st, panel, mx, my);
+      if hit is UhWorld { needs_rebuild = true; }
+    }
+
+    // ── Rebuild the scene if the map mutated ──
+    if needs_rebuild {
+      scn = moros_render::map_build_scene(st.es_map);
+      render::upload_scene(rnd, scn);
+      needs_rebuild = false;
+    }
+
+    // ── 3D pass (no buffer swap — overlay comes next) ──
+    apply_render_camera(cam, st.es_camera);
+    if !render::render_frame_no_swap(rnd, scn, cam) { break; }
+
+    // ── 2D overlay: the editor panel ──
+    graphics::gl_disable(graphics::GL_DEPTH_TEST);
+    graphics::gl_enable(graphics::GL_BLEND);
+    graphics::gl_blend_func(
+      graphics::BLEND_SRC_ALPHA,
+      graphics::BLEND_ONE_MINUS_SRC_ALPHA);
+    // Rebuild the panel with the latest tool / position / fps so
+    // button highlights, list selection, and the status strip
+    // stay in sync with the simulation's current state.
+    draw_panel = editor_panel(st, rnd.width, rnd.height, fps_int);
+    render_panel(painter, labels, cache, draw_panel);
+    graphics::gl_enable(graphics::GL_DEPTH_TEST);
+    graphics::gl_disable(graphics::GL_BLEND);
+
+    // ── Present the composited frame ──
+    graphics::gl_swap_buffers();
+
+    prev_held = held;
+    prev_mx = mx;
+    prev_my = my;
+  }
+
+  render::destroy(rnd);
+}

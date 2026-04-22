@@ -5,7 +5,8 @@
 //! Including type checking.
 
 use crate::data::{
-    Argument, Context, Data, DefType, I32, Type, Value, to_default, v_block, v_if, v_loop, v_set,
+    Argument, Context, Data, DefType, I32, IntegerSpec, Type, Value, to_default, v_block, v_if,
+    v_loop, v_set,
 };
 use crate::database::{Parts, Stores};
 use crate::diagnostics::{Diagnostics, Level, diagnostic_format};
@@ -619,6 +620,34 @@ impl Parser {
     // * Helper functions *
     // ********************
 
+    /// P184 Phase 5: canonical entry point for building a vector
+    /// database type from a content `Type`.  Consults
+    /// `Data::narrow_vector_content` first (single source of truth
+    /// for narrow-detection; shared with `typedef.rs::fill_database`
+    /// for struct fields).  Falls back to the content's own
+    /// `known_type` when narrow doesn't apply, or to the default
+    /// `integer` slot (0) when the content has no registered type
+    /// yet.  Every `database.vector(...)` call in `src/parser/`
+    /// should route through this helper so locals, parameters,
+    /// returns, and literals get the same narrow storage that
+    /// struct fields get via fill_database.
+    pub(crate) fn vector_of(&mut self, content: &Type) -> u16 {
+        if let Some(narrow) = self.data.narrow_vector_content(content, &mut self.database) {
+            return self.database.vector(narrow);
+        }
+        let c_nr = self.data.type_elm(content);
+        if c_nr == u32::MAX {
+            return self.database.vector(u16::MAX);
+        }
+        let c_tp = self.data.def(c_nr).known_type;
+        // Known_type may be unset for forward references; fall back to
+        // the default integer slot (0) so the vector type still
+        // registers correctly.  The content's own fill pass will
+        // update once it runs.
+        let resolved = if c_tp == u16::MAX { 0 } else { c_tp };
+        self.database.vector(resolved)
+    }
+
     /// Get an iterator.
     /// The iterable expression is in *code.
     /// Creating the iterator will be in *code afterward.
@@ -758,7 +787,11 @@ impl Parser {
         let mut should_nr = self.data.type_def_nr(should);
         if let Type::Vector(c_tp, _) = should {
             let c_nr = self.data.type_def_nr(c_tp);
-            let tp = self.database.vector(self.data.def(c_nr).known_type);
+            // P184 Phase 5: route through `vector_of` so narrow aliases
+            // (vector<i32>, vector<u8>) get the correct narrow element
+            // type — matching what fill_database registers for struct
+            // fields.
+            let tp = self.vector_of(c_tp);
             should_nr = self.data.check_vector(c_nr, tp, self.lexer.pos());
         }
         let should_kt = if should_nr == u32::MAX {
@@ -855,7 +888,7 @@ impl Parser {
             {
                 return true;
             }
-            if let (Type::Enum(_, false, _), Type::Integer(_, _, _)) = (test_type, should) {
+            if let (Type::Enum(_, false, _), Type::Integer(_)) = (test_type, should) {
                 return true;
             }
             if let Type::Reference(r, _) = should
@@ -1377,7 +1410,7 @@ impl Parser {
     /// I9-vec: compute element store size from the Type alone (no database needed).
     fn type_element_size(tp: &Type, data: &Data) -> i32 {
         // Post-2c: honor size(N) on integer aliases.
-        if matches!(tp, Type::Integer(_, _, _)) {
+        if matches!(tp, Type::Integer(_)) {
             let alias_nr = data.type_elm(tp);
             if let Some(n) = data.forced_size(alias_nr) {
                 return i32::from(n);
@@ -1389,7 +1422,7 @@ impl Parser {
             | Type::Character
             | Type::Text(_)
             | Type::Enum(_, false, _) => 4,
-            Type::Integer(_, _, _) | Type::Float => 8,
+            Type::Integer(_) | Type::Float => 8,
             // for Reference(struct_nr), compute the struct's inline field
             // size from its attributes rather than assuming 12 (DbRef size).
             // Vector elements of struct type are stored inline, not as pointers.
@@ -1420,7 +1453,7 @@ impl Parser {
     fn wrap_vector_get_val(code: Value, tp: &Type, data: &Data) -> Value {
         let p = Value::Int(0);
         let (op_name, extra) = match tp {
-            Type::Integer(_, _, _) => ("OpGetInt", None),
+            Type::Integer(_) => ("OpGetInt", None),
             Type::Float => ("OpGetFloat", None),
             Type::Single => ("OpGetSingle", None),
             Type::Text(_) => ("OpGetText", None),
@@ -1569,13 +1602,41 @@ impl Parser {
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
-            Type::Integer(min, _, _) => {
-                // Post-2c: honor size(N) on the captured alias; fall back to
-                // the limit()-based heuristic when no alias info available.
-                let s = self
-                    .data
-                    .forced_size(alias)
-                    .unwrap_or_else(|| tp.size(nullable));
+            Type::Integer(spec) => {
+                // Post-2c / P184 width selection:
+                // * `alias` is set → this is a struct-field read whose
+                //   captured alias may carry `size(N)`.  Use that, else
+                //   the bounds-heuristic `byte_width` (which works for
+                //   plain `integer` and `integer limit(...)` fields).
+                // * `alias == u32::MAX` AND spec has a forced_size → we're
+                //   likely inside a vector element read.  Use
+                //   `vector_narrow_width` to mirror Phase 2's actual
+                //   storage decision (1 and 4 bytes narrow; 2 stays wide
+                //   until the short-encoding Phase 4 round lands); fall
+                //   through to 8 when Phase 2 stored wide so reads align.
+                // * `alias == u32::MAX` AND no forced_size → bounds
+                //   heuristic (struct-field path for plain or limited
+                //   `integer`).
+                // Narrow-vec path: alias is absent AND spec carries a
+                // forced_size AND the gate is open.  This branch maps
+                // to `Parts::ShortRaw` for 2-byte (Phase 4b) and to
+                // `Parts::Byte` / `Parts::Int` for 1/4-byte (Phase 4a).
+                // When the gate is CLOSED for a given forced_size
+                // (fallback), storage stays wide (8-byte) and the
+                // read must match — use `unwrap_or(8)` so closed-gate
+                // forced_size reads dispatch to `OpGetInt`.
+                let narrow_vec = alias == u32::MAX
+                    && spec.forced_size.is_some()
+                    && spec.vector_narrow_width().is_some();
+                let s = if alias != u32::MAX {
+                    self.data
+                        .forced_size(alias)
+                        .unwrap_or_else(|| spec.byte_width(nullable))
+                } else if spec.forced_size.is_some() {
+                    spec.vector_narrow_width().unwrap_or(8)
+                } else {
+                    spec.byte_width(nullable)
+                };
                 debug_assert!(
                     matches!(s, 1 | 2 | 4 | 8),
                     "get_val: unexpected integer field width s={s} \
@@ -1583,9 +1644,14 @@ impl Parser {
                      by the OpGet* family"
                 );
                 if s == 1 {
-                    self.cl("OpGetByte", &[code, p, Value::Int(*min)])
+                    self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
+                } else if s == 2 && narrow_vec {
+                    // P184 Phase 4b: narrow vector element, direct encoding.
+                    self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
                 } else if s == 2 {
-                    self.cl("OpGetShort", &[code, p, Value::Int(*min)])
+                    // Struct field with u16/i16 alias OR bounds-heuristic
+                    // landing at 2 bytes: legacy `Parts::Short` `+1` encoding.
+                    self.cl("OpGetShort", &[code, p, Value::Int(spec.min)])
                 } else if s == 4 {
                     self.cl("OpGetInt4", &[code, p])
                 } else {
@@ -1605,12 +1671,16 @@ impl Parser {
             | Type::Spacial(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _)
-            | Type::Vector(_, _) => self.cl("OpGetField", &[code, p, self.type_info(tp)]),
+            | Type::Vector(_, _) => {
+                let info = self.type_info(tp);
+                self.cl("OpGetField", &[code, p, info])
+            }
             Type::Reference(_, _) => {
                 // Inline struct field: OpGetField adds the field offset to the base ref.
                 // Linked/base type dereference is handled at the call site (fields.rs)
                 // using OpVectorRef, which combines the 4-byte pointer read + deref.
-                self.cl("OpGetField", &[code, p, self.type_info(tp)])
+                let info = self.type_info(tp);
+                self.cl("OpGetField", &[code, p, info])
             }
             _ => {
                 diagnostic!(
@@ -1678,7 +1748,8 @@ impl Parser {
             None
         };
         let set_op = match tp {
-            Type::Integer(min, _, _) => {
+            Type::Integer(ref spec) => {
+                let IntegerSpec { min, .. } = *spec;
                 let m = Value::Int(min);
                 // Post-2c: honor size(N) on the alias recorded during field
                 // parsing; fall back to the limit()-based heuristic.
@@ -1687,10 +1758,22 @@ impl Parser {
                 } else {
                     self.data.def(d_nr).attributes[f_nr].alias_d_nr
                 };
-                let s = self
-                    .data
-                    .forced_size(alias_nr)
-                    .unwrap_or_else(|| tp.size(self.data.attr_nullable(d_nr, f_nr)));
+                // P184 Phase 4b: narrow-vec path mirrors `get_val`.
+                // Reached by `insert(vector<u16>, ...)` where
+                // `set_field` is invoked with `f_nr == usize::MAX` and
+                // `tp` is the narrow element Type.  Struct-field
+                // writes (alias_nr != u32::MAX) stay on the legacy
+                // `OpSetShort` / `Parts::Short` `+1` encoding path.
+                let narrow_vec = alias_nr == u32::MAX
+                    && spec.forced_size.is_some()
+                    && spec.vector_narrow_width().is_some();
+                let s = self.data.forced_size(alias_nr).unwrap_or_else(|| {
+                    if narrow_vec {
+                        spec.vector_narrow_width().unwrap()
+                    } else {
+                        tp.size(self.data.attr_nullable(d_nr, f_nr))
+                    }
+                });
                 // Size-consistency gate: the size resolved from
                 // `forced_size` / limit must be one of the four
                 // supported widths.  Any other value indicates a
@@ -1710,6 +1793,8 @@ impl Parser {
                 );
                 if s == 1 {
                     self.cl("OpSetByte", &[ref_code, pos_val, m, val_code])
+                } else if s == 2 && narrow_vec {
+                    self.cl("OpSetShortRaw", &[ref_code, pos_val, m, val_code])
                 } else if s == 2 {
                     self.cl("OpSetShort", &[ref_code, pos_val, m, val_code])
                 } else if s == 4 {
@@ -2049,7 +2134,7 @@ impl Parser {
                 actual.push(actual_code);
                 continue;
             }
-            if let (Type::Integer(_, _, _), Type::Enum(_, true, _)) = (&tp, actual_type) {
+            if let (Type::Integer(_), Type::Enum(_, true, _)) = (&tp, actual_type) {
                 let cd = if matches!(actual_code, Value::Enum(_, _)) {
                     actual_code
                 } else {
@@ -2943,11 +3028,7 @@ impl Parser {
                 && !written.contains(&(a_nr as u16))
                 && matches!(
                     base_tp,
-                    Type::Integer(_, _, _)
-                        | Type::Float
-                        | Type::Single
-                        | Type::Boolean
-                        | Type::Character
+                    Type::Integer(_) | Type::Float | Type::Single | Type::Boolean | Type::Character
                 )
             {
                 let src = self.vars.var_source(a_nr as u16);
@@ -2966,7 +3047,7 @@ impl Parser {
     // <function> ::= 'fn' <identifier> '(' <attributes> ] [ '->' <type> ] (';' <rust> | <code>)
     pub fn null(&mut self, tp: &Type) -> Value {
         match tp {
-            Type::Integer(_, _, _) | Type::Character => self.cl("OpConvIntFromNull", &[]),
+            Type::Integer(_) | Type::Character => self.cl("OpConvIntFromNull", &[]),
             Type::Boolean => {
                 if !self.first_pass {
                     diagnostic!(

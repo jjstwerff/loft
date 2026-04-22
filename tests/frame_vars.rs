@@ -63,7 +63,7 @@ fn integer_variable_layout() {
         let n = vars.name(v_nr);
         if n == "x" || n == "y" || n == "z" {
             assert!(
-                matches!(vars.tp(v_nr), loft::data::Type::Integer(_, _, _)),
+                matches!(vars.tp(v_nr), loft::data::Type::Integer(_)),
                 "{n} should be Integer, got {:?}",
                 vars.tp(v_nr)
             );

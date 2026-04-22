@@ -9831,3 +9831,153 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P184: `vector<i32>` honours the `size(4)` annotation on the alias.
+/// Before Phase 3, indexing returned `(v[i+1] << 32) | v[i]` because
+/// storage was 4-byte stride but `OpGetVector` / `get_val` emitted
+/// 8-byte reads.
+#[test]
+fn p184_vector_i32_narrow_read() {
+    code!(
+        "struct P184Box { v: vector<i32> }
+fn test() {
+    b = P184Box { v: [] };
+    b.v += [1 as i32, 2 as i32, 3 as i32];
+    assert(b.v[0] == 1, \"v[0] expected 1, got {b.v[0]}\");
+    assert(b.v[1] == 2, \"v[1] expected 2, got {b.v[1]}\");
+    assert(b.v[2] == 3, \"v[2] expected 3, got {b.v[2]}\");
+    assert(len(b.v) == 3, \"len expected 3, got {len(b.v)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 control: `vector<integer>` still uses 8-byte-stride storage.
+#[test]
+fn p184_vector_integer_wide_control() {
+    code!(
+        "struct P184WideBox { v: vector<integer> }
+fn test() {
+    b = P184WideBox { v: [] };
+    b.v += [1, 2, 3];
+    assert(b.v[0] == 1, \"v[0] expected 1, got {b.v[0]}\");
+    assert(b.v[1] == 2, \"v[1] expected 2, got {b.v[1]}\");
+    assert(b.v[2] == 3, \"v[2] expected 3, got {b.v[2]}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184: `vector<u16>` — currently stored wide (8-byte) because
+/// `Parts::Short`'s legacy `val - min + 1` encoding diverges from
+/// the raw-byte vector copy path; narrow 2-byte storage awaits a
+/// later Phase 4 round.  This guard confirms the wide-fallback
+/// behaviour is consistent (reads + writes agree) so values
+/// round-trip correctly even without the narrowing optimisation.
+#[test]
+fn p184_vector_u16_round_trip() {
+    code!(
+        "struct P184U16Box { v: vector<u16> }
+fn test() {
+    b = P184U16Box { v: [] };
+    b.v += [1 as u16, 2 as u16, 300 as u16, 65000 as u16];
+    assert(b.v[0] == 1, \"v[0]\");
+    assert(b.v[1] == 2, \"v[1]\");
+    assert(b.v[2] == 300, \"v[2]\");
+    assert(b.v[3] == 65000, \"v[3]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184: `vector<u8>` narrow storage — 1-byte stride.
+#[test]
+fn p184_vector_u8_narrow_read() {
+    code!(
+        "struct P184U8Box { v: vector<u8> }
+fn test() {
+    b = P184U8Box { v: [] };
+    b.v += [1 as u8, 2 as u8, 255 as u8];
+    assert(b.v[0] == 1, \"v[0]\");
+    assert(b.v[1] == 2, \"v[1]\");
+    assert(b.v[2] == 255, \"v[2]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 Phase 5: `vector<i32>` as a LOCAL variable narrows to 4-byte
+/// storage.  Before Phase 5 locals fell back to wide (8-byte) storage
+/// because `fill_database` only ran on struct definitions — the
+/// literal-append path in `parser/vectors.rs::build_vector_code` and
+/// `get_type`'s Type::Vector arm used the default wide `integer` slot.
+/// Phase 5 routes both paths through `Parser::vector_of` which
+/// consults `Data::narrow_vector_content`.
+#[test]
+fn p184_vector_i32_local_narrow_read() {
+    code!(
+        "fn test() {
+    result: vector<i32> = [];
+    result += [1 as i32, 2 as i32, 3 as i32];
+    assert(result[0] == 1, \"r[0] expected 1, got {result[0]}\");
+    assert(result[1] == 2, \"r[1] expected 2, got {result[1]}\");
+    assert(result[2] == 3, \"r[2] expected 3, got {result[2]}\");
+    assert(len(result) == 3, \"len\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 Phase 5: `vector<i32>` as a function RETURN type narrows.
+/// The caller sees 4-byte-stride storage because `parse_type`'s
+/// alias-resolution path stamps forced_size and `get_type` /
+/// `vector_of` register the narrow vector db type on demand.
+#[test]
+fn p184_vector_i32_return_narrow_read() {
+    code!(
+        "fn make_i32_vec() -> vector<i32> {
+    result: vector<i32> = [];
+    result += [10 as i32, 20 as i32, 30 as i32];
+    result
+}
+fn test() {
+    v = make_i32_vec();
+    assert(v[0] == 10, \"v[0]\");
+    assert(v[1] == 20, \"v[1]\");
+    assert(v[2] == 30, \"v[2]\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P184 Phase 6: `hash<Row[narrow_key]>` already works via the
+/// struct-field narrowing path — the key field's narrow storage
+/// is handled by the same `fill_database` Integer arm that
+/// Phase 0 extended.  Primitive-content `hash<i32>` /
+/// `sorted<i32>` / `index<i32>` are parse errors (the grammar
+/// requires a `[key]` suffix), so Phase 6 has no new narrowing
+/// code to add.  This guard locks down the happy path:
+/// `hash` + `sorted` collections with `u32`-typed key fields.
+#[test]
+fn p184_hash_sorted_narrow_key_field() {
+    code!(
+        "struct P184Row { rid: u32 not null, name: text }
+struct P184HashDb { rows: hash<P184Row[rid]> }
+struct P184SortedDb { rows: sorted<P184Row[rid]> }
+fn test() {
+    h = P184HashDb { rows: [] };
+    h.rows += [P184Row { rid: 42, name: \"forty-two\" }];
+    h.rows += [P184Row { rid: 7, name: \"seven\" }];
+    assert(h.rows[42].name == \"forty-two\", \"hash[42]\");
+    assert(h.rows[7].name == \"seven\", \"hash[7]\");
+    s = P184SortedDb { rows: [] };
+    s.rows += [P184Row { rid: 3, name: \"three\" }];
+    s.rows += [P184Row { rid: 1, name: \"one\" }];
+    s.rows += [P184Row { rid: 2, name: \"two\" }];
+    assert(s.rows[1].name == \"one\", \"sorted[1]\");
+    assert(s.rows[2].name == \"two\", \"sorted[2]\");
+    assert(s.rows[3].name == \"three\", \"sorted[3]\");
+}"
+    )
+    .result(Value::Null);
+}

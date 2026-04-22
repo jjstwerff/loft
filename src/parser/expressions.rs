@@ -716,7 +716,7 @@ use a separate collection or add after the loop"
         // (e.g. `h.field = [...]` for a hash field) as mismatches.
         let scalar_target = matches!(
             f_type,
-            Type::Integer(_, _, _)
+            Type::Integer(_)
                 | Type::Float
                 | Type::Single
                 | Type::Boolean

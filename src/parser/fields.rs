@@ -409,7 +409,20 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        let elm_size = i32::from(self.database.size(known));
+        // P184 Phase 3: honour narrow vector-element stride when the
+        // content Type::Integer carries a forced_size AND Phase 2 would
+        // register a direct-encoded narrow type (see
+        // `IntegerSpec::vector_narrow_width` — currently 1 and 4 bytes).
+        // Shorts stay wide until Phase 4 aligns the `Parts::Short`
+        // encoding with raw-byte copies.  Falls back to the
+        // bounds-heuristic via `database.size(known_type)` otherwise.
+        let elm_size = if let Type::Integer(spec) = etp
+            && let Some(n) = spec.vector_narrow_width()
+        {
+            i32::from(n)
+        } else {
+            i32::from(self.database.size(known))
+        };
         if let Value::Iter(var, init, next, extra_init) = p {
             if matches!(*next, Value::Block(_)) {
                 // Linked structs: array stores 4-byte record pointers → use OpVectorRef
