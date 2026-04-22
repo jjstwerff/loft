@@ -1314,6 +1314,10 @@ impl State {
     }
 
     /// First-assignment reference from tuple destructuring — deep copy.
+    ///
+    /// **Plan-04 Phase B.3.d:** slot-aware — uses
+    /// `slot_offset = stack.position - v.stack_pos` (after a bump
+    /// to make room for the DbRef) for `OpInitRef` + `OpDatabase`.
     fn gen_set_first_ref_tuple_copy(
         &mut self,
         stack: &mut Stack,
@@ -1322,15 +1326,19 @@ impl State {
         d_nr: u32,
     ) {
         let tp_nr = stack.data.def(d_nr).known_type;
-        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
-        stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.position - stack.function.stack(v);
         stack.add_op("OpInitRef", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         let copy_val = Value::Call(
