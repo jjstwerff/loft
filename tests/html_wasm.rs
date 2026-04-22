@@ -133,6 +133,17 @@ fn assert_wasm_rlib_fresh() {
 /// Node repro harness with stub imports, and return (stdout, stderr,
 /// exit_status).  Returns None when prerequisites are missing.
 fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
+    run_html_wasm_with_libs(name, source, &[])
+}
+
+/// Same as `run_html_wasm` but also passes a `--lib <dir>` for each
+/// entry in `lib_dirs`.  Needed for programs that `use <pkg>;` out of
+/// a local library tree (e.g. `use moros_editor;` from `lib/`).
+fn run_html_wasm_with_libs(
+    name: &str,
+    source: &str,
+    lib_dirs: &[&str],
+) -> Option<(String, String, bool)> {
     if which("node").is_none() {
         eprintln!("SKIP: node not installed");
         return None;
@@ -161,16 +172,18 @@ fn run_html_wasm(name: &str, source: &str) -> Option<(String, String, bool)> {
     // `/tmp/loft_html.rs` path, so parallel test invocations would
     // overwrite each other's emitted Rust mid-build.
     let _guard = build_lock().lock().unwrap();
-    let status = Command::new(&loft_bin)
-        .args([
-            "--html",
-            html.to_str().unwrap(),
-            "--path",
-            &format!("{}/", repo_root().display()),
-            src.to_str().unwrap(),
-        ])
-        .status()
-        .expect("invoke loft --html");
+    let mut cmd = Command::new(&loft_bin);
+    cmd.args([
+        "--html",
+        html.to_str().unwrap(),
+        "--path",
+        &format!("{}/", repo_root().display()),
+    ]);
+    for dir in lib_dirs {
+        cmd.arg("--lib").arg(repo_root().join(dir));
+    }
+    cmd.arg(src.to_str().unwrap());
+    let status = cmd.status().expect("invoke loft --html");
     assert!(status.success(), "loft --html failed for {name}");
     drop(_guard);
 
@@ -306,6 +319,47 @@ fn p137_html_vector_iteration_runs() {
     assert!(
         stdout.contains("total=60"),
         "expected 'total=60' in output.\nstdout: {stdout}"
+    );
+}
+
+/// ROADMAP 0.8.5 end-to-end smoke: `lib/moros_editor` (which imports
+/// `lib/moros_map`) runs cleanly under `--html`.  Exercises the full
+/// edit pipeline the browser scene editor drives — paint, height, wall,
+/// batched stencil stamp, undo — across the loft-side library + WASM
+/// host bridge.  If any moros_editor code path traps under wasm32
+/// (e.g. a future change hits a non-wasm32-safe std call), this catches
+/// it before the browser build ships.
+#[test]
+fn moros_editor_html_smoke() {
+    let src = r#"use moros_editor;
+fn main() {
+    m = map_empty();
+    us = undo_empty();
+
+    paint_material_with_undo(us, m, 0, 0, 0, 1);
+    set_height_with_undo(us, m, 0, 0, 0, 3);
+    set_wall_with_undo(us, m, 0, 0, 0, 0, 7);
+
+    batch_begin(us);
+    stencil_stamp_with_undo(us, m, stencil_house_small(), 2, 2, 0, 0);
+    batch_end(us);
+
+    undo_pop(us, m);
+
+    d = undo_depth(us);
+    h = map_get_hex(m, 0, 0, 0).h_material;
+    println("depth={d} mat={h}");
+}
+"#;
+    let Some((stdout, stderr, ok)) =
+        run_html_wasm_with_libs("moros_editor_smoke", src, &["lib"])
+    else {
+        return;
+    };
+    assert!(ok, "moros_editor smoke trapped under --html.\n{stderr}");
+    assert!(
+        stdout.contains("depth=3 mat=1"),
+        "expected 'depth=3 mat=1'.\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
 

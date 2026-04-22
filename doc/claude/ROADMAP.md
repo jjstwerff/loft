@@ -113,11 +113,12 @@ Design: `../moros/doc/claude/`
 
 ### Must-fix blockers (share the Moros editor's code paths)
 
-Step plans for both entries: [QUALITY.md](QUALITY.md).
+All blockers cleared; Moros editor's loft-side libraries can ship
+under `--html` without browser-side wedges.
 
 | ID    | Title                                                           | E  | Source                       |
 |-------|-----------------------------------------------------------------|----|------------------------------|
-| P137  | `loft --html` browser WASM wedges on first `loft_start` — blocks every WASM-shipped loft program, Moros editor included | M  | PROBLEMS.md #137, QUALITY.md |
+| ~~P137~~ | ~~`loft --html` browser WASM wedges on first `loft_start`~~ | — | **Done** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically.  Verified by `tests/html_wasm.rs` (5 regression guards). |
 | ~~P135~~ | ~~Canvas Y-flip three-way compensation~~ | S | **Done** — upload flip removed + TEX_VERT_2D samples identity V; 2×2 atlas corner guard in `snap_smoke.sh`. Canonical convention locked in OPENGL.md |
 
 ### Sprint A–C: Data model + editor + loft backend
