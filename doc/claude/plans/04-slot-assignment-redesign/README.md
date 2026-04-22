@@ -17,30 +17,40 @@ retracted.  V1 remains the production allocator.**
   consistency** in `validate.rs`.  Converts the "`Incorrect var
   X[slot] versus TOS`" runtime-panic class for zone-1 placements
   into a compile-time `[I7]` diagnostic.
-- **Phase B (in progress):** **clean opcode architecture + function-entry
-  frame reserve.**  Separate "advance stack pointer" from "write init
-  value": `OpReserveFrame(n)` (already exists) becomes the sole
-  stack-push primitive; every init-at-slot is a positional
-  `OpInit*(pos)` op.  Every compound push-and-init op is deleted:
-  `OpText`, `OpConvRefFromNull`, `OpNullRefSentinel`, `OpCreateStack`
-  (4 removed).  Positional init ops: `OpInitText(pos)` +
-  `OpInitRef(pos)` (from 2h.1) plus new `OpInitRefSentinel(pos)` +
-  `OpInitCreateStack(pos, dep_pos)`.  Net opcode delta: **−2**.
-  Bytecode shrinks further because per-block `OpReserveFrame` +
-  matching `OpFreeStack` are replaced by one function-entry
-  `OpReserveFrame(hwm)`.  `gen_set_first_at_tos` loses its
-  slot-move, gap-fill, and TOS-match assert; slots become
-  authoritative.
-  Sub-phases: B.1 add 2 new positional ops · B.2 rewire all call
-  sites + delete 4 compound ops · B.3 function-entry
-  `OpReserveFrame(hwm)` · B.4 docs.  Realistic scope: **1–2 weeks
-  focused work.**
+- **Phase B (partially landed):** **clean opcode architecture +
+  function-entry frame reserve.**  Separate "advance stack
+  pointer" from "write init value": `OpReserveFrame(n)` (already
+  exists) becomes the sole stack-push primitive; every init-at-slot
+  is a positional `OpInit*(pos)` op.  Positional init ops:
+  `OpInitText(pos)` + `OpInitRef(pos)` (from 2h.1) plus new
+  `OpInitRefSentinel(pos)` + `OpInitCreateStack(pos, dep_pos)`.
+  Sub-phases:
+  - **B.1 landed** (`9f759ee`): 2 new positional ops added as
+    dormant primitives.
+  - **B.2 landed** (`bea156a…5e35948`): rewired all codegen call
+    sites + parser-emitted compound ops via `generate_call`
+    interception; deleted `OpText` (−1 opcode).  The 3 remaining
+    compound ops (`OpConvRefFromNull`, `OpNullRefSentinel`,
+    `OpCreateStack`) are now dead runtime code — dictionary
+    entries survive only so parser `cl("OpName", …)` emissions
+    still find a `def_nr`.
+  - **B.3 designed, deferred** — emit one function-entry
+    `OpReserveFrame(frame_hwm)`; delete per-block
+    `OpReserveFrame(block.var_size)`; remove slot-move + gap-fill
+    from `gen_set_first_at_tos`.  Blocked by a slot-aware refactor
+    of 4 `gen_set_first_ref_*_copy` functions + the reassign deep-
+    copy branch in `generate_set` — each hard-codes
+    `OpInitRef(12) + OpDatabase(12, tp)` under the now-invalid
+    assumption `v.stack_pos == stack.position`.  Design in
+    [`b3-function-entry-reserve.md`](b3-function-entry-reserve.md);
+    estimated 2–3 focused days to land B.3.a–j cleanly.
+  - **B.4 docs — pending B.3.**
 
 Phase B stays under plan-04 — no plan-06 spin-out.  The 2h.3
 "function-entry-only `OpReserveFrame(hwm)` optimisation" and the
-2h.1 positional-primitive idea are both delivered here, extended
-to eliminate the compound ops entirely, but **without the V1
-retirement** that 2h.3 bundled.
+2h.1 positional-primitive idea are both preserved in the design,
+extended to eliminate the compound ops entirely, but **without
+the V1 retirement** that 2h.3 bundled.
 
 Both retirement routes — the 2h pivot and the direct V2-drive — share
 a hidden failure mode: variables whose declared scope is an outer block
@@ -304,7 +314,11 @@ full test suite green.  No "rewrite everything then fix the fallout"
 | 2v | **V2-drive (alternative to 2h)** — tried making V2 the authoritative allocator instead of the codegen-is-allocator pivot.  Same failure mode as 2h: V2's IR-walk doesn't scope-filter. | — | ❌ retracted | — |
 | 3 | Original "switch" plan (V1→V2).  Never revisited after 2h/V2-drive both failed. | [03-switch.md](03-switch.md) | ❌ retracted | — |
 | 4 | Cleanup (rewrite SLOTS.md for V2, add `slot_allocator_has_no_size_or_shape_branches` lint, move to `plans/finished/`). | [04-cleanup.md](04-cleanup.md) | ❌ retracted | — |
-| 2+ | **Expanded invariant validation (close-out)** — add I7 scope-frame check to `validate.rs`.  Catches the `Incorrect var X[slot] versus TOS` runtime panic class at compile time. | — | 🆕 landed as part of this retraction | — |
+| 2+ | **Expanded invariant validation (close-out)** — add I7 scope-frame check to `validate.rs`.  Catches the `Incorrect var X[slot] versus TOS` runtime panic class at compile time. | — | ✅ landed `9f759ee` | — |
+| B.1 | **Positional init primitives** — `OpInitRefSentinel(pos)`, `OpInitCreateStack(pos, dep_pos)` added as dormant opcodes alongside the existing `OpInitText` / `OpInitRef` (from 2h.1). | — | ✅ landed `9f759ee` | — |
+| B.2 | **Compound-op decomposition** — rewire all codegen call sites + parser emissions to `OpReserveFrame(n) + OpInit*(n)`; delete `OpText` (−1 opcode).  The 3 remaining compound ops become dead runtime code. | — | ✅ landed `bea156a…5e35948` | — |
+| B.3 | **Function-entry frame reserve** (slot-aware refactor of 4 `gen_set_first_ref_*_copy` paths + reassign branch; delete slot-move; single `OpReserveFrame(frame_hwm)` per function; delete 3 dormant compound ops). | [b3-function-entry-reserve.md](b3-function-entry-reserve.md) | 🟡 designed, deferred | — |
+| B.4 | **Docs** — rewrite SLOTS.md frame-layout section; CHANGELOG entry. | — | ⏸ pending B.3 | — |
 
 **Phase 0 artefacts:**
 - 26 fixtures in `tests/slot_v2_baseline.rs` (24 passing, 2 `#[ignore]`-d — P185 and a par-codegen pre-existing issue).
