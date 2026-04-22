@@ -230,6 +230,25 @@ pub extern "C" fn loft_gl_create_fullscreen_window(
     }
 }
 
+/// Initiative 03 Phase 4: toggle fullscreen on the existing window.
+/// Cheaper than destroying + recreating the GL context — winit flips
+/// the window mode at runtime and all GL resources (textures, VAOs,
+/// shaders, FBOs) survive.  Pass `true` for borderless fullscreen on
+/// the current monitor, `false` to return to the windowed size
+/// `gl_create_window` originally opened.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
+    use winit::window::Fullscreen;
+    with_gl(|s| {
+        if on {
+            s.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+        } else {
+            s.window.set_fullscreen(None);
+        }
+    });
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
     with_gl_mut(|s| {
@@ -1059,6 +1078,7 @@ pub extern "C" fn loft_gl_point_size(size: f64) {
 loft_ffi::loft_register! {
     loft_gl_create_window,
     loft_gl_create_fullscreen_window,
+    loft_gl_set_fullscreen,
     loft_gl_mouse_wheel,
     loft_gl_poll_events,
     loft_gl_swap_buffers,

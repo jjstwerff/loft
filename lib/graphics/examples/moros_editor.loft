@@ -22,6 +22,9 @@
 //   O                  Toggle occlusion (see-through).
 //   Ctrl-Z / Ctrl-Y    Undo / redo.
 //   Left-click         Apply current tool at the avatar's hex.
+//   F5                 Save map to ./moros_map.json.
+//   F9                 Load ./moros_map.json (clears undo stack).
+//   F11                Toggle fullscreen.
 //   Esc                Quit.
 //
 // Build & run
@@ -126,6 +129,12 @@ fn main() {
   prev_mx = 0;
   prev_my = 0;
   prev_mx_btn = 0;
+  // Edge-detect F5 / F9 / F11 (save / load / fullscreen toggle) so
+  // one press = one action; holding the key doesn't spam saves.
+  prev_f5 = false;
+  prev_f9 = false;
+  prev_f11 = false;
+  is_fullscreen = false;
 
   for _ in 0..1000000000 {
     if !graphics::gl_poll_events() { break; }
@@ -155,6 +164,39 @@ fn main() {
       clicked, rclicked,
       ctrl,
     );
+
+    // ── F5 / F9 / F11 edge-triggered file / window controls ──
+    // These live outside the `InputState` dispatch because they're
+    // host-level concerns (disk I/O, window mode) that don't fit
+    // the simulation's input surface.
+    f5_now = graphics::gl_key_pressed(graphics::KEY_F5);
+    if f5_now && !prev_f5 {
+      file("./moros_map.json").write(map_to_json(st.es_map));
+      println("moros_editor: saved to ./moros_map.json");
+    }
+    prev_f5 = f5_now;
+
+    f9_now = graphics::gl_key_pressed(graphics::KEY_F9);
+    if f9_now && !prev_f9 {
+      load_file = file("./moros_map.json");
+      load_text = load_file.content();
+      if load_text.len() > 0 {
+        st.es_map = map_from_json(load_text);
+        st.es_undo = undo_empty();
+        needs_rebuild = true;
+        println("moros_editor: loaded ./moros_map.json");
+      } else {
+        println("moros_editor: ./moros_map.json empty or missing — skipping load");
+      }
+    }
+    prev_f9 = f9_now;
+
+    f11_now = graphics::gl_key_pressed(graphics::KEY_F11);
+    if f11_now && !prev_f11 {
+      is_fullscreen = !is_fullscreen;
+      graphics::gl_set_fullscreen(is_fullscreen);
+    }
+    prev_f11 = f11_now;
 
     // ── Step the editor simulation ──
     moros_sim::editor_tick(st, input, FRAME_DT);

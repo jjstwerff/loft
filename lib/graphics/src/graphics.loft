@@ -462,6 +462,14 @@ pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean
 pub fn gl_create_fullscreen_window(title: text) -> boolean;
 #native "loft_gl_create_fullscreen_window"
 
+// Toggle fullscreen on the existing window (runtime flip, cheaper
+// than recreating the GL context — textures / VAOs / shaders
+// survive).  Pass `true` for borderless fullscreen, `false` for
+// windowed.  Browsers (WASM) require a user gesture to enter
+// fullscreen; calling outside one is non-fatal.
+pub fn gl_set_fullscreen(on: boolean);
+#native "loft_gl_set_fullscreen"
+
 // Poll window events. Returns false when the window should close.
 pub fn gl_poll_events() -> boolean;
 #native "loft_gl_poll_events"

@@ -3,9 +3,9 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Phase 4 — Save/load + fullscreen toggle (follow-up)
+# Phase 4 — Save/load + fullscreen toggle
 
-**Status:** open.  **Depends on:** Phase 3.
+**Status:** ✅ done 2026-04-22.
 
 ## Scope
 
