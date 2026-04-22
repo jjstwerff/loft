@@ -1267,6 +1267,13 @@ impl State {
     }
 
     /// First-assignment reference copy from another variable of the same type.
+    ///
+    /// **Plan-04 Phase B.3.c:** deep-copy path is slot-aware; the
+    /// O-B1 last-use-move shortcut at the top is untouched because it
+    /// already addresses v via the push-and-stack-position-tracking
+    /// pattern that works the same whether slot-move is active or not
+    /// (v.stack_pos keeps V1's value when OpVarRef just pushes a copy
+    /// of src's DbRef).
     fn gen_set_first_ref_var_copy(&mut self, stack: &mut Stack, v: u16, src: u16, d_nr: u32) {
         // O-B1: last-use move — if source is only read once (this assignment),
         // transfer the DbRef instead of deep copying. Skip the source's OpFreeRef.
@@ -1282,15 +1289,21 @@ impl State {
             return;
         }
         let tp_nr = stack.data.def(d_nr).known_type;
-        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
-        stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        // Bump TOS so v's slot is fully below stack.position, then emit
+        // positional init + allocator at slot_offset.
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.position - stack.function.stack(v);
         stack.add_op("OpInitRef", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         self.code_add(tp_nr);
         let copy_nr = stack.data.def_nr("OpCopyRecord");
         let copy_val = Value::Call(
