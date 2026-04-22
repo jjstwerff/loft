@@ -141,9 +141,17 @@ pub fn upload_scene(self: Renderer, sc: const scene::Scene) {
   self.uploaded = true;
 }
 
-// Render one frame.  Returns false when close requested.
-pub fn render_frame(self: Renderer, sc: const scene::Scene,
-                    cam: const scene::Camera) -> boolean {
+// Render one frame's 3D passes WITHOUT swapping buffers.  Callers
+// that want to draw a 2D overlay between the 3D pass and the swap
+// (e.g. the native Moros editor's panel) use this variant and
+// invoke `graphics::gl_swap_buffers()` themselves after their
+// overlay renders.  Returns false when close requested.
+//
+// Introduced by Initiative 03 Phase 3b (native moros editor
+// panel overlay).  The existing `render_frame` wrapper below
+// preserves backward compatibility with every current caller.
+pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
+                            cam: const scene::Camera) -> boolean {
   if !graphics::gl_poll_events() { return false; }
   if !self.uploaded { self.upload_scene(sc); }
   // Camera matrices
@@ -209,6 +217,16 @@ pub fn render_frame(self: Renderer, sc: const scene::Scene,
       graphics::gl_draw(self.vaos[rn.mesh_idx], self.vert_counts[rn.mesh_idx]);
     }
   }
+  true
+}
+
+// Render one frame (3D passes + buffer swap).  Convenience wrapper
+// for callers that don't need a 2D overlay between the 3D pass and
+// the swap — brick-buster, 24-renderer-demo, and every other current
+// consumer.  Returns false when close requested.
+pub fn render_frame(self: Renderer, sc: const scene::Scene,
+                    cam: const scene::Camera) -> boolean {
+  if !self.render_frame_no_swap(sc, cam) { return false; }
   graphics::gl_swap_buffers();
   true
 }

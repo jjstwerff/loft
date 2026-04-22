@@ -42,6 +42,13 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
     state
         .const_refs
         .resize(data.definitions() as usize, null_ref);
+    // P127 / Initiative 03 Phase 3b — mirror const_refs on Stores so
+    // native codegen (which has `&mut Stores` but no `&mut State`)
+    // can substitute `s.const_refs` → `stores.const_refs` and resolve.
+    state
+        .database
+        .const_refs
+        .resize(data.definitions() as usize, null_ref);
 
     for d_nr in 0..data.definitions() {
         if data.def(d_nr).def_type != DefType::Constant {
@@ -121,11 +128,17 @@ fn build_const_vectors(state: &mut State, data: &mut Data) {
         state.database.allocations[db.store_nr as usize].ref_count = u32::MAX / 2;
         data.definitions[d_nr as usize].const_ref = Some(vec_ref);
         state.const_refs[d_nr as usize] = vec_ref;
+        state.database.const_refs[d_nr as usize] = vec_ref;
     }
 }
 
 /// Walk the Block IR for a vector constant and extract the literal values.
 /// Returns an empty Vec if the IR contains non-literal expressions.
+/// Public wrapper for reuse by native codegen's init-emission.
+pub fn extract_literal_values_public(code: &Value, data: &Data) -> Vec<Value> {
+    extract_literal_values(code, data)
+}
+
 fn extract_literal_values(code: &Value, data: &Data) -> Vec<Value> {
     let Value::Block(block) = code else {
         return vec![];

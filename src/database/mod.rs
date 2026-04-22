@@ -163,6 +163,17 @@ pub struct Stores {
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
     pub scratch: Vec<String>,
+    /// P127: per-definition DbRef into the CONST_STORE for vector
+    /// constants (e.g. `pub HEIGHT_STEP_LABELS: vector<text> = […]`).
+    /// Indexed by `d_nr`; a null DbRef (store_nr = u16::MAX) means
+    /// that definition isn't a constant.  Populated by
+    /// `compile::build_const_vectors` (interpreter path) or by the
+    /// `init()` function emitted by `src/generation/` (native path).
+    /// Mirrors `State.const_refs` so the native codegen's substitution
+    /// `s.const_refs` → `stores.const_refs` works from any function
+    /// context that only has `&mut Stores` (which is every native
+    /// function — native code doesn't carry a State reference).
+    pub const_refs: Vec<DbRef>,
     /// Errors from the last `Type.parse()` call, read via `s#errors`.
     pub last_parse_errors: Vec<String>,
     /// P54: errors from the last `json_parse()` call, read via
@@ -251,6 +262,7 @@ impl Clone for Stores {
             max: self.max,
             free_bits: Vec::new(),
             scratch: Vec::new(),
+            const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
@@ -330,6 +342,7 @@ impl Stores {
             max: 0,
             free_bits: Vec::new(),
             scratch: Vec::new(),
+            const_refs: Vec::new(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
@@ -366,6 +379,20 @@ impl Stores {
         result.base_type("text", 4); // 5
         result.base_type("character", 4); // 6
         result
+    }
+
+    /// Initiative 03 Phase 3b: return a `Str` pointing into the
+    /// constant store.  Native-mode counterpart to
+    /// `State::string_from_const_store`, which pushes the Str onto
+    /// the bytecode interpreter's stack.  Native code uses the
+    /// value directly via the `#rust"…"` template substitution
+    /// `s.string_from_const_store` → `stores.string_from_const_store`.
+    #[must_use]
+    pub fn string_from_const_store(&self, rec: u32, _pos: u32) -> crate::keys::Str {
+        let store = &self.allocations[CONST_STORE as usize];
+        let len = store.get_u32_raw(rec, 4) as u32;
+        let ptr = unsafe { store.ptr.offset(rec as isize * 8 + 8) };
+        crate::keys::Str { ptr, len }
     }
 
     #[must_use]

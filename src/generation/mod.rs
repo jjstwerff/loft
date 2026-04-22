@@ -546,7 +546,12 @@ extern crate loft;"
         writeln!(w, "fn init(db: &mut Stores) {{")?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
-        writeln!(w, "    db.finish();\n}}\n")?;
+        writeln!(w, "    db.finish();")?;
+        // Initiative 03 Phase 3b: emit code to build CONST_STORE
+        // vectors and populate `db.const_refs` — mirrors the
+        // interpreter path in `compile::build_const_vectors`.
+        self.emit_const_vectors(w, till)?;
+        writeln!(w, "}}\n")?;
         // Emit only reachable functions across the full definition range.
         self.output_functions(w, 0, till, Some(&reachable))?;
         // Emit a Rust entry point that bootstraps the loft `main` function, if present.
@@ -925,6 +930,114 @@ extern crate loft;"
             if self.data.def(dnr).def_type == DefType::Enum {
                 self.emit_type_fields_mode(w, type_id, dnr, FieldPhase::EnumValues)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Initiative 03 Phase 3b: emit Rust code that rebuilds every
+    /// `pub CONST: vector<T> = [...]` constant inside `init()`.
+    /// Mirrors `compile::build_const_vectors` — for each DefType::
+    /// Constant definition with vector content and literal values,
+    /// allocates a fresh store, writes the elements, and records
+    /// the DbRef in `db.const_refs[d_nr]`.  The `#rust"…"` template
+    /// for `OpConstRef` is `s.const_refs[@d_nr as usize]`; native
+    /// codegen translates `s.const_refs` → `stores.const_refs`
+    /// (`src/generation/calls.rs`), so the emitted user functions
+    /// find these DbRefs at call time.
+    fn emit_const_vectors(&self, w: &mut dyn Write, till: u32) -> std::io::Result<()> {
+        // Short-circuit if nothing references const_refs (avoids
+        // emitting an unused `db.const_refs.resize(...)` that'd
+        // produce a dead-code warning under `-D warnings`).
+        let have_any = (0..till)
+            .any(|d| self.data.def(d).def_type == DefType::Constant
+                    && self.data.def(d).const_ref.is_some());
+        if !have_any {
+            return Ok(());
+        }
+        writeln!(
+            w,
+            "    // Initiative 03 Phase 3b — const_refs: mirror compile::build_const_vectors.",
+        )?;
+        writeln!(
+            w,
+            "    db.const_refs.resize({till}, loft::keys::DbRef {{ store_nr: u16::MAX, rec: 0, pos: 0 }});"
+        )?;
+        for d_nr in 0..till {
+            let def = self.data.def(d_nr);
+            if def.def_type != DefType::Constant { continue; }
+            if def.const_ref.is_none() { continue; }
+            let crate::data::Type::Vector(ref elem_tp_box, _) = def.returned else { continue; };
+            let elem_tp = (**elem_tp_box).clone();
+            let values = crate::compile::extract_literal_values_public(&def.code, self.data);
+            if values.is_empty() { continue; }
+            let vec_struct_name = format!("main_vector<{}>", elem_tp.name(self.data));
+            let vec_struct_dnr = self.data.def_nr(&vec_struct_name);
+            if vec_struct_dnr == u32::MAX { continue; }
+            let vec_tp = self.data.def(vec_struct_dnr).known_type;
+            if vec_tp == u16::MAX { continue; }
+            let size = u16::from(self.stores.size(vec_tp));
+            writeln!(w, "    {{ // const d_nr={d_nr}")?;
+            writeln!(w, "        let cv = db.database({size}_u32);")?;
+            writeln!(
+                w,
+                "        db.store_mut(&cv).set_u32_raw(cv.rec, 4, {vec_tp}_u32);"
+            )?;
+            writeln!(w, "        db.set_default_value({vec_tp}, &cv);")?;
+            writeln!(
+                w,
+                "        let cvr = loft::keys::DbRef {{ store_nr: cv.store_nr, rec: 1, pos: 8 }};"
+            )?;
+            for val in &values {
+                writeln!(w, "        {{ let rec = db.record_new(&cvr, {vec_tp}, 0);")?;
+                match val {
+                    crate::data::Value::Int(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_int(rec.rec, rec.pos, {v}_i64);"
+                        )?;
+                    }
+                    crate::data::Value::Long(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_long(rec.rec, rec.pos, {v}_i64);"
+                        )?;
+                    }
+                    crate::data::Value::Float(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_float(rec.rec, rec.pos, {v}_f64);"
+                        )?;
+                    }
+                    crate::data::Value::Single(v) => {
+                        writeln!(
+                            w,
+                            "            db.store_mut(&rec).set_single(rec.rec, rec.pos, {v}_f32);"
+                        )?;
+                    }
+                    crate::data::Value::Text(v) => {
+                        let esc = v.replace('\\', "\\\\").replace('"', "\\\"");
+                        writeln!(
+                            w,
+                            "            {{ let store = db.store_mut(&rec); \
+                             let s_pos = store.set_str(\"{esc}\"); \
+                             store.set_u32_raw(rec.rec, rec.pos, s_pos); }}"
+                        )?;
+                    }
+                    _ => {}
+                }
+                writeln!(w, "            db.record_finish(&cvr, &rec, {vec_tp}, 0);")?;
+                writeln!(w, "        }}")?;
+            }
+            writeln!(
+                w,
+                "        db.allocations[cv.store_nr as usize].lock();"
+            )?;
+            writeln!(
+                w,
+                "        db.allocations[cv.store_nr as usize].ref_count = u32::MAX / 2;"
+            )?;
+            writeln!(w, "        db.const_refs[{d_nr}] = cvr;")?;
+            writeln!(w, "    }}")?;
         }
         Ok(())
     }
