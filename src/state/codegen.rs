@@ -1363,15 +1363,24 @@ impl State {
     ///   touch program-lifetime locked stores (rc >= u32::MAX/2).
     fn gen_set_first_ref_call_copy(&mut self, stack: &mut Stack, v: u16, value: &Value, d_nr: u32) {
         let tp_nr = stack.data.def(d_nr).known_type;
-        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
+        // Plan-04 Phase B.3.e: slot-aware init + allocate.  The
+        // subsequent `n_set_store_lock(…)` calls between the
+        // allocator and the `OpCopyRecord` (P143 bracket) are void
+        // and leave `stack.position` unchanged, so `slot_offset`
+        // computed here stays valid across them.
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
-        stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.position - stack.function.stack(v);
         stack.add_op("OpInitRef", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         self.code_add(tp_nr);
 
         // Collect ref-typed args of the call to bracket with lock/unlock
