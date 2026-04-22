@@ -149,10 +149,10 @@ full test suite green.  No "rewrite everything then fix the fallout"
 | # | Phase | File | Status | Blocks |
 |---|---|---|---|---|
 | 0 | **Characterize** — lock current behaviour with tests (P178, P185, every SLOTS.md pattern as an explicit assertion), audit every `place_orphaned_vars` call site, produce a fixture catalogue. | [00-characterize.md](00-characterize.md) | open | 1 |
-| 1 | **Design** — specify the single-pass algorithm; walk it through every fixture from Phase 0 and show by-hand what placement it produces.  Resolve open design questions above.  No code changes. | (not written) | blocked by 0 | 2 |
-| 2 | **Parallel implementation** — build the new allocator behind a `LOFT_SLOT_V2` debug env var.  On every test run, compute both old and new placements and assert they match.  No codegen uses V2 yet. | (not written) | blocked by 1 | 3 |
-| 3 | **Switch** — flip codegen to V2.  Remove V1.  Delete `place_orphaned_vars` and the zone split. | (not written) | blocked by 2 | 4 |
-| 4 | **Cleanup** — update SLOTS.md to describe only V2, remove obsolete patterns from the test table, retire `LOFT_ASSIGN_LOG` if V2 has better diagnostics. | (not written) | blocked by 3 | — |
+| 1 | **Design** — write `SPEC.md` with the single-pass algorithm, resolve the three design questions, walk the spec through every Phase 0 fixture by hand.  No code changes. | [01-design.md](01-design.md) | blocked by 0 | 2 |
+| 2 | **Parallel implementation** — build V2 in `src/variables/slots_v2.rs`, add an equivalence harness behind `LOFT_SLOT_V2=validate`, iterate until the whole suite passes with the harness on.  Codegen still uses V1. | [02-parallel-impl.md](02-parallel-impl.md) | blocked by 1 | 3 |
+| 3 | **Switch** — flip codegen to V2, un-ignore P178 / P185, delete V1 (`place_orphaned_vars`, zone split, `LOFT_SLOT_V1` fallback) in one commit. | [03-switch.md](03-switch.md) | blocked by 2 | 4 |
+| 4 | **Cleanup** — rewrite SLOTS.md for V2, land the `slot_allocator_has_no_size_or_shape_branches` doc_hygiene lint, mark P178/P185 fixed, move initiative to `plans/finished/`. | [04-cleanup.md](04-cleanup.md) | blocked by 3 | — |
 
 Phase 0 is the one that unlocks the rest — without an exhaustive
 fixture catalogue there's no way to show Phase 2's equivalence
