@@ -52,8 +52,9 @@ the canonical example of this discipline in action.
 
 ## Current initiatives
 
-_None._  Open a new `NN-slug/` subdirectory with a `README.md` and
-a first phase plan file when the next multi-phase effort starts.
+| Dir | Initiative | Current phase |
+|---|---|---|
+| `03-native-moros-editor/` | Wire the Moros editor into a runnable native OpenGL program (windowed or fullscreen), filling the input API + fullscreen gaps the existing graphics library doesn't cover. | Phase 0 — fullscreen support in `gl_create_window` |
 
 ## Finished initiatives
 
