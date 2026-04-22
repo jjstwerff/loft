@@ -5,8 +5,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # P184 — Narrow integer elements in collection types
 
-**Status:** open — Phase 0 ready to start.  First attempt 2026-04-21
-reverted (see postmortem below).
+**Status:** ✅ done 2026-04-22.  All phases landed; initiative ready
+to move to `finished/`.
 
 **Goal:** make `vector<i32>` / `hash<i32>` / `sorted<i32>` /
 `index<i32>` (and their `u8` / `u16` / `u32` / `i8` / `i16`
@@ -28,9 +28,9 @@ carries an inline-cast workaround (`glb_write_indices`).
 | 1 | Parser populates `IntegerSpec.forced_size` from the user-typed alias | [01-parser-populate.md](01-parser-populate.md) | ✅ done — commit `bf4db07` | 2 |
 | 2 | Resolver (`fill_database`) emits narrow vector database types | [02-resolver-narrow.md](02-resolver-narrow.md) | ✅ done — commit `3b6fd43` (struct fields only; sizes 1 + 4) | 3 |
 | 3 | Read path (`parse_vector_index` + iterator) uses narrow stride | [03-read-path.md](03-read-path.md) | ✅ done — commit `3b6fd43` | 4a |
-| 4a | Short-encoding mismatch: `vector<u16>` / `vector<i16>` stay wide with consistent round-trip | [04-append-set.md](04-append-set.md) | open — uncommitted work in-tree | 5 |
-| 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | **blocked** — 2026-04-21 attempt hung in `native_dir::16-parser`; reverted. Bisect required before re-attempt. | 6 |
-| 5 | Apply narrow-vector registration at local-var, parameter, and return-type sites | [05-locals-returns.md](05-locals-returns.md) | open — **larger than planned** (needs code, not just tests) | 6 |
+| 4a | Short-encoding mismatch: `vector<u16>` / `vector<i16>` stay wide with consistent round-trip | [04-append-set.md](04-append-set.md) | ✅ done — commit `e61176f` | 5 |
+| 4b | Introduce `Parts::ShortRaw` direct-encoded variant so 2-byte narrow storage lands without touching the legacy `Parts::Short` | [04b-short-encoding.md](04b-short-encoding.md) | ✅ done 2026-04-22 — Option L-minimal, commit `be39b01`.  Bug α (iter-next `narrow_int_cast` destroys `i64::MIN` sentinel) was the root cause of the 2026-04-21 hang; fix landed together with the ShortRaw variant and the emit_field / emit_type_creation / iter collection narrow-lookup fixes | 6 |
+| 5 | Apply narrow-vector registration at local-var, parameter, and return-type sites | [05-locals-returns.md](05-locals-returns.md) | ✅ done — commit `e78f65c` | 6 |
 | 6 | Extend to Hash / Sorted / Index | [06-hash-sorted-index.md](06-hash-sorted-index.md) | ✅ done 2026-04-22 — primitive-content forms are parse errors; struct-key narrowing works via the existing Phase 2 struct-field path; regression guard landed | — |
 
 ## Scope surprises found during implementation
