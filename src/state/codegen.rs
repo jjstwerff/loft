@@ -1309,6 +1309,15 @@ impl State {
             self.code_add(src_pos);
             stack.position += size_of::<crate::keys::DbRef>() as u16;
             stack.function.set_skip_free(src);
+            // Plan-04 Phase B.3.h.4: slot-aware — move the pushed DbRef
+            // from TOS to v's slot via OpPutRef.  Under slot-move (still
+            // active through B.3.h), var_pos equals 12 and this is a
+            // behavior-preserving bytecode-level overhead (copy onto
+            // self).  Once slot-move is removed, this becomes the
+            // mechanism that lands the transferred DbRef in v's slot.
+            let var_pos = stack.position - stack.function.stack(v);
+            stack.add_op("OpPutRef", self);
+            self.code_add(var_pos);
             return;
         }
         let tp_nr = stack.data.def(d_nr).known_type;
