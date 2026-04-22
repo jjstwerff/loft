@@ -478,6 +478,31 @@ impl Function {
         self.variables.len() as u16
     }
 
+    /// Plan-04 Phase B.3: frame high-water mark — max slot end across
+    /// all non-argument placed locals.  Used by `def_code` (B.3.i) to
+    /// emit a single `OpReserveFrame(frame_hwm)` at function entry,
+    /// which replaces the N per-block `OpReserveFrame(block.var_size)`
+    /// + matching `OpFreeStack` pairs.  Returns 0 if no local is
+    /// placed.
+    ///
+    /// Dead code until B.3.i wires the caller — kept `pub` because
+    /// `Function` is exported.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn frame_hwm(&self, context: &Context) -> u16 {
+        let mut hwm: u16 = 0;
+        for v in &self.variables {
+            if v.argument || v.stack_pos == u16::MAX {
+                continue;
+            }
+            let end = v.stack_pos.saturating_add(size(&v.type_def, context));
+            if end > hwm {
+                hwm = end;
+            }
+        }
+        hwm
+    }
+
     pub fn name(&self, var_nr: u16) -> &str {
         if var_nr as usize >= self.variables.len() {
             return "??";
