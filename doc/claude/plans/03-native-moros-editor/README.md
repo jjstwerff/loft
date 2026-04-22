@@ -55,7 +55,7 @@ constants, new variants) — no signature changes on already-shipped
 | 3b | Panel UI overlay (2D panel after 3D scene, click routing) | [03-panel.md](03-panel.md) | open | 4 |
 | 4 | Save/load (F5/F9) + fullscreen toggle (F11) | [04-persistence.md](04-persistence.md) | ✅ done 2026-04-22 | 5 |
 | 5 | Polish — FPS counter, resize, error diagnostics, avatar render, hex-pick highlight | [05-polish.md](05-polish.md) | open | 6 |
-| 6 | Standalone compiled application — `make native-editor` produces a shippable `dist/moros-editor/` directory; binary runs from a fresh location without `loft` on the machine | [06-standalone.md](06-standalone.md) | open | — |
+| 6 | Standalone compiled application — `make editor-dist` produces a shippable `dist/moros-editor/` directory; binary runs from a fresh location without `loft` on the machine | [06-standalone.md](06-standalone.md) | ✅ done 2026-04-22 | — |
 
 Phases 0–2 ship a minimum-viable native editor (window, camera, WASD
 navigation, tool-1-through-6 select, Esc to quit).  Phases 3–5 bring

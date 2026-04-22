@@ -5,7 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 6 — Standalone compiled application
 
-**Status:** open.  **Depends on:** Phase 2 (driver exists).
+**Status:** ✅ done 2026-04-22.  `make editor-dist` produces a
+relocatable `dist/moros-editor/` bundle (binary + cdylib + font,
+`$ORIGIN` rpath).  Verified by copying the dist dir to
+`/tmp/ne_relocated` and running from there — the binary loaded
+the sibling cdylib and entered its main loop, exiting at
+`gl_create_window` only because this dev box has no display.
 
 ## Scope
 
