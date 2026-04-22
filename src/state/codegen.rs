@@ -1094,39 +1094,28 @@ impl State {
         }
     }
 
-    /// First assignment at current TOS — dispatch by variable type.
+    /// First-assignment dispatch for large-type locals.
+    ///
+    /// **Plan-04 Phase B.2.d:** the pos-match-TOS assertion at the end
+    /// of the preamble has been removed — it checked an invariant
+    /// (slot == TOS at init time) that the positional init ops no
+    /// longer require.  The slot-move (`set_stack_pos(v,
+    /// stack.position)` for `pos < TOS`) and gap-fill (PROBLEMS.md
+    /// #139) are retained: callers downstream of `set_var` still
+    /// rely on `stack.function.stack(v)` reflecting the
+    /// post-positioning slot, and zone-1 byte-vars placed inside the
+    /// zone-2 frontier still need codegen's TOS bumped to reach the
+    /// slot.
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
         let pos = stack.function.stack(v);
-        // When pos < TOS (large type reusing dead slot below TOS), move
-        // the variable's slot to TOS so the init opcode writes correctly.
         if pos < stack.position {
             stack.function.set_stack_pos(v, stack.position);
-        }
-        // PROBLEMS.md #139: when the slot allocator reserved a slot above
-        // TOS (because a zone-1 byte-sized variable — plain enum or
-        // boolean — was placed at a fixed slot inside the zone-2 frontier
-        // without advancing codegen's TOS through it), bump the runtime
-        // stack pointer with an OpReserveFrame so slot == TOS for the
-        // init opcode below.  The reserved bytes cover the zone-1 var's
-        // slot; the zone-1 var was already written via OpPutEnum/etc. so
-        // the bytes contain live data, not garbage.
-        else if pos > stack.position {
+        } else if pos > stack.position {
             let gap = pos - stack.position;
             stack.add_op("OpReserveFrame", self);
             self.code_add(gap);
             stack.position += gap;
         }
-        let pos = stack.function.stack(v);
-        assert!(
-            pos == stack.position,
-            "[gen_set_first_at_tos] '{}' in '{}': slot={pos} but TOS={} — \
-             caller must ensure TOS matches the variable's slot before calling",
-            stack.function.name(v),
-            stack.data.def(stack.def_nr).name,
-            stack.position,
-        );
-        // Slot is at current TOS — use direct placement (same as old claim() path).
-        // Large types (text, refs, vectors) always land here; non-reusing primitives too.
         if matches!(*stack.function.tp(v), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
