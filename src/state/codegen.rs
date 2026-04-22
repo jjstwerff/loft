@@ -1130,7 +1130,7 @@ impl State {
         {
             // The first assignment of a Reference variable being copied from another:
             // allocate a fresh store, initialize the struct record, then copy the data.
-            self.gen_set_first_ref_copy(stack, d_nr, value);
+            self.gen_set_first_ref_copy(stack, v, d_nr, value);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
             && let Value::Var(src) = value
             && let Type::Reference(src_d_nr, _) = stack.function.tp(*src)
@@ -1206,7 +1206,19 @@ impl State {
     }
 
     /// First-assignment reference copy from a Call(OpCopyRecord, ...).
-    fn gen_set_first_ref_copy(&mut self, stack: &mut Stack, d_nr: u32, value: &Value) {
+    ///
+    /// **Plan-04 Phase B.3.b:** slot-aware.  `v` is the first-assign
+    /// target; the fallback path now uses
+    /// `slot_offset = stack.position - v.stack_pos` for `OpInitRef` +
+    /// `OpDatabase` so the DbRef allocation lands in `v`'s slot
+    /// regardless of where V1 placed it.  Under the current
+    /// slot-move invariant (slot-move in `gen_set_first_at_tos` is
+    /// still active through B.3.g), `v.stack_pos == stack.position`
+    /// at entry, so `slot_offset` equals `ref_size = 12` after the
+    /// intervening `OpReserveFrame(12)` — bytecode-identical to B.2.
+    /// Slot-move is removed in B.3.h, at which point `slot_offset`
+    /// reflects V1's actual placement.
+    fn gen_set_first_ref_copy(&mut self, stack: &mut Stack, v: u16, d_nr: u32, value: &Value) {
         // O-B2: if the source is a call to a function with no Reference parameters,
         // the returned store is always fresh — adopt it directly instead of deep copying.
         // This eliminates both the copy overhead and the store leak.
@@ -1227,20 +1239,28 @@ impl State {
             if !has_ref_params {
                 // Safe: function has no Reference params, cannot return an aliased store.
                 // Generate just the inner call — its result DbRef becomes v's value.
+                // (Under slot-move, result lands at v's slot by construction; B.3.h
+                //  may need an OpPutRef here once slot-move is removed.)
                 self.generate(&args[0], stack, false);
                 return;
             }
         }
         // Fallback: allocate fresh store + deep copy (source store may alias a parameter).
-        // Plan-04 Phase B.2: OpConvRefFromNull → OpReserveFrame(12) + OpInitRef(12).
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
-        stack.add_op("OpReserveFrame", self);
-        self.code_add(ref_size);
-        stack.position += ref_size;
+        // Bump TOS so v's slot is fully below stack.position, then emit
+        // positional init + allocator at slot_offset.
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.position - stack.function.stack(v);
         stack.add_op("OpInitRef", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         stack.add_op("OpDatabase", self);
-        self.code_add(ref_size);
+        self.code_add(slot_offset);
         let tp_nr = stack.data.def(d_nr).known_type;
         self.code_add(tp_nr);
         self.generate(value, stack, false);
