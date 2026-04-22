@@ -455,6 +455,13 @@ pub fn save_png(self: const Canvas, path: text) -> boolean {
 pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean;
 #native "loft_gl_create_window"
 
+// Open a borderless fullscreen window at the primary monitor's native
+// resolution. Returns true on success. Read the actual viewport size
+// afterwards with `gl_window_width` / `gl_window_height` if you need
+// to set up an aspect-aware camera.
+pub fn gl_create_fullscreen_window(title: text) -> boolean;
+#native "loft_gl_create_fullscreen_window"
+
 // Poll window events. Returns false when the window should close.
 pub fn gl_poll_events() -> boolean;
 #native "loft_gl_poll_events"

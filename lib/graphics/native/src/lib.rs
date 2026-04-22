@@ -172,6 +172,28 @@ pub extern "C" fn loft_gl_create_window(
     }
 }
 
+/// Initiative 03 Phase 0: borderless fullscreen companion to
+/// `loft_gl_create_window`.  Opens on the primary monitor at its
+/// native resolution.  Returns `true` on success.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_create_fullscreen_window(
+    title_ptr: *const u8,
+    title_len: usize,
+) -> bool {
+    let title = unsafe { loft_ffi::text(title_ptr, title_len) };
+    match window::create_gl_state_fullscreen(title) {
+        Ok(state) => {
+            GL.with(|cell| *cell.borrow_mut() = Some(state));
+            GL_READY.with(|c| c.set(true));
+            true
+        }
+        Err(e) => {
+            eprintln!("loft_gl_create_fullscreen_window: {e}");
+            false
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
     with_gl_mut(|s| {
@@ -987,6 +1009,7 @@ pub extern "C" fn loft_gl_point_size(size: f64) {
 
 loft_ffi::loft_register! {
     loft_gl_create_window,
+    loft_gl_create_fullscreen_window,
     loft_gl_poll_events,
     loft_gl_swap_buffers,
     loft_gl_clear,
