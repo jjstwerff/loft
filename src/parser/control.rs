@@ -93,10 +93,7 @@ impl Parser {
             //                  block expression; fall through.
             let link = self.lexer.link();
             self.lexer.token("{");
-            let looks_like_struct_body = self
-                .lexer
-                .has_identifier()
-                .is_some()
+            let looks_like_struct_body = self.lexer.has_identifier().is_some()
                 && ((self.lexer.peek_token(":") && !self.lexer.peek_token(":="))
                     || self.lexer.peek_token(","));
             self.lexer.revert(link);

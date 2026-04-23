@@ -369,9 +369,7 @@ fn place_large_and_recurse(
         // Without these, a `Set(v, …)` nested inside a BreakWith / Iter / Tuple /
         // TuplePut / Yield / Parallel stayed invisible to the scope-aware walker
         // and fell through to `place_orphaned_vars`.
-        Value::BreakWith(_, inner)
-        | Value::Yield(inner)
-        | Value::TuplePut(_, _, inner) => {
+        Value::BreakWith(_, inner) | Value::Yield(inner) | Value::TuplePut(_, _, inner) => {
             place_large_and_recurse(function, inner, scope, tos, depth + 1);
         }
         Value::Iter(_, a, b, c) => {

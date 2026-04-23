@@ -702,8 +702,6 @@ fn method_mutation_extends_lifetime() {
     .invariants_pass();
 }
 
-
-
 // ── Pattern 27 ──────────────────────────────────────────────────────────────
 // Kind-mismatch / size-mismatch no-reuse (invariant I5).  After a 24-B
 // Text dies, a 12-B DbRef (vector) and an 8-B integer are created.

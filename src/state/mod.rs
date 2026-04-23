@@ -1446,7 +1446,6 @@ impl State {
         ) = db;
     }
 
-
     pub fn put_stack<T: 'static>(&mut self, val: T) {
         #[cfg(debug_assertions)]
         {

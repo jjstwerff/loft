@@ -40,8 +40,8 @@ pub use slots::assign_slots;
 // another mod-public-ing pass.
 #[allow(unused_imports)]
 pub use slots_v2::{
-    AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result,
-    assign_slots_v2, v2_report_enabled, v2_validate_enabled,
+    AllocatorResult, LocalInterval, SlotAssignment, SlotKind, apply_v2_result, assign_slots_v2,
+    v2_report_enabled, v2_validate_enabled,
 };
 pub use validate::dump_variables;
 // Plan-04 Phase 2e: ungate validate_slots so LOFT_SLOT_V2=validate
@@ -51,6 +51,10 @@ pub use validate::dump_variables;
 // `#[cfg(any(debug_assertions, test))]` — validate_slots is
 // unconditionally *compiled*, but only *called* automatically
 // during unit tests; shadow mode opts in at runtime via env var.
+// The profile.dev.package.loft override disables debug_assertions
+// in the hot interpreter path; clippy sees no in-crate caller and
+// would otherwise flag this re-export.
+#[allow(unused_imports)]
 pub use validate::validate_slots;
 
 use crate::data::{Context, Data, Type, Value};
@@ -482,8 +486,7 @@ impl Function {
     /// all non-argument placed locals.  Used by `def_code` (B.3.i) to
     /// emit a single `OpReserveFrame(frame_hwm)` at function entry,
     /// which replaces the N per-block `OpReserveFrame(block.var_size)`
-    /// + matching `OpFreeStack` pairs.  Returns 0 if no local is
-    /// placed.
+    /// paired with `OpFreeStack`.  Returns 0 if no local is placed.
     ///
     /// Dead code until B.3.i wires the caller — kept `pub` because
     /// `Function` is exported.
@@ -1274,6 +1277,7 @@ impl Function {
     /// `assign_slots` inline; V2's caller calls this explicitly
     /// before invoking `assign_slots_v2` so a stale state from
     /// an earlier pass does not leak.
+    #[allow(dead_code)]
     pub fn reset_local_slots(&mut self) {
         for v in &mut self.variables {
             if !v.argument {

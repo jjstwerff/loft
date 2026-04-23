@@ -1266,9 +1266,9 @@ impl State {
                             Type::Character => stack.add_op("OpPutCharacter", self),
                             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
                             Type::Text(_) => stack.add_op("OpPutText", self),
-                            Type::Reference(_, _)
-                            | Type::Vector(_, _)
-                            | Type::Enum(_, true, _) => stack.add_op("OpPutRef", self),
+                            Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                                stack.add_op("OpPutRef", self)
+                            }
                             other => panic!(
                                 "gen_set_first_at_tos tuple fallthrough: unsupported elem {other:?}"
                             ),

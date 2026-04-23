@@ -2239,7 +2239,7 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
             }
         }
         Value::Block(bl) | Value::Loop(bl) => {
-            for op in bl.operators.iter_mut() {
+            for op in &mut bl.operators {
                 replace_var_in_ir(op, target, replacement);
             }
         }

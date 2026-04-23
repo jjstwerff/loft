@@ -164,10 +164,7 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
             walk_node(inner, function, w);
             let v = *v_nr as usize;
             // Skip arguments, zero-sized, already-placed, no-first-def vars.
-            if v >= function.next_var() as usize
-                || function.is_argument(*v_nr)
-                || w.assigned[v]
-            {
+            if v >= function.next_var() as usize || function.is_argument(*v_nr) || w.assigned[v] {
                 return;
             }
             let fd = function.first_def(*v_nr);

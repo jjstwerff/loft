@@ -55,8 +55,8 @@ fn graphics_native_built() -> bool {
 /// inputs are expanded to RGBA8 so encoder choices (RGB vs RGBA,
 /// depending on whether any alpha < 255) don't break the compare.
 fn decode_rgba8(path: &Path) -> (Vec<u8>, u32, u32) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("opening {}: {e}", path.display()));
+    let file =
+        std::fs::File::open(path).unwrap_or_else(|e| panic!("opening {}: {e}", path.display()));
     let decoder = png::Decoder::new(file);
     let mut reader = decoder
         .read_info()
@@ -124,7 +124,14 @@ fn compare_rgba(a: &[u8], b: &[u8]) -> DiffReport {
 /// Run a loft script under `cwd` and assert it exits 0.  Returns the
 /// stdout+stderr for diagnostic inclusion on failure.
 fn run_loft(script: &Path, cwd: &Path) -> String {
+    // --interpret overrides the example's `#!/usr/bin/env -S loft --native`
+    // shebang.  Under --native the first invocation falls through to an
+    // on-the-fly native compile; nextest's initial try has no cached
+    // binary and fails with "failed to run native binary: No such file".
+    // --interpret is deterministic across both tries and still exercises
+    // the full IR + bytecode + rasterizer path.
     let out = Command::new(loft_bin())
+        .arg("--interpret")
         .arg(script)
         .current_dir(cwd)
         .output()
@@ -245,7 +252,8 @@ fn canvas_demo_matches_gold() {
         // should match exactly.  Keep `max_abs = 1` as a hedge
         // against stray rounding in platform-specific float math
         // (Bezier and AA-line use f64 trig/lerp).
-        /* max_abs  */ 1,
+        /* max_abs  */
+        1,
         /* mean_abs */ 0.05,
     );
 }

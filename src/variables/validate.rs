@@ -3,14 +3,21 @@
 
 //! Slot validation and variable table dump: assert no overlapping live intervals,
 //! scope-parent analysis, and debug output.
-
+//!
+//! Every helper here is ultimately reachable from `validate_slots`, which is
+//! only called under `#[cfg(any(debug_assertions, test))]`.  The loft package
+//! disables `debug_assertions` in its hot interpreter profile
+//! (`[profile.dev.package.loft]`), so under the default clippy invocation the
+//! whole helper tree appears unused.  `#![allow(dead_code)]` acknowledges that:
+//! the items are exercised by `cargo test`, by any caller enabling
+//! `debug_assertions`, and by `LOFT_SLOT_V2=validate` runtime callers.
+#![allow(dead_code)]
 
 use crate::data::Value;
 use crate::data::{Context, Data, Type};
 
 use std::collections::HashMap;
 use std::io::{Error, Write};
-
 
 use super::Variable;
 use super::{Function, size};
@@ -52,7 +59,6 @@ fn short_type(tp: &Type) -> String {
 /// If a scope number appears more than once in the tree (e.g. a synthetic block sharing
 /// a scope number with an outer block), keep the first-seen parent — it is the
 /// structurally outermost one.  Never insert a self-loop (`scope == parent`).
-
 fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>) {
     match val {
         Value::Block(bl) | Value::Loop(bl) => {
@@ -92,7 +98,6 @@ fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>
 }
 
 /// Returns true if `ancestor` is a strict ancestor of `child` in the scope tree.
-
 fn is_scope_ancestor(ancestor: u16, child: u16, parents: &HashMap<u16, u16>) -> bool {
     let mut cur = child;
     let mut steps = 0u32;
@@ -116,7 +121,6 @@ fn is_scope_ancestor(ancestor: u16, child: u16, parents: &HashMap<u16, u16>) -> 
 /// Returns true if scope SA and scope SB can be physically concurrent, i.e., one is an
 /// ancestor of the other (or they are equal).  Variables in sibling branches of the IR tree
 /// cannot be simultaneously on the stack, so byte-range overlap between them is allowed.
-
 fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
     // u16::MAX = "no scope" (global or argument) — always treat as possible conflict.
     if sa == u16::MAX || sb == u16::MAX {
@@ -128,7 +132,6 @@ fn scopes_can_conflict(sa: u16, sb: u16, parents: &HashMap<u16, u16>) -> bool {
 /// Scan `vars` for the first pair of variables whose stack slots AND live intervals both
 /// overlap AND whose scopes are in the same execution branch (i.e. one scope is an ancestor
 /// of the other).  Variables in sibling branches cannot be simultaneously on the stack.
-
 pub(super) fn find_conflict(
     vars: &[Variable],
     scope_parents: &HashMap<u16, u16>,
@@ -190,13 +193,11 @@ pub(super) fn find_conflict(
 /// dead-slot reuse only between compatible kinds / sizes (SPEC.md
 /// § 5a invariant I5).  The same compatibility is checked
 /// post-placement by `check_i5_kind_consistency`.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotKind {
     Inline,
     RefSlot,
 }
-
 
 fn slot_kind(tp: &Type) -> SlotKind {
     match tp {
@@ -217,7 +218,6 @@ fn slot_kind(tp: &Type) -> SlotKind {
 /// Compute the frame's `local_start` — the first byte above the
 /// argument + return-address prefix.  Matches the formula in
 /// `src/scopes.rs:156–164`: `sum(arg sizes) + 4`.
-
 fn compute_local_start(function: &Function) -> u16 {
     let mut total: u16 = 0;
     for &a in &function.arguments() {
@@ -230,7 +230,6 @@ fn compute_local_start(function: &Function) -> u16 {
 /// placed at or above `local_start`, so no local can overlap the
 /// argument region.  Returns `Some((idx, local_start))` on the
 /// first violation.
-
 fn check_i2_arg_isolation(vars: &[Variable], local_start: u16) -> Option<(usize, u16)> {
     for (idx, v) in vars.iter().enumerate() {
         if v.argument {
@@ -253,7 +252,6 @@ fn check_i2_arg_isolation(vars: &[Variable], local_start: u16) -> Option<(usize,
 /// I4 — every defined variable is placed.  Any variable with a
 /// populated live interval and non-zero size must have a valid
 /// `stack_pos`.  Returns the var index on the first violation.
-
 fn check_i4_every_var_placed(vars: &[Variable]) -> Option<usize> {
     for (idx, v) in vars.iter().enumerate() {
         if v.argument {
@@ -279,7 +277,6 @@ fn check_i4_every_var_placed(vars: &[Variable]) -> Option<usize> {
 /// RefSlot reuse, `(slot, size)` must coincide fully.
 ///
 /// Returns `Some((left_idx, right_idx))` on the first violation.
-
 fn check_i5_kind_consistency(vars: &[Variable]) -> Option<(usize, usize)> {
     for li in 0..vars.len() {
         let l = &vars[li];
@@ -306,8 +303,7 @@ fn check_i5_kind_consistency(vars: &[Variable]) -> Option<(usize, usize)> {
                 continue;
             }
             // Live-interval overlap is I1's concern — not I5's.
-            let intervals_overlap =
-                l.first_def <= r.last_use && r.first_def <= l.last_use;
+            let intervals_overlap = l.first_def <= r.last_use && r.first_def <= l.last_use;
             if intervals_overlap {
                 continue;
             }
@@ -398,11 +394,7 @@ fn compute_scope_frame_bases(code: &Value, local_start: u16) -> HashMap<u16, (u1
     frames
 }
 
-fn walk_frame_bases(
-    val: &Value,
-    current_base: u16,
-    frames: &mut HashMap<u16, (u16, u16)>,
-) {
+fn walk_frame_bases(val: &Value, current_base: u16, frames: &mut HashMap<u16, (u16, u16)>) {
     match val {
         Value::Block(bl) => {
             let zone1 = bl.var_size;
@@ -458,11 +450,7 @@ fn walk_frame_bases(
 ///
 /// Returns `Some((loop_scope, left_idx, right_idx))` on the first
 /// violation.
-
-fn check_i6_loop_iteration(
-    vars: &[Variable],
-    function: &Function,
-) -> Option<(u16, usize, usize)> {
+fn check_i6_loop_iteration(vars: &[Variable], function: &Function) -> Option<(u16, usize, usize)> {
     // Enumerate the loop scopes referenced by any placed variable.
     let mut loop_scopes: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
     for v in vars {
@@ -522,7 +510,6 @@ fn check_i6_loop_iteration(
 /// On the first failure, logs the full variable table and IR code
 /// before panicking with a distinct `[I1]` … `[I6]` prefix so the
 /// failing invariant is self-identifying.
-
 pub fn validate_slots(function: &Function, data: &Data, def_nr: u32) {
     let vars = &function.variables;
     let local_start = compute_local_start(function);
@@ -792,8 +779,7 @@ mod invariant_tests {
         // Local placed at slot 4 — violates I2.
         add_local(&mut f, "bad", &INT, 4, 10, 20);
         assert_eq!(
-            check_i2_arg_isolation(&f.variables, compute_local_start(&f))
-                .map(|(i, _)| i),
+            check_i2_arg_isolation(&f.variables, compute_local_start(&f)).map(|(i, _)| i),
             Some(1)
         );
     }
@@ -803,9 +789,7 @@ mod invariant_tests {
         let mut f = mk_fn();
         add_arg(&mut f, "arg_a", &INT); // local_start = 12
         add_local(&mut f, "good", &INT, 12, 10, 20);
-        assert!(
-            check_i2_arg_isolation(&f.variables, compute_local_start(&f)).is_none()
-        );
+        assert!(check_i2_arg_isolation(&f.variables, compute_local_start(&f)).is_none());
     }
 
     // ── I4 — every defined variable is placed ────────────────────────

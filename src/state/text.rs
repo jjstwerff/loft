@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::State;
-use super::{size_ptr, size_str};
+use super::size_ptr;
 use crate::keys::{DbRef, Str};
 use crate::ops;
 use std::cmp::Ordering;
