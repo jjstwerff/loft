@@ -47,6 +47,21 @@ if r.ok() { println(r.body) }
 - `..._h` variants accept custom headers: `http_get_h(url, ["Accept: application/json"])`.
 - A simple HTTP **server** is also available: `for req in listen(8080) { respond(req, ...) }`.
 
+### Lighting that actually lights
+
+The 3D renderer's PBR shader now uses the light colours and intensity
+you pass in.  Previously the `Light` struct was accepted by the
+scene-graph but the shader ignored `color_r/g/b`, `intensity`, and all
+point lights — every scene looked as if lit by a single neutral-white
+directional.
+
+- A directional light's `intensity` scales its contribution.
+- A scene's first **point light** is now rendered (quadratic
+  attenuation; no shadow yet).
+- Goldens for five of the graphics examples are checked in as
+  regression guards — a shader tweak that breaks lighting is caught by
+  a pixel-diff test.
+
 ### Games in the browser
 
 - **Brick Buster** — a complete arcade game (paddle, ball, powerups,

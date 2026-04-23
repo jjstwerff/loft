@@ -1,34 +1,137 @@
 #!/usr/bin/env -S loft --native
-// Checker-Shaded Cube — rotating cube in an orbiting-camera scene rendered
-// through the high-level renderer. The original LearnOpenGL variant of
-// this example hand-rolled a procedural checker texture; the high-level
-// renderer doesn't expose per-material textures yet, so this version uses
-// a solid-colour metallic material for the same visual weight.
+// Checker Cube with loft Logo
+//
+// Rotating cube whose faces carry a procedural checkerboard with the
+// word "loft" stamped across it.  Built on the low-level GL API rather
+// than the high-level renderer because the renderer does not yet
+// expose per-material textures.
+//
+// Pipeline:
+//   1. Build a 256×256 canvas with an 8×8-pixel checker grid.
+//   2. Load DejaVuSans-Bold and draw "loft" centred across the canvas.
+//   3. Upload the canvas as a GL texture.
+//   4. Run a hand-rolled vertex+fragment shader that samples the
+//      texture and applies a single directional light for shape.
 //
 // Loft constructions used:
-//   scene::{Scene, Camera, material_metal, node_at, directional_light}
-//   render::{create_renderer, render_frame, destroy}
+//   graphics::canvas, set_pixel, draw_text, gl_upload_canvas
+//   mesh::cube, mesh_to_floats_uv
+//   math::mat4_perspective, mat4_look_at, mat4_rotate_y, mat4_mul
+//   gl_create_shader, gl_upload_vertices(d, 8)
+use graphics;
 use mesh;
 use math;
-use scene;
-use render;
+
+VERT_TC = `
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aUV;
+uniform mat4 uMVP;
+out vec2 vUV;
+out vec3 vNormal;
+void main() {{
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vUV = aUV;
+    vNormal = aNormal;
+}}
+`;
+
+FRAG_TC = `
+#version 330 core
+in vec2 vUV;
+in vec3 vNormal;
+out vec4 FragColor;
+uniform sampler2D uTexture;
+void main() {{
+    vec3 ld = normalize(vec3(0.5, 1.0, 0.8));
+    float diff = max(dot(normalize(vNormal), ld), 0.0);
+    // Canvas rows are stored with y=0 at canvas-top, but the upload
+    // writes them as the first texel rows, so TC.y=0 = canvas-top.
+    // The cube mesh's UVs put (0,0) at each face's -V vertex, which
+    // inverts the text on the front/back/sides.  Sample with
+    // (1.0 - vUV.y) so "loft" reads upright on every face.
+    vec4 tex = texture(uTexture, vec2(vUV.x, 1.0 - vUV.y));
+    FragColor = vec4(tex.rgb * (0.35 + 0.65 * diff), 1.0);
+}}
+`;
+
+// Build a 256×256 checkerboard canvas with "loft" stamped on top.
+// Four-per-face cells (64 px each) keep the moiré manageable with the
+// default nearest-neighbour filtering on the uploaded texture.
+fn make_loft_checker() -> graphics::Canvas {
+  tc_sz = 256;
+  tc_c = graphics::canvas(tc_sz, tc_sz, graphics::rgba(245, 245, 245, 255));
+  tc_cell = 128;     // 2×2 checker grid per face — large squares keep
+                     // the nearest-neighbour minification moiré readable
+  tc_dark = graphics::rgba(90, 100, 120, 255);
+  for tc_y in 0..tc_sz {
+    for tc_x in 0..tc_sz {
+      if (tc_x / tc_cell + tc_y / tc_cell) % 2 == 0 {
+        tc_c.set_pixel(tc_x, tc_y, tc_dark);
+      }
+    }
+  }
+  // Stamp "loft" horizontally centred.  Font lookup tries the CWD first
+  // (how `loft --native` invokes it from the repo root) and then falls
+  // back to the examples path (how tests run it).
+  tc_font = graphics::gl_load_font("DejaVuSans-Bold.ttf");
+  if tc_font < 0 {
+    tc_font = graphics::gl_load_font("lib/graphics/examples/DejaVuSans-Bold.ttf");
+  }
+  if tc_font >= 0 {
+    tc_label = "loft";
+    tc_size = 112.0;
+    tc_tw = graphics::gl_measure_text(tc_font, tc_label, tc_size) as integer;
+    tc_th = graphics::gl_text_height(tc_font, tc_size);
+    tc_tx = (tc_sz - tc_tw) / 2;
+    tc_ty = (tc_sz - tc_th) / 2;
+    tc_c.draw_text(tc_font, tc_label, tc_size, tc_tx, tc_ty,
+      graphics::rgba(220, 70, 40, 255));
+  }
+  tc_c
+}
 
 fn main() {
-  sc20 = scene::Scene { name: "checker_cube" };
-  ci20 = sc20.add_mesh(mesh::cube());
-  mat20 = sc20.add_material(scene::material_metal("steel", 0.7, 0.72, 0.78, 0.25));
-  sc20.add_node(scene::node_at("cube", ci20, mat20, math::mat4_identity()));
-  sc20.add_light(scene::directional_light("key", 1.0, 0.95, 0.9, 3.5,
-    math::normalize3(math::vec3(-0.5, -1.0, -0.8))));
-  cam20 = scene::Camera { name: "main", fov: 45.0, near: 0.1, far: 100.0,
-    position: math::vec3(2.0, 2.0, 3.0),
-    target: math::vec3(0.0, 0.0, 0.0) };
-  r20 = render::create_renderer(800, 600, "20 - Checker-Shaded Cube");
-  start20 = ticks();
-  for _ in 0..5000 {
-    t20 = (ticks() - start20) as float / 1000000.0;
-    sc20.nodes[0].transform = math::mat4_rotate_y(t20 * 0.5);
-    if !r20.render_frame(sc20, cam20) { break; }
+  if !graphics::gl_create_window(800, 600, "20 - Checker Cube (loft logo)") {
+    println("Failed to create window");
+    return;
   }
-  r20.destroy();
+  tc_m = mesh::cube();
+  tc_shader = graphics::gl_create_shader(VERT_TC, FRAG_TC);
+  tc_data = mesh::mesh_to_floats_uv(tc_m);
+  tc_vao = graphics::gl_upload_vertices(tc_data, 8);
+  tc_nv = tc_m.triangles.len() * 3;
+
+  tc_check = make_loft_checker();
+  tc_tex = graphics::gl_upload_canvas(tc_check.data, tc_check.width, tc_check.height);
+
+  // Closer view + tighter FOV = bigger cube on screen = less texture
+  // minification = less moiré under the default GL_LINEAR filter.
+  tc_proj = math::mat4_perspective(0.6, 800.0 / 600.0, 0.1, 100.0);
+  tc_view = math::mat4_look_at(
+    math::vec3(1.8, 1.4, 2.2),
+    math::vec3(0.0, 0.0, 0.0),
+    math::vec3(0.0, 1.0, 0.0));
+
+  tc_start = ticks();
+  for _ in 0..5000 {
+    if !graphics::gl_poll_events() { break; }
+    tc_t = (ticks() - tc_start) as float / 1000000.0;
+    tc_model = math::mat4_rotate_y(tc_t * 0.5);
+    tc_mvp = math::mat4_mul(tc_proj, math::mat4_mul(tc_view, tc_model));
+
+    graphics::gl_clear(graphics::rgba(30, 30, 35, 255));
+    graphics::gl_use_shader(tc_shader);
+    graphics::gl_set_uniform_mat4(tc_shader, "uMVP", tc_mvp.m);
+    graphics::gl_bind_texture(tc_tex, 0);
+    graphics::gl_set_uniform_int(tc_shader, "uTexture", 0);
+    graphics::gl_draw(tc_vao, tc_nv);
+    graphics::gl_swap_buffers();
+  }
+
+  graphics::gl_delete_texture(tc_tex);
+  graphics::gl_delete_vao(tc_vao);
+  graphics::gl_delete_shader(tc_shader);
+  graphics::gl_destroy_window();
 }

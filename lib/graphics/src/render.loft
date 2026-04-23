@@ -50,8 +50,11 @@ in vec3 vNormal;
 in vec4 vLightSpacePos;
 out vec4 FragColor;
 uniform vec3 uCamPos;
-uniform vec3 uLightDir;
-uniform vec3 uLightColor;
+uniform vec3 uLightDir;        // world-space direction the light travels
+uniform vec3 uLightColor;      // directional light colour × intensity
+uniform vec3 uPointLightPos;   // world-space point-light position
+uniform vec3 uPointLightColor; // point-light colour × intensity (0,0,0 = off)
+uniform int uHasPointLight;
 uniform vec3 uColor;
 uniform float uMetallic;
 uniform float uRoughness;
@@ -69,16 +72,36 @@ float shadow_calc(vec4 lsp) {{
 void main() {{
     vec3 N = normalize(vNormal);
     vec3 V = normalize(uCamPos - vWorldPos);
+    float rough_pow = mix(8.0, 128.0, 1.0 - uRoughness);
+    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    vec3 F0 = mix(vec3(0.04), uColor, uMetallic);
+    float shadow = 0.0;
+    if (uHasShadow == 1) shadow = shadow_calc(vLightSpacePos);
+
+    // Directional light — scaled by its colour × intensity (uLightColor).
     vec3 L = normalize(-uLightDir);
     vec3 H = normalize(V + L);
     float diff = max(dot(N, L), 0.0);
-    float spec = pow(max(dot(N, H), 0.0), mix(8.0, 128.0, 1.0 - uRoughness));
-    float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
-    float shadow = 0.0;
-    if (uHasShadow == 1) shadow = shadow_calc(vLightSpacePos);
+    float spec = pow(max(dot(N, H), 0.0), rough_pow);
+    float shade = 1.0 - shadow;
+    vec3 diffuse  = uColor * uLightColor * diff * (1.0 - uMetallic * 0.7) * shade;
+    vec3 specular = F0 * uLightColor * spec * (1.0 + fresnel) * shade;
+
+    // Point light — quadratic attenuation, no shadow.  Skipped when the
+    // scene has no point light (uHasPointLight == 0).
+    if (uHasPointLight == 1) {{
+        vec3 Pd = uPointLightPos - vWorldPos;
+        float dist = length(Pd);
+        vec3 PL = Pd / max(dist, 0.0001);
+        vec3 PH = normalize(V + PL);
+        float atten = 1.0 / (1.0 + 0.1 * dist + 0.01 * dist * dist);
+        float pdiff = max(dot(N, PL), 0.0);
+        float pspec = pow(max(dot(N, PH), 0.0), rough_pow);
+        diffuse  += uColor * uPointLightColor * pdiff * (1.0 - uMetallic * 0.7) * atten;
+        specular += F0 * uPointLightColor * pspec * (1.0 + fresnel) * atten;
+    }}
+
     vec3 ambient = uColor * mix(0.15, 0.08, uMetallic);
-    vec3 diffuse = uColor * diff * (1.0 - uMetallic * 0.7) * (1.0 - shadow);
-    vec3 specular = mix(vec3(0.04), uColor, uMetallic) * spec * (1.0 + fresnel) * (1.0 - shadow);
     vec3 result = ambient + diffuse + specular;
     // Tone mapping + gamma
     result = result / (result + vec3(1.0));
@@ -159,7 +182,10 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
   rf_proj = math::mat4_perspective(cam.fov * 0.01745, self.width as float / self.height as float,
                                    cam.near, cam.far);
   rf_eye = cam.position;
-  // Light — use first directional light or default
+  // Lighting — picks the first directional light (shadow caster) and
+  // the first point light from the scene.  `intensity` is pre-folded
+  // into the colour so the shader only reads one vec3 per light.
+  // Defaults (no directional in scene): neutral white from upper-front.
   rf_has_shadow = 0;
   rf_light_dir = math::vec3(-1.0, -2.0, -1.0);
   rf_light_color = math::vec3(1.0, 1.0, 1.0);
@@ -167,13 +193,30 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
   for rl in sc.lights {
     if rl.light_type == scene::Directional {
       rf_light_dir = rl.direction;
-      rf_light_color = math::vec3(rl.color_r, rl.color_g, rl.color_b);
-      // Compute orthographic light VP for shadow mapping
+      rf_light_color = math::vec3(
+        rl.color_r * rl.intensity,
+        rl.color_g * rl.intensity,
+        rl.color_b * rl.intensity);
+      // Orthographic light VP for shadow mapping.
       rf_light_eye = math::vec3(-rf_light_dir.x * 10.0, -rf_light_dir.y * 10.0, -rf_light_dir.z * 10.0);
       rf_light_view = math::mat4_look_at(rf_light_eye, math::vec3(0.0, 0.0, 0.0), math::vec3(0.0, 1.0, 0.0));
       rf_light_proj = math::mat4_ortho(-12.0, 12.0, -12.0, 12.0, 0.1, 30.0);
       rf_light_vp = math::mat4_mul(rf_light_proj, rf_light_view);
       rf_has_shadow = 1;
+      break;
+    }
+  }
+  rf_has_point = 0;
+  rf_point_pos = math::vec3(0.0, 0.0, 0.0);
+  rf_point_color = math::vec3(0.0, 0.0, 0.0);
+  for rpl in sc.lights {
+    if rpl.light_type == scene::Point {
+      rf_point_pos = rpl.position;
+      rf_point_color = math::vec3(
+        rpl.color_r * rpl.intensity,
+        rpl.color_g * rpl.intensity,
+        rpl.color_b * rpl.intensity);
+      rf_has_point = 1;
       break;
     }
   }
@@ -202,6 +245,11 @@ pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,
   graphics::gl_set_uniform_vec3(self.pbr_shader, "uCamPos", rf_eye.x, rf_eye.y, rf_eye.z);
   graphics::gl_set_uniform_vec3(self.pbr_shader, "uLightDir", rf_light_dir.x, rf_light_dir.y, rf_light_dir.z);
   graphics::gl_set_uniform_vec3(self.pbr_shader, "uLightColor", rf_light_color.x, rf_light_color.y, rf_light_color.z);
+  graphics::gl_set_uniform_vec3(self.pbr_shader, "uPointLightPos",
+    rf_point_pos.x, rf_point_pos.y, rf_point_pos.z);
+  graphics::gl_set_uniform_vec3(self.pbr_shader, "uPointLightColor",
+    rf_point_color.x, rf_point_color.y, rf_point_color.z);
+  graphics::gl_set_uniform_int(self.pbr_shader, "uHasPointLight", rf_has_point);
   graphics::gl_set_uniform_int(self.pbr_shader, "uHasShadow", rf_has_shadow);
   if rf_has_shadow == 1 {
     graphics::gl_bind_texture(self.shadow_tex, 1);

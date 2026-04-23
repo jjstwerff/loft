@@ -128,10 +128,18 @@ Single uber-shader covering the full material range:
   normal, UV, and light-space position for shadow lookup.
 - **Fragment**:
   - PBR metallic-roughness (Cook-Torrance BRDF)
-  - Directional + point light support (up to 4 of each)
-  - Shadow map sampling with bias
+  - One directional light (shadow caster) plus one point light
+    (quadratic attenuation, no shadow).  Second-and-later lights of
+    each kind are ignored.  Both light colours are pre-multiplied by
+    `Light.intensity` on the CPU side so the shader reads a single
+    `vec3` per light.
+  - Shadow map sampling with bias (directional only)
   - Ambient term (0.03 * albedo)
   - HDR tone-mapping + gamma correction
+
+  Regression coverage: `tests/golden/{12,16,19,21,24}-*.png`, driven
+  by the `LOFT_FAKE_TICKS_US` clock-freeze in `snap_example.sh`.
+  A shader change shows up as a per-pixel diff on these captures.
 
 Materials feed directly into uniforms:
 `base_color_r/g/b/a`, `metallic`, `roughness` from the existing `Material` struct.

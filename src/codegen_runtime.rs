@@ -1418,11 +1418,24 @@ pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
     }
 }
 
+/// Parse a `LOFT_FAKE_*` env var into an `i64`.  See the same-named
+/// helper in `src/native.rs` for the full contract; duplicated here so
+/// `--native`-compiled binaries honour the override the same way the
+/// interpreter does.
+#[cfg(not(target_arch = "wasm32"))]
+fn fake_clock_env(var: &str) -> Option<i64> {
+    std::env::var(var).ok()?.parse::<i64>().ok()
+}
+
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
+/// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
 #[cfg(not(feature = "wasm"))]
 pub fn n_now(_stores: &mut Stores) -> i64 {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
+        return fake;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(i64::MIN, |d| d.as_millis() as i64)
@@ -1436,9 +1449,13 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
+/// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
+        return fake;
+    }
     stores.start_time.elapsed().as_micros() as i64
 }
 
