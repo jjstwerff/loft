@@ -1395,7 +1395,7 @@ guard should land with the proper fix.)
 
 ### ~~P185~~ — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop — FIXED
 
-**Fixed 2026-04-23** by plan-05 (`doc/claude/plans/05-orphan-placer-elimination/`).
+**Fixed 2026-04-23** by plan-05 (`doc/claude/plans/finished/05-orphan-placer-elimination/`).
 The root cause was `place_orphaned_vars` placing the late local
 (`key`) onto a slot still used by a live text buffer — the inline
 `file(...)` iterator temporary's slot was freed too aggressively.
@@ -1482,12 +1482,12 @@ writes to `out` via a backtick-block append.  Result: truncated
 build-playground-examples` (or any direct `loft scripts/build-
 playground-examples.loft`) reproduces.
 
-**Fix path:** plan-04 (`doc/claude/plans/04-slot-assignment-redesign/`)
+**Fix path:** plan-04 (`doc/claude/plans/finished/04-slot-assignment-redesign/`)
 aimed for a broader rework but was retracted in 2026-04-22 — both
 the codegen-is-allocator pivot and V2-drive failed on a shared
 outer-scope / inner-Set failure mode.  V1 remains the allocator.
 The targeted P185 fix is now scoped under plan-05
-(`doc/claude/plans/05-orphan-placer-elimination/`): extend V1's
+(`doc/claude/plans/finished/05-orphan-placer-elimination/`): extend V1's
 main walk to cover the three IR shapes currently orphaned
 (Insert-rooted bodies, parent-scope Set in child-Block, Insert
 preambles), delete `place_orphaned_vars`, and add invariant I8

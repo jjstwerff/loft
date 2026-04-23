@@ -187,7 +187,7 @@ every commit in this phase.  Phase 2 lands in the order above
 (2a → 2f); no commit is allowed to require `LOFT_SLOT_V2` to stay
 green.
 
-Per [plans/README.md](../README.md)'s ground rule, a step that
+Per [plans/README.md](../../README.md)'s ground rule, a step that
 surfaces a scope surprise (SPEC missed an IR shape, a compute_intervals
 quirk, a validate_slots false positive) pauses Phase 2 and
 updates SPEC.md / walkthroughs.md / SPEC_GAPS.md before the next

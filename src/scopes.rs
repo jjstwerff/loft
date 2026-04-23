@@ -157,7 +157,7 @@ pub fn check(data: &mut Data) {
         // (e.g. match-arm pattern bindings lifted to body scope by
         // `scan_if`'s `small_both` pre-registration).  V1's zone-1
         // pre-pass is load-bearing — see
-        // `doc/claude/plans/04-slot-assignment-redesign/README.md`
+        // `doc/claude/plans/finished/04-slot-assignment-redesign/README.md`
         // § Status.  Invariants I1–I7 in `validate.rs` check V1's
         // output at every codegen completion (debug / test builds).
         let local_start: u16 = {

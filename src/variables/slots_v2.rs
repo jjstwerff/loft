@@ -7,7 +7,7 @@
 //! intervals by `(live_start, var_nr)` and greedy-places each at
 //! the lowest slot that does not conflict with any still-live
 //! interval of compatible `SlotKind` and size (see `SPEC.md § 2`
-//! at `doc/claude/plans/04-slot-assignment-redesign/SPEC.md`).
+//! at `doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md`).
 //!
 //! The module is currently a **scaffolding stub**.  Phase 2c
 //! implements the algorithm; Phase 2d transitions fixtures.

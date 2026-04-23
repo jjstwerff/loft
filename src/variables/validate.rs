@@ -511,7 +511,7 @@ fn check_i6_loop_iteration(
 }
 
 /// Assert that slot placements satisfy invariants I1–I6 from
-/// [`SPEC.md § 5a`](../doc/claude/plans/04-slot-assignment-redesign/SPEC.md).
+/// [`SPEC.md § 5a`](../doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md).
 ///
 /// Unconditionally compiled so the `LOFT_SLOT_V2=validate` shadow
 /// path (scopes.rs) can invoke it from any build profile.  The

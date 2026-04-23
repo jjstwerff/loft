@@ -25,22 +25,32 @@ should silently fix.
 ```text
 ┌──────────────────┐  ← frame base (args + return address)
 │  zone 1: small   │  ≤8-byte types, greedy interval colouring
-│                  │  pre-claimed via OpReserveFrame (Blocks only)
+│                  │  at each Block/function scope
 ├──────────────────┤
 │  zone 2: large   │  >8-byte types (text, refs, vectors)
 │                  │  placed sequentially in IR-walk order
-└──────────────────┘  ← TOS
+└──────────────────┘  ← frame_hwm (reserved at function entry)
 ```
 
-**Blocks** use both zones.  `OpReserveFrame(var_size)` pre-claims zone 1
-at block entry.  `generate_block` cleans up with `OpFreeStack` at exit.
+**Single function-entry reserve (plan-04 B.3).**  A single
+`OpReserveFrame(frame_hwm)` at function entry covers every local
+slot — both zone-1 greedy placements and zone-2 IR-walk placements.
+`frame_hwm` is the maximum `stack_pos + size` across all non-argument
+variables.  Per-block `OpReserveFrame(block.var_size)` is gone; slot-move
++ gap-fill in `gen_set_first_at_tos` is gone; every first-assignment is
+a positional init (`OpInitText(pos)` / `OpInitRef(pos)` /
+`OpInitRefSentinel(pos)` / `OpInitCreateStack(pos, dep_pos)`).
 
-**Loops** skip zone 1 entirely.  `var_size = 0`, no `OpReserveFrame`.
-All loop variables (small and large) are placed sequentially via the
-zone 2 IR-walk.  This is because:
-- Loop variables persist across iterations (can't re-reserve each time)
-- `OpFreeStack` after loop exit corrupts nested/parallel loop patterns
-- Zone 1 slot reuse is pointless for loops (nothing dies mid-loop)
+**Blocks** use both zones.  Slots are assigned by `assign_slots`;
+codegen writes directly to each variable's pre-assigned position via the
+positional init ops.  No per-block reserve, no per-block free: the whole
+frame is owned by the function and released on return.
+
+**Loops** skip zone 1 (same as before the B.3 refit).  `var_size = 0`,
+no per-loop reserve.  All loop variables are placed sequentially via
+the zone 2 IR-walk.  Loop variables persist across iterations;
+`clear_stack` at the end of each iteration resets TOS to the loop start
+without touching the reserved frame.
 
 ---
 
@@ -48,8 +58,8 @@ zone 2 IR-walk.  This is because:
 
 Small variables (≤ 8 bytes) in a Block scope are packed densely at
 `frame_base`.  Dead variables' slots are reused within the same scope
-if sizes match.  The `zone1_hwm` (high-water mark) determines the
-`var_size` written into the Block node.
+if sizes match.  The zone-1 high-water mark contributes to `frame_hwm`,
+which drives the single function-entry `OpReserveFrame`.
 
 ---
 
@@ -66,23 +76,23 @@ by `v_size` after each placement.
 - **Inner pre-assignments:** `Set(v, Insert([Set(__lift, ...), Call(...)]))` —
   the Insert's preamble Sets are processed first so `__lift` vars get
   lower slots than `v`.
-- **Orphaned variables:** Variables whose scope has no Block/Loop node in
-  the IR tree are placed by `place_orphaned_vars` after the main walk,
-  using interval colouring against already-placed variables.
+- **Cross-scope `Set` + Insert-rooted bodies** — plan-05 extended the
+  main walk to cover variables whose first `Set` lies in a child
+  `operators` list or whose function body root is `Value::Insert`.
+  The former post-walk orphan placer (`place_orphaned_vars`) is deleted;
+  the main walk now reaches every local.
 
 ---
 
 ## Codegen Invariants
 
-### `gen_set_first_at_tos` assertion
+### `gen_set_first_at_tos` — positional write
 
-```rust
-assert!(pos == stack.position, "slot={pos} but TOS={}", stack.position);
-```
-
-Every first assignment goes through `gen_set_first_at_tos` (if `pos >= TOS`)
-or `set_var` (if `pos < TOS`).  The assertion catches any case where
-`assign_slots` placed a variable above codegen's TOS.
+Every first assignment is a positional init op: the codegen emits
+`OpInit*(slot_pos)` with the slot the allocator chose, and the runtime
+writes directly to that position.  No slot-move fix-up.  The assertion
+that used to verify `pos == TOS` is gone — it became meaningless once
+the allocator and codegen agree on absolute positions.
 
 ### `set_stack_pos` assertion
 
@@ -92,11 +102,11 @@ debug_assert!(pre_assigned_pos == u16::MAX || pre_assigned_pos == pos || argumen
 
 Codegen never moves a variable after `assign_slots` has placed it.
 
-### `gen_loop` — no OpReserveFrame
+### `gen_loop` — no per-loop OpReserveFrame
 
 Loops do not emit `OpReserveFrame`.  All loop variables are placed at TOS
-by codegen on first encounter.  `clear_stack` at the end of each iteration
-resets TOS to the loop start.
+by codegen on first encounter (same as before B.3).  `clear_stack` at
+the end of each iteration resets TOS to the loop start.
 
 ---
 
@@ -118,25 +128,31 @@ is searchable.
 | **I6** | Loop-iteration safety — no slot shared across loop-body boundary without a reset. |
 | **I7** | **Scope-frame consistency** — each variable's `stack_pos` lies within its declared scope's frame region `[frame_base(scope), frame_base(scope) + var_size(scope))`.  Catches the "slot above TOS" runtime panic class at compile time. |
 
-I7 is the new addition (2026-04-22 close-out of plan-04).  The
-remaining invariants I1–I6 were authored during plan-04 Phase 2 as
-correctness gates for V2; they continue to run against V1's output
-unchanged.
+I7 was added at the 2026-04-22 close-out of plan-04.  Invariants
+I1–I6 were authored during plan-04 Phase 2 as correctness gates for
+V2; they continue to run against V1's output unchanged.
 
-**I8 — orphan-iterator-alias** (dep-chain-aware aliasing check
-guarding P185's failure shape) is scoped but not yet built — see
-`doc/claude/plans/05-orphan-placer-elimination/`.
+**I8 — orphan-iterator-alias** was scoped in plan-05 Phase 2b as a
+dep-chain-aware aliasing check guarding P185's failure shape.
+Deferred and now dropped: with `place_orphaned_vars` gone, the
+bug class it would catch is structurally prevented.  Revisit only
+if a future slot-reuse aliasing regression surfaces.
 
-## Plan-04 status
+## Plan-04 / plan-05 status (closed)
 
-Plan-04 (`doc/claude/plans/04-slot-assignment-redesign/`) aimed to
-replace this two-zone allocator with a single-pass, scope-blind
-algorithm.  The retirement attempts (codegen-is-allocator and
-V2-drive) both failed on variables declared at outer scope but
-first-Set in inner scope — see the plan's README § Status for
-details.  V1 remains the production allocator.  V2
-(`src/variables/slots_v2.rs`) stays as a shadow validator invoked
-via `LOFT_SLOT_V2=validate`.
+- **Plan-04** (`doc/claude/plans/finished/04-slot-assignment-redesign/`)
+  aimed to replace this two-zone allocator with a single-pass,
+  scope-blind algorithm.  The retirement attempts
+  (codegen-is-allocator and V2-drive) both failed on variables
+  declared at outer scope but first-Set in inner scope.  V1 remains
+  the production allocator.  V2 (`src/variables/slots_v2.rs`) stays
+  as a shadow validator invoked via `LOFT_SLOT_V2=validate`.  What
+  did land: positional init primitives, function-entry frame reserve,
+  `OpText` deletion, and invariant I7.
+- **Plan-05** (`doc/claude/plans/finished/05-orphan-placer-elimination/`)
+  deleted `place_orphaned_vars` by extending the main IR-walk to cover
+  Insert-rooted bodies and cross-scope `Set`s.  P185 is fixed and
+  its regression tests are un-ignored.
 
 ---
 
@@ -164,11 +180,12 @@ adding a new fixture.  The check fires in every build profile.
 Two fixture catalogues use this harness:
 
 - `tests/strings.rs` — string-scope regressions (2 fixtures).
-- `tests/slot_v2_baseline.rs` — the **Phase 0 fixture catalogue for the
-  slot-assignment redesign** (see
-  [`plans/04-slot-assignment-redesign/`](plans/04-slot-assignment-redesign/)).
-  Every fixture locks one specific placement decision so V2 (single-pass
-  allocator) can be validated against V1 before the Phase 3 switchover.
+- `tests/slot_v2_baseline.rs` — the **Phase 0 fixture catalogue from
+  plan-04** (see
+  [`plans/finished/04-slot-assignment-redesign/`](plans/finished/04-slot-assignment-redesign/)).
+  Every fixture locks one specific placement decision; the file now
+  runs as a structural regression guard against V1's output and a
+  correctness gate for V2's shadow validator.
 
 Unit tests in `src/variables/slots.rs` also verify slot assignments for
 specific IR shapes without running codegen, by constructing synthetic
@@ -180,8 +197,9 @@ specific IR shapes without running codegen, by constructing synthetic
 
 Every pattern documented below has an explicit fixture in
 `tests/slot_v2_baseline.rs` that locks the exact slot layout
-produced by today's two-zone allocator.  The V2 allocator (built in
-Phase 2) must reproduce every layout before the switch in Phase 3.
+produced by the two-zone allocator.  The catalogue is retained as a
+regression guard after plan-04's close-out; V2 (shadow validator)
+must still reproduce every layout under `LOFT_SLOT_V2=validate`.
 
 | # | Pattern | Fixture | Status |
 |---|---------|---------|--------|
@@ -198,7 +216,7 @@ Phase 2) must reproduce every layout before the switch in Phase 3.
 | 11 | Call with Block arg (vector-comprehension in arg position) | `call_with_block_arg` | ✅ |
 | 12 | Parent var Set inside child scope | `parent_var_set_inside_child_scope` | ✅ |
 | 13 | P178 — `is`-capture in Insert-rooted body | `p178_is_capture_body` | ✅ |
-| 14 | P185 — late local after inner text-accumulator loop | `p185_late_local_after_inner_loop` | ⚠ `#[ignore]` — V2 required to pick non-aliasing slot |
+| 14 | P185 — late local after inner text-accumulator loop | `p185_late_local_after_inner_loop` | ✅ passing since plan-05 retired `place_orphaned_vars` |
 | 15 | Local after args-heavy signature (args-region isolation) | `fn_with_only_arguments` | ✅ |
 | 16 | Nested If with Block branches | `nested_if_block_branches` | ✅ |
 | 17 | Large vector followed by small int (zone-1/2 mixing) | `large_vector_then_small_int` | ✅ |
@@ -219,32 +237,21 @@ for the specific blocker).
 
 ---
 
-## Scope shapes and orphan placement
+## Scope shapes — every local reached by the main walk
 
-`place_orphaned_vars` (`src/variables/slots.rs:58`) is the post-walk
-catch-net for variables the `process_scope` / `place_large_and_recurse`
-IR-walk never visits.  The Phase 0 audit
-([`plans/04-slot-assignment-redesign/00a-audit.md`](plans/04-slot-assignment-redesign/00a-audit.md))
-identifies three structural triggers for orphan status; each is covered
-by a fixture in `tests/slot_v2_baseline.rs`:
+Plan-05 deleted `place_orphaned_vars` (the post-walk catch-net) by
+extending `process_scope` / `place_large_and_recurse` to cover every
+IR shape that previously left a variable orphaned.  The three
+structural triggers were:
 
-| Scope-shape trigger | Why the main walk misses it | Fixture |
-|---------------------|-----------------------------|---------|
-| Function body root is `Value::Insert` (not `Block`/`Loop`) | `process_scope` returns early when `block_val` isn't Block/Loop; every local becomes an orphan | `p178_is_capture_body`, `insert_preamble_lift_ordering` |
-| Parent-scope `Set` inside a child Block's `operators` | The child-scope walk never sees variables from the parent's scope number; they remain unplaced until the orphan pass collects them | `parent_var_set_inside_child_scope` |
-| Insert preamble (`Value::Insert([Set(__lift_N, ...), ...])`) wrapping a Call or format-string | Lift vars have the enclosing function's scope, not the Insert's — the IR walk doesn't descend into the preamble as a named-scope child | `insert_preamble_lift_ordering`, `sequential_lifted_calls` |
+| Scope-shape trigger | How the main walk now reaches it | Fixture |
+|---------------------|-----------------------------------|---------|
+| Function body root is `Value::Insert` (not `Block`/`Loop`) | Insert at function-body root treated as a synthetic Block with scope 1 (plan-05 Phase 1a) | `p178_is_capture_body`, `insert_preamble_lift_ordering` |
+| Parent-scope `Set` inside a child Block's `operators` | Cross-scope `Set(v)` where `v.scope != walker_scope` is handled in the parent's operator list (plan-05 Phase 1b) | `parent_var_set_inside_child_scope` |
+| Insert preamble (`Value::Insert([Set(__lift_N, ...), ...])`) wrapping a Call or format-string | Exhaustive traversal of `BreakWith / Iter / Tuple / TuplePut / Yield / Parallel` (plan-05 Phase 1b) | `insert_preamble_lift_ordering`, `sequential_lifted_calls` |
 
-`place_orphaned_vars` takes `local_start` as the floor for its
-candidate-slot search (fix for P178) so orphans cannot overlap the
-argument + return-address region at `[0, local_start)`.  Arguments have
-`stack_pos == u16::MAX` during `assign_slots`; without the `local_start`
-floor, the per-variable conflict check at `slots.rs:382–389` could not
-see them and would happily assign slot 0.
-
-The Phase 0 audit also catalogues 20 dispatch points in today's
-allocator (5 on variable size, 11 on scope kind, 1 on Text type, 3 on
-set cardinality) that V2's single-pass algorithm must subsume into a
-uniform formula — see `00a-audit.md` for the per-line mapping.
+The P178 `local_start` floor stays in the per-variable conflict check
+to keep locals from overlapping the argument + return-address region.
 
 ---
 
@@ -252,7 +259,7 @@ uniform formula — see `00a-audit.md` for the per-line mapping.
 
 | File | Role |
 |------|------|
-| `src/variables/slots.rs` | `assign_slots`, `process_scope`, `place_large_and_recurse`, `place_orphaned_vars` |
+| `src/variables/slots.rs` | `assign_slots`, `process_scope`, `place_large_and_recurse` |
 | `src/state/codegen.rs` | `generate_set`, `gen_set_first_at_tos`, `gen_loop`, `generate_block` |
 | `src/variables/mod.rs` | `set_stack_pos` assertion, `Function` struct |
 | `src/scopes.rs` | `scan_set` (Insert flattening), `inline_struct_return` (P122 lift) |

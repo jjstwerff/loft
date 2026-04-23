@@ -109,7 +109,7 @@ impl Test {
     /// Locks a single placement decision so it will not drift silently;
     /// fires in every test profile (the rendering cost is negligible
     /// and its whole purpose is to catch V1↔V2 slot drift during the
-    /// plan-04 redesign).  See `doc/claude/plans/04-slot-assignment-redesign/`.
+    /// plan-04 redesign).  See `doc/claude/plans/finished/04-slot-assignment-redesign/`.
     pub fn slots(&mut self, spec: &str) -> &mut Test {
         self.expected_slots = Some(spec.to_string());
         self
@@ -117,7 +117,7 @@ impl Test {
 
     /// Plan-04 Phase 2d: assert the slot layout satisfies invariants
     /// I1–I6 from
-    /// `doc/claude/plans/04-slot-assignment-redesign/SPEC.md § 5a`,
+    /// `doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md § 5a`,
     /// without locking any specific numeric layout.
     ///
     /// Current implementation is a marker: `validate_slots` already

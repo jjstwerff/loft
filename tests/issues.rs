@@ -9995,7 +9995,7 @@ fn test() {
 ///
 /// Same class as P178 (orphan-placer reused argument slots).  The
 /// structural fix is a rework of slot allocation — see
-/// `doc/claude/plans/04-slot-assignment-redesign/`.
+/// `doc/claude/plans/finished/04-slot-assignment-redesign/`.
 ///
 /// The test depends on `tests/docs/*.loft` existing (it does in-tree)
 /// because the bug requires a real `file(...).files()` iterator —

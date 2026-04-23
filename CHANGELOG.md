@@ -9,6 +9,51 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Slot allocator & frame layout (plans 04 + 05)
+
+Two companion plans closed together; user-visible only as the
+absence of a recurring heap-corruption class (P178 / P185).
+
+**Runtime / codegen changes:**
+
+- Single function-entry `OpReserveFrame(frame_hwm)` replaces the
+  per-block `OpReserveFrame(block.var_size)` + `OpFreeStack`
+  bookkeeping.  The whole frame is owned by the function and
+  released on return.
+- Positional init opcodes: `OpInitText(pos)`, `OpInitRef(pos)`,
+  `OpInitRefSentinel(pos)`, `OpInitCreateStack(pos, dep_pos)`.
+  Every first-assignment writes directly to the allocator-chosen
+  slot; slot-move + gap-fill in `gen_set_first_at_tos` is gone.
+- `OpText` deleted (−1 opcode).  The three compound ops
+  `OpConvRefFromNull` / `OpNullRefSentinel` / `OpCreateStack`
+  remain as dictionary-only entries for parser back-compat; their
+  runtime bodies are dead code.
+- `place_orphaned_vars` deleted (~150 LOC retired).  `process_scope`
+  + `place_large_and_recurse` now reach every local: Insert-rooted
+  function bodies, cross-scope `Set` in child operator lists, and
+  the `BreakWith / Iter / Tuple / TuplePut / Yield / Parallel`
+  IR shapes are all handled in the main walk.
+- P185 fixed (`p185_slot_alias_on_late_local_in_nested_for` +
+  `p185_late_local_after_inner_loop` un-ignored).
+
+**Diagnostics:**
+
+- Invariant **I7 — scope-frame consistency** in
+  `src/variables/validate.rs`: each variable's `stack_pos` lies
+  within its declared scope's frame region.  Converts the
+  `Incorrect var X[slot] versus TOS` runtime panic into a
+  compile-time `[I7]` diagnostic.
+- V2 allocator (`src/variables/slots_v2.rs`) remains as a shadow
+  validator invoked via `LOFT_SLOT_V2=validate`; I1–I6 green on
+  the corpus as a correctness gate for future V1 edits.
+
+**Retracted from the original plan-04 scope:**
+
+- Single-pass V2 allocator driving codegen (both the
+  codegen-is-allocator pivot and the direct V2-drive attempt hit
+  the same failure mode on variables declared at outer scope but
+  first-Set in inner scope).  V1 continues to drive codegen.
+
 ### Integer → i64 migration (Phase 2c)
 
 `integer` is now 8 bytes end-to-end — on the stack, in struct

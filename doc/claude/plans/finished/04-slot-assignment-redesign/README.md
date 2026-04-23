@@ -5,95 +5,80 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 04 — Slot assignment redesign
 
-## Status — 2026-04-22 retraction + revised close-out
+## Status — 2026-04-23: closed
 
-**Phases 0, 1, 2 landed as design + shadow-validated V2.  Phase 2h
-(codegen-is-allocator) and the subsequent V2-drive attempt are
-retracted.  V1 remains the production allocator.**
+All phases landed.  Plan moved to `plans/finished/`.  See also the
+companion [`plan-05`](../05-orphan-placer-elimination/README.md)
+which retired `place_orphaned_vars`.
 
-**Revised close-out — two phases, both under plan-04:**
+**Final shape — three successive refits, no V1 retirement:**
 
-- **Phase A (landed):** V1 revert + invariant **I7 — scope-frame
-  consistency** in `validate.rs`.  Converts the "`Incorrect var
-  X[slot] versus TOS`" runtime-panic class for zone-1 placements
-  into a compile-time `[I7]` diagnostic.
-- **Phase B (partially landed):** **clean opcode architecture +
-  function-entry frame reserve.**  Separate "advance stack
-  pointer" from "write init value": `OpReserveFrame(n)` (already
-  exists) becomes the sole stack-push primitive; every init-at-slot
-  is a positional `OpInit*(pos)` op.  Positional init ops:
-  `OpInitText(pos)` + `OpInitRef(pos)` (from 2h.1) plus new
-  `OpInitRefSentinel(pos)` + `OpInitCreateStack(pos, dep_pos)`.
-  Sub-phases:
-  - **B.1 landed** (`9f759ee`): 2 new positional ops added as
-    dormant primitives.
-  - **B.2 landed** (`bea156a…5e35948`): rewired all codegen call
-    sites + parser-emitted compound ops via `generate_call`
-    interception; deleted `OpText` (−1 opcode).  The 3 remaining
-    compound ops (`OpConvRefFromNull`, `OpNullRefSentinel`,
-    `OpCreateStack`) are now dead runtime code — dictionary
-    entries survive only so parser `cl("OpName", …)` emissions
-    still find a `def_nr`.
-  - **B.3 designed, deferred** — emit one function-entry
-    `OpReserveFrame(frame_hwm)`; delete per-block
-    `OpReserveFrame(block.var_size)`; remove slot-move + gap-fill
-    from `gen_set_first_at_tos`.  Blocked by a slot-aware refactor
-    of 4 `gen_set_first_ref_*_copy` functions + the reassign deep-
-    copy branch in `generate_set` — each hard-codes
-    `OpInitRef(12) + OpDatabase(12, tp)` under the now-invalid
-    assumption `v.stack_pos == stack.position`.  Design in
-    [`b3-function-entry-reserve.md`](b3-function-entry-reserve.md);
-    estimated 2–3 focused days to land B.3.a–j cleanly.
-  - **B.4 docs — pending B.3.**
+- **Phase A (`9f759ee`) — landed.**  V1 revert + invariant **I7 —
+  scope-frame consistency** in `validate.rs`.  Converts the
+  `Incorrect var X[slot] versus TOS` runtime-panic class for
+  zone-1 placements into a compile-time `[I7]` diagnostic.
+- **Phase B.1 (`9f759ee`) — landed.**  Positional init
+  primitives `OpInitRefSentinel(pos)` + `OpInitCreateStack(pos,
+  dep_pos)` added alongside the existing `OpInitText(pos)` /
+  `OpInitRef(pos)` (from 2h.1).
+- **Phase B.2 (`bea156a…5e35948`) — landed.**  Rewired every
+  codegen call site + parser-emitted compound op via
+  `generate_call` interception; deleted `OpText` (−1 opcode).
+  The three remaining compound ops (`OpConvRefFromNull`,
+  `OpNullRefSentinel`, `OpCreateStack`) became dead runtime code
+  but kept their dictionary entries so parser `cl("OpName", …)`
+  still resolves.
+- **Phase B.3 atomic bundle (`06a8d14`) — landed.**  Single
+  function-entry `OpReserveFrame(frame_hwm)`; per-block
+  `OpReserveFrame(block.var_size)` deleted; slot-move + gap-fill
+  removed from `gen_set_first_at_tos`.  `gen_set_first_*` helpers
+  rewritten slot-aware.  `generate_set`'s first-allocation
+  dispatch collapsed to a single `gen_set_first_at_tos` call.
+  `generate_block` drop-tail compensation re-reads a `Var(inner)`
+  when the tail is `Drop(Var(_))` and the block result is
+  non-Void (papers over a parser-emitted IR pattern the previous
+  per-block reserve implicitly covered).
+- **Phase B.3 follow-up v2 (`f47cc93`) — landed.**  `par(b = …, N)`
+  loop body treats `b` as a parse-time alias, not a runtime
+  variable; `build_parallel_for_ir` uses `create_unique` +
+  `set_name` to register `b` for body parsing, then
+  `replace_var_in_ir` substitutes every `Value::Var(b_var)` with
+  the element accessor at parse time.  Fixes the name-sharing
+  regression where two par blocks collapsed onto one `b_var` via
+  `Function::add_variable`'s name-keyed early-return.  See
+  [`b3-par-inline.md`](b3-par-inline.md) for the design and
+  [`b3-par-type-lie.md`](b3-par-type-lie.md) for the shelved v1
+  attempt's post-mortem.
+- **Phase B.4 — landed.**  `SLOTS.md` frame-layout section
+  rewritten for the single-entry-reserve design; CHANGELOG entry
+  added alongside plan-05's close-out.
 
-Phase B stays under plan-04 — no plan-06 spin-out.  The 2h.3
-"function-entry-only `OpReserveFrame(hwm)` optimisation" and the
-2h.1 positional-primitive idea are both preserved in the design,
-extended to eliminate the compound ops entirely, but **without
-the V1 retirement** that 2h.3 bundled.
+**Retracted / deferred out of scope:**
+- The original single-pass V2 allocator driving codegen (2h, 2v,
+  03-switch) — both attempts hit a shared failure mode on
+  outer-scope / inner-Set placements.  V2 remains a shadow
+  validator.
+- The `OpConvRefFromNull` / `OpNullRefSentinel` deletion attempt
+  (2026-04-23) was reverted: replacing the parser's `cl(...)`
+  emissions with decomposed Block IR broke native codegen (the
+  compound ops' `#rust"..."` templates had no equivalent on the
+  positional init ops).  Compound ops stay as dictionary-only
+  dead runtime code.
 
-Both retirement routes — the 2h pivot and the direct V2-drive — share
-a hidden failure mode: variables whose declared scope is an outer block
-but whose first `Set` lands inside a nested block get placed at the
-inner TOS.  A sibling inner block that re-Sets or reads the same
-variable sees the slot above its own TOS → `generate_var` panics with
-`Incorrect var X[slot] versus TOS`.  Concrete surfacing:
-`tests/issues.rs::p162_return_match_struct_enum_native`
-(`_mv_width_3` declared at body scope, first-Set in match_arm(4)).
+See [`05-orphan-placer-elimination/`](../05-orphan-placer-elimination/README.md)
+for the companion plan that retires `place_orphaned_vars` by
+extending V1's main walk.  Both plans together retire every
+brittle-patch target this initiative originally set out to
+structurally fix.
 
-V1 handles this correctly via its **zone-1 pre-pass**: before
-descending into any child scope, V1 collects every variable whose
-`scope == current_block.scope` and greedy-colours their slots at the
-parent's frame_base.  V2's IR-walk algorithm doesn't scope-filter —
-the 02c "99.8 % byte-identical" shadow report missed this because
-invariants I1–I6 check slot *validity*, not codegen-consumability
-under drive.
-
-**What survives:**
-- V1 continues to drive codegen untouched.
-- V2 remains as a shadow-mode validator (`LOFT_SLOT_V2=validate`)
-  — its output passes I1–I6 on the corpus, which is a meaningful
-  correctness gate against future V1 edits.
-- Invariants I1–I6 from `validate.rs` now run automatically at the
-  end of every codegen pass (debug / test builds) against V1's
-  actual output.
-- **New: I7 scope-frame invariant** — catches the "slot outside
-  declared-scope frame" class of bug at compile time with a named
-  diagnostic instead of the runtime `Incorrect var X[…]` panic.
-- The SPEC.md / walkthroughs.md / fixture-catalogue artefacts
-  remain as reference for plan-05 (see below).
-
-**What's deferred:**
-- **P185 un-ignore** — moved to plan-05.
-- Orphan-placer elimination — moved to plan-05.
-
-See [`doc/claude/plans/05-orphan-placer-elimination/`](../05-orphan-placer-elimination/README.md)
-for the targeted follow-up: extend V1's main walk to cover the three
-IR shapes currently orphaned (Insert-rooted bodies, parent-scope
-Set inside child-Block operators, Insert preambles), then delete
-`place_orphaned_vars`.  Companion invariant **I8 —
-orphan-iterator-alias** catches P185's dep-chain-aware aliasing at
-compile time.
+**What survives (the permanent state):**
+- V1 continues to drive codegen.
+- V2 shadow validator under `LOFT_SLOT_V2=validate` — I1–I6 green
+  on the corpus; a meaningful correctness gate for future V1 edits.
+- Invariants I1–I7 in `validate.rs` run at end of every codegen
+  pass in debug / test builds against V1's output.
+- SPEC.md / walkthroughs.md / fixture-catalogue remain as
+  reference.
 
 ---
 
@@ -111,7 +96,7 @@ at a time.
 
 `src/variables/slots.rs::assign_slots` is the single authority for
 variable slot positions.  Its current shape (as documented in
-[SLOTS.md](../../SLOTS.md)):
+[SLOTS.md](../../../SLOTS.md)):
 
 - **Two zones.**  Small (≤ 8 B) variables go to zone 1 with greedy
   interval colouring and `OpReserveFrame`.  Large (> 8 B) variables
@@ -299,7 +284,7 @@ documented runtime contract.
 
 ## Ground rule — no regressions
 
-Per [`plans/README.md`](../README.md): every phase must preserve the
+Per [`plans/README.md`](../../README.md): every phase must preserve the
 full test suite green.  No "rewrite everything then fix the fallout"
 — each phase lands a single narrow change with a regression guard.
 
@@ -320,7 +305,7 @@ full test suite green.  No "rewrite everything then fix the fallout"
 | B.3 | **Function-entry frame reserve** (slot-aware refactor of 4 `gen_set_first_ref_*_copy` paths + reassign branch; delete slot-move; single `OpReserveFrame(frame_hwm)` per function; delete 3 dormant compound ops). | [b3-function-entry-reserve.md](b3-function-entry-reserve.md) | ✅ landed `06a8d14`; wrap threading regression closed by B.3-follow-up (v2) | — |
 | B.3-follow-up (v1) | **par() IR type-lie fix** (shelved) — correct `build_parallel_for_ir`'s first-pass placeholder. | [b3-par-type-lie.md](b3-par-type-lie.md) | ❌ attempted, insufficient — `b_var` is shared across par blocks via name-keyed `add_variable`; `set_type` oscillates. Post-mortem in doc. | — |
 | B.3-follow-up (v2) | **par() loop variable as inline alias** — `b` becomes a parse-time alias for the `OpGetField(OpGetVector(…))` accessor, not a runtime variable.  No `b_var` means no name-sharing bug; the view-semantics of "borrowed read into `_par_results_N`" fit text/ref/struct returns as well. | [b3-par-inline.md](b3-par-inline.md) | ✅ landed — all 49 primitive-pair matrix tests pass; `wrap::threading` + `script_threading` pass; `issues` 500/500, `expressions` 119/119, `slot_v2_baseline` 27/27; `find_problems.sh --bg --wait` clean | — |
-| B.4 | **Docs** — rewrite SLOTS.md frame-layout section; CHANGELOG entry. | — | ⏸ pending B.3-follow-up | — |
+| B.4 | **Docs** — rewrite SLOTS.md frame-layout section; CHANGELOG entry. | — | ✅ landed (this commit) | — |
 
 **Phase 0 artefacts:**
 - 26 fixtures in `tests/slot_v2_baseline.rs` (24 passing, 2 `#[ignore]`-d — P185 and a par-codegen pre-existing issue).
@@ -401,9 +386,9 @@ assertion is meaningful.
 
 ## Related
 
-- [SLOTS.md](../../SLOTS.md) — current design (will be rewritten in Phase 4).
-- [PROBLEMS.md § P178](../../PROBLEMS.md) — orphan-placer argument-area overlap.
-- [PROBLEMS.md § P185](../../PROBLEMS.md) — orphan-placer text-buffer overlap.
+- [SLOTS.md](../../../SLOTS.md) — current design (will be rewritten in Phase 4).
+- [PROBLEMS.md § P178](../../../PROBLEMS.md) — orphan-placer argument-area overlap.
+- [PROBLEMS.md § P185](../../../PROBLEMS.md) — orphan-placer text-buffer overlap.
 - `src/variables/slots.rs` — the subject.
 - `src/variables/intervals.rs` — live-interval computation (already present, to be reused).
 - `src/variables/validate.rs` — debug-only overlap validator (Phase 2's equivalence check will piggy-back on this).

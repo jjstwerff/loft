@@ -14,7 +14,7 @@
 //! (e.g. "because `place_orphaned_vars` starts at `local_start`"), the
 //! fixture is a candidate for rewrite into an invariant assertion
 //! ("orphan locals must not overlap the argument region") — see
-//! `doc/claude/plans/04-slot-assignment-redesign/00-characterize.md`
+//! `doc/claude/plans/finished/04-slot-assignment-redesign/00-characterize.md`
 //! step 3.
 //!
 //! Pattern coverage (drawn from [SLOTS.md] Known Patterns plus the open

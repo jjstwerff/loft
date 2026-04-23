@@ -346,7 +346,7 @@ depend on.
 
 ## Ground rule — no regressions
 
-From [`plans/README.md`](../README.md): every commit runs
+From [`plans/README.md`](../../README.md): every commit runs
 `cargo test --release` green.  Additionally:
 
 - `cargo test --lib` green (unit tests in `validate.rs` still

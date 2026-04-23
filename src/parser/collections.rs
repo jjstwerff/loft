@@ -2208,7 +2208,7 @@ use #count instead"
 /// `build_parallel_for_ir` to inline-expand the par loop variable `b`
 /// to its element-accessor expression, so that `b` is a parse-time
 /// alias rather than a runtime slot.  See
-/// `doc/claude/plans/04-slot-assignment-redesign/b3-par-inline.md`.
+/// `doc/claude/plans/finished/04-slot-assignment-redesign/b3-par-inline.md`.
 fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
     match val {
         Value::Var(v) if *v == target => {

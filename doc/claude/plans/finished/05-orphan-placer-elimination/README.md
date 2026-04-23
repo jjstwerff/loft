@@ -5,8 +5,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 05 — Orphan-placer elimination
 
-**Status:** planned.  Targeted follow-up after plan-04's retraction
-(see [`../04-slot-assignment-redesign/README.md`](../04-slot-assignment-redesign/README.md)
+## Status — 2026-04-23: closed
+
+**Landed:** Phases 1a + 1b + 2 + 2c.
+- `e0a020f` — Phase 1a: `process_scope` handles
+  `Value::Insert` at function-body root.
+- `494e5c7` — Phase 1b: exhaustive IR traversal +
+  cross-scope `Set` handling.
+- `309e0f4` — Phase 2: `place_orphaned_vars` deleted
+  (~150 LOC retired).
+- `f74f78c` — Phase 2c: P185 tests un-ignored + marked
+  fixed in `PROBLEMS.md`.
+
+**Dropped:** Phase 2b (invariant **I8 — orphan-iterator-alias**
+in `validate.rs`).  With `place_orphaned_vars` gone, the bug
+class I8 would catch is structurally prevented — a defensive
+invariant with no driving bug doesn't pay its complexity cost.
+Revisit only if a future slot-reuse aliasing regression surfaces.
+
+Plan moved to `plans/finished/`.
+
+Follow-up to plan-04 (see
+[`../04-slot-assignment-redesign/README.md`](../04-slot-assignment-redesign/README.md)
 § Status).
 
 **Goal:** delete `src/variables/slots.rs::place_orphaned_vars` by
@@ -72,16 +92,19 @@ Phase 1 complete.  Phase 2 gates the retirement of
 `place_orphaned_vars`.
 
 **Phase 2 — Delete and guard:**
-- Delete `place_orphaned_vars` and its call site.  *(this commit)*
+- Delete `place_orphaned_vars` and its call site.
+  *(landed — Phase 2, `309e0f4`)*
 - Add invariant **I8 — orphan-iterator-alias** to
   `src/variables/validate.rs`: for each slot reuse across live
   intervals, walk dep chains to ensure no currently-live variable's
   value points into the reused slot's backing store.  Panic with
-  `[I8]` prefix.  *(Phase 2b — next commit)*
+  `[I8]` prefix.  *(Phase 2b — deferred; defensive-only, no
+  open bug drives it)*
 - Un-ignore `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
   and `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`.
-  *(Phase 2c)*
-- Mark P185 fixed in `doc/claude/PROBLEMS.md`.  *(Phase 2c)*
+  *(landed — Phase 2c, `f74f78c`)*
+- Mark P185 fixed in `doc/claude/PROBLEMS.md`.
+  *(landed — Phase 2c, `f74f78c`)*
 
 ## References
 
@@ -109,7 +132,7 @@ Code:
 
 ## Ground rule — no regressions
 
-Per [`plans/README.md`](../README.md): every phase lands a single
+Per [`plans/README.md`](../../README.md): every phase lands a single
 narrow change with `cargo test --release` green.  Never bundle the
 main-walk extension with the orphan placer deletion.
 
