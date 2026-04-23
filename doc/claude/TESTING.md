@@ -27,6 +27,18 @@ panics, and SIGSEGV context (last ~15 lines before each crash).
 `--wait` blocks on the background pid and then produces the
 final summary.
 
+Before the test run starts, the script rebuilds every sibling
+cdylib under `lib/*/native/` via `rebuild_native_cdylibs`.  The
+suite dlopens these libraries through `extensions::load_all` or
+links them via `--native`; when the `.rlib` / `.so` is older than
+its source, rustc surfaces a confusing
+`cannot find function X in crate loft_*_native` and cascades a
+dozen unrelated test failures.  Cargo is incremental, so a clean
+tree is ~free; a stale tree costs one recompile but stops a
+whole class of misleading reports.  The same freshness step is
+wired into `make test`, `make quick`, `make ci`, and
+`make run-tests` via the `rebuild-native-cdylibs` target.
+
 Running in the background is the default for a reason: the
 suite takes long enough that blocking on it wastes cycles you
 could spend reading the failure pattern that's already showing

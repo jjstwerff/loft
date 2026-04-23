@@ -62,7 +62,7 @@
 # down to any name to see exactly what it does.
 # =========================================================================
 
-.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help
+.PHONY: all check-targets install uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm loft-test wasm-assets test-packages test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game play native-editor editor-dist help rebuild-native-cdylibs
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -122,7 +122,31 @@ debug:
 	RUSTFLAGS=-g RUST_BACKTRACE=1 cargo build -v
 	sudo ln -f -s ${PWD}/target/debug/loft /usr/local/bin/loft
 
-test: clippy
+# Rebuild every derived artefact the test suite depends on.  Covers
+# three classes of stale artefact that each cascade into misleading
+# test failures:
+#   1. Sibling cdylibs under lib/*/native/  (loaded via
+#      extensions::load_all, linked via --native)
+#   2. Test fixture cdylibs under tests/lib/*/native/
+#   3. The wasm32-unknown-unknown rlib the html_wasm suite links
+#      (only when the target already exists, so `make test` doesn't
+#      impose the wasm target on developers who never touch --html)
+# Cargo is incremental; each step is ~free on a clean tree.
+rebuild-native-cdylibs:
+	@for d in lib/*/native tests/lib/*/native; do \
+	  [ -f "$$d/Cargo.toml" ] || continue; \
+	  (cd "$$d" && cargo build --release -q) || { \
+	    echo "FAIL: rebuild $$d"; exit 1; \
+	  }; \
+	done
+	@if [ -d target/wasm32-unknown-unknown ]; then \
+	  cargo build --release --target wasm32-unknown-unknown \
+	    --lib --no-default-features --features random -q || { \
+	    echo "FAIL: wasm rlib rebuild"; exit 1; \
+	  }; \
+	fi
+
+test: clippy rebuild-native-cdylibs
 	-rm -f tests/generated/*
 	-rm -f tests/dumps/*.txt
 	# --release: the loft bytecode interpreter is ~1800x slower in debug
@@ -130,7 +154,7 @@ test: clippy
 	# the full test suite under a minute instead of 30+ minutes.
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 >> result.txt 2>&1
 
-quick:
+quick: rebuild-native-cdylibs
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
 
 profile:
@@ -689,7 +713,7 @@ test-gl-headless:
 	echo "$$total tested, $$skipped skipped, $$failed failed"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
 
-ci:
+ci: rebuild-native-cdylibs
 	-rm -rf tests/generated
 	-rm -f /tmp/loft_native_*
 	# Some tests (e.g. fill_rs_up_to_date, n2..n10) write into tests/generated
@@ -751,7 +775,7 @@ ship:
 	cargo clippy --no-default-features --all-targets -- -D warnings && \
 	cargo test --release
 
-run-tests:
+run-tests: rebuild-native-cdylibs
 	cargo test --release > result.txt 2>&1
 
 clippy:

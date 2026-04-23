@@ -39,6 +39,74 @@ LOG_DEFAULT=/tmp/loft_test.log
 OUT_DEFAULT=/tmp/loft_problems.txt
 PID_FILE=/tmp/loft_test.pid
 
+# Refresh every derived artefact that the test suite depends on before
+# running it.  There are three classes of stale artefact, each of which
+# has caused a cascade of misleading test failures in the past:
+#
+#   1. Sibling cdylibs under lib/*/native/ — loaded by
+#      `extensions::load_all`, linked by `--native`.  Source gains a
+#      symbol → rustc: "cannot find function X in crate Y".
+#   2. Test fixture cdylibs under tests/lib/*/native/ — native_loader
+#      tests detect this and panic with a clear message, but one
+#      detection panic per test is still one per test.
+#   3. The wasm32-unknown-unknown rlib used by html_wasm tests —
+#      the html_wasm suite checks staleness before running.
+#
+# Cargo is incremental, so each step is ~free on a clean tree.  Logs
+# go to /tmp/loft_cdylib.log so the test log stays focused on test
+# output.  Failures here print a warning but do not stop the test run;
+# the pre-existing in-test detection will surface the underlying
+# problem with a specific rebuild command.
+rebuild_native_cdylibs() {
+  local repo_root
+  repo_root=$(cd "$(dirname "$0")/.." && pwd)
+  local log=/tmp/loft_cdylib.log
+  : > "$log"
+  local any_src_cdylib=0
+
+  # 1. Sibling cdylibs under lib/*/native/
+  for manifest in "$repo_root"/lib/*/native/Cargo.toml; do
+    [[ -f "$manifest" ]] || continue
+    any_src_cdylib=1
+    local dir
+    dir=$(dirname "$manifest")
+    echo "== rebuild $dir ==" >> "$log"
+    if ! (cd "$dir" && cargo build --release -q >> "$log" 2>&1); then
+      echo "warning: rebuild of $dir failed — see $log" >&2
+    fi
+  done
+
+  # 2. Test fixture cdylibs under tests/lib/*/native/
+  while IFS= read -r manifest; do
+    [[ -f "$manifest" ]] || continue
+    any_src_cdylib=1
+    local dir
+    dir=$(dirname "$manifest")
+    echo "== rebuild $dir ==" >> "$log"
+    if ! (cd "$dir" && cargo build --release -q >> "$log" 2>&1); then
+      echo "warning: rebuild of $dir failed — see $log" >&2
+    fi
+  done < <(find "$repo_root/tests" -name Cargo.toml -not -path '*/target/*' 2>/dev/null)
+
+  # 3. The wasm32-unknown-unknown rlib used by the html_wasm suite.
+  #    Only rebuild if the target directory already exists — the very
+  #    first run lets the --html driver build it so we don't impose a
+  #    wasm-target install on developers who never touch the HTML gate.
+  if [[ -d "$repo_root/target/wasm32-unknown-unknown" ]]; then
+    echo "== rebuild wasm32-unknown-unknown rlib ==" >> "$log"
+    if ! (cd "$repo_root" && cargo build --release \
+            --target wasm32-unknown-unknown \
+            --lib --no-default-features --features random \
+            -q >> "$log" 2>&1); then
+      echo "warning: wasm rlib rebuild failed — see $log" >&2
+    fi
+  fi
+
+  if [[ "$any_src_cdylib" -eq 0 ]]; then
+    echo "no sibling cdylibs found — skipping freshness step" >&2
+  fi
+}
+
 # Extract a compact failure summary from the raw log.
 # $1: log path, $2: output path
 summarise() {
@@ -155,6 +223,10 @@ if [[ "${1:-}" == "--bg" ]]; then
   # Remove stale bytecode caches so tests always compile fresh.
   find tests/ -name '*.loftc' -delete 2>/dev/null || true
   find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
+  # Refresh sibling cdylibs before forking; see rebuild_native_cdylibs
+  # for the rationale.  Runs in the foreground so the caller sees build
+  # errors immediately, not 90 s later inside the test log.
+  rebuild_native_cdylibs
   # Tee via a subshell so the script returns after backgrounding.
   (cargo test --release --no-fail-fast > "$LOG" 2>&1
    summarise "$LOG" "$OUT") &
@@ -169,6 +241,7 @@ LOG="${1:-$LOG_DEFAULT}"
 OUT="${2:-$OUT_DEFAULT}"
 find tests/ -name '*.loftc' -delete 2>/dev/null || true
 find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
+rebuild_native_cdylibs
 cargo test --release --no-fail-fast 2>&1 | tee "$LOG"
 summarise "$LOG" "$OUT"
 echo
