@@ -10001,7 +10001,6 @@ fn test() {
 /// because the bug requires a real `file(...).files()` iterator —
 /// synthetic vector iteration doesn't reproduce the slot overlap.
 #[test]
-#[ignore = "P185 — slot aliasing; see PROBLEMS.md"]
 fn p185_slot_alias_on_late_local_in_nested_for() {
     code!(
         "fn test() {

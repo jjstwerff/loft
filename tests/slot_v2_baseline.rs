@@ -415,7 +415,6 @@ fn test() {
 // `#[ignore]`d and `slots("")` is a placeholder.
 
 #[test]
-#[ignore = "P185 — slot aliasing; V2 redesign required to lock layout"]
 fn p185_late_local_after_inner_loop() {
     code!(
         "fn test() {

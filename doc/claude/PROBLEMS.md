@@ -1393,7 +1393,23 @@ assertion).
 for the indirect regression guard — a direct `tests/issues.rs::p184_*`
 guard should land with the proper fix.)
 
-### P185 — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop
+### ~~P185~~ — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop — FIXED
+
+**Fixed 2026-04-23** by plan-05 (`doc/claude/plans/05-orphan-placer-elimination/`).
+The root cause was `place_orphaned_vars` placing the late local
+(`key`) onto a slot still used by a live text buffer — the inline
+`file(...)` iterator temporary's slot was freed too aggressively.
+Plan-05 retired the orphan placer outright: Phase 1a recognised
+`Value::Insert` at the function-body root, Phase 1b extended
+`place_large_and_recurse` to traverse every `Value` variant AND to
+handle cross-scope `Set(v)` where `v.scope != walker_scope`
+(the canonical shape for file-read preambles).  With the main walk
+now reaching every variable, `place_orphaned_vars` was deleted in
+Phase 2 (`309e0f4`).  The `tests/issues.rs::p185_*` and
+`tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`
+tests are un-ignored in this commit.
+
+### Historical — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop
 
 **Severity:** High (safety: heap corruption).  Triggers `OpFreeText`
 (op 118) on a slot that still aliases a live text buffer, producing
@@ -1480,8 +1496,8 @@ compile-time panic.  Until plan-05 lands, the two workarounds
 above are the user-facing guidance.
 
 **Tests:** `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
-— currently `#[ignore = "P185 — slot aliasing; see PROBLEMS.md"]`;
-unignore when the fix lands.
+and `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`
+— both un-ignored 2026-04-23 after plan-05 Phase 2 landed.
 
 **Discovered:** 2026-04-22, while investigating why `doc/examples.js`
 drifted on the `docs-problems-sync` branch (the generator had been
