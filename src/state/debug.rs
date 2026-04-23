@@ -38,6 +38,27 @@ fn frame_base_or(state: &State) -> u32 {
     state.call_stack.last().map_or(4, |cf| cf.args_base)
 }
 
+/// Result of the anomaly-scan pass of [`State::validate_stack`].  Produced
+/// once and borrowed by the later summary / hex-dump / annotation stages.
+struct StackScan {
+    anomalies: usize,
+    sp: u32,
+    base: u32,
+    compile_sp: Option<u16>,
+    max_store: u16,
+    safe_top: u32,
+    dbref_anomalies: Vec<DbRefAnomaly>,
+}
+
+/// A 12-byte window on the stack whose `store_nr` is non-zero but outside
+/// the allocation table — i.e. almost certainly a stale / corrupted `DbRef`.
+struct DbRefAnomaly {
+    off: u32,
+    sn: u16,
+    rec: u32,
+    pos: u32,
+}
+
 // ------------------------------------------------------------------ FrameVariable
 
 /// One slot-assigned variable in the current call frame, with a snapshot of its
@@ -119,9 +140,14 @@ impl State {
     /// Validate the interpreter stack and write a diagnostic hex dump.
     /// Returns the number of anomalies (bounds, alignment, stale `DbRef`).
     ///
+    /// The function is a thin coordinator: it runs the four anomaly checks
+    /// (bounds / alignment / compile-time depth / DbRef scan), then — up to
+    /// the requested `level` — the summary line, hex dump, and variable
+    /// annotation sections.  Each section is a private helper so its
+    /// concern can be read, tested, and skipped independently.
+    ///
     /// # Errors
     /// Propagates I/O errors from the writer.
-    #[allow(clippy::too_many_lines)]
     pub fn validate_stack(
         &self,
         f: &mut dyn Write,
@@ -130,13 +156,44 @@ impl State {
         level: StackDiagLevel,
         extras: &[(u32, u32, &str)],
     ) -> Result<usize, Error> {
+        let scan = self.scan_stack_anomalies(f, code_pos, level)?;
+
+        if level == StackDiagLevel::Silent {
+            return Ok(scan.anomalies);
+        }
+
+        Self::write_stack_summary(f, &scan, code_pos)?;
+
+        if level == StackDiagLevel::Brief {
+            return Ok(scan.anomalies);
+        }
+
+        self.write_stack_hex_dump(f, &scan, extras)?;
+
+        if level < StackDiagLevel::Full {
+            return Ok(scan.anomalies);
+        }
+
+        self.write_stack_variable_annotations(f, data, code_pos)?;
+        Ok(scan.anomalies)
+    }
+
+    /// Run the bounds / alignment / compile-depth / DbRef anomaly checks.
+    /// In non-Silent modes, bounds and alignment problems are reported
+    /// inline; in Brief mode, DbRef anomalies are reported inline too (the
+    /// full Hex mode defers them to the annotation pass for context).
+    fn scan_stack_anomalies(
+        &self,
+        f: &mut dyn Write,
+        code_pos: u32,
+        level: StackDiagLevel,
+    ) -> Result<StackScan, Error> {
         let mut anomalies = 0usize;
         let store = self.database.store(&self.stack_cur);
         let store_bytes = store.byte_capacity();
-        let base = self.stack_cur.pos; // base byte offset within the record
+        let base = self.stack_cur.pos;
         let sp = self.stack_pos;
 
-        // ---- 1. Bounds ----
         if u64::from(base) + u64::from(sp) > store_bytes {
             anomalies += 1;
             if level > StackDiagLevel::Silent {
@@ -150,7 +207,6 @@ impl State {
             }
         }
 
-        // ---- 2. Alignment ----
         if !sp.is_multiple_of(4) {
             anomalies += 1;
             if level > StackDiagLevel::Silent {
@@ -158,7 +214,6 @@ impl State {
             }
         }
 
-        // ---- 3. Compile-time depth comparison ----
         let compile_sp: Option<u16> = if code_pos == u32::MAX {
             None
         } else {
@@ -170,18 +225,14 @@ impl State {
             anomalies += 1;
         }
 
-        // ---- 4. DbRef anomaly scan ----
-        // Walk every 4-byte aligned offset and treat every 12-byte window as a
-        // potential DbRef.  Flag those whose store_nr is non-zero but >= max.
         let max_store = self.database.allocations.len() as u16;
         let safe_top = sp.min((store_bytes.saturating_sub(u64::from(base))) as u32);
-        // Collect anomalous DbRef positions for the hex dump annotation.
-        let mut dbref_anomalies: Vec<(u32, u16, u32, u32)> = Vec::new(); // (offset, sn, rec, pos)
+        let mut dbref_anomalies: Vec<DbRefAnomaly> = Vec::new();
         if safe_top >= 12 {
             let mut off = 0u32;
             while off + 12 <= safe_top {
-                // Read the three 4-byte words manually from consecutive bytes to
-                // avoid any potential alignment or bounds issue.
+                // Read three 4-byte words manually, byte-by-byte, to sidestep
+                // any potential alignment or bounds issue.
                 let b = |o: u32| -> u8 { *store.addr::<u8>(self.stack_cur.rec, base + o) };
                 let w0 = u32::from_le_bytes([b(off), b(off + 1), b(off + 2), b(off + 3)]);
                 let sn = (w0 & 0xFFFF) as u16; // store_nr lives in the low 2 bytes
@@ -189,9 +240,8 @@ impl State {
                 let pos = u32::from_le_bytes([b(off + 8), b(off + 9), b(off + 10), b(off + 11)]);
                 if sn != 0 && sn < u16::MAX && sn >= max_store {
                     anomalies += 1;
-                    dbref_anomalies.push((off, sn, rec, pos));
+                    dbref_anomalies.push(DbRefAnomaly { off, sn, rec, pos });
                     if level > StackDiagLevel::Silent && level < StackDiagLevel::Hex {
-                        // In Brief mode print the anomaly inline.
                         writeln!(
                             f,
                             "[STACK] SUSPECT DbRef @{off}: store_nr={sn} \
@@ -203,34 +253,57 @@ impl State {
             }
         }
 
-        if level == StackDiagLevel::Silent {
-            return Ok(anomalies);
-        }
+        Ok(StackScan {
+            anomalies,
+            sp,
+            base,
+            compile_sp,
+            max_store,
+            safe_top,
+            dbref_anomalies,
+        })
+    }
 
-        // ---- 5. Summary line ----
+    /// One-line stack summary: `[STACK] stack_pos=N compile=M[ok] ...`.
+    fn write_stack_summary(
+        f: &mut dyn Write,
+        scan: &StackScan,
+        code_pos: u32,
+    ) -> Result<(), Error> {
+        let sp = scan.sp;
         write!(f, "[STACK] stack_pos={sp}")?;
-        match compile_sp {
+        match scan.compile_sp {
             Some(csp) if u32::from(csp) == sp => write!(f, " compile={csp}[ok]")?,
             Some(csp) => write!(f, " compile={csp}[MISMATCH runtime={sp}]")?,
             None => {}
         }
-        write!(f, " anomalies={anomalies}")?;
+        write!(f, " anomalies={}", scan.anomalies)?;
         if code_pos != u32::MAX {
             write!(f, " code_pos={code_pos}")?;
         }
         writeln!(f)?;
+        Ok(())
+    }
 
-        if level == StackDiagLevel::Brief {
-            return Ok(anomalies);
+    /// Hex dump of the live stack with DbRef-anomaly and caller-supplied
+    /// `extras` labels interleaved at their byte offsets.
+    fn write_stack_hex_dump(
+        &self,
+        f: &mut dyn Write,
+        scan: &StackScan,
+        extras: &[(u32, u32, &str)],
+    ) -> Result<(), Error> {
+        if scan.safe_top == 0 {
+            return Ok(());
         }
-
-        // ---- 6. Hex dump ----
-        // Build a combined label map: (offset, label) sorted by offset.
         let mut labels: Vec<(u32, String)> = Vec::new();
-        for (off, sn, rec, pos) in &dbref_anomalies {
+        for a in &scan.dbref_anomalies {
             labels.push((
-                *off,
-                format!("SUSPECT DbRef store_nr={sn}(max={max_store}) rec={rec} pos={pos}"),
+                a.off,
+                format!(
+                    "SUSPECT DbRef store_nr={}(max={}) rec={} pos={}",
+                    a.sn, scan.max_store, a.rec, a.pos
+                ),
             ));
         }
         for (from, to, note) in extras {
@@ -238,82 +311,82 @@ impl State {
         }
         labels.sort_by_key(|(o, _)| *o);
 
-        if safe_top > 0 {
-            const ROW: u32 = 16;
-            writeln!(f, "[STACK] hex dump (stack_pos={sp}, base={base}):")?;
-            let b = |o: u32| -> u8 { *store.addr::<u8>(self.stack_cur.rec, base + o) };
-            let mut off = 0u32;
-            while off < safe_top {
-                let row_end = (off + ROW).min(safe_top);
-                write!(f, "  {off:5}: ")?;
-                // Hex
-                for i in off..row_end {
-                    write!(f, "{:02x} ", b(i))?;
-                }
-                // Pad short rows
-                for _ in 0..(ROW - (row_end - off)) {
-                    write!(f, "   ")?;
-                }
-                // ASCII
-                write!(f, " |")?;
-                for i in off..row_end {
-                    let c = b(i);
-                    write!(f, "{}", if c.is_ascii_graphic() { c as char } else { '.' })?;
-                }
-                write!(f, "|")?;
-                // Labels that start in this row
-                for (loff, lbl) in labels.iter().filter(|(lo, _)| *lo >= off && *lo < row_end) {
-                    write!(f, "  <@{loff} {lbl}>")?;
-                }
-                writeln!(f)?;
-                off += ROW;
+        const ROW: u32 = 16;
+        let store = self.database.store(&self.stack_cur);
+        let base = scan.base;
+        let b = |o: u32| -> u8 { *store.addr::<u8>(self.stack_cur.rec, base + o) };
+        writeln!(f, "[STACK] hex dump (stack_pos={}, base={base}):", scan.sp)?;
+        let mut off = 0u32;
+        while off < scan.safe_top {
+            let row_end = (off + ROW).min(scan.safe_top);
+            write!(f, "  {off:5}: ")?;
+            for i in off..row_end {
+                write!(f, "{:02x} ", b(i))?;
             }
-        }
-
-        if level < StackDiagLevel::Full {
-            return Ok(anomalies);
-        }
-
-        // ---- 7. Variable annotations (Full mode) ----
-        let fn_d_nr = data.map_or(u32::MAX, |d| State::fn_d_nr_for_pos(code_pos, d));
-        if fn_d_nr != u32::MAX {
-            if let Some(d) = data {
-                let vars = &d.def(fn_d_nr).variables;
-                writeln!(
-                    f,
-                    "[STACK] variables for fn_d_nr={fn_d_nr} ({}):",
-                    d.def(fn_d_nr).name
-                )?;
-                // Collect variables that have an assigned stack slot, sorted by slot.
-                let mut slots: Vec<(u16, String, String, u16)> = Vec::new(); // (slot, name, type, size)
-                for v_nr in 0..d.def(fn_d_nr).variables.count() {
-                    let slot = vars.stack(v_nr);
-                    if slot == u16::MAX {
-                        continue;
-                    }
-                    let var_size = size(vars.tp(v_nr), &Context::Variable);
-                    let type_str = vars.tp(v_nr).show(d, vars);
-                    slots.push((slot, vars.name(v_nr).to_string(), type_str, var_size));
-                }
-                slots.sort_by_key(|(s, _, _, _)| *s);
-                if slots.is_empty() {
-                    writeln!(f, "  (no slot-assigned variables at this code position)")?;
-                } else {
-                    writeln!(f, "  {:<6} {:<6} {:<22} type", "slot", "size", "name")?;
-                    for (slot, name, tp, var_size) in &slots {
-                        let end = slot + var_size;
-                        // Mark slot as live (within current stack frame)
-                        let live = u32::from(*slot) < sp;
-                        let flag = if live { "" } else { " [out-of-frame]" };
-                        writeln!(f, "  [{slot}..{end}) {name:<22} {tp}{flag}")?;
-                    }
-                }
+            for _ in 0..(ROW - (row_end - off)) {
+                write!(f, "   ")?;
             }
-        } else if code_pos != u32::MAX {
-            writeln!(f, "[STACK] no matching function for code_pos={code_pos}")?;
+            write!(f, " |")?;
+            for i in off..row_end {
+                let c = b(i);
+                write!(f, "{}", if c.is_ascii_graphic() { c as char } else { '.' })?;
+            }
+            write!(f, "|")?;
+            for (loff, lbl) in labels.iter().filter(|(lo, _)| *lo >= off && *lo < row_end) {
+                write!(f, "  <@{loff} {lbl}>")?;
+            }
+            writeln!(f)?;
+            off += ROW;
         }
+        Ok(())
+    }
 
-        Ok(anomalies)
+    /// List every slot-assigned variable of the current function with its
+    /// slot range, type, and live/out-of-frame flag.  Emitted in Full mode.
+    fn write_stack_variable_annotations(
+        &self,
+        f: &mut dyn Write,
+        data: Option<&Data>,
+        code_pos: u32,
+    ) -> Result<(), Error> {
+        let Some(d) = data else { return Ok(()) };
+        let fn_d_nr = State::fn_d_nr_for_pos(code_pos, d);
+        if fn_d_nr == u32::MAX {
+            if code_pos != u32::MAX {
+                writeln!(f, "[STACK] no matching function for code_pos={code_pos}")?;
+            }
+            return Ok(());
+        }
+        let vars = &d.def(fn_d_nr).variables;
+        writeln!(
+            f,
+            "[STACK] variables for fn_d_nr={fn_d_nr} ({}):",
+            d.def(fn_d_nr).name
+        )?;
+        let mut slots: Vec<(u16, String, String, u16)> = Vec::new();
+        for v_nr in 0..vars.count() {
+            let slot = vars.stack(v_nr);
+            if slot == u16::MAX {
+                continue;
+            }
+            let var_size = size(vars.tp(v_nr), &Context::Variable);
+            let type_str = vars.tp(v_nr).show(d, vars);
+            slots.push((slot, vars.name(v_nr).to_string(), type_str, var_size));
+        }
+        slots.sort_by_key(|(s, _, _, _)| *s);
+        if slots.is_empty() {
+            writeln!(f, "  (no slot-assigned variables at this code position)")?;
+            return Ok(());
+        }
+        writeln!(f, "  {:<6} {:<6} {:<22} type", "slot", "size", "name")?;
+        let sp = self.stack_pos;
+        for (slot, name, tp, var_size) in &slots {
+            let end = slot + var_size;
+            let live = u32::from(*slot) < sp;
+            let flag = if live { "" } else { " [out-of-frame]" };
+            writeln!(f, "  [{slot}..{end}) {name:<22} {tp}{flag}")?;
+        }
+        Ok(())
     }
 
     /// Convenience wrapper: write a Full stack validation report to stderr.
