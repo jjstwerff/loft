@@ -365,17 +365,19 @@ in a better state than it found it, with passing tests).
 8. **H4** — HTTP client + `HttpResponse`; Medium, `ureq` already present from REG.1; test against httpbin.org or mock
 7. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
-**For 0.9.0 (after 0.8.4 is tagged):**
+**For the 0.8.5 → 0.8.6 → 0.9.0 advertising-readiness sequence (after 0.8.4 is tagged):**
 
-Ordered in four tiers by (immediate leverage) × (low scope risk) ×
-(dependencies-on / unblocking).  Tier 1 lands before Tier 2 starts;
-Tier 3 waits on Tier 1 for CI confidence; Tier 4 is the tail.
-Today's development-process-and-adoption assessment (see
-[ROADMAP.md § 0.9.0 Advertising readiness](ROADMAP.md#090--fully-working-loft-language))
-drives the ordering: advertising-readiness items land first; pure
-language polish moves to the tail.
+Ordered by (immediate leverage) × (low scope risk) ×
+(dependencies-on / unblocking), now split across three releases so
+each ship is a standalone tag with its own CHANGELOG entry.  The
+split was introduced after today's "can we advertise loft?"
+assessment; see
+[ROADMAP.md § 0.8.5](ROADMAP.md#085--loft-is-learnable),
+[§ 0.8.6](ROADMAP.md#086--loft-is-extensible), and
+[§ 0.9.0](ROADMAP.md#090--fully-working-loft-language) for per-release
+scope and ship criteria.
 
-**Tier 1 — immediate wins, ~1 week total**
+**Release 0.8.5 — "loft is learnable" (~2 weeks)**
 
 1. **DX.4** — native CI parity.  Promote `tests/native.rs` into the
    fast `cargo nextest run --profile ci` gate.  One CI config
@@ -391,16 +393,17 @@ language polish moves to the tail.
    (`lib/graphics/examples/*.loft`, brick-buster, moros-editor)
    under a discoverable path with one-paragraph READMEs.  Feeds
    DX.3.
-
-**Tier 2 — narrative, parallel with Tier 1 once writing bandwidth frees**
-
-4. **DX.3** — "Learn loft in 30 minutes" tutorial.  Writing
+4. **DX.3** — "Learn loft in 30 minutes" walkthrough.  Writing
    work, not coding.  Start from the house-scene canvas demo
    (already working, gold-tested) and narrate forward.  Single
-   GitHub Pages page is the cheapest ship.  Depends on Tier 1
-   for concrete screenshots / referential examples.
+   GitHub Pages page.  Depends on SH.1 / SH.2 / DX.1 for concrete
+   screenshots and referential examples.
 
-**Tier 3 — ecosystem foundation, ~2 weeks after Tier 1 green**
+Ship criterion: one external programmer can install SH.2 from VS
+Code Marketplace, open an example, read DX.3 top-to-bottom, and
+run the demo within 30 minutes from zero prior exposure.
+
+**Release 0.8.6 — "loft is extensible" (~3 weeks)**
 
 5. **FFI.1 → FFI.2 → FFI.3 → FFI.4** in that order.  Generic
    type marshaller, generic cdylib loader, per-function glue
@@ -408,50 +411,55 @@ language polish moves to the tail.
    together shrinks the boilerplate bar for extracted libraries —
    `lib/graphics/native/` has ~15 hand-written type-punning
    functions today that FFI.1–3 subsume.  Prerequisite for
-   PKG.EXTRACT being sane; starting before FFI.1–4 means every
-   extracted repo duplicates boilerplate about to be deleted.
+   0.9.0's PKG.EXTRACT.
 6. **PKG.7** — lock file (`loft.lock`).  Cheap, precedes PKG.REG.
 7. **PKG.REG** — registry MVP.  Design is complete in
    [PACKAGES.md](PACKAGES.md); implementation is the
    `loft install <name>` fetcher + a `registry.txt` on GitHub
-   seeded with 3–5 first-party libraries that stay in-repo for
-   this phase (extraction comes later).
+   seeded with 3–5 first-party libraries that stay in-repo
+   for 0.8.6 (extraction is 0.9.0's PKG.EXTRACT).
 
-**Tier 4 — language-polish tail, land in remaining 0.9.0 window**
+Ship criterion: `loft install <name>` resolves and installs from
+the public registry for at least 3 libraries; a third-party
+library outside the `loft` repo proves the registry is genuinely
+federated.
+
+**Release 0.9.0 — "fully working loft language" (~6 weeks)**
 
 8. **L1** — error recovery after token failures.  Standalone UX
-   improvement; was already in 0.9.0 prior to the re-prioritise;
-   also unblocks P2.4.
+   improvement; RELEASE.md H blocker for 0.9.0.  Also unblocks
+   P2.4.
 9. **A2** — logger remaining work.  Independent, small-medium;
    can land any time a hand's free.
-10. **P2** — REPL.  High effort; land after L1 (needed for
-    P2.4 error recovery).
-11. **W-warn** — developer warnings (Clippy-inspired).  Medium;
-    design in GAME_INFRA.md.
+10. **P2** — REPL.  High effort; RELEASE.md H blocker.  Land
+    after L1 (needed for P2.4 error recovery).
+11. **W-warn** — developer warnings (Clippy-inspired).  RELEASE.md
+    M blocker.
 12. **AOT** — auto-compile libraries to native shared libs.
     Medium; design in PLANNING.md.
-13. **C52** — stdlib name clash warning + `std::` prefix.  Medium.
+13. **C52** — stdlib name clash warning + `std::` prefix.
+    RELEASE.md M blocker.
 14. **C53** — match arms for library enums + bare variant names.
     Medium.
 15. **CS.B / CS.C1 / CS.C2 / CS.C3** — compilation cache finish.
     CS.C1 is the biggest (MH — ~2K lines of recursive-enum binary
     serialisation in `data.rs`); budget a focused run.
+16. **P117 / P120 / P121 / P124** — verification passes (RELEASE.md
+    M blockers).  Each is a hands-on re-run of a fix that landed
+    earlier; not reopening the bug.
+17. **PKG.EXTRACT** — **last 0.9.0 item**.  Move every `lib/*/`
+    into separate GitHub projects (logical bundling allowed — see
+    [ROADMAP.md § 0.9.0 Library extraction](ROADMAP.md#library-extraction)).
+    Depends on PKG.REG + DX.4 + FFI.1–4 (all shipped in 0.8.5 /
+    0.8.6).  Starting earlier duplicates work; starting later is
+    fine.  L effort per bundle; moves happen one family at a time
+    ("extract loft-moros, land, extract loft-net, land, …") so a
+    failed extract doesn't strand the others.
 
-**Tier 5 — last item in 0.9.0, do not start before Tier 3 is stable**
-
-16. **PKG.EXTRACT** — move every `lib/*/` into separate GitHub
-    projects (logical bundling allowed — see
-    [ROADMAP.md](ROADMAP.md#package-and-ffi-tooling)).  Depends on
-    PKG.REG (install path), DX.4 (cross-repo CI story), and
-    FFI.1–4 (boilerplate-free native authoring).  Starting earlier
-    duplicates work; starting later is fine.  L effort per bundle;
-    moves happen one family at a time (extract `loft-moros`, land,
-    extract `loft-net`, land, …) so a failed extract doesn't
-    strand the others.
-
-**Explicitly excluded from 0.9.0** to avoid scope creep:
+**Explicitly excluded from the 0.8.5 → 0.9.0 window** to avoid scope creep:
 - LSP — stays in 1.0.0 per roadmap.  Months-long on its own.
 - HTTP stdlib / `server` / `game_client` libraries — 1.1+ (`WEB_SERVER_LIB.md`, `GAME_CLIENT_LIB.md`).
+- Moros hex RPG editor (web version) — [independent lifecycle](ROADMAP.md#demo-applications--independent-lifecycles); does not gate any language tag.
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
