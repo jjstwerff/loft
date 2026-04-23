@@ -1282,14 +1282,23 @@ use #count instead"
         } else {
             ret_type.clone()
         };
-        let b_var = self.create_var(result_name, &b_type);
+        // Plan-04 B.3 follow-up v2 (b3-par-inline.md): each par block gets
+        // its OWN uniquely-named `b_var` (via `create_unique` → internal
+        // name `_<result_name>_<counter>`), so two par blocks sharing the
+        // user's loop-variable name can no longer collide on a single
+        // `Function::variables` entry.  During body parsing the user's
+        // name is aliased to this `b_var` via `set_name` (same mechanism
+        // as match-arm field aliases in `control.rs:867`).  After the
+        // body parses, every `Value::Var(b_var)` in the body is rewritten
+        // to the element-accessor expression (see post-parse rewrite
+        // below) — `b` becomes an inline alias rather than a runtime
+        // slot, so there is no `Set(b_var, …)`, no `OpPut*`, and no
+        // type-width mismatch to drift the stack.
+        let b_var = self.create_unique(result_name, &b_type);
         self.vars.defined(b_var);
+        let prior_name_target = self.vars.set_name(result_name, b_var);
         if matches!(b_type, Type::Integer(_) | Type::Unknown(_)) {
             self.vars.in_use(b_var, true);
-        }
-        // Reference return: b_var borrows from the result vector — must not be freed.
-        if matches!(ret_type, Type::Reference(_, _)) {
-            self.vars.set_skip_free(b_var);
         }
 
         // Parse the body block.
@@ -1306,6 +1315,13 @@ use #count instead"
         self.in_par_body = outer_par;
         self.in_loop = in_loop;
         self.vars.finish_loop(loop_nr);
+        // Restore prior `result_name` alias (or remove ours if none).
+        match prior_name_target {
+            Some(nr) => {
+                self.vars.set_name(result_name, nr);
+            }
+            None => self.vars.remove_name(result_name),
+        }
 
         // Build IR only when we have a valid function reference.
         if fn_d_nr == u32::MAX || par_for_d_nr == u32::MAX {
@@ -1392,13 +1408,20 @@ use #count instead"
                 self.get_field(vec_tp, usize::MAX, get_vec)
             }
         };
-        let b_assign = v_set(b_var, get_call);
+        // Plan-04 B.3 follow-up v2 (b3-par-inline.md): rewrite every
+        // `Value::Var(b_var)` in the body with a clone of `get_call`.
+        // `b` is no longer a runtime variable — each reference expands
+        // inline to the accessor expression.  No `Set(b_var, get_call)`
+        // is emitted; the body references ARE the reads.  Under the B.3
+        // atomic bundle's slot-aware `OpPut*` dispatch this eliminates
+        // the type-width mismatch and the stack drift.
+        replace_var_in_ir(&mut block, b_var, &get_call);
         let idx_inc = v_set(
             idx_var,
             self.cl("OpAddInt", &[Value::Var(idx_var), Value::Int(1)]),
         );
 
-        let mut lp = vec![stop, b_assign, block, idx_inc];
+        let mut lp = vec![stop, block, idx_inc];
         if count != u16::MAX {
             lp.insert(
                 3,
@@ -2177,5 +2200,66 @@ use #count instead"
 
         *val = v_block(stmts, I32.clone(), "count_if");
         I32.clone()
+    }
+}
+
+/// Plan-04 B.3 follow-up v2: recursively walk `val` and replace every
+/// `Value::Var(target)` with a clone of `replacement`.  Used by
+/// `build_parallel_for_ir` to inline-expand the par loop variable `b`
+/// to its element-accessor expression, so that `b` is a parse-time
+/// alias rather than a runtime slot.  See
+/// `doc/claude/plans/04-slot-assignment-redesign/b3-par-inline.md`.
+fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
+    match val {
+        Value::Var(v) if *v == target => {
+            *val = replacement.clone();
+        }
+        Value::Var(_)
+        | Value::Int(_)
+        | Value::Long(_)
+        | Value::Float(_)
+        | Value::Single(_)
+        | Value::Boolean(_)
+        | Value::Text(_)
+        | Value::Enum(_, _)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _)
+        | Value::Null => {}
+        Value::Call(_, args)
+        | Value::CallRef(_, args)
+        | Value::Insert(args)
+        | Value::Tuple(args)
+        | Value::Parallel(args) => {
+            for a in args.iter_mut() {
+                replace_var_in_ir(a, target, replacement);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in bl.operators.iter_mut() {
+                replace_var_in_ir(op, target, replacement);
+            }
+        }
+        Value::Set(_, body)
+        | Value::Return(body)
+        | Value::BreakWith(_, body)
+        | Value::Drop(body)
+        | Value::TuplePut(_, _, body)
+        | Value::Yield(body) => {
+            replace_var_in_ir(body, target, replacement);
+        }
+        Value::If(cond, t, f) => {
+            replace_var_in_ir(cond, target, replacement);
+            replace_var_in_ir(t, target, replacement);
+            replace_var_in_ir(f, target, replacement);
+        }
+        Value::Iter(_, a, b, c) => {
+            replace_var_in_ir(a, target, replacement);
+            replace_var_in_ir(b, target, replacement);
+            replace_var_in_ir(c, target, replacement);
+        }
     }
 }
