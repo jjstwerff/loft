@@ -31,7 +31,7 @@ existing entry, not re-open it as a bug.
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
-| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
+| ~~54~~ | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | — | **Fixed 2026-04-14.**  First-class `JsonValue` enum shipped (`default/06_json.loft`); `json_parse` is the single entry; `MyStruct.parse(JsonValue)` runs the unified schema walker (`n_struct_from_jsonvalue`) with Q1 inline type-mismatch diagnostics; `to_json` / `to_json_pretty` canonical + pretty serialisers; all six `JsonValue` constructors (`json_null` / `json_bool` / `json_number` / `json_string` / `json_array` / `json_object`); free-form iteration (`kind` / `has_field` / `keys` / `fields`).  39+ acceptance tests green in `tests/issues.rs::p54_*`.  Remaining follow-up is feature-shape only: `T.to_json()` struct-method codegen (Q3 struct half — mirrors step-5 walker) and the P54-U Phase 3 legacy-scanner deletion.  See QUALITY.md § P54. |
 | ~~184~~ | `vector<i32>` / `hash<i32>` / `sorted<i32>` / `index<i32>` ignore the `size(4)` annotation — narrow integer aliases stored + read as 8 bytes | — | **Fixed 2026-04-22** by plan-02 (`finished/02-narrow-collection-elements/`) via the Option L-minimal design after two earlier attempts uncovered a pre-existing `narrow_int_cast` bug in iter-next blocks (Bug α).  Narrow aliases now honour `Parts::{Byte, Short, Int}` pack density through storage, read, append, insert, and return paths.  See CHANGELOG.md § "Integer → i64 migration" for the user-visible shape. |
 | ~~P185~~ | Slot-aliasing SIGSEGV / heap corruption — late local declared after an inner `body += <format-string>` accumulator inside a `for _ in file(...).files()` loop got a slot overlapping a still-live text buffer | — | **Fixed 2026-04-23** by plan-05 (`finished/05-orphan-placer-elimination/`): retired `place_orphaned_vars` entirely by extending `process_scope` + `place_large_and_recurse` to reach Insert-rooted function bodies, cross-scope `Set` in child operator lists, and every IR variant (`BreakWith / Iter / Tuple / TuplePut / Yield / Parallel`).  Tests: `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`, `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop` (both un-ignored). |
 | ~~P186~~ | Struct-typed block / if expressions rejected as `void` | — | **Fixed 2026-04-22** — `parse_block` now preserves `Type::Rewritten(_)` across Insert-flattening (first_pass struct literals emit `Insert` + `Rewritten(Reference)`, which used to be clobbered to `Void`) and disambiguates struct-body `{ field: val, … }` from block-expression `{ expr }` by peeking `ident :` / `ident ,`.  Tests: `tests/issues.rs::p186_struct_typed_block_expressions` (4 shapes). |
@@ -164,80 +164,50 @@ concrete and the scope is bounded.
 
 ---
 
-### 54. `json_items` returns opaque `vector<text>` — 0.9.0
+### ~~54~~. `json_items` returns opaque `vector<text>` — FIXED
 
-**Symptom:** `json_items(body)` returns `vector<text>` where each
-element is either a JSON object body or garbage.  The caller writes
-`MyStruct.parse(body)` and gets a partial zero-value struct on
-malformed input — no type checking, no diagnostic.
+**Fixed 2026-04-14.**  The text-based JSON surface
+(`json_items` / `json_nested` / `json_long` / `json_float` /
+`json_bool`) was retired and replaced with a first-class
+`JsonValue` enum:
 
-**Decision:** replace the text-based JSON surface with a first-class
-`JsonValue` enum.  No newtype-around-text half-measure — the newtype
-would keep the text surface, its shape predicates would be runtime
-peeks into the string, and `.parse` would still run a separate parser
-over every element.  Doing the parse once into a typed tree and then
-indexing / matching that tree is simpler, faster, and covers the
-dynamic-shape use case too.
+- `default/06_json.loft` declares `JsonValue`
+  (JNull / JBool / JNumber / JString / JArray / JObject) plus
+  the companion `JsonField` struct.  `JObject.fields` stores a
+  `vector<JsonField>` (the originally-designed
+  `hash<JsonField[name]>` is a 0.9.0 follow-up once hash
+  iteration and nested struct-enum-in-hash layouts are
+  exercised end-to-end).
+- `json_parse(text)` is the single entry point; `json_errors()`
+  returns RFC 6901 path + line:column + caret context on failure.
+- `MyStruct.parse(JsonValue)` runs the unified schema walker
+  (`n_struct_from_jsonvalue`) with inline Q1 type-mismatch
+  diagnostics (schema-side kind checks against every primitive
+  field).
+- Read surface: `kind` / `len` / `field` / `item` / `has_field` /
+  `keys` / `fields`.  Write surface: `to_json` / `to_json_pretty`
+  (canonical RFC 8259 + 2-space pretty).  Construction: all six
+  `json_null` / `json_bool` / `json_number` / `json_string` /
+  `json_array` / `json_object` helpers.
+- All JSON natives ship natively (commit `7a2329e` cleared
+  `NATIVE_SKIP` / `SCRIPTS_NATIVE_SKIP`), so `cargo run --native`
+  runs the full JSON stack through LLVM codegen.
 
-```loft
-pub enum JsonValue {
-    JNull,
-    JBool   { value: boolean },
-    JNumber { value: float not null },   // IEEE-754 per RFC 8259
-    JString { value: text },
-    JArray  { items:  vector<JsonValue> },
-    JObject { fields: vector<JsonField> }
-}
+Acceptance: 39+ green tests in `tests/issues.rs::p54_*` plus the
+Q1 / Q2 / Q4 subsuites.  Full landing narrative with the
+step-by-step arc lives in
+[QUALITY.md § Active sprint — P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
 
-pub struct JsonField { name: text, value: JsonValue }
-
-// Parse + diagnostics
-pub fn json_parse(raw: text)               -> JsonValue;
-pub fn json_errors()                       -> text;     // RFC 6901 path + line:col
-
-// Read surface
-pub fn kind(self: JsonValue)               -> text;     // "JNull" .. "JObject"
-pub fn len(self: JsonValue)                -> integer;  // null on non-container
-pub fn field(self: JsonValue, name: text)  -> JsonValue; // JObject only; JNull on miss / wrong kind
-pub fn item(self: JsonValue, index: integer) -> JsonValue; // JArray only; JNull on OOB / wrong kind
-pub fn has_field(self: JsonValue, name: text) -> boolean;
-pub fn keys(self: JsonValue)               -> vector<text>;
-pub fn fields(self: JsonValue)             -> vector<JsonField>; // values deep-copy
-
-// Typed extractors — null on kind mismatch
-pub fn as_text(self:   JsonValue) -> text;
-pub fn as_number(self: JsonValue) -> float;
-pub fn as_long(self:   JsonValue) -> long;
-pub fn as_bool(self:   JsonValue) -> boolean;
-
-// Write surface
-pub fn to_json(self: JsonValue)            -> text;     // canonical RFC 8259
-pub fn to_json_pretty(self: JsonValue)     -> text;     // 2-space indent for non-empty containers
-
-// Construction helpers
-pub fn json_null()                                 -> JsonValue;
-pub fn json_bool(v: boolean)                       -> JsonValue;
-pub fn json_number(v: float)                       -> JsonValue;  // non-finite → JNull
-pub fn json_string(v: text)                        -> JsonValue;
-pub fn json_array(items: vector<JsonValue>)        -> JsonValue;  // deep-copies items
-pub fn json_object(fields: vector<JsonField>)      -> JsonValue;  // deep-copies fields
-
-// Schema-driven (P54 step 5 — pending)
-pub fn parse(self: Type, v: JsonValue) -> Type;   // `MyStruct.parse(v)`
-```
-
-`JObject.fields` is stored as `vector<JsonField>` rather than the
-originally-designed `hash<JsonField[name]>` — the hash form is a
-0.9.0 follow-up once hash iteration and nested struct-enum-in-hash
-layouts are exercised end-to-end.  Linear scan is fine for the
-object sizes typical in configuration / API responses.
-
-The old `json_items` / `json_nested` / `json_long` / `json_float` /
-`json_bool` surface documented in [PLANNING.md](PLANNING.md) § H2
-is withdrawn.  All JSON work routes through `json_parse` →
-`JsonValue` from 0.9.0 onward.
-
-Full landing plan in [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
+Remaining follow-ups are feature-shape enhancements, not bugs:
+- **Q3 struct-side `T.to_json()` codegen** — mirrors P54 step 5's
+  struct-parse walker so `struct.to_json()` becomes a
+  method-call shorthand.  Users can already round-trip via the
+  general `to_json(v)` walker.
+- **P54-U Phase 3** — delete the ~540-line legacy JSON scanner
+  in `src/database/structures.rs::parsing`.  Phases 1+2
+  confirmed zero success-path fallback hits across the full
+  suite; the legacy path is already dead code on the happy
+  path, awaiting formal removal.
 
 ---
 
@@ -375,7 +345,7 @@ only the browser build is broken.
 
 ---
 
-### 138. `--native` rustc E0460: `rand_core` version mismatch
+### ~~138~~. `--native` rustc E0460: `rand_core` version mismatch — MITIGATED
 
 **Severity:** Medium — blocks `loft --native <script>` and `make play`
 on a checkout where `cargo build --release --bin loft` has run without
@@ -429,6 +399,15 @@ This replaces the previous 700-error cascade with a single recovery
 instruction.  Test: introduce a stale rlib (`cargo build --bin loft`
 after modifying a dependency version) and run
 `loft --native <any-file>` — the hint should appear.
+
+**Status:** closed as mitigated.  The root cause (cargo's
+incremental state linking the `loft` crate against one `rand_core`
+rmeta hash while newer versions also exist in `target/release/deps/`)
+is inherent to cargo's caching model; the shipping mitigation
+(`make play` auto-rebuild + `--native` driver's E0460 hint) reduces
+the failure to a one-line "run this command" recovery.  Leaving
+as a documented footgun rather than an open bug; reopen if a
+future toolchain revision breaks the E0460 detection regex.
 
 ---
 
