@@ -190,11 +190,16 @@ that gap:
 - **DX.3** — a 30-minute narrative tutorial for newcomers.
 - **DX.4** — native-mode parity in fast CI to stop P143/P171-class
   regressions from surfacing mid-release.
-- **PKG.EXTRACT** — move every `lib/*/` library into its own GitHub
-  repository.  The interpreter repo today carries ~960 MB of library
-  code + build artefacts that have nothing to do with the language
-  itself; a programmer cloning `loft` to look at the interpreter
-  shouldn't wait on a multi-hundred-megabyte graphics assets download.
+- **PKG.EXTRACT** — move every `lib/*/` library out of the interpreter
+  repo.  Logical bundling is allowed where it fits — the five `moros_*`
+  libraries naturally share one `loft-moros` repo, `server` / `web` /
+  `game_protocol` share `loft-net`, `graphics` + `imaging` share
+  `loft-graphics` — but `loft install <name>` still resolves at
+  library granularity so users never see the bundling.  The
+  interpreter repo today carries ~960 MB of library code + build
+  artefacts that have nothing to do with the language itself; a
+  programmer cloning `loft` to look at the interpreter shouldn't
+  wait on a multi-hundred-megabyte graphics assets download.
   Healthy ecosystems separate the language from its libraries;
   loft's monorepo today is an accident of solo-maintainer convenience.
 
@@ -271,7 +276,7 @@ avoid adding serde to the default feature set.
 |-------------|--------------------------------------------------------|----|--------|------------------|
 | PKG.7       | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
 | PKG.REG     | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted registry.txt; 3–5 curated first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one. Previously deferred-indefinitely as A7.4 under "ecosystem must exist first"; the chicken-and-egg bites both ways — no registry, no ecosystem.  Required to credibly advertise loft to external programmers. | M  | ✓      | PACKAGES.md      |
-| PKG.EXTRACT | Extract every library under `lib/*/` into its own GitHub repository (`jjstwerff/loft-graphics`, `jjstwerff/loft-web`, `jjstwerff/loft-imaging`, `jjstwerff/loft-moros-{map,render,sim,ui,editor}`, `jjstwerff/loft-crypto`, `jjstwerff/loft-random`, `jjstwerff/loft-server`, `jjstwerff/loft-game-protocol`, `jjstwerff/loft-shapes`, `jjstwerff/loft-arguments`) and register each in the PKG.REG registry.  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG for the install path, on DX.4 for the cross-repo CI story, and on FFI.1–4 for the boilerplate-free native-extension author experience.  Per-repo moves are one-by-one ("extract graphics, land, extract imaging, land, ...") so a failed move doesn't strand the others. | L  | —      | PACKAGES.md      |
+| PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG for the install path, on DX.4 for the cross-repo CI story, and on FFI.1–4 for the boilerplate-free native-extension author experience.  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
 | FFI.1       | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
 | FFI.2       | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
 | FFI.3       | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
