@@ -64,6 +64,14 @@ struct Scopes {
     /// Counter for `__ret_N` temporaries used by `free_vars` to hold a
     /// non-trivial tail expression's value while free ops run (B5-L3 fix).
     ret_temp_counter: u16,
+    /// P187: `__ref_N` work_ref → witness variable whose call-return
+    /// value might alias `__ref_N`'s store at runtime.  Populated by
+    /// `scan_set` when the work_ref is passed as an arg to a user-fn
+    /// call whose Reference result is assigned to the witness.
+    /// Consulted by `get_free_vars` to emit `OpFreeRefIfDistinct` (a
+    /// runtime store-nr check) instead of the unconditional `OpFreeRef`
+    /// — see the comment block around `scan_set`'s P150/P187 branch.
+    paired_witness: HashMap<u16, u16>,
 }
 
 /// Perform scope analysis on all currently known functions.
@@ -85,6 +93,7 @@ pub fn check(data: &mut Data) {
             lift_counter: 0,
             lift_vars: Vec::new(),
             ret_temp_counter: 0,
+            paired_witness: HashMap::new(),
         };
         let mut function = Function::copy(&data.def(d_nr).variables);
         for a in function.arguments() {
@@ -537,24 +546,65 @@ impl Scopes {
                     function.make_independent(v, d);
                 }
             }
-            // P150: previously this `else` branch marked every __ref_*
-            // arg as skip_free under the assumption that the callee
-            // always wrote into the placeholder (so v and __ref_N
-            // shared the same store, freeing both = double-free).  But
-            // when the callee returns a fresh store (early-return
-            // through a constructor call, or T.parse(text) that
-            // allocates fresh — both shapes used by
-            // `lib/moros_map/src/moros_map.loft`'s `map_from_json`),
-            // the placeholder is orphaned.  The runtime tolerates
-            // double-free as a no-op (database/allocation.rs:103-105
-            // `Stores::free_named`'s "if store.free { return }"), so
-            // it's safe to let the existing is_work_ref check at
-            // scopes.rs:902 emit OpFreeRef for __ref_N at scope exit:
-            //   - shared-store case: __ref_N's free is a no-op
-            //     (already freed via v's free that fires first).
-            //   - fresh-store case: __ref_N's free reclaims the
-            //     orphaned placeholder.
-            // No skip_free needed in either subcase.
+            // P150 / P187: `has_ref_params == false` call whose
+            // result is assigned to a Reference variable `v`.  At
+            // runtime the callee either:
+            //   - **adopts** the placeholder (writes into the passed
+            //     `__ref_N` and returns the same DbRef) — then `v`
+            //     and `__ref_N` share a store;
+            //   - **allocates fresh** (e.g. `return map_empty()` or
+            //     `T.parse(text)` with an internal fresh alloc) —
+            //     then `v`'s store and `__ref_N`'s placeholder store
+            //     are distinct, and the placeholder is orphaned.
+            //
+            // The compiler cannot resolve the choice statically: a
+            // single callee (`map_from_json`) branches both ways on
+            // `json == ""`.  Both patterns must work.
+            //
+            // Plain `OpFreeRef(__ref_N)` at scope exit (P150's
+            // resolution) is wrong in the adoption case when `v`
+            // flows into the enclosing function's return — the
+            // placeholder free happens BEFORE the caller reads `v`,
+            // corrupting `v`'s shared store.  Plain `skip_free`
+            // (pre-P150) is wrong in the fresh-store case —
+            // placeholder orphaned.
+            //
+            // Record `__ref_N → v` in `paired_witness`.  At scope
+            // exit, `get_free_vars` emits `OpFreeRefIfDistinct(__ref_N,
+            // v)` instead of `OpFreeRef(__ref_N)`: the runtime
+            // store-nr comparison settles the two cases per execution
+            // path (match → skip; differ → free).  See
+            // `doc/claude/PROBLEMS.md` § P187 for the full analysis.
+            if !has_ref_params && let Value::Call(_, args) = value {
+                for arg in args {
+                    let arg_var = match arg {
+                        Value::Var(av) => Some(*av),
+                        Value::Set(av, _) => Some(*av),
+                        _ => None,
+                    };
+                    if let Some(av) = arg_var {
+                        let n = function.name(av);
+                        if n.starts_with("__ref_") || n.starts_with("__rref_") {
+                            // `av`'s scope is inherited from the enclosing
+                            // assignment: `self.scope`.  `v`'s scope was
+                            // just written above.  Only pair when the
+                            // witness `v` lives AT LEAST as long as
+                            // `av` — i.e. `var_scope[v] <= var_scope[av]`.
+                            // Otherwise, when codegen lowers the function
+                            // to Rust, the witness's `let` falls out of
+                            // its block scope before `av`'s OpFreeRef
+                            // fires, and the emitted `var_f.store_nr`
+                            // references a dead name (e.g. `f = file(…,
+                            // __ref_1)` inside a nested `{}` block).
+                            let av_scope = self.var_scope.get(&av).copied().unwrap_or(u16::MAX);
+                            let v_scope = self.var_scope.get(&v).copied().unwrap_or(u16::MAX);
+                            if v_scope <= av_scope && v_scope != u16::MAX {
+                                self.paired_witness.entry(av).or_insert(v);
+                            }
+                        }
+                    }
+                }
+            }
         }
         // P147: companion to the P146 fix above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
@@ -986,7 +1036,23 @@ impl Scopes {
                             self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
                         );
                     }
-                    ls.push(call("OpFreeRef", v, data));
+                    // P187: when `v` is a `__ref_*` / `__rref_*` work-ref
+                    // that was passed to a user-fn call whose Reference
+                    // result lives on as `witness`, emit the runtime-
+                    // conditional `OpFreeRefIfDistinct(v, witness)` — it
+                    // is a no-op in the adoption case (v and witness
+                    // share a store) and a real free in the fresh-store
+                    // case (distinct stores, placeholder orphaned).
+                    // Falls through to plain `OpFreeRef` when no pairing
+                    // was recorded.
+                    if is_work_ref && let Some(&witness) = self.paired_witness.get(&v) {
+                        ls.push(Value::Call(
+                            data.def_nr("OpFreeRefIfDistinct"),
+                            vec![Value::Var(v), Value::Var(witness)],
+                        ));
+                    } else {
+                        ls.push(call("OpFreeRef", v, data));
+                    }
                 }
             }
             // free the closure DbRef embedded at offset+4 in a fn-ref slot.

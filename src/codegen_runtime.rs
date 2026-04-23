@@ -117,6 +117,19 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
     stores.free_named(&db, name);
 }
 
+/// P187: conditionally free `placeholder` — only when its `store_nr`
+/// differs from `witness`'s.  Emitted for `__ref_N` work-refs whose
+/// value might alias a still-live Reference variable in the current
+/// scope (adoption vs. fresh-store is a runtime choice the caller's
+/// compiler cannot resolve statically).  See `doc/claude/PROBLEMS.md`
+/// § P187 for the mechanism.  Bytecode equivalent: `OpFreeRefIfDistinct`
+/// in `src/fill.rs`.
+pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbRef) {
+    if placeholder.store_nr != witness.store_nr {
+        stores.free(&placeholder);
+    }
+}
+
 /// Format a database record as text and append it to the output string.
 /// Bytecode equivalent: `OpFormatDatabase` in `src/state/io.rs:278`.
 pub fn OpFormatDatabase(

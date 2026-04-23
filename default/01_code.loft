@@ -686,6 +686,18 @@ fn OpNullRefSentinel() -> reference;
 // to a pre-reserved slot.
 fn OpInitRefSentinel(pos: const u16);
 fn OpFreeRef(v1: reference);
+// P187: free `placeholder` only when its store differs from `witness`.
+// Emitted for `__ref_N` work-refs that were passed to a user-fn call
+// whose Reference result is still live at the scope where the placeholder
+// would otherwise be freed.  At runtime:
+//   - adoption (callee returned the same DbRef it was passed) →
+//     store_nr match → no-op, let `witness`'s OpFreeRef release the
+//     shared store once it also goes out of scope;
+//   - fresh-store (callee allocated its own and ignored the placeholder)
+//     → store_nr differ → free the orphaned placeholder.
+// See doc/claude/PROBLEMS.md § P187 for the full mechanism.
+fn OpFreeRefIfDistinct(placeholder: reference, witness: reference);
+#rust"if @placeholder.store_nr != @witness.store_nr {{ s.database.free(&@placeholder); }}"
 fn OpSizeofRef(val: reference) -> integer;
 fn OpVarRef(pos: const u16) -> reference;
 #rust"{{let r = *s.get_var::<DbRef>(@pos); stores.valid(&r); r}}"
