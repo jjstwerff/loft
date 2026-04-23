@@ -181,6 +181,16 @@ tooling-friendly. No "appears fixed but unverified" bugs in PROBLEMS.md.
 Anyone can write loft code in their preferred editor with syntax
 highlighting, decent error messages, and a REPL for experimentation.
 
+**Advertising readiness**: 0.9.0 is also the gate for honestly pitching
+loft to external programmers as an alternative to their current scripting
+language.  Three items were added to this milestone specifically to close
+that gap — PKG.REG (central registry so `loft install <name>` works),
+DX.3 (a 30-minute narrative tutorial), and DX.4 (native-mode parity in
+fast CI).  Without these, newcomers hit an "on your own" wall within an
+hour and the native codegen's P143/P171-class regressions keep surfacing
+mid-release.  With them, loft has the surrounding surface a bettable
+language needs.
+
 ### Language polish
 
 | ID     | Title                                                  | E  | Design | Source           |
@@ -241,16 +251,19 @@ avoid adding serde to the default feature set.
 | SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
 | DX.1  | Quick-start `examples/` directory                      | XS | ✓      | DX.md            |
 | DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
+| DX.3  | "Learn loft in 30 minutes" narrative walkthrough — a single discoverable page (GitHub Pages + repo root README link) that walks a first-time visitor from `loft hello.loft` through structs, pattern match, `par()` parallel, and HTML export using the house-scene canvas demo.  Complements DX.1's examples/ (reference) with a narrative path (learning).  A newcomer shouldn't have to infer the language from cold-reading examples. | S  | —      | this-session assessment |
+| DX.4  | Native-mode parity in fast CI — every `tests/scripts/*.loft` and `tests/issues.rs` test runs under both `--interpret` AND `--native` via the existing `tests/native.rs` harness, wired into the GitHub Actions fast job (not just `ci-full`).  Catches P143/P144/P157/P171/P180-class native-codegen regressions before they land in main.  Today's fast CI runs `cargo nextest run --profile ci` which skips `tests/native.rs`; parity requires promoting it.  Cost: one CI job slot + longer compile cache. | S  | —      | this-session assessment |
 
 ### Package and FFI tooling
 
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| PKG.7 | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| FFI.1 | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
-| FFI.2 | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
-| FFI.3 | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
-| FFI.4 | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
+| ID      | Title                                                  | E  | Design | Source           |
+|---------|--------------------------------------------------------|----|--------|------------------|
+| PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
+| PKG.REG | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted registry.txt; 3–5 curated first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one. Previously deferred-indefinitely as A7.4 under "ecosystem must exist first"; the chicken-and-egg bites both ways — no registry, no ecosystem.  Required to credibly advertise loft to external programmers. | M  | ✓      | PACKAGES.md      |
+| FFI.1   | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
+| FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
+| FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
+| FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
 
 ### CLI fixes that improved during 0.8.4
 
@@ -355,7 +368,6 @@ before tagging — no "appears fixed" exceptions.
 |-------|----------------------------------------------------|-------------------------------------------|
 | O1    | Superinstruction peephole rewriting                | Opcode table full (254/256)               |
 | P4    | Bytecode cache (`.loftc`)                          | Superseded by native codegen              |
-| A7.4  | Central package registry                           | Ecosystem must exist first                |
 
 ---
 
