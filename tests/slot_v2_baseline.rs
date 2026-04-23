@@ -262,15 +262,16 @@ fn p122q_sorted_range_comprehension() {
 // locals isolated from outer-loop iteration state.
 
 // The layout below is locked, but codegen currently panics on this
-// shape with `Incorrect var a[65535] versus 172 on n_test`
-// (`src/state/codegen.rs:1773`): the outer par-loop iterator
-// variable `a` is not assigned a stack slot after the `par(...)`
-// clause rewrites the loop.  This is a pre-existing codegen issue
-// exposed by enabling the `.slots()` check — independent of the
-// plan-04 slot redesign.  Un-ignore once `a` gets a slot (either
-// through par-lowering or through V2's uniform placement).
+// P122r: `Incorrect var a[65535] versus N` codegen panic fixed
+// 2026-04-23 by extending plan-04 B.3 follow-up v2's inline-alias
+// treatment to the outer iterator `a` (not just the inner `b`).
+// `parse_parallel_for_loop` / `build_parallel_for_ir` in
+// `src/parser/collections.rs` now rewrite every `Value::Var(a)`
+// in the body to `OpGetVector(items, elem_size, idx)` (plus
+// `get_field` for non-Reference element types) so `a` never
+// needs a slot.  The desugared par loop owns `idx` / `results`;
+// `a` is purely syntactic sugar.
 #[test]
-#[ignore = "par-loop codegen panic: outer iterator 'a' unplaced (u16::MAX)"]
 fn p122r_par_loop_with_inner_for() {
     code!(
         "struct P04Item { iv: integer not null }

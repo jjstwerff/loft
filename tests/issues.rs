@@ -4090,8 +4090,8 @@ fn run() -> integer {
 /// `Stores::free_named` with an out-of-bounds `store_nr`.  Now
 /// skip_free suppresses the OpFreeRef emission, so the garbage
 /// slot stays untouched.  Guards the layer-2 half of B5 against
-/// regression independently of the recursion path still open in
-/// `p54_b5_recursive_struct_enum`.
+/// regression independently of the recursive path exercised by
+/// `p54_b5_recursive_struct_enum` (now un-ignored).
 #[test]
 fn p54_b5_not_taken_arm_with_vector_binding_ok() {
     code!(
