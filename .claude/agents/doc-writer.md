@@ -23,6 +23,12 @@ consistent — not to invent new structure.
 - `doc/claude/RELEASE.md`, `QUALITY.md`, `ROADMAP.md`, `PLANNING.md`
   — release / release-planning docs.  Changes here need to be
   precise and justified.
+- `CHANGELOG.md` — the user-facing release history at repo root.
+  New user-visible behaviour, removed APIs, migration notes.
+  Entries live under `## [Unreleased]` until a release cut; each
+  gets a short heading (e.g. `### Integer → i64 migration`) with
+  a "What users see" paragraph and, where relevant, a "Downsides
+  recorded" cross-reference to CAVEATS.md.
 - `doc/claude/*.md` design docs (LOFT.md, STDLIB.md, COMPILER.md,
   etc.) — update when behaviour changes; otherwise leave alone.
 
@@ -74,11 +80,62 @@ consistent — not to invent new structure.
 - **Test references**: name the `#[test]` fn and its binary, e.g.
   `tests/issues.rs::p184_vector_i32_narrow_read`.
 
+## Known doc_hygiene gotchas
+
+The `tests/doc_hygiene.rs` binary enforces several invariants
+that silently trip if you ignore them.  Always run `cargo test
+--release --test doc_hygiene` after a PROBLEMS.md / QUALITY.md
+edit.
+
+- **`quality_open_table_has_no_crossed_out_rows`** — QUALITY.md's
+  main open-issues table must not contain struck-out `~~X~~` rows.
+  When an item closes, REMOVE its row from the open table; add a
+  mention to the closed-items paragraph below.  `~~X~~` markers
+  belong to PROBLEMS.md's quick-ref table, NOT QUALITY.md's.
+- **`quality_struck_tier2_items_have_landing_date`** — anything
+  struck in QUALITY.md's Tier 2 section must carry a landing date.
+- **`problems_quickref_matches_longform_status`** — if
+  PROBLEMS.md's quick-ref table row is struck, the longform `###`
+  entry below must also be struck (and vice versa).  Update both
+  or neither.
+- **`problems_p54_jobject_layout_matches_stdlib`** — PROBLEMS.md § P54
+  must name `vector<JsonField>` as the JObject storage form, since
+  that's what `default/06_json.loft` actually declares.  An earlier
+  draft used `hash<JsonField[name]>`; never revert to that.
+- **`ignored_tests_baseline_is_current`** — when you un-ignore a
+  test or add a new `#[ignore]`, update `tests/ignored_tests.baseline`.
+  Regenerate with
+  `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`.
+- **`caveats_longform_done_matches_verification_log`** — any
+  CAVEATS.md entry marked DONE needs a matching verification-log
+  line.
+
 ## Report shape
 
-End your work with:
-- Files changed (path + one-line reason).
-- Any cross-reference you noticed but didn't update — flag it so
-  the user / parent agent can follow up.
-- `cargo test --release --test doc_hygiene` run result (should
-  always be green after your edits).
+```
+## Doc update
+
+### Files changed
+
+- `<path>` — <one-line reason>
+  Sections touched: <heading list>
+
+### Cross-references
+
+- <doc/claude/X.md line Y references the updated item; leave as-is | flag to update>
+- <QUALITY.md closed-items paragraph needs N added — not done here>
+
+### Invariants checked
+
+- `cargo test --release --test doc_hygiene` — ✅ / ❌ <first failure>
+- Any `~~X~~` markers still match their longform counterparts.
+- `tests/ignored_tests.baseline` in sync with actual `#[ignore]`s.
+
+### Verdict
+
+<All touched docs consistent | Follow-up needed: ...>
+```
+
+Keep the report tight.  No narration of why the edit matters —
+the commit message carries that.  List only what changed, what's
+outstanding, and what you checked.

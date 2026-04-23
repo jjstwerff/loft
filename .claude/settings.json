@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "agent",
+            "if": "Edit(**/*.rs)",
+            "prompt": "A Rust edit just landed.  The hook payload is $ARGUMENTS — extract tool_input.file_path and review ONLY the change just made to that file.  You are the code-quality-validator: diagnose, never edit.  Read the file, consider the in-flight change in context, and report concisely on (a) fit-for-purpose, (b) hidden regressions, (c) hazards the author may have missed.  If the change is trivial (whitespace, comment-only, doc-only rewording), reply 'Nothing to flag.' in under 15 words.  Otherwise keep the review tight — bullet points, specific file:line citations, no rehash of what the code does.",
+            "model": "claude-sonnet-4-6",
+            "timeout": 120,
+            "statusMessage": "code-quality-validator reviewing Rust change..."
+          },
+          {
+            "type": "agent",
+            "if": "Write(**/*.rs)",
+            "prompt": "A Rust file was just written.  The hook payload is $ARGUMENTS — extract tool_input.file_path and review the file.  You are the code-quality-validator: diagnose, never edit.  Focus on (a) fit-for-purpose, (b) hidden regressions, (c) hazards the author may have missed.  If the file is trivial scaffolding, reply 'Nothing to flag.' in under 15 words.  Otherwise keep the review tight — bullet points, specific file:line citations, no rehash.",
+            "model": "claude-sonnet-4-6",
+            "timeout": 120,
+            "statusMessage": "code-quality-validator reviewing new Rust file..."
+          }
+        ]
+      }
+    ]
+  }
+}

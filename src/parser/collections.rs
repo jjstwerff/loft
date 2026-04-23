@@ -1025,7 +1025,7 @@ use #count instead"
                 && kw == "par"
             {
                 self.lexer.has_identifier(); // consume "par"
-                self.parse_parallel_for_loop(code, &id, &in_type, expr, fill, loop_nr);
+                self.parse_parallel_for_loop(code, &id, &in_type, &expr, fill, loop_nr);
                 return;
             }
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
@@ -1112,7 +1112,7 @@ use #count instead"
         code: &mut Value,
         elem_var: &str,
         in_type: &Type,
-        vec_expr: Value,
+        vec_expr: &Value,
         fill: Value,
         loop_nr: u16,
     ) {
@@ -1166,6 +1166,16 @@ use #count instead"
         // Create the element variable so the worker call expression can resolve it.
         // (e.g. `calc(a)` needs `a` in scope during parsing even though the body
         // never runs `a` directly — the parallel map handles that.)
+        //
+        // Plan-04 B.3 follow-up (P122r): the body of
+        // `for a in items par(b = worker(a), N) { ... a.iv ... }`
+        // is parsed against this `elem_var_nr`, but the desugared
+        // loop iterates over an `idx` counter and never writes `a` —
+        // so the slot allocator would never place it.  `a` is treated
+        // as an inline alias for `OpGetVector(items, idx)`, same as
+        // `b` → `OpGetVector(results, idx)`.  build_parallel_for_ir
+        // performs the actual Var→accessor rewrite after body parse,
+        // once `idx_var` exists.
         let elem_var_nr = self.create_var(elem_var, &elem_tp);
         self.vars.defined(elem_var_nr);
         if matches!(elem_tp, Type::Integer(_)) {
@@ -1228,6 +1238,8 @@ use #count instead"
             fill,
             loop_nr,
             extra_vals,
+            elem_var_nr,
+            &elem_tp,
         );
     }
 
@@ -1242,11 +1254,13 @@ use #count instead"
         ret_type: &Type,
         elem_size: i32,
         return_size: i32,
-        vec_expr: Value,
+        vec_expr: &Value,
         threads_expr: Value,
         fill: Value,
         loop_nr: u16,
         extra_args: Vec<Value>,
+        elem_var: u16,
+        elem_tp: &Type,
     ) {
         let ref_d_nr = self.data.def_nr("reference");
         let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
@@ -1364,7 +1378,7 @@ use #count instead"
         let pf_call = Value::Call(actual_par_d_nr, pf_args);
 
         // len(input_vec) — compute once before the loop.
-        let len_call = self.cl("OpLengthVector", &[vec_expr]);
+        let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1416,6 +1430,30 @@ use #count instead"
         // atomic bundle's slot-aware `OpPut*` dispatch this eliminates
         // the type-width mismatch and the stack drift.
         replace_var_in_ir(&mut block, b_var, &get_call);
+
+        // P122r: apply the same inline-alias treatment to the outer
+        // iterator variable `a`.  The desugared loop increments `idx`;
+        // `a` is logically `items[idx]` on every iteration.  Rewriting
+        // `Var(a)` → `OpGetVector(items, elem_size, idx)` (plus
+        // `get_field` for non-Reference element types, mirroring the
+        // `b` path) means `a` never needs a slot.  Without this the
+        // allocator leaves `a` at `stack_pos == u16::MAX` and codegen
+        // panics `Incorrect var a[65535] versus N`.
+        let a_get_vec = self.cl(
+            "OpGetVector",
+            &[vec_expr.clone(), Value::Int(elem_size), Value::Var(idx_var)],
+        );
+        let a_accessor = if matches!(elem_tp, Type::Reference(_, _)) {
+            a_get_vec
+        } else {
+            let elm_td = self.data.type_def_nr(elem_tp);
+            if elm_td == u32::MAX {
+                a_get_vec
+            } else {
+                self.get_field(elm_td, usize::MAX, a_get_vec)
+            }
+        };
+        replace_var_in_ir(&mut block, elem_var, &a_accessor);
         let idx_inc = v_set(
             idx_var,
             self.cl("OpAddInt", &[Value::Var(idx_var), Value::Int(1)]),

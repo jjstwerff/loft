@@ -73,6 +73,19 @@ expressed as a self-contained loft program.
 - **`tests/docs/*.loft`** — reserved for reference-manual snippets
   that also validate.  Don't add new ones unless the user explicitly
   asks; `tests/scripts/` is the default loft-script home.
+- **Gold-image tests (`tests/graphics_gold.rs`)** — for the
+  graphics / canvas / renderer library, where the output is an
+  image that byte comparison can't meaningfully assert against
+  (PNG encoders vary across zlib / libpng revisions).  The
+  harness runs a loft example in a tempdir, decodes both the
+  produced PNG and a reference under `tests/gold/`, expands
+  to RGBA8 so RGB↔RGBA encoder choices don't matter, and
+  asserts per-channel MAE under a tight tolerance.  Updating the
+  reference is an explicit opt-in: `UPDATE_GOLD=1 cargo test
+  --test graphics_gold` rewrites the gold from the fresh
+  render.  Auto-skips if the graphics native cdylib isn't
+  built.  Prefer this pattern for any new visual-output test
+  over byte-match assertions.
 
 When you hesitate between a `tests/scripts/*.loft` test and a
 `tests/issues.rs` entry, pick scripts first.  Drop back to issues.rs
@@ -101,8 +114,27 @@ code.  Key points:
 
 ## Report shape
 
-End your work with a short summary:
-- What test(s) you added.
-- Where (file:line).
-- Verification command you ran and its exit state.
-- Anything the test surfaced that might need follow-up.
+```
+## Tests added
+
+### Added
+
+- `<file>:<test_name>` — <what it asserts>
+  Binary: `<cargo test ... --test <bin>>`
+  Shape: <loft script | Rust regression guard | gold-image | fixture>
+
+### Verification
+
+- `<exact cargo test command>` — ✅ / ❌ <first failure>
+- Narrow + wide control pair (if applicable): <names of both tests>
+
+### Follow-ups surfaced
+
+- <bug found while writing the test | missing doc entry | gap in adjacent coverage>
+- <none>
+```
+
+Keep it tight.  No narration of what the test does beyond the
+one-line `what it asserts` — the test body and the docstring
+already explain that.  List only what you added, what you ran,
+and what you noticed while writing it.

@@ -976,15 +976,12 @@ fn assert_generator_output_matches_committed(script: &str, output_relative: &str
 /// leaves GitHub Pages serving stale content.  This test is the
 /// guard.
 ///
-/// **Currently ignored:** `build-playground-examples.loft` crashes
-/// with SIGSEGV partway through its `for f in file("tests/docs").files()`
-/// loop (reproduced on clean `develop` branched from `1753615`; see
-/// PROBLEMS.md § "playground generator SIGSEGV").  Until that's
-/// fixed, running this test would corrupt `doc/examples.js` on disk
-/// (the script opens the file, writes a partial stream, then dies).
-/// Remove `#[ignore]` once the generator completes cleanly.
+/// The SIGSEGV that previously made this test unrunnable (P185 —
+/// slot-aliasing heap corruption in the generator's
+/// `for f in file("tests/docs").files()` loop) was closed by
+/// plan-05 on 2026-04-23.  Un-ignored as of the same commit; the
+/// generator now completes cleanly.
 #[test]
-#[ignore = "generator SIGSEGV truncates output — see PROBLEMS.md"]
 fn doc_examples_js_is_up_to_date() {
     assert_generator_output_matches_committed(
         "scripts/build-playground-examples.loft",

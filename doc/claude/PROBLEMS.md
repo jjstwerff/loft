@@ -31,9 +31,9 @@ existing entry, not re-open it as a bug.
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
-| 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
-| 184 | `vector<i32>` ignores the `size(4)` annotation — elements stored + accessed as 8-byte i64 (same for `u32`, and symmetrically for `hash<i32>` / `sorted<i32>` / `index<i32>`) | Medium | **Workaround:** use `vector<integer>` and emit explicit `as i32` casts at binary-write sites (`f += val as i32`).  The type annotation looks narrower but storage + reads are both 8 bytes — trust the `integer` name and cast at boundaries. |
-| P185 | Slot-aliasing SIGSEGV / heap corruption — a local declared AFTER an inner `body += <format-string>` accumulator, inside a `for _ in file(...).files()` loop (inline temporary, not a named var), gets assigned a slot that overlaps a still-live text buffer.  Teardown trips `OpFreeText` (op 118) on the aliased slot → SIGSEGV or `realloc(): invalid pointer`.  Discovered while debugging why `scripts/build-playground-examples.loft` corrupts its own output file mid-run. | **High** (safety: heap corruption) | **Workarounds** (both work): (a) declare the late local BEFORE the inner loop, or (b) hoist `file(...)` into a named variable (`d = file(...); for f in d.files()`).  Both nudge slot assignment away from the bad overlap. |
+| ~~54~~ | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | — | **Fixed 2026-04-14.**  First-class `JsonValue` enum shipped (`default/06_json.loft`); `json_parse` is the single entry; `MyStruct.parse(JsonValue)` runs the unified schema walker (`n_struct_from_jsonvalue`) with Q1 inline type-mismatch diagnostics; `to_json` / `to_json_pretty` canonical + pretty serialisers; all six `JsonValue` constructors (`json_null` / `json_bool` / `json_number` / `json_string` / `json_array` / `json_object`); free-form iteration (`kind` / `has_field` / `keys` / `fields`).  39+ acceptance tests green in `tests/issues.rs::p54_*`.  Remaining follow-up is feature-shape only: `T.to_json()` struct-method codegen (Q3 struct half — mirrors step-5 walker) and the P54-U Phase 3 legacy-scanner deletion.  See QUALITY.md § P54. |
+| ~~184~~ | `vector<i32>` / `hash<i32>` / `sorted<i32>` / `index<i32>` ignore the `size(4)` annotation — narrow integer aliases stored + read as 8 bytes | — | **Fixed 2026-04-22** by plan-02 (`finished/02-narrow-collection-elements/`) via the Option L-minimal design after two earlier attempts uncovered a pre-existing `narrow_int_cast` bug in iter-next blocks (Bug α).  Narrow aliases now honour `Parts::{Byte, Short, Int}` pack density through storage, read, append, insert, and return paths.  See CHANGELOG.md § "Integer → i64 migration" for the user-visible shape. |
+| ~~P185~~ | Slot-aliasing SIGSEGV / heap corruption — late local declared after an inner `body += <format-string>` accumulator inside a `for _ in file(...).files()` loop got a slot overlapping a still-live text buffer | — | **Fixed 2026-04-23** by plan-05 (`finished/05-orphan-placer-elimination/`): retired `place_orphaned_vars` entirely by extending `process_scope` + `place_large_and_recurse` to reach Insert-rooted function bodies, cross-scope `Set` in child operator lists, and every IR variant (`BreakWith / Iter / Tuple / TuplePut / Yield / Parallel`).  Tests: `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`, `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop` (both un-ignored). |
 | ~~P186~~ | Struct-typed block / if expressions rejected as `void` | — | **Fixed 2026-04-22** — `parse_block` now preserves `Type::Rewritten(_)` across Insert-flattening (first_pass struct literals emit `Insert` + `Rewritten(Reference)`, which used to be clobbered to `Void`) and disambiguates struct-body `{ field: val, … }` from block-expression `{ expr }` by peeking `ident :` / `ident ,`.  Tests: `tests/issues.rs::p186_struct_typed_block_expressions` (4 shapes). |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
@@ -164,80 +164,50 @@ concrete and the scope is bounded.
 
 ---
 
-### 54. `json_items` returns opaque `vector<text>` — 0.9.0
+### ~~54~~. `json_items` returns opaque `vector<text>` — FIXED
 
-**Symptom:** `json_items(body)` returns `vector<text>` where each
-element is either a JSON object body or garbage.  The caller writes
-`MyStruct.parse(body)` and gets a partial zero-value struct on
-malformed input — no type checking, no diagnostic.
+**Fixed 2026-04-14.**  The text-based JSON surface
+(`json_items` / `json_nested` / `json_long` / `json_float` /
+`json_bool`) was retired and replaced with a first-class
+`JsonValue` enum:
 
-**Decision:** replace the text-based JSON surface with a first-class
-`JsonValue` enum.  No newtype-around-text half-measure — the newtype
-would keep the text surface, its shape predicates would be runtime
-peeks into the string, and `.parse` would still run a separate parser
-over every element.  Doing the parse once into a typed tree and then
-indexing / matching that tree is simpler, faster, and covers the
-dynamic-shape use case too.
+- `default/06_json.loft` declares `JsonValue`
+  (JNull / JBool / JNumber / JString / JArray / JObject) plus
+  the companion `JsonField` struct.  `JObject.fields` stores a
+  `vector<JsonField>` (the originally-designed
+  `hash<JsonField[name]>` is a 0.9.0 follow-up once hash
+  iteration and nested struct-enum-in-hash layouts are
+  exercised end-to-end).
+- `json_parse(text)` is the single entry point; `json_errors()`
+  returns RFC 6901 path + line:column + caret context on failure.
+- `MyStruct.parse(JsonValue)` runs the unified schema walker
+  (`n_struct_from_jsonvalue`) with inline Q1 type-mismatch
+  diagnostics (schema-side kind checks against every primitive
+  field).
+- Read surface: `kind` / `len` / `field` / `item` / `has_field` /
+  `keys` / `fields`.  Write surface: `to_json` / `to_json_pretty`
+  (canonical RFC 8259 + 2-space pretty).  Construction: all six
+  `json_null` / `json_bool` / `json_number` / `json_string` /
+  `json_array` / `json_object` helpers.
+- All JSON natives ship natively (commit `7a2329e` cleared
+  `NATIVE_SKIP` / `SCRIPTS_NATIVE_SKIP`), so `cargo run --native`
+  runs the full JSON stack through LLVM codegen.
 
-```loft
-pub enum JsonValue {
-    JNull,
-    JBool   { value: boolean },
-    JNumber { value: float not null },   // IEEE-754 per RFC 8259
-    JString { value: text },
-    JArray  { items:  vector<JsonValue> },
-    JObject { fields: vector<JsonField> }
-}
+Acceptance: 39+ green tests in `tests/issues.rs::p54_*` plus the
+Q1 / Q2 / Q4 subsuites.  Full landing narrative with the
+step-by-step arc lives in
+[QUALITY.md § Active sprint — P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
 
-pub struct JsonField { name: text, value: JsonValue }
-
-// Parse + diagnostics
-pub fn json_parse(raw: text)               -> JsonValue;
-pub fn json_errors()                       -> text;     // RFC 6901 path + line:col
-
-// Read surface
-pub fn kind(self: JsonValue)               -> text;     // "JNull" .. "JObject"
-pub fn len(self: JsonValue)                -> integer;  // null on non-container
-pub fn field(self: JsonValue, name: text)  -> JsonValue; // JObject only; JNull on miss / wrong kind
-pub fn item(self: JsonValue, index: integer) -> JsonValue; // JArray only; JNull on OOB / wrong kind
-pub fn has_field(self: JsonValue, name: text) -> boolean;
-pub fn keys(self: JsonValue)               -> vector<text>;
-pub fn fields(self: JsonValue)             -> vector<JsonField>; // values deep-copy
-
-// Typed extractors — null on kind mismatch
-pub fn as_text(self:   JsonValue) -> text;
-pub fn as_number(self: JsonValue) -> float;
-pub fn as_long(self:   JsonValue) -> long;
-pub fn as_bool(self:   JsonValue) -> boolean;
-
-// Write surface
-pub fn to_json(self: JsonValue)            -> text;     // canonical RFC 8259
-pub fn to_json_pretty(self: JsonValue)     -> text;     // 2-space indent for non-empty containers
-
-// Construction helpers
-pub fn json_null()                                 -> JsonValue;
-pub fn json_bool(v: boolean)                       -> JsonValue;
-pub fn json_number(v: float)                       -> JsonValue;  // non-finite → JNull
-pub fn json_string(v: text)                        -> JsonValue;
-pub fn json_array(items: vector<JsonValue>)        -> JsonValue;  // deep-copies items
-pub fn json_object(fields: vector<JsonField>)      -> JsonValue;  // deep-copies fields
-
-// Schema-driven (P54 step 5 — pending)
-pub fn parse(self: Type, v: JsonValue) -> Type;   // `MyStruct.parse(v)`
-```
-
-`JObject.fields` is stored as `vector<JsonField>` rather than the
-originally-designed `hash<JsonField[name]>` — the hash form is a
-0.9.0 follow-up once hash iteration and nested struct-enum-in-hash
-layouts are exercised end-to-end.  Linear scan is fine for the
-object sizes typical in configuration / API responses.
-
-The old `json_items` / `json_nested` / `json_long` / `json_float` /
-`json_bool` surface documented in [PLANNING.md](PLANNING.md) § H2
-is withdrawn.  All JSON work routes through `json_parse` →
-`JsonValue` from 0.9.0 onward.
-
-Full landing plan in [QUALITY.md § P54](QUALITY.md#active-sprint--p54-jsonvalue-enum).
+Remaining follow-ups are feature-shape enhancements, not bugs:
+- **Q3 struct-side `T.to_json()` codegen** — mirrors P54 step 5's
+  struct-parse walker so `struct.to_json()` becomes a
+  method-call shorthand.  Users can already round-trip via the
+  general `to_json(v)` walker.
+- **P54-U Phase 3** — delete the ~540-line legacy JSON scanner
+  in `src/database/structures.rs::parsing`.  Phases 1+2
+  confirmed zero success-path fallback hits across the full
+  suite; the legacy path is already dead code on the happy
+  path, awaiting formal removal.
 
 ---
 
@@ -375,7 +345,7 @@ only the browser build is broken.
 
 ---
 
-### 138. `--native` rustc E0460: `rand_core` version mismatch
+### ~~138~~. `--native` rustc E0460: `rand_core` version mismatch — MITIGATED
 
 **Severity:** Medium — blocks `loft --native <script>` and `make play`
 on a checkout where `cargo build --release --bin loft` has run without
@@ -429,6 +399,15 @@ This replaces the previous 700-error cascade with a single recovery
 instruction.  Test: introduce a stale rlib (`cargo build --bin loft`
 after modifying a dependency version) and run
 `loft --native <any-file>` — the hint should appear.
+
+**Status:** closed as mitigated.  The root cause (cargo's
+incremental state linking the `loft` crate against one `rand_core`
+rmeta hash while newer versions also exist in `target/release/deps/`)
+is inherent to cargo's caching model; the shipping mitigation
+(`make play` auto-rebuild + `--native` driver's E0460 hint) reduces
+the failure to a one-line "run this command" recovery.  Leaving
+as a documented footgun rather than an open bug; reopen if a
+future toolchain revision breaks the E0460 detection regex.
 
 ---
 
@@ -1302,96 +1281,36 @@ always safe.  Field reads now only execute when the variant matches.
 
 ---
 
-### P184 — `vector<i32>` / `hash<i32>` / `sorted<i32>` ignore the `size(4)` annotation
+### ~~P184~~ — `vector<i32>` / `hash<i32>` / `sorted<i32>` ignore the `size(4)` annotation — FIXED
 
-**Severity:** Medium — silent layout mismatch between the declared narrow
-element type and the actual storage.  No crash, but any binary-format
-code (glTF, PNG, custom protocols) that trusts `vector<i32>` to mean
-"4 bytes per element" gets the wrong file size.  Indexing also returns
-values combined with adjacent elements.
+**Fixed 2026-04-22** by plan-02
+(`doc/claude/plans/finished/02-narrow-collection-elements/`).
 
-**Reproducer:**
+Narrow integer aliases (`u8`, `u16`, `i8`, `i16`, `i32`, `u32`)
+inside `vector<T>` / `hash<T[key]>` / `sorted<T[key]>` /
+`index<T[key]>` now honour the `size(N)` annotation through
+storage, read, append, insert, and return paths.  The concrete
+encoding uses `Parts::{Byte, Short, ShortRaw, Int}` variants on
+the element layout; the `glb_idx_buf` helper and other binary-format
+writers no longer need the `as i32` workaround the former
+PROBLEMS.md entry documented.
 
-```loft
-struct Box { v: vector<i32> }
+The closure took three attempts — the first two uncovered a
+pre-existing `narrow_int_cast` bug in iter-next blocks (Bug α)
+that had to land alongside the layout change.  Postmortem + the
+"all or nothing" rule for partial narrowing in
+`plans/finished/02-narrow-collection-elements/README.md`.
 
-fn test() {
-  b = Box { v: [] };
-  b.v += [1 as i32, 2 as i32, 3 as i32];
-  assert(b.v[0] == 1, "v[0] = {b.v[0]}");  // FAILS: v[0] = 8589934593
-  f = file("/tmp/out.bin");
-  f#format = LittleEndian;
-  f += b.v;
-  assert(f.size == 12, "12 bytes for 3 × i32");  // FAILS: 24 bytes
-}
-```
+**Tests:** `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
+(indirect — GLB BIN-chunk byte count) plus the direct element-width
+guards added during plan-02 Phase 4b.
 
-The value `8589934593 = 0x200000001` is `(2 << 32) | 1` — `b.v[0]`
-reads 8 bytes and gets v[0] in the low half + v[1] in the high half.
-
-**Surfaced in:** `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
-after C54 Phase 2c.  The glTF BIN chunk's triangle indices were 24
-bytes per triangle (wrong) instead of the 12 bytes the header claimed.
-
-**Root cause:**
-
-`type i32 = integer size(4)` sets `forced_size = 4` on `i32`'s
-definition.  Struct-field allocation consults it via
-`src/typedef.rs::fill_database`'s `Type::Integer` arm:
-
-```rust
-let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
-let s = data.forced_size(alias).unwrap_or_else(|| a_type.size(field_nullable));
-```
-
-**But the Vector arm (line 325) never consults `forced_size`** — it
-uses `data.def(content_def_nr).known_type` which resolves to the
-8-byte base `integer` database type for every `Type::Integer`,
-regardless of the alias the user typed.  The alias info is already
-collapsed by the time `Type::Vector(content, _)` is constructed in
-`parse_type_full` / `sub_type`.
-
-Same issue affects `Type::Hash`, `Type::Sorted`, `Type::Index`.
-
-**Fix path:** full phased plan in
-[`plans/02-narrow-collection-elements/README.md`](plans/02-narrow-collection-elements/README.md)
-— representation choice (preferred: extend `Type::Integer` with an
-`Option<NonZeroU8>` forced-size field so the alias signal flows
-through `Box<Type>` naturally), then Phase 1–6 covering parser
-population, resolver narrowing, read path (the hard one —
-`src/parser/fields.rs::parse_vector_index`'s compile-time
-`elm_size` has to look up the vector's real stride, not use a
-constant), append / insert / set paths, local variables and
-return types, and the hash / sorted / index extension.  Per-phase
-acceptance criteria and regression-test matrix spelled out there.
-
-**Tried and reverted** (2026-04-21): storage narrowing landed via
-`Attribute.content_alias_d_nr`, but the parser's `elm_size`
-computation at the indexing site stayed 8-byte — producing *worse*
-behaviour than leaving the bug (4-byte storage + 8-byte reads =
-garbage values).  Reverted entirely.  Detailed postmortem and the
-"all or nothing" rule in the plan file above.
-
-**Workaround:** use `vector<integer>` (8-byte elements) and add
-explicit `as i32` casts at binary-write sites:
-
-```loft
-// Instead of: result: vector<i32> = []; result += [t.a]; ... f += result;
-for t in tris { f += t.a as i32; f += t.b as i32; f += t.c as i32; }
-```
-
-The fix in `lib/graphics/src/glb.loft` (`glb_write_indices` helper)
-uses this pattern — commits that tripped the bug replaced the
-`glb_idx_buf` → `vector<integer>` helper with an inline write loop
-that casts per element.
-
-**Discovered:** 2026-04-21 while fixing `test_map_export_glb_header`
-(BIN chunk double-counted bytes, tripping the header's `total_len`
-assertion).
-
-**Tests:** (see `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
-for the indirect regression guard — a direct `tests/issues.rs::p184_*`
-guard should land with the proper fix.)
+Historical narrative (reproducer, root-cause analysis, the
+2026-04-21 tried-and-reverted postmortem, and the original manual
+`as i32` workaround) lives in git history and in
+`plans/finished/02-narrow-collection-elements/`.  It is not
+reproduced here because the bug is gone and the workaround is no
+longer needed.
 
 ### ~~P185~~ — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop — FIXED
 

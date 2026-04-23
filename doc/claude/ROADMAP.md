@@ -181,6 +181,39 @@ tooling-friendly. No "appears fixed but unverified" bugs in PROBLEMS.md.
 Anyone can write loft code in their preferred editor with syntax
 highlighting, decent error messages, and a REPL for experimentation.
 
+**Advertising readiness**: 0.9.0 is also the gate for honestly pitching
+loft to external programmers as an alternative to their current scripting
+language.  Four items were added to this milestone specifically to close
+that gap:
+
+- **PKG.REG** — central registry so `loft install <name>` works.
+- **DX.3** — a 30-minute narrative tutorial for newcomers.
+- **DX.4** — native-mode parity in fast CI to stop P143/P171-class
+  regressions from surfacing mid-release.
+- **PKG.EXTRACT** — move every `lib/*/` library out of the interpreter
+  repo.  Logical bundling is allowed where it fits — the five `moros_*`
+  libraries naturally share one `loft-moros` repo, `server` / `web` /
+  `game_protocol` share `loft-net`, `graphics` + `imaging` share
+  `loft-graphics` — but `loft install <name>` still resolves at
+  library granularity so users never see the bundling.  The
+  interpreter repo today carries ~960 MB of library code + build
+  artefacts that have nothing to do with the language itself; a
+  programmer cloning `loft` to look at the interpreter shouldn't
+  wait on a multi-hundred-megabyte graphics assets download.
+  Healthy ecosystems separate the language from its libraries;
+  loft's monorepo today is an accident of solo-maintainer convenience.
+
+Without these, newcomers hit an "on your own" wall within an hour and
+the native codegen's regressions keep slipping in.  With them, loft
+has the surrounding surface a bettable language needs.
+
+**Implementation order within 0.9.0** lives in
+[PLANNING.md § Recommended Implementation Order](PLANNING.md#recommended-implementation-order)
+— the five-tier sequence (DX.4 first → SH/DX polish → FFI+PKG
+ecosystem → language-polish tail → PKG.EXTRACT last) is designed so
+each tier leaves main in a shippable state, and no tier starts before
+its dependencies are stable.
+
 ### Language polish
 
 | ID     | Title                                                  | E  | Design | Source           |
@@ -241,16 +274,20 @@ avoid adding serde to the default feature set.
 | SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
 | DX.1  | Quick-start `examples/` directory                      | XS | ✓      | DX.md            |
 | DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
+| DX.3  | "Learn loft in 30 minutes" narrative walkthrough — a single discoverable page (GitHub Pages + repo root README link) that walks a first-time visitor from `loft hello.loft` through structs, pattern match, `par()` parallel, and HTML export using the house-scene canvas demo.  Complements DX.1's examples/ (reference) with a narrative path (learning).  A newcomer shouldn't have to infer the language from cold-reading examples. | S  | —      | this-session assessment |
+| DX.4  | Native-mode parity in fast CI — every `tests/scripts/*.loft` and `tests/issues.rs` test runs under both `--interpret` AND `--native` via the existing `tests/native.rs` harness, wired into the GitHub Actions fast job (not just `ci-full`).  Catches P143/P144/P157/P171/P180-class native-codegen regressions before they land in main.  Today's fast CI runs `cargo nextest run --profile ci` which skips `tests/native.rs`; parity requires promoting it.  Cost: one CI job slot + longer compile cache. | S  | —      | this-session assessment |
 
 ### Package and FFI tooling
 
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| PKG.7 | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| FFI.1 | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
-| FFI.2 | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
-| FFI.3 | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
-| FFI.4 | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
+| ID          | Title                                                  | E  | Design | Source           |
+|-------------|--------------------------------------------------------|----|--------|------------------|
+| PKG.7       | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
+| PKG.REG     | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted registry.txt; 3–5 curated first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one. Previously deferred-indefinitely as A7.4 under "ecosystem must exist first"; the chicken-and-egg bites both ways — no registry, no ecosystem.  Required to credibly advertise loft to external programmers. | M  | ✓      | PACKAGES.md      |
+| PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG for the install path, on DX.4 for the cross-repo CI story, and on FFI.1–4 for the boilerplate-free native-extension author experience.  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
+| FFI.1       | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
+| FFI.2       | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
+| FFI.3       | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
+| FFI.4       | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
 
 ### CLI fixes that improved during 0.8.4
 
@@ -355,7 +392,6 @@ before tagging — no "appears fixed" exceptions.
 |-------|----------------------------------------------------|-------------------------------------------|
 | O1    | Superinstruction peephole rewriting                | Opcode table full (254/256)               |
 | P4    | Bytecode cache (`.loftc`)                          | Superseded by native codegen              |
-| A7.4  | Central package registry                           | Ecosystem must exist first                |
 
 ---
 

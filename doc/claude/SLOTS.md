@@ -211,7 +211,7 @@ must still reproduce every layout under `LOFT_SLOT_V2=validate`.
 |  6 | Sequential lifted calls (`body += pad(i)`) | `sequential_lifted_calls` | ✅ |
 |  7 | Comprehension then literal (P122p) | `p122p_comprehension_then_literal` | ✅ |
 |  8 | Sorted range comprehension (P122q) | `p122q_sorted_range_comprehension` | ✅ |
-|  9 | Par loop with inner for (P122r) | `p122r_par_loop_with_inner_for` | ⚠ `#[ignore]` — codegen panic on `par()` outer iterator |
+|  9 | Par loop with inner for (P122r) | `p122r_par_loop_with_inner_for` | ✅ fixed 2026-04-23 — outer `par()` iterator `a` inlined to `OpGetVector(items, idx)` (mirroring the inner `b` treatment) so it no longer needs a slot |
 | 10 | Many parent refs + child loop index | `parent_refs_plus_child_loop_index` | ✅ |
 | 11 | Call with Block arg (vector-comprehension in arg position) | `call_with_block_arg` | ✅ |
 | 12 | Parent var Set inside child scope | `parent_var_set_inside_child_scope` | ✅ |

@@ -36,6 +36,11 @@ Invoked after a non-trivial edit, or explicitly via "review this",
   and any tests that exercise it.
 - **Conventions.**  CLAUDE.md, doc/claude/CODE.md,
   doc/claude/DEVELOPMENT.md.  Flag anything that violates them.
+- **For `.loft` edits**, cross-reference
+  `.claude/skills/loft-write/SKILL.md` — naming conventions,
+  type reference, format strings, known bugs / workarounds.
+  A subtle `.loft` violation often hides behind what looks
+  like valid syntax.
 
 ### What to look for
 
@@ -112,9 +117,14 @@ when the user asks "is the tree clean?".
    file:line anchors.
 3. **`cargo check --no-default-features`** — feature-gated
    default-stripped build.
-4. **`cargo test --release --no-fail-fast`** — every test binary,
-   every test.  Parse for `test result: FAILED` and list failing
-   tests.
+4. **Full test suite via `./scripts/find_problems.sh --bg`** —
+   project policy (CLAUDE.md) forbids foreground `cargo test
+   --release` because it blocks the session on a ~20 min run
+   and loses output on crash.  The script runs `cargo test
+   --release --no-fail-fast` detached, tees to
+   `/tmp/loft_test.log`, and writes a structured FAILED + SIGSEGV
+   summary to `/tmp/loft_problems.txt`.  Invoke with `--bg`,
+   then `--wait` for the summary.
 5. **`cargo test --release --test doc_hygiene`** — Markdown / plan
    file invariants.
 6. **Freshness checks** — if html_wasm or native_loader tests
@@ -125,10 +135,33 @@ when the user asks "is the tree clean?".
      vs its source.
    When stale, name the rebuild from `DEVELOPMENT.md § Common pitfalls`.
 
+### Pre-existing vs newly-introduced failures — always report both
+
+Per `doc/claude/DEVELOPMENT.md § CI Validation § Pre-existing vs.
+newly-introduced failures — always irrelevant`: a red `make ci`
+blocks commit regardless of who made it red.  If a clippy error
+or test failure predates the current branch, say so and flag
+the fix as in-scope anyway.  Never soft-pass "not your problem"
+pre-existing breakage.
+
+### The `debug_assertions`-off dev profile quirk
+
+`[profile.dev.package.loft]` in `Cargo.toml` disables
+`debug_assertions` for the loft package in the dev profile.
+Clippy runs under dev; items used only under
+`#[cfg(any(debug_assertions, test))]` appear dead.  When you
+see a surprising "function X is never used" on code called
+from `src/state/codegen.rs::validate_slots` or similar, check
+whether its caller is behind that cfg before suggesting
+removal — the fix is usually `#[allow(dead_code)]` or
+cfg-gating the helper to match.
+
 ### Parallelism + efficiency
 
 - fmt + clippy + `check --no-default-features` can run in
-  parallel.  Tests run after those pass.
+  parallel.  The full test suite runs in background via
+  `find_problems.sh --bg` — start it early, poll with `--peek`
+  or wait with `--wait`.
 - For a "docs-only" clean check, skip the full test suite and say
   so explicitly — let the user ask for the full run.
 

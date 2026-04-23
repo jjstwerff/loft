@@ -9,7 +9,7 @@ PROBLEMS.md and CAVEATS.md.
 Read order:
 1. § Open programmer-biting issues — the live work queue
 2. § Active sprint — P54 — current focus, with steps remaining
-3. § Active design — C54 — the next big landing
+3. § Active design — C54 — **LANDED** 2026-04-21 via plan-01; kept as design reference
 4. § Compiler blockers — struct-enum bugs (B2…B7) gating P54 + future enums
 5. § Enhancement tiers — quality investments ranked by leverage
 
@@ -28,9 +28,7 @@ Decisions to *not* fix something live in
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14** (canonical + pretty both shipped): `to_json` walks all six variants — primitives, empty containers, non-empty containers, nested containers — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` codegen for arbitrary structs (Q3 second half) needs P54 step 5's codegen machinery.  See § Q3 below |
 | Q4 | No way to construct `JsonValue` trees in loft code (fixtures, mocking, forwarding) | — | **Q4 COMPLETE 2026-04-14**: all six constructors ship with real behaviour.  `json_null` / `json_bool` / `json_number` / `json_string` wire the primitives directly; `json_array` / `json_object` deep-copy caller-supplied items/fields into a fresh arena via a shared `dbref_to_parsed` + `materialise_primitive_into` helper, handling nested containers.  See § Q4 below |
-| C54 | `integer` arithmetic on `i32::MIN` silently returns null | Medium | **Designed, not landed** — see § C54 below |
 | P54-U | Two JSON parsers (`src/json.rs::parse` for the new JsonValue path, `src/database/structures.rs::parsing` for legacy `text→struct` direct write) accept different dialects and have different diagnostic surfaces | Medium | **Phase 1 + 2 landed 2026-04-14.**  Phase 1: `Dialect::Strict` / `Dialect::Lenient` enum + `parse_with(input, dialect)` in `src/json.rs`.  `parse_object` accepts bare-key identifier keys under Lenient, `parse_value` now also accepts bare identifier values via a new `Parsed::Ident(String)` variant (loft enum tags like `{category: Hourly}`).  Phase 2: schema-driven `walk_parsed_into` + `walk_parsed_struct` + `walk_primitive_into` in `src/database/structures.rs`; `Stores::parse` and `Stores::parse_message` route through the unified parser first and fall back to the legacy scanner only for error-path position reporting.  **Instrumentation confirmed zero success-path fallback hits across the full test suite** (`issues`, `data_structures`, `wrap`, all `.loft` scripts and docs).  Phase 3 remaining: replace the legacy error-path fallback with walker-native `Diagnostic` shape, then delete ~540 lines of hand-rolled scanner in `structures.rs`.  10 new unit tests total in `src/json.rs`.  Design in § P54-U below |
-| B5 | Recursive struct-enum — recursive tail call returns to wrong PC | Medium | Compiler — **two layers shipped 2026-04-14, third layer open.**  Layer 1 (type registration, `src/typedef.rs::fill_all`): walks every struct/enum-variant attribute and calls `data.vector_def(...)` for every `vector<T>` content type before the `fill_database` loop, so `main_vector<Tree>` gets a real `known_type` and `OpDatabase(db_tp=…)` no longer receives `u16::MAX`.  Closes the original "Incomplete record" panic.  Layer 2 (match-arm bindings, `src/parser/control.rs:1103`): `create_unique` for `mv_<field>` now sets `skip_free` on the binding variable — the binding is a borrowed view into the subject's record, not an owned store, so the exit-time OpFreeRef would decrement a store the binding doesn't own (worse, the not-taken arm's slot is never assigned and the free reads garbage bytes as a DbRef, observed as out-of-bounds store_nr ≈ 4621).  Closes the garbage-FreeRef crash.  Positive guards: `p54_b5_recursive_struct_enum_construction` (construct + match + `kids.len()`); `p54_b5_not_taken_arm_with_vector_binding_ok` (layer 2 in isolation — not-taken arm with vector-bound field); `p54_b5_for_loop_over_enum_variant_vector` (layers 1+2 combined via match-arm for-loop over `vector<Tree>`, nested match per element, no recursion).  **Remaining (still-ignored) layer 3:** the recursive path — `count(Node{kids:[Leaf,...]})` → inside match's Node arm → `count(k)` for each leaf → inner `count(Leaf{...})` returns 3 — the inner `OpReturn` jumps to a bogus PC (OpCastIntFromText on a null text, then random ops).  Symptom matches B3-family (struct-enum tail-expression return).  Recursive `count` isn't a tail-expr case directly, but the call-stack may be mis-computed.  Regression guard: `p54_b5_recursive_struct_enum` stays `#[ignore]` with a narrower reason. |
 
 Items that look open in the historical sections of PROBLEMS.md /
 CAVEATS.md but are now closed: P22, P91, P135 / C58, P137, P139, C60,
@@ -42,8 +40,18 @@ pre-alloc args just like Reference/Vector), B2-runtime (2026-04-13
 v_block wrap, fields.rs Sig.Idle wrap, calc.rs sub-struct size=1),
 B7 (2026-04-13 — `def_code` null-code path now sets `self.arguments`
 and `stack.position` from def attributes for native fns + native
-registry aliases `t_9JsonValue_<method>` → `n_<method>` impls).
-See CHANGELOG.md.
+registry aliases `t_9JsonValue_<method>` → `n_<method>` impls),
+**C54** (2026-04-21, plan-01: `integer` widened to i64 end-to-end;
+`long` keyword + `l` suffix removed; 34 duplicate `Op*Long` opcodes
+reclaimed), **P184** (2026-04-22, plan-02: narrow integer aliases
+inside `vector` / `hash` / `sorted` / `index` now honour `size(N)`
+via the Option L-minimal `Parts::{Byte, Short, ShortRaw, Int}`
+variants), **P185** (2026-04-23, plan-05: slot-aliasing SIGSEGV
+closed by retiring `place_orphaned_vars` and extending the main
+IR walk), **B5** (all layers landed — Layer 1 + 2 on 2026-04-14,
+Layer 3 closed as a side-effect of the struct-enum return work
+landed in #168→#174; `p54_b5_recursive_struct_enum` is
+un-ignored and passing).  See CHANGELOG.md.
 
 ---
 
@@ -389,7 +397,18 @@ site in `default/`, `lib/`, or `tests/` uses `Struct.parse(text)`.
 
 ---
 
-## Active design — C54 (integer i64)
+## ~~Active design — C54 (integer i64)~~ — LANDED
+
+> **Landed 2026-04-21** by plan-01
+> (`doc/claude/plans/finished/01-integer-i64/`).  `integer` is i64
+> end-to-end; `Type::Long` / `long` keyword / `l` literal suffix
+> removed; 34 duplicate `Op*Long` opcodes reclaimed; binary-format
+> lint in place; `.loftc` cache removed.  See CHANGELOG.md § "Integer
+> → i64 migration" for the user-facing shape.
+>
+> The sub-ticket table below (C54.A … C54.E, with C54.D closed-by-decision
+> pointing at `DESIGN_DECISIONS.md`) is preserved as design reference —
+> every sub-ticket shipped except the DESIGN_DECISIONS-closed C54.D.
 
 **Bite.** Any arithmetic landing on `i32::MIN` silently returns null
 (and debug-aborts).  Division by zero same.  In a language pitched as
