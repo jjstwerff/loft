@@ -68,6 +68,7 @@ libc               = "0.2"
 
 [dev-dependencies]
 stdext = "0.3"
+png    = "0.17"
 
 [profile.test]
 # Reduce DWARF to line-tables only; keeps file:line in backtraces and
