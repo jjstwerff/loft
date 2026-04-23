@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::State;
-use super::{size_ptr, size_str};
+use super::size_ptr;
 use crate::keys::{DbRef, Str};
 use crate::ops;
 use std::cmp::Ordering;
@@ -318,17 +318,25 @@ impl State {
             .addr_mut::<String>(r.rec, r.pos)
     }
 
-    pub fn text(&mut self) {
+    /// Plan-04 Phase 2h: positional variant of the removed `text()`.  Writes a
+    /// fresh empty `String` at the frame slot reached by
+    /// `self.stack_pos - pos` (matches the addressing convention of
+    /// `clear_text`, `append_text`, and the other `_text` ops).
+    /// Does NOT advance `stack_pos` — the frame is assumed to be
+    /// already reserved.
+    ///
+    /// `pos` is read from the bytecode stream as a `const u16`.
+    pub fn init_text(&mut self) {
+        let pos = *self.code::<u16>();
         if cfg!(debug_assertions) {
             self.text_positions
-                .insert(self.stack_cur.pos + self.stack_pos);
+                .insert(self.stack_cur.pos + self.stack_pos - u32::from(pos));
         }
-        let v = self.string_mut(0);
+        let v = self.string_mut(pos);
         let s = String::new();
         unsafe {
             core::ptr::write(v, s);
         }
-        self.stack_pos += size_str();
     }
 
     pub fn var_text(&mut self) {

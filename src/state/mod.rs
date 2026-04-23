@@ -1383,6 +1383,69 @@ impl State {
         ) = value;
     }
 
+    /// Plan-04 Phase 2h: positional variant of `conv_ref_from_null`.
+    /// Writes a null `DbRef` (12 bytes) at the frame slot reached by
+    /// `self.stack_pos - pos` (matches `get_var::<DbRef>`'s
+    /// addressing).  Does NOT push onto the eval stack — the frame
+    /// is assumed to be already reserved.
+    ///
+    /// `pos` is read from the bytecode stream as a `const u16`.
+    pub fn init_ref(&mut self) {
+        let pos = *self.code::<u16>();
+        let null_ref = self.database.null();
+        *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
+            self.stack_cur.rec,
+            self.stack_cur.pos + self.stack_pos - u32::from(pos),
+        ) = null_ref;
+    }
+
+    /// Plan-04 Phase B: positional variant of `null_ref_sentinel`.
+    /// Writes `DbRef{store_nr: u16::MAX, rec: 0, pos: 0}` at the
+    /// frame slot reached by `self.stack_pos - pos`.  Does NOT push
+    /// onto the eval stack — used for first-init of inline-ref
+    /// placeholders when the frame is pre-reserved, or combined with
+    /// `OpReserveFrame(12)` to replicate `OpNullRefSentinel`'s
+    /// push-and-init effect.
+    ///
+    /// `pos` is read from the bytecode stream as a `const u16`.
+    pub fn init_ref_sentinel(&mut self) {
+        let pos = *self.code::<u16>();
+        *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
+            self.stack_cur.rec,
+            self.stack_cur.pos + self.stack_pos - u32::from(pos),
+        ) = DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        };
+    }
+
+    /// Plan-04 Phase B: positional variant of `create_stack`.
+    /// Writes a stack-frame DbRef pointing into dep's slot
+    /// (`stack_cur.pos + self.stack_pos - dep_pos`) at frame slot
+    /// `self.stack_pos - pos`.  Does NOT push onto the eval stack.
+    /// Used for first-init of borrowed-ref slots when the frame is
+    /// pre-reserved, or combined with `OpReserveFrame(12)` to
+    /// replicate `OpCreateStack`'s push-and-init effect.  The
+    /// resulting DbRef must be overwritten by `OpPutRef` before any
+    /// field access (same contract as `OpCreateStack`).
+    ///
+    /// Both `pos` and `dep_pos` are read from the bytecode stream
+    /// as `const u16`.
+    pub fn init_create_stack(&mut self) {
+        let pos = *self.code::<u16>();
+        let dep_pos = *self.code::<u16>();
+        let db = DbRef {
+            store_nr: self.stack_cur.store_nr,
+            rec: self.stack_cur.rec,
+            pos: self.stack_cur.pos + self.stack_pos - u32::from(dep_pos),
+        };
+        *self.database.store_mut(&self.stack_cur).addr_mut::<DbRef>(
+            self.stack_cur.rec,
+            self.stack_cur.pos + self.stack_pos - u32::from(pos),
+        ) = db;
+    }
+
     pub fn put_stack<T: 'static>(&mut self, val: T) {
         #[cfg(debug_assertions)]
         {

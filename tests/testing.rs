@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 
 //! Testing framework
-#[cfg(debug_assertions)]
 use loft::data::Context;
 use loft::scopes;
 extern crate loft;
@@ -98,17 +97,40 @@ impl Test {
         self
     }
 
-    /// Assert the stack-slot layout of `n_test` variables after codegen (debug builds only).
+    /// Assert the stack-slot layout of `n_test` variables after codegen.
     ///
-    /// `spec` is a space-separated list of `name(scope)=slot` tokens, e.g.:
-    /// `"_t(4L)=0  b(4L)=4"` — `_t` in loop scope 4 at slot 0, `b` in loop scope 4 at slot 4.
-    /// Scope suffix "L" asserts a loop scope; no suffix asserts a regular (non-loop) scope.
+    /// `spec` is the multi-line visual layout the harness renders after
+    /// `byte_code`, using `name(scope)+size=slot [first_def..last_use]`
+    /// tokens with depth bars for nested scopes.  Calling `.slots("")`
+    /// triggers the harness to panic with the computed layout so the
+    /// spec can be copy-pasted back — this is the intended workflow for
+    /// adding a new fixture.
+    ///
+    /// Locks a single placement decision so it will not drift silently;
+    /// fires in every test profile (the rendering cost is negligible
+    /// and its whole purpose is to catch V1↔V2 slot drift during the
+    /// plan-04 redesign).  See `doc/claude/plans/finished/04-slot-assignment-redesign/`.
     pub fn slots(&mut self, spec: &str) -> &mut Test {
-        #[cfg(debug_assertions)]
-        {
-            self.expected_slots = Some(spec.to_string());
-        }
-        let _ = spec;
+        self.expected_slots = Some(spec.to_string());
+        self
+    }
+
+    /// Plan-04 Phase 2d: assert the slot layout satisfies invariants
+    /// I1–I6 from
+    /// `doc/claude/plans/finished/04-slot-assignment-redesign/SPEC.md § 5a`,
+    /// without locking any specific numeric layout.
+    ///
+    /// Current implementation is a marker: `validate_slots` already
+    /// runs at the end of codegen (`src/state/codegen.rs:156`) and
+    /// panics with a distinct `[I1]` … `[I6]` prefix on any
+    /// violation, so a V1 regression that breaks an invariant fails
+    /// this test by construction.  Phase 2e will additionally run
+    /// `assign_slots_v2` under `LOFT_SLOT_V2=validate` and invoke
+    /// the same validator on its output.
+    pub fn invariants_pass(&mut self) -> &mut Test {
+        // No-op marker — actual checking happens in codegen's
+        // validate_slots call.  Documenting intent at the fixture
+        // site makes the test's purpose unambiguous.
         self
     }
 
@@ -261,7 +283,6 @@ impl Drop for Test {
             byte_code(&mut state, &mut p.data);
         }))
         .err();
-        #[cfg(debug_assertions)]
         if let Some(spec) = &self.expected_slots {
             let test_nr = p.data.def_nr("n_test");
             let f = &p.data.def(test_nr).variables;

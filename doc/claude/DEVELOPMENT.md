@@ -615,6 +615,45 @@ CI validation has two distinct phases: a **mandatory local gate** that must pass
 every commit, and the **remote CI** that GitHub runs after a push.  Most failures happen
 because the local gate is skipped.
 
+### Pre-existing vs. newly-introduced failures — always irrelevant
+
+**A red CI gate is a red CI gate, regardless of who or what made it red.**
+The working tree must be stable and usable after every commit.  It does
+not matter whether a `cargo fmt --check` diff, a clippy error, a
+`no-default-features` build break, or a test failure was already present
+on the base branch before your work, was caused by a toolchain upgrade,
+or was introduced by the current change.  If `make ci` is red when you
+reach for `git commit`, **fix it first** — then commit.
+
+The reasoning is flat: downstream contributors, CI runs, and future you
+cannot distinguish "broken by this commit" from "broken by a prior
+commit" from the working-tree symptom alone.  Leaving a red gate in
+place forces every later contributor to diagnose it from scratch, and
+turns every future `make ci` run into noise that hides genuinely-new
+regressions.  A clean gate is a shared resource; "it wasn't me" is not
+a reason to leave it dirty.
+
+Practical shape:
+
+- A toolchain upgrade surfaced new clippy lints on existing code → fix
+  them (apply the suggestion, restructure the doc comment, or add a
+  scoped `#[allow(...)]` with a comment explaining *why* the lint is a
+  false positive).  Do not revert the toolchain.
+- `cargo fmt --check` reports drift in a file you did not touch → run
+  `cargo fmt` and commit the result.  The bundled drift lands alongside
+  your intended change; flag it in the commit message so reviewers can
+  recognise the stylistic churn.
+- A pre-existing dead-code warning fires because of a build-profile
+  cfg gate → gate the item with the same cfg, or `#[allow(dead_code)]`
+  with a comment pointing at the gated call site.
+- A test regresses on your branch *and* on `origin/main` → the fix
+  blocks your commit either way.  If the root cause is clearly outside
+  your work's scope, land a minimal repair in a separate preparatory
+  commit (still on your branch) before the feature commit.
+
+This policy is stricter than "don't introduce regressions."  It is
+"leave the gate cleaner than you found it, every time."
+
 ### Local CI gate (mandatory before every commit)
 
 Run all four checks and confirm they are clean **before** `git commit`.  Never commit

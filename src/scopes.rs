@@ -150,9 +150,16 @@ pub fn check(data: &mut Data) {
             &mut seq,
             0,
         );
-        // Run assign_slots in shadow mode: pre-compute slots, save them, then reset so
-        // claim() continues to drive codegen as before (A6.2).  The saved layout is
-        // validated by check_shadow_slots after byte_code completes.
+        // Plan-04 close-out (2026-04-22): V1 remains the slot
+        // allocator.  The Phase 2h "codegen is the allocator" pivot
+        // and the V2-drive alternative both failed on variables
+        // declared at an outer scope but first-Set in an inner scope
+        // (e.g. match-arm pattern bindings lifted to body scope by
+        // `scan_if`'s `small_both` pre-registration).  V1's zone-1
+        // pre-pass is load-bearing — see
+        // `doc/claude/plans/finished/04-slot-assignment-redesign/README.md`
+        // § Status.  Invariants I1–I7 in `validate.rs` check V1's
+        // output at every codegen completion (debug / test builds).
         let local_start: u16 = {
             let vars = &data.definitions[d_nr as usize].variables;
             let arg_size: u16 = vars
@@ -162,7 +169,6 @@ pub fn check(data: &mut Data) {
                 .sum();
             arg_size + 4 // 4 bytes for the return-address slot
         };
-        // Pre-assign stack slots using the two-zone block pre-claim approach.
         {
             let d = &mut data.definitions[d_nr as usize];
             assign_slots(&mut d.variables, &mut d.code, local_start);

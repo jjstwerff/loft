@@ -33,6 +33,8 @@ existing entry, not re-open it as a bug.
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
 | 54 | `json_items` returns opaque `vector<text>` | Medium | **0.9.0:** first-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull); `json_parse` is the one entry point; old text-based surface withdrawn |
 | 184 | `vector<i32>` ignores the `size(4)` annotation — elements stored + accessed as 8-byte i64 (same for `u32`, and symmetrically for `hash<i32>` / `sorted<i32>` / `index<i32>`) | Medium | **Workaround:** use `vector<integer>` and emit explicit `as i32` casts at binary-write sites (`f += val as i32`).  The type annotation looks narrower but storage + reads are both 8 bytes — trust the `integer` name and cast at boundaries. |
+| P185 | Slot-aliasing SIGSEGV / heap corruption — a local declared AFTER an inner `body += <format-string>` accumulator, inside a `for _ in file(...).files()` loop (inline temporary, not a named var), gets assigned a slot that overlaps a still-live text buffer.  Teardown trips `OpFreeText` (op 118) on the aliased slot → SIGSEGV or `realloc(): invalid pointer`.  Discovered while debugging why `scripts/build-playground-examples.loft` corrupts its own output file mid-run. | **High** (safety: heap corruption) | **Workarounds** (both work): (a) declare the late local BEFORE the inner loop, or (b) hoist `file(...)` into a named variable (`d = file(...); for f in d.files()`).  Both nudge slot assignment away from the bad overlap. |
+| ~~P186~~ | Struct-typed block / if expressions rejected as `void` | — | **Fixed 2026-04-22** — `parse_block` now preserves `Type::Rewritten(_)` across Insert-flattening (first_pass struct literals emit `Insert` + `Rewritten(Reference)`, which used to be clobbered to `Void`) and disambiguates struct-body `{ field: val, … }` from block-expression `{ expr }` by peeking `ident :` / `ident ,`.  Tests: `tests/issues.rs::p186_struct_typed_block_expressions` (4 shapes). |
 | ~~91~~ | Default-from-earlier-parameter | — | **Done** — call-site `Value::Var(arg_index)` substitution in the stored default tree; simpler than planned prologue approach |
 | ~~135~~ | Sprite atlas row indexing swap | — | **Fixed** — canonical `(0,0) = screen-top-left`; canvas upload no longer pre-flips rows; OPENGL.md § Canvas coordinate convention.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |
 | ~~137~~ | `loft --html` Brick Buster runtime `unreachable` panic | — | **Fixed** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically. Tests: `tests/html_wasm.rs` (4 regression guards behind a serial mutex) |
@@ -1390,6 +1392,116 @@ assertion).
 **Tests:** (see `lib/moros_render/tests/geometry.loft::test_map_export_glb_header`
 for the indirect regression guard — a direct `tests/issues.rs::p184_*`
 guard should land with the proper fix.)
+
+### ~~P185~~ — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop — FIXED
+
+**Fixed 2026-04-23** by plan-05 (`doc/claude/plans/finished/05-orphan-placer-elimination/`).
+The root cause was `place_orphaned_vars` placing the late local
+(`key`) onto a slot still used by a live text buffer — the inline
+`file(...)` iterator temporary's slot was freed too aggressively.
+Plan-05 retired the orphan placer outright: Phase 1a recognised
+`Value::Insert` at the function-body root, Phase 1b extended
+`place_large_and_recurse` to traverse every `Value` variant AND to
+handle cross-scope `Set(v)` where `v.scope != walker_scope`
+(the canonical shape for file-read preambles).  With the main walk
+now reaching every variable, `place_orphaned_vars` was deleted in
+Phase 2 (`309e0f4`).  The `tests/issues.rs::p185_*` and
+`tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`
+tests are un-ignored in this commit.
+
+### Historical — Slot-aliasing SIGSEGV on late local declared after inner text-accumulator loop
+
+**Severity:** High (safety: heap corruption).  Triggers `OpFreeText`
+(op 118) on a slot that still aliases a live text buffer, producing
+either a raw SIGSEGV or glibc `realloc(): invalid pointer` abort on
+scope teardown.  P178 / P177-class: the slot allocator placed two
+locals that must not share a slot onto the same slot.
+
+**Reproducer** (fails on clean `develop` branched from `1753615`):
+
+```loft
+fn main() {
+  out = file("/tmp/out.txt");
+  for f in file("tests/docs").files() {          // inline temporary iter source
+    path = "{f.path}";
+    if !path.ends_with(".loft") or path.ends_with("/.loft") { continue; }
+    body = "";
+    for i in 0..3 {
+      body += "{i}";                             // grows a text buffer
+    }
+    key = path[path.find("/") + 1..path.len() - 5];   // declared AFTER body loop
+    out += `
+      {key}
+    `;
+    break;
+  }
+  println("done");
+}
+```
+
+Running this prints `done` and then crashes during scope teardown
+with SIGSEGV or `realloc(): invalid pointer`.  The crash is in
+`free_text` (fill.rs op 118) on a slot that should already have
+been handed back.
+
+**Two independent workarounds** (either alone avoids the crash):
+
+1. **Hoist `key` above the inner loop** — the late declaration is the
+   direct trigger.
+   ```loft
+   key = path[path.find("/") + 1..path.len() - 5];
+   body = "";
+   for i in 0..3 { body += "{i}"; }
+   ```
+2. **Hoist `file(...)` into a named variable** — stops the allocator
+   from reusing the temporary's slot.
+   ```loft
+   d = file("tests/docs");
+   for f in d.files() { ... key = path[...]; ... }
+   ```
+
+Both nudge the slot allocator onto a non-overlapping placement.
+
+**Root cause (hypothesis):** the scope analyser treats the inline
+`file(...)` temporary as free after the iterator is materialised,
+then `place_orphaned_vars` assigns `key`'s slot on top of a slot
+that the text buffer (`body`) or the iterator's internal state is
+still referencing via a DbRef.  When scope teardown runs `OpFreeText`
+on the orphan slot, the decrement lands on a still-live store → use-
+after-free.  Same family as P178 (`local_start = 0` orphan start
+overlapping argument slots), which was patched with `local_start`
+parameter; P185 is a different manifestation of the same "orphan
+start is too aggressive" issue.
+
+**Surfaced by:** `scripts/build-playground-examples.loft` corrupting
+its own output — the script reads `tests/docs/*.loft` in an outer
+`for f in file("tests/docs").files()` loop, builds `body` line-by-line
+in an inner loop, then computes `key = name.to_lowercase()...` and
+writes to `out` via a backtick-block append.  Result: truncated
+`doc/examples.js` (2 lines of 85+) and SIGSEGV.  `make
+build-playground-examples` (or any direct `loft scripts/build-
+playground-examples.loft`) reproduces.
+
+**Fix path:** plan-04 (`doc/claude/plans/finished/04-slot-assignment-redesign/`)
+aimed for a broader rework but was retracted in 2026-04-22 — both
+the codegen-is-allocator pivot and V2-drive failed on a shared
+outer-scope / inner-Set failure mode.  V1 remains the allocator.
+The targeted P185 fix is now scoped under plan-05
+(`doc/claude/plans/finished/05-orphan-placer-elimination/`): extend V1's
+main walk to cover the three IR shapes currently orphaned
+(Insert-rooted bodies, parent-scope Set in child-Block, Insert
+preambles), delete `place_orphaned_vars`, and add invariant I8
+(dep-chain-aware aliasing check) so the SIGSEGV becomes a named
+compile-time panic.  Until plan-05 lands, the two workarounds
+above are the user-facing guidance.
+
+**Tests:** `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
+and `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`
+— both un-ignored 2026-04-23 after plan-05 Phase 2 landed.
+
+**Discovered:** 2026-04-22, while investigating why `doc/examples.js`
+drifted on the `docs-problems-sync` branch (the generator had been
+quietly corrupting its own output every time it ran).
 
 ---
 

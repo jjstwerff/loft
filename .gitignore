@@ -14,6 +14,9 @@ tests/wasm/assets.json
 tests/test_native_pkg/
 *.glb
 lib/graphics/examples/*.png
+# Canvas demo writes this into its CWD (typically repo root) — gold lives at
+# tests/gold/10-canvas-demo.png; the working-directory copy is transient.
+/10-canvas-demo.png
 test_scene_debug.loft
 # FUSE filesystem hidden files: created when a file is deleted while still
 # open by another process (e.g. an editor or watcher). They're stale OS
