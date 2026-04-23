@@ -142,7 +142,8 @@ Run through this list before pushing.  Skip items that are clearly unaffected.
 
 | Document | Update when… |
 |---|---|
-| `CHANGELOG.md` | Always — add entries under `## Unreleased` for every user-visible change |
+| `doc/claude/CHANGELOG_TECHNICAL.md` | Always — add a detailed entry under `## [Unreleased]` for every change (internal phase/opcode/slot detail welcome) |
+| `CHANGELOG.md` | When a change is user-visible — add a friendly, jargon-free entry under `## Unreleased`.  Entry-level programmers are the audience |
 | `doc/claude/ROADMAP.md` | Sprint items were completed or reprioritised |
 | `doc/claude/PLANNING.md` | Items were completed (remove) or new items discovered (add) |
 | `doc/claude/PROBLEMS.md` | Bugs were fixed (mark resolved) or **any new bug found during the sprint** (add with reproducer) |
@@ -531,7 +532,8 @@ behaviour and update them as needed.  Common files to check:
 
 | File | Update when |
 |---|---|
-| `CHANGELOG.md` | Always — add a feature or bug-fix entry under Unreleased |
+| `doc/claude/CHANGELOG_TECHNICAL.md` | Always — add a detailed entry under Unreleased |
+| `CHANGELOG.md` | When the change is user-visible — add a plain-language entry under Unreleased |
 | `PLANNING.md` | Always — remove the item section and Quick Reference row |
 | `ROADMAP.md` | Always — remove or update the row(s) for the completed item(s) |
 | `RELEASE.md` | Gate criteria or release checklist changed |

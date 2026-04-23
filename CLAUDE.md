@@ -242,7 +242,8 @@ The rule: **always commit before any operation that changes the working tree.**
 | [DEBUG_PLAN.md](doc/claude/DEBUG_PLAN.md) | Systematic plan for all open safety/leak/data-loss issues (P120–P135) |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |
+| [CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md) | Full technical changelog — opcode/slot/phase detail for contributors |
 | [CAVEATS.md](doc/claude/CAVEATS.md) | Verifiable edge cases and limitations with reproducers and test references |
 | [COROUTINE.md](doc/claude/COROUTINE.md) | Coroutine design — stackful `yield`, `iterator<T>`, `yield from` (planned, 1.1+) |
 | [LIFETIME.md](doc/claude/LIFETIME.md) | Dependency tracking and scope-based freeing — dep field semantics, Text vs Reference, closures |
