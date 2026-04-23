@@ -84,6 +84,20 @@ impl State {
             data.definitions[def_nr as usize].code_length = self.code_pos - start;
             return;
         }
+        // Plan-04 Phase B.3 atomic bundle: single function-entry
+        // `OpReserveFrame(frame_hwm)` covers every local's slot.
+        // `frame_hwm` is the maximum slot-end across all non-argument
+        // placed locals (computed from V1's slot assignments).
+        // Per-block `OpReserveFrame(block.var_size)` is deleted in
+        // `generate_block`; first-Set helpers now write positional-init
+        // or push-then-`OpPut*` into the pre-reserved slots.
+        let frame_hwm = stack.function.frame_hwm(&Context::Variable);
+        if frame_hwm > stack.position {
+            let reserve = frame_hwm - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(reserve);
+            stack.position += reserve;
+        }
         if console {
             println!("{} ", stack.data.def(def_nr).header(stack.data, def_nr));
             stack.data.dump(def_nr);
@@ -784,10 +798,17 @@ impl State {
     }
 
     pub(super) fn gen_set_first_tuple_null(&mut self, stack: &mut Stack, v: u16) {
+        // Plan-04 Phase B.3 atomic bundle: slot-aware.  Push each null
+        // element value then OpPut it at the element's absolute slot
+        // (mirrors set_var's tuple dispatch around codegen.rs:2339).
+        // The function-entry frame reserve ensures every element slot
+        // is addressable.
         let Type::Tuple(elems) = stack.function.tp(v).clone() else {
             return;
         };
-        for elem in &elems {
+        let offsets = crate::data::element_offsets(&elems);
+        let tuple_var_base = stack.function.stack(v);
+        for (i, elem) in elems.iter().enumerate() {
             match elem {
                 Type::Integer(_) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
@@ -808,9 +829,7 @@ impl State {
                     // T1.8c: use NullRefSentinel (no store allocation) for tuple
                     // reference elements.  The element will be overwritten by PutRef
                     // or CopyRecord during destructuring; a real store is not needed
-                    // at null-init time.  Using OpConvRefFromNull here would leak a
-                    // store because the tuple scope-exit skip (scopes.rs:587) never
-                    // frees tuple elements.
+                    // at null-init time.
                     self.emit_push_sentinel(stack);
                 }
                 Type::Text(_) => {
@@ -818,28 +837,52 @@ impl State {
                 }
                 other => panic!("gen_set_first_tuple_null: unsupported element type {other:?}"),
             }
+            let elem_abs = tuple_var_base + offsets[i] as u16;
+            let pos = stack.position - elem_abs;
+            match elem {
+                Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
+                Type::Boolean => stack.add_op("OpPutBool", self),
+                Type::Single => stack.add_op("OpPutSingle", self),
+                Type::Float => stack.add_op("OpPutFloat", self),
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _) => {
+                    stack.add_op("OpPutRef", self);
+                }
+                Type::Text(_) => stack.add_op("OpPutText", self),
+                _ => unreachable!(),
+            }
+            self.code_add(pos);
         }
     }
 
     pub(super) fn gen_set_first_vector_null(&mut self, stack: &mut Stack, v: u16) {
+        // Plan-04 Phase B.3 atomic bundle: slot-aware.  Writes the DbRef
+        // directly at v's slot rather than pushing onto TOS.  The
+        // function-entry `OpReserveFrame(frame_hwm)` in `def_code`
+        // guarantees `stack.position >= v.slot + 12`, so the init is
+        // always addressable as `slot_offset = stack.position - v.slot`.
         if let Type::Vector(elm_tp, dep) = stack.function.tp(v).clone() {
-            // skip_free variables are match-arm bindings that borrow from the
-            // subject — don't allocate a store, just push a null sentinel.
-            if stack.function.is_skip_free(v) {
-                self.emit_push_sentinel(stack);
-            } else if stack.function.is_inline_ref(v) {
-                // Lift temporaries (scopes.rs scan_args) are always assigned
-                // from a call result before first read; the null-init only
-                // needs to reserve the slot and leave a null DbRef so an
-                // OpFreeRef along an un-taken path is a no-op.  Skipping the
-                // full pre-alloc avoids a dangling vector store (P54-B/Q2
-                // chain-leak fix).
-                self.emit_push_sentinel(stack);
+            let ref_size = size_of::<crate::keys::DbRef>() as u16;
+            let slot_end = stack.function.stack(v).saturating_add(ref_size);
+            if stack.position < slot_end {
+                let bump = slot_end - stack.position;
+                stack.add_op("OpReserveFrame", self);
+                self.code_add(bump);
+                stack.position += bump;
+            }
+            let slot_offset = stack.position - stack.function.stack(v);
+            if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
+                // skip_free bindings borrow; inline_ref lift temporaries are
+                // overwritten before read.  Both want a null sentinel in the
+                // slot with no store alloc.
+                stack.add_op("OpInitRefSentinel", self);
+                self.code_add(slot_offset);
             } else if dep.is_empty() {
-                // TODO move this convoluted implementation to a new operator.
-                self.emit_push_null_ref(stack);
+                // Owned vector: allocate a fresh store at v's slot, then
+                // init the header's length field (4B) and dep field (1B).
+                stack.add_op("OpInitRef", self);
+                self.code_add(slot_offset);
                 stack.add_op("OpDatabase", self);
-                self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                self.code_add(slot_offset);
                 let name = format!("main_vector<{}>", elm_tp.name(stack.data));
                 let known = stack.data.name_type(&name, self.source);
                 debug_assert_ne!(
@@ -849,31 +892,31 @@ impl State {
                     stack.function.name
                 );
                 self.code_add(known);
+                // Push a DbRef copy of v's slot, set length=0 (4B), set dep byte.
                 stack.add_op("OpVarRef", self);
-                self.code_add(size_of::<crate::keys::DbRef>() as u16);
+                self.code_add(slot_offset);
                 stack.add_op("OpConstInt", self);
                 self.code_add(0i64);
-                // Vector header length field is 4 bytes (u32).  Post-2c
-                // `OpSetInt` writes 8 bytes and overflows into adjacent
-                // storage.  Use `OpSetInt4` to write only 4 bytes.
+                // Vector header length field is 4 bytes (u32).
                 stack.add_op("OpSetInt4", self);
                 self.code_add(4u16);
-                // OpCreateStack(12) — dep is the DbRef pushed by the
-                // surrounding pattern's OpConvRefFromNull (now a
-                // push-sentinel), 12 bytes below current TOS.
-                self.emit_push_create_stack(stack, size_of::<crate::keys::DbRef>() as u16);
+                // OpCreateStack pointing at v's slot (now the real DbRef).
+                let dep_offset = stack.position - stack.function.stack(v);
+                self.emit_push_create_stack(stack, dep_offset);
                 stack.add_op("OpConstInt", self);
                 self.code_add(12i64);
                 stack.add_op("OpSetByte", self);
                 self.code_add(4u16);
                 self.code_add(0u16);
             } else {
-                // Same pre-init logic as for borrowed Reference types above:
-                // a stack-frame DbRef pointing into dep's slot.
-                // Must be overwritten by OpPutRef before any field access.
+                // Borrowed view: a stack-frame DbRef pointing into dep's
+                // slot.  Must be overwritten by OpPutRef before any field
+                // access.
                 let dep_pos = stack.function.stack(dep[0]);
                 let dep_offset = stack.position - dep_pos;
-                self.emit_push_create_stack(stack, dep_offset);
+                stack.add_op("OpInitCreateStack", self);
+                self.code_add(slot_offset);
+                self.code_add(dep_offset);
             }
         }
     }
@@ -1079,58 +1122,32 @@ impl State {
                 stack.data.def(stack.def_nr).name,
             );
             stack.function.set_stack_allocated(v);
-            if pos >= stack.position {
-                self.gen_set_first_at_tos(stack, v, value);
-            } else {
-                // Slot is below TOS: zone1 variable reusing a dead slot.
-                if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
-                    return;
-                }
-                // Large types below TOS need initialization at TOS first,
-                // then OpPut to store at the slot. set_var handles this for
-                // reassignment but not for first assignment — use
-                // gen_set_first_at_tos which handles init properly.
-                // It will assert pos == TOS, so we must accept that for
-                // large types below TOS this assertion may fire.
-                // The old adjust_first_assignment_slot moved these to TOS;
-                // we now route them through the same path.
-                if matches!(
-                    stack.function.tp(v),
-                    Type::Text(_)
-                        | Type::Reference(_, _)
-                        | Type::Vector(_, _)
-                        | Type::Enum(_, true, _)
-                ) {
-                    self.gen_set_first_at_tos(stack, v, value);
-                } else {
-                    self.set_var(stack, v, value);
-                }
-            }
+            // Plan-04 Phase B.3 atomic bundle: under the single
+            // function-entry `OpReserveFrame(frame_hwm)`, every slot
+            // lives below TOS at every first-Set.  Route all
+            // first-Sets through `gen_set_first_at_tos`, which now
+            // handles positional init (Text / Ref-null / Vector-null /
+            // Tuple-null) or push-then-`OpPut*` (Fn-ref, Ref call
+            // adopt, and every simple type via the fall-through).
+            // `set_var`'s first-Set path was unsafe for Text anyway
+            // (`OpAppendText` on uninitialised bytes) — routing Text
+            // here is a safety improvement.
+            self.gen_set_first_at_tos(stack, v, value);
         }
     }
 
     /// First-assignment dispatch for large-type locals.
     ///
-    /// **Plan-04 Phase B.2.d:** the pos-match-TOS assertion at the end
-    /// of the preamble has been removed — it checked an invariant
-    /// (slot == TOS at init time) that the positional init ops no
-    /// longer require.  The slot-move (`set_stack_pos(v,
-    /// stack.position)` for `pos < TOS`) and gap-fill (PROBLEMS.md
-    /// #139) are retained: callers downstream of `set_var` still
-    /// rely on `stack.function.stack(v)` reflecting the
-    /// post-positioning slot, and zone-1 byte-vars placed inside the
-    /// zone-2 frontier still need codegen's TOS bumped to reach the
-    /// slot.
+    /// **Plan-04 Phase B.3 atomic bundle:** slot-move and gap-fill
+    /// are gone.  Every local's slot is reserved by the single
+    /// function-entry `OpReserveFrame(frame_hwm)` in `def_code`, so
+    /// `v.stack_pos` already names a live slot in the pre-reserved
+    /// frame and `stack.position >= v.stack_pos + size(v)` is an
+    /// invariant maintained by codegen.  First-Set helpers write at
+    /// `slot_offset = stack.position - v.stack_pos` (positional init
+    /// ops) or push-then-`OpPut*(slot_offset)` (for paths whose only
+    /// way to produce the value is via the eval stack).
     fn gen_set_first_at_tos(&mut self, stack: &mut Stack, v: u16, value: &Value) {
-        let pos = stack.function.stack(v);
-        if pos < stack.position {
-            stack.function.set_stack_pos(v, stack.position);
-        } else if pos > stack.position {
-            let gap = pos - stack.position;
-            stack.add_op("OpReserveFrame", self);
-            self.code_add(gap);
-            stack.position += gap;
-        }
         if matches!(*stack.function.tp(v), Type::Text(_)) {
             self.gen_set_first_text(stack, v, value);
         } else if matches!(
@@ -1175,48 +1192,98 @@ impl State {
             if has_ref_params {
                 self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             } else {
-                // P150: previously this branch marked every __ref_* arg
-                // as skip_free under the assumption that the callee always
-                // wrote into the placeholder (so v and __ref_N shared a
-                // store, freeing both = double-free).  But when the callee
-                // returns a fresh store (early-return through a constructor
-                // call, or T.parse(text) that allocates fresh — both
-                // shapes used by `lib/moros_map/src/moros_map.loft`'s
-                // `map_from_json`), the placeholder ConvRefFromNull alloc
-                // is orphaned: __ref_N's slot still points to the
-                // placeholder, m's slot points to the callee's fresh
-                // store, and skip_free on __ref_N suppresses the OpFreeRef
-                // that would reclaim the placeholder.
-                //
-                // The runtime tolerates double-free as a no-op (see
-                // database/allocation.rs:103-105: `if store.free { return }`),
-                // so leaving __ref_N to be freed by scopes.rs's is_work_ref
-                // gate at scope exit is safe in both cases:
-                //   - typical adoption: __ref_N's free is a no-op (already
-                //     freed via v's free that fires first).
-                //   - orphan (P150): __ref_N's free reclaims the placeholder.
-                // Mirrors the matching scopes.rs::scan_set change.
+                // P150: runtime tolerates double-free as a no-op so leaving
+                // __ref_N to be freed by scopes.rs's is_work_ref gate at
+                // scope exit is safe in both adoption and orphan cases.
+                // Plan-04 Phase B.3 atomic bundle: the callee's returned
+                // DbRef is pushed onto TOS by `generate`; move it to v's
+                // slot via `OpPutRef(slot_offset)`.
                 self.generate(value, stack, false);
+                let var_pos = stack.position - stack.function.stack(v);
+                stack.add_op("OpPutRef", self);
+                self.code_add(var_pos);
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {
+            // Plan-04 Phase B.3 atomic bundle: push the 20-byte fn-ref
+            // value (8B d_nr + 12B closure DbRef) then OpPutFnRef at v's
+            // slot.  `OpPutFnRef`'s stdlib signature pops a 16-byte
+            // `text`, so the runtime actually pops 20 bytes but the
+            // compile-time tracker only accounts for 16 — mirror
+            // `set_var`'s `stack.position -= 4` correction.
             if *value == Value::Null {
-                // pre-init a fn-ref slot with 20 null bytes.
-                // d_nr = i64::MIN (integer null sentinel) + closure = null DbRef (12B).
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
                 self.emit_push_sentinel(stack);
             } else {
-                // A5.6-1/A5.6-2: 20-byte fn-ref slot: [d_nr (8B)][closure DbRef (12B)].
-                // gen_fn_ref_value ensures every branch (including if-else) reaches the
-                // join point with a full 16-byte slot.
                 self.gen_fn_ref_value(value, stack);
             }
+            let var_pos = stack.position - stack.function.stack(v);
+            stack.add_op("OpPutFnRef", self);
+            self.code_add(var_pos);
+            stack.position -= 4;
         } else {
+            // Plan-04 Phase B.3 atomic bundle: push then OpPut* at v's
+            // slot.  Mirrors `set_var`'s non-RefVar dispatch at
+            // codegen.rs:2313.  `Value::Null` on a type where `generate`
+            // produces no bytes leaves the slot uninitialised (old
+            // fall-through behaviour) — detected via a stack-position
+            // delta check.
+            let before = stack.position;
             self.generate(value, stack, false);
+            if stack.position == before {
+                return;
+            }
+            let var_pos = stack.position - stack.function.stack(v);
+            let tp = stack.function.tp(v).clone();
+            match tp {
+                Type::Integer(_) => stack.add_op("OpPutInt", self),
+                Type::Character => stack.add_op("OpPutCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                Type::Boolean => stack.add_op("OpPutBool", self),
+                Type::Single => stack.add_op("OpPutSingle", self),
+                Type::Float => stack.add_op("OpPutFloat", self),
+                Type::Vector(_, _)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Iterator(_, _) => stack.add_op("OpPutRef", self),
+                Type::Tuple(elems) => {
+                    let offsets = crate::data::element_offsets(&elems);
+                    let tuple_var_base = stack.function.stack(v);
+                    for i in (0..elems.len()).rev() {
+                        let elem_abs = tuple_var_base + offsets[i] as u16;
+                        let pos = stack.position - elem_abs;
+                        match &elems[i] {
+                            Type::Integer(_) | Type::Function(_, _, _) => {
+                                stack.add_op("OpPutInt", self);
+                            }
+                            Type::Boolean => stack.add_op("OpPutBool", self),
+                            Type::Float => stack.add_op("OpPutFloat", self),
+                            Type::Single => stack.add_op("OpPutSingle", self),
+                            Type::Character => stack.add_op("OpPutCharacter", self),
+                            Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                            Type::Text(_) => stack.add_op("OpPutText", self),
+                            Type::Reference(_, _)
+                            | Type::Vector(_, _)
+                            | Type::Enum(_, true, _) => stack.add_op("OpPutRef", self),
+                            other => panic!(
+                                "gen_set_first_at_tos tuple fallthrough: unsupported elem {other:?}"
+                            ),
+                        }
+                        self.code_add(pos);
+                    }
+                    return;
+                }
+                other => panic!(
+                    "gen_set_first_at_tos fallthrough: unsupported var type {other:?} for \
+                     first-Set of {}",
+                    stack.function.name(v)
+                ),
+            }
+            self.code_add(var_pos);
         }
     }
 
@@ -2076,12 +2143,12 @@ impl State {
         }
         let to = stack.position;
 
-        // Pre-claim small-variable (zone1) frame so large-type init opcodes see exact TOS.
-        if block.var_size > 0 {
-            stack.add_op("OpReserveFrame", self);
-            self.code_add(block.var_size);
-            stack.position += block.var_size;
-        }
+        // Plan-04 Phase B.3 atomic bundle: per-block
+        // `OpReserveFrame(block.var_size)` deleted.  Every local is
+        // covered by the single function-entry `OpReserveFrame(frame_hwm)`
+        // emitted in `def_code`.  The per-block `OpFreeStack` below
+        // stays — it still discards eval-stack residue above the
+        // block's result value.
 
         let mut tp = Type::Void;
         let mut return_expr = 0;
@@ -2130,6 +2197,20 @@ impl State {
         } else {
             let size = size(&block.result, &Context::Argument);
             let after = to + size;
+            // Plan-04 Phase B.3: under the per-block `OpReserveFrame`
+            // that this atomic bundle deletes, a `drop <var>` tail
+            // coincidentally aliased the block's result slot with the
+            // block-local's storage.  With function-entry reserve the
+            // local lives elsewhere in the frame and the push+pop of
+            // `drop` leaves no explicit result on the eval stack.
+            // Re-read the inner `Var` to produce the missing push
+            // (safe: `Var` reads are idempotent).
+            if stack.position < after
+                && let Some(Value::Drop(inner)) = block.operators.last()
+                && matches!(**inner, Value::Var(_))
+            {
+                self.generate(inner, stack, false);
+            }
             if stack.position > after {
                 stack.add_op("OpFreeStack", self);
                 self.code_add(size as u8);
