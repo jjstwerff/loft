@@ -207,6 +207,13 @@ Without these, newcomers hit an "on your own" wall within an hour and
 the native codegen's regressions keep slipping in.  With them, loft
 has the surrounding surface a bettable language needs.
 
+**Implementation order within 0.9.0** lives in
+[PLANNING.md § Recommended Implementation Order](PLANNING.md#recommended-implementation-order)
+— the five-tier sequence (DX.4 first → SH/DX polish → FFI+PKG
+ecosystem → language-polish tail → PKG.EXTRACT last) is designed so
+each tier leaves main in a shippable state, and no tier starts before
+its dependencies are stable.
+
 ### Language polish
 
 | ID     | Title                                                  | E  | Design | Source           |

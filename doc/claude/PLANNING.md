@@ -366,9 +366,92 @@ in a better state than it found it, with passing tests).
 7. **H5** — nested/array/enum `from_json` + integration tests; Med–High, depends on H3 + H4
 
 **For 0.9.0 (after 0.8.4 is tagged):**
-1. **L1** — error recovery; standalone UX improvement, no dependencies; also unblocks P2.4
-2. **A2** — logger remaining work; independent, small-medium; can land any time
-3. **P2** — REPL; high effort; land after L1 (needed for P2.4 error recovery)
+
+Ordered in four tiers by (immediate leverage) × (low scope risk) ×
+(dependencies-on / unblocking).  Tier 1 lands before Tier 2 starts;
+Tier 3 waits on Tier 1 for CI confidence; Tier 4 is the tail.
+Today's development-process-and-adoption assessment (see
+[ROADMAP.md § 0.9.0 Advertising readiness](ROADMAP.md#090--fully-working-loft-language))
+drives the ordering: advertising-readiness items land first; pure
+language polish moves to the tail.
+
+**Tier 1 — immediate wins, ~1 week total**
+
+1. **DX.4** — native CI parity.  Promote `tests/native.rs` into the
+   fast `cargo nextest run --profile ci` gate.  One CI config
+   change + timing-budget check.  Start here — smallest item,
+   biggest safety return.  Catches P143/P144/P157/P171/P180-class
+   regressions pre-commit instead of mid-release.
+2. **SH.1 + SH.2** — TextMate grammar + VS Code extension.  Land
+   together since SH.2 consumes SH.1.  Gives newcomers syntax
+   highlighting + a "Run loft file" task button.  Needed before
+   DX.3 so the tutorial can screenshot real VS Code.
+3. **DX.1** — quick-start `examples/` directory at repo root.
+   XS effort.  Gathers scattered examples
+   (`lib/graphics/examples/*.loft`, brick-buster, moros-editor)
+   under a discoverable path with one-paragraph READMEs.  Feeds
+   DX.3.
+
+**Tier 2 — narrative, parallel with Tier 1 once writing bandwidth frees**
+
+4. **DX.3** — "Learn loft in 30 minutes" tutorial.  Writing
+   work, not coding.  Start from the house-scene canvas demo
+   (already working, gold-tested) and narrate forward.  Single
+   GitHub Pages page is the cheapest ship.  Depends on Tier 1
+   for concrete screenshots / referential examples.
+
+**Tier 3 — ecosystem foundation, ~2 weeks after Tier 1 green**
+
+5. **FFI.1 → FFI.2 → FFI.3 → FFI.4** in that order.  Generic
+   type marshaller, generic cdylib loader, per-function glue
+   elimination, docs.  Each is S to MH.  Landing all four
+   together shrinks the boilerplate bar for extracted libraries —
+   `lib/graphics/native/` has ~15 hand-written type-punning
+   functions today that FFI.1–3 subsume.  Prerequisite for
+   PKG.EXTRACT being sane; starting before FFI.1–4 means every
+   extracted repo duplicates boilerplate about to be deleted.
+6. **PKG.7** — lock file (`loft.lock`).  Cheap, precedes PKG.REG.
+7. **PKG.REG** — registry MVP.  Design is complete in
+   [PACKAGES.md](PACKAGES.md); implementation is the
+   `loft install <name>` fetcher + a `registry.txt` on GitHub
+   seeded with 3–5 first-party libraries that stay in-repo for
+   this phase (extraction comes later).
+
+**Tier 4 — language-polish tail, land in remaining 0.9.0 window**
+
+8. **L1** — error recovery after token failures.  Standalone UX
+   improvement; was already in 0.9.0 prior to the re-prioritise;
+   also unblocks P2.4.
+9. **A2** — logger remaining work.  Independent, small-medium;
+   can land any time a hand's free.
+10. **P2** — REPL.  High effort; land after L1 (needed for
+    P2.4 error recovery).
+11. **W-warn** — developer warnings (Clippy-inspired).  Medium;
+    design in GAME_INFRA.md.
+12. **AOT** — auto-compile libraries to native shared libs.
+    Medium; design in PLANNING.md.
+13. **C52** — stdlib name clash warning + `std::` prefix.  Medium.
+14. **C53** — match arms for library enums + bare variant names.
+    Medium.
+15. **CS.B / CS.C1 / CS.C2 / CS.C3** — compilation cache finish.
+    CS.C1 is the biggest (MH — ~2K lines of recursive-enum binary
+    serialisation in `data.rs`); budget a focused run.
+
+**Tier 5 — last item in 0.9.0, do not start before Tier 3 is stable**
+
+16. **PKG.EXTRACT** — move every `lib/*/` into separate GitHub
+    projects (logical bundling allowed — see
+    [ROADMAP.md](ROADMAP.md#package-and-ffi-tooling)).  Depends on
+    PKG.REG (install path), DX.4 (cross-repo CI story), and
+    FFI.1–4 (boilerplate-free native authoring).  Starting earlier
+    duplicates work; starting later is fine.  L effort per bundle;
+    moves happen one family at a time (extract `loft-moros`, land,
+    extract `loft-net`, land, …) so a failed extract doesn't
+    strand the others.
+
+**Explicitly excluded from 0.9.0** to avoid scope creep:
+- LSP — stays in 1.0.0 per roadmap.  Months-long on its own.
+- HTTP stdlib / `server` / `game_client` libraries — 1.1+ (`WEB_SERVER_LIB.md`, `GAME_CLIENT_LIB.md`).
 
 **For 1.0.0 (after 0.9.0 is tagged):**
 7. **R1** — workspace split; small change, unblocks all Tier W
