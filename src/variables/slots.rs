@@ -45,17 +45,13 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
             v.pre_assigned_pos = u16::MAX;
         }
     }
-    // Walk the IR tree, assigning slots scope-by-scope.
+    // Plan-05: the main walk reaches every variable via `process_scope` +
+    // `place_large_and_recurse` (Phase 1a Insert-root + Phase 1b exhaustive
+    // traversal + cross-scope Set handling).  The former
+    // `place_orphaned_vars` fallback is retired.  Debug builds guard the
+    // retirement via the I4 invariant in `validate_slots` (every non-argument
+    // variable with `first_def != u32::MAX` must be placed).
     process_scope(function, code, local_start, 0);
-    // Place any variables that the IR walk missed (scope has no Block/Loop in IR).
-    //
-    // P178: pass `local_start` so orphan locals never collide with the
-    // argument / return-address region.  Arguments have stack_pos ==
-    // u16::MAX during assign_slots (set by codegen later), so the
-    // orphan-placer's conflict check can't see them — without a floor,
-    // orphans would happily claim slot 0 / 4 / 12 / ..., overlapping
-    // the arg slots at runtime.
-    place_orphaned_vars(function, local_start);
     #[cfg(debug_assertions)]
     {
         function.logging = false;
@@ -453,59 +449,6 @@ fn inner_has_pre_assignments(val: &Value) -> bool {
     }
 }
 
-/// Place variables that the IR walk missed (scope has no Block/Loop in IR).
-fn place_orphaned_vars(function: &mut Function, local_start: u16) {
-    let mut orphans: Vec<usize> = function
-        .variables
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| {
-            !v.argument
-                && v.first_def != u32::MAX
-                && v.stack_pos == u16::MAX
-                && size(&v.type_def, &Context::Variable) > 0
-        })
-        .map(|(i, _)| i)
-        .collect();
-    // Sort by first_def so earlier-defined vars get lower slots,
-    // matching codegen's evaluation order.
-    orphans.sort_by_key(|&i| function.variables[i].first_def);
-    for &i in &orphans {
-        let v_size = size(&function.variables[i].type_def, &Context::Variable);
-        let v_first = function.variables[i].first_def;
-        let v_last = function.variables[i].last_use;
-        // P178: start above the argument + return-address region so
-        // orphan locals can't overlap the arg slots at runtime.  (Args
-        // have stack_pos == u16::MAX during assign_slots because codegen
-        // assigns their positions later, so the per-var conflict check
-        // below can't see them — the floor is the only protection.)
-        let mut candidate = local_start;
-        loop {
-            let end = candidate + v_size;
-            let conflict = function.variables.iter().enumerate().any(|(j, jv)| {
-                if j == i || jv.stack_pos == u16::MAX {
-                    return false;
-                }
-                let js = jv.stack_pos;
-                let je = js + size(&jv.type_def, &Context::Variable);
-                candidate < je && end > js && v_first <= jv.last_use && v_last >= jv.first_def
-            });
-            if !conflict {
-                break;
-            }
-            candidate += 1;
-        }
-        if function.logging {
-            eprintln!(
-                "[assign_slots]   orphan '{}' scope={} size={v_size}B → slot={candidate}",
-                function.variables[i].name, function.variables[i].scope,
-            );
-        }
-        function.variables[i].stack_pos = candidate;
-        function.variables[i].pre_assigned_pos = candidate;
-    }
-}
-
 fn find_reusable_zone2_slot(function: &Function, v: usize, scope: u16) -> Option<u16> {
     // only reuse Text-to-Text slots.  Other zone-2 types (Reference, Vector)
     // have complex interactions with IR-walk-order placement that cause partial
@@ -599,12 +542,19 @@ mod tests {
         // Maps scope → Vec<Value> of operators for that scope's block.
         let mut operators: HashMap<u16, Vec<Value>> = HashMap::new();
 
-        // Seed with large-var Set nodes per scope.
+        // Plan-05: seed a Set node for EVERY non-argument variable so the
+        // walker reaches it.  Previously only size > 8 vars got Sets
+        // (under the assumption that zone-1 coloring picked up small vars
+        // from the `filter` on scope-matching declared vars) — but that
+        // pathway no longer backstops to `place_orphaned_vars` for loop
+        // zone-1 vars whose scope is a loop scope (loops skip zone-1).
+        // Seeding an explicit Set covers both the zone-1 small path and
+        // the zone-2 large path uniformly.
         for (i, v) in f.variables.iter().enumerate() {
             if v.argument || v.first_def == u32::MAX {
                 continue;
             }
-            if size(&v.type_def, &Context::Variable) > 8 {
+            if size(&v.type_def, &Context::Variable) > 0 {
                 operators
                     .entry(v.scope)
                     .or_default()

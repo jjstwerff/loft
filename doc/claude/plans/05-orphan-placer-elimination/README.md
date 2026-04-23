@@ -56,45 +56,32 @@ Phase 0).
 
 **Phase 1 — Extend `process_scope` / `place_large_and_recurse`:**
 - Recognize `Value::Insert` at function-body root (treat as synthetic
-  Block with scope 1).  *(landed)*
-- When walking a child Block's operators, also check for parent-scope
-  Sets and place them at the parent's frame base.  *(deferred)*
-- When descending an Insert preamble, place its `__lift_*` / `__ref_*`
-  temps at the enclosing function-scope frame base.  *(deferred)*
+  Block with scope 1).  *(landed — Phase 1a, `e0a020f`)*
+- Exhaustive IR traversal for `BreakWith / Iter / Tuple / TuplePut /
+  Yield / Parallel`.  *(landed — Phase 1b, `494e5c7`)*
+- Cross-scope `Set(v)` handling where `v.scope != walker_scope`
+  (child-scope pre-init preamble in parent's operator list).
+  *(landed — Phase 1b, `494e5c7`)*
 
-### Phase 1a — 2026-04-23 status
+Orphan-probe reduction:
+- Pre-Phase 1a: 6 shapes surfaced.
+- Post-Phase 1a: 4 shapes remained.
+- Post-Phase 1b: 0 shapes remained.
 
-The Insert-root extension landed.  Orphan-probe instrumentation
-showed it covers the P178 / P04 router shape (the canonical case).
-Five residual orphan shapes remain:
-
-- `_total_1(scope=3)` / `_gen_2(scope=4)` in a test fixture `f`.
-- `_tv_1(scope=1, 24B text)` in a test fixture `f` (different from above).
-- `_read_34 … _read_45` in scopes 45 / 53 / 61 / 62 of `n_main` of
-  some test script — deeply-nested scopes never walked.
-- `_idx_14(scope=2, 8B)` in `n_render_native` (graphics examples).
-
-These surface via inner scopes that `process_scope` never reaches
-because an outer wrapper (likely another Insert layer or a
-for-loop-lowering Iter rewrite) intercepts before the scope-aware
-walk.  Phase 1b will characterise each shape with a minimal
-reproducer before extending the walker.
-
-After **both** Phase 1a and Phase 1b land, `place_orphaned_vars`
-should be unreachable on the full corpus.  Gate: `cargo test
---release` green with an `unreachable!()` marker replacing the
-function body.
+Phase 1 complete.  Phase 2 gates the retirement of
+`place_orphaned_vars`.
 
 **Phase 2 — Delete and guard:**
-- Delete `place_orphaned_vars` and its call site.
+- Delete `place_orphaned_vars` and its call site.  *(this commit)*
 - Add invariant **I8 — orphan-iterator-alias** to
   `src/variables/validate.rs`: for each slot reuse across live
   intervals, walk dep chains to ensure no currently-live variable's
   value points into the reused slot's backing store.  Panic with
-  `[I8]` prefix.
+  `[I8]` prefix.  *(Phase 2b — next commit)*
 - Un-ignore `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
   and `tests/slot_v2_baseline.rs::p185_late_local_after_inner_loop`.
-- Mark P185 fixed in `doc/claude/PROBLEMS.md`.
+  *(Phase 2c)*
+- Mark P185 fixed in `doc/claude/PROBLEMS.md`.  *(Phase 2c)*
 
 ## References
 
