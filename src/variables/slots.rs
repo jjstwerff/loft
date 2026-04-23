@@ -62,8 +62,16 @@ pub fn assign_slots(function: &mut Function, code: &mut Value, local_start: u16)
     }
 }
 
-/// Assign slots for all variables in the scope owned by `block_val` (a Block or Loop node),
-/// then recurse into child scopes.
+/// Assign slots for all variables in the scope owned by `block_val` (a Block, Loop,
+/// or function-body Insert preamble), then recurse into child scopes.
+///
+/// Plan-05 Phase 1: `Value::Insert` at a function-body root is recognised as the
+/// same conceptual scope as its inner Block (the scope embedded in the first
+/// Block among the Insert's operators).  Zone-1 placement runs for that scope
+/// and the Insert's operators are walked like a Block's operators — pre-init
+/// Sets in the preamble place scope-1 vars; the inner Block child recurses
+/// into its own scope (typically the same scope, a no-op after idempotence
+/// guard on `stack_pos != u16::MAX`).
 #[allow(clippy::too_many_lines)]
 fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16, depth: u32) {
     assert!(
@@ -73,12 +81,27 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
     let is_loop = matches!(block_val, Value::Loop(_));
     let bl_scope = match block_val {
         Value::Block(bl) | Value::Loop(bl) => bl.scope,
+        Value::Insert(ops) => {
+            // Plan-05: function-body Insert.  Adopt the first inner Block's
+            // scope as the active scope (this is the function's main body
+            // scope; typically 1).  Preamble operators Set vars at this
+            // scope before the inner Block runs.
+            ops.iter()
+                .find_map(|op| match op {
+                    Value::Block(bl) => Some(bl.scope),
+                    _ => None,
+                })
+                .unwrap_or(0)
+        }
         _ => return,
     };
 
     // ── Zone 1: colour small variables (size ≤ 8) ─────────────────────────────
     // Loops skip zone1: no OpReserveFrame (loop vars persist across iterations).
     // All loop vars are placed sequentially via the zone2 IR-walk.
+    //
+    // Plan-05: `stack_pos == u16::MAX` guard so re-entering the same scope
+    // (Insert preamble then inner Block with matching scope) is idempotent.
     let mut small_vars: Vec<usize> = if is_loop {
         Vec::new()
     } else {
@@ -87,10 +110,14 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
             .iter()
             .enumerate()
             .filter(|(_, v)| {
-                !v.argument && v.scope == bl_scope && v.first_def != u32::MAX && {
-                    let s = size(&v.type_def, &Context::Variable);
-                    s > 0 && s <= 8
-                }
+                !v.argument
+                    && v.scope == bl_scope
+                    && v.first_def != u32::MAX
+                    && v.stack_pos == u16::MAX
+                    && {
+                        let s = size(&v.type_def, &Context::Variable);
+                        s > 0 && s <= 8
+                    }
             })
             .map(|(i, _)| i)
             .collect()
@@ -173,6 +200,7 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
 
     // Store var_size in the Block/Loop node.
     // Loops: var_size=0 (no OpReserveFrame, zone1 is empty).
+    // Insert-root has no per-block var_size slot — skip.
     if let Value::Block(bl) | Value::Loop(bl) = block_val {
         bl.var_size = if is_loop { 0 } else { zone1_size };
     }
@@ -186,6 +214,7 @@ fn process_scope(function: &mut Function, block_val: &mut Value, frame_base: u16
 
     let operators = match block_val {
         Value::Block(bl) | Value::Loop(bl) => &mut bl.operators,
+        Value::Insert(ops) => ops,
         _ => return,
     };
 

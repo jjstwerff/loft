@@ -56,15 +56,34 @@ Phase 0).
 
 **Phase 1 — Extend `process_scope` / `place_large_and_recurse`:**
 - Recognize `Value::Insert` at function-body root (treat as synthetic
-  Block with scope 1).
+  Block with scope 1).  *(landed)*
 - When walking a child Block's operators, also check for parent-scope
-  Sets and place them at the parent's frame base.
+  Sets and place them at the parent's frame base.  *(deferred)*
 - When descending an Insert preamble, place its `__lift_*` / `__ref_*`
-  temps at the enclosing function-scope frame base.
+  temps at the enclosing function-scope frame base.  *(deferred)*
 
-After Phase 1, `place_orphaned_vars` should be unreachable on the
-full corpus.  Gate: `cargo test --release` green with an
-`unreachable!()` marker replacing the function body.
+### Phase 1a — 2026-04-23 status
+
+The Insert-root extension landed.  Orphan-probe instrumentation
+showed it covers the P178 / P04 router shape (the canonical case).
+Five residual orphan shapes remain:
+
+- `_total_1(scope=3)` / `_gen_2(scope=4)` in a test fixture `f`.
+- `_tv_1(scope=1, 24B text)` in a test fixture `f` (different from above).
+- `_read_34 … _read_45` in scopes 45 / 53 / 61 / 62 of `n_main` of
+  some test script — deeply-nested scopes never walked.
+- `_idx_14(scope=2, 8B)` in `n_render_native` (graphics examples).
+
+These surface via inner scopes that `process_scope` never reaches
+because an outer wrapper (likely another Insert layer or a
+for-loop-lowering Iter rewrite) intercepts before the scope-aware
+walk.  Phase 1b will characterise each shape with a minimal
+reproducer before extending the walker.
+
+After **both** Phase 1a and Phase 1b land, `place_orphaned_vars`
+should be unreachable on the full corpus.  Gate: `cargo test
+--release` green with an `unreachable!()` marker replacing the
+function body.
 
 **Phase 2 — Delete and guard:**
 - Delete `place_orphaned_vars` and its call site.
