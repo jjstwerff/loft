@@ -695,6 +695,24 @@ fn dispatch_call(
         }
     }
 
+    // Helper: widen an i32 native return to i64, preserving the null
+    // sentinel.  Cdylibs predate the i64 migration and return `i32::MIN`
+    // to mean "null"; without this preservation, `i64::from(i32::MIN)`
+    // is just `-2147483648`, a regular non-null integer.  The loft-side
+    // `if !x { … }` check then misses the failure (e.g.
+    // `gl_load_font` errors silently flow through, font_idx stays
+    // negative, every text texture renders empty — Brick Buster's
+    // entire HUD/title/score disappears).  Map i32::MIN → i64::MIN so
+    // the sentinel survives the boundary.
+    #[inline]
+    fn widen_int(v: i32) -> i64 {
+        if v == i32::MIN {
+            i64::MIN
+        } else {
+            i64::from(v)
+        }
+    }
+
     // Helper: convert a LoftRef from a native cdylib back to DbRef and push
     // onto the stack.  Native cdylibs return a direct vector reference
     // (rec=data_rec, pos=8) but the interpreter expects an indirect layout
@@ -729,7 +747,7 @@ fn dispatch_call(
         // () -> i32
         (&[], Some(ArgT::I32)) => {
             let f: extern "C" fn() -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f()));
+            stores.put::<i64>(stack, widen_int(f()));
         }
         // () -> bool
         (&[], Some(ArgT::Bool)) => {
@@ -749,7 +767,7 @@ fn dispatch_call(
         // (i32) -> i32
         (&[ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(i32_arg!(0))));
+            stores.put::<i64>(stack, widen_int(f(i32_arg!(0))));
         }
         // (i32) -> bool
         (&[ArgT::I32], Some(ArgT::Bool)) => {
@@ -764,12 +782,12 @@ fn dispatch_call(
         // (i32, i32) -> i32
         (&[ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), i32_arg!(1))));
+            stores.put::<i64>(stack, widen_int(f(i32_arg!(0), i32_arg!(1))));
         }
         // (i32, f64) -> i32
         (&[ArgT::I32, ArgT::F64], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, f64) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), f64_arg!(1))));
+            stores.put::<i64>(stack, widen_int(f(i32_arg!(0), f64_arg!(1))));
         }
         // (i32, i32) -> void
         (&[ArgT::I32, ArgT::I32], None) => {
@@ -793,7 +811,7 @@ fn dispatch_call(
         (&[ArgT::Text], Some(ArgT::I32)) => {
             let f: extern "C" fn(*const u8, usize) -> i32 = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(0);
-            stores.put::<i64>(stack, i64::from(f(p, l)));
+            stores.put::<i64>(stack, widen_int(f(p, l)));
         }
         // (text, text) -> i32
         (&[ArgT::Text, ArgT::Text], Some(ArgT::I32)) => {
@@ -801,7 +819,7 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             let (p0, l0) = text_arg!(0);
             let (p1, l1) = text_arg!(1);
-            stores.put::<i64>(stack, i64::from(f(p0, l0, p1, l1)));
+            stores.put::<i64>(stack, widen_int(f(p0, l0, p1, l1)));
         }
         // (i32, i32, text) -> bool  (e.g. gl_create_window: u32,u32,text→bool)
         (&[ArgT::I32, ArgT::I32, ArgT::Text], Some(ArgT::Bool)) => {
@@ -830,12 +848,12 @@ fn dispatch_call(
         // (f64) -> i32
         (&[ArgT::F64], Some(ArgT::I32)) => {
             let f: extern "C" fn(f64) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(f64_arg!(0))));
+            stores.put::<i64>(stack, widen_int(f(f64_arg!(0))));
         }
         // (i32, i32, i32) -> i32
         (&[ArgT::I32, ArgT::I32, ArgT::I32], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), i32_arg!(1), i32_arg!(2))));
+            stores.put::<i64>(stack, widen_int(f(i32_arg!(0), i32_arg!(1), i32_arg!(2))));
         }
         // (i32, i32, i32) -> void
         (&[ArgT::I32, ArgT::I32, ArgT::I32], None) => {
@@ -919,14 +937,14 @@ fn dispatch_call(
             let f: extern "C" fn(i32, i32, i32, i32) -> i32 = unsafe { std::mem::transmute(fp) };
             stores.put::<i64>(
                 stack,
-                i64::from(f(i32_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3))),
+                widen_int(f(i32_arg!(0), i32_arg!(1), i32_arg!(2), i32_arg!(3))),
             );
         }
         // (i32, text) -> i32
         (&[ArgT::I32, ArgT::Text], Some(ArgT::I32)) => {
             let f: extern "C" fn(i32, *const u8, usize) -> i32 = unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(1);
-            stores.put::<i64>(stack, i64::from(f(i32_arg!(0), p, l)));
+            stores.put::<i64>(stack, widen_int(f(i32_arg!(0), p, l)));
         }
         // () -> i64
         (&[], Some(ArgT::I64)) => {
@@ -943,7 +961,7 @@ fn dispatch_call(
         (&[ArgT::Ref], Some(ArgT::I32)) => {
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef) -> i32 = unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(ls, ref_arg!(0))));
+            stores.put::<i64>(stack, widen_int(f(ls, ref_arg!(0))));
         }
         // (Ref) -> Bool
         (&[ArgT::Ref], Some(ArgT::Bool)) => {
@@ -985,14 +1003,14 @@ fn dispatch_call(
             let f: extern "C" fn(LoftStore, *const u8, usize, LoftRef) -> i32 =
                 unsafe { std::mem::transmute(fp) };
             let (p, l) = text_arg!(0);
-            stores.put::<i64>(stack, i64::from(f(ls, p, l, ref_arg!(1))));
+            stores.put::<i64>(stack, widen_int(f(ls, p, l, ref_arg!(1))));
         }
         // (I32, Ref) -> I32
         (&[ArgT::I32, ArgT::Ref], Some(ArgT::I32)) => {
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, i32, LoftRef) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(ls, i32_arg!(0), ref_arg!(1))));
+            stores.put::<i64>(stack, widen_int(f(ls, i32_arg!(0), ref_arg!(1))));
         }
         // (I32, Ref) -> Bool
         (&[ArgT::I32, ArgT::Ref], Some(ArgT::Bool)) => {
@@ -1006,7 +1024,7 @@ fn dispatch_call(
             let ls = make_loft_store(stores, first_ref_store(args));
             let f: extern "C" fn(LoftStore, LoftRef, i32) -> i32 =
                 unsafe { std::mem::transmute(fp) };
-            stores.put::<i64>(stack, i64::from(f(ls, ref_arg!(0), i32_arg!(1))));
+            stores.put::<i64>(stack, widen_int(f(ls, ref_arg!(0), i32_arg!(1))));
         }
         // (Ref, I32) -> void
         (&[ArgT::Ref, ArgT::I32], None) => {
@@ -1068,7 +1086,7 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             stores.put::<i64>(
                 stack,
-                i64::from(f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2))),
+                widen_int(f(ls, i32_arg!(0), ref_arg!(1), i32_arg!(2))),
             );
         }
         // (I32, Ref, I32) -> void
@@ -1140,7 +1158,7 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             stores.put::<i64>(
                 stack,
-                i64::from(f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2))),
+                widen_int(f(ls, ref_arg!(0), i32_arg!(1), i32_arg!(2))),
             );
         }
         // (Ref, I32, I32, I32) -> void  (e.g. set_pixel, blend_pixel)
@@ -1298,7 +1316,7 @@ fn dispatch_call(
             let (p, l) = text_arg!(1);
             stores.put::<i64>(
                 stack,
-                i64::from(f(ls, i32_arg!(0), p, l, f64_arg!(2), ref_arg!(3))),
+                widen_int(f(ls, i32_arg!(0), p, l, f64_arg!(2), ref_arg!(3))),
             );
         }
         // (Ref, I32, Text, F64, I32, I32, I32) -> void  (e.g. draw_text)
@@ -1337,7 +1355,7 @@ fn dispatch_call(
                 unsafe { std::mem::transmute(fp) };
             stores.put::<i64>(
                 stack,
-                i64::from(f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2))),
+                widen_int(f(ls, ref_arg!(0), i32_arg!(1), f64_arg!(2))),
             );
         }
         _ => {

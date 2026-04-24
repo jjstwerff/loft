@@ -902,16 +902,16 @@ pub extern "C" fn loft_gl_text_texture(
     loft_gl_upload_alpha_texture(pixels.as_ptr(), w as i32, h as i32)
 }
 
-/// Save pixel data as a PNG file.
-/// Pixels are packed as 0xAARRGGBB integers.
-/// Native compilation path: receives raw pointer + count.
+/// Save pixel data as a PNG file.  Pixels are 0xAARRGGBB packed
+/// integers stored in loft's `vector<integer>` (i64 stride post-2c);
+/// only the low 32 bits of each element carry the colour.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_save_png(
     path_ptr: *const u8,
     path_len: usize,
     width: i32,
     height: i32,
-    data_ptr: *const i32,
+    data_ptr: *const i64,
     data_count: u32,
 ) -> bool {
     let path = unsafe { loft_ffi::text(path_ptr, path_len) };
@@ -922,7 +922,9 @@ pub extern "C" fn loft_save_png(
     }
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
     // Check if any pixel has alpha < 255 to decide RGB vs RGBA output.
-    let has_alpha = pixels.iter().any(|&px| ((px >> 24) & 0xFF) != 0xFF_u32 as i32);
+    let has_alpha = pixels
+        .iter()
+        .any(|&elem| (((elem as u32) >> 24) & 0xFF) != 0xFF);
     let file = match std::fs::File::create(path) {
         Ok(f) => f,
         Err(_) => return false,
@@ -932,11 +934,12 @@ pub extern "C" fn loft_save_png(
     if has_alpha {
         encoder.set_color(png::ColorType::Rgba);
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-        for &px in pixels {
+        for &elem in pixels {
+            let px = elem as u32;
             rgba.push(((px >> 16) & 0xFF) as u8); // R
-            rgba.push(((px >> 8) & 0xFF) as u8);  // G
-            rgba.push((px & 0xFF) as u8);          // B
-            rgba.push(((px >> 24) & 0xFF) as u8);  // A
+            rgba.push(((px >> 8) & 0xFF) as u8); // G
+            rgba.push((px & 0xFF) as u8); // B
+            rgba.push(((px >> 24) & 0xFF) as u8); // A
         }
         let mut writer = match encoder.write_header() {
             Ok(w) => w,
@@ -946,10 +949,11 @@ pub extern "C" fn loft_save_png(
     } else {
         encoder.set_color(png::ColorType::Rgb);
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-        for &px in pixels {
+        for &elem in pixels {
+            let px = elem as u32;
             rgb.push(((px >> 16) & 0xFF) as u8); // R
-            rgb.push(((px >> 8) & 0xFF) as u8);  // G
-            rgb.push((px & 0xFF) as u8);          // B
+            rgb.push(((px >> 8) & 0xFF) as u8); // G
+            rgb.push((px & 0xFF) as u8); // B
         }
         let mut writer = match encoder.write_header() {
             Ok(w) => w,
@@ -975,10 +979,27 @@ pub extern "C" fn loft_gl_load_texture(
     unsafe { loft_gl_upload_texture(img.as_raw().as_ptr(), w, h) as i32 }
 }
 
-/// Upload Canvas pixel data (0xAARRGGBB packed i32s) as a GL RGBA texture.
+/// Upload Canvas pixel data (0xAARRGGBB packed integers) as a GL RGBA
+/// texture.  Post-2c, loft's `vector<integer>` is i64-stride storage —
+/// each element occupies 8 bytes, with the packed colour in the LOW 32
+/// bits and the high 32 bits zero.  Reading at the old i32 stride
+/// (4-byte pixels) sees only every other "pixel" populated; the rest
+/// were the high-half of the prior i64 = 0 = transparent black, which
+/// shows up as moiré on textured surfaces and as missing pixels on
+/// rasterised text (Brick Buster's title / HUD).  Read at i64 stride
+/// to match the loft allocation; only the low 32 bits carry the
+/// colour.
+///
+/// C58: canonical `(0, 0) = canvas top-left` — no upload-side Y flip.
+/// GL's glTexImage2D stores the first buffer row as the texture's
+/// bottom row, so canvas-top lives at TC.y=0 after upload.  The 2D
+/// orthographic projection's `-2/H` already compensates for that when
+/// mapping user-supplied top-left screen coords to GL clip-space, so
+/// sprite and texture shaders can sample with identity V (no per-shader
+/// flip).
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_upload_canvas(
-    data_ptr: *const i32,
+    data_ptr: *const i64,
     data_count: u32,
     width: i32,
     height: i32,
@@ -989,22 +1010,14 @@ pub extern "C" fn loft_gl_upload_canvas(
     if w == 0 || h == 0 || data_count < w * h {
         return 0;
     }
-    // C58: canonical `(0, 0) = canvas top-left` — no upload-side Y flip.
-    // GL's glTexImage2D stores the first buffer row as the texture's bottom
-    // row, so canvas-top lives at TC.y=0 after upload.  The 2D orthographic
-    // projection's `-2/H` already compensates for that when mapping
-    // user-supplied top-left screen coords to GL clip-space, so sprite and
-    // texture shaders can sample with identity V (no per-shader flip).
     let pixels = unsafe { std::slice::from_raw_parts(data_ptr, (w * h) as usize) };
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let px = pixels[(y * w + x) as usize];
-            rgba.push(((px >> 16) & 0xFF) as u8); // R
-            rgba.push(((px >> 8) & 0xFF) as u8);  // G
-            rgba.push((px & 0xFF) as u8);          // B
-            rgba.push(((px >> 24) & 0xFF) as u8);  // A
-        }
+    for &elem in pixels {
+        let px = elem as u32; // low 32 bits hold the packed colour
+        rgba.push(((px >> 16) & 0xFF) as u8); // R
+        rgba.push(((px >> 8) & 0xFF) as u8); // G
+        rgba.push((px & 0xFF) as u8); // B
+        rgba.push(((px >> 24) & 0xFF) as u8); // A
     }
     unsafe { loft_gl_upload_texture(rgba.as_ptr(), w, h) as i32 }
 }
@@ -1021,11 +1034,11 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
 ) -> i32 {
     gl_guard!(0);
     let count = unsafe { store.vector_len(&data) } as u32;
-    let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i32;
+    let data_ptr = unsafe { store.vector_data_ptr(&data) } as *const i64;
     loft_gl_upload_canvas(data_ptr, count, width, height)
 }
-loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i32, height: i32, data: vec<i32>) -> bool);
-loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i32, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i32>) -> i32);
+loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i32, height: i32, data: vec<i64>) -> bool);
+loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i32, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i32);
 
 /// Return the line height in pixels for a font at the given size.
 #[unsafe(no_mangle)]
@@ -1033,14 +1046,22 @@ pub extern "C" fn loft_text_height(_font_idx: i32, size: f64) -> i32 {
     (size as f32 * 1.2) as i32
 }
 
-/// Rasterize text and write alpha values (0-255) into a pre-allocated i32 buffer.
+/// Rasterize text and write alpha values (0-255) into a pre-allocated
+/// `vector<integer>` buffer.  Post-2c, `integer` storage is i64 stride
+/// — write at i64 stride to match.  Pre-2c i32-stride writes left every
+/// other slot's high half zero, which loft then read as a packed
+/// alpha pair → only the low byte (alpha[2k]) survived the `& 255`
+/// mask in `rgba`, so loft canvas pixel `k` showed `alpha[2k]` and
+/// pixel `k+1` from row index `k+1` showed `alpha[2k+2]` — text
+/// rasterised with every-other-pixel zero, the checker overlay
+/// visible on Brick Buster's title.
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_rasterize_text_into(
     font_idx: i32,
     text_ptr: *const u8,
     text_len: usize,
     size: f64,
-    buf_ptr: *const i32,
+    buf_ptr: *const i64,
     buf_count: u32,
 ) -> i32 {
     let s = unsafe { loft_ffi::text(text_ptr, text_len) };
@@ -1049,12 +1070,12 @@ pub extern "C" fn loft_rasterize_text_into(
     if count == 0 || buf_ptr.is_null() {
         return 0;
     }
-    let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut i32, buf_count as usize) };
+    let buf = unsafe { std::slice::from_raw_parts_mut(buf_ptr as *mut i64, buf_count as usize) };
     for (i, &a) in bitmap.iter().enumerate() {
         if i >= buf.len() {
             break;
         }
-        buf[i] = a as i32;
+        buf[i] = i64::from(a);
     }
     bw as i32
 }
