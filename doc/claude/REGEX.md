@@ -224,7 +224,7 @@ delivers immediate value for CLI / server / log use cases.  See
 
 - [LAZY_STDLIB.md](LAZY_STDLIB.md) — lazy-loading mechanism; regex is
   the first new consumer.
-- [MATCH.md](MATCH.md) — base match semantics.
+- [LOFT.md](LOFT.md) § Match expressions — base match semantics.
 - [MATCH_PEG.md](MATCH_PEG.md) — PEG-style sequence patterns on
   vectors, enums, iterators, and (simple) text.  Regex is the tool
   for *complex* text; these two systems intentionally do not share a

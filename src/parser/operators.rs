@@ -138,7 +138,7 @@ impl Parser {
 
     /// Check whether `val` is a call to a user-defined function that returns a struct
     /// via a temporary store.  Used by `copy_ref` to decide whether to free the source
-    /// store after the deep copy (P122 fix).  The free bit is suppressed under WASM,
+    /// store after the deep copy.  The free bit is suppressed under WASM,
     /// so this helper is too.
     #[cfg(not(feature = "wasm"))]
     fn is_struct_returning_call(&self, val: &Value) -> bool {

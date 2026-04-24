@@ -51,7 +51,7 @@ struct PendingImport {
 /// Pure-resolution result from [`Parser::lib_path_manifest_resolve`].
 /// Callers decide when to apply side effects (native-lib registration,
 /// dependency queueing, etc.).  The legacy `lib_path_manifest` adapter
-/// applies them immediately; Phase A of the P173 package-mode driver
+/// applies them immediately; Phase A of the package-mode driver
 /// consults the manifest to build its package graph, then defers
 /// side-effect application until after pass-1 parsing.
 struct ResolvedPkg {
@@ -111,12 +111,12 @@ pub struct Parser {
     line: u32,
     /// Wildcard and selective imports waiting to be applied once the target source is fully parsed.
     pending_imports: Vec<PendingImport>,
-    /// P173: every (for_source, lib_source, ImportSpec) pair that
+    /// every (for_source, lib_source, ImportSpec) pair that
     /// `apply_pending_imports` applied during this parse pass.  Retained so
     /// that `resolve_deferred_unknowns` can re-apply them with overwrite
     /// semantics after cyclic `use` declarations have left Unknown stubs.
     applied_imports: Vec<PendingImport>,
-    /// P173: `DefType::Unknown` stubs collected by `actual_types_deferred`
+    /// `DefType::Unknown` stubs collected by `actual_types_deferred`
     /// during each `parse_file` run.  Resolved (or finally reported) by
     /// `resolve_deferred_unknowns` after all files in the recursion have
     /// had their pass-1 / pass-2 definitions registered.
@@ -177,7 +177,7 @@ pub struct Parser {
     pub(crate) last_cast_alias: u32,
     /// Field-binding Set nodes created by `if expr is Variant { field }`.
     /// Drained by `parse_if` and prepended to the if-body so they only
-    /// execute when the discriminant matches (P163).
+    /// execute when the discriminant matches.
     pub(crate) is_capture_bindings: Vec<Value>,
 }
 
@@ -385,7 +385,7 @@ impl Parser {
         self.diagnostics.is_empty()
     }
 
-    /// P173: after `parse_file` has run (and all `todo_files` have drained,
+    /// after `parse_file` has run (and all `todo_files` have drained,
     /// so every file in the recursion has had its definitions registered),
     /// reconcile any `DefType::Unknown` stubs that `actual_types_deferred`
     /// collected during parsing.
@@ -620,7 +620,7 @@ impl Parser {
     // * Helper functions *
     // ********************
 
-    /// P184 Phase 5: canonical entry point for building a vector
+    /// canonical entry point for building a vector
     /// database type from a content `Type`.  Consults
     /// `Data::narrow_vector_content` first (single source of truth
     /// for narrow-detection; shared with `typedef.rs::fill_database`
@@ -705,7 +705,7 @@ impl Parser {
                 if matches!(orig, Value::Var(_)) {
                     *code = self.cl("OpCreateStack", &[orig]);
                 } else {
-                    // P179: produce a `Value::Insert` so that scope
+                    // produce a `Value::Insert` so that scope
                     // analysis (`scopes::scan_args`) hoists the
                     // pre-call Set into the enclosing statement list.
                     // Insert does not form a scope, so the work-ref
@@ -787,7 +787,7 @@ impl Parser {
         let mut should_nr = self.data.type_def_nr(should);
         if let Type::Vector(c_tp, _) = should {
             let c_nr = self.data.type_def_nr(c_tp);
-            // P184 Phase 5: route through `vector_of` so narrow aliases
+            // route through `vector_of` so narrow aliases
             // (vector<i32>, vector<u8>) get the correct narrow element
             // type — matching what fill_database registers for struct
             // fields.
@@ -1603,7 +1603,7 @@ impl Parser {
         let p = Value::Int(pos as i32);
         match tp {
             Type::Integer(spec) => {
-                // Post-2c / P184 width selection:
+                // Narrow-integer width selection:
                 // * `alias` is set → this is a struct-field read whose
                 //   captured alias may carry `size(N)`.  Use that, else
                 //   the bounds-heuristic `byte_width` (which works for
@@ -1646,7 +1646,7 @@ impl Parser {
                 if s == 1 {
                     self.cl("OpGetByte", &[code, p, Value::Int(spec.min)])
                 } else if s == 2 && narrow_vec {
-                    // P184 Phase 4b: narrow vector element, direct encoding.
+                    // narrow vector element, direct encoding.
                     self.cl("OpGetShortRaw", &[code, p, Value::Int(spec.min)])
                 } else if s == 2 {
                     // Struct field with u16/i16 alias OR bounds-heuristic
@@ -1758,7 +1758,7 @@ impl Parser {
                 } else {
                     self.data.def(d_nr).attributes[f_nr].alias_d_nr
                 };
-                // P184 Phase 4b: narrow-vec path mirrors `get_val`.
+                // narrow-vec path mirrors `get_val`.
                 // Reached by `insert(vector<u16>, ...)` where
                 // `set_field` is invoked with `f_nr == usize::MAX` and
                 // `tp` is the narrow element Type.  Struct-field
@@ -2112,7 +2112,7 @@ impl Parser {
             // which has its own work-text copy handling in convert()).  The `&` modifier
             // means "mutations propagate back to the caller" — passing a literal means
             // the mutations are silently discarded, which is almost certainly a bug.
-            // P160: also accept "addressable" expressions — vector element access
+            // also accept "addressable" expressions — vector element access
             // (`v[i]`), field access (`s.field`), and chains thereof — since these
             // produce a DbRef into existing mutable storage.
             if let Type::RefVar(inner) = &tp
@@ -2295,7 +2295,7 @@ impl Parser {
                     );
                     all_types[a_nr] = tp.clone();
                 } else {
-                    // P91: default expressions may reference earlier
+                    // default expressions may reference earlier
                     // parameters by `Var(N)` slots (e.g. `b: integer = a * 2`
                     // produces a tree with `Var(0)`).  Substitute those
                     // references with the caller's actual argument values
@@ -2311,7 +2311,7 @@ impl Parser {
         }
     }
 
-    /// P91: replace `Value::Var(from)` with `Value::Var(to)` throughout
+    /// replace `Value::Var(from)` with `Value::Var(to)` throughout
     /// a default-expression tree.  Used by `parse_arguments` to rewrite
     /// internally-allocated slot numbers into stable argument indices
     /// before the default is stored on the function definition.
@@ -2343,7 +2343,7 @@ impl Parser {
         }
     }
 
-    /// P91: replace `Value::Var(i)` for `i < args.len()` with `args[i]`
+    /// replace `Value::Var(i)` for `i < args.len()` with `args[i]`
     /// in a default-expression tree.  Used at call sites to transplant a
     /// default's earlier-parameter references into the caller's scope.
     fn substitute_param_refs(val: Value, args: &[Value]) -> Value {
@@ -2526,7 +2526,7 @@ impl Parser {
                 diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
             }
         }
-        // P173: defer `Undefined type` errors to `resolve_deferred_unknowns`
+        // defer `Undefined type` errors to `resolve_deferred_unknowns`
         // so forward-references across cyclic intra-package `use` declarations
         // get a chance to resolve once both sides of the cycle are registered.
         typedef::actual_types_deferred(
@@ -2571,7 +2571,7 @@ impl Parser {
         }
         self.pending_imports = remaining;
         for pi in to_apply {
-            // P173: retain a copy so `resolve_deferred_unknowns` can re-apply
+            // retain a copy so `resolve_deferred_unknowns` can re-apply
             // with overwrite semantics after a cyclic `use` has finished
             // registering the partner file's definitions.
             self.applied_imports.push(pi.clone());
@@ -2866,7 +2866,7 @@ impl Parser {
     ///
     /// Legacy path: delegates to [`lib_path_manifest_resolve`] for pure
     /// resolution, then applies side-effects via [`apply_manifest_side_effects`].
-    /// Phase A (P173 package-mode driver) calls `lib_path_manifest_resolve`
+    /// Phase A calls `lib_path_manifest_resolve`
     /// directly and builds the package graph explicitly.
     fn lib_path_manifest(&mut self, dir: &str, id: &str) -> Option<String> {
         let resolved = self.lib_path_manifest_resolve(dir, id)?;
@@ -2881,7 +2881,7 @@ impl Parser {
     /// state touched is `self.lexer.diagnostics` on a version-mismatch fatal.
     ///
     /// This is the entry point used by Phase A of the package-mode driver
-    /// (P173), which needs to enumerate files + package edges without
+    /// , which needs to enumerate files + package edges without
     /// spilling symbol-table side-effects before pass-1 parsing begins.
     fn lib_path_manifest_resolve(&mut self, dir: &str, id: &str) -> Option<ResolvedPkg> {
         let pkg_dir = format!("{dir}/{id}");
@@ -3004,7 +3004,7 @@ impl Parser {
         }
     }
 
-    /// P160: check whether a value is "addressable" — rooted in a Var and
+    /// check whether a value is "addressable" — rooted in a Var and
     /// reached through field access (OpGetField) or vector element access
     /// (OpGetVector / OpVectorRef) chains.  Addressable values produce a
     /// DbRef into existing mutable storage, so they are safe to pass as
@@ -3029,7 +3029,7 @@ impl Parser {
     fn check_ref_mutations(&mut self, arguments: &[Argument]) {
         let code = self.data.def(self.context).code.clone();
         let mut written: HashSet<u16> = HashSet::new();
-        // P176: interprocedural param-write cache, local to this check.
+        // interprocedural param-write cache, local to this check.
         // Re-created per function-body check; small cost, avoids
         // persisting state across passes or across unrelated checks.
         let mut callee_cache: HashMap<u32, Vec<bool>> = HashMap::new();
@@ -3237,8 +3237,8 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
 /// - It is passed as a `RefVar`-typed argument to a `Value::Call`, or
 /// - It appears anywhere in the first argument of a field-write operator (`OpSet*`),
 ///   which covers the pattern `v[idx].field = val` where `v: &vector<T>`.
-/// - **P176**: it flows into a callee whose own body mutates that
-///   parameter (directly or transitively via further calls).  The
+/// - It flows into a callee whose own body mutates that parameter
+///   (directly or transitively via further calls).  The
 ///   interprocedural lookup is memoised via `callee_cache`.
 fn find_written_vars(
     code: &Value,
@@ -3255,7 +3255,7 @@ fn find_written_vars(
             let def = data.def(*fn_nr);
             let attrs = &def.attributes;
             // Operators whose FIRST argument is mutated (collection / field writes).
-            // P152: vector ops folded in here so `c.items += other_vec` (where `c.items`
+            // vector ops folded in here so `c.items += other_vec` (where `c.items`
             // is `OpGetField(Var(c), …)`) correctly marks `c` as written via
             // collect_vars_in.  Previously the OpAppend*/OpClear* family only checked for
             // a bare `Value::Var` arg, missing the field-access shape.
@@ -3268,7 +3268,7 @@ fn find_written_vars(
                 || def.name == "OpClearVector"
                 || def.name == "OpInsertVector"
                 || def.name == "OpRemoveVector";
-            // P152.B: OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
+            // OpCopyRecord(src, dst, type) writes through `dst` (arg[1]).
             // Used by struct field whole-replacement (`s.i = fresh`) where the
             // destination is `OpGetField(s, …)`.
             let second_arg_write = def.name == "OpCopyRecord";
@@ -3287,7 +3287,7 @@ fn find_written_vars(
                 }
                 find_written_vars(arg, data, written, callee_cache);
             }
-            // P176: the callee may mutate one of its by-value parameters
+            // the callee may mutate one of its by-value parameters
             // through a field write (e.g. `fn add(self: Box, x) { self.items += [x] }`).
             // Look up its param-write effects and mark the corresponding
             // caller-side arg vars so `check_ref_mutations` sees them as
@@ -3295,7 +3295,8 @@ fn find_written_vars(
             // effects are already encoded by the OpSet*/OpAppend*/OpCopyRecord
             // patterns above.  Args are collected with `collect_vars_in` so
             // wrapped sources (field access, `OpCreateStack(Var(_))` from
-            // the P179 path) still propagate the mutation to their root var.
+            // the hoisted-preamble path) still propagate the mutation to
+            // their root var.
             if def.code != Value::Null {
                 let callee_writes = callee_param_writes(*fn_nr, data, callee_cache);
                 for (i, arg) in args.iter().enumerate() {
@@ -3337,7 +3338,7 @@ fn find_written_vars(
     }
 }
 
-/// P176: for the given user-defined function, return a boolean per
+/// for the given user-defined function, return a boolean per
 /// parameter indicating whether its body writes that parameter
 /// (directly or through a transitive call).  Results are memoised
 /// in `cache`; a placeholder (all-false) is inserted before recursive

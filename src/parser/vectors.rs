@@ -1053,7 +1053,7 @@ impl Parser {
         if is_field {
             // elm is a reference INTO an existing field's store — the owning struct's
             // variable already emits FreeRef at scope exit.  Suppress FreeRef for elm
-            // to prevent a double-free (P109).
+            // to prevent a double-free.
             self.vars.set_skip_free(elm);
         }
         // Handle [for n in range [if cond] { body }] vector comprehension
@@ -1403,7 +1403,7 @@ impl Parser {
             self.lexer.pos()
         );
         for p in res {
-            // P184 Phase 5: route through `vector_of` so narrow integer
+            // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
             // db type as struct fields get via `fill_database`.  Without
             // this the literal-append path would register
@@ -1464,7 +1464,7 @@ impl Parser {
             } else if let Type::Integer(spec) = in_t
                 && let Some(n) = spec.vector_narrow_width()
             {
-                // P184 Phase 4b: narrow integer element write.
+                // narrow integer element write.
                 // `set_field(ed_nr=INTEGER_DEF, f_nr=usize::MAX, …)`
                 // dispatches through the wide `integer`'s `returned`
                 // type and emits `OpSetInt` (8 bytes).  That works
@@ -1585,7 +1585,7 @@ impl Parser {
         }
         match in_t {
             Type::Integer(spec) => {
-                // P184 Phase 4b: honour `forced_size` via
+                // honour `forced_size` via
                 // `vector_narrow_width`.  Gate covers 1/2/4 bytes.
                 // 2-byte uses `Parts::ShortRaw` (direct encoding) —
                 // parallel to `Parts::Byte` / `Parts::Int` so that
@@ -1602,7 +1602,7 @@ impl Parser {
                         _ => self.database.name("integer"),
                     }
                 } else {
-                    // Bounds heuristic (pre-P184 behaviour).
+                    // Bounds heuristic fallback.
                     match in_t.size(false) {
                         1 if spec.min == 0 => self.database.name("byte"),
                         1 => self.database.name(&format!("byte<{},false>", spec.min)),
@@ -1643,7 +1643,7 @@ impl Parser {
                 self.database.name(&name)
             }
             Type::Vector(tp, _) => {
-                // P184 Phase 5: route through `vector_of` so narrow-alias
+                // route through `vector_of` so narrow-alias
                 // content (vector<i32>, vector<u8>) registers the same
                 // narrow vector db_tp that `fill_database` registers for
                 // struct fields.  Without this, locals / returns / file

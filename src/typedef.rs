@@ -90,7 +90,7 @@ fn copy_unknown_fields(data: &mut Data, d: u32) {
 /// patching the stub (via `Data::rewrite_unknown_refs`) or surfacing the
 /// final "Undefined type" error later.
 ///
-/// The P173 package-mode driver uses this: cyclic intra-package `use`
+/// The package-mode driver uses this: cyclic intra-package `use`
 /// declarations legitimately produce Unknown stubs for cross-file types
 /// that will be resolved by `resolve_deferred_unknowns` after both sides
 /// of the cycle have registered their definitions.
@@ -324,14 +324,14 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
             let tp = match a_type {
                 Type::Vector(c_type, _) => {
                     let c_nr = data.type_elm(&c_type);
-                    // P156: unresolved vector content — parser already emitted
+                    // unresolved vector content — parser already emitted
                     // a diagnostic (constant-shadow, undefined type, etc.).
                     // Skip this attribute rather than panicking so the user
                     // sees the proper error instead of an interpreter crash.
                     if c_nr == u32::MAX {
                         continue;
                     }
-                    // P184 Phase 5: route through the shared helper so locals,
+                    // route through the shared helper so locals,
                     // parameters, and return types (Phase 5 migrations below)
                     // use the same narrow-detection logic as struct fields.
                     let c_tp = if let Some(narrow) = data.narrow_vector_content(&c_type, database) {

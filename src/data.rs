@@ -43,14 +43,13 @@ pub static I32: Type = Type::Integer(IntegerSpec::signed32());
 pub static I64: Type = Type::Integer(IntegerSpec::wide());
 
 /// Specification of an `integer`-family type — bounds, nullability,
-/// and optional forced storage width (P184).
+/// and optional forced storage width.
 ///
 /// `Debug` is implemented manually (instead of derived) so
 /// `format!("{tp:?}")` on `Type::Integer(spec)` prints
-/// `Integer(min, max, not_null)` — matching the pre-P184 tuple shape
-/// that diagnostic output was built around.  The optional
-/// `forced_size` is printed only when present, as a trailing
-/// `, size(N)`.
+/// `Integer(min, max, not_null)` — matching the tuple shape diagnostic
+/// output was built around.  The optional `forced_size` is printed
+/// only when present, as a trailing `, size(N)`.
 ///
 /// `PartialEq` / `Eq` / `Hash` are implemented manually to ignore
 /// `forced_size` — the annotation is a storage hint, not a value-type
@@ -179,11 +178,11 @@ impl IntegerSpec {
         }
     }
 
-    /// P184 Phase 4b: element stride for narrow vectors, matching
+    /// element stride for narrow vectors, matching
     /// what `typedef.rs::fill_database`'s Vector arm registers.
     /// Returns `Some(n)` for the direct-encoded widths:
     /// - 1 → `Parts::Byte` (u8 / i8)
-    /// - 2 → `Parts::ShortRaw` (u16 / i16, P184 Phase 4b)
+    /// - 2 → `Parts::ShortRaw` (u16 / i16)
     /// - 4 → `Parts::Int` (i32)
     ///
     /// All three use direct raw encoding (no `+1` shift), so
@@ -237,9 +236,9 @@ impl IntegerSpec {
 }
 
 impl Debug for IntegerSpec {
-    /// Matches the pre-P184 `Integer(min, max, not_null)` tuple shape
-    /// so the `Display for Type` fallback (`format!("{self:?}").to_lowercase()`)
-    /// and any other `{:?}` consumer keeps producing the same output.
+    /// Matches the `Integer(min, max, not_null)` tuple shape so the
+    /// `Display for Type` fallback (`format!("{self:?}").to_lowercase()`)
+    /// and any other `{:?}` consumer produces the expected output.
     /// A `forced_size` annotation, when present, is appended as `, size(N)`.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}, {}, {}", self.min, self.max, self.not_null)?;
@@ -906,7 +905,7 @@ pub enum DefType {
     // A static constant.
     Constant,
     // A generic function template parameterised by a single type variable.
-    // Not compiled until instantiated at a concrete call site (P5).
+    // Not compiled until instantiated at a concrete call site.
     Generic,
     // I2: an interface declaration — a named set of required method signatures.
     // Method stubs are stored as attributes on this definition.
@@ -1137,7 +1136,7 @@ impl Write for Into {
 
 #[allow(dead_code)]
 impl Data {
-    /// P184 Phase 5: map a vector's content `Type` to a narrow
+    /// map a vector's content `Type` to a narrow
     /// database element type-nr when the content is a `Type::Integer`
     /// with a `forced_size` annotation that [`IntegerSpec::vector_narrow_width`]
     /// accepts (currently 1 and 4 bytes; 2 opens in Phase 4b).
@@ -1814,7 +1813,7 @@ impl Data {
     /// precedence), but bindings that currently point to a `DefType::Unknown`
     /// stub are replaced by the imported real definition.
     ///
-    /// Used by the P173 package-mode driver's Phase C: when file B creates an
+    /// Used by the package-mode driver's Phase C: when file B creates an
     /// Unknown stub for a type that will come from file A's re-exported
     /// namespace, this variant is what makes B's later references resolve
     /// to A's real definition.
@@ -1884,7 +1883,7 @@ impl Data {
     /// `target_def_nr`.  Walks compound types (`Vector`, `RefVar`, `Iterator`,
     /// `Tuple`, `Function`, `Rewritten`) recursively.
     ///
-    /// Used by the P173 package-mode driver's Phase C after imports have been
+    /// Used by the package-mode driver's Phase C after imports have been
     /// propagated: stub def_nrs created during Phase B's deferred parsing
     /// become resolvable once the real definition is reachable via
     /// `def_names`, and this helper patches every `Type::Unknown(stub_nr)`

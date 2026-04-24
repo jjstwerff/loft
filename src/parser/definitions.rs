@@ -263,7 +263,7 @@ impl Parser {
                     }
                     self.lexer.token(":");
                     self.parse_field(v_nr, &a_name);
-                    // P158: accept trailing comma after the last field,
+                    // accept trailing comma after the last field,
                     // matching struct parsing (line 1380).
                     if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                         break;
@@ -287,8 +287,8 @@ impl Parser {
                 self.data.definitions[v_nr as usize].returned =
                     self.data.def(d_nr).returned.clone();
             }
-            // P164: accept trailing comma after the last variant,
-            // matching the P158 guard on the field-list loop above.
+            // accept trailing comma after the last variant,
+            // matching the trailing-comma guard on the field-list loop above.
             if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
                 break;
             }
@@ -926,7 +926,7 @@ impl Parser {
             } else {
                 Type::Unknown(0)
             };
-            // P91: if this parameter has `= expr`, the expression may
+            // if this parameter has `= expr`, the expression may
             // reference earlier parameters of the same function.  Inject
             // those earlier params into `self.vars` before parsing the
             // default, track which var_nr each maps to, then rewrite the
@@ -1096,7 +1096,7 @@ impl Parser {
             } else if matches!(self.data.def(tp_nr).returned, Type::Text(_)) {
                 Some(Type::Text(dep))
             } else {
-                // P184 Phase 1: when a user-typed integer alias carries an
+                // when a user-typed integer alias carries an
                 // explicit `size(N)` annotation (e.g. `i32`, `u8`, `u16`),
                 // stamp the forced width onto the returned Type::Integer so
                 // the signal flows through `Box<Type>` in `Type::Vector` /
@@ -1163,7 +1163,7 @@ impl Parser {
 
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
         if let Some(sub_name) = self.lexer.has_identifier() {
-            // P156: before trying to resolve the element type, fail fast if the
+            // before trying to resolve the element type, fail fast if the
             // identifier shadows a non-type definition (constant, function).
             // parse_type silently returns None in that case; sub_type's later
             // assert!(self.first_pass) masks the issue in pass 1 and
@@ -1232,9 +1232,9 @@ impl Parser {
                             self.lexer.has_token(",");
                             self.lexer.has_identifier();
                         }
-                        // C7/P22: keep the bespoke diagnostic (more helpful
-                        // than a generic "unknown type"); surface the
-                        // milestone so users know when to check back.
+                        // Keep the bespoke diagnostic (more helpful than a
+                        // generic "unknown type") and surface the milestone
+                        // so users know when to check back.
                         diagnostic!(
                             self.lexer,
                             Level::Error,

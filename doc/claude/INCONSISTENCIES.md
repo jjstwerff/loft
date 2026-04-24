@@ -90,8 +90,6 @@ The asymmetry is an acknowledged stdlib naming choice, not a language bug.
 ---
 
 
-
-
 ## 18. `#break` Reuses the `#attribute` Syntax for a Control-Flow Statement
 
 **Severity: Low**
@@ -192,8 +190,6 @@ misreading from a reproducer whose sum happened to be the same under
 both semantics.
 
 ---
-
-
 
 
 ## Summary by Severity

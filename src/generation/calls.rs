@@ -47,7 +47,7 @@ impl Output<'_> {
             if let Some(vr) = self.create_stack_var(v) {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
-            // P160: OpCreateStack wrapping an addressable expression
+            // OpCreateStack wrapping an addressable expression
             // (e.g. v[i] as & param).  Emit a temporary + &mut so the
             // callee can write through the DbRef into the store.
             } else if let Value::Call(d_nr, args) = v
@@ -65,7 +65,7 @@ impl Output<'_> {
                     Type::RefVar(_)
                 )
             {
-                // P144: forwarding a & parameter to another & parameter.
+                // forwarding a & parameter to another & parameter.
                 // The variable is already &mut DbRef — pass it directly
                 // instead of dereferencing with *var_name.
                 let name = sanitize(self.data.def(self.def_nr).variables.name(*nr));

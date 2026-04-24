@@ -615,7 +615,7 @@ impl Stores {
         }
     }
 
-    /// P184 Phase 4b: 2-byte narrow vector-element field type, used for
+    /// 2-byte narrow vector-element field type, used for
     /// `vector<u16>` / `vector<i16>` / `vector<integer limit(...) size(2)>`.
     /// Stored raw (no `+1` shift) so `vector_add`'s raw-byte copy works
     /// unchanged.  `i16::MIN` reserved as the null sentinel.  Struct

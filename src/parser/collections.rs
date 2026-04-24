@@ -45,7 +45,7 @@ impl Parser {
         iter_var: u16,
         pre_var: Option<u16>,
     ) -> Value {
-        // P161: unwrap &vector<T> / &sorted<T> so the iterator setup
+        // unwrap &vector<T> / &sorted<T> so the iterator setup
         // matches the underlying collection type.
         if let Type::RefVar(inner) = is_type {
             return self.iterator(code, inner, should, iter_var, pre_var);
@@ -96,7 +96,7 @@ impl Parser {
                     let i = Value::Var(iter_var);
                     let vec_tp = self.data.type_def_nr(vtp);
                     let db_tp = self.data.def(vec_tp).known_type;
-                    // P184 Phase 4b: narrow vector element iteration uses
+                    // narrow vector element iteration uses
                     // the forced_size stride so the generated
                     // `vector::get_vector(size, idx)` matches the actual
                     // 1/2/4-byte storage.  Without this, `database.size(db_tp)`
@@ -120,7 +120,7 @@ impl Parser {
                             ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
                         }
                     } else {
-                        // P184: route through `get_val` with the full
+                        // route through `get_val` with the full
                         // element Type — preserves `IntegerSpec.forced_size`
                         // so narrow vectors dispatch to `OpGetShortRaw` /
                         // `OpGetByte` / `OpGetInt4` via the narrow_vec
@@ -327,7 +327,7 @@ impl Parser {
                 }
                 return v_set(*nr, val.clone());
             }
-            // P152: LHS is a field access (e.g. `s.v = fresh`).  Pre-fix this
+            // LHS is a field access (e.g. `s.v = fresh`).  Pre-fix this
             // returned bare `val` and the assignment was silently discarded.
             // The full clear-then-append pair lives in parse_assign_op where
             // the RHS type is in scope (so we can avoid emitting OpAppendVector
@@ -1167,7 +1167,7 @@ use #count instead"
         // (e.g. `calc(a)` needs `a` in scope during parsing even though the body
         // never runs `a` directly — the parallel map handles that.)
         //
-        // Plan-04 B.3 follow-up (P122r): the body of
+        // Plan-04 B.3 follow-up: the body of
         // `for a in items par(b = worker(a), N) { ... a.iv ... }`
         // is parsed against this `elem_var_nr`, but the desugared
         // loop iterates over an `idx` counter and never writes `a` —
@@ -1431,7 +1431,7 @@ use #count instead"
         // the type-width mismatch and the stack drift.
         replace_var_in_ir(&mut block, b_var, &get_call);
 
-        // P122r: apply the same inline-alias treatment to the outer
+        // apply the same inline-alias treatment to the outer
         // iterator variable `a`.  The desugared loop increments `idx`;
         // `a` is logically `items[idx]` on every iteration.  Rewriting
         // `Var(a)` → `OpGetVector(items, elem_size, idx)` (plus
@@ -1806,7 +1806,7 @@ use #count instead"
         let num_attrs = self.data.attributes(struct_def_nr);
         let mut blocks: Vec<Value> = Vec::new();
 
-        // P148: work_checkpoint + clean_work_refs removed — see comment at the
+        // work_checkpoint + clean_work_refs removed — see comment at the
         // end of this loop explaining why skip_free must NOT be set here.
         for a in 0..num_attrs {
             let attr_name = self.data.attr_name(struct_def_nr, a);
@@ -1847,14 +1847,14 @@ use #count instead"
             blocks.push(v_set(loop_var, Value::Var(sf_work)));
             blocks.push(body.clone());
         }
-        // P148: do NOT call clean_work_refs here.  The unrolled loop
+        // do NOT call clean_work_refs here.  The unrolled loop
         // creates 2 work-refs per iteration (FvFloat/etc + StructField)
         // and assigns the latter to loop_var via v_set.  Only the LAST
         // iteration's work-refs feed loop_var; earlier ones are orphaned.
         // Marking them all skip_free prevented get_free_vars from
         // emitting OpFreeRef at scope exit, leaking 1 store per
         // orphaned work-ref (8 stores for a 3-field + 4-field struct).
-        // The P147 scan_set companion (Set(v, Var(src)) path) already
+        // The scan_set var-copy companion (Set(v, Var(src)) path) already
         // strips loop_var's deps so it gets its own OpFreeRef; the
         // work-refs themselves pass get_free_vars's is_work_ref check.
 
@@ -2123,7 +2123,7 @@ use #count instead"
         );
 
         let preamble = vec![v_set(vec_var, list[0].clone()), create_iter];
-        // N8a.4 (P3): return for_next and break_if_done as separate values so callers
+        // N8a.4: return for_next and break_if_done as separate values so callers
         // inline them directly in the loop body.  A v_block wrapper would declare
         // `for_var` inside a nested Rust `{ }` block, making it invisible to the
         // short_circuit/count_step expression that follows in native code.

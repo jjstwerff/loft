@@ -22,7 +22,7 @@ use crate::store::Store;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Write as _};
 use std::sync::{Arc, Mutex};
-// P137: the `--html` build compiles for wasm32-unknown-unknown
+// the `--html` build compiles for wasm32-unknown-unknown
 // WITHOUT the `wasm` feature (the feature carries wasm-bindgen
 // host bridges that `--html`'s hand-rolled JS runtime does not
 // provide).  That leaves `std::time::Instant` on a target with no
@@ -90,8 +90,8 @@ pub enum VarValueSnapshot {
 pub struct Field {
     pub name: String,
     /// Known-type number of the field's value type — needed by
-    /// runtime struct-schema walkers (e.g. P54's
-    /// `n_struct_from_jsonvalue`) that iterate `Parts::Struct(_)`.
+    /// runtime struct-schema walkers (e.g. `n_struct_from_jsonvalue`)
+    /// that iterate `Parts::Struct(_)`.
     pub content: u16,
     pub position: u16,
     pub default: Content,
@@ -155,7 +155,7 @@ pub struct Stores {
     #[cfg(feature = "wasm")]
     pub files: Vec<()>,
     pub max: u16,
-    /// S29 (P1-R4 M4-b): bitmap of free store slots — bit `i` is set when `allocations[i]`
+    /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
     /// requirement on `free()` that the old cascade-based scan imposed.
@@ -163,7 +163,7 @@ pub struct Stores {
     /// Temporary strings produced by text-returning native functions.
     /// Cleared by `OpClearScratch` at statement boundaries.
     pub scratch: Vec<String>,
-    /// P127: per-definition DbRef into the CONST_STORE for vector
+    /// per-definition DbRef into the CONST_STORE for vector
     /// constants (e.g. `pub HEIGHT_STEP_LABELS: vector<text> = […]`).
     /// Indexed by `d_nr`; a null DbRef (store_nr = u16::MAX) means
     /// that definition isn't a constant.  Populated by
@@ -176,7 +176,7 @@ pub struct Stores {
     pub const_refs: Vec<DbRef>,
     /// Errors from the last `Type.parse()` call, read via `s#errors`.
     pub last_parse_errors: Vec<String>,
-    /// P54: errors from the last `json_parse()` call, read via
+    /// errors from the last `json_parse()` call, read via
     /// `json_errors()`.  Cleared on every successful `json_parse`;
     /// populated with `format!("{msg} (byte {pos})")` on parse failure.
     pub last_json_errors: Vec<String>,
@@ -219,8 +219,8 @@ pub struct Stores {
     /// build and the `--html` no-feature build): milliseconds since
     /// Unix epoch at program start.  `n_ticks` uses this plus the
     /// host-imported `time_ticks` to compute elapsed time without
-    /// `std::time::Instant`.  See P137 for why we can't use Instant
-    /// on wasm32 even without the `wasm` feature.
+    /// `std::time::Instant`.  Instant is unavailable on wasm32 (for
+    /// either feature variant), so we snapshot elapsed ms here.
     #[cfg(target_arch = "wasm32")]
     pub start_time_ms: i64,
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
@@ -239,7 +239,7 @@ pub struct Stores {
     /// fallback paths.  Lazily allocated on first use (after JsonValue's
     /// `known_type` has been registered), kept for the process lifetime —
     /// its containing store is flagged `free = false` so `check_store_leaks`
-    /// ignores it.  See P54 `p54_missing_chain_returns_jnull` fix.
+    /// ignores it.
     pub jnull_sentinel: Option<DbRef>,
 }
 
@@ -356,7 +356,7 @@ impl Stores {
             user_args: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             start_time: Instant::now(),
-            // P137: `Stores::new()` must not call `Instant::now()` or
+            // `Stores::new()` must not call `Instant::now()` or
             // `SystemTime::now()` on wasm32-unknown-unknown — both
             // trap as `(unreachable)` with no time source.  The
             // `--html` build (wasm32, no `wasm` feature) uses 0 as

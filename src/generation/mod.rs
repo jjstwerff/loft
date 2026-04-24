@@ -1199,7 +1199,7 @@ extern crate loft;"
         } else if def.def_type == DefType::Enum {
             writeln!(w, "    let t{type_id} = db.enumerate(\"{}\");", def.name)?;
         } else if def.def_type == DefType::Vector {
-            // P184 Phase 4b: prefer the actual registered Parts::Vector
+            // prefer the actual registered Parts::Vector
             // content from `stores.types[type_id]` — that's what
             // `fill_database` stored, including narrow-integer content
             // via `narrow_vector_content`.  Falling back to
@@ -1313,7 +1313,7 @@ extern crate loft;"
         forced_size: Option<u8>,
     ) -> std::io::Result<()> {
         if let Type::Vector(c, _) = typedef {
-            // P184 Phase 4b: when the element `Type::Integer` carries a
+            // when the element `Type::Integer` carries a
             // `forced_size` annotation that `vector_narrow_width`
             // accepts (u8 / i8 / u16 / i16 / i32), look up the narrow
             // content type-nr that `fill_database` already registered

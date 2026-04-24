@@ -688,8 +688,8 @@ datetime, http, ...) reuses the mechanism.
 ## Related documents
 
 - [REGEX.md](REGEX.md) — regex library design; the first lazy consumer.
-- [MATCH.md](MATCH.md) — base match semantics (regex is a library, not
-  a match-pattern kind).
+- [LOFT.md](LOFT.md) § Match expressions — base match semantics (regex
+  is a library, not a match-pattern kind).
 - [BROADENING.md](BROADENING.md) — why cold-start matters for
   loft's non-game reach.
 - [BYTECODE_CACHE.md](BYTECODE_CACHE.md) — `.loftc` cache design

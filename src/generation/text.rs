@@ -40,7 +40,7 @@ impl Output<'_> {
             )?;
             return Ok(());
         }
-        // P152: vector field whole-replacement (e.g. `b.data = f#read(...)`)
+        // vector field whole-replacement (e.g. `b.data = f#read(...)`)
         // emits OpClearVector with a non-Var arg (typically OpGetField).
         // Compute the DbRef inline and call vector::clear_vector.
         if let [val] = vals {

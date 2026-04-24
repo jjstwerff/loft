@@ -1129,9 +1129,8 @@ pub fn map_export_glb(map: Map, path: text) {
 // An octahedron centred on `pos + (0, radius, 0)` with 6 vertices
 // and 8 triangles.  Low-poly on purpose: it's a placeholder "red
 // ball" for the walkable editor avatar.  Takes primitives rather
-// than `Player` so moros_render keeps its one-way dependency on
-// moros_sim (P173 covers the full two-way story, but keeping the
-// primitive surface matches camera_follow / camera_overview).
+// than `Player` to keep moros_render's one-way dependency on
+// moros_sim, matching camera_follow / camera_overview.
 
 pub fn emit_player_avatar(m: &Mesh, pos: Vec3, radius: float) {
   // Centre the ball on the avatar's head — caller supplies feet pos.

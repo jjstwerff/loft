@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// P54: First-class JSON as a typed tree.
+// First-class JSON as a typed tree.
 //
 // `json_parse(text)` returns a `JsonValue` enum whose variants cover
 // every JSON kind.  Callers match on the variant to access the payload,
@@ -9,8 +9,6 @@
 // typed extractors (`as_text`, `as_number`, `as_long`, `as_bool`) for
 // leaf values.  Malformed input returns `JNull` rather than panicking;
 // the last parse error is retrievable via `json_errors()`.
-//
-// Design: doc/claude/BITING_PLAN.md § P54, doc/claude/PROBLEMS.md #54.
 
 /// Typed union of JSON values.  The discriminant (1..6) picks the
 /// active variant; variant data lives in the variant's fields.
@@ -159,23 +157,21 @@ pub fn json_string(v: text) -> JsonValue;
 /// real empty JArray.
 pub fn json_array(items: vector<JsonValue>) -> JsonValue;
 
-/// Q4 constructor — build a JsonValue set to the `JObject` variant
-/// carrying the supplied fields.  Each field's value deep-copies via
-/// the same `dbref_to_parsed` walker as `json_array`, so a JObject
-/// can carry captured-subtree JArray / JObject values.  Empty input
-/// produces a real empty JObject.
+/// Build a JsonValue set to the `JObject` variant carrying the supplied
+/// fields.  Each field's value deep-copies via the same `dbref_to_parsed`
+/// walker as `json_array`, so a JObject can carry captured-subtree JArray
+/// / JObject values.  Empty input produces a real empty JObject.
 pub fn json_object(fields: vector<JsonField>) -> JsonValue;
 
-/// P54 step 5 internal walker — populate a struct of the given
-/// `struct_kt` (known-type number) from a JsonValue.  Compile-time
-/// codegen for `Struct.parse(JsonValue)` emits exactly one call
-/// to this function regardless of struct shape; the runtime walker
-/// uses `stores.types[struct_kt].parts` to dispatch on each
-/// field's declared type (primitive, nested struct, JsonValue
-/// passthrough, or vector).  Path-qualified Q1 schema-side
-/// diagnostics on type mismatches go to `json_errors()`.  Users
-/// should not call this directly — write `MyStruct.parse(value)`
-/// instead.
+/// Internal walker — populate a struct of the given `struct_kt`
+/// (known-type number) from a JsonValue.  Compile-time codegen for
+/// `Struct.parse(JsonValue)` emits exactly one call to this function
+/// regardless of struct shape; the runtime walker uses
+/// `stores.types[struct_kt].parts` to dispatch on each field's declared
+/// type (primitive, nested struct, JsonValue passthrough, or vector).
+/// Path-qualified schema-side diagnostics on type mismatches go to
+/// `json_errors()`.  Users should not call this directly — write
+/// `MyStruct.parse(value)` instead.
 ///
 /// Return type is declared as `JsonValue` here purely because it
 /// shares the same DbRef byte layout as the actual `reference[T]`

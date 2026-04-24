@@ -804,7 +804,7 @@ impl Function {
 
     /// Create a temporary variable during scope analysis (no Lexer needed).
     /// Reuses an existing variable if the name already exists (two-pass stability).
-    /// Used by P135 fix to lift inline struct-returning call arguments.
+    /// Used to lift inline struct-returning call arguments.
     pub fn add_temp_var(&mut self, name: &str, type_def: &Type) -> u16 {
         if let Some(nr) = self.names.get(name) {
             let nr = *nr;
@@ -966,7 +966,7 @@ impl Function {
             {
                 return self.is_new(var_nr);
             }
-            // P165: annotated LHS struct-enum accepts a variant of
+            // annotated LHS struct-enum accepts a variant of
             // that enum as RHS.  `let k: Kind = Alpha { x: 1 };` is
             // idiomatic — the struct-literal constructor types the
             // variant as `Reference(variant_d, _)`, but the parent

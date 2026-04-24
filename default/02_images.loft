@@ -326,7 +326,7 @@ fn OpVarFnRef(pos: const u16) -> text;
 // WARNING (C40): same type mismatch as OpVarFnRef above — see C30 guard.
 fn OpPutFnRef(pos: const u16, _fnref: text);
 #rust"{{ let v = *s.get_stack::<[u8; 20]>(); s.put_var(@pos, v); }}"
-// P127: push a pre-built constant's DbRef from the constant store.
+// Push a pre-built constant's DbRef from the constant store.
 fn OpConstRef(d_nr: const integer) -> reference;
 #rust"s.const_refs[@d_nr as usize]"
 // Push a Str pointing into the constant store for integer string literals.

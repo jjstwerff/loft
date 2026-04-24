@@ -22,7 +22,7 @@ impl Stores {
     /// # Panics
     /// When a store already in use is allocated again.
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
-        // S29 (P1-R4 M4-b): find the lowest free slot using the free_bits bitmap.
+        // S29: find the lowest free slot using the free_bits bitmap.
         // If a freed slot exists below max, reuse it; otherwise grow max.
         let slot = self.find_free_slot();
         if slot >= self.allocations.len() as u16 {
@@ -149,7 +149,7 @@ impl Stores {
             }
         }
         store.free = true;
-        // S29 (P1-R4 M4-b): mark slot as free in the bitmap so database_named()
+        // S29: mark slot as free in the bitmap so database_named()
         // can reuse it without LIFO ordering.
         self.set_free_bit(al);
         // Trim max when freeing the top slot(s) so that database_named() doesn't

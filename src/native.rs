@@ -992,7 +992,7 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, crate::wasm::host_time_now());
 }
 
-/// P137-class fallback: the `--html` build (wasm32, no `wasm` feature)
+/// the `--html` build (wasm32, no `wasm` feature)
 /// has no host time bridge; return 0 so programs that read `now()`
 /// without the bridge don't trap.  Mirror of the `n_ticks` fallback
 /// for the same target.
@@ -1023,7 +1023,7 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
 
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
-    // P137: no host time bridge on the --html build; return 0.
+    // no host time bridge on the --html build; return 0.
     stores.put(stack, 0i64);
 }
 
@@ -1350,7 +1350,7 @@ fn n_base64url_encode(stores: &mut Stores, stack: &mut DbRef) {
 // These functions are now auto-marshalled by extensions::wire_native_fns().
 // See EXTERNAL_LIBS.md Phase 5 for design.
 
-// ── P54: JsonValue native bindings (primitive-only, step 2) ─────────────
+// ── JsonValue native bindings ──────────────────────────────────────────
 //
 // `default/06_json.loft` declares the JsonValue struct-enum.  Variant
 // discriminants are 1-indexed in declaration order:
@@ -1933,7 +1933,7 @@ fn n_len(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, len);
 }
 
-// ─────────────── P54 step 5 — single-walker `Struct.parse(JsonValue)` ──────
+// ─────────────── single-walker `Struct.parse(JsonValue)` ──────────────────
 //
 // `n_struct_from_jsonvalue` is the single source of truth for unwrapping
 // a `JsonValue` into a struct.  The compile-time `parse_type_parse`
@@ -2372,11 +2372,10 @@ fn populate_vector_from_jarray(
     }
 }
 
-/// Q4 primitive constructor — allocate a JsonValue set to the `JNull`
-/// variant and return a DbRef to it.  No arena needed (JNull has no
-/// payload), so this can ship ahead of P54 step 4's container
-/// materialisation.  Useful for test fixtures that want to construct
-/// a known-null JsonValue without going through `json_parse("null")`.
+/// Allocate a JsonValue set to the `JNull` variant and return a
+/// DbRef to it.  No arena needed (JNull has no payload).  Useful
+/// for test fixtures that want to construct a known-null JsonValue
+/// without going through `json_parse("null")`.
 fn n_json_null(stores: &mut Stores, stack: &mut DbRef) {
     let result = jv_alloc(stores);
     stores
@@ -2904,9 +2903,9 @@ fn n_to_json(stores: &mut Stores, stack: &mut DbRef) {
 /// mirrors `to_json` today because primitive variants carry no
 /// nested structure — canonical and pretty output are
 /// byte-identical.  Retained as a separate entry point so the
-/// surface is forward-compatible: once P54 step 4 arena-
-/// materialises `JArray` / `JObject`, this path will branch into
-/// 2-space indent + one-element-per-line layout at the same site.
+/// surface is forward-compatible: once `JArray` / `JObject` are
+/// arena-materialised, this path will branch into 2-space indent +
+/// one-element-per-line layout at the same site.
 fn n_to_json_pretty(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let out = json_to_text(stores, &v, true);

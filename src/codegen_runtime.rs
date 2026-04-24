@@ -117,13 +117,12 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
     stores.free_named(&db, name);
 }
 
-/// P187: conditionally free `placeholder` — only when its `store_nr`
+/// conditionally free `placeholder` — only when its `store_nr`
 /// differs from `witness`'s.  Emitted for `__ref_N` work-refs whose
 /// value might alias a still-live Reference variable in the current
 /// scope (adoption vs. fresh-store is a runtime choice the caller's
-/// compiler cannot resolve statically).  See `doc/claude/PROBLEMS.md`
-/// § P187 for the mechanism.  Bytecode equivalent: `OpFreeRefIfDistinct`
-/// in `src/fill.rs`.
+/// compiler cannot resolve statically).  Bytecode equivalent:
+/// `OpFreeRefIfDistinct` in `src/fill.rs`.
 pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbRef) {
     if placeholder.store_nr != witness.store_nr {
         stores.free(&placeholder);
@@ -271,13 +270,14 @@ pub fn i_json_errors(stores: &mut Stores) -> Str {
 /// all owned sub-structures (text fields, vectors, etc.).
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
 pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
-    // P171: mirror `state/io.rs::copy_record`'s tag handling and
+    // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
-    // indexing into `stores.types` (Issue #120 / P143 use 0x8000 as
-    // "free source after copy"); native codegen was missing both the
-    // mask and the free, so any caller that set the flag — e.g.
-    // `copy_ref` on a struct-returning call's result — panicked at
-    // `Types::size()` with an out-of-bounds index.  Also missing:
+    // indexing into `stores.types` (0x8000 marks "free source after
+    // copy").  The mask must be applied before indexing and the
+    // flagged source freed after the copy; any caller that sets the
+    // flag — e.g. `copy_ref` on a struct-returning call's result —
+    // otherwise panics at `Types::size()` with an out-of-bounds
+    // index.  Also missing:
     // `remove_claims` before the overwrite, which the bytecode form
     // uses to free the destination's nested vectors/strings so a
     // reassignment doesn't double-free on scope exit.
@@ -1460,9 +1460,9 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
     crate::wasm::host_time_now()
 }
 
-/// P137-class fallback for the `--html` build (wasm32, no `wasm`
-/// feature): returns 0 because no host time bridge exists.  Mirror of
-/// the `n_ticks` fallback below for the same target.
+/// Fallback for the `--html` build (wasm32, no `wasm` feature):
+/// returns 0 because no host time bridge exists.  Mirror of the
+/// `n_ticks` fallback below for the same target.
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
 pub fn n_now(_stores: &mut Stores) -> i64 {
     0
@@ -1480,7 +1480,7 @@ pub fn n_ticks(stores: &mut Stores) -> i64 {
     stores.start_time.elapsed().as_micros() as i64
 }
 
-/// Bytecode equivalent: `n_ticks` in `src/native.rs`.  P137: gated on
+/// Bytecode equivalent: `n_ticks` in `src/native.rs`.  Gated on
 /// target_arch, not the `wasm` feature — the `--html` build (wasm32,
 /// no `wasm` feature) returns 0 because no host time bridge exists.
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]

@@ -1225,7 +1225,7 @@ impl Store {
         }
     }
 
-    /// P184 Phase 4b: direct 2-byte read for `Parts::ShortRaw` vector
+    /// direct 2-byte read for `Parts::ShortRaw` vector
     /// elements, with `min`-shifted encoding mirroring `get_byte`:
     /// stored value is `(val - min)` as `u16`; returns `read + min`.
     /// Unlike `get_short` (which applies `+1` encoding with `raw=0`
@@ -1252,7 +1252,7 @@ impl Store {
         }
     }
 
-    /// P184 Phase 4b: direct 2-byte write for `Parts::ShortRaw` vector
+    /// direct 2-byte write for `Parts::ShortRaw` vector
     /// elements.  Mirrors `set_byte`: stores `(val - min) as u16`.
     /// `val == i32::MIN` stores as `u16::MAX` (null sentinel).
     #[inline]

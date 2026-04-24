@@ -229,8 +229,7 @@ The rule: **always commit before any operation that changes the working tree.**
 | [ROADMAP.md](doc/claude/ROADMAP.md) | Items in implementation order, grouped by milestone (0.9.0 / 1.0.0 / 1.1+) |
 | [BROADENING.md](doc/claude/BROADENING.md) | Strategic evaluation — using loft beyond games (CLI, server, data), sequenced unlocks |
 | [LAZY_STDLIB.md](doc/claude/LAZY_STDLIB.md) | Conditional stdlib loading — trigger-based module load, pay-for-what-you-use cold start |
-| [MATCH.md](doc/claude/MATCH.md) | Match expression design — pattern types, binding, phase breakdown |
-| [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture |
+| [MATCH_PEG.md](doc/claude/MATCH_PEG.md) | L3 PEG-style match patterns — sequence/alternation/optional with anchor-revert capture (base match syntax lives in LOFT.md § Match expressions) |
 | [REGEX.md](doc/claude/REGEX.md) | Regex standalone library — replaces the `r"..."` literal / "regex arm in match" plan with a full-featured library |
 | [TUPLES.md](doc/claude/TUPLES.md) | Tuple design — multi-value returns, deconstruction, match destructuring |
 | [SORTED_SLICE.md](doc/claude/SORTED_SLICE.md) | A8: slicing, open-ended ranges, partial-key match, comprehensions on sorted/index |
@@ -239,7 +238,6 @@ The rule: **always commit before any operation that changes the working tree.**
 | [PACKAGES.md](doc/claude/PACKAGES.md) | Package format, registry, governance, external libs, library extraction |
 | [CONST_STORE.md](doc/claude/CONST_STORE.md) | Constant store design -- shared read-only Store for vector/string constants, mmap, WASM fast startup |
 | [DEBUG.md](doc/claude/DEBUG.md) | Debugging utilities and tools |
-| [DEBUG_PLAN.md](doc/claude/DEBUG_PLAN.md) | Systematic plan for all open safety/leak/data-loss issues (P120–P135) |
 | [RELEASE.md](doc/claude/RELEASE.md) | Release checklist and version history |
 | [WEB_IDE.md](doc/claude/WEB_IDE.md) | Web IDE integration design notes |
 | [CHANGELOG.md](CHANGELOG.md) | User-facing release notes (shipped in release archives) |

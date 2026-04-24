@@ -524,9 +524,9 @@ const DEFAULT_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Embedded graphics library files.  Added to VIRT_FS so `use graphics;` etc.
-/// resolve under WASM without a native cdylib.
-const GRAPHICS_LIB_FILES: &[(&str, &str)] = &[
+/// Library files embedded in the WASM build so `use <name>;` resolves in the
+/// browser sandbox without a native cdylib.
+const BUNDLED_LIB_FILES: &[(&str, &str)] = &[
     (
         "graphics.loft",
         include_str!("../lib/graphics/src/graphics.loft"),
@@ -539,6 +539,7 @@ const GRAPHICS_LIB_FILES: &[(&str, &str)] = &[
         include_str!("../lib/graphics/src/render.loft"),
     ),
     ("glb.loft", include_str!("../lib/graphics/src/glb.loft")),
+    ("shapes.loft", include_str!("../lib/shapes/src/shapes.loft")),
 ];
 
 /// Run a loft program supplied as a JSON array of `{name, content}` file objects.
@@ -577,7 +578,7 @@ pub fn compile_and_run(files_json: &str) -> String {
     // Populate VIRT_FS with default files + graphics library + user files.
     let mut all_files: Vec<(String, String)> = DEFAULT_FILES
         .iter()
-        .chain(GRAPHICS_LIB_FILES.iter())
+        .chain(BUNDLED_LIB_FILES.iter())
         .map(|(n, c)| (n.to_string(), (*c).to_string()))
         .collect();
     for (name, content) in &files {
@@ -659,7 +660,7 @@ pub fn compile_and_start(files_json: &str) -> String {
 
     let mut all_files: Vec<(String, String)> = DEFAULT_FILES
         .iter()
-        .chain(GRAPHICS_LIB_FILES.iter())
+        .chain(BUNDLED_LIB_FILES.iter())
         .map(|(n, c)| (n.to_string(), (*c).to_string()))
         .collect();
     for (name, content) in &files {
@@ -683,7 +684,7 @@ pub fn compile_and_start(files_json: &str) -> String {
             }
         }
         let lib_set: std::collections::HashSet<&str> =
-            GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
+            BUNDLED_LIB_FILES.iter().map(|(n, _)| *n).collect();
         let main_name = VIRT_FS.with(|fs| {
             fs.borrow()
                 .keys()
@@ -905,7 +906,7 @@ fn run_pipeline() -> (String, bool, Vec<AssertResult>) {
         }
     }
     let lib_names: std::collections::HashSet<&str> =
-        GRAPHICS_LIB_FILES.iter().map(|(n, _)| *n).collect();
+        BUNDLED_LIB_FILES.iter().map(|(n, _)| *n).collect();
     let main_name = VIRT_FS.with(|fs| {
         fs.borrow()
             .keys()

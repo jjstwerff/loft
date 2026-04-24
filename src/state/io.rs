@@ -59,7 +59,7 @@ impl State {
                 match f.read_to_string(buf) {
                     Ok(_) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                        // P166: non-UTF-8 bytes.  Silently clearing
+                        // non-UTF-8 bytes.  Silently clearing
                         // the buffer masks real data — write a loud
                         // actionable warning to stderr so the user
                         // sees the misuse the first time the call
@@ -586,7 +586,7 @@ impl State {
         let db_tp = *self.code::<u16>();
         let format = *self.code::<u8>();
         let val = *self.get_stack::<DbRef>();
-        // P145: validate DbRef and known_type before raw pointer access
+        // validate DbRef and known_type before raw pointer access
         #[cfg(debug_assertions)]
         {
             assert!(

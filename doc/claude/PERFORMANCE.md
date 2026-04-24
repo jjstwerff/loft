@@ -1058,8 +1058,6 @@ Full design: the Constant Data section below.
 
 ---
 
----
-
 
 # String Buffer Allocation and Optimization Opportunities
 
