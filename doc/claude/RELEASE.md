@@ -219,6 +219,12 @@ blocker for every release, not just 1.0.  The items below are the
 | **Zero open High issues** | H | No entry in PROBLEMS.md or QUALITY.md tagged **High** severity at release time. | PROBLEMS.md |
 | **INCONSISTENCIES sweep** | M | 6 open entries in INCONSISTENCIES.md — none are code blockers but #6 (plain enums cannot have methods) and #10 (sizeof(u8) = 4) need documentation coverage before 1.0. | INCONSISTENCIES.md |
 
+### CI infrastructure carried over from 0.8.4
+
+| ID | Summary |
+|---|---|
+| **macos-13 runner queue** | The 0.8.4 release stalled 20+ min waiting for a `macos-13` runner while the other 3 matrix entries finished in 1–5 min.  Bump `.github/workflows/release.yml` to `macos-14`, or drop `x86_64-apple-darwin` entirely (aarch64-apple-darwin covers modern Macs).  Decide before cutting 0.8.5. |
+
 ### Code-debt cleanup (nice-to-have for 1.0)
 
 | ID | Summary |
