@@ -12,10 +12,19 @@ invariants, internal phase numbers)?  See
 
 ---
 
-## Unreleased — heading toward 0.9.0
+## Unreleased — heading toward 0.8.5
 
-The next release focuses on **the web**: your loft programs can now fetch
+0.8.5 adds **learnability**: syntax highlighting, a VS Code extension,
+and a "learn loft in 30 minutes" walkthrough so new users can get from
+zero to a running demo without reading the reference.
+
+## 0.8.4 — 2026-04-24 — Awesome Brick Buster
+
+This release focuses on **the web**: your loft programs can now fetch
 URLs, serve HTTP, parse JSON, and even run entirely inside a browser tab.
+The headline is **Brick Buster** — a full arcade game, paddle + ball +
+powerups + music + levels + high score, that you can share with a friend
+via a single URL.
 
 ### JSON — read and write structured data
 
@@ -104,11 +113,6 @@ directional.
 
 ---
 
-## 0.8.3 — 2026-04-03
-
-A polish release focused on **correctness**, **closures**, and **making
-errors less surprising**.
-
 ### Closures you can return
 
 Functions that return a closure now work correctly, including when the
@@ -129,7 +133,7 @@ factor = 10
 big = map(nums, |x| { x * factor })
 ```
 
-### Bug fixes
+### Quality-of-life fixes
 
 - **Typos stop compilation.**  `y = unknown_thing` now fails with a
   clear error instead of silently creating a garbage value.
