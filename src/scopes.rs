@@ -52,25 +52,25 @@ struct Scopes {
     /// Recursion depth counter for `scan`; reset to 0 when scope analysis starts.
     scan_depth: usize,
     /// Counter for `__lift_N` temporary variables created to own inline struct
-    /// arguments (P135 fix).
+    /// arguments.
     lift_counter: u16,
     /// Variables added by `scan_args` for inline struct-returning call arguments.
     /// These are conditionally assigned inside if-chains / match arms, so the
     /// outer block needs a `Set(v, Null)` at function entry to reserve their
     /// slot in codegen's stack.position — otherwise the function-level
     /// `OpFreeRef(__lift_N)` at function exit reads a slot that was never
-    /// allocated along every execution path (P54-B3-family crash).
+    /// allocated along every execution path.
     lift_vars: Vec<u16>,
     /// Counter for `__ret_N` temporaries used by `free_vars` to hold a
     /// non-trivial tail expression's value while free ops run (B5-L3 fix).
     ret_temp_counter: u16,
-    /// P187: `__ref_N` work_ref → witness variable whose call-return
+    /// `__ref_N` work_ref → witness variable whose call-return
     /// value might alias `__ref_N`'s store at runtime.  Populated by
     /// `scan_set` when the work_ref is passed as an arg to a user-fn
     /// call whose Reference result is assigned to the witness.
     /// Consulted by `get_free_vars` to emit `OpFreeRefIfDistinct` (a
     /// runtime store-nr check) instead of the unconditional `OpFreeRef`
-    /// — see the comment block around `scan_set`'s P150/P187 branch.
+    /// — see the comment block around `scan_set`'s witness-pairing branch.
     paired_witness: HashMap<u16, u16>,
 }
 
@@ -100,7 +100,7 @@ pub fn check(data: &mut Data) {
             scopes.var_scope.insert(a, 0);
         }
         let mut code = scopes.scan(&data.definitions[d_nr as usize].code, &mut function, data);
-        // P54-B3: lift vars from `scan_args` are assigned inside conditional
+        // lift vars from `scan_args` are assigned inside conditional
         // branches (if-chains, match arms) but their `OpFreeRef` lives at
         // function exit.  Without a Set(v, Null) at function entry, codegen's
         // stack.position never reserves their slot along every execution path,
@@ -519,9 +519,9 @@ impl Scopes {
         // codegen has two sub-paths (state/codegen.rs:1039-1066):
         // - has_ref_params == true → gen_set_first_ref_call_copy deep-copy
         // - has_ref_params == false → adoption (callee's __ref_N store IS
-        //   the returned struct's store, OR — P150 — the callee returned a
+        //   the returned struct's store), OR the callee returned a
         //   different fresh store and the caller's __ref_N pre-alloc is
-        //   orphaned).
+        //   orphaned.
         if matches!(
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
@@ -533,7 +533,7 @@ impl Scopes {
                 !a.hidden && matches!(a.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
             });
             if has_ref_params {
-                // P146: codegen will take gen_set_first_ref_call_copy
+                // codegen will take gen_set_first_ref_call_copy
                 // (state/codegen.rs:1186-1238) — OpConvRefFromNull +
                 // OpDatabase + lock-args + OpCopyRecord deep-copy into a
                 // FRESH store owned by `v`.  Strip v's declared deps so
@@ -546,9 +546,8 @@ impl Scopes {
                     function.make_independent(v, d);
                 }
             }
-            // P150 / P187: `has_ref_params == false` call whose
-            // result is assigned to a Reference variable `v`.  At
-            // runtime the callee either:
+            // `has_ref_params == false` call whose result is assigned
+            // to a Reference variable `v`.  At runtime the callee either:
             //   - **adopts** the placeholder (writes into the passed
             //     `__ref_N` and returns the same DbRef) — then `v`
             //     and `__ref_N` share a store;
@@ -561,20 +560,18 @@ impl Scopes {
             // single callee (`map_from_json`) branches both ways on
             // `json == ""`.  Both patterns must work.
             //
-            // Plain `OpFreeRef(__ref_N)` at scope exit (P150's
-            // resolution) is wrong in the adoption case when `v`
-            // flows into the enclosing function's return — the
-            // placeholder free happens BEFORE the caller reads `v`,
-            // corrupting `v`'s shared store.  Plain `skip_free`
-            // (pre-P150) is wrong in the fresh-store case —
-            // placeholder orphaned.
+            // Plain `OpFreeRef(__ref_N)` at scope exit is wrong in
+            // the adoption case when `v` flows into the enclosing
+            // function's return — the placeholder free happens
+            // BEFORE the caller reads `v`, corrupting `v`'s shared
+            // store.  Unconditionally skipping the free is wrong in
+            // the fresh-store case — placeholder orphaned.
             //
             // Record `__ref_N → v` in `paired_witness`.  At scope
             // exit, `get_free_vars` emits `OpFreeRefIfDistinct(__ref_N,
             // v)` instead of `OpFreeRef(__ref_N)`: the runtime
             // store-nr comparison settles the two cases per execution
-            // path (match → skip; differ → free).  See
-            // `doc/claude/PROBLEMS.md` § P187 for the full analysis.
+            // path (match → skip; differ → free).
             if !has_ref_params && let Value::Call(_, args) = value {
                 for arg in args {
                     let arg_var = match arg {
@@ -606,7 +603,7 @@ impl Scopes {
                 }
             }
         }
-        // P147: companion to the P146 fix above for the
+        // Companion to the has_ref_params == true branch above for the
         // var-to-var deep-copy path.  When `Set(v, Var(src))` and
         // both are References to the same struct, codegen takes
         // `gen_set_first_ref_var_copy` (state/codegen.rs:1025-1033)
@@ -1005,7 +1002,7 @@ impl Scopes {
                 // unfreed stores when:
                 //   - `gen_set_first_ref_call_copy`'s `0x8000` doesn't
                 //     fire (e.g. when the callee MIGHT return a DbRef
-                //     aliasing one of its args — P143), or
+                //     aliasing one of its args), or
                 //   - the call-site reuses the same work-ref slot across
                 //     loop iterations and `OpDatabase`'s `clear+claim`
                 //     leaves the store marked `free` from the previous
@@ -1036,7 +1033,7 @@ impl Scopes {
                             self.var_scope.get(&v).copied().unwrap_or(u16::MAX),
                         );
                     }
-                    // P187: when `v` is a `__ref_*` / `__rref_*` work-ref
+                    // when `v` is a `__ref_*` / `__rref_*` work-ref
                     // that was passed to a user-fn call whose Reference
                     // result lives on as `witness`, emit the runtime-
                     // conditional `OpFreeRefIfDistinct(v, witness)` — it
@@ -1191,7 +1188,7 @@ impl Scopes {
             }
             // Do NOT recurse into Value::Loop — loop-interior Reference
             // variables are handled by the Loop handler in scan() which
-            // pre-inits them at the pre-loop scope (issue #120).
+            // pre-inits them at the pre-loop scope.
             _ => {}
         }
     }
@@ -1236,7 +1233,7 @@ impl Scopes {
                     && ops[..n - 1].iter().all(|v| {
                         matches!(v, Value::Set(v_nr, _) if function.name(*v_nr).starts_with("__lift_"))
                     });
-                // P179: hoist Set(__ref_N, expr) preamble produced by the
+                // hoist Set(__ref_N, expr) preamble produced by the
                 // parser's `&T`-conversion path for non-Var sources.  The
                 // final op is always OpCreateStack(Var(__ref_N)); after
                 // hoisting it stays as the arg value, while the Set moves
@@ -1300,8 +1297,8 @@ impl Scopes {
     }
 
     /// Check whether a scanned argument at position `arg_idx` is an inline
-    /// struct-returning call that needs lifting to a temporary variable (P135
-    /// fix).  Returns the struct definition number if lifting is needed, None
+    /// struct-returning call that needs lifting to a temporary variable.
+    /// Returns the struct definition number if lifting is needed, None
     /// otherwise.
     ///
     /// Skips lifting when the outer call's return type depends on this argument
@@ -1598,7 +1595,7 @@ fn check_ref_leaks(
                 eprintln!(
                     "[check_ref_leaks] Warning: Reference variable '{}' (var_nr={v}) in \
                      function '{}' has only text-work deps {:?} — likely spurious. \
-                     Store will leak at runtime (P117).",
+                     Store will leak at runtime.",
                     function.name(v),
                     fn_name,
                     dep.iter()

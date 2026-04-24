@@ -83,9 +83,7 @@ pub fn id_of_tool(t: ToolKind) -> integer {
 
 // ── Palette contents contextual to the current tool ──────────────
 
-// Palette contents per tool.  File-scope `vector<text>` constants
-// are now populated by the compiler (P175 fix), so we can use them
-// directly instead of wrapping in zero-arg functions.
+// Palette contents per tool.
 pub WALL_PALETTE_NAMES: vector<text> = ["none", "solid", "half", "thick_flat", "thick_curved"];
 pub ITEM_PALETTE_NAMES_PLACEHOLDER: vector<text> = ["item_0", "item_1", "item_2", "item_3"];
 pub HEIGHT_STEP_LABELS: vector<text> = ["1", "2", "4", "8"];
@@ -183,11 +181,7 @@ pub fn panel_build(
 
 // ── Hit-test ─────────────────────────────────────────────────────
 //
-// Struct-enum with field-bearing variants.  Originally switched to a
-// plain `enum Kind + struct Hit` pair when is-capture was reading
-// garbage for `tb_id`, but P178 (fixed 2026-04-17) resolved the
-// underlying slot-allocator issue so the natural struct-enum form
-// works now.
+// Struct-enum with field-bearing variants carrying per-hit payload.
 pub enum UiHit {
   UhWorld,
   UhToolButton { tb_id: integer not null },

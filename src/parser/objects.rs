@@ -538,7 +538,7 @@ impl Parser {
                         return self.parse_type_parse(d_nr, code);
                     }
                 }
-            // P159: Type.parse() for struct-enums.  Must not consume the
+            // Type.parse() for struct-enums.  Must not consume the
             // "." unless "parse" follows — `Enum.Variant` is a qualified
             // variant reference, not a method call.  Save a link and
             // revert if "parse" doesn't follow.
@@ -657,7 +657,7 @@ impl Parser {
 
     /// `Type.parse(arg)` — populate a struct from a JsonValue.
     ///
-    /// Single-walker design (P54 step 5): regardless of the struct's
+    /// Single-walker design: regardless of the struct's
     /// shape, this emits exactly one IR call to
     /// `n_struct_from_jsonvalue(arg, struct_kt)`.  The walker uses
     /// `stores.types[struct_kt].parts` at runtime to dispatch on each
@@ -667,7 +667,7 @@ impl Parser {
     /// vector fields iterate the JArray and recurse per element for
     /// struct elements.
     ///
-    /// **Auto-wrap (P54 step 6 form):** when the argument is plain
+    /// **Auto-wrap:** when the argument is plain
     /// text, transparently wrap with `json_parse(text)` first so
     /// legacy `Struct.parse(text)` keeps compiling but routes
     /// through the typed-tree pipeline (malformed input populates
@@ -692,7 +692,7 @@ impl Parser {
             if is_jsonvalue {
                 // Direct JsonValue → walker.  This is the new
                 // typed-tree path used by `Struct.parse(json_parse(text))`
-                // and by P54 step-5 codegen elsewhere.
+                // and by the `Struct.parse(JsonValue)` codegen elsewhere.
                 let n_walker = self.data.def_nr("n_struct_from_jsonvalue");
                 debug_assert_ne!(
                     n_walker,
@@ -706,10 +706,7 @@ impl Parser {
                 // (`OpCastVectorFromText` calls
                 // `src/database/structures.rs::parsing`, which accepts
                 // both standard JSON and loft-native bare-key syntax).
-                // Preserves the legacy data-import semantics — see
-                // QUALITY.md § P54-U for the unification design that
-                // collapses both paths into one parser with mode
-                // selection.
+                // Preserves the legacy data-import semantics.
                 let mut text_expr = arg_expr;
                 if !matches!(arg_tp, Type::Text(_)) {
                     self.convert(&mut text_expr, &arg_tp, &Type::Text(Vec::new()));
@@ -1247,7 +1244,7 @@ impl Parser {
                 // Two shapes route here:
                 // - LHS variable already has an incompatible type (e.g. integer from a
                 //   prior pass) — `!type_matches`.
-                // - P170: LHS variable is a user-declared local whose type was inferred
+                // - LHS variable is a user-declared local whose type was inferred
                 //   as dependent on some other variable (e.g. `x` had `x = bs[i]` in a
                 //   later statement, giving x type `Reference(T, [bs])`), so
                 //   `is_independent` returns false even though `type_matches` is true
@@ -1443,7 +1440,7 @@ impl Parser {
             // Emit OpAppendVector to deep-copy the source vector into the
             // struct's field so the data is independent of the source store.
             //
-            // P153: the same holds for any non-Insert vector-typed
+            // the same holds for any non-Insert vector-typed
             // expression (e.g. `C { v: build() }` where `build` returns a
             // vector).  Before this was a plain push, which left the field
             // uninitialised.
@@ -1452,7 +1449,7 @@ impl Parser {
                     let pos = self
                         .database
                         .position(self.data.def(td_nr).known_type, field);
-                    // P184 Phase 5: `vector_of` consults
+                    // `vector_of` consults
                     // `Data::narrow_vector_content` and registers a
                     // narrow element type when the content is a narrow
                     // alias (i32, u8).  `elem_tp` is the narrow type

@@ -443,9 +443,6 @@ construct adding speculative parse could regress it silently.
 
 ## See also
 
-- [DEBUG_PLAN.md](DEBUG_PLAN.md) — the phase-A/B/C/D methodology that
-  turned most of the above from "mysterious flakes" into tracked
-  reproducers.
 - [PROBLEMS.md](PROBLEMS.md) — currently-open issues (most of the
   brittle surfaces above have at least one entry).
 - [CODE.md](CODE.md) — naming / safety rules that apply across all of

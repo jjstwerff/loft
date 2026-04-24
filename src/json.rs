@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// P54: JSON parser used by the `json_parse` native function in
+// JSON parser used by the `json_parse` native function in
 // `src/native.rs`.  Walks UTF-8 text once and returns a `Parsed`
 // value that the caller materialises into a loft `JsonValue`
 // struct-enum record.
@@ -53,7 +53,7 @@ pub enum Parsed {
 ///   loft's bare-identifier object keys (`{val: 7}`) that the
 ///   legacy `vector<T>.parse(text)` path has supported since
 ///   day one.  This keeps loft-authored data literals compiling
-///   through the unified parser (P54-U).
+///   through the unified parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Dialect {
     #[default]
@@ -690,7 +690,7 @@ mod tests {
         assert!(parse("null trailing").is_err());
     }
 
-    // ── P54-U: Dialect::Lenient accepts loft bare-identifier keys ──────
+    // ── Dialect::Lenient accepts loft bare-identifier keys ──────
 
     #[test]
     fn parse_with_strict_rejects_bare_key() {
@@ -737,7 +737,7 @@ mod tests {
         assert!(Dialect::default() == Dialect::Strict);
     }
 
-    // ── P54-U prep: Dialect::Lenient also accepts bare identifier values ──
+    // ── Dialect::Lenient also accepts bare identifier values ──
 
     #[test]
     fn parse_with_lenient_accepts_bare_ident_value() {

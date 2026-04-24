@@ -2174,7 +2174,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
             let status = output.status;
             if !status.success() {
-                // P138: detect the rand_core / cargo-cache staleness and print a
+                // detect the rand_core / cargo-cache staleness and print a
                 // clear recovery hint instead of a generic codegen-bug message.
                 let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
                 if stderr_utf8.contains("E0460")

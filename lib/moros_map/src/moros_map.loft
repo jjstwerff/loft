@@ -52,12 +52,11 @@ pub fn map_from_json(json: text) -> Map {
 // ── MO.2: Hex-address helpers ───────────────────────────────────────
 
 // Euclidean-division helpers for chunk / intra-chunk indexing on a
-// 32-wide chunk grid (P172).  C-style `q / 32` and `q % 32` produce
-// negative quotients and remainders for negative axial coordinates,
-// which silently maps (-1, 1) etc. to a wrong cell.  These helpers
-// always return `chunk_idx_32 = floor(v / 32)` and
-// `hex_idx_32 ∈ [0, 31]` so adjacent hexes across the origin
-// behave consistently.
+// 32-wide chunk grid.  C-style `q / 32` and `q % 32` produce negative
+// quotients and remainders for negative axial coordinates, which
+// silently maps (-1, 1) etc. to a wrong cell.  These helpers always
+// return `chunk_idx_32 = floor(v / 32)` and `hex_idx_32 ∈ [0, 31]`
+// so adjacent hexes across the origin behave consistently.
 fn chunk_idx_32(v: integer) -> integer {
   vr = v % 32;
   if vr < 0 { (v - vr - 32) / 32 } else { (v - vr) / 32 }
@@ -139,9 +138,7 @@ pub fn map_get_hex(m: Map, q: integer, r: integer, cy: integer) -> Hex {
   Hex {}
 }
 
-// MO.3 convenience editors.  Originally deferred under P144 (infinite
-// loop when multiple &Map fns called each other in cross-file packages),
-// now restored — P144 was closed by the cherry-pick fix in PR #173.
+// Convenience editors.
 
 // Paint a hex's material at (q, r, cy).
 pub fn map_paint_material(m: &Map, q: integer, r: integer, cy: integer, material: integer) {

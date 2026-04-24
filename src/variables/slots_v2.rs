@@ -226,10 +226,10 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
 //     `tests/wrap.rs`.
 //   - `tests/slot_v2_baseline.rs` — 29 Phase-0 fixtures, each a
 //     `code!("fn test() { … }")` block exercising one shape
-//     (P178, loop-carry, block-return, sibling-scope reuse, …).
-//   - `tests/issues.rs::p178_is_capture_slot_alias` — P178.
+//     (is-capture aliasing, loop-carry, block-return, sibling-scope
+//     reuse, late-local-in-nested-for, …).
+//   - `tests/issues.rs::p178_is_capture_slot_alias`
 //   - `tests/issues.rs::p185_slot_alias_on_late_local_in_nested_for`
-//     — P185 (un-ignored in Phase 2h.5).
 //
 // A slot-inspection suite can live in a separate integration test
 // that loads specific `.loft` files from `tests/scripts/` and

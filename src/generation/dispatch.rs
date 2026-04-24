@@ -499,7 +499,7 @@ impl Output<'_> {
                 return Ok(());
             }
             "OpFreeRefIfDistinct" => {
-                // P187: free the placeholder only when its store_nr
+                // free the placeholder only when its store_nr
                 // differs from the witness's.  Emit:
                 //   if ph.store_nr != wit.store_nr { OpFreeRef(stores, ph, "ph"); ph.store_nr = u16::MAX }
                 // so the fresh-store path still reclaims the orphan

@@ -670,7 +670,8 @@ fn main() {
 
 ## See also
 - [TUPLES.md](TUPLES.md) — Full tuple design; T1.8a/b for function-return convention
-- [MATCH.md](MATCH.md) — Existing match design; L2 nested field patterns
+- [LOFT.md](LOFT.md) § Match expressions — match syntax reference;
+  L2 nested field patterns tracked in PLANNING.md
 - [PLANNING.md](PLANNING.md) — T1 backlog
 - `src/parser/control.rs` — `parse_match`, `parse_scalar_match`, `parse_vector_match`
 - `src/data.rs` — `Type::Tuple`, `Value::TupleGet`, `Value::TuplePut`

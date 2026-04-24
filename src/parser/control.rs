@@ -59,7 +59,7 @@ pub(crate) fn definitely_returns(val: &Value) -> bool {
 /// sibling arms commonly return an owned `T` (`_ => ""`).  Requiring the
 /// owned/borrow distinction to match exactly makes the straightforward
 /// null-on-mismatch extractor pattern a compile error for no semantic
-/// gain — the caller reads the value regardless of ownership.  (P54 B6.)
+/// gain — the caller reads the value regardless of ownership.
 fn match_arm_types_unify(a: &Type, b: &Type) -> bool {
     let strip = |t: &Type| -> Type {
         match t {
@@ -80,7 +80,7 @@ impl Parser {
         {
             // We actually scan a record here instead of a block of statements
             // — the LHS is a pre-typed struct variable and `{ ... }` is its
-            // body.  P186: disambiguate between struct-body `{ field: val, ... }`
+            // body.  Disambiguate between struct-body `{ field: val, ... }`
             // and block-expression `{ expr }` (e.g. `{ S { a: 3 } }`) by peeking
             // at the first two tokens after `{`:
             //   - `ident :`  — struct body (canonical form).
@@ -206,7 +206,7 @@ impl Parser {
             }
             if let Value::Insert(ls) = n {
                 Self::move_insert_elements(&mut l, ls);
-                // P186: preserve `Type::Rewritten(_)` when flattening an
+                // preserve `Type::Rewritten(_)` when flattening an
                 // Insert.  A first-pass `parse_object` struct literal
                 // returns `Type::Rewritten(Type::Reference(_))` together
                 // with a Value::Insert body that has no terminating
@@ -491,7 +491,7 @@ impl Parser {
                 (parent, true, true, false)
             }
             Type::Reference(d_nr, _) if self.data.def_type(*d_nr) == DefType::Enum => {
-                // P54: iterating a `vector<StructEnum>` yields loop variables
+                // iterating a `vector<StructEnum>` yields loop variables
                 // typed `Type::Reference(enum_def, _)` (via `for_type` in this
                 // file, line 1952 — struct-enums degrade to a reference type
                 // when carried through generic collections).  Without this
@@ -2228,9 +2228,9 @@ impl Parser {
                         let v_nr = self.create_unique(&format!("mv_{field_name}"), &field_type);
                         if v_nr != u16::MAX {
                             self.vars.defined(v_nr);
-                            // P178 / B5: the capture binds a borrowed view
-                            // into the subject's record — scope cleanup
-                            // must not emit OpFreeRef for it (see the same
+                            // The capture binds a borrowed view into the
+                            // subject's record — scope cleanup must not
+                            // emit OpFreeRef for it (see the same
                             // note at parse_match_enum_field_bindings in
                             // this file for the match-arm path).
                             self.vars.set_skip_free(v_nr);
@@ -2269,7 +2269,7 @@ impl Parser {
     }
 
     pub(crate) fn for_type(&mut self, in_type: &Type) -> Type {
-        // P161: unwrap &vector<T> so the element type resolves correctly.
+        // unwrap &vector<T> so the element type resolves correctly.
         if let Type::RefVar(inner) = in_type {
             return self.for_type(inner);
         }
@@ -2805,7 +2805,7 @@ impl Parser {
                 let mut p = Value::Null;
                 let t = self.expression(&mut p);
                 named_args.push((arg_name, p, t));
-                // P167: accept trailing comma on the last named arg.
+                // accept trailing comma on the last named arg.
                 if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
                     break;
                 }
@@ -2858,9 +2858,8 @@ impl Parser {
             types.push(t);
             list.push(p);
             arg_idx += 1;
-            // P167: accept trailing comma on the last positional arg —
-            // sibling of P158 (struct-enum field list) and P164 (enum
-            // variant list).
+            // accept trailing comma on the last positional arg —
+            // matching the struct-enum field list and enum variant list.
             if !self.lexer.has_token(",") || self.lexer.peek_token(")") {
                 break;
             }

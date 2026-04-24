@@ -14,7 +14,7 @@ impl Parser {
             }
             // In the first pass, skip the field name token so parsing continues.
             self.lexer.has_identifier();
-            // P151: wrap `code` in Value::Drop so an unresolved field access
+            // wrap `code` in Value::Drop so an unresolved field access
             // (e.g. `x.v` where x's type is not yet known on pass 1) is no
             // longer treated as a plain `Value::Var(x)` by downstream
             // assignment processing.  Without this wrapping, `x.v = 99` in
@@ -185,7 +185,7 @@ impl Parser {
                     // the LHS of assignment owns the store (empty dep); the
                     // work-ref is skip_free so it isn't double-freed.  With
                     // `vec![w]` the LHS got `dep=[__ref_N]` which made it a
-                    // borrower — nothing freed the store (P54-B2 leak).
+                    // borrower — nothing freed the store.
                     self.vars.set_skip_free(w);
                     *code =
                         crate::data::v_block(list, Type::Enum(dnr, true, vec![]), "EnumUnitLit");
@@ -409,7 +409,7 @@ impl Parser {
         let index_t = self.parse_in_range(&mut p, code, "$");
         let elm_td = self.data.type_elm(etp);
         let known = self.data.def(elm_td).known_type;
-        // P184 Phase 3: honour narrow vector-element stride when the
+        // honour narrow vector-element stride when the
         // content Type::Integer carries a forced_size AND Phase 2 would
         // register a direct-encoded narrow type (see
         // `IntegerSpec::vector_narrow_width` — currently 1 and 4 bytes).

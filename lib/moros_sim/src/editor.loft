@@ -18,19 +18,12 @@ use graphics;
 use player;
 use tools;
 
-// ── Camera control (Step 21, P181 refactor) ─────────────────────
-// User's persistent orbit delta on top of the current camera
-// mode's default pose.  Accumulated by right-drag; reset on
-// camera-mode toggle so each mode opens at its canonical pose.
-// Applied via `camera_orbit` every frame AFTER `camera_follow` /
-// `camera_overview` compute the base pose.
-//
-// Lives in its own struct (not as two floats inline on
-// `EditorState`) as a P181 workaround — the inline-float tail
-// shape tripped a slot-allocator interaction that silently dropped
-// `undo_push` mutations from a sibling `&UndoStack` arg.  Using a
-// nested `Reference`-typed sub-struct as the tail restores the
-// previous layout behaviour while keeping the same semantics.
+// ── Camera control ────────────────────────────────────────────────
+// User's persistent orbit delta on top of the current camera mode's
+// default pose.  Accumulated by right-drag; reset on camera-mode
+// toggle so each mode opens at its canonical pose.  Applied via
+// `camera_orbit` every frame AFTER `camera_follow` / `camera_overview`
+// compute the base pose.
 pub struct CameraControl {
   cc_az_offset: float not null,
   cc_el_offset: float not null,

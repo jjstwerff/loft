@@ -278,7 +278,7 @@ pub fn set_stub_symbols(syms: std::collections::HashSet<String>) {
 ///
 /// # Panics
 /// Panics if a symbol is found via dlsym but the library used `loft_register_v1`
-/// (indicating a registration bug — issue #119).
+/// (indicating a registration bug).
 #[cfg(feature = "native-extensions")]
 pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data) {
     // Phase 1: resolve any missing symbols via dlsym.
@@ -325,7 +325,7 @@ pub fn wire_native_fns(state: &mut crate::state::State, data: &crate::data::Data
         for sym in to_resolve {
             if let Some(ptr) = try_dlsym(&sym) {
                 // The library used loft_register_v1 but didn't register
-                // this symbol — this is a registration bug (issue #119).
+                // this symbol — this is a registration bug.
                 assert!(
                     !has_v1,
                     "native symbol '{sym}' was not registered via loft_register_v1 \

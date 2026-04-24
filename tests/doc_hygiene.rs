@@ -294,69 +294,6 @@ fn p54_json_natives_registered_for_every_declaration() {
     );
 }
 
-/// QUALITY P54 — `PROBLEMS.md § 54` documents the design contract
-/// for the JSON surface to readers who haven't seen QUALITY.md.
-/// Earlier drafts of `### 54.` carried `JObject { fields:
-/// hash<JsonField[name]> }` (the originally-designed key-indexed
-/// hash) but the implementation shipped with `vector<JsonField>`
-/// — easier to materialise + frees as one unit with the parent
-/// store.  The hash form is a 0.9.0 follow-up.
-///
-/// This guard pins the doc against the stdlib so a future spec
-/// edit can't silently revert to the un-shipped hash form.  The
-/// invariant: PROBLEMS.md's `### 54.` body must contain the
-/// `vector<JsonField>` storage form, not `hash<JsonField[name]>`.
-#[test]
-fn problems_p54_jobject_layout_matches_stdlib() {
-    let problems = fs::read_to_string("doc/claude/PROBLEMS.md").expect("cannot read PROBLEMS.md");
-    let stdlib =
-        fs::read_to_string("default/06_json.loft").expect("cannot read default/06_json.loft");
-
-    // The stdlib's actual JObject layout — the source of truth.
-    assert!(
-        stdlib.contains("JObject { fields: vector<JsonField> }"),
-        "default/06_json.loft no longer declares `JObject {{ fields: vector<JsonField> }}` — \
-         this guard is pinned to that layout; if the storage form changed, update the guard."
-    );
-
-    // PROBLEMS.md must agree.
-    assert!(
-        problems.contains("vector<JsonField>"),
-        "PROBLEMS.md § 54 must reference `vector<JsonField>` as the JObject storage form to \
-         match `default/06_json.loft`.  An earlier draft used `hash<JsonField[name]>` (the \
-         pre-shipping design).  Update PROBLEMS.md to match the actually-shipped layout, \
-         keeping a note that the hash form is a 0.9.0 follow-up."
-    );
-
-    // And must NOT carry the obsolete hash form (only mention as historical context).
-    let lines_with_hash: Vec<(usize, &str)> = problems
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| l.contains("hash<JsonField[name]>"))
-        .collect();
-    // Allow exactly zero matches in a code-block context (the example).
-    // Allow plain-prose mentions only as part of a "0.9.0 follow-up" sentence.
-    for (i, line) in &lines_with_hash {
-        let trimmed = line.trim_start();
-        let in_code_block = trimmed.starts_with('|')
-            || trimmed.starts_with("pub fn")
-            || trimmed.starts_with("pub enum")
-            || trimmed.starts_with("pub struct")
-            || trimmed.starts_with("JObject")
-            || trimmed.starts_with("JArray")
-            || trimmed.starts_with("    ");
-        let is_followup_note = line.to_ascii_lowercase().contains("follow-up")
-            || line.to_ascii_lowercase().contains("0.9.0");
-        assert!(
-            !in_code_block || is_followup_note,
-            "PROBLEMS.md L{}: `hash<JsonField[name]>` appears in code-block / declaration \
-             context — should be `vector<JsonField>`.  Line: {}",
-            i + 1,
-            line
-        );
-    }
-}
-
 /// QUALITY P54 — the JSON stdlib + native doc-comments must not
 /// contain stale "step 4" / "stub" / "forward-compatible" /
 /// "lands when X" / "today returns JNull" language now that

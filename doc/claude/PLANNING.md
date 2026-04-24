@@ -84,133 +84,11 @@ catches up later.
 
 ---
 
-### Version 0.8.4 — HTTP client and JSON (planned)
+### Per-version ticket bodies
 
-Goal: add blocking HTTP client access and automatic JSON mapping so loft programs can
-consume web services.  Builds on P1 lambdas (0.8.3): `Type.from_json` is a callable
-fn-ref that composes naturally with `map` and `filter`.  All items gated behind a new
-`http` Cargo feature so binaries that don't need networking stay lean.
-
-**JSON struct annotation (H1):**
-- **H1** — Parse `#json` before struct declarations; synthesise `to_json(self) -> text`
-  reusing the existing `:j` format flag.  No new runtime dependency.
-
-**JSON primitive stdlib (H2):**
-- **H2** — Add `serde_json`-backed extraction functions: `json_text`, `json_int`,
-  `json_long`, `json_float`, `json_bool`, `json_items`, `json_nested`.
-  Declared in `default/06_web.loft`; implemented in new `src/native_http.rs`.
-
-**JSON deserialization codegen — scalars (H3):**
-- **H3** — For each `#json` struct with primitive fields only, synthesise
-  `from_json(body: text) -> T` using the H2 primitives.  `Type.from_json` is now a
-  valid fn-ref passable to `map`.
-
-**HTTP client (H4):**
-- **H4** — `HttpResponse` struct (`status: integer`, `body: text`, `ok()` method) and
-  blocking HTTP functions (`http_get`, `http_post`, `http_put`, `http_delete`, plus
-  `_h` variants accepting `vector<text>` headers) via `ureq`.
-
-**Nested types and integration (H5):**
-- **H5** — Extend `from_json` codegen to nested `#json` struct fields, `vector<T>` array
-  fields, and plain enum fields.  Integration test suite against a mock HTTP server.
-
-**Package registry (REG.1–REG.2):**
-- **REG.1** — `src/registry.rs`: parse a plain-text registry file (`name version url` per
-  line), resolve the best version (highest semver for "latest", exact match for pinned),
-  download the `.zip`, extract to a temp dir, locate the package root inside the archive.
-  Gated behind a new `registry` Cargo feature (on by default); deps: `ureq = "2"`,
-  `zip = "2"`.  Full design: [PACKAGES.md](PACKAGES.md).
-- **REG.2** — Extend `loft install` in `main.rs`: arguments without `/` or `.` are
-  treated as registry names with optional `@version` suffix.  Local-path installs
-  (`install .`, `install /path`) are unchanged.  Registry file location: `LOFT_REGISTRY`
-  env var or `~/.loft/registry.txt`.
-- **REG.3** — `loft registry sync`: reads the `# source: <url>` header from the local
-  registry file (falling back to `LOFT_REGISTRY_URL` env var or the compiled-in default
-  pointing at `jjstwerff/loft-registry` on GitHub), downloads via HTTPS, validates, and
-  replaces `~/.loft/registry.txt`.  Prints a summary line with package/version counts and
-  sync date.  Fails safely — the local file is not overwritten if the download fails.
-- **REG.4** — `loft registry check`: scans `~/.loft/lib/*/loft.toml` to collect installed
-  (name, version) pairs; reads the local registry; classifies each as yanked / deprecated /
-  outdated / current / unknown; prints a formatted report; exits 1 if any installed package
-  is yanked (for CI use).  Also adds `loft registry list [--installed]` for browsing.
-  Warns if the local registry file is older than 7 days without exiting non-zero.
-
----
-
----
-
----
-
-### Version 0.9.0 — Production-ready standalone executable (planned)
-
-Goal: every planned language feature is present and the interpreter ships pre-built.
-Interpreter correctness and native codegen are handled by 0.8.2; new syntax by 0.8.3;
-HTTP and JSON by 0.8.4; this milestone completes runtime infrastructure and tooling,
-and moves the bundled libraries to independent GitHub repositories so they are
-distributed through the registry rather than the interpreter source tree.
-
-**Library extraction (LIB.1–LIB.4):**
-- **LIB.1** — GitHub Actions release workflow template: a reusable workflow file that,
-  on a version tag push (`v*`), packages `src/`, `loft.toml`, `tests/`, `README.md`,
-  and `LICENSE` as `<name>-<version>.zip`, attaches it to a GitHub Release, and prints
-  the download URL.  Designed once; copied into each library repository.
-- **LIB.2** — Migrate `lib/graphics/` to a new `jjstwerff/loft-graphics` GitHub
-  repository (or `loft-lang/loft-graphics` if the org exists by then).  Tag `v0.1.0`,
-  trigger the LIB.1 workflow to produce the release zip, add the entry to the central
-  registry.  Remove `lib/graphics/` from the main `loft` repository; update any
-  in-repo test scripts that referenced it to use `loft install graphics` instead.
-- **LIB.3** — Same migration for `lib/shapes/` → `jjstwerff/loft-shapes`.  Shapes
-  depends on graphics, so LIB.2 must land first.
-- **LIB.4** — Add both packages to the central registry file and cut the first
-  `loft registry sync` that includes them.  Verify with `loft install graphics` and
-  `loft install shapes` on a clean machine.
-
-**Language completeness:**
-- **L1** — Error recovery: a single bad token must not cascade into dozens of spurious errors.
-- **P2** — REPL / interactive mode: `loft` with no arguments enters a persistent session.
-
-**Parallel execution completeness:**
-- **A1** — Moved to 0.8.2 (see remaining work above).
-
-**Logging completeness:**
-- **A2** — Logger remaining work: hot-reload wiring, `is_production()`/`is_debug()`, `--release` assert elision, `--debug` per-type safety logging.
-
-**Deferred from 0.9.0:**
-- O1 (superinstruction merging) — Deferred indefinitely; the opcode table is full (254/256 used) and adding superinstructions requires an opcode-space redesign first.
-- A12 (lazy work-variable init) — Too complex and disruptive; also blocked by Issues 68–70; deferred to 1.1+.
-- A5 (closure capture) — Depends on P1; very high effort; 1.1+.
-- A7 (native extension libraries) — Moved to 0.9.0.
-
----
-
-### Version 1.0.0 — Complete IDE + stability contract (planned)
-
-Goal: a fully working, friendly IDE that lets users write and run loft programs in a
-browser without installing anything, paired with a stable, feature-complete interpreter.
-
-The **stability contract** — any program valid on 1.0.0 compiles and runs identically on
-any 1.0.x or 1.x.0 release — covers both the language surface and the public IDE API.
-Full gate criteria in [RELEASE.md](RELEASE.md).
-
-**Prerequisites:**
-- **R1** — Workspace split into `loft-core` + `loft-cli` + `loft-gendoc` (enables the `cdylib` WASM target without affecting the CLI binary).
-
-**Web IDE (W1–W6):**
-- **W1** — WASM foundation: compile interpreter to WASM, expose typed JS API.
-- **W2** — Editor shell: CodeMirror 6 with Loft grammar, diagnostics, toolbar.
-- **W3** — Symbol navigation: go-to-definition, find-usages, outline panel.
-- **W4** — Multi-file projects: IndexedDB persistence, tab bar, `use` auto-complete.
-- **W5** — Documentation and examples browser: embedded HTML docs + one-click example projects.
-- **W6** — Export/import ZIP + PWA: offline support, URL sharing, drag-and-drop import.
-
-**Stability gate (same as RELEASE.md §§ 1–9):**
-- All INCONSISTENCIES.md entries addressed or documented as accepted behaviour.
-- Full documentation review; pre-built binaries for all four platforms; crates.io publish.
-
-**Deferred to 1.1+:**
-A5, A7, Tier N (native codegen), C57.
-
----
+Per-version scoping (which tickets land in 0.8.4 / 0.8.5 / 0.8.6 / 0.9.0 / 1.0.0)
+is authoritative in [ROADMAP.md](ROADMAP.md).  The full ticket text (L/I/A/S/N/H/R/W
+tier entries below) is the source this document owns; ROADMAP.md references it by ID.
 
 ### Version 1.x — Minor releases (additive)
 
@@ -497,13 +375,6 @@ value.  Each is small but needs per-construct target lists.
 
 ---
 
----
-
----
-
----
-
----
 
 **Severity:** Low–Medium — a REPL dramatically reduces iteration time when exploring data
 or testing small snippets
@@ -549,11 +420,6 @@ left at the last successful checkpoint.
 
 ---
 
----
-
----
-
----
 
 ### T1  Tuple types
 **Sources:** TUPLES.md
@@ -1085,7 +951,6 @@ integer/long overflow, shift out-of-range, null field dereference, vector OOB.
 
 ---
 
----
 
 ### A8  Slicing & comprehension on `sorted` / `index`
 **Sources:** [SORTED_SLICE.md](SORTED_SLICE.md)
@@ -1659,17 +1524,6 @@ green.
 
 ---
 
----
-
----
-
----
-
----
-
----
-
----
 
 ### L9  Format specifier / type mismatch — escalate to compile error
 **Status: completed**
@@ -1766,11 +1620,6 @@ unconditionally (Issue 69 fix landed).
 
 ---
 
----
-
----
-
----
 
 ### TR1  Stack trace introspection
 **Sources:** STACKTRACE.md
@@ -2505,9 +2354,6 @@ In `output_call`, when emitting a call from a pure context to a pure callee, emi
 
 ---
 
----
-
----
 
 ## H — HTTP / Web Services
 
@@ -2897,7 +2743,6 @@ once.  Full design in [WEB_IDE.md](WEB_IDE.md).
 
 ---
 
----
 
 ### W2  Editor Shell
 **Sources:** [WEB_IDE.md](WEB_IDE.md) — M2

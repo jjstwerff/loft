@@ -1269,10 +1269,10 @@ mod tests {
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
-    // ── P122: parent-scope zone2 variables must not overlap child-scope zone1 ──
+    // ── Parent-scope zone2 variables must not overlap child-scope zone1 ──
 
     /// When a parent scope has many zone2 reference variables (like __lift_N temps
-    /// from P135 inline struct arg lifting), a late-placed reference variable in
+    /// from inline struct arg lifting), a late-placed reference variable in
     /// the parent (like `r`) occupies slots right before the child scope's frame_base.
     /// The child scope's zone1 variables must not overlap the parent's zone2 range.
     ///
@@ -1321,7 +1321,7 @@ mod tests {
         );
     }
 
-    // ── P122: coroutine Set(gen, Call(fn, [Block])) ──
+    // ── coroutine Set(gen, Call(fn, [Block])) ──
     //
     // Codegen evaluates Call arguments before placing the result.
     // Set(gen, Call(fn, [Block(scope=5, [Set(vec, ...)])])):
@@ -1575,9 +1575,9 @@ mod tests {
         );
     }
 
-    // ── P122/P135: Set(v, Insert([Set(__lift_1, ...), ..., Call(...)]))
+    // ── Set(v, Insert([Set(__lift_1, ...), ..., Call(...)]))
     //
-    // The P135 lift produces Insert nodes containing preamble Sets for
+    // The inline-struct-arg lift produces Insert nodes containing preamble Sets for
     // __lift_N temporaries followed by the actual Call.  Codegen evaluates
     // the Insert sequentially — the __lift Sets advance TOS before the
     // Call result is assigned to v.  assign_slots must place __lift vars
@@ -1655,7 +1655,7 @@ mod tests {
         assert!(find_conflict(&f.variables, &HashMap::new()).is_none());
     }
 
-    // ── P122: sequential Set(v, Insert([Set(__lift, ...), Call(fn, __lift)])) ──
+    // ── sequential Set(v, Insert([Set(__lift, ...), Call(fn, __lift)])) ──
     //
     // From mat4_look_at: two sequential assignments where each has a lifted
     // inline arg. The key constraint: codegen encounters Set(f, Insert(...))

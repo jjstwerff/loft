@@ -189,7 +189,7 @@ impl Stores {
     /// Returns `None` on success, or `Some(error_path)` on failure.
     /// The error path is a human-readable string like `"line 1:15 path:items[2].name"`.
     ///
-    /// P54-U phase 2: routes through the unified
+    /// routes through the unified
     /// `crate::json::parse_with(text, Dialect::Lenient)` + the
     /// schema-driven [`Stores::walk_parsed_into`] walker.  On
     /// unified-path failure (syntax error OR schema/shape
@@ -242,12 +242,10 @@ impl Stores {
     */
     #[must_use]
     pub fn os_arguments(&mut self) -> DbRef {
-        // P168: always return the curated script-level args.  The old
-        // `fallback to std::env::args_os()` leaked the binary path +
-        // loft CLI flags when `user_args` was empty (i.e. when the
-        // script was invoked with no arguments) — P131's filter only
-        // ran through the `user_args` path.  `user_args` is the
-        // authoritative list; an empty one is a correct result.
+        // `user_args` is the authoritative curated list of
+        // script-level args; an empty one is a correct result.  We
+        // never fall back to `std::env::args_os()`, which would leak
+        // the binary path + loft CLI flags.
         let args = self.user_args.clone();
         self.text_vector(&args)
     }
@@ -518,7 +516,7 @@ impl ShowDb<'_> {
                     self.write_struct(s, st, indent);
                 }
                 Parts::EnumValue(_, st) => {
-                    // P159: wrap struct-enum variant in a discriminant
+                    // wrap struct-enum variant in a discriminant
                     // object so JSON round-trip can identify the variant.
                     // Output: {"VariantName":{fields}} in JSON mode.
                     if self.json {

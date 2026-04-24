@@ -590,7 +590,7 @@ use a separate collection or add after the loop"
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
-        // P152: vector-typed field whole-replacement.
+        // vector-typed field whole-replacement.
         // `s.v = fresh` (RHS is a vector variable/expr) used to silently drop
         // the assignment because towards_set's vector branch returned bare
         // `val`.  `s.v = []` likewise leaked through to the Insert bypass at
@@ -623,7 +623,7 @@ use a separate collection or add after the loop"
                 && rhs_is_vector
                 && let Type::Vector(elm_tp, _) = f_type
             {
-                // P154 self-identity guard: `s.v = s.v` is a no-op; don't
+                // `s.v = s.v` is a no-op; don't
                 // emit a clear (which would wipe the field) + append (which
                 // would then see an empty source).
                 if *code == *to {
@@ -633,7 +633,7 @@ use a separate collection or add after the loop"
                 let elm_tp_clone = (**elm_tp).clone();
                 let dn = self.data.type_def_nr(&elm_tp_clone);
                 let rec_tp = Value::Int(i32::from(self.data.def(dn).known_type));
-                // P154: when the RHS is anything other than a plain Var read
+                // when the RHS is anything other than a plain Var read
                 // it may alias the destination (e.g.
                 // `s.v = pop_tail(s.v, 1)` where the helper reads the
                 // destination).  The OpClearVector that follows would wipe
@@ -693,7 +693,7 @@ use a separate collection or add after the loop"
             *code = Value::Insert(ls);
             return Type::Void;
         }
-        // P180: route the RHS of a simple assignment through `convert()`
+        // route the RHS of a simple assignment through `convert()`
         // so it picks up the same widening-with-explicit-narrowing policy
         // the constructor path (`handle_field`) and return-type path
         // (`parse_return`) already use.  `convert()` wraps `code` with an

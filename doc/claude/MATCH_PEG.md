@@ -4,8 +4,9 @@
 
 # PEG-Style Match Patterns with Anchor-Revert Captures (L3)
 
-> **Status: design draft.**  Extends [MATCH.md](MATCH.md) with sequence
-> patterns, alternation, optionals, repetition, and multi-variable capture.
+> **Status: design draft.**  Extends the base match syntax
+> ([LOFT.md](LOFT.md) § Match expressions) with sequence patterns,
+> alternation, optionals, repetition, and multi-variable capture.
 > Backtracking is modelled on the existing `Lexer::link()` / `revert()`
 > anchor mechanic so a partially-matched branch can be cleanly undone.
 
@@ -458,7 +459,7 @@ one revert per loop exit.
 
 | Existing feature                    | Interaction                                                                 |
 |------------------------------------|------------------------------------------------------------------------------|
-| L2 nested enum patterns (MATCH.md) | Required prerequisite — sub-patterns inside seq must already work on fields.|
+| L2 nested enum patterns            | Required prerequisite — sub-patterns inside seq must already work on fields. See PLANNING.md § L2. |
 | Slice/vector patterns              | L3 sequence *is* the generalised slice pattern; `[a, b, ...rest]` compiles identically. |
 | Tuple destructure ([TUPLES.md](TUPLES.md)) | Tuples are a fixed-arity sequence — a degenerate L3.1 case.                |
 | Guards (`if` on arm)               | Guard runs *after* L3 captures are committed; failure is not revertable.   |
@@ -575,11 +576,11 @@ memo buffer.  Worth revisiting once L3.6 is on the critical path.
 
 ## See also
 
-- [MATCH.md](MATCH.md) — base match semantics and L2 nested patterns.
+- [LOFT.md](LOFT.md) § Match expressions — base match syntax reference.
 - [REGEX.md](REGEX.md) — standalone regex library for rich text matching;
   the intentional complement to this PEG extension.
-- [LOFT.md](LOFT.md) — match syntax reference.
 - [TUPLES.md](TUPLES.md) — fixed-arity sequence captures.
+- [PLANNING.md](PLANNING.md) — L2 nested-pattern backlog (prerequisite).
 - [COROUTINE.md](COROUTINE.md) — iterator-valued inputs (L3.6).
 - [LAZY_STDLIB.md](LAZY_STDLIB.md) — lazy-loading mechanism (regex is its
   first consumer).

@@ -177,7 +177,7 @@ impl Stores {
         let append_pos = new_db.pos;
         // Claim more than 1 record if needed for the actual copy.
         self.vector_set_size(db, o_length, size);
-        // P153: `vector_set_size` may have relocated the destination record.
+        // `vector_set_size` may have relocated the destination record.
         // `new_db.rec` captured from `vector_append` is stale after relocation;
         // re-read the current rec from the field slot (which `vector_set_size`
         // keeps up to date) before we use it for the byte copy.  Element
@@ -255,7 +255,7 @@ impl Stores {
             let new_vec = store.resize(vec_rec, ((length + adding) * size + 15) / 8);
             if new_vec != vec_rec {
                 store.set_u32_raw(db.rec, db.pos, new_vec);
-                // P153: track the relocation so the length write below lands
+                // track the relocation so the length write below lands
                 // in the current record instead of the freed one.
                 vec_rec = new_vec;
             }
@@ -263,7 +263,7 @@ impl Stores {
         store.set_u32_raw(vec_rec, 4, length + adding);
     }
 
-    /// P54-U phase 2: walk a [`crate::json::Parsed`] tree into
+    /// walk a [`crate::json::Parsed`] tree into
     /// the record at `to`, dispatching on the target type's
     /// [`Parts`] variant.  Returns `true` on success, `false`
     /// on a shape/type mismatch that can't be recovered.
@@ -273,7 +273,7 @@ impl Stores {
     /// parser stays schema-free; all type dispatch lives here.
     /// Replaces the hand-rolled `parsing` scanner in the
     /// legacy `text → struct` path (still kept for the
-    /// transition; see § P54-U in doc/claude/QUALITY.md).
+    /// transition).
     #[allow(clippy::ptr_arg)] // path needs push/pop, slice not enough
     pub(super) fn walk_parsed_into(
         &mut self,

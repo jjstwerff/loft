@@ -497,7 +497,7 @@ impl State {
         let true_stack = stack.position;
         if *f_val == Value::Null {
             self.code_put(code_step, (self.code_pos - true_pos) as i16); // actual step
-            // P136: when the true branch diverges (return/break/continue, possibly
+            // when the true branch diverges (return/break/continue, possibly
             // wrapped by scopes.rs in Insert/Block), execution only reaches the
             // join point via the goto-false path — where runtime stack_pos equals
             // the pre-if `stack_pos`, not `true_stack`. Without this reset, every
@@ -1048,7 +1048,7 @@ impl State {
                         .iter()
                         .any(|a| a.hidden && a.typedef.heap_dep().is_some());
                     let copy_nr = stack.data.def_nr("OpCopyRecord");
-                    // P181: same gate as `gen_set_first_ref_call_copy`.
+                    // same gate as `gen_set_first_ref_call_copy`.
                     // A borrowed-view return (non-empty dep chain) must
                     // NOT have its source freed — the "source" is a slice
                     // of the caller-owned arg's store.
@@ -1062,14 +1062,14 @@ impl State {
                         copy_nr,
                         vec![value.clone(), Value::Var(v), Value::Int(tp_val)],
                     );
-                    // P155: bracket the call + deep-copy with n_set_store_lock
+                    // bracket the call + deep-copy with n_set_store_lock
                     // on every Ref/Vector/Enum arg (like gen_set_first_ref_call_copy
                     // already does for first-assignments).  Without this, when the
                     // callee returns a DbRef aliased with a caller arg, OpCopyRecord's
                     // 0x8000 free-source flag frees the caller's arg store — later
                     // uses of that arg SIGSEGV in OpGetVector.  The first-assignment
-                    // path hit this bug too until the P143 fix added the bracket;
-                    // the reassignment path needed the same treatment.
+                    // path brackets the call with locks on ref-typed args;
+                    // the reassignment path needs the same treatment.
                     let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value {
                         let attrs = stack.data.def(*fn_nr).attributes.clone();
                         args.iter()
@@ -1192,7 +1192,7 @@ impl State {
             if has_ref_params {
                 self.gen_set_first_ref_call_copy(stack, v, value, d_nr);
             } else {
-                // P150: runtime tolerates double-free as a no-op so leaving
+                // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
                 // scope exit is safe in both adoption and orphan cases.
                 // Plan-04 Phase B.3 atomic bundle: the callee's returned
@@ -1449,12 +1449,12 @@ impl State {
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.
     ///
-    /// Sets the `0x8000` "free source" bit on `OpCopyRecord` (issue #120 —
-    /// prevents callee store leak), but FIRST locks every ref-typed
+    /// Sets the `0x8000` "free source" bit on `OpCopyRecord` so the
+    /// callee store is released, but FIRST locks every ref-typed
     /// argument of the call, then unlocks them after the copy.  The
-    /// existing `OpCopyRecord` code at `src/state/io.rs:1001` skips the
-    /// source-free when the source store is `locked`, so an early-return
-    /// that aliased one of the args (P143:
+    /// `OpCopyRecord` code at `src/state/io.rs:1001` skips the
+    /// source-free when the source store is `locked`, so an
+    /// early-return that aliases one of the args (e.g.
     /// `return arg.field[i]` inside `for ... in arg.collection { ... }`)
     /// does not free part of the caller's argument.  Args that were
     /// already locked at function entry (const params) get a no-op lock
@@ -1464,7 +1464,7 @@ impl State {
         let tp_nr = stack.data.def(d_nr).known_type;
         // Plan-04 Phase B.3.e: slot-aware init + allocate.  The
         // subsequent `n_set_store_lock(…)` calls between the
-        // allocator and the `OpCopyRecord` (P143 bracket) are void
+        // allocator and the `OpCopyRecord` are void
         // and leave `stack.position` unchanged, so `slot_offset`
         // computed here stays valid across them.
         let ref_size = size_of::<crate::keys::DbRef>() as u16;
@@ -1516,7 +1516,7 @@ impl State {
         // Disabled under WASM: frame yield/resume creates store aliases that rc
         // alone cannot track yet; freeing causes "Allocating a used store" panics.
         //
-        // P181: also clear the flag when the callee returns a BORROWED view
+        // also clear the flag when the callee returns a BORROWED view
         // (its return type carries a `dep` chain naming one of its args).
         // In that case the "source" of the CopyRecord is a slice of the
         // arg's store; freeing it would corrupt the caller.  Return-dep
@@ -1768,7 +1768,7 @@ impl State {
             return Type::Boolean;
         }
         // resolve library index — prefer #native symbol, fall back to def name.
-        // P145: only use the library_names fallback for functions without a user-
+        // only use the library_names fallback for functions without a user-
         // defined body.  A user function whose `n_<name>` collides with a native
         // stdlib name (e.g. user `to_json` vs native `n_to_json` for JsonValue)
         // must go through OpCall, not OpStaticCall.
@@ -1808,7 +1808,7 @@ impl State {
                 let dep_offset = stack.position - stack.function.stack(*wv);
                 self.emit_push_create_stack(stack, dep_offset);
             } else {
-                // P160: OpCreateStack with a non-Var expression (e.g.
+                // OpCreateStack with a non-Var expression (e.g.
                 // OpGetVector result).  Generate the expression to push
                 // a 12-byte DbRef, then point OpInitCreateStack at it.
                 self.generate(&parameters[0], stack, false);

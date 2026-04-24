@@ -570,7 +570,7 @@ impl Output<'_> {
                     if let Some(vr) = self.create_stack_var(val) {
                         let vname = sanitize(self.data.def(self.def_nr).variables.name(vr));
                         write!(w, "&mut var_{vname}")?;
-                    // P160: OpCreateStack wrapping an addressable expression.
+                    // OpCreateStack wrapping an addressable expression.
                     } else if let Value::Call(d_nr, args) = val
                         && self.data.def(*d_nr).name == "OpCreateStack"
                         && args.len() == 1
@@ -586,13 +586,13 @@ impl Output<'_> {
                             Type::RefVar(_)
                         )
                     {
-                        // P144/P157: forwarding a & parameter to another &
-                        // parameter.  The variable is already &mut DbRef —
-                        // pass it directly instead of dereferencing with
-                        // *var_name.  Mirrors the check in
-                        // `calls.rs::output_call_user_fn`; the pre-eval path
-                        // re-emits calls structurally and needs the same
-                        // handling.
+                        // Forwarding a & parameter to another & parameter.
+                        // The variable is already &mut DbRef — pass it
+                        // directly instead of dereferencing with *var_name.
+                        // Mirrors the check in
+                        // `calls.rs::output_call_user_fn`; the pre-eval
+                        // path re-emits calls structurally and needs the
+                        // same handling.
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*nr));
                         write!(w, "var_{name}")?;
                     } else {
