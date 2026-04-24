@@ -10067,3 +10067,68 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P187 — struct scalar fields read as corrupt after a later vector
+/// allocation in a sibling function.
+///
+/// Surface symptom (Brick Buster):
+///   `graphics::create_sprite_sheet(atlas, 4, 5, graphics::painter_vao(p))`
+///   receives `atlas` with `width=null`, `height=null`, `data.len=0`,
+///   even though the caller just printed the same struct with correct
+///   values (width=128, height=160, data.len=20480).  `gl_upload_canvas`
+///   sees `w=0, h=0, count=1` and bails.  The entire title / HUD / text
+///   rendering disappears.
+///
+/// Irreducible core (this test):
+///   1. A builder returns a struct whose `vector<T>` field was
+///      populated via a for-comprehension (`result.data = [for _ in ..]`).
+///   2. A mutator method on that returned struct is called inside the
+///      builder before `return`.
+///   3. A subsequent sibling function allocates a local vector of its
+///      own (any element type).
+///   After those three things, `atlas.width` — a scalar field set at
+///   struct-literal time — reads as a corrupt value.
+///
+/// Drop any of the three and the bug disappears: no comprehension,
+/// no mutator call, or no post-return vector allocation → correct read.
+///
+/// Likely root cause: P184's narrow collection storage interacting
+/// with store reallocation triggered by the later vector literal.
+/// The returned struct's record is relocated but the caller's local
+/// still references the old (stale) address, so the width read walks
+/// into unrelated bytes.  See `doc/claude/PROBLEMS.md` § P187.
+#[test]
+fn p187_struct_scalar_field_corrupted_after_sibling_vector_alloc() {
+    code!(
+        "struct P187Canvas {
+    width: integer not null,
+    height: integer not null,
+    data: vector<integer>
+}
+fn p187_canvas() -> P187Canvas {
+    result = P187Canvas { width: 128, height: 160 };
+    result.data = [for _ in 0..10 { 0 }];
+    result
+}
+fn touch(self: P187Canvas) {
+    self.data[0] = 42;
+}
+fn p187_build() -> P187Canvas {
+    at = p187_canvas();
+    at.touch();
+    at
+}
+fn p187_alloc_local_vec() -> integer {
+    a = [0.0f, 0.0f];
+    a.len()
+}
+fn test() {
+    atlas = p187_build();
+    _unused = p187_alloc_local_vec();
+    assert(atlas.width == 128, \"width={atlas.width}, expected 128\");
+    assert(atlas.height == 160, \"height={atlas.height}, expected 160\");
+    assert(atlas.data.len() == 10, \"data.len={atlas.data.len()}, expected 10\");
+}"
+    )
+    .result(Value::Null);
+}

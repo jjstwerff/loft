@@ -40,7 +40,7 @@ mkdir -p /tmp/loft_gl_snapshots tests/golden
 
 failed=0
 total=0
-while IFS=$'\t' read -r loft_rel golden_rel wait_s window_re geometry key_script; do
+while IFS=$'\t' read -r loft_rel golden_rel wait_s window_re geometry key_script env_vars; do
   # Skip blank / comment lines.
   case "$loft_rel" in ''|\#*) continue ;; esac
 
@@ -61,7 +61,7 @@ while IFS=$'\t' read -r loft_rel golden_rel wait_s window_re geometry key_script
   # Capture under Xvfb.
   if ! xvfb-run -a -s "-screen 0 $geometry" \
       tests/scripts/snap_example.sh \
-      "$loft_path" "$captured" "$wait_s" "$window_re" "${key_script:-}" \
+      "$loft_path" "$captured" "$wait_s" "$window_re" "${key_script:-}" "${env_vars:-}" \
       >/tmp/loft_gl_snap_last.log 2>&1; then
     echo "FAIL (snap)"
     cat /tmp/loft_gl_snap_last.log >&2

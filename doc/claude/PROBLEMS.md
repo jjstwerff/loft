@@ -30,6 +30,7 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
+| ~~P187~~ | Struct scalar fields read as corrupt after a sibling function allocates a local vector — when a builder adopted a `__ref_*` placeholder via a `has_ref_params == false` user-fn call, the placeholder's `OpFreeRef` at scope exit released the *shared* store before the caller read the returned value, then a subsequent local-vector allocation reused the freed store. | — | **Fixed 2026-04-24** by introducing the runtime-conditional `OpFreeRefIfDistinct(placeholder, witness)` opcode (default/01_code.loft + src/fill.rs + src/codegen_runtime.rs + src/generation/dispatch.rs).  `scopes.rs::scan_set` records `__ref_N → witness` pairings whenever a `has_ref_params == false` call's Reference result is assigned to a same-or-outer-scope variable, and `get_free_vars` emits `OpFreeRefIfDistinct` instead of plain `OpFreeRef` for those work-refs.  At runtime the store-nr comparison settles adoption (skip — let the witness's free release the shared store) vs. fresh-store (free — orphaned placeholder reclaimed).  Tests: `tests/issues.rs::p187_struct_scalar_field_corrupted_after_sibling_vector_alloc` (un-`#[ignore]`'d).  P150's leak guard (`tests/leak.rs::p150_moros_map_serial_leak`) stays green. |
 | ~~22~~ | `spacial<T>` diagnostic wording | — | **Done** — message now says "planned for 1.1+; until then use sorted<T> or index<T>" |
 | ~~54~~ | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | — | **Fixed 2026-04-14.**  First-class `JsonValue` enum shipped (`default/06_json.loft`); `json_parse` is the single entry; `MyStruct.parse(JsonValue)` runs the unified schema walker (`n_struct_from_jsonvalue`) with Q1 inline type-mismatch diagnostics; `to_json` / `to_json_pretty` canonical + pretty serialisers; all six `JsonValue` constructors (`json_null` / `json_bool` / `json_number` / `json_string` / `json_array` / `json_object`); free-form iteration (`kind` / `has_field` / `keys` / `fields`).  39+ acceptance tests green in `tests/issues.rs::p54_*`.  Remaining follow-up is feature-shape only: `T.to_json()` struct-method codegen (Q3 struct half — mirrors step-5 walker) and the P54-U Phase 3 legacy-scanner deletion.  See QUALITY.md § P54. |
 | ~~184~~ | `vector<i32>` / `hash<i32>` / `sorted<i32>` / `index<i32>` ignore the `size(4)` annotation — narrow integer aliases stored + read as 8 bytes | — | **Fixed 2026-04-22** by plan-02 (`finished/02-narrow-collection-elements/`) via the Option L-minimal design after two earlier attempts uncovered a pre-existing `narrow_int_cast` bug in iter-next blocks (Bug α).  Narrow aliases now honour `Parts::{Byte, Short, Int}` pack density through storage, read, append, insert, and return paths.  See CHANGELOG.md § "Integer → i64 migration" for the user-visible shape. |
@@ -1278,6 +1279,167 @@ expressions) stays in the condition since reading the enum byte is
 always safe.  Field reads now only execute when the variant matches.
 
 **Discovered:** 2026-04-17, while converting `#fields` iteration tests.
+
+---
+
+### ~~P187~~ — struct scalar fields read as corrupt after a sibling vector allocation — FIXED
+
+**Status:** fixed (2026-04-24).
+
+**Fix:** New runtime-conditional opcode `OpFreeRefIfDistinct(placeholder,
+witness)` (declared in `default/01_code.loft`, generated into
+`src/fill.rs`, native equivalent in `src/codegen_runtime.rs`, native
+emission in `src/generation/dispatch.rs`).  At runtime it frees
+`placeholder` only when `placeholder.store_nr != witness.store_nr`.
+
+`src/scopes.rs::scan_set` records `__ref_N → witness` whenever a
+`has_ref_params == false` call's Reference result is assigned to a
+same-or-outer-scope variable; `get_free_vars` emits the conditional op
+in place of plain `OpFreeRef` for those work-refs.  Per execution
+path:
+
+- **adoption** (callee returned the same DbRef it received):
+  store_nrs match → no-op; the witness's own `OpFreeRef` in the
+  caller's scope releases the shared store once.
+- **fresh-store** (callee allocated its own and ignored the
+  placeholder): store_nrs differ → orphaned placeholder is freed.
+
+The scope check (`var_scope[witness] <= var_scope[__ref_N]`) skips
+pairings where the witness lives in an inner block — its Rust local
+would be out of scope by the time the placeholder is freed (e.g.
+`f = file(name, __ref_1)` inside a nested `{}` block — `f` dies
+first; `__ref_1` is freed at function exit and falls back to plain
+`OpFreeRef`).
+
+Tests: `tests/issues.rs::p187_struct_scalar_field_corrupted_after_sibling_vector_alloc`
+(un-`#[ignore]`'d).  `tests/leak.rs::p150_moros_map_serial_leak` and
+the `--native` script suite (which exercises the inner-scope-witness
+path) stay green.
+
+**Original symptom (kept for context):**
+
+**Severity:** high — silent data corruption.  No compile error, no panic.
+The program runs to completion and reads a "plausible" but wrong integer
+from a struct field.
+
+**Symptom (surface, Brick Buster):**
+
+`graphics::create_sprite_sheet(atlas, 4, 5, graphics::painter_vao(p))`
+receives `atlas` with `width=null, height=null, data.len=0`, even though
+the caller (BB `main`) just printed the same struct one line earlier
+with correct values `width=128, height=160, data.len=20480`.
+`gl_upload_canvas` then fails the `w == 0 || h == 0` early-return, the
+atlas texture never uploads, and the entire title / HUD / paddle /
+ball rendering disappears in the captured frame.
+
+**Minimal reproducer** (pure language; no `graphics` import needed):
+
+```loft
+struct Canvas {
+  width: integer not null,
+  height: integer not null,
+  data: vector<integer>
+}
+
+fn canvas() -> Canvas {
+  result = Canvas { width: 128, height: 160 };
+  result.data = [for _ in 0..10 { 0 }];   // (A) comprehension assignment
+  result
+}
+
+fn touch(self: Canvas) {
+  self.data[0] = 42;                      // (B) mutator call on returned struct
+}
+
+fn build_atlas() -> Canvas {
+  at = canvas();
+  at.touch();
+  at
+}
+
+fn alloc_local_vec() -> integer {
+  a = [0.0f, 0.0f];                       // (C) any post-return vector literal
+  a.len()
+}
+
+fn main() {
+  atlas = build_atlas();
+  _unused = alloc_local_vec();
+  println("atlas.width={atlas.width}");   // prints 5 (expected 128)
+}
+```
+
+**Minimal trigger — all three required:**
+
+1. The returned struct's `vector<T>` field was populated via a
+   for-comprehension (`result.data = [for _ in 0..N { ... }]`, any `N`).
+2. A mutator method (`self: Canvas` signature) was called on the struct
+   inside the builder **before** the return.
+3. A subsequent sibling function allocates a local vector of any kind
+   (including a tiny `[0.0f, 0.0f]`).
+
+Drop any one — construct the vector field inline at struct-literal
+time, skip the `at.touch()` call, or don't call the sibling function
+— and the bug disappears.
+
+**Observed behaviour under (A)+(B)+(C):**
+
+- `atlas.width` reads `5` or `0` (depends on allocator state) instead
+  of `128`.
+- `atlas.height` sometimes stays correct, sometimes reads `null`.
+- `atlas.data.len()` varies similarly.
+
+**Likely root cause:** store reallocation triggered by the later
+vector literal moves the canvas record, but the caller's local
+reference to `atlas` still points at the old (stale) address — the
+read walks into unrelated bytes.  Likely in the same family as the
+P120 / P150-153 store-lifecycle class, but none of those exact fixes
+cover this particular "builder + mutator + sibling alloc" pattern.
+
+**Hypothesis — narrow field layout interaction:** post-P184, the
+`width: integer` field occupies 8 bytes.  The builder's return slot
+might be being reused for the sibling function's local vector, which
+overwrites the width region.  Needs `LOFT_LOG=minimal` + slot
+annotation to confirm.
+
+**Workarounds:**
+
+1. **Inline the builder** at the call site — don't package it as a
+   separate function that does both comprehension-populate AND
+   mutator-call.
+2. **Drop the mutator call** from the builder — do the set_pixel /
+   fill_rect work at the call site after receiving the built canvas.
+3. **Rearrange call order** — allocate every local vector in
+   sibling helpers *before* the build_atlas() call.
+
+**Fix path (not yet implemented):**
+
+- Extend the test harness around P150-series leak tests with a
+  struct-field-read guard that catches the corruption before it
+  silently propagates.
+- Investigate `src/scopes.rs::get_free_vars` and the call-site
+  OpFreeRef emission for builder returns — the store holding
+  `atlas` is probably getting marked freeable after the build_atlas
+  call returns, even though the caller still references it.
+- The Brick Buster snapshot test (`tests/golden/25-brick-buster-*.png`)
+  becomes green once this is fixed (atlas texture uploads correctly,
+  title + HUD + paddle render as before).
+
+**Tests:** `tests/issues.rs::p187_struct_scalar_field_corrupted_after_sibling_vector_alloc`
+(currently `#[ignore]`'d with the message
+`"P187 — tracked, fix pending; un-ignore when resolved"`).  The
+reproducer above is the exact body; un-ignore when fixed.
+
+**Downstream effects:**
+
+- Brick Buster title, HUD, text labels, paddle, ball all invisible
+  in `tests/golden/25-brick-buster-*.png` captures on develop3.
+- The six BB golden PNGs are **stale** — last matched on
+  2026-04-12 (commit `f2130bc`).  Regenerate only after P187 is
+  fixed; otherwise the new goldens lock in a broken render.
+
+**Discovered:** 2026-04-23, while validating the Brick Buster golden
+snapshots against the current `develop3` HEAD.
 
 ---
 

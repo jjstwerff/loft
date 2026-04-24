@@ -498,6 +498,36 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
+            "OpFreeRefIfDistinct" => {
+                // P187: free the placeholder only when its store_nr
+                // differs from the witness's.  Emit:
+                //   if ph.store_nr != wit.store_nr { OpFreeRef(stores, ph, "ph"); ph.store_nr = u16::MAX }
+                // so the fresh-store path still reclaims the orphan
+                // and the adoption path leaves both slots alone until
+                // the caller's OpFreeRef on the witness fires.
+                if let [ref ph_val, ref wit_val] = vals[..] {
+                    let ph_name = if let Value::Var(v) = ph_val {
+                        format!(
+                            "var_{}",
+                            sanitize(self.data.def(self.def_nr).variables.name(*v))
+                        )
+                    } else {
+                        String::new()
+                    };
+                    write!(w, "if ")?;
+                    self.output_code_inner(w, ph_val)?;
+                    write!(w, ".store_nr != ")?;
+                    self.output_code_inner(w, wit_val)?;
+                    write!(w, ".store_nr {{ OpFreeRef(stores, ")?;
+                    self.output_code_inner(w, ph_val)?;
+                    write!(w, ", \"{ph_name}\")")?;
+                    if let Value::Var(_) = ph_val {
+                        write!(w, "; {ph_name}.store_nr = u16::MAX")?;
+                    }
+                    write!(w, " }}")?;
+                }
+                return Ok(());
+            }
             "OpCopyRecord" => {
                 // Deep copy: copy_block + copy_claims
                 if let [ref src, ref dst, ref tp_val] = vals[..] {

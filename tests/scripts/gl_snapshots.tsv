@@ -25,6 +25,16 @@
 #                           `space@300;p@200` (send SPACE, wait 300ms,
 #                           send P, wait 200ms).  Use xdotool key names
 #                           (`space`, `Return`, `p`, `k`, `x`, etc.).
+#   7. env                  (optional) `;`-separated `KEY=VAL` pairs
+#                           exported before loft runs.  Use
+#                           `LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000`
+#                           to freeze the clocks for animation-driven
+#                           scenes.  Leave blank for examples that want
+#                           a real clock (e.g. Brick Buster's splash).
+#
+# Empty middle columns MUST be written as a literal `-` — `IFS=$'\t'`
+# collapses adjacent tabs and would otherwise drop the empty field and
+# shift every later column left.  Trailing empty columns may be omitted.
 #
 # Comment lines start with '#'; blank lines are ignored.
 #
@@ -40,3 +50,19 @@
 25-brick-buster.loft	25-brick-buster-powerups.png	1	rick Buster	800x600x24	space@500;u@400
 25-brick-buster.loft	25-brick-buster-explosion.png	1	rick Buster	800x600x24	space@500;x@600
 25-brick-buster.loft	25-brick-buster-gameover.png	1	rick Buster	800x600x24	space@500;k@400
+
+# PBR / lighting path — guards the renderer (render.loft) against silent
+# regressions in lighting, shadow mapping, and materials.  LOFT_FAKE_TICKS_US
+# freezes `ticks()` at 2.0 s so animation-driven scenes capture
+# deterministically across runs.
+12-multiple-lights.loft	12-multiple-lights.png	2	Multiple Lights	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000
+16-shadow-mapping.loft	16-shadow-mapping.png	2	Shadow Mapping	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000
+19-complete-scene.loft	19-complete-scene.png	2	Complete Scene	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000
+21-keyboard-camera.loft	21-keyboard-camera.png	2	Keyboard Camera	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000
+24-renderer-demo.loft	24-renderer-demo.png	2	Renderer Demo	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000
+
+# Import / texture-upload path — a regression guard for the rarely-exercised
+# Canvas -> GL texture upload and canvas-side text rasterisation.  The cube
+# carries a procedural checker pattern with "loft" stamped via draw_text,
+# uploaded through gl_upload_canvas, sampled via a hand-rolled shader.
+20-textured-cube.loft	20-textured-cube.png	2	Checker Cube	800x600x24	-	LOFT_FAKE_TICKS_US=2000000;LOFT_FAKE_NOW_MS=1700000000000

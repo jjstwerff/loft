@@ -35,9 +35,15 @@ comes after the single-player browser experience works.
 | Version | Headline                                       |
 |---------|------------------------------------------------|
 | 0.8.4   | **Awesome Brick Buster** — a game worth sharing    |
-| 0.8.5   | **Working Moros editor** — paint hex scenes in the browser |
-| 0.9.0   | **Fully working loft language** — feature-complete + verified |
+| 0.8.5   | **loft is learnable** — syntax highlighting, VS Code extension, 30-minute tutorial, native-CI parity |
+| 0.8.6   | **loft is extensible** — `loft install <name>` + package registry + zero-boilerplate native extensions |
+| 0.9.0   | **Fully working loft language** — REPL + error recovery + warnings + libraries extracted to their own repos |
 | 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract |
+
+**Demo applications** (Brick Buster, Moros editor, Web IDE, game-client / server
+libraries) ship on their own cadence — not gated by language releases.  See
+[Demo applications — independent lifecycles](#demo-applications--independent-lifecycles)
+at the end of this file for their backlogs.
 
 **Effort:** XS = Tiny · S = Small · M = Medium · MH = Med–High · H = High · VH = Very High
 
@@ -103,116 +109,110 @@ with idiomatic struct-based APIs.
 
 ---
 
-## 0.8.5 — Working Moros editor
+## 0.8.5 — loft is learnable
 
-**Goal:** the Moros hex RPG scene editor runs end-to-end in the browser:
-load a map, paint hexes, place walls and items, see a live 3D preview,
-export to GLB. Web only — multiplayer comes in 1.0.0.
+**Goal:** a first-time visitor can install loft, get syntax
+highlighting in their editor, work through a 30-minute tutorial,
+and see the native codegen regression-guarded before anything
+ships to main.  Closes the "on your own" wall newcomers hit today.
 
-Design: `../moros/doc/claude/`
+**Advertising narrative**: "loft is learnable" is the first of three
+advertising-readiness releases leading into 0.9.0.  0.8.6 adds
+extensibility (registry + zero-boilerplate FFI); 0.9.0 adds the
+complete language surface.  Each is a standalone ship with its own
+CHANGELOG entry — users don't have to wait for 0.9.0 to evaluate
+the progression.
 
-**Native editor (shipped, independent of this milestone):** a standalone
-OpenGL editor now also ships via
-`lib/graphics/examples/moros_editor.loft` and is packaged with
-`make editor-dist` into a self-contained `dist/moros-editor/` directory
-that runs without `loft` on the machine.  It provides fullscreen support
-(`gl_create_fullscreen_window`), scroll-wheel + expanded key codes,
-panel UI overlay, and `editor_click` routing.  See
-`doc/claude/plans/finished/03-native-moros-editor/README.md`.
+### Tooling polish
 
-### Must-fix blockers (share the Moros editor's code paths)
+| ID    | Title                                                  | E  | Design | Source           |
+|-------|--------------------------------------------------------|----|--------|------------------|
+| DX.4  | Native-mode parity in fast CI — promote `tests/native.rs` into the `cargo nextest run --profile ci` gate so every `tests/scripts/*.loft` runs under both `--interpret` AND `--native`.  Catches P143/P144/P157/P171/P180-class regressions pre-commit instead of mid-release. | S  | —      | this-session     |
+| SH.1  | TextMate grammar for `.loft` syntax highlighting       | S  | ✓      | DX.md            |
+| SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
+| DX.1  | Quick-start `examples/` directory at repo root — discoverable path for the scattered `lib/graphics/examples/*.loft`, brick-buster, moros-editor, house-scene canvas demo; each with a one-paragraph README. | XS | ✓      | DX.md            |
 
-All blockers cleared; Moros editor's loft-side libraries can ship
-under `--html` without browser-side wedges.
+### Narrative
 
-| ID    | Title                                                           | E  | Source                       |
-|-------|-----------------------------------------------------------------|----|------------------------------|
-| ~~P137~~ | ~~`loft --html` browser WASM wedges on first `loft_start`~~ | — | **Done** — `Instant::now()` guard switched from `feature = "wasm"` to `target_arch = "wasm32"`; `host_time_now()` returns 0 on wasm32-without-wasm-feature; `n_ticks` gated identically.  Verified by `tests/html_wasm.rs` (5 regression guards). |
-| ~~P135~~ | ~~Canvas Y-flip three-way compensation~~ | S | **Done** — upload flip removed + TEX_VERT_2D samples identity V; 2×2 atlas corner guard in `snap_smoke.sh`. Canonical convention locked in OPENGL.md |
+| ID    | Title                                                  | E  | Design | Source           |
+|-------|--------------------------------------------------------|----|--------|------------------|
+| DX.3  | "Learn loft in 30 minutes" walkthrough — single discoverable GitHub Pages page that guides a first-time visitor from `loft hello.loft` through structs, pattern match, `par()` parallel, and HTML export using the house-scene canvas demo as the anchor.  Complements DX.1's reference-style examples/ with a narrative path.  Real VS Code screenshots (depends on SH.2 landing first). | S  | —      | this-session     |
 
-### Sprint A–C: Data model + editor + loft backend
+### Ship criteria
 
-| ID     | Title                                                  | E  | Design | Depends on    |
-|--------|--------------------------------------------------------|----|--------|---------------|
-| MO.1a  | `moros_map` — Hex, Chunk, Map, HexAddress structs      | S  | ✓      |               |
-| MO.1b  | `moros_map` — MaterialDef, WallDef, ItemDef palettes   | S  | ✓      | MO.1a         |
-| MO.1c  | `moros_map` — SpawnPoint, NpcRoutine, NpcWaypoint      | S  | ✓      | MO.1a         |
-| MO.2   | `moros_map` — map_to_json / map_from_json              | S  | ✓      | MO.1a         |
-| MO.C1  | `scene-canvas.js` — hex coordinate math + flat render  | M  | ✓      | MO.2          |
-| MO.C2  | `scene-canvas.js` — pan/zoom/hit-test                  | S  | ✓      | MO.C1         |
-| MO.C3  | `scene-canvas.js` — layer rendering with opacity       | S  | ✓      | MO.C1         |
-| MO.E1  | `scene-editor.html` — shell + toolbar + palettes       | M  | ✓      | MO.C1         |
-| MO.E2  | `scene-editor.js` — Select + Paint + Height tools      | M  | ✓      | MO.E1         |
-| MO.E3  | `scene-editor.js` — Wall + Item placement              | S  | ✓      | MO.E2         |
-| MO.E4  | `scene-editor.js` — undo/redo stack                    | S  | ✓      | MO.E2         |
-| MO.E5  | `scene-editor.js` — localStorage save/load             | S  | ✓      | MO.E2         |
-| MO.3   | `moros_editor` — hex paint, height, wall, item ops     | M  | ✓      | MO.1a         |
-| MO.4   | `moros_editor` — undo/redo stack (loft-side)           | S  | ✓      | MO.3          |
-| MO.5a  | `moros_editor` — slope tool                            | S  | ✓      | MO.3          |
-| MO.5b  | `moros_editor` — stencil stamping (12 orientations)    | M  | ✓      | MO.3          |
-| MO.6   | `moros_editor` — spawn/waypoint management             | S  | ✓      | MO.3          |
-| MO.W1  | WASM build: moros_map + moros_editor → .wasm           | S  | ✓      | MO.3          |
+- Every item above merged to main with `make ci` green.
+- One external programmer (outside the loft project) can install
+  SH.2 from VS Code Marketplace, open `examples/10-2d-canvas.loft`,
+  read DX.3 top-to-bottom, and run the demo within 30 minutes from
+  zero prior exposure.  Hands-on feedback collected before tagging.
+- The `tests/native.rs` binary runs in the fast CI job, not just
+  `ci-full`.
 
-### Sprint D–E: 3D renderer + export
+---
 
-| ID     | Title                                                  | E  | Design | Depends on    |
-|--------|--------------------------------------------------------|----|--------|---------------|
-| MO.7a  | `moros_render` — hex surface geometry (flat + slope)   | M  | ✓      | MO.1a         |
-| MO.7b  | `moros_render` — wall slab geometry (thin + thick)     | M  | ✓      | MO.7a         |
-| MO.7c  | `moros_render` — MeshBuilder batching + material sort  | S  | ✓      | MO.7a         |
-| MO.8a  | `moros_render` — linear stair steps                    | S  | ✓      | MO.7a         |
-| MO.8b  | `moros_render` — spiral newel + grand arc treads       | M  | ✓      | MO.8a         |
-| MO.9a  | `moros_render` — camera orbit/pan/zoom                 | S  | ✓      | MO.7a, GL6.6  |
-| MO.9b  | `moros_render` — hex picking (screen ray → hex addr)   | M  | ✓      | MO.9a         |
-| MO.10  | `moros_render` — GLB export (scene → file/base64)      | M  | ✓      | MO.7a         |
-| MO.13  | Developer art — flat-shade procedural swatches         | S  | ✓      | MO.7a         |
-| MO.W2  | WASM build: moros_render → .wasm                       | S  | ✓      | MO.7a         |
-| MO.12a | `scene-editor.html` — wire loft WASM to JS editor      | M  | ✓      | MO.W1, MO.E2  |
-| MO.12b | `scene-editor.html` — live 3D preview panel            | M  | ✓      | MO.W2, MO.9a  |
-| MO.12c | `scene-editor.html` — GLB export button                | S  | ✓      | MO.10, MO.12a |
-| MO.P   | 🌐 **Moros scene editor** on GH Pages                   | S  | ✓      | MO.12b        |
+## 0.8.6 — loft is extensible
+
+**Goal:** `loft install <name>` works; a user can add external
+libraries to their project without cloning and wiring by hand; the
+native-extension author experience is boilerplate-free.  Prepares
+the ground for 0.9.0's `PKG.EXTRACT` library-repo split.
+
+### Ecosystem foundation
+
+| ID      | Title                                                  | E  | Design | Source           |
+|---------|--------------------------------------------------------|----|--------|------------------|
+| FFI.1   | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
+| FFI.2   | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
+| FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
+| FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
+| PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
+| PKG.REG | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted `registry.txt`; 3–5 first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one.  Registered libraries stay in-repo for 0.8.6; the extraction into separate GitHub projects is 0.9.0's PKG.EXTRACT.  | M  | ✓      | PACKAGES.md      |
+
+### Ship criteria
+
+- `loft install <name>` resolves and installs from the public
+  registry for at least 3 libraries.
+- FFI.1–4 land together; `lib/graphics/native/` has at most 3
+  hand-written type-pun functions remaining (down from ~15 today).
+- A worked example of a third-party library outside the `loft`
+  repo registering to the registry and being `loft install`-able.
+- All Tier 1 tooling (SH.1 / SH.2 / DX.1 / DX.3 from 0.8.5) still
+  green against the registry-resolved libraries — no tutorial
+  drift.
 
 ---
 
 ## 0.9.0 — Fully working loft language
 
-**Goal:** the language itself is feature-complete, well-documented, and
-tooling-friendly. No "appears fixed but unverified" bugs in PROBLEMS.md.
-Anyone can write loft code in their preferred editor with syntax
-highlighting, decent error messages, and a REPL for experimentation.
+**Goal:** the language itself is feature-complete and the library
+ecosystem lives in its own GitHub repos, leaving the `loft` project
+as a lean interpreter + compiler + stdlib core.  Building on 0.8.5
+(learnability) and 0.8.6 (extensibility), 0.9.0 closes the remaining
+language gaps — error recovery, REPL, developer warnings — that
+made "fully working language" a premature label in the earlier
+plan, and completes the repo split that lets the ecosystem scale
+beyond the solo-maintainer monorepo.
 
-**Advertising readiness**: 0.9.0 is also the gate for honestly pitching
-loft to external programmers as an alternative to their current scripting
-language.  Four items were added to this milestone specifically to close
-that gap:
+**Advertising readiness** — the 0.8.5 / 0.8.6 / 0.9.0 sequence is
+the three-ship progression:
+- **0.8.5** — *learnable*: syntax highlighting, VS Code extension,
+  30-minute tutorial, native-CI parity.
+- **0.8.6** — *extensible*: `loft install <name>`, package registry,
+  zero-boilerplate FFI.
+- **0.9.0** — *fully working*: language polish (L1 + P2 + W-warn +
+  C52 + C53), plus `PKG.EXTRACT` moving every library out of the
+  interpreter repo.
 
-- **PKG.REG** — central registry so `loft install <name>` works.
-- **DX.3** — a 30-minute narrative tutorial for newcomers.
-- **DX.4** — native-mode parity in fast CI to stop P143/P171-class
-  regressions from surfacing mid-release.
-- **PKG.EXTRACT** — move every `lib/*/` library out of the interpreter
-  repo.  Logical bundling is allowed where it fits — the five `moros_*`
-  libraries naturally share one `loft-moros` repo, `server` / `web` /
-  `game_protocol` share `loft-net`, `graphics` + `imaging` share
-  `loft-graphics` — but `loft install <name>` still resolves at
-  library granularity so users never see the bundling.  The
-  interpreter repo today carries ~960 MB of library code + build
-  artefacts that have nothing to do with the language itself; a
-  programmer cloning `loft` to look at the interpreter shouldn't
-  wait on a multi-hundred-megabyte graphics assets download.
-  Healthy ecosystems separate the language from its libraries;
-  loft's monorepo today is an accident of solo-maintainer convenience.
+Each ship is a standalone tag with its own CHANGELOG entry — users
+don't wait for 0.9.0 to see loft graduate from "curious hobby
+project" to "bettable scripting language".
 
-Without these, newcomers hit an "on your own" wall within an hour and
-the native codegen's regressions keep slipping in.  With them, loft
-has the surrounding surface a bettable language needs.
-
-**Implementation order within 0.9.0** lives in
-[PLANNING.md § Recommended Implementation Order](PLANNING.md#recommended-implementation-order)
-— the five-tier sequence (DX.4 first → SH/DX polish → FFI+PKG
-ecosystem → language-polish tail → PKG.EXTRACT last) is designed so
-each tier leaves main in a shippable state, and no tier starts before
-its dependencies are stable.
+**Implementation order** within 0.9.0's own items (language polish
+sub-chunks + PKG.EXTRACT) lives in
+[PLANNING.md § Recommended Implementation Order](PLANNING.md#recommended-implementation-order).
+PKG.EXTRACT is the last 0.9.0 item — it depends on 0.8.6's PKG.REG
+(install path) and FFI.1–4 (boilerplate-free authoring), so starting
+it earlier duplicates work that's about to be deleted.
 
 ### Language polish
 
@@ -270,24 +270,17 @@ avoid adding serde to the default feature set.
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| SH.1  | TextMate grammar for `.loft` syntax highlighting       | S  | ✓      | DX.md            |
-| SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
-| DX.1  | Quick-start `examples/` directory                      | XS | ✓      | DX.md            |
 | DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
-| DX.3  | "Learn loft in 30 minutes" narrative walkthrough — a single discoverable page (GitHub Pages + repo root README link) that walks a first-time visitor from `loft hello.loft` through structs, pattern match, `par()` parallel, and HTML export using the house-scene canvas demo.  Complements DX.1's examples/ (reference) with a narrative path (learning).  A newcomer shouldn't have to infer the language from cold-reading examples. | S  | —      | this-session assessment |
-| DX.4  | Native-mode parity in fast CI — every `tests/scripts/*.loft` and `tests/issues.rs` test runs under both `--interpret` AND `--native` via the existing `tests/native.rs` harness, wired into the GitHub Actions fast job (not just `ci-full`).  Catches P143/P144/P157/P171/P180-class native-codegen regressions before they land in main.  Today's fast CI runs `cargo nextest run --profile ci` which skips `tests/native.rs`; parity requires promoting it.  Cost: one CI job slot + longer compile cache. | S  | —      | this-session assessment |
 
-### Package and FFI tooling
+*(Tooling polish — SH.1, SH.2, DX.1, DX.3, DX.4 — shipped in 0.8.5.)*
+
+### Library extraction
 
 | ID          | Title                                                  | E  | Design | Source           |
 |-------------|--------------------------------------------------------|----|--------|------------------|
-| PKG.7       | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| PKG.REG     | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted registry.txt; 3–5 curated first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one. Previously deferred-indefinitely as A7.4 under "ecosystem must exist first"; the chicken-and-egg bites both ways — no registry, no ecosystem.  Required to credibly advertise loft to external programmers. | M  | ✓      | PACKAGES.md      |
-| PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG for the install path, on DX.4 for the cross-repo CI story, and on FFI.1–4 for the boilerplate-free native-extension author experience.  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
-| FFI.1       | Generic type marshaller from `#native` signature       | MH | ✓      | GAME_INFRA.md    |
-| FFI.2       | Generic cdylib loader — scan exports, HashMap          | S  | ✓      | GAME_INFRA.md    |
-| FFI.3       | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
-| FFI.4       | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
+| PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry (shipped in 0.8.6) so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG (0.8.6), DX.4 (0.8.5 cross-repo CI story), and FFI.1–4 (0.8.6 boilerplate-free native-extension author experience).  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
+
+*(PKG.7 + PKG.REG + FFI.1–4 shipped in 0.8.6 as the ecosystem foundation.)*
 
 ### CLI fixes that improved during 0.8.4
 
@@ -392,6 +385,28 @@ before tagging — no "appears fixed" exceptions.
 |-------|----------------------------------------------------|-------------------------------------------|
 | O1    | Superinstruction peephole rewriting                | Opcode table full (254/256)               |
 | P4    | Bytecode cache (`.loftc`)                          | Superseded by native codegen              |
+
+---
+
+## Demo applications — independent lifecycles
+
+Per [RELEASE.md § Explicitly out of scope here](RELEASE.md#explicitly-out-of-scope-here),
+demo applications ship on their own cadence and do **not** gate
+any language release.  They may ship before, during, or after any
+of the language milestones above.
+
+| Demo | State | Backlog location |
+|---|---|---|
+| **Brick Buster** (`lib/graphics/examples/25-brick-buster.loft`) | 0.8.4 scope — audio + levels + polish + HTML export all done; ready for GH Pages / itch.io publication | ROADMAP.md § 0.8.4 game-polish section |
+| **Moros hex RPG editor — native** | **Shipped 2026-04-22** via plan-03 (`plans/finished/03-native-moros-editor/`); `make editor-dist` builds a self-contained `dist/moros-editor/` runnable without `loft` on the machine.  Fullscreen, scroll-wheel + expanded key codes, panel UI overlay, `editor_click` routing. | Historical — see plan-03 README. |
+| **Moros hex RPG editor — web** | Designed but not built (~20 open sprints: MO.1–MO.13 covering map data model, JS scene editor, WASM build, 3D renderer, GLB export).  Depends on the loft libraries that will be extracted per PKG.EXTRACT; once those ship independently, the web editor can iterate without touching the language repo. | `../moros/doc/claude/` + `PLANNING.md` MO.* entries |
+| **Web IDE** (W1.1 HTML export is language-side and done; W2–W6 are IDE work) | Deferred past 1.0 per ROADMAP.md § 1.0.0.  Independent project. | ROADMAP.md § 1.0.0 IDE+multiplayer block |
+| **Server library** (`lib/server`), **game-client library** (`lib/game_client`), **scene scripting** layer | 1.1+ — `WEB_SERVER_LIB.md`, `GAME_CLIENT_LIB.md`, `SERVER_FEATURES.md` | Own design docs |
+
+If a demo's progress reveals a language-side bug or a missing
+primitive, the fix lands under the relevant language milestone
+(0.9.0 for language polish, 1.0.0 for stability).  But the demo's
+own scope never blocks a language tag.
 
 ---
 

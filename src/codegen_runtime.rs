@@ -38,7 +38,7 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 #[cfg(not(feature = "wasm"))]
 use std::io::{Read, Seek, SeekFrom, Write as _};
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Allocate a database root record for the given type.
@@ -115,6 +115,19 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
         }
     }
     stores.free_named(&db, name);
+}
+
+/// P187: conditionally free `placeholder` — only when its `store_nr`
+/// differs from `witness`'s.  Emitted for `__ref_N` work-refs whose
+/// value might alias a still-live Reference variable in the current
+/// scope (adoption vs. fresh-store is a runtime choice the caller's
+/// compiler cannot resolve statically).  See `doc/claude/PROBLEMS.md`
+/// § P187 for the mechanism.  Bytecode equivalent: `OpFreeRefIfDistinct`
+/// in `src/fill.rs`.
+pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbRef) {
+    if placeholder.store_nr != witness.store_nr {
+        stores.free(&placeholder);
+    }
 }
 
 /// Format a database record as text and append it to the output string.
@@ -1418,27 +1431,52 @@ pub fn cr_rand_int(lo: i64, hi: i64) -> i64 {
     }
 }
 
+/// Parse a `LOFT_FAKE_*` env var into an `i64`.  See the same-named
+/// helper in `src/native.rs` for the full contract; duplicated here so
+/// `--native`-compiled binaries honour the override the same way the
+/// interpreter does.
+#[cfg(not(target_arch = "wasm32"))]
+fn fake_clock_env(var: &str) -> Option<i64> {
+    std::env::var(var).ok()?.parse::<i64>().ok()
+}
+
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
+/// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn n_now(_stores: &mut Stores) -> i64 {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
+        return fake;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(i64::MIN, |d| d.as_millis() as i64)
 }
 
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
-#[cfg(feature = "wasm")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub fn n_now(_stores: &mut Stores) -> i64 {
     crate::wasm::host_time_now()
 }
 
+/// P137-class fallback for the `--html` build (wasm32, no `wasm`
+/// feature): returns 0 because no host time bridge exists.  Mirror of
+/// the `n_ticks` fallback below for the same target.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+pub fn n_now(_stores: &mut Stores) -> i64 {
+    0
+}
+
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
+/// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn n_ticks(stores: &mut Stores) -> i64 {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
+        return fake;
+    }
     stores.start_time.elapsed().as_micros() as i64
 }
 

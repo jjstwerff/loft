@@ -15,7 +15,7 @@ use crate::state::{Call, State};
 use crate::vector;
 #[cfg(feature = "threading")]
 use std::sync::Arc;
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
 pub const FUNCTIONS: &[(&str, Call)] = &[
@@ -961,25 +961,55 @@ fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val != 0);
 }
 
+/// Parse a `LOFT_FAKE_*` env var into an `i64`.  Empty / unset / unparseable
+/// values return `None`, letting the caller fall through to the real clock.
+/// Used to freeze `ticks()` and `now()` for deterministic snapshot tests —
+/// see `doc/claude/TESTING.md` § "Deterministic snapshots".
+///
+/// Only compiled on hosts with `std::env` (i.e. not on `wasm32`).
+#[cfg(not(target_arch = "wasm32"))]
+fn fake_clock_env(var: &str) -> Option<i64> {
+    std::env::var(var).ok()?.parse::<i64>().ok()
+}
+
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
-#[cfg(not(feature = "wasm"))]
+/// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
+#[cfg(not(target_arch = "wasm32"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
+        stores.put(stack, fake);
+        return;
+    }
     let millis = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(i64::MIN, |d| d.as_millis() as i64);
     stores.put(stack, millis);
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, crate::wasm::host_time_now());
 }
 
+/// P137-class fallback: the `--html` build (wasm32, no `wasm` feature)
+/// has no host time bridge; return 0 so programs that read `now()`
+/// without the bridge don't trap.  Mirror of the `n_ticks` fallback
+/// for the same target.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+fn n_now(stores: &mut Stores, stack: &mut DbRef) {
+    stores.put(stack, 0i64);
+}
+
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
+/// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 #[cfg(not(target_arch = "wasm32"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
+    if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
+        stores.put(stack, fake);
+        return;
+    }
     let micros = stores.start_time.elapsed().as_micros() as i64;
     stores.put(stack, micros);
 }

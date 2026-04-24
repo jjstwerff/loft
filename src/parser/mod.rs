@@ -2594,163 +2594,231 @@ impl Parser {
         }
     }
 
-    fn lib_path(&mut self, id: &String) -> String {
-        // under the `wasm` feature, check VIRT_FS before filesystem lookups.
+    fn lib_path(&mut self, id: &str) -> String {
+        // Under the `wasm` feature, VIRT_FS wins over filesystem lookups.
         #[cfg(feature = "wasm")]
         if crate::wasm::virt_fs_get(&format!("{id}.loft")).is_some() {
             return format!("{id}.loft");
         }
-        // - a source file, the lib directory in the project (project-supplied)
-        let mut f = format!("lib{0}{id}.loft", sep_str());
-        if !std::path::Path::new(&f).exists() {
-            f = format!("{id}.loft");
-        }
-        // Clone the file path so it is owned; slices of it won't borrow `self`,
-        // allowing &mut self calls (lib_path_manifest) later in this method.
-        // Normalise to the platform separator (sep()) so that rfind / contains
-        // use a single token rather than probing for both '/' and '\\'.
+
         let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        let cur_dir = if let Some(p) = cur_script.rfind(sep()) {
-            &cur_script[0..p]
-        } else {
-            ""
-        };
-        let tests_infix = format!("{0}tests{0}", sep());
-        let base_dir = if cur_dir.contains(tests_infix.as_str()) {
-            &cur_dir[..cur_dir.find(tests_infix.as_str()).unwrap()]
-        } else {
-            ""
-        };
-        // - a lib directory relative to the current directory
-        let s = sep_str();
-        if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}{s}lib{s}{id}.loft");
-        }
-        // - a lib directory relative to the base directory when inside /tests/
-        if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}{s}lib{s}{id}.loft");
-        }
-        // - walk up from the script directory looking for a loft.toml; if found,
-        //   the package's parent directory contains sibling packages.
-        if !std::path::Path::new(&f).exists() && !cur_dir.is_empty() {
-            let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
-            loop {
-                if search_dir.join("loft.toml").exists() {
-                    if let Some(parent) = search_dir.parent() {
-                        let candidate = parent.join(id).join("src").join(format!("{id}.loft"));
-                        let chosen = if candidate.exists() {
-                            Some(candidate)
-                        } else {
-                            let flat = parent.join(format!("{id}.loft"));
-                            flat.exists().then_some(flat)
-                        };
-                        if let Some(path) = chosen {
-                            f = path.to_string_lossy().to_string();
-                            // The sibling path resolves the file directly without
-                            // going through lib_path_manifest, so the target
-                            // package's loft.toml (one dir up from `src/`) would
-                            // otherwise never register its native crate — which
-                            // later leaves `#native` symbols unmapped and makes
-                            // `--native` emit `todo!()` stubs.
-                            let pkg_root = parent.join(id);
-                            let manifest = pkg_root.join("loft.toml");
-                            if manifest.exists() {
-                                self.register_native_manifest(&manifest, &pkg_root);
-                            }
-                        }
-                    }
-                    break;
-                }
-                if let Some(p) = search_dir.parent() {
-                    search_dir = p.to_path_buf();
-                } else {
-                    break;
-                }
-            }
-        }
-        // - a directory with the same name of the current script (strip the .loft suffix)
-        if !std::path::Path::new(&f).exists() && cur_script.len() >= 5 {
-            f = format!("{}{s}{id}.loft", &cur_script[0..cur_script.len() - 5]);
-        }
-        // - extra library directories from --lib / --project command-line flags (single-file)
-        if !std::path::Path::new(&f).exists() {
-            for l in &self.lib_dirs {
-                let candidate = format!("{l}{s}{id}.loft");
-                if std::path::Path::new(&candidate).exists() {
-                    f.clone_from(&candidate);
-                    // Check for loft.toml in ancestor directories to register
-                    // native crate info (the file was found directly, not via
-                    // lib_path_manifest, so native packages wouldn't be registered).
-                    let mut search = std::path::Path::new(&candidate)
-                        .parent()
-                        .map(std::path::Path::to_path_buf);
-                    while let Some(dir) = search {
-                        let manifest = dir.join("loft.toml");
-                        if manifest.exists() {
-                            self.register_native_manifest(&manifest, &dir);
-                            break;
-                        }
-                        search = dir.parent().map(std::path::Path::to_path_buf);
-                    }
-                    break;
-                }
-            }
-        }
-        // step 7c: packaged layout (<dir>/<id>/src/<id>.loft) in lib_dirs
-        if !std::path::Path::new(&f).exists() {
-            let lib_dirs = self.lib_dirs.clone();
-            for l in &lib_dirs {
-                if let Some(entry) = self.lib_path_manifest(l, id) {
-                    f = entry;
-                    break;
-                }
-            }
-        }
-        // - a user-defined lib directory (externally downloaded), single-file
-        if !std::path::Path::new(&f).exists()
-            && let Some(v) = env::var_os("LOFT_LIB")
-        {
-            for l in env::split_paths(&v) {
-                let candidate = l.join(format!("{id}.loft"));
-                if candidate.exists() {
-                    f = candidate.to_string_lossy().replace(other_sep(), sep_str());
-                    break;
-                }
-            }
-        }
-        // step 7d: packaged layout in LOFT_LIB
-        if !std::path::Path::new(&f).exists()
-            && let Some(v) = env::var_os("LOFT_LIB")
-        {
-            for l in env::split_paths(&v) {
-                let l = l.to_string_lossy().replace(other_sep(), sep_str());
-                if let Some(entry) = self.lib_path_manifest(&l, id) {
-                    f = entry;
-                    break;
-                }
-            }
-        }
-        // PKG.2: ~/.loft/lib/<id>/src/<id>.loft (installed packages)
-        if !std::path::Path::new(&f).exists() {
-            let home = env::var("HOME")
-                .or_else(|_| env::var("USERPROFILE"))
-                .unwrap_or_default();
-            if !home.is_empty() {
-                let user_lib = format!("{home}/.loft/lib");
-                if let Some(entry) = self.lib_path_manifest(&user_lib, id) {
-                    f = entry;
-                }
-            }
-        }
-        // - the current directory (beside the parsed file)
-        if !cur_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{cur_dir}{s}{id}.loft");
-        }
-        // - the base directory when inside /tests/
-        if !base_dir.is_empty() && !std::path::Path::new(&f).exists() {
-            f = format!("{base_dir}{s}{id}.loft");
-        }
+        let cur_dir_owned = script_dir(&cur_script).to_string();
+        let base_dir_owned = tests_base_dir(&cur_dir_owned).to_string();
+        let cur_dir = cur_dir_owned.as_str();
+        let base_dir = base_dir_owned.as_str();
+
+        // Try each strategy in order; first one that finds the file wins.
+        // `f` starts as the cheapest guess (project-local `lib/<id>.loft` or
+        // `<id>.loft`); subsequent strategies overwrite only when `f` does
+        // not yet resolve to an existing file.
+        let mut f = Self::probe_project_lib(id);
+
+        Self::probe_cur_dir_lib(id, cur_dir, &mut f);
+        Self::probe_base_dir_lib(id, base_dir, &mut f);
+        self.probe_sibling_package(id, cur_dir, &mut f);
+        Self::probe_script_sibling_dir(id, &cur_script, &mut f);
+        self.probe_cmdline_lib_dirs(id, &mut f);
+        self.probe_cmdline_lib_dirs_manifest(id, &mut f);
+        Self::probe_loft_lib_flat(id, &mut f);
+        self.probe_loft_lib_manifest(id, &mut f);
+        self.probe_user_installed(id, &mut f);
+        Self::probe_cur_dir_flat(id, cur_dir, &mut f);
+        Self::probe_base_dir_flat(id, base_dir, &mut f);
+
         f
+    }
+
+    /// Initial guess: the project-supplied `lib/<id>.loft`, falling back to
+    /// `<id>.loft` in the current working directory.
+    fn probe_project_lib(id: &str) -> String {
+        let f = format!("lib{0}{id}.loft", sep_str());
+        if std::path::Path::new(&f).exists() {
+            f
+        } else {
+            format!("{id}.loft")
+        }
+    }
+
+    /// `<cur_dir>/lib/<id>.loft` — lib dir relative to the script being parsed.
+    fn probe_cur_dir_lib(id: &str, cur_dir: &str, f: &mut String) {
+        if !cur_dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{cur_dir}{0}lib{0}{id}.loft", sep_str());
+        }
+    }
+
+    /// `<base_dir>/lib/<id>.loft` — lib dir relative to the base directory
+    /// when the script lives inside a `/tests/` tree.
+    fn probe_base_dir_lib(id: &str, base_dir: &str, f: &mut String) {
+        if !base_dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{base_dir}{0}lib{0}{id}.loft", sep_str());
+        }
+    }
+
+    /// Walk up from `cur_dir` looking for a `loft.toml`; on hit, the package's
+    /// parent directory may contain sibling packages.  When the sibling is
+    /// found directly (not via `lib_path_manifest`), the sibling's own
+    /// `loft.toml` must be registered so its `#native` symbols resolve.
+    fn probe_sibling_package(&mut self, id: &str, cur_dir: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() || cur_dir.is_empty() {
+            return;
+        }
+        let mut search_dir = std::path::Path::new(cur_dir).to_path_buf();
+        loop {
+            if search_dir.join("loft.toml").exists() {
+                if let Some(parent) = search_dir.parent()
+                    && let Some(path) = Self::find_sibling_file(parent, id)
+                {
+                    *f = path.to_string_lossy().to_string();
+                    let pkg_root = parent.join(id);
+                    let manifest = pkg_root.join("loft.toml");
+                    if manifest.exists() {
+                        self.register_native_manifest(&manifest, &pkg_root);
+                    }
+                }
+                break;
+            }
+            let Some(p) = search_dir.parent() else {
+                break;
+            };
+            search_dir = p.to_path_buf();
+        }
+    }
+
+    /// Sibling lookup: prefer `<parent>/<id>/src/<id>.loft`, fall back to
+    /// flat `<parent>/<id>.loft`.
+    fn find_sibling_file(parent: &std::path::Path, id: &str) -> Option<std::path::PathBuf> {
+        let nested = parent.join(id).join("src").join(format!("{id}.loft"));
+        if nested.exists() {
+            return Some(nested);
+        }
+        let flat = parent.join(format!("{id}.loft"));
+        flat.exists().then_some(flat)
+    }
+
+    /// A directory named after the current script (minus the `.loft` suffix).
+    fn probe_script_sibling_dir(id: &str, cur_script: &str, f: &mut String) {
+        if !std::path::Path::new(f).exists() && cur_script.len() >= 5 {
+            *f = format!(
+                "{}{}{id}.loft",
+                &cur_script[0..cur_script.len() - 5],
+                sep_str()
+            );
+        }
+    }
+
+    /// `--lib` / `--project` command-line flag directories, flat layout.
+    /// Registers any discovered `loft.toml` in the file's ancestry.
+    fn probe_cmdline_lib_dirs(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let lib_dirs = self.lib_dirs.clone();
+        for l in &lib_dirs {
+            let candidate = format!("{l}{}{id}.loft", sep_str());
+            if std::path::Path::new(&candidate).exists() {
+                f.clone_from(&candidate);
+                self.register_manifest_in_ancestors(&candidate);
+                break;
+            }
+        }
+    }
+
+    /// Scan ancestor directories for a `loft.toml` and register the first one
+    /// found.  Called when a file was resolved directly (not through
+    /// `lib_path_manifest`), so its owning package's native crate would
+    /// otherwise never be registered.
+    fn register_manifest_in_ancestors(&mut self, candidate: &str) {
+        let mut search = std::path::Path::new(candidate)
+            .parent()
+            .map(std::path::Path::to_path_buf);
+        while let Some(dir) = search {
+            let manifest = dir.join("loft.toml");
+            if manifest.exists() {
+                self.register_native_manifest(&manifest, &dir);
+                return;
+            }
+            search = dir.parent().map(std::path::Path::to_path_buf);
+        }
+    }
+
+    /// `--lib` / `--project` directories, packaged layout
+    /// (`<dir>/<id>/src/<id>.loft`).
+    fn probe_cmdline_lib_dirs_manifest(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let lib_dirs = self.lib_dirs.clone();
+        for l in &lib_dirs {
+            if let Some(entry) = self.lib_path_manifest(l, id) {
+                *f = entry;
+                return;
+            }
+        }
+    }
+
+    /// `LOFT_LIB` env var, flat layout (`<dir>/<id>.loft`).
+    fn probe_loft_lib_flat(id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let Some(v) = env::var_os("LOFT_LIB") else {
+            return;
+        };
+        for l in env::split_paths(&v) {
+            let candidate = l.join(format!("{id}.loft"));
+            if candidate.exists() {
+                *f = candidate.to_string_lossy().replace(other_sep(), sep_str());
+                return;
+            }
+        }
+    }
+
+    /// `LOFT_LIB` env var, packaged layout (via `lib_path_manifest`).
+    fn probe_loft_lib_manifest(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let Some(v) = env::var_os("LOFT_LIB") else {
+            return;
+        };
+        for l in env::split_paths(&v) {
+            let l = l.to_string_lossy().replace(other_sep(), sep_str());
+            if let Some(entry) = self.lib_path_manifest(&l, id) {
+                *f = entry;
+                return;
+            }
+        }
+    }
+
+    /// `~/.loft/lib/<id>/src/<id>.loft` — packages installed via `loft install`.
+    fn probe_user_installed(&mut self, id: &str, f: &mut String) {
+        if std::path::Path::new(f).exists() {
+            return;
+        }
+        let home = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))
+            .unwrap_or_default();
+        if home.is_empty() {
+            return;
+        }
+        let user_lib = format!("{home}/.loft/lib");
+        if let Some(entry) = self.lib_path_manifest(&user_lib, id) {
+            *f = entry;
+        }
+    }
+
+    /// Final fallback: beside the parsed file itself.
+    fn probe_cur_dir_flat(id: &str, cur_dir: &str, f: &mut String) {
+        if !cur_dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{cur_dir}{0}{id}.loft", sep_str());
+        }
+    }
+
+    /// Final fallback for scripts inside a `/tests/` tree.
+    fn probe_base_dir_flat(id: &str, base_dir: &str, f: &mut String) {
+        if !base_dir.is_empty() && !std::path::Path::new(f).exists() {
+            *f = format!("{base_dir}{0}{id}.loft", sep_str());
+        }
     }
 
     /// Register native crate info from a loft.toml manifest.
@@ -3072,6 +3140,23 @@ impl Parser {
     }
 
     // For now, assume that returned texts are always related to internal variables
+}
+
+/// Directory portion of a normalised script path, or `""` if the path is bare.
+fn script_dir(cur_script: &str) -> &str {
+    cur_script.rfind(sep()).map_or("", |p| &cur_script[0..p])
+}
+
+/// If `cur_dir` lives inside a `/tests/` tree, return the ancestor above
+/// `tests/`; otherwise `""`.  Used to locate the project-root `lib/`
+/// directory when running a script from `tests/`.
+fn tests_base_dir(cur_dir: &str) -> &str {
+    let tests_infix = format!("{0}tests{0}", sep());
+    if let Some(idx) = cur_dir.find(tests_infix.as_str()) {
+        &cur_dir[..idx]
+    } else {
+        ""
+    }
 }
 
 fn merge_dependencies(a: &Type, b: &Type) -> Type {

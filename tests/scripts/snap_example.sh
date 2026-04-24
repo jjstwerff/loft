@@ -7,12 +7,19 @@
 # -combine` to undo the Xvfb/Mesa-swrast R↔B channel swap (see P133).
 #
 # Usage:
-#   snap_example.sh <loft_file> <output_png> [wait_seconds] [window_name_regex] [key_script]
+#   snap_example.sh <loft_file> <output_png> [wait_seconds] [window_name_regex] [key_script] [env]
 #
 # `key_script` is an optional `;`-separated sequence of `KEY@MS` steps
 # sent via xdotool before the final screenshot.  MS is the number of
 # milliseconds to sleep *after* pressing KEY (so the game loop can react).
 # KEY uses xdotool names: `space`, `Return`, `p`, `Left`, `Right`, `F1`.
+#
+# `env` is an optional `;`-separated list of `KEY=VAL` pairs exported
+# before launching loft.  Used by the PBR snapshot entries to set
+# `LOFT_FAKE_TICKS_US` / `LOFT_FAKE_NOW_MS` so animation-driven scenes
+# capture identically on every run.  Opt-in per entry — time-sensitive
+# examples like Brick Buster that pre-date the env vars keep rendering
+# with a real clock.
 #
 # Example:
 #   snap_example.sh brick-buster.loft /tmp/play.png 0.5 "rick Buster" "space@500"
@@ -41,6 +48,13 @@ OUTPUT="$2"
 WAIT_SECONDS="${3:-1}"
 WINDOW_NAME="${4:-.}"
 KEY_SCRIPT="${5:-}"
+ENV_VARS="${6:-}"
+
+# TSV empty-column placeholder.  `IFS=$'\t'` collapses adjacent tabs so
+# middle columns use `-` to mean "no value"; normalise here so both
+# callers (test_gl_snapshots.sh and direct invocations) agree.
+[ "$KEY_SCRIPT" = "-" ] && KEY_SCRIPT=""
+[ "$ENV_VARS" = "-" ] && ENV_VARS=""
 
 if [ ! -f "$LOFT_FILE" ]; then
   echo "FAIL: loft file not found: $LOFT_FILE" >&2
@@ -50,6 +64,23 @@ fi
 cd "$(dirname "$0")/../.."
 
 LOG="/tmp/loft_snap_$$.log"
+
+# Export any `KEY=VAL;...` pairs from the TSV entry's env column.  Used
+# by PBR snapshot entries to set LOFT_FAKE_TICKS_US / LOFT_FAKE_NOW_MS
+# so animation-driven scenes capture identically on every run.  Scoped
+# to this process and any children (i.e. the loft binary below).
+if [ -n "$ENV_VARS" ]; then
+  IFS=';' read -ra _EVS <<<"$ENV_VARS"
+  for pair in "${_EVS[@]}"; do
+    [ -z "$pair" ] && continue
+    case "$pair" in
+      *=*) export "$pair" ;;
+      *)
+        echo "FAIL: bad env entry '$pair' (use KEY=VAL)" >&2
+        exit 2 ;;
+    esac
+  done
+fi
 
 # Launch the example.  Redirect both streams so the test log captures any
 # loft-side warnings (e.g. font not loaded) that should be surfaced on

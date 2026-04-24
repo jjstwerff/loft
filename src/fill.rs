@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 239] = &[
+pub const OPERATORS: &[fn(&mut State); 240] = &[
     goto,
     goto_word,
     goto_false,
@@ -155,6 +155,7 @@ pub const OPERATORS: &[fn(&mut State); 239] = &[
     null_ref_sentinel,
     init_ref_sentinel,
     free_ref,
+    free_ref_if_distinct,
     sizeof_ref,
     var_ref,
     put_ref,
@@ -1163,6 +1164,14 @@ fn init_ref_sentinel(s: &mut State) {
 
 fn free_ref(s: &mut State) {
     s.free_ref();
+}
+
+fn free_ref_if_distinct(s: &mut State) {
+    let v_witness = *s.get_stack::<DbRef>();
+    let v_placeholder = *s.get_stack::<DbRef>();
+    if v_placeholder.store_nr != v_witness.store_nr {
+        s.database.free(&v_placeholder);
+    }
 }
 
 fn sizeof_ref(s: &mut State) {
