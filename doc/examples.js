@@ -61,3 +61,11 @@
           { key: "formatting", name: "Formatting" },
           { key: "reference_parameter_forwarding", name: "Reference parameter forwarding" },
       ];
+  // EXAMPLE_GROUPS: shape consumed by doc/playground.html — an array
+  // of { group, items[] } objects so the UI can render an
+  // <optgroup> per category.  Until the build script learns to
+  // categorise per file path, every example lands in a single
+  // "Examples" group.
+  export const EXAMPLE_GROUPS = [
+    { group: "Examples", items: EXAMPLE_LIST },
+  ];
