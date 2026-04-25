@@ -23,6 +23,11 @@ jobs:
             os: ubuntu-latest
             binary: loft
             archive: loft-linux-x86_64.tar.gz
+          # TODO(next release): bump macos-13 → macos-14.  The 0.8.4 release
+          # stalled for 20+ min on macos-13 runner availability while the
+          # other three matrix entries finished in 1–5 min; macos-14 runners
+          # queue much faster.  Alternatively, drop x86_64-apple-darwin
+          # entirely — aarch64-apple-darwin covers modern Macs.
           - target: x86_64-apple-darwin
             os: macos-13
             binary: loft
