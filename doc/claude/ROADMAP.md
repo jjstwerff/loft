@@ -32,13 +32,13 @@ comes after the single-player browser experience works.
 
 ## Milestone narrative
 
-| Version | Headline                                       |
-|---------|------------------------------------------------|
-| 0.8.4   | **Awesome Brick Buster** — a game worth sharing    |
-| 0.8.5   | **loft is learnable** — syntax highlighting, VS Code extension, 30-minute tutorial, native-CI parity |
-| 0.8.6   | **loft is extensible** — `loft install <name>` + package registry + zero-boilerplate native extensions |
-| 0.9.0   | **Fully working loft language** — REPL + error recovery + warnings + libraries extracted to their own repos |
-| 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract |
+| Version | Headline                                       | Status |
+|---------|------------------------------------------------|--------|
+| 0.8.0–0.8.4 | Game-ready interpreter, web export, JSON / HTTP, Brick Buster | **Shipped** (latest 0.8.4 — 2026-04-25) |
+| 0.8.5   | **loft is learnable** — syntax highlighting, VS Code extension, 30-minute tutorial, native-CI parity | Next |
+| 0.8.6   | **loft is extensible** — `loft install <name>` + package registry + zero-boilerplate native extensions | Planned |
+| 0.9.0   | **Fully working loft language** — REPL + error recovery + warnings + libraries extracted to their own repos | Planned |
+| 1.0.0   | **Totally sure everything works** — IDE + multiplayer + stability contract | Planned |
 
 **Demo applications** (Brick Buster, Moros editor, Web IDE, game-client / server
 libraries) ship on their own cadence — not gated by language releases.  See
@@ -54,58 +54,12 @@ Completed work belongs in CHANGELOG.md and git history.
 
 ---
 
-## 0.8.4 — Awesome Brick Buster
+## Carried over from 0.8.4
 
-**Goal:** ship a Brick Buster game that is fun to play, not just a tech demo. The
-current `lib/graphics/examples/25-brick-buster.loft` already has multi-hit bricks,
-pickups, particles, combos, multi-ball, level transitions, and a sprite
-atlas (G1/G2). 0.8.4 turns it from "playable proof of concept" into
-"a game someone would actually want to share with a friend."
-
-### What "awesome" means
-
-| Area      | Today                          | After 0.8.4                                  |
-|-----------|--------------------------------|----------------------------------------------|
-| Audio     | ~~Silent~~ | **Done** — chiptune synthesis (sfx_beep/chirp/noise/descend/bounce) |
-| Levels    | Procedurally generated rows    | Several hand-designed levels with themes     |
-| Visuals   | Procedural sprite atlas        | Polished art + screen shake + better particles |
-| Sharing   | ~~Run from `cargo run …`~~ | **Done** — `loft --html` single-file export (native WASM) |
-| Smoothness| ~~Per-frame store leak workarounds~~ | **Done** — P122 fixed; idiomatic struct APIs work |
-
-### Game infrastructure
-
-| ID    | Title                                                  | E  | Status |
-|-------|--------------------------------------------------------|----|--------|
+| ID    | Title                                                  | E  | Notes |
+|-------|--------------------------------------------------------|----|-------|
 | G3    | Tilemap rendering (grid-based 2D, batched draw)        | M  | Partial — the brick grid + `level_brick(lv,r,c)` dispatcher in Brick Buster is the tilemap for that game; a generic `lib/tilemap` package is still open. |
-| ~~G5~~| ~~Audio: sound effect playback~~                       | S  | **Done** — rodio + audio_play_raw + chiptune synthesis |
-| ~~G6~~| ~~Audio: background music with crossfade~~             | S  | **Done** — three-track rotating playlist with inter-track silence |
-| ~~W1.1~~| ~~Single-file HTML export~~                          | M  | **Done** — native WASM + asyncify + GL bridge |
-| G7.P  | 🌐 **Playable Brick Buster** — share link on itch.io        | S  | Ready (--html works) |
-
-### Game polish (`lib/graphics/examples/25-brick-buster.loft`)
-
-| ID    | Title                                                  | E  | Status |
-|-------|--------------------------------------------------------|----|--------|
-| ~~BK.1~~ | ~~Audio integration~~                              | S  | **Done** — brick/paddle/wall/pickup/life sounds |
-| ~~BK.2~~ | ~~Background music~~                               | S  | **Done** — 3 early-Capcom tracks (Heroic / Determined / Calm) rotating with 4-s silences |
-| ~~BK.3~~ | ~~Hand-designed levels (5+)~~                      | M  | **Done** — 5 layouts via `level_brick` dispatcher, procedural fallback at 6+ |
-| ~~BK.4~~ | ~~Screen shake on brick break + life lost~~        | XS | **Done** — `br_shake_t/mag` applied via painter projection matrix |
-| ~~BK.5~~ | ~~Pause menu + restart~~                           | S  | **Done** — P to pause, SPACE to resume |
-| ~~BK.6~~ | ~~Title screen + game-over screen~~                | S  | **Done** — state machine with restart |
-| ~~BK.7~~ | ~~High-score persistence~~                         | S  | **Done** — `.loft/brickbuster_score.txt` + `HI <n>` HUD row |
-| ~~BK.8~~ | ~~Sprite-atlas polish pass~~                       | S  | **Done** — cel-shaded outlines, round ball with velocity-directional squash, hearts, Roman-numeral levels, balloon projectile, fireball after-images |
-
-### Language fixes (all completed)
-
-All language blockers for 0.8.4 are resolved:
-- **P117–P131** — fixed and verified (store leaks, slot allocation, native codegen,
-  CLI args, headless GL safety). See PROBLEMS.md § Fixed.
-- **L4** — compile error for literal passed to `&` parameter.
-- **L5/L6/S5** — confirmed already fixed.
-- **Bytecode cache** — `build.rs` adds git commit hash; rebuilds invalidate stale `.loftc`.
-
-Brick Buster's raw-float workarounds (bitmasks, `aabb_depth_x/y`) can now be replaced
-with idiomatic struct-based APIs.
+| G7.P  | 🌐 **Playable Brick Buster on itch.io** — `--html` works and Pages already serves the build; a separate itch.io upload remains.  Demo-app deliverable; no language work attached. | S | Optional |
 
 ---
 
@@ -127,10 +81,13 @@ the progression.
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| DX.4  | Native-mode parity in fast CI — promote `tests/native.rs` into the `cargo nextest run --profile ci` gate so every `tests/scripts/*.loft` runs under both `--interpret` AND `--native`.  Catches P143/P144/P157/P171/P180-class regressions pre-commit instead of mid-release. | S  | —      | this-session     |
 | SH.1  | TextMate grammar for `.loft` syntax highlighting       | S  | ✓      | DX.md            |
 | SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
 | DX.1  | Quick-start `examples/` directory at repo root — discoverable path for the scattered `lib/graphics/examples/*.loft`, brick-buster, moros-editor, house-scene canvas demo; each with a one-paragraph README. | XS | ✓      | DX.md            |
+
+*(DX.4 native-CI parity already in place — `tests/native.rs::native_dir` /
+`native_scripts` run inside `cargo nextest run --profile ci` with empty
+NATIVE_SKIP / SCRIPTS_NATIVE_SKIP lists.)*
 
 ### Narrative
 
@@ -237,16 +194,6 @@ Step plans for both entries: [QUALITY.md](QUALITY.md).
 | C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, QUALITY.md  |
 | P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, QUALITY.md |
 
-**Shipped in earlier 0.8.x** (kept here for CHANGELOG readers; delete on 0.9.0 sweep):
-- ~~C7/P22~~ — `spacial<T>` diagnostic references 1.1+ timeline
-- ~~C60~~ — hash iteration in ascending key order (`quality` branch)
-- ~~C61.local~~ — outer-local shadow reject on pass 1
-- ~~C61-nested~~ — parse-time reject for `for i { for i { } }`
-- ~~P86~~ — real closures; regression guards in `tests/issues.rs` and `tests/parse_errors.rs`
-- ~~P91~~ — default-from-earlier-parameter via call-site Var(N) substitution
-- ~~P138~~ — `loft --native` prints actionable hint on E0460 + rand_core
-- ~~SLOT-VEC3 / #139~~ — `OpReserveFrame` fires when slot sits above TOS
-
 ### Compilation cache and constant store
 
 The `.loftc` bytecode cache and `CONST_STORE` are implemented (Phase A + D).
@@ -281,18 +228,6 @@ avoid adding serde to the default feature set.
 | PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry (shipped in 0.8.6) so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG (0.8.6), DX.4 (0.8.5 cross-repo CI story), and FFI.1–4 (0.8.6 boilerplate-free native-extension author experience).  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
 
 *(PKG.7 + PKG.REG + FFI.1–4 shipped in 0.8.6 as the ecosystem foundation.)*
-
-### CLI fixes that improved during 0.8.4
-
-These were closed during today's release-mode push but belong to the
-language-polish narrative.
-
-| ID   | Title                                                  | Status |
-|------|--------------------------------------------------------|--------|
-| P126 | `-1` tail expression after `if { return; }`            | ✓ closed |
-| P128 | File-scope constants reject type annotations           | ✓ closed |
-| P131 | CLI consumes script-level arguments                    | ✓ closed |
-| P132 | Release-mode coroutine-iterator-character hang         | ✓ closed |
 
 ---
 
@@ -397,7 +332,7 @@ of the language milestones above.
 
 | Demo | State | Backlog location |
 |---|---|---|
-| **Brick Buster** (`lib/graphics/examples/25-brick-buster.loft`) | 0.8.4 scope — audio + levels + polish + HTML export all done; ready for GH Pages / itch.io publication | ROADMAP.md § 0.8.4 game-polish section |
+| **Brick Buster** (`lib/graphics/examples/25-brick-buster.loft`) | **Shipped 2026-04-25** to GH Pages via the v0.8.4 release workflow ([brick-buster.html](https://jjstwerff.github.io/loft/brick-buster.html)).  itch.io publication still optional. | Carried-over note above |
 | **Moros hex RPG editor — native** | **Shipped 2026-04-22** via plan-03 (`plans/finished/03-native-moros-editor/`); `make editor-dist` builds a self-contained `dist/moros-editor/` runnable without `loft` on the machine.  Fullscreen, scroll-wheel + expanded key codes, panel UI overlay, `editor_click` routing. | Historical — see plan-03 README. |
 | **Moros hex RPG editor — web** | Designed but not built (~20 open sprints: MO.1–MO.13 covering map data model, JS scene editor, WASM build, 3D renderer, GLB export).  Depends on the loft libraries that will be extracted per PKG.EXTRACT; once those ship independently, the web editor can iterate without touching the language repo. | `../moros/doc/claude/` + `PLANNING.md` MO.* entries |
 | **Web IDE** (W1.1 HTML export is language-side and done; W2–W6 are IDE work) | Deferred past 1.0 per ROADMAP.md § 1.0.0.  Independent project. | ROADMAP.md § 1.0.0 IDE+multiplayer block |
