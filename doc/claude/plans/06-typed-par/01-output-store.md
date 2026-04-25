@@ -217,6 +217,20 @@ in phase 1; the matching test
 `tests/threading_chars.rs::par_struct_to_struct_enum_t4` becomes
 positive.
 
+### G3 — `--native-wasm` rejects par at codegen
+
+The wasm codegen path emits `loft_wasm.rs` that references
+`OpFreeRef` and friends but doesn't generate the worker-cleanup
+ops; `rustc` fails with `not found in this scope`.  After phase 1's
+per-worker output stores + D6's single-threaded fallback, the wasm
+path runs par as a sequential for-loop in the calling thread (no
+real threads in default WASM build).
+
+User-visible: `bench/11_par`'s `loft-wasm` column shows `-` today;
+it becomes a real serial-throughput number after phase 1.  No
+canary needed in `tests/threading_chars.rs` (the harness's `code!`
+runs interpret-only); the bench is the reproducer.
+
 ### G2 — primitive-element input vectors
 
 Today's runtime reads input vector elements with a fixed 12-byte

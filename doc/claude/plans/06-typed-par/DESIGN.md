@@ -203,6 +203,15 @@ parallelism on WASM via `wasm-bindgen-rayon`.  Plan-06 is forward-
 compatible — same `Stitch` policy enum, same queue store layout,
 just a different scheduler.
 
+**Today's gap** (G3 — discovered while building bench/11_par).
+The `--native-wasm` codegen path currently rejects par with
+`OpFreeRef not found in this scope` and similar — the wasm codegen
+doesn't emit the worker-cleanup ops.  Plan-06 phase 1's typed
+pipeline + this section's single-threaded fallback together close
+this; until then, bench/11_par's loft-wasm column shows `-`.
+Test canary added in `tests/threading_chars.rs` once a phase
+gates on it.
+
 ## D7 — `Value::ParFor` IR shape
 
 Concrete struct fields (referenced from phase 1 onward):
