@@ -135,44 +135,95 @@ pub fn run_parallel_direct(
         crate::wasm::host_call_raw("parallel_run", &args);
     }
     // Native OS threads via thread::scope.
+    //
+    // Plan-06 phase 1 step 2: each worker gets its own output slot
+    // (an exclusive Store appended to its WorkerStores via
+    // add_output_slot).  The worker writes u64 results into the
+    // slot's Store buffer instead of into a shared raw pointer.
+    // After join, the parent reads the slot's bytes back into the
+    // existing out_ptr buffer (preserves the caller's contract;
+    // phase 2 will retire the read-back via store-pointer rebase).
+    //
+    // The win: the cross-thread `SendMutPtr(out_ptr)` raw-pointer
+    // hack is gone.  Workers write to memory they own exclusively;
+    // the parent reads after thread::scope guarantees join.
     #[cfg(all(feature = "threading", not(feature = "wasm")))]
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let out = Arc::new(SendMutPtr(out_ptr));
+        let ret_sz = return_size as usize;
 
         thread::scope(|s| {
-            for t in 0..threads {
-                let start = t * n_rows / threads;
-                let end = (t + 1) * n_rows / threads;
-                let worker_stores = stores.clone_for_worker();
-                let prog = Arc::clone(&program);
-                let input_t = *input;
-                let extras = extra_args.to_vec();
-                let out_t = Arc::clone(&out);
-                let ret_sz = return_size as usize;
+            // Spawn each worker; collect (start, ScopedJoinHandle) pairs.
+            // Each worker returns (Stores, slot_nr, byte_count) so the
+            // parent can take_slot + copy back.
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let start = t * n_rows / threads;
+                    let end = (t + 1) * n_rows / threads;
+                    let row_count = end - start;
+                    let bytes_needed = row_count * ret_sz;
+                    let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
+                    let mut worker_stores = stores.clone_for_worker();
+                    let slot = worker_stores.add_output_slot(slot_words);
+                    let prog = Arc::clone(&program);
+                    let input_t = *input;
+                    let extras = extra_args.to_vec();
 
-                s.spawn(move || {
-                    let mut state = prog.new_state(worker_stores);
-                    for row_idx in start..end {
-                        let row_idx_i32 = row_idx as i64;
-                        let row_ref = vector::get_vector(
-                            &input_t,
-                            element_size,
-                            row_idx_i32,
-                            &state.database.allocations,
-                        );
-                        let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                        unsafe {
-                            let dst = out_t.0.add(row_idx * ret_sz);
-                            std::ptr::copy_nonoverlapping(
-                                (&raw const val).cast::<u8>(),
-                                dst,
-                                ret_sz,
+                    let handle = s.spawn(move || {
+                        let mut state = prog.new_state(worker_stores);
+                        // Write into the worker's exclusively-owned slot.
+                        // SAFETY: the slot's Store was just allocated by
+                        // this worker; the buffer is uninitialised but
+                        // sized for `bytes_needed`; we write exactly
+                        // bytes_needed bytes contiguously.
+                        let slot_ptr = state.database.allocations
+                            [slot.store_nr as usize]
+                            .base_ptr();
+                        for (local_idx, row_idx) in (start..end).enumerate() {
+                            let row_ref = vector::get_vector(
+                                &input_t,
+                                element_size,
+                                row_idx as i64,
+                                &state.database.allocations,
                             );
+                            let val = state.execute_at_raw(
+                                fn_pos,
+                                &row_ref,
+                                &extras,
+                                ret_sz as u32,
+                            );
+                            unsafe {
+                                let dst = slot_ptr.add(local_idx * ret_sz);
+                                std::ptr::copy_nonoverlapping(
+                                    (&raw const val).cast::<u8>(),
+                                    dst,
+                                    ret_sz,
+                                );
+                            }
                         }
-                    }
-                });
+                        // Hand the worker's stores + slot info back so
+                        // the parent can take_slot + copy.
+                        (state.database, slot.store_nr, bytes_needed)
+                    });
+                    (start, handle)
+                })
+                .collect();
+
+            // Join each worker, take its slot, copy bytes into the
+            // shared out_ptr at the right offset.
+            for (start, handle) in handles {
+                let (worker_db, slot_nr, n_bytes) = handle.join().expect("worker panic");
+                // SAFETY: out_ptr is non-overlapping per-worker (each
+                // worker's range is disjoint); the slot's Store is now
+                // owned by us via worker_db; we read exactly n_bytes
+                // bytes from the slot.
+                unsafe {
+                    let src = worker_db.allocations[slot_nr as usize].base_ptr();
+                    let dst = out_ptr.add(start * ret_sz);
+                    std::ptr::copy_nonoverlapping(src, dst, n_bytes);
+                }
+                // worker_db drops here, freeing the slot Store.
             }
         });
     }
