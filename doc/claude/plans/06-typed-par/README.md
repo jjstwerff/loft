@@ -70,12 +70,12 @@ single PR with its own `make ci` run.
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
 | 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | open | XS | Pin current behaviour with characterisation tests; record perf baseline so later phases prove no regression. |
-| 1 | 01-output-store.md | open | M | Worker writes its output to a pre-allocated per-worker output Store instead of `out_ptr` / channel.  Three native fns still exist; phase 1 only changes WHERE results land, not the dispatch shape. |
-| 2 | 02-stitch-not-copy.md | open | M | Main-thread stitching concatenates per-worker output stores into a single result store via store-pointer rebase, retiring `copy_block` + `copy_claims` for the parallel path. |
-| 3 | 03-one-native-fn.md | open | S | Collapse `n_parallel_for_native` / `_text_native` / `_ref_native` into one polymorphic native fn.  Drop the four `parallel_get_*` getters — output already lives in the result Store. |
-| 4 | 04-typed-input-output.md | open | M | Surface change: `parallel_for(input: vector<T>, fn: fn(T) -> U, threads: integer) -> vector<U>` with element types in the type system, removing the `element_size` / `return_size` integer args. |
-| 5 | 05-retire-par-light.md | open | S | With store-typed I/O the compiler can detect "worker only writes to its output store" and skip the parent-store clone automatically.  `par_light` becomes an internal optimisation, not a user-facing variant. |
-| 6 | 06-cleanup-and-doc.md | open | XS | Delete the 7 retired runtime variants; collapse THREADING.md's "light vs. full" section into one explanation; CHANGELOG entry. |
+| 1 | [01-output-store.md](01-output-store.md) | open | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Three native fns still exist; phase 1 only changes where results land. |
+| 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | open | M | Main-thread stitch via store-pointer rebase, retiring `copy_block` + `copy_claims`.  Closes P1-R3 + P1-R5 from THREADING.md. |
+| 3 | [03-one-native-fn.md](03-one-native-fn.md) | open | S | Collapse `n_parallel_for_native` / `_text_native` / `_ref_native` into one polymorphic `n_parallel_native(stitch)`.  Drop the four `parallel_get_*` getters. |
+| 4 | [04-typed-input-output.md](04-typed-input-output.md) | open | M | Typed surface: `parallel_for(input: vector<T>, fn: fn(T) -> U, threads: integer) -> vector<U>` — `element_size` and `return_size` retire; the type system carries them. |
+| 5 | [05-auto-light.md](05-auto-light.md) | open | M | Scope-analysis pass that proves a worker writes nothing outside its own output store; codegen picks the light path automatically.  Defines the heuristic that DESIGN.md D8 references. |
+| 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Delete the now-unreachable runtime variants (~520 lines from `src/parallel.rs`, ~336 from `codegen_runtime.rs`, ~70 from `default/01_code.loft`); rewrite THREADING.md's par sections; CHANGELOG entry. |
 | 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | M | Fused `for x in ls par(r = foo(x), 4) { … }` construction + parser-side desugaring of the value-position `par(input, fn, threads)` call form to the same `Value::ParFor` IR node.  One primitive, one runtime path; the call form gets `vector_with_capacity` pre-alloc for free.  Replaces the earlier 3-variant idea (`par_for_each` / `par_fold` / `par_iter`).  `par_light` is removed from the user surface entirely — the auto-light heuristic from phase 5 makes it a compiler-internal decision, never exposed to users. |
 
 ## Ground rules
@@ -137,12 +137,19 @@ These are not addressed by plan-06 even though they're tempting:
 
 ## Cross-references
 
+- [DESIGN.md](DESIGN.md) — cross-cutting decisions referenced from
+  every phase: Stitch policy enum (D1), worker / parent store
+  relationship (D2), fn return-type accessor (D3), failure model
+  (D4), degenerate-input handling (D5), WASM fallback (D6),
+  `Value::ParFor` IR shape (D7), auto-light heuristic (D8),
+  source-span propagation (D9), call-site migration (D10).
 - [THREADING.md](../../THREADING.md) — current par design, especially
   §§ "Data flow" and "Isolation guarantees".
 - [ROADMAP.md § 1.1+ A14 / A15 / W1.14](../../ROADMAP.md#11-backlog) —
   related parallel work; this plan is independent but compatible.
 - [src/parallel.rs](../../../../src/parallel.rs) — current 683-line
-  runtime; ~1100 lines net retired across plan-06 phases.
+  runtime; ~520 lines retired in phase 6 (~800 lines net across
+  plan-06 phases).
 - [src/codegen_runtime.rs:1581-1805](../../../../src/codegen_runtime.rs) —
   current 3-fn native dispatch; collapses in phase 3.
 - [doc/claude/plans/README.md](../README.md) — global plan ground rules.
