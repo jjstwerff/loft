@@ -1708,16 +1708,21 @@ where
 /// Text-returning variant of `n_parallel_for_native`.  The worker closure returns
 /// an owned `String`; each result is stored in the result store via `set_str` and
 /// the 4-byte text position is written into the result vector.
+///
+/// Plan-06 phase 1b: same parallelization shape as `n_parallel_for_native` —
+/// threads run via `thread::scope` with `clone_for_worker` snapshots.  Each
+/// thread accumulates `Vec<(idx, String)>`; main-thread merges and writes
+/// strings into the result store via `set_str` after join.
 pub fn n_parallel_for_text_native<F>(
     stores: &mut Stores,
     input: DbRef,
     elem_size: i32,
     _return_size: i32,
-    _threads: i32,
-    mut worker: F,
+    threads: i32,
+    worker: F,
 ) -> DbRef
 where
-    F: FnMut(&mut Stores, DbRef) -> String,
+    F: Fn(&mut Stores, DbRef) -> String + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let result_db = stores.null();
@@ -1726,19 +1731,12 @@ where
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
-            }
-        };
-        let s = worker(stores, elm);
+
+    let strings = run_native_workers_text(stores, &input, elem_size, threads, n, &worker);
+
+    for (i, s) in strings.iter().enumerate() {
         let store = stores.store_mut(&result_db);
-        let s_pos = store.set_str(&s);
+        let s_pos = store.set_str(s);
         store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
     }
     {
@@ -1753,6 +1751,77 @@ where
     }
 }
 
+/// Parallel worker dispatcher for native text-return par.
+/// Each thread accumulates owned `String`s for its slice; main-thread
+/// merges per-thread vectors into a single ordered `Vec<String>` for
+/// the caller to write into the result store.
+fn run_native_workers_text<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<String>
+where
+    F: Fn(&mut Stores, DbRef) -> String + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    #[cfg(all(feature = "threading", not(feature = "wasm")))]
+    {
+        let threads = (n_threads.max(1) as usize).min(n);
+        let mut results: Vec<String> = (0..n).map(|_| String::new()).collect();
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(threads);
+            for t in 0..threads {
+                let start = t * n / threads;
+                let end = (t + 1) * n / threads;
+                let mut worker_stores = stores.clone_for_worker();
+                let input_t = *input;
+                handles.push(s.spawn(move || {
+                    let mut local: Vec<(usize, String)> = Vec::with_capacity(end - start);
+                    for row_idx in start..end {
+                        let elm = vector::get_vector(
+                            &input_t,
+                            elem_size as u32,
+                            row_idx as i64,
+                            &worker_stores.allocations,
+                        );
+                        let val = worker(&mut worker_stores.stores, elm);
+                        local.push((row_idx, val));
+                    }
+                    local
+                }));
+            }
+            for h in handles {
+                let local = h.join().expect("worker thread panicked");
+                for (idx, val) in local {
+                    results[idx] = val;
+                }
+            }
+        });
+        results
+    }
+    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
+    {
+        let _ = n_threads;
+        let mut worker_stores = stores.clone_for_worker();
+        let mut results = Vec::with_capacity(n);
+        for row_idx in 0..n {
+            let elm = vector::get_vector(
+                input,
+                elem_size as u32,
+                row_idx as i64,
+                &worker_stores.allocations,
+            );
+            results.push(worker(&mut worker_stores.stores, elm));
+        }
+        results
+    }
+}
+
 /// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure
 /// returns a `DbRef` pointing to a newly created struct.  Each result is deep-copied
 /// (raw bytes + owned sub-fields) inline into the result vector so that `OpGetVector`
@@ -1760,17 +1829,24 @@ where
 ///
 /// `struct_size` is the inline byte size of the struct (from `stores.size(known_type)`).
 /// `known_type` is the struct's type id for `copy_block` / `copy_claims`.
+///
+/// Plan-06 phase 1c: workers run in parallel via `thread::scope` with
+/// `clone_for_worker` snapshots; each thread returns its `(idx, src_ref)`
+/// batch plus its `WorkerStores`, and the main thread deep-copies each
+/// struct into the result vector via `copy_from_worker`'s graft machinery
+/// (mirrors how `src/native.rs` already wires `run_parallel_ref` for the
+/// interpreter path).
 pub fn n_parallel_for_ref_native<F>(
     stores: &mut Stores,
     input: DbRef,
     elem_size: i32,
     struct_size: i32,
     known_type: i32,
-    _threads: i32,
-    mut worker: F,
+    threads: i32,
+    worker: F,
 ) -> DbRef
 where
-    F: FnMut(&mut Stores, DbRef) -> DbRef,
+    F: Fn(&mut Stores, DbRef) -> DbRef + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let sz = struct_size as u32;
@@ -1781,25 +1857,20 @@ where
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
-            }
-        };
-        let src_ref = worker(stores, elm);
-        let dest = DbRef {
-            store_nr: result_db.store_nr,
-            rec: vec_rec,
-            pos: 8 + (i as u32) * sz,
-        };
-        stores.copy_block(&src_ref, &dest, sz);
-        stores.copy_claims(&src_ref, &dest, kt);
+
+    let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
+
+    for (batch, mut worker_stores) in batches {
+        for (i, src_ref) in batch {
+            let dest = DbRef {
+                store_nr: result_db.store_nr,
+                rec: vec_rec,
+                pos: 8 + (i as u32) * sz,
+            };
+            stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+        }
     }
+
     {
         let store = stores.store_mut(&result_db);
         store.set_u32_raw(vec_rec, 4, n as u32);
@@ -1809,6 +1880,75 @@ where
         store_nr: result_db.store_nr,
         rec: header_rec,
         pos: 4,
+    }
+}
+
+/// Parallel worker dispatcher for native struct/reference-return par.
+/// Each thread accumulates `(row_idx, struct_ref_in_worker_store)` pairs
+/// and returns its batch plus its full `Stores` clone.  The caller uses
+/// `Stores::copy_from_worker` to deep-copy each struct into the result
+/// vector across the worker / parent store boundary.
+fn run_native_workers_ref<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<(Vec<(usize, DbRef)>, Stores)>
+where
+    F: Fn(&mut Stores, DbRef) -> DbRef + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    #[cfg(all(feature = "threading", not(feature = "wasm")))]
+    {
+        let threads = (n_threads.max(1) as usize).min(n);
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(threads);
+            for t in 0..threads {
+                let start = t * n / threads;
+                let end = (t + 1) * n / threads;
+                let mut worker_stores = stores.clone_for_worker();
+                let input_t = *input;
+                handles.push(s.spawn(move || {
+                    let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(end - start);
+                    for row_idx in start..end {
+                        let elm = vector::get_vector(
+                            &input_t,
+                            elem_size as u32,
+                            row_idx as i64,
+                            &worker_stores.allocations,
+                        );
+                        let r = worker(&mut worker_stores.stores, elm);
+                        batch.push((row_idx, r));
+                    }
+                    (batch, worker_stores.stores)
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("worker thread panicked"))
+                .collect()
+        })
+    }
+    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
+    {
+        let _ = n_threads;
+        let mut worker_stores = stores.clone_for_worker();
+        let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(n);
+        for row_idx in 0..n {
+            let elm = vector::get_vector(
+                input,
+                elem_size as u32,
+                row_idx as i64,
+                &worker_stores.allocations,
+            );
+            let r = worker(&mut worker_stores.stores, elm);
+            batch.push((row_idx, r));
+        }
+        vec![(batch, worker_stores.stores)]
     }
 }
 

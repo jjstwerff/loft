@@ -241,21 +241,28 @@ Workload: `bench/11_par/bench.loft` — 100 K-element vector,
 | loft-wasm | `-` | par codegen rejects today (G3 — fixed by phase 1) |
 | rust | 4ms | `std::thread::spawn × 4` — std-only, range-partitioned |
 
-### Phase 1a delta (G4 closed)
+### Phase 1a / 1b / 1c delta (G4 closed across all three native paths)
 
-Recorded 2026-04-25 after `n_parallel_for_native` was rewritten
-to use `thread::scope` × N + `clone_for_worker` (mirrors
-`run_parallel_raw` from the interpreter path).  Same workload,
-same host:
+Recorded 2026-04-25 after `n_parallel_for_native` /
+`_text_native` / `_ref_native` were rewritten to use
+`thread::scope` × N + `clone_for_worker`.  Same workload, same
+host:
 
 | Column | Time | Δ vs phase 0 |
 |---|---|---|
 | loft-native | **6ms** | -50 % (sequential 12ms → parallel 6ms — G4 closed) |
 
-The native column now sits within ~2× of rust's 3-4ms — overhead
-is per-worker `Stores::clone_for_worker()` + result merge on the
-main thread.  Phase 2 (rebase pass retiring `copy_block`) and
-the per-worker output Store work in 1b/1c should reclaim the rest.
+The bench measures primitive-return par; the text and ref native
+paths use the same parallelization shape (per-thread
+`Vec<(idx, value)>` batches + main-thread merge — text writes via
+`set_str`, ref deep-copies via `Stores::copy_from_worker`'s
+graft).  All three native dispatches now real-parallel.
+
+The native column sits within ~2× of rust's 3-4ms — remaining
+overhead is per-worker `Stores::clone_for_worker()` + result
+merge on the main thread.  Phase 2 (rebase pass retiring
+`copy_block` for ref returns) and the per-worker output Store
+work should reclaim the rest.
 
 Plan-06 phase 1's bench gate: loft-interp within ±5 % of 44 ms;
 loft-native ≤ ~5 ms (further closure work ahead).
