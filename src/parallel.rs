@@ -210,6 +210,12 @@ where
 /// The translation is per-worker: each worker's DbRefs come from a
 /// different worker-local namespace, so the rebase map is constructed
 /// fresh for each worker.
+///
+/// Currently unused at runtime — phase 2b's narrow path
+/// (`copy_from_worker_unowned`) handles owned-free struct returns
+/// without needing the rebase walk.  The full step 2b will use this
+/// for owned-field structs (text, refs).
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct StoreRebase {
     /// Maps worker-local `store_nr` → parent-side `store_nr` for stores
@@ -221,6 +227,7 @@ pub struct StoreRebase {
     pub map: std::collections::HashMap<u16, u16>,
 }
 
+#[allow(dead_code)]
 impl StoreRebase {
     /// Construct an empty rebase map.
     #[must_use]
