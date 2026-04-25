@@ -1186,6 +1186,24 @@ use #count instead"
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
             self.parse_parallel_worker(elem_var, &elem_tp);
 
+        // Plan-06 phase 5b proper — par-safety analyser hook lives
+        // here.  The analyser (`scopes::is_par_safe` /
+        // `scopes::par_unsafe_reason`) is implemented and unit-tested
+        // (commits 227acc8, 63ad94d) but is NOT invoked at compile
+        // time yet because today's stdlib annotation coverage is
+        // ~15 fns out of ~150.  Calling is_par_safe on a worker
+        // that legitimately uses unannotated stdlib (set_store_lock,
+        // claim, etc. — internals invoked by compiler-generated
+        // wrapper code) produces false-positive rejections that
+        // would break every existing par() call site.
+        //
+        // Phase 5b' (after the 5a annotation sweep is comprehensive)
+        // re-enables the diagnostic at Level::Error per DESIGN.md D8.
+        // Until then the analyser is available via the public API
+        // (e.g. for tooling / IDE plugins that want to lint par
+        // bodies optimistically).
+        let _ = fn_d_nr; // silence unused warning until 5b' enables the check
+
         // Comma separating worker from thread count.
         self.lexer.token(",");
         let mut threads_expr = Value::Null;
