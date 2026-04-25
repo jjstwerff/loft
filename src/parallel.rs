@@ -494,7 +494,7 @@ pub fn run_parallel_direct(
                 );
                 // Plan-06 phase 1 G2 — primitive-input dispatch.
                 let val = if prim_in > 0 {
-                    let v = read_primitive_at(&state.database, &row_ref, prim_in);
+                    let v = read_primitive_at(&state.database, &row_ref, element_size);
                     state.execute_at_raw_primitive_input(
                         fn_pos,
                         v,
@@ -829,11 +829,19 @@ pub fn run_parallel_light(
                         );
                         // Plan-06 phase 1 G2 — primitive-input dispatch.
                         // Workers whose first param is a primitive
-                        // (1/4/8 bytes) need the inline value, not a
-                        // DbRef.  read_primitive_at extracts the
-                        // appropriate width from the row record.
+                        // need the inline value, not a DbRef.  Read
+                        // `element_size` bytes from the row (vector
+                        // stride; honours `IntegerSpec.forced_size`)
+                        // and push them into a slot of `prim_in`
+                        // bytes (the worker's calling-convention slot
+                        // width — i32 args promote to 8-byte integer
+                        // slots, so prim_in=8 even when read=4).
                         let val = if prim_in > 0 {
-                            let v = read_primitive_at(&state.database, &row_ref, prim_in);
+                            let v = read_primitive_at(
+                                &state.database,
+                                &row_ref,
+                                element_size,
+                            );
                             state.execute_at_raw_primitive_input(
                                 fn_pos,
                                 v,
@@ -870,7 +878,7 @@ pub fn run_parallel_light(
                 &state.database.allocations,
             );
             let val = if primitive_input_size > 0 {
-                let v = read_primitive_at(&state.database, &row_ref, primitive_input_size);
+                let v = read_primitive_at(&state.database, &row_ref, element_size);
                 state.execute_at_raw_primitive_input(
                     fn_pos,
                     v,

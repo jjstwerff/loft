@@ -17,29 +17,29 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-/// Plan-06 phase 1 G2 — does the worker fn's first parameter
-/// have a primitive type?  When true, the dispatcher reads
-/// `element_size` bytes from each row record and pushes them as
-/// the inline value (instead of pushing a `DbRef` to the row).
+/// Plan-06 phase 1 G2 — given a worker fn's def, return the
+/// inline byte width of its first parameter SLOT when the param
+/// is a primitive type.  Returns `0` for non-primitive (struct/
+/// ref/text) first params, which take a `DbRef` in slot 0 and
+/// route through the existing `execute_at_raw` path.
 ///
-/// Returning a boolean rather than the size lets the caller
-/// reuse the parser-supplied `element_size` (which already
-/// honours size-overrides like `pub type i32 = integer size(4)`)
-/// instead of duplicating the size lookup.
-fn first_arg_is_primitive(def: &crate::data::Definition) -> bool {
+/// This is the WORKER's slot width, not the input-vector stride.
+/// For a `vector<i32>` input feeding `fn dbl(x: i32) -> integer`,
+/// the vector stride is 4 (forced_size) but the worker promotes
+/// i32 to integer for the calling convention — slot 0 is 8 bytes
+/// wide.  The dispatcher reads `element_size` bytes from the row
+/// and pushes them zero-extended into a slot of this width.
+fn primitive_first_arg_slot_size(def: &crate::data::Definition) -> u32 {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
-        return false;
+        return 0;
     };
-    matches!(
-        &first.typedef,
-        Type::Boolean
-            | Type::Enum(_, false, _)
-            | Type::Single
-            | Type::Character
-            | Type::Integer(_)
-            | Type::Float
-    )
+    match &first.typedef {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Single | Type::Character => 4,
+        Type::Integer(_) | Type::Float => 8,
+        _ => 0,
+    }
 }
 
 /// Plan-06 phase 3d — par-runtime dispatch mode derived at the
@@ -613,11 +613,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_for: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let pis = if first_arg_is_primitive(def) {
-            v_element_size as u32
-        } else {
-            0
-        };
+        let pis = primitive_first_arg_slot_size(def);
         if matches!(def.returned, crate::data::Type::Text(_)) {
             (DispatchMode::Text, u16::MAX, 4u32, pis)
         } else if let Some(heap_d_nr) = def.returned.heap_def_nr() {
@@ -744,12 +740,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
         } else {
             v_return_size.clamp(1, 8) as u32
         };
-        // primitive input → reuse element_size (parser-honoured byte width).
-        let pis = if first_arg_is_primitive(def) {
-            v_element_size as u32
-        } else {
-            0
-        };
+        let pis = primitive_first_arg_slot_size(def);
         (rs, pis)
     };
     let n_threads = (v_threads as usize).max(1);

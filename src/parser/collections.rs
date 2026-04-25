@@ -1251,12 +1251,25 @@ use #count instead"
         // which is wrong for inline vector element storage.
         let elem_size = {
             let elm_td = self.data.type_elm(&elem_tp);
-            let known = self.data.def(elm_td).known_type;
-            let db_size = i32::from(self.database.size(known));
-            if db_size > 0 {
-                db_size
+            // Plan-06 phase 1 G2.1 — narrow-integer vector inputs
+            // (vector<u8>, vector<i32>) store one element per
+            // forced_size byte slot.  IntegerSpec::vector_narrow_width()
+            // returns 1/2/4 for u8/i16/i32 and matches the iterator
+            // dispatch in collections.rs:105-113 for non-par for loops.
+            // Without this, var_size() returned 8 for any Integer
+            // and par read garbage at row_idx*8 instead of row_idx*4.
+            if let Type::Integer(spec) = &elem_tp
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                i32::from(n)
             } else {
-                i32::from(var_size(&elem_tp, &Context::Argument))
+                let known = self.data.def(elm_td).known_type;
+                let db_size = i32::from(self.database.size(known));
+                if db_size > 0 {
+                    db_size
+                } else {
+                    i32::from(var_size(&elem_tp, &Context::Argument))
+                }
             }
         };
 

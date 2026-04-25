@@ -383,7 +383,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-narrow-integer-input: vector<i32>/<u8> stride bug — parser computes elem_size=8 from var_size() but storage uses byte_width()=4/1; G2 dispatch reads garbage at offset row_idx*8.  Fix needs parser-side elem_size to honour IntegerSpec::forced_size."]
 fn par_i32_input_t4() {
     code!(
         "fn dbl(x: i32) -> integer { (x as integer) * 2 }
@@ -399,7 +398,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-narrow-integer-input: vector<u8> stride bug — see par_i32_input_t4."]
 fn par_u8_input_t4() {
     code!(
         "fn dbl(x: u8) -> integer { (x as integer) * 2 }
