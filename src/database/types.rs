@@ -838,6 +838,43 @@ impl Stores {
         }
     }
 
+    /// Plan-06 phase 2b refinement — per-variant ownership for
+    /// struct-enums (DESIGN.md D11c).
+    ///
+    /// Given a struct-enum's parent type `enum_tp` and a discriminant
+    /// byte read from the value, returns whether THAT specific variant
+    /// has owned sub-fields.  Used by the per-element copy dispatch
+    /// in parallel_execute_and_collect to take the cheap
+    /// `copy_from_worker_unowned` path for variants that don't need
+    /// the full deep-copy.
+    ///
+    /// Example: `Verdict { Pass{score:integer}, Fail{reason:text} }`
+    /// - has_owned_sub_fields(Verdict) → true (because Fail has text)
+    /// - variant_has_owned_sub_fields(Verdict, 0) → false (Pass: integer only)
+    /// - variant_has_owned_sub_fields(Verdict, 1) → true (Fail: text)
+    ///
+    /// Returns `true` (conservative) if `enum_tp` is not a Parts::Enum
+    /// or if `disc` is out of range.  This keeps callers safe when the
+    /// type is something else.
+    #[must_use]
+    pub fn variant_has_owned_sub_fields(&self, enum_tp: u16, disc: u8) -> bool {
+        if enum_tp == u16::MAX || (enum_tp as usize) >= self.types.len() {
+            return true; // conservative
+        }
+        if let Parts::Enum(variants) = &self.types[enum_tp as usize].parts {
+            // Plan-06 D11c per-variant check: each (v_tp, name) pair
+            // is one variant; v_tp is the EnumValue type with that
+            // variant's fields.  The discriminant indexes into the
+            // variants list (0-based).
+            if let Some((v_tp, _)) = variants.get(disc as usize) {
+                return self.has_owned_sub_fields(*v_tp);
+            }
+        }
+        // Not a Parts::Enum or disc out-of-range → fall back to
+        // whole-type ownership.
+        self.has_owned_sub_fields(enum_tp)
+    }
+
     /// Internal helper for `has_owned_sub_fields`: classify a single
     /// field's content type.  Primitive integer/float/bool variants
     /// are unowned; everything that owns out-of-line data is owned.

@@ -823,7 +823,21 @@ fn parallel_execute_and_collect(
                 n,
             );
             let struct_size = u32::from(stores.size(known_type));
-            let unowned = !stores.has_owned_sub_fields(known_type);
+            // Plan-06 phase 2b refinement: for struct-enums, the
+            // ownership question is per-variant, not per-type.
+            // Pre-compute whether the parent type is a struct-enum
+            // (vs a plain Reference) so we know to peek the disc
+            // byte per element.
+            let whole_unowned = !stores.has_owned_sub_fields(known_type);
+            // Detect struct-enum at the database-Parts level (not
+            // data::Type) — variant_has_owned_sub_fields keys off
+            // Parts::Enum's variant list.
+            let is_struct_enum = known_type != u16::MAX
+                && (known_type as usize) < stores.types.len()
+                && matches!(
+                    stores.types[known_type as usize].parts,
+                    crate::database::Parts::Enum(_)
+                );
             for (batch, mut worker_stores) in batches {
                 for (i, src_ref) in batch {
                     let dest = DbRef {
@@ -831,7 +845,24 @@ fn parallel_execute_and_collect(
                         rec: vec_rec,
                         pos: 8 + (i as u32) * struct_size,
                     };
-                    if unowned {
+                    // Per-element ownership decision:
+                    //   - whole-type unowned → always cheap path
+                    //   - struct-enum → peek discriminant; cheap if
+                    //     the active variant has no owned sub-fields
+                    //   - everything else → full deep-copy path
+                    let elem_unowned = if whole_unowned {
+                        true
+                    } else if is_struct_enum {
+                        // Struct-enum disc byte is at offset 0 of the
+                        // value record (per loft's enum layout).
+                        let disc =
+                            worker_stores.store(&src_ref).get_byte(src_ref.rec, src_ref.pos, 0)
+                                as u8;
+                        !stores.variant_has_owned_sub_fields(known_type, disc)
+                    } else {
+                        false
+                    };
+                    if elem_unowned {
                         stores.copy_from_worker_unowned(
                             &src_ref,
                             &dest,
