@@ -634,10 +634,19 @@ fn purity_annotations_parsed_from_stdlib() {
         }
     }
 
-    // Phase 5a — parent-write mutators: vector.clear is the first
-    // tagged.  More mutators (vector_add, hash_set, etc.) get
-    // tagged in subsequent commits.
-    let parent_write_fns = &["n_clear"];
+    // Phase 5a — parent-write mutators (collection-mutating
+    // opcodes that user code reaches via compound assignment or
+    // hash/sorted methods).
+    let parent_write_fns = &[
+        "n_clear",                // vector.clear()
+        "n_OpRemoveVector",       // vec.remove(i) and erase semantics
+        "n_OpInsertVector",       // vec.insert(i, x)
+        "n_OpAppendVector",       // vec += other
+        "n_OpHashAdd",            // hash[k] = v
+        "n_OpHashRemove",         // hash.remove(k)
+        "n_OpNewRecord",          // claims space in a parent store
+        "n_OpFinishRecord",       // writes into a parent record
+    ];
     for name in parent_write_fns {
         let d_nr = p.data.def_nr(name);
         if d_nr != u32::MAX {

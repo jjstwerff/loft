@@ -826,25 +826,37 @@ fn OpVectorRef(r: vector, index: integer) -> reference[r];
 #rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 #rust"s.db_from_text(@val, @db_tp)"
+// Plan-06 phase 5a: collection-mutation opcodes are #impure(parent_write).
+// par-safety analyser rejects calls to these from worker fns when the
+// first arg (the collection) is non-local (D8 R1 — full check still
+// requires "is first arg local?" analysis; today blanket-rejected).
 fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
 #rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
+#impure(parent_write)
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
+#impure(parent_write)
 // Claim space for a new record for the given structure
 fn OpNewRecord(data: reference, parent_tp: const u16, fld: const u16) -> reference[data];
+#impure(parent_write)
 // Write the new record into the given structure (when not already done)
 fn OpFinishRecord(data: reference, rec: reference, parent_tp: const u16, fld: const u16);
+#impure(parent_write)
 // Add all elements of another vector with the same type
 fn OpAppendVector(r: vector, other: vector, tp: const u16);
 #rust"s.database.vector_add(&@r, &@other, @tp);"
+#impure(parent_write)
 // Get a record from a structure. This operator also reads a dynamic key from stack (not shown here)
 fn OpGetRecord(data: reference, db_tp: const u16, no_keys: const u8) -> reference[data];
 fn OpValidate(data: reference, db_tp: const u16);
 // These types should eventually become unnecessary because of the unified internal database API
 type hash size(4);
 fn OpHashAdd(data: reference, rec: reference, tp: const u16);
+#impure(parent_write)
 fn OpHashFind(data: reference, tp: const u16) -> reference[data];
+#pure
 fn OpHashRemove(data: reference, rec: reference, tp: const u16);
+#impure(parent_write)
 // C60 Step 3a-part2: iterate a hash in ascending key order.
 // Returns a fresh vector<reference<T>> with the hash's records sorted
 // by key field(s).  The parser desugars `for e in h { … }` into a
