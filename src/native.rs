@@ -17,6 +17,28 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
+/// Plan-06 phase 3d — par-runtime dispatch mode derived at the
+/// native-call boundary from the worker fn's `def.returned`, so the
+/// runtime no longer relies on the parser's historic `return_size`
+/// sentinels (`0` for text, `-1` for ref, `1..=8` for primitive).
+/// The sentinels still travel on the stack for binary compatibility
+/// but the runtime ignores them when `def.returned` is decisive.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DispatchMode {
+    /// `Type::Text(_)` return — workers produce owned `String`s,
+    /// main thread interns into the result store.
+    Text,
+    /// `Type::Reference(_, _)` or `Type::Enum(_, true, _)` return —
+    /// workers return a `DbRef` into worker-local stores; main
+    /// thread deep-copies (or rebases per phase 2's narrow path).
+    Ref,
+    /// Inline-byte primitive return (1..=8 bytes: bool, byte, i32,
+    /// i64, f32, f64, fn-ref).  Workers write directly into per-
+    /// worker output slots (phase 1) and main thread copies bytes
+    /// back into the result vector.
+    Primitive,
+}
+
 pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_assert", n_assert),
     ("n_panic", n_panic),
@@ -543,40 +565,42 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     let element_size = v_element_size as u32;
     let n_threads = (v_threads as usize).max(1);
     let n = vector::length_vector(&v_input, &stores.allocations) as usize;
-    // return_size == 0 signals text mode; -1 signals reference (struct) mode.
-    let is_text = v_return_size == 0;
-    let is_ref = v_return_size == -1;
-    // For ref mode, compute the actual inline struct size from known_type.
-    // This is used for result vector allocation.
-    let return_size = if is_text {
-        4u32
-    } else if is_ref {
-        // Will be set below after known_type is resolved.
-        0u32 // placeholder
-    } else {
-        v_return_size.clamp(1, 8) as u32
-    };
 
-    // For reference returns, look up the struct's known_type for deep-copy
-    // and compute the inline struct size for the result vector.  Both
-    // Type::Reference and Type::Enum(_, true, _) (heap-allocated struct-enum)
-    // route through this path; heap_def_nr() catches both — plan-06 G1.
-    let (known_type, return_size) = if is_ref {
+    // Plan-06 phase 3d — derive dispatch mode and sizes from the
+    // worker fn's def.returned, NOT from `v_return_size` sentinels.
+    // The parser still emits the historic 0 / -1 / 1..=8 sentinels
+    // on the stack so legacy callers stay binary-compatible, but the
+    // runtime now ignores them: it inspects `def.returned` directly.
+    //
+    // - Text return  → text mode, return_size = 4 (text pointer slot)
+    // - heap_def_nr Some → ref/struct-enum mode, size from database
+    // - everything else → primitive mode, size from def.returned
+    //
+    // `v_return_size` is kept around as a backstop for the primitive
+    // path: when def.returned hasn't fully resolved (e.g. `Unknown`
+    // during partial parses) we fall back to the parser-supplied
+    // hint.  Once phase 4c lands the typed surface this fallback
+    // can be deleted.
+    let (dispatch_mode, known_type, return_size) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
             .expect("parallel_for: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let kt = match def.returned.heap_def_nr() {
-            Some(d_nr) => data.def(d_nr).known_type,
-            None => u16::MAX,
-        };
-        let sz = u32::from(stores.size(kt));
-        (kt, sz)
-    } else {
-        (u16::MAX, return_size)
+        if matches!(def.returned, crate::data::Type::Text(_)) {
+            (DispatchMode::Text, u16::MAX, 4u32)
+        } else if let Some(heap_d_nr) = def.returned.heap_def_nr() {
+            let kt = data.def(heap_d_nr).known_type;
+            let sz = u32::from(stores.size(kt));
+            (DispatchMode::Ref, kt, sz)
+        } else {
+            // Primitive (or partial-parse Unknown).  Trust v_return_size.
+            (DispatchMode::Primitive, u16::MAX, v_return_size.clamp(1, 8) as u32)
+        }
     };
+    let is_text = dispatch_mode == DispatchMode::Text;
+    let is_ref = dispatch_mode == DispatchMode::Ref;
 
     // Plan-06 phase 3b — synthesise the Stitch policy from the legacy
     // (return_size, is_text, is_ref) booleans the parser still emits.
@@ -669,7 +693,27 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     };
 
     let element_size = v_element_size as u32;
-    let return_size = v_return_size.clamp(1, 8) as u32;
+    // Plan-06 phase 3d — derive return_size from def.returned for
+    // primitives.  The light path only ever reaches this code with
+    // primitive returns (the parser routes Text/Reference/struct-
+    // enum to the heavy path; see parser/collections.rs is_primitive_return).
+    // We still consult v_return_size as a backstop when def.returned
+    // is Unknown (partial-parse scaffolding).
+    let return_size = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_for_light: missing context");
+        let data = unsafe { &*ctx.data };
+        let def = data.def(v_func as u32);
+        let derived =
+            u32::from(crate::variables::size(&def.returned, &crate::data::Context::Argument));
+        if (1..=8).contains(&derived) {
+            derived
+        } else {
+            v_return_size.clamp(1, 8) as u32
+        }
+    };
     let n_threads = (v_threads as usize).max(1);
     let n = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
     let pool_m: usize = 2;
