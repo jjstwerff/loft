@@ -192,10 +192,71 @@ New fixtures:
 - Stitch policy enum — phase 3.
 - Auto-light heuristic — phase 5.
 
+## Surface gaps closed by phase 1
+
+Phase 0's characterisation work surfaced two **pre-existing par
+limitations** that the new uniform output-store mechanism resolves
+naturally as a side effect.  Each is captured as an `#[ignore]`d
+test in `tests/threading_chars.rs`; phase 1's commit un-`#[ignore]`s
+them.
+
+### G1 — struct-enum return types
+
+Today's parser at `src/parser/collections.rs:1209` rejects worker
+return types whose `var_size > 8` with the diagnostic
+`Parallel worker return type '<Enum>' (size N) is not supported`.
+Struct-enums (variant with fields) typically have size 12+ (1-byte
+discriminant + variant payload + alignment) and hit this gate.
+
+After phase 1, workers write into per-worker output Stores using
+the same `OpSet*` ops every loft fn uses to write its return value.
+The runtime no longer needs to know the return type's byte width
+upfront — the output store carries it via the existing type
+schema.  The size-8 gate at `parser/collections.rs:1209` is deleted
+in phase 1; the matching test
+`tests/threading_chars.rs::par_struct_to_struct_enum_t4` becomes
+positive.
+
+### G2 — primitive-element input vectors
+
+Today's runtime reads input vector elements with a fixed 12-byte
+DbRef stride regardless of the actual narrow encoding.  Result:
+`vector<integer>`, `vector<float>`, `vector<i32>`, `vector<u8>`,
+`vector<text>` inputs all give garbage to workers.  Plain
+non-par `for x in vector<integer>` works correctly — the bug is
+specific to par's worker-dispatch.
+
+Phase 1 partially closes this when workers compute their input slice
+using the type-driven element stride (matching what the codegen for
+plain `for ... in items` already does).  Phase 4's typed surface
+makes the closure complete by reading the element type from
+`vector<T>`'s schema instead of trusting a parser-computed
+integer.
+
+`tests/threading_chars.rs::par_int_to_int_t4_primitive_input` and
+its 4 siblings (`par_float_input_t4`, `par_i32_input_t4`,
+`par_u8_input_t4`, `par_text_input_t4`) become positive between
+phase 1 and phase 4.
+
+### Why these aren't in PROBLEMS.md
+
+Plan-06 is the single source of truth for "what par needs to
+support after the redesign".  The `#[ignore]`d tests are canaries
+that get un-`#[ignore]`d when the relevant phase lands; the plan
+file owns the inventory.  Filing per-gap PROBLEMS.md entries would
+duplicate the plan and create maintenance churn.
+
+When phase 1 / phase 4 land, the same commit:
+1. Removes the runtime restriction.
+2. Un-`#[ignore]`s the corresponding tests in `threading_chars.rs`.
+3. Updates this section to mark the gap closed.
+
 ## Hand-off to phase 2
 
 After phase 1 lands, every worker writes to an output store but
 the main thread still uses today's `copy_block` + `copy_claims`
 collection.  Phase 2 introduces the store-rebase pass that retires
 those, removing P1-R3 (`claims` HashSet overhead) and P1-R5 (no
-Rust-level proof of non-aliasing).
+Rust-level proof of non-aliasing).  Surface gaps G1 (struct-enum
+returns) close in phase 1; G2 (primitive-input) progresses in
+phase 1 and finishes in phase 4.
