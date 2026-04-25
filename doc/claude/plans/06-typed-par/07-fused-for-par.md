@@ -269,18 +269,24 @@ unchanged.  Add five fixtures specifically for the new shapes:
 | Fixture | Body shape | Asserts |
 |---|---|---|
 | `tests/scripts/par_for_each.loft` | side-effect only | output log lines; zero result-vector allocation (verify via `LOFT_STORES=warn`) |
-| `tests/scripts/par_for_fold.loft` | accumulate to a single value | final accumulator equals serial fold; only the queue store allocated |
+| `tests/scripts/par_for_fold.loft` | accumulate to a single value via the auto-detect pattern | final accumulator equals serial fold; **`Stitch::Reduce` selected** (verify via `LOFT_LOG=static` showing no queue store allocated, just per-worker 1-element output stores) |
 | `tests/scripts/par_for_break.loft` | `break` early on first match | workers stopped, no further `foo(x)` calls (verify via a counting `foo`) |
 | `tests/scripts/par_for_pair_aware.loft` | body uses `x` and `r` together | results pair with inputs in input order |
-| `tests/scripts/par_call_desugars.loft` | call form `par(ls, foo, 4)` | `LOFT_LOG=static` dump shows synthesized `Value::ParFor`; output identical to pre-desugar behaviour byte-for-byte |
+| `tests/scripts/par_call_desugars.loft` | call form `par(ls, foo, 4)` | `LOFT_LOG=static` dump shows synthesized `Value::ParFor` with `Stitch::Concat`; output identical to pre-desugar behaviour byte-for-byte |
+| `tests/scripts/par_fold_sum.loft` | `par_fold(xs, 0, |a, b| a + b, 4)` | parallel reduction; result equals serial fold; bench shows ≥ 30 % faster than `par(xs, identity, 4).sum()` two-pass |
+| `tests/scripts/par_fold_text_concat.loft` | `par_fold(strings, "", |a, b| a + b, 4)` | result preserves worker-id ordering; equal to serial concat |
 
-Plus three unit tests in `tests/issues.rs`:
+Plus four unit tests in `tests/issues.rs`:
 
 - `par_call_preserves_source_span` — diagnostics inside the
   desugared body cite the original `par(...)` call site.
 - `par_call_with_method_form` — `par(ls, .my_method, 4)` desugars
   correctly.
 - `par_call_with_lambda` — `par(ls, |x| x * 2, 4)` desugars correctly.
+- `par_fold_auto_detect_pattern` — fused for-loop with
+  `acc = combine(acc, r)` body emits `Stitch::Reduce` opcode;
+  body with `acc = combine(acc, r) + 1` (extra computation) does
+  NOT match the pattern and falls back to `Stitch::Queue`.
 
 ### Documentation
 
@@ -351,11 +357,76 @@ Implementation order within phase 7:
    lands, `par_light` is not a name in the language — a user
    writing it gets `unknown function: par_light — did you mean
    par?` from the regular parser-side undefined-name diagnostic.
-4. **7d — doc + CHANGELOG.**  Replace `THREADING.md`'s "par variants"
-   section; new `LOFT.md` subsection; CHANGELOG entry.  CHANGELOG
-   notes `par_light` was an internal flag that no longer exists at
-   the user surface; users who hand-typed it receive an "unknown
-   function" error and rename to `par`.
+4. **7d — `par_fold` surface + auto-detect pure-fold body.**  Two
+   pieces:
+
+   *Surface.* Declare in `default/01_code.loft`:
+
+   ```loft
+   pub fn par_fold<T, U>(input: vector<T>, init: U,
+                         fold: fn(U, T) -> U,
+                         threads: integer) -> U;
+   ```
+
+   Lowers to `Value::ParFor` with `Stitch::Reduce { fold_fn }` and
+   no body.  `init` is encoded as the `Reduce` policy's seed value
+   on the opcode payload (or in a dedicated fixed slot for non-
+   primitive `U`).  Document the monoid requirement: `fold` must
+   be associative with `init` as identity for parallel results to
+   match a serial fold.  Common cases (sum / max / min / boolean
+   AND / boolean OR / text concat) qualify.
+
+   *Auto-detect.* Scope analysis recognises a fused for-loop body
+   of the shape:
+
+   ```loft
+   acc: U = <init>
+   for x in xs par(r = foo(x), 4) {
+       acc = combine(acc, r)            // or `acc op= r` for op ∈ {+, *, |, &, +=, ...}
+   }
+   ```
+
+   When the body matches, codegen rewrites to `Stitch::Reduce`
+   instead of `Stitch::Queue`.  The user wrote a fused for-loop;
+   the compiler emits a parallel reduce.  Both forms (`par_fold(...)`
+   directly, or the fused loop matching the pattern) compile to
+   identical bytecode.
+
+   Pattern criteria for auto-detect:
+   - Body is a single `Set(acc, fold_fn(Var(acc), Var(r)))` or a
+     primitive compound assignment (`acc += r` etc.).
+   - `acc` is declared immediately before the for-loop, with a
+     simple initial value.
+   - `acc` is not read or written elsewhere in the surrounding
+     scope between declaration and loop.
+   - `acc` and the fused for-loop's tail expression match (i.e.
+     `acc` is the value the surrounding code expects after the
+     loop).
+
+   Conservative — false negatives are fine (user gets queue policy
+   instead of reduce; correct output, smaller perf win).  False
+   positives must be impossible: any body access outside the
+   single accumulator update disqualifies the pattern.
+
+   Bench on `total = par_fold(values, 0, |a, b| a + b, 4)` for
+   1 M i64 inputs: expected near-linear speedup vs. serial fold;
+   ≥ 30 % faster than today's `par(values, identity, 4).sum()`
+   two-pass shape (which allocates 8 MB for the intermediate vector
+   that par_fold skips).
+
+5. **7e — doc + CHANGELOG.**  Replace `THREADING.md`'s "par variants"
+   section; new `LOFT.md` subsection covering both the fused for-
+   loop and `par_fold`; CHANGELOG entry.  CHANGELOG notes:
+   - `par(items, fn, threads)` keeps working (now sugar for the
+     fused for-loop with auto-collect body).
+   - `par_fold(items, init, fold, threads)` is new — single-pass
+     parallel reduction with no intermediate vector.
+   - `par_light` was an internal flag that no longer exists at the
+     user surface; users who hand-typed it receive an "unknown
+     function" error and rename to `par`.
+   - The fused for-loop with `acc = combine(acc, r)` body is
+     auto-detected as a parallel reduce — no surface choice
+     needed; same bytecode as `par_fold(...)`.
 
 Each commit lands with `make ci` green.
 

@@ -25,9 +25,13 @@ pub enum Stitch {
     /// when the body never references `r`, and by future par_for_each.
     Discard,
 
-    /// Combine per-worker partial results via a user-supplied fn.
-    /// Used by future par_fold; not in plan-06's initial scope.
-    Reduce { combine_fn: u32 },
+    /// Each worker accumulates over its slice via a user-supplied
+    /// monoidal fold; main thread combines per-worker partials with
+    /// the same fold fn.  Used by `par_fold(input, init, fold,
+    /// threads) -> U` and by the fused for-loop when the body is a
+    /// pure single-accumulator update (auto-detected at scope
+    /// analysis).  Lands in plan-06 phase 3e (runtime) + 7e (surface).
+    Reduce { fold_fn: u32 },
 
     /// Bounded queue: workers push, parent body pops in input order.
     /// Used by the fused for-loop when the body references `r` or

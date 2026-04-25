@@ -121,6 +121,82 @@ the local optimisation: codegen reads the worker fn's `Type` from
 `Data` and embeds the sizes in the opcode at codegen time, removing
 the runtime arg entirely.
 
+### 3e — `Stitch::Reduce` runtime
+
+Implements the third stitch policy from DESIGN.md D1.  `Reduce`
+takes a fold fn `(U, T) -> U` and an initial value of type `U`,
+runs the fold in parallel across the input slices, then combines
+per-worker partial results into one final `U`.  The user surface
+arrives in phase 7e (`par_fold(...)`); phase 3e ships only the
+runtime mechanism.
+
+**Per-worker partial:** each worker allocates a 1-element output
+store of type `U` initialised to `init`.  The worker's loop body
+becomes:
+
+```
+acc = init                            // worker-local register
+for input_idx in worker_slice {
+    elem = input_store[input_idx]
+    acc = fold_fn(acc, elem)
+}
+output_store.set(0, acc)              // store the partial
+```
+
+**Main-thread combine:** after join, the parent thread folds the
+per-worker partials into the final result, starting from `init`:
+
+```
+result = init
+for w in 0..worker_count {
+    partial = worker_outputs[w].get(0)
+    result = fold_fn(result, partial)
+}
+```
+
+The combine pass walks per-worker output stores in worker-id
+order, not input-index order — assumes the fold operation is
+associative.  Document explicitly: `par_fold` requires `fold` to
+form a monoid with `init`.  Non-associative folds produce
+implementation-defined results.
+
+**Memory:** allocates `threads` 1-element output stores instead of
+the `2 × threads`-slot bounded queue (Queue) or per-worker
+N-element output stores (Concat).  Smallest of the four policies.
+
+**Cost:** one fold-fn call per input element (same as serial),
+plus `threads − 1` combine calls on join.  For pure-arithmetic
+folds, the per-element cost dominates and parallel speedup is
+near-linear.
+
+**Touch points:**
+- `src/parallel.rs::run_parallel_reduce`: new fn, ~80 lines.
+  Mirrors `run_parallel_direct`'s slice partitioning but with a
+  scalar accumulator per worker instead of a result-vector slice.
+- `n_parallel_native`'s match adds a new arm dispatching to
+  `run_parallel_reduce` when stitch is `Reduce`.
+- WASM single-threaded fallback: `run_parallel_reduce_sequential`
+  in the `#[cfg(not(feature = "threading"))]` block; identical
+  output to threaded path because the fold is monoidal.
+
+**Tests** (in 3e's commit, not waiting for 7e):
+- `tests/issues.rs::par_phase3e_reduce_sum` — `Stitch::Reduce`
+  with integer addition; assert correct result, single-element
+  output store per worker, no queue allocation.
+- `tests/issues.rs::par_phase3e_reduce_text_concat` — text fold;
+  assert worker-id order is preserved (deterministic for any
+  ordering choice).
+- `tests/issues.rs::par_phase3e_reduce_empty_input` — `init`
+  returned unchanged.
+- `tests/issues.rs::par_phase3e_reduce_single_thread` — worker
+  count clamped to 1; partial == result.
+
+Acceptance: phase-0 suite still passes (Reduce isn't user-visible
+yet — phase 7e wires the surface); the new fixtures pass; bench
+of `Stitch::Reduce` on bench-1's workload (1 M `i64` summed) shows
+a wall-clock floor matching today's `par(...)` then `sum()` two-
+pass approach **minus** the result-vector allocation cost.
+
 ## Cross-cutting interactions
 
 | DESIGN.md item | Phase 3 contribution |
