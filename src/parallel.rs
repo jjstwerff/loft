@@ -79,6 +79,91 @@ impl WorkerProgram {
     }
 }
 
+// ── Plan-06 phase 1 step 4.5 — shared run_parallel_* template ─────────────────
+//
+// Five of the six run_parallel_* variants share a uniform shape after the
+// channel→thread::scope conversion in steps 2–4:
+//
+//   1. Spawn N worker threads via `thread::scope`.
+//   2. Each worker gets a fresh `clone_for_worker()` snapshot, an Arc-bumped
+//      reference to the WorkerProgram, and a row range `start..end`.
+//   3. Each worker computes some R from its row range and returns it.
+//   4. The main thread joins all workers, collecting `Vec<R>` in worker-id order.
+//
+// `parallel_workers` captures that scaffolding; the per-variant `run_parallel_*`
+// fns become thin wrappers that pass a closure describing the per-worker work.
+// `run_parallel_light` is **not** on this template — it uses
+// `clone_for_light_worker(pool_slice)` with a mutable borrow of pre-allocated
+// pool stores.  Phase 5's `Arc<Store>` rewrite makes every path light by
+// default; at that point the template absorbs run_parallel_light too.
+
+/// Common scope-spawn-collect scaffolding for the five non-light
+/// `run_parallel_*` variants.
+///
+/// The closure `f` receives `(start, end, worker_stores, &Arc<WorkerProgram>)`
+/// and must produce a `Send` value `R`.  Each worker's R is collected in
+/// worker-id order and returned as `Vec<R>`.
+///
+/// Implementation notes:
+/// - `f` is captured by reference inside the spawn closures.  The spawn
+///   closures are `move`, so they capture `&f` by `Copy`; rust enforces
+///   `f: Sync` so concurrent calls are safe.
+/// - Each worker gets its own `WorkerStores` via `clone_for_worker`; the
+///   closure may call `add_output_slot` / `take_slot` as needed and
+///   include them in its `R` payload.
+/// - `n_threads` is clamped to `min(n_threads, n_rows)`; for `n_rows == 0`
+///   the caller is expected to short-circuit before calling.
+#[cfg(feature = "threading")]
+fn parallel_workers<R, F>(
+    stores: &Stores,
+    program: WorkerProgram,
+    n_threads: usize,
+    n_rows: usize,
+    f: F,
+) -> Vec<R>
+where
+    R: Send,
+    F: Fn(usize, usize, WorkerStores, &Arc<WorkerProgram>) -> R + Sync,
+{
+    let threads = n_threads.max(1).min(n_rows.max(1));
+    let program = Arc::new(program);
+    thread::scope(|s| {
+        let f_ref = &f;
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let start = t * n_rows / threads;
+                let end = (t + 1) * n_rows / threads;
+                let worker_stores = stores.clone_for_worker();
+                let prog = Arc::clone(&program);
+                s.spawn(move || f_ref(start, end, worker_stores, &prog))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("worker thread panicked"))
+            .collect()
+    })
+}
+
+/// Sequential equivalent of `parallel_workers` for the `not(threading)` path.
+/// Runs the closure once with `start = 0`, `end = n_rows`, and a single
+/// `clone_for_worker()` snapshot.  Returned `Vec<R>` always has length 1.
+#[cfg(not(feature = "threading"))]
+fn parallel_workers<R, F>(
+    stores: &Stores,
+    program: WorkerProgram,
+    _n_threads: usize,
+    n_rows: usize,
+    f: F,
+) -> Vec<R>
+where
+    F: FnOnce(usize, usize, WorkerStores, &Arc<WorkerProgram>) -> R,
+{
+    let worker_stores = stores.clone_for_worker();
+    let prog = Arc::new(program);
+    vec![f(0, n_rows, worker_stores, &prog)]
+}
+
 /// Run workers, writing results directly into `out_ptr`.
 /// # Panics
 /// Panics if a worker thread panics.
@@ -132,98 +217,58 @@ pub fn run_parallel_direct(
         args.push(&wasm_bindgen::JsValue::from(n_rows as u32));
         crate::wasm::host_call_raw("parallel_run", &args);
     }
-    // Native OS threads via thread::scope.
-    //
-    // Plan-06 phase 1 step 2: each worker gets its own output slot
-    // (an exclusive Store appended to its WorkerStores via
-    // add_output_slot).  The worker writes u64 results into the
-    // slot's Store buffer instead of into a shared raw pointer.
-    // After join, the parent reads the slot's bytes back into the
-    // existing out_ptr buffer (preserves the caller's contract;
-    // phase 2 will retire the read-back via store-pointer rebase).
-    //
-    // The win: the cross-thread `SendMutPtr(out_ptr)` raw-pointer
-    // hack is gone.  Workers write to memory they own exclusively;
-    // the parent reads after thread::scope guarantees join.
+    // Native OS threads — uses the parallel_workers template.  Each
+    // worker allocates its own output slot inside the closure; the
+    // returned (Stores, slot_nr, n_bytes, start) tuple lets the
+    // parent copy back into out_ptr at the right offset.  The
+    // cross-thread `SendMutPtr(out_ptr)` raw-pointer hack is gone.
     #[cfg(all(feature = "threading", not(feature = "wasm")))]
     {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
         let ret_sz = return_size as usize;
-
-        thread::scope(|s| {
-            // Spawn each worker; collect (start, ScopedJoinHandle) pairs.
-            // Each worker returns (Stores, slot_nr, byte_count) so the
-            // parent can take_slot + copy back.
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let start = t * n_rows / threads;
-                    let end = (t + 1) * n_rows / threads;
-                    let row_count = end - start;
-                    let bytes_needed = row_count * ret_sz;
-                    let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
-                    let mut worker_stores = stores.clone_for_worker();
-                    let slot = worker_stores.add_output_slot(slot_words);
-                    let prog = Arc::clone(&program);
-                    let input_t = *input;
-                    let extras = extra_args.to_vec();
-
-                    let handle = s.spawn(move || {
-                        let mut state = prog.new_state(worker_stores);
-                        // Write into the worker's exclusively-owned slot.
-                        // SAFETY: the slot's Store was just allocated by
-                        // this worker; the buffer is uninitialised but
-                        // sized for `bytes_needed`; we write exactly
-                        // bytes_needed bytes contiguously.
-                        let slot_ptr = state.database.allocations
-                            [slot.store_nr as usize]
-                            .base_ptr();
-                        for (local_idx, row_idx) in (start..end).enumerate() {
-                            let row_ref = vector::get_vector(
-                                &input_t,
-                                element_size,
-                                row_idx as i64,
-                                &state.database.allocations,
-                            );
-                            let val = state.execute_at_raw(
-                                fn_pos,
-                                &row_ref,
-                                &extras,
-                                ret_sz as u32,
-                            );
-                            unsafe {
-                                let dst = slot_ptr.add(local_idx * ret_sz);
-                                std::ptr::copy_nonoverlapping(
-                                    (&raw const val).cast::<u8>(),
-                                    dst,
-                                    ret_sz,
-                                );
-                            }
-                        }
-                        // Hand the worker's stores + slot info back so
-                        // the parent can take_slot + copy.
-                        (state.database, slot.store_nr, bytes_needed)
-                    });
-                    (start, handle)
-                })
-                .collect();
-
-            // Join each worker, take its slot, copy bytes into the
-            // shared out_ptr at the right offset.
-            for (start, handle) in handles {
-                let (worker_db, slot_nr, n_bytes) = handle.join().expect("worker panic");
-                // SAFETY: out_ptr is non-overlapping per-worker (each
-                // worker's range is disjoint); the slot's Store is now
-                // owned by us via worker_db; we read exactly n_bytes
-                // bytes from the slot.
-                unsafe {
-                    let src = worker_db.allocations[slot_nr as usize].base_ptr();
-                    let dst = out_ptr.add(start * ret_sz);
-                    std::ptr::copy_nonoverlapping(src, dst, n_bytes);
+        let input_t = *input;
+        let extras = extra_args.to_vec();
+        let results = parallel_workers(
+            stores,
+            program,
+            n_threads,
+            n_rows,
+            |start, end, mut ws, prog| {
+                let row_count = end - start;
+                let bytes_needed = row_count * ret_sz;
+                let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
+                let slot = ws.add_output_slot(slot_words);
+                let mut state = prog.new_state(ws);
+                // SAFETY: slot's buffer was just allocated for this worker;
+                // we write exactly bytes_needed bytes contiguously.
+                let slot_ptr = state.database.allocations[slot.store_nr as usize].base_ptr();
+                for (local_idx, row_idx) in (start..end).enumerate() {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx as i64,
+                        &state.database.allocations,
+                    );
+                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                    unsafe {
+                        let dst = slot_ptr.add(local_idx * ret_sz);
+                        std::ptr::copy_nonoverlapping(
+                            (&raw const val).cast::<u8>(),
+                            dst,
+                            ret_sz,
+                        );
+                    }
                 }
-                // worker_db drops here, freeing the slot Store.
+                (state.database, slot.store_nr, bytes_needed, start)
+            },
+        );
+        for (worker_db, slot_nr, n_bytes, start) in results {
+            // SAFETY: per-worker disjoint ranges; n_bytes ≤ slot capacity.
+            unsafe {
+                let src = worker_db.allocations[slot_nr as usize].base_ptr();
+                let dst = out_ptr.add(start * ret_sz);
+                std::ptr::copy_nonoverlapping(src, dst, n_bytes);
             }
-        });
+        }
     }
     #[cfg(not(feature = "threading"))]
     {
@@ -271,71 +316,29 @@ pub fn run_parallel_raw(
     if n_rows == 0 {
         return Vec::new();
     }
-    // Plan-06 phase 1 step 4: same channel→scope swap as
-    // run_parallel_text/_ref.  Workers return Vec<u64> via
-    // ScopedJoinHandle; main thread re-sequences.
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        thread::scope(|s| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let start = t * n_rows / threads;
-                    let end = (t + 1) * n_rows / threads;
-                    let worker_stores = stores.clone_for_worker();
-                    let prog = Arc::clone(&program);
-                    let input_t = *input;
-                    let extras = extra_args.to_vec();
-                    let handle = s.spawn(move || {
-                        let mut state = prog.new_state(worker_stores);
-                        let mut batch = Vec::with_capacity(end - start);
-                        for row_idx in start..end {
-                            let row_ref = vector::get_vector(
-                                &input_t,
-                                element_size,
-                                row_idx as i64,
-                                &state.database.allocations,
-                            );
-                            let val = state.execute_at_raw(
-                                fn_pos,
-                                &row_ref,
-                                &extras,
-                                return_size,
-                            );
-                            batch.push(val);
-                        }
-                        batch
-                    });
-                    (start, handle)
-                })
-                .collect();
-            let mut results = vec![0u64; n_rows];
-            for (start, h) in handles {
-                let batch = h.join().expect("worker thread panicked");
-                for (offset, val) in batch.into_iter().enumerate() {
-                    results[start + offset] = val;
-                }
-            }
-            results
-        })
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results = vec![0u64; n_rows];
-        for (row_idx, result) in results.iter_mut().enumerate() {
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            batch.push(state.execute_at_raw(fn_pos, &row_ref, &extras, return_size));
         }
-        results
+        (start, batch)
+    });
+    let mut results = vec![0u64; n_rows];
+    for (start, batch) in batches {
+        for (offset, val) in batch.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
+    results
 }
 
 /// Parallel text returns: workers copy `Str` to owned `String` before state drops.
@@ -362,76 +365,29 @@ pub fn run_parallel_text(
     if n_rows == 0 {
         return Vec::new();
     }
-    // Plan-06 phase 1 step 3: each worker collects its own batch
-    // of (start_idx, Vec<String>) and returns it via thread::scope's
-    // ScopedJoinHandle — no mpsc channel.  Main thread re-sequences
-    // by start_idx into the contiguous result vector.  The intermediate
-    // `String`s stay Rust-owned for now; phase 1 step 3b (folded with
-    // step 4 in the ref path) writes them into a per-worker text-Store
-    // output slot via OpSetText, completing the "all results live in
-    // a Store" promise.  Removing the channel is the load-bearing win.
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        thread::scope(|s| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let start = t * n_rows / threads;
-                    let end = (t + 1) * n_rows / threads;
-                    let worker_stores = stores.clone_for_worker();
-                    let prog = Arc::clone(&program);
-                    let input_t = *input;
-                    let extras = extra_args.to_vec();
-                    let handle = s.spawn(move || {
-                        let mut state = prog.new_state(worker_stores);
-                        let mut batch = Vec::with_capacity(end - start);
-                        for row_idx in start..end {
-                            let row_ref = vector::get_vector(
-                                &input_t,
-                                element_size,
-                                row_idx as i64,
-                                &state.database.allocations,
-                            );
-                            let s = state.execute_at_text(
-                                fn_pos,
-                                &row_ref,
-                                &extras,
-                                n_hidden_text,
-                            );
-                            batch.push(s);
-                        }
-                        batch
-                    });
-                    (start, end, handle)
-                })
-                .collect();
-            let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-            for (start, _end, handle) in handles {
-                let batch = handle.join().expect("worker thread panicked");
-                for (offset, val) in batch.into_iter().enumerate() {
-                    results[start + offset] = val;
-                }
-            }
-            results
-        })
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-        for (row_idx, result) in results.iter_mut().enumerate() {
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+        let mut state = prog.new_state(ws);
+        let mut batch: Vec<String> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
+            batch.push(state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text));
         }
-        results
+        (start, batch)
+    });
+    let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
+    for (start, batch) in batches {
+        for (offset, val) in batch.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
+    results
 }
 
 /// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
@@ -458,67 +414,22 @@ pub fn run_parallel_ref(
     if n_rows == 0 {
         return Vec::new();
     }
-    // Plan-06 phase 1 step 4: each worker collects its
-    // (Vec<(row_idx, DbRef)>, Stores) tuple and returns it via
-    // thread::scope's ScopedJoinHandle — no mpsc channel.  The
-    // returned Stores still carries the worker's intermediate
-    // allocations (which the parent's copy_from_worker grafts to
-    // deep-copy struct results); phase 2 retires this in favour
-    // of the rebase walk that adopts worker stores by store_nr.
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        thread::scope(|s| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let start = t * n_rows / threads;
-                    let end = (t + 1) * n_rows / threads;
-                    let worker_stores = stores.clone_for_worker();
-                    let prog = Arc::clone(&program);
-                    let input_t = *input;
-                    let extras = extra_args.to_vec();
-                    s.spawn(move || {
-                        let mut state = prog.new_state(worker_stores);
-                        let mut batch = Vec::with_capacity(end - start);
-                        for row_idx in start..end {
-                            let row_ref = vector::get_vector(
-                                &input_t,
-                                element_size,
-                                row_idx as i64,
-                                &state.database.allocations,
-                            );
-                            let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
-                            batch.push((row_idx, val));
-                        }
-                        (batch, state.database)
-                    })
-                })
-                .collect();
-            let mut results = Vec::with_capacity(threads);
-            for h in handles {
-                results.push(h.join().expect("worker thread panicked"));
-            }
-            results
-        })
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut batch = Vec::with_capacity(n_rows);
-        for row_idx in 0..n_rows {
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            let val = state.execute_at_ref(fn_pos, &row_ref, extra_args);
-            batch.push((row_idx, val));
+            batch.push((row_idx, state.execute_at_ref(fn_pos, &row_ref, &extras)));
         }
-        vec![(batch, state.database)]
-    }
+        (batch, state.database)
+    })
 }
 
 /// Parallel integer returns: one `i32` per row, original order.
@@ -542,65 +453,28 @@ pub fn run_parallel_int(
     if n_rows == 0 {
         return Vec::new();
     }
-    // Plan-06 phase 1 step 4: same channel→scope swap as the
-    // other run_parallel_* variants.  Workers return Vec<i64> via
-    // ScopedJoinHandle; main thread re-sequences.
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        thread::scope(|s| {
-            let handles: Vec<_> = (0..threads)
-                .map(|t| {
-                    let start = t * n_rows / threads;
-                    let end = (t + 1) * n_rows / threads;
-                    let worker_stores = stores.clone_for_worker();
-                    let prog = Arc::clone(&program);
-                    let input_t = *input;
-                    let handle = s.spawn(move || {
-                        let mut state = prog.new_state(worker_stores);
-                        let mut batch = Vec::with_capacity(end - start);
-                        for row_idx in start..end {
-                            let row_ref = vector::get_vector(
-                                &input_t,
-                                element_size,
-                                row_idx as i64,
-                                &state.database.allocations,
-                            );
-                            batch.push(state.execute_at(fn_pos, &row_ref));
-                        }
-                        batch
-                    });
-                    (start, handle)
-                })
-                .collect();
-            let mut results = vec![i64::MIN; n_rows];
-            for (start, h) in handles {
-                let batch = h.join().expect("worker thread panicked");
-                for (offset, val) in batch.into_iter().enumerate() {
-                    results[start + offset] = val;
-                }
-            }
-            results
-        })
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results = vec![i64::MIN; n_rows];
-        for (row_idx, result) in results.iter_mut().enumerate() {
-            let row_idx_i32 = row_idx as i64;
+    let input_t = *input;
+    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
-                row_idx_i32,
+                row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at(fn_pos, &row_ref);
+            batch.push(state.execute_at(fn_pos, &row_ref));
         }
-        results
+        (start, batch)
+    });
+    let mut results = vec![i64::MIN; n_rows];
+    for (start, batch) in batches {
+        for (offset, val) in batch.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
+    results
 }
 
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
