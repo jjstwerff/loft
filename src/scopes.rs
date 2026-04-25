@@ -2087,3 +2087,203 @@ mod par_diag_tests {
         assert!(!r.contains("hash_set"), "second violator leaked: {r}");
     }
 }
+
+// ── Plan-06 phase 5e — fixed-point par-safety (DESIGN.md D8 phase 5e) ────────
+
+/// Plan-06 phase 5e — monotonic fixed-point over the call graph.
+///
+/// Replaces 5b's placeholder "cycle returns true optimistically"
+/// trick with a proper fixed-point iteration: every user fn starts
+/// classified true; the worklist demotes fns whose bodies invoke
+/// par-unsafe callees; demotions propagate to callers via the
+/// caller graph (Data::callers_of / D12).
+///
+/// Result: mutually-recursive pure fns (`is_even` / `is_odd` shape)
+/// classify true, where 5b's placeholder would have returned false
+/// pessimistically.  Mutually-recursive fns where ANY participant
+/// is impure correctly demote the whole cycle.
+///
+/// Termination: classifications are monotonic (true → false, never
+/// reverse); worklist re-enqueues only when a demotion actually
+/// happens.  Worst case: every user fn walked twice = O(N + E)
+/// where E = call-graph edge count.
+///
+/// Currently no production caller — phase 5b' wires this in place
+/// of the per-fn `is_par_safe` for the parser's diagnostic.
+#[allow(dead_code)]
+#[must_use]
+pub fn analyse_par_safety_fixpoint(data: &Data) -> HashMap<u32, bool> {
+    use std::collections::VecDeque;
+
+    // Step 1: initial classification.  Every user fn starts true;
+    // stdlib annotations are taken at face value.
+    let user_fns: Vec<u32> = data.user_fn_d_nrs();
+    let mut classification: HashMap<u32, bool> = HashMap::new();
+    for &d_nr in &user_fns {
+        classification.insert(d_nr, true);
+    }
+
+    // Step 2: worklist iteration.
+    let mut worklist: VecDeque<u32> = user_fns.iter().copied().collect();
+    while let Some(d_nr) = worklist.pop_front() {
+        // Skip if already demoted — monotonic.
+        if !classification.get(&d_nr).copied().unwrap_or(false) {
+            continue;
+        }
+        let def = &data.definitions[d_nr as usize];
+        let still_safe = walk_classified(&def.code, data, &classification);
+        if !still_safe {
+            classification.insert(d_nr, false);
+            // Propagate demotion: every caller may need to re-check
+            // because their body now calls a newly-demoted callee.
+            for caller in data.callers_of(d_nr) {
+                if classification.get(&caller).copied().unwrap_or(false) {
+                    worklist.push_back(caller);
+                }
+            }
+        }
+    }
+    classification
+}
+
+/// Walk a Value tree using the current classification map (not
+/// recursive descent like 5b's walk_par_safe_value).  For user-fn
+/// callees, looks up classification[callee]; for stdlib callees,
+/// uses the Purity annotation.  No cache placeholder needed —
+/// the fixed-point loop owns convergence.
+#[allow(dead_code)]
+fn walk_classified(
+    value: &Value,
+    data: &Data,
+    classification: &HashMap<u32, bool>,
+) -> bool {
+    match value {
+        Value::Call(callee, args) => {
+            let safe = call_classified(*callee, data, classification);
+            safe && args
+                .iter()
+                .all(|a| walk_classified(a, data, classification))
+        }
+        Value::CallRef(_, _) => false,
+        Value::Block(b) => b
+            .operators
+            .iter()
+            .all(|v| walk_classified(v, data, classification)),
+        Value::Insert(vs) => vs.iter().all(|v| walk_classified(v, data, classification)),
+        Value::If(c, t, e) => {
+            walk_classified(c, data, classification)
+                && walk_classified(t, data, classification)
+                && walk_classified(e, data, classification)
+        }
+        Value::Loop(body) => body
+            .operators
+            .iter()
+            .all(|v| walk_classified(v, data, classification)),
+        Value::Set(_, rhs) => walk_classified(rhs, data, classification),
+        _ => true,
+    }
+}
+
+#[allow(dead_code)]
+fn call_classified(
+    callee: u32,
+    data: &Data,
+    classification: &HashMap<u32, bool>,
+) -> bool {
+    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
+        return false;
+    }
+    let def = &data.definitions[callee as usize];
+    match def.purity {
+        Purity::Pure
+        | Purity::Impure(ImpureCategory::HostIo)
+        | Purity::Impure(ImpureCategory::Prng)
+        | Purity::Impure(ImpureCategory::Io)
+        | Purity::Impure(ImpureCategory::ParCall) => true,
+        Purity::Impure(ImpureCategory::ParentWrite) => false,
+        Purity::Unknown => {
+            if matches!(def.code, Value::Null) {
+                false
+            } else {
+                // User fn — look up the classification.  If absent
+                // (user_fn_d_nrs missed it), conservative false.
+                classification.get(&callee).copied().unwrap_or(false)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod par_fixpoint_tests {
+    use super::analyse_par_safety_fixpoint;
+    use crate::data::{Data, DefType, ImpureCategory, Purity, Value};
+    use crate::lexer::Position;
+
+    fn pos() -> Position {
+        Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn mutually_recursive_pure_fns_both_classify_safe() {
+        // is_even / is_odd shape — the canonical case 5b's
+        // placeholder trick gets WRONG (returns false for both)
+        // and that 5e gets RIGHT (returns true for both).
+        let mut d = Data::new();
+        let pure_fn = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[pure_fn as usize].purity = Purity::Pure;
+        let is_even = d.add_def("is_even", &pos(), DefType::Function);
+        let is_odd = d.add_def("is_odd", &pos(), DefType::Function);
+        // is_even calls is_odd + min (pure)
+        d.definitions[is_even as usize].code = Value::Call(is_odd, vec![Value::Call(pure_fn, vec![])]);
+        // is_odd calls is_even
+        d.definitions[is_odd as usize].code = Value::Call(is_even, vec![]);
+        let result = analyse_par_safety_fixpoint(&d);
+        assert_eq!(result.get(&is_even), Some(&true), "is_even should be safe");
+        assert_eq!(result.get(&is_odd), Some(&true), "is_odd should be safe");
+    }
+
+    #[test]
+    fn impure_in_cycle_demotes_all_participants() {
+        // a→b→c→a, but b also calls vector_add (parent_write).
+        // All three should classify false.
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let a = d.add_def("a", &pos(), DefType::Function);
+        let b = d.add_def("b", &pos(), DefType::Function);
+        let c = d.add_def("c", &pos(), DefType::Function);
+        d.definitions[a as usize].code = Value::Call(b, vec![]);
+        // b calls bad + c
+        d.definitions[b as usize].code = Value::Call(c, vec![Value::Call(bad, vec![])]);
+        d.definitions[c as usize].code = Value::Call(a, vec![]);
+        let result = analyse_par_safety_fixpoint(&d);
+        assert_eq!(result.get(&a), Some(&false), "a → b → bad");
+        assert_eq!(result.get(&b), Some(&false), "b → bad");
+        assert_eq!(result.get(&c), Some(&false), "c → a → b → bad");
+    }
+
+    #[test]
+    fn pure_fn_unaffected_by_unrelated_impure_fn() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let pure_user = d.add_def("pure_user", &pos(), DefType::Function);
+        let bad_user = d.add_def("bad_user", &pos(), DefType::Function);
+        d.definitions[pure_user as usize].code = Value::Int(0);
+        d.definitions[bad_user as usize].code = Value::Call(bad, vec![]);
+        let result = analyse_par_safety_fixpoint(&d);
+        assert_eq!(result.get(&pure_user), Some(&true));
+        assert_eq!(result.get(&bad_user), Some(&false));
+    }
+
+    #[test]
+    fn empty_data_returns_empty_map() {
+        let d = Data::new();
+        let result = analyse_par_safety_fixpoint(&d);
+        assert!(result.is_empty());
+    }
+}
