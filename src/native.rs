@@ -579,6 +579,29 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         (u16::MAX, return_size)
     };
 
+    // Plan-06 phase 3b — synthesise the Stitch policy from the legacy
+    // (return_size, is_text, is_ref) booleans the parser still emits.
+    // ConcatLegacy's ret_size sentinel encoding (per DESIGN.md D1a):
+    //   0       → text
+    //   u8::MAX → reference
+    //   1..=8   → primitive (inline byte width)
+    let stitch = if is_text {
+        crate::parallel::Stitch::ConcatLegacy {
+            elem_size: element_size as u8,
+            ret_size: 0,
+        }
+    } else if is_ref {
+        crate::parallel::Stitch::ConcatLegacy {
+            elem_size: element_size as u8,
+            ret_size: u8::MAX,
+        }
+    } else {
+        crate::parallel::Stitch::ConcatLegacy {
+            elem_size: element_size as u8,
+            ret_size: return_size as u8,
+        }
+    };
+
     let result_ref = parallel_execute_and_collect(
         stores,
         program,
@@ -586,8 +609,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         &v_input,
         element_size,
         return_size,
-        is_text,
-        is_ref,
+        stitch,
         known_type,
         n_threads,
         &extra_args,
@@ -731,14 +753,28 @@ fn parallel_execute_and_collect(
     input: &DbRef,
     element_size: u32,
     return_size: u32,
-    is_text: bool,
-    is_ref: bool,
+    stitch: crate::parallel::Stitch,
     known_type: u16,
     n_threads: usize,
     extra_args: &[u64],
     n: usize,
     n_hidden_text: usize,
 ) -> DbRef {
+    // Plan-06 phase 3b — single match on Stitch policy replaces the
+    // legacy is_ref/is_text/return_size booleans.  Each arm dispatches
+    // to one of the existing run_parallel_* helpers; phase 3c collapses
+    // them into a single polymorphic worker once the layout work in
+    // phase 2's full rebase walk lands.
+    use crate::parallel::Stitch;
+    // ret_size sentinel encoding (D1a): 0=text, u8::MAX=reference,
+    // 1..=8=primitive with inline byte width.
+    let (is_ref, is_text) = match stitch {
+        Stitch::ConcatLegacy { ret_size, .. } => (ret_size == u8::MAX, ret_size == 0),
+        // Discard / Reduce / Queue: not yet wired through this path —
+        // phase 7 routes them via Value::ParFor instead.
+        _ => unreachable!("parallel_execute_and_collect only handles ConcatLegacy today"),
+    };
+
     let result_db = stores.null();
     let vec_words = ((n as u32) * return_size + 15) / 8;
     let vec_cr = stores.claim(&result_db, vec_words.max(1));
