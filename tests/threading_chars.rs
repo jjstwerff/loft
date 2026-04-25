@@ -466,3 +466,245 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(30));
 }
+
+// ── phase 0d canaries — additional D11 spectrum entries ─────────────
+// Each test asserts the eventual correct behaviour.  Today the
+// shape either fails to compile or returns garbage; the relevant
+// plan-06 phase un-`#[ignore]`s the test as the gap closes.
+
+#[test]
+#[ignore = "par-enum-input: vector<EnumTag> input untested; planned canary for plan-06 phase 1 (type-driven element stride)"]
+fn par_enum_input_t4() {
+    code!(
+        "enum Color { Red, Green, Blue }
+fn idx(c: Color) -> integer { if c == Red { 1 } else if c == Green { 2 } else { 3 } }
+fn run() -> integer {
+    items: vector<Color> = [Red, Green, Blue, Red];
+    sum = 0;
+    for c in items par(r = idx(c), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(7));
+}
+
+#[test]
+#[ignore = "par-vec-of-refs-input: vector<Reference<X>> input untested; planned canary for plan-06 phase 1"]
+fn par_vec_of_refs_input_t4() {
+    // Workers receive a Reference (DbRef into the parent's store)
+    // and return a derived value.  Distinct from vector<Struct>
+    // because the elements are ref-typed, not inline struct.
+    code!(
+        "struct Item { value: integer }
+struct Holder { i: reference Item }
+fn from_holder(h: const Holder) -> integer { h.i.value * 2 }
+fn run() -> integer {
+    a: Item = Item { value: 10 };
+    b: Item = Item { value: 20 };
+    items: vector<Holder> = [Holder { i: a }, Holder { i: b }];
+    sum = 0;
+    for h in items par(r = from_holder(h), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(60));
+}
+
+#[test]
+#[ignore = "par-nested-vector-input: vector<vector<T>> input untested; planned canary for plan-06 phase 4"]
+fn par_nested_vector_input_t4() {
+    // Worker iterates the inner vector.  Outer is the par input.
+    code!(
+        "struct Bag { items: vector<integer> }
+fn sum_bag(b: const Bag) -> integer {
+    s = 0;
+    for x in b.items { s += x; }
+    s
+}
+fn run() -> integer {
+    bags: vector<Bag> = [
+        Bag { items: [1, 2, 3] },
+        Bag { items: [10, 20] },
+        Bag { items: [100] }
+    ];
+    total = 0;
+    for b in bags par(r = sum_bag(b), 4) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(136));
+}
+
+#[test]
+#[ignore = "par-vec-of-fns-input: vector<fn(...) -> T> input untested; planned canary for plan-06 phase 1"]
+fn par_vec_of_fns_input_t4() {
+    // Workers receive a fn-ref and call it on a fixed input.
+    // Whether vector<fn> is even constructable today is part of
+    // what the canary documents.
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn triple(x: integer) -> integer { x * 3 }
+fn quad(x: integer) -> integer { x * 4 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl, triple, quad];
+    total = 0;
+    for f in fs par(r = apply(f), 4) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(90));
+}
+
+#[test]
+#[ignore = "par-sorted-input: sorted<T[key]> input untested; planned canary for plan-06 phase 4 (typed input)"]
+fn par_sorted_input_t4() {
+    code!(
+        "struct Score { value: integer not null }
+fn dbl(s: const Score) -> integer { s.value * 2 }
+fn run() -> integer {
+    sorted_items: sorted<Score[value]> = [];
+    sorted_items += Score { value: 30 };
+    sorted_items += Score { value: 10 };
+    sorted_items += Score { value: 20 };
+    sum = 0;
+    for s in sorted_items par(r = dbl(s), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(120));
+}
+
+#[test]
+#[ignore = "par-hash-input: hash<T[key]> input untested; planned canary for plan-06 phase 4"]
+fn par_hash_input_t4() {
+    code!(
+        "struct Score { name: text not null, value: integer }
+fn dbl(s: const Score) -> integer { s.value * 2 }
+fn run() -> integer {
+    h: hash<Score[name]> = [];
+    h += Score { name: \"a\", value: 10 };
+    h += Score { name: \"b\", value: 20 };
+    h += Score { name: \"c\", value: 30 };
+    sum = 0;
+    for s in h par(r = dbl(s), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(120));
+}
+
+#[test]
+#[ignore = "par-index-input: index<T[key]> input untested; planned canary for plan-06 phase 4"]
+fn par_index_input_t4() {
+    code!(
+        "struct Score { name: text not null, value: integer }
+fn dbl(s: const Score) -> integer { s.value * 2 }
+fn run() -> integer {
+    ix: index<Score[name]> = [];
+    ix += Score { name: \"a\", value: 10 };
+    ix += Score { name: \"b\", value: 20 };
+    sum = 0;
+    for s in ix par(r = dbl(s), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(60));
+}
+
+#[test]
+#[ignore = "par-large-struct-return: worker returning a value-struct > 8 bytes is rejected; planned fix in plan-06 phase 1"]
+fn par_struct_to_large_struct_t4() {
+    // Today's parser-side check_light_eligible / parse_parallel_for
+    // rejects any return type with var_size > 8 unless it's a
+    // Reference.  A large by-value struct hits this.
+    code!(
+        "struct Score { value: integer }
+struct Wide { a: integer, b: integer, c: integer }
+fn make_wide(s: const Score) -> Wide { Wide { a: s.value, b: s.value * 2, c: s.value * 3 } }
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }, Score { value: 3 }];
+    sum = 0;
+    for s in sl par(w = make_wide(s), 4) { sum += w.a + w.b + w.c; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(36));
+}
+
+#[test]
+#[ignore = "par-vector-return: worker returning vector<T> rejected today; planned fix in plan-06 phase 1"]
+fn par_struct_to_vector_t4() {
+    // Worker constructs and returns a vector per element.  Today
+    // the runtime can't represent this.  After phase 1, the per-
+    // worker output store holds vector records like any other.
+    code!(
+        "struct Score { value: integer }
+fn replicate(s: const Score) -> vector<integer> {
+    out: vector<integer> = [];
+    for i in 0..s.value { out += [i]; }
+    out
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 2 }, Score { value: 3 }];
+    total_len = 0;
+    for s in sl par(v = replicate(s), 4) { total_len += len(v); }
+    total_len
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(5));
+}
+
+#[test]
+#[ignore = "par-keyed-collection-return: worker returning hash/sorted/index rejected; planned fix in plan-06 phase 1"]
+fn par_struct_to_keyed_collection_t4() {
+    code!(
+        "struct Score { value: integer }
+struct Tag { id: integer not null, label: text }
+fn build_tags(s: const Score) -> sorted<Tag[id]> {
+    out: sorted<Tag[id]> = [];
+    out += Tag { id: s.value, label: \"v{s.value}\" };
+    out += Tag { id: s.value + 100, label: \"hi\" };
+    out
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }];
+    total_len = 0;
+    for s in sl par(t = build_tags(s), 4) { total_len += len(t); }
+    total_len
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+#[test]
+#[ignore = "par-fn-return: worker returning a fn-ref untested; planned canary for plan-06 phase 1"]
+fn par_struct_to_fn_t4() {
+    // Worker selects and returns a fn-ref based on its input.
+    code!(
+        "struct Score { value: integer }
+fn dbl(x: integer) -> integer { x * 2 }
+fn triple(x: integer) -> integer { x * 3 }
+fn pick(s: const Score) -> fn(integer) -> integer {
+    if s.value > 0 { dbl } else { triple }
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: -1 }, Score { value: 2 }];
+    sum = 0;
+    for s in sl par(f = pick(s), 4) { sum += f(10); }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(70));
+}
