@@ -330,6 +330,93 @@ dispatch is the only call site that escapes typed-IR analysis; it
 gets retired entirely in phase 4 (no replacement — every caller
 already has a typed alternative).
 
+## D11 — Type spectrum on input and output
+
+After plan-06, par's accepted type surface equals the language's
+ordinary fn-signature surface.  **Anywhere you can write
+`fn process(x: T) -> U`, you can also write `par(xs, process, N)`.**
+No size carve-outs, no primitive-vs-struct distinction, no "size > 8
+not supported".  Today's restrictions are runtime-side limitations
+removed by the store-typed pipeline.
+
+### D11a — Input types
+
+`par`'s input is anything that today's `for x in input` accepts:
+
+| Input type | Today | After plan-06 | Closes |
+|---|---|---|---|
+| `vector<Struct>` | ✅ | ✅ | — |
+| `vector<integer>` / `<float>` / `<i32>` / `<u8>` | ❌ garbage (G2) | ✅ | phase 4 (typed input) |
+| `vector<text>` | ❌ garbage (G2) | ✅ | phase 4 |
+| `vector<Reference<T>>` | ❌ likely garbage | ✅ | phase 1 (type-driven stride) |
+| `vector<EnumTag>` (plain enum) | ❓ | ✅ | phase 1 |
+| `vector<StructEnum>` | ❌ size > 8 (G1) | ✅ | phase 1 |
+| `sorted<T[key]>` / `hash<T[key]>` / `index<T[key]>` | ❌ rejected | ✅ | phase 4 — `for x in sorted/hash/index` semantics already exist; typed surface plumbs them through |
+| `vector<vector<T>>` (nested) | ❓ | ✅ | phase 4 — element is a Reference<vector<T>>; workers iterate inner via normal vector ops |
+| `vector<fn(...) -> T>` | ❓ | ✅ | phase 1 — fn-refs are 16-byte values, same path as primitives |
+| Generic `vector<T>` (bounded) | ❓ depends on monomorphisation | ✅ | bounded generics already monomorphise at call site |
+
+The general rule: **iterable in a regular for-loop ⇒ acceptable as
+par input**.  Phase 0a's `tests/threading_chars.rs` carries the
+gap canaries (`#[ignore]`d); the closing phase un-ignores each.
+
+### D11b — Output types
+
+`par`'s output is anything an ordinary fn can return:
+
+| Output type | Today | After plan-06 | Closes |
+|---|---|---|---|
+| primitive scalars (sizes 1–8) | ✅ | ✅ | — |
+| text | ✅ | ✅ | (channel removed in phase 1b) |
+| Reference<Struct> | ✅ | ✅ | (rebase replaces copy_block in phase 2) |
+| Plain enum (1-byte disc) | ✅ | ✅ | — |
+| StructEnum (variant w/ fields) | ❌ size > 8 (G1) | ✅ | phase 1 — per-worker output Stores accept any record-shaped output |
+| Large value-struct (size > 8) | ❌ | ✅ | phase 1 — same root cause |
+| `vector<T>` (worker returns a collection) | ❌ | ✅ | phase 1 — output store can hold a vector record like any other |
+| `hash<T>` / `sorted<T>` / `index<T>` | ❌ | ✅ | phase 1 — keyed collections are stores; rebase handles them |
+| fn-ref | ❌ likely rejected | ✅ | phase 1 — 16-byte values, primitive-path equivalent |
+| null | ✅ degenerate | ✅ | — |
+| Optional<T> (nullable) | ✅ for primitives | ✅ for everything | sentinel-based; orthogonal to par |
+| Tuples | n/a (1.1+) | ✅ when tuples land | tuples are synthetic structs; ride the same path |
+
+### D11c — Principled exception: cross-worker reference graphs
+
+Workers cannot return references to **another worker's** output
+store.  E.g. worker A returning a `Reference<X>` that points into
+worker B's output is forbidden; the rebase pass at stitch time
+keys translation by `(this_worker_id, local_store_nr)`.
+
+This is a deliberate design choice — relaxing it would require
+stitch-time aliasing analysis with significant complexity and
+little real-world payoff (workloads that need shared output graphs
+are rare; the workaround is a post-stitch transformation pass).
+
+The restriction is enforceable at compile time once D2's
+`Arc<read-only>` parent / `&mut` exclusive output relationship is
+in place: a worker's output type can only reference its own
+exclusive output store or read-only parent stores, never another
+worker's exclusive store.
+
+### D11d — Why this is "the full normal spectrum"
+
+Three architectural changes from plan-06 unify the type handling:
+
+1. **D2 relationship** — input is read-only Arc; element stride
+   comes from the type system, not a parser-computed integer.
+2. **Phase 1 per-worker output Stores** — workers write via
+   ordinary `OpSet*` opcodes, the same way every loft fn writes
+   its return value.  No size pre-check; no fixed-byte-width
+   dispatch.
+3. **Phase 4 typed surface** — `parallel_for(input: vector<T>,
+   fn: fn(T) -> U, threads) -> vector<U>` gets compile-time T/U
+   validation; runtime never has to guess.
+
+After all three land, par is **type-uniform with the rest of the
+language**.  The 7-name surface (par, par_light, parallel_for,
+parallel_for_int, parallel_for_light, parallel_get_*) and the
+size-class restrictions are both artefacts of pre-plan-06
+implementation choices, not language design constraints.
+
 ## See also
 
 - [README.md](README.md) — plan-06 phase ladder.
