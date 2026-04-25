@@ -65,35 +65,29 @@ Completed work belongs in CHANGELOG.md and git history.
 
 ## 0.8.5 — loft is learnable
 
-**Goal:** a first-time visitor can install loft, get syntax
-highlighting in their editor, work through a 30-minute tutorial,
-and see the native codegen regression-guarded before anything
-ships to main.  Closes the "on your own" wall newcomers hit today.
+**Goal:** a first-time visitor installs loft, gets syntax highlighting
+in their editor, works through a 30-minute tutorial, and can step
+through a `--native` build under stock GDB or LLDB.  Closes the "on
+your own" wall newcomers hit today.
 
-**Advertising narrative**: "loft is learnable" is the first of three
-advertising-readiness releases leading into 0.9.0.  0.8.6 adds
-extensibility (registry + zero-boilerplate FFI); 0.9.0 adds the
-complete language surface.  Each is a standalone ship with its own
-CHANGELOG entry — users don't have to wait for 0.9.0 to evaluate
-the progression.
+**Advertising narrative:** "learnable" is the first of three
+advertising-readiness ships (0.8.5 / 0.8.6 / 0.9.0).  0.8.6 adds
+extensibility + first-class IDE support; 0.9.0 finishes the language
+surface.  Each is a standalone tag.
 
 ### Tooling polish
 
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
-| SH.1  | TextMate grammar for `.loft` syntax highlighting       | S  | ✓      | DX.md            |
-| SH.2  | VS Code extension (syntax + snippets + run task)       | S  | ✓      | DX.md            |
-| DX.1  | Quick-start `examples/` directory at repo root — discoverable path for the scattered `lib/graphics/examples/*.loft`, brick-buster, moros-editor, house-scene canvas demo; each with a one-paragraph README. | XS | ✓      | DX.md            |
+| SH.1  | TextMate grammar for `.loft`                           | S  | ✓      | DX.md            |
+| SH.2  | VS Code extension (grammar + snippets + run task)      | S  | ✓      | DX.md            |
+| DX.1  | Quick-start `examples/` directory at repo root         | XS | ✓      | DX.md            |
+| DX.3  | "Learn loft in 30 minutes" walkthrough page            | S  | ✓      | DX.md            |
+| NDB.0 | `--native-debug` flag — DWARF in `--native` builds     | XS | ✓      | NATIVE_DEBUG.md  |
 
 *(DX.4 native-CI parity already in place — `tests/native.rs::native_dir` /
 `native_scripts` run inside `cargo nextest run --profile ci` with empty
 NATIVE_SKIP / SCRIPTS_NATIVE_SKIP lists.)*
-
-### Narrative
-
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| DX.3  | "Learn loft in 30 minutes" walkthrough — single discoverable GitHub Pages page that guides a first-time visitor from `loft hello.loft` through structs, pattern match, `par()` parallel, and HTML export using the house-scene canvas demo as the anchor.  Complements DX.1's reference-style examples/ with a narrative path.  Real VS Code screenshots (depends on SH.2 landing first). | S  | —      | this-session     |
 
 ### Ship criteria
 
@@ -102,17 +96,19 @@ NATIVE_SKIP / SCRIPTS_NATIVE_SKIP lists.)*
   SH.2 from VS Code Marketplace, open `examples/10-2d-canvas.loft`,
   read DX.3 top-to-bottom, and run the demo within 30 minutes from
   zero prior exposure.  Hands-on feedback collected before tagging.
-- The `tests/native.rs` binary runs in the fast CI job, not just
-  `ci-full`.
+- `loft --native --native-debug hello.loft` produces a binary that
+  steps cleanly under stock `gdb` / `lldb` — variable names are
+  rust-internal but the basic motion works.
 
 ---
 
-## 0.8.6 — loft is extensible
+## 0.8.6 — loft is extensible + first-class editor support
 
 **Goal:** `loft install <name>` works; a user can add external
-libraries to their project without cloning and wiring by hand; the
-native-extension author experience is boilerplate-free.  Prepares
-the ground for 0.9.0's `PKG.EXTRACT` library-repo split.
+libraries without cloning and wiring by hand; the native-extension
+author experience is boilerplate-free.  In parallel, the Loft
+Language Server lights up VSCode, Eclipse, JetBrains, and Neovim with
+diagnostics + outline + hover via thin marketplace plugins.
 
 ### Ecosystem foundation
 
@@ -123,21 +119,20 @@ the ground for 0.9.0's `PKG.EXTRACT` library-repo split.
 | FFI.3   | Eliminate per-function glue in native.rs               | M  | ✓      | GAME_INFRA.md    |
 | FFI.4   | Docs: zero-boilerplate native function guide           | S  | ✓      | GAME_INFRA.md    |
 | PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
-| PKG.REG | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted `registry.txt`; 3–5 first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one.  Registered libraries stay in-repo for 0.8.6; the extraction into separate GitHub projects is 0.9.0's PKG.EXTRACT.  | M  | ✓      | PACKAGES.md      |
+| PKG.REG | Central package registry MVP — `loft install <name>`   | M  | ✓      | PACKAGES.md      |
 
-### Language server foundation
+### Language server + IDE plugins
 
-The Loft Language Server is the highest-leverage editor-integration
-investment: one server unlocks first-class support across VSCode,
-Eclipse (via LSP4E), JetBrains (via LSP4IJ), Helix, Neovim, Sublime,
-and the future browser IDE (W2 in 1.0.0).  See SH.2's VSCode extension
-as the test ground; this entry upgrades the experience from
-grammar-only highlighting to semantic, type-aware editing.
+One LSP server unlocks first-class support across every editor that
+speaks the protocol.  Per-IDE plugins are thin marketplace shims
+(~200 lines each) on top of LSP4E / LSP4IJ / nvim-lspconfig.
 
-| ID    | Title                                                  | E  | Design | Source           |
-|-------|--------------------------------------------------------|----|--------|------------------|
-| LSP.1 | `loft-lsp` MVP binary — `publishDiagnostics`, `documentSymbol`, `hover`.  Reuses the existing parser + type checker; exposes them over JSON-RPC.  Requires a public `parse_file(text) -> (Data, Vec<Diagnostic>)` accessor and a stable diagnostic-range struct (today errors print to stderr; LSP needs `(start, end, severity, message, code)`).  Runs against any LSP4E-capable editor on day one — Eclipse + Neovim parity for diagnostics + outline + hover. | M | — | this-session |
-| NDB.0 | `--native-debug` CLI flag — pass `-Cdebuginfo=2` (and drop `-O` even under `--native-release`) so the rustc invocation produces DWARF that stock GDB / LLDB can consume out of the box.  Native binaries become steppable in any GDB-driven front-end (CLI, Emacs gud, vim termdebug, Eclipse CDT, KDevelop) — variable names show as the rust-internal `var_x` form until NDB.1 lands. | XS | — | this-session |
+| ID            | Title                                                  | E  | Design | Source           |
+|---------------|--------------------------------------------------------|----|--------|------------------|
+| LSP.1         | `loft-lsp` MVP — diagnostics + outline + hover         | M  | ✓      | LSP.md           |
+| IDE.ECLIPSE   | Eclipse plugin via LSP4E (LSP.1 features)              | S  | ✓      | LSP.md           |
+| IDE.JETBRAINS | JetBrains plugin via LSP4IJ (LSP.1 features)           | S  | ✓      | LSP.md           |
+| IDE.NEOVIM    | Neovim docs + `nvim-lspconfig` snippet                 | XS | ✓      | LSP.md           |
 
 ### Ship criteria
 
@@ -147,12 +142,13 @@ grammar-only highlighting to semantic, type-aware editing.
   hand-written type-pun functions remaining (down from ~15 today).
 - A worked example of a third-party library outside the `loft`
   repo registering to the registry and being `loft install`-able.
-- All Tier 1 tooling (SH.1 / SH.2 / DX.1 / DX.3 from 0.8.5) still
-  green against the registry-resolved libraries — no tutorial
-  drift.
-- `loft-lsp` MVP serves diagnostics + outline + hover under both
-  VSCode and Eclipse on a sample 1k-line program, with re-parse
-  latency under 100 ms in release mode.
+- All 0.8.5 tooling (SH.1 / SH.2 / DX.1 / DX.3) still green against
+  the registry-resolved libraries — no tutorial drift.
+- `loft-lsp` serves diagnostics + outline + hover under VSCode,
+  Eclipse, JetBrains, and Neovim on a sample 1k-line program, with
+  re-parse latency under 100 ms in release mode.
+- Eclipse Marketplace listing live; JetBrains Marketplace listing
+  live; `nvim-loft.lua` snippet shipped under `doc/`.
 
 ---
 
@@ -170,23 +166,20 @@ beyond the solo-maintainer monorepo.
 **Advertising readiness** — the 0.8.5 / 0.8.6 / 0.9.0 sequence is
 the three-ship progression:
 - **0.8.5** — *learnable*: syntax highlighting, VS Code extension,
-  30-minute tutorial, native-CI parity.
-- **0.8.6** — *extensible*: `loft install <name>`, package registry,
-  zero-boilerplate FFI.
+  30-minute tutorial, native-mode debugging in stock GDB / LLDB.
+- **0.8.6** — *extensible + first-class IDE*: `loft install <name>`,
+  package registry, zero-boilerplate FFI, language server with
+  Eclipse / JetBrains / Neovim plugins.
 - **0.9.0** — *fully working*: language polish (L1 + P2 + W-warn +
-  C52 + C53), plus `PKG.EXTRACT` moving every library out of the
-  interpreter repo.
+  C52 + C53), full LSP editing surface + DAP debugger, plus
+  `PKG.EXTRACT` moving every library out of the interpreter repo.
 
 Each ship is a standalone tag with its own CHANGELOG entry — users
 don't wait for 0.9.0 to see loft graduate from "curious hobby
 project" to "bettable scripting language".
 
-**Implementation order** within 0.9.0's own items (language polish
-sub-chunks + PKG.EXTRACT) lives in
-[PLANNING.md § Recommended Implementation Order](PLANNING.md#recommended-implementation-order).
 PKG.EXTRACT is the last 0.9.0 item — it depends on 0.8.6's PKG.REG
-(install path) and FFI.1–4 (boilerplate-free authoring), so starting
-it earlier duplicates work that's about to be deleted.
++ FFI.1–4, so starting it earlier duplicates work.
 
 ### Language polish
 
@@ -201,34 +194,39 @@ it earlier duplicates work that's about to be deleted.
 
 ### User-biting caveats — all ship in 0.9.0
 
-Each of these is a commitment, not a maybe.  Deferring any of them
-makes the "fully working language" label dishonest.
+Each is a commitment, not a maybe.  Deferring any makes the
+"fully working language" label dishonest.  Step plans:
+[QUALITY.md](QUALITY.md).
 
-Step plans for both entries: [QUALITY.md](QUALITY.md).
+| ID   | Title                                                  | E  | Source                      |
+|------|--------------------------------------------------------|----|-----------------------------|
+| C54  | `integer` → i64; `long` becomes a historical alias     | L  | CAVEATS.md, QUALITY.md      |
+| P54  | First-class `JsonValue` enum; old text-based JSON gone | MH | PROBLEMS.md #54, QUALITY.md |
 
-| ID   | Title                                                                     | E  | Source                      |
-|------|---------------------------------------------------------------------------|----|-----------------------------|
-| C54  | Switch `integer` from i32 to i64 — eliminates the `i32::MIN` null-sentinel trap; `long` becomes a historical alias | L  | CAVEATS.md, QUALITY.md  |
-| P54  | First-class `JsonValue` enum (JObject / JArray / JString / JNumber / JBool / JNull) — `json_parse` returns it; `MyStruct.parse` accepts only `JsonValue`; old text-based `json_items` / `json_nested` / `json_long` / `json_float` / `json_bool` surface withdrawn | MH | PROBLEMS.md #54, QUALITY.md |
+### Language server — full editing surface
+
+Builds on LSP.1 from 0.8.6.  Once these land, parity with JDT-for-Java
+in Eclipse is achievable, modulo optional project-wizard / debug-
+perspective polish.
+
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| LSP.2  | `loft-lsp` editing — completion, def, refs, rename, semantic tokens, code actions | MH | ✓ | LSP.md |
+| LSP.3  | `loft-dap` MVP — DAP server for interpreter-mode debug | MH | ✓ | LSP.md |
+| NDB.1  | `.loft.map` source map + `loft-gdb.py` / `loft-lldb.py` plugins | M  | ✓ | NATIVE_DEBUG.md  |
 
 ### Compilation cache and constant store
 
-The `.loftc` bytecode cache and `CONST_STORE` are implemented (Phase A + D).
-Remaining work must land in 0.9.0 to avoid stability risk in later milestones.
-Design: [CONST_STORE.md](CONST_STORE.md).
+The `.loftc` bytecode cache and `CONST_STORE` are implemented
+(Phase A + D).  Remaining work must land in 0.9.0 to avoid stability
+risk in later milestones.
 
 | ID     | Title                                                  | E  | Design | Source           |
 |--------|--------------------------------------------------------|----|--------|------------------|
 | CS.B   | mmap cache loading (native)                            | S  | ✓      | CONST_STORE.md   |
-| CS.C1  | Serialize `Data` struct to binary                      | MH | ~      | CONST_STORE.md   |
+| CS.C1  | Serialize `Data` struct to binary (prereq for CS.C2/C3) | MH | ~     | CONST_STORE.md   |
 | CS.C2  | `build.rs` pre-compile stdlib to `.loftc`              | M  | ✓      | CONST_STORE.md   |
 | CS.C3  | WASM: `include_bytes!` stdlib cache, skip re-parse     | S  | ✓      | CONST_STORE.md   |
-
-CS.B becomes worthwhile after CS.C2 produces a larger cache file. CS.C1 is
-the prerequisite for CS.C2/C3 — it requires serializing `Definition`,
-`Value`, `Type`, `Attribute`, and `Function` (recursive enums, ~2K lines
-in `data.rs`). Hand-written binary serialization preferred over serde to
-avoid adding serde to the default feature set.
 
 ### Developer experience
 
@@ -236,28 +234,11 @@ avoid adding serde to the default feature set.
 |-------|--------------------------------------------------------|----|--------|------------------|
 | DX.2  | CI: add package tests + native tests to workflow       | XS | ✓      | DX.md            |
 
-*(Tooling polish — SH.1, SH.2, DX.1, DX.3, DX.4 — shipped in 0.8.5.)*
-
-### Language server — full editing surface
-
-Builds on LSP.1 from 0.8.6.  Once these land, "first-class" support
-across LSP-capable IDEs is achievable: VSCode and Eclipse get
-parity with what JDT delivers for Java, modulo Eclipse's optional
-project-wizard / debug-perspective polish.
-
-| ID     | Title                                                  | E  | Design | Source           |
-|--------|--------------------------------------------------------|----|--------|------------------|
-| LSP.2  | `loft-lsp` editing — `completion`, `definition`, `references`, `rename`, `semanticTokens`, `codeAction`.  Requires a public `Definition` → `(file, line, col)` index over `Data`, a completion engine over the AST, and a fix-it catalogue (most diagnostics already know the fix). | MH | — | this-session |
-| LSP.3  | `loft-dap` MVP — Debug Adapter Protocol server: `launch`, `setBreakpoints`, `stackTrace`, `variables`, `next` / `stepIn` / `stepOut`.  Reuses the TR1.3 `vector<StackFrame>` capture and `LOFT_LOG=minimal` step-trace plumbing; needs an in-process pause/step API on the interpreter. | MH | — | this-session |
-| NDB.1  | `.loft.map` source-map emission + GDB / LLDB plugins.  `--native-debug` writes a sidecar mapping `(rs_file, rs_line) → (loft_file, loft_line)` and `(rs_var) → (loft_var)`.  Ship `loft-gdb.py` and `loft-lldb.py` that read the sidecar and rewrite GDB's view: `step` walks loft lines, `bt` shows loft fn names, `info locals` shows the user's identifiers.  Same source-map data feeds LSP.3's breakpoint resolution — write it once, consume it twice. | M | — | this-session |
-
 ### Library extraction
 
 | ID          | Title                                                  | E  | Design | Source           |
 |-------------|--------------------------------------------------------|----|--------|------------------|
-| PKG.EXTRACT | Extract every library under `lib/*/` out of the interpreter repo and into separate GitHub projects; register each library in the PKG.REG registry (shipped in 0.8.6) so `loft install <name>` resolves at library granularity regardless of how repos are grouped.  **Logical bundling is allowed** — libraries that form a natural family can share a single repo with per-library subdirectories, as long as each exports a `loft.toml` and the registry points at the right subdir.  Expected groupings: `jjstwerff/loft-moros` (moros_editor / moros_map / moros_render / moros_sim / moros_ui — all part of the Moros editor stack); `jjstwerff/loft-net` (server + web + game_protocol — shared HTTP / WS / protocol infrastructure); `jjstwerff/loft-graphics` (graphics + imaging — both visual, the imaging library is the low-level backend graphics draws on top of); and standalone repos for the rest (`loft-crypto`, `loft-random`, `loft-arguments`, `loft-shapes`).  The `loft` repo keeps only the interpreter + compiler + stdlib core (`default/*.loft`) + language tests.  Removes ~960 MB of mostly build-artefact + asset bloat from casual clones of the interpreter (`lib/graphics` alone is 811 MB) and matches the "one language, many libraries" story that every healthy ecosystem tells.  Depends on PKG.REG (0.8.6), DX.4 (0.8.5 cross-repo CI story), and FFI.1–4 (0.8.6 boilerplate-free native-extension author experience).  Moves happen one bundle at a time ("extract loft-moros, land, extract loft-net, land, ...") so a failed move doesn't strand the others; the bundling choice per-family is revisable up until the extract commit. | L  | —      | PACKAGES.md      |
-
-*(PKG.7 + PKG.REG + FFI.1–4 shipped in 0.8.6 as the ecosystem foundation.)*
+| PKG.EXTRACT | Move `lib/*/` out into per-family GitHub repos via PKG.REG | L | ✓ | PACKAGES.md      |
 
 ---
 
@@ -278,23 +259,9 @@ with hands-on testing on every supported platform.
 | W5    | Docs & examples browser                                | M  | ✓      | WEB_IDE.md       |
 | W6    | Export/import ZIP + PWA offline                        | M  | ✓      | WEB_IDE.md       |
 
-### Desktop IDE plugins
-
-The LSP + DAP servers from 0.8.6 / 0.9.0 land here as thin per-IDE
-shims.  Each is a few hundred lines of glue — the heavy lifting is
-the language server itself.  Marketplace listings let users get
-first-class Loft support inside their existing toolchain without
-switching editors.
-
-| ID            | Title                                                  | E  | Design | Source           |
-|---------------|--------------------------------------------------------|----|--------|------------------|
-| IDE.ECLIPSE   | Eclipse plugin via LSP4E + DSP4E — register `.loft` content type, point the generic editor at `loft-lsp`, point the debug launcher at `loft-dap`.  Optional polish: project wizard, run-config UI.  Marketplace listing on Eclipse.org. | S | — | this-session |
-| IDE.JETBRAINS | JetBrains plugin via LSP4IJ — same shim shape, IntelliJ / RustRover / PyCharm marketplaces. | S | — | this-session |
-| IDE.NEOVIM    | Neovim documentation + sample `nvim-lspconfig` snippet pointing at `loft-lsp` (plus `nvim-dap` for debugger).  No plugin to maintain — just docs. | XS | — | this-session |
-
-*(Web IDE — W2–W6 above — uses the same `loft-lsp` server compiled
-to WASM; it's not a fourth editor binding, just the LSP server in
-a different host.)*
+*(Desktop IDE plugins — IDE.ECLIPSE, IDE.JETBRAINS, IDE.NEOVIM —
+shipped in 0.8.6 alongside LSP.1.  Web IDE W2–W6 above uses the same
+`loft-lsp` server compiled to WASM.)*
 
 ### Scene scripting
 
@@ -359,7 +326,7 @@ before tagging — no "appears fixed" exceptions.
 | A4     | Spatial index operations                               | M  | ✓      | PLANNING.md         |
 | O4     | Native: direct-emit local collections                  | M  | ✓      | PLANNING.md         |
 | O5     | Native: omit `stores` from pure functions              | M  | ✓      | PLANNING.md         |
-| NDB.2  | DWARF rewrite — post-process the rustc DWARF (using `gimli` to read/write `.debug_line` + `.debug_info` sections) so file/line entries point directly at `.loft` source.  Stock GDB / LLDB needs no plugin; works in Eclipse CDT, Emacs gud, vim termdebug, KDevelop without any Loft-aware tooling.  Polish on top of NDB.1 — most users get enough from the plugin. | MH | — | this-session |
+| NDB.2  | DWARF rewrite — point `.debug_line` / `.debug_info` directly at `.loft`; stock debuggers need no plugin | MH | ✓ | NATIVE_DEBUG.md |
 
 ---
 
