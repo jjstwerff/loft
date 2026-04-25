@@ -1186,23 +1186,38 @@ use #count instead"
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
             self.parse_parallel_worker(elem_var, &elem_tp);
 
-        // Plan-06 phase 5b proper — par-safety analyser hook lives
-        // here.  The analyser (`scopes::is_par_safe` /
-        // `scopes::par_unsafe_reason`) is implemented and unit-tested
-        // (commits 227acc8, 63ad94d) but is NOT invoked at compile
-        // time yet because today's stdlib annotation coverage is
-        // ~15 fns out of ~150.  Calling is_par_safe on a worker
-        // that legitimately uses unannotated stdlib (set_store_lock,
-        // claim, etc. — internals invoked by compiler-generated
-        // wrapper code) produces false-positive rejections that
-        // would break every existing par() call site.
+        // Plan-06 phase 5b' — par-safety SHALLOW check.  Emits a
+        // Level::Warning when the worker fn's body directly calls
+        // a Purity::Impure(ParentWrite) callee.  Shallow (no
+        // recursion into callees) so it produces ZERO false
+        // positives — every flagged worker has an actual
+        // parent-write call right in its body.
         //
-        // Phase 5b' (after the 5a annotation sweep is comprehensive)
-        // re-enables the diagnostic at Level::Error per DESIGN.md D8.
-        // Until then the analyser is available via the public API
-        // (e.g. for tooling / IDE plugins that want to lint par
-        // bodies optimistically).
-        let _ = fn_d_nr; // silence unused warning until 5b' enables the check
+        // The deep `scopes::is_par_safe` analyser (transitively
+        // checks callees) and the fixed-point variant
+        // `analyse_par_safety_fixpoint` are implemented and
+        // tested (commits 227acc8, c0cda7f) but not yet invoked
+        // here — they require comprehensive 5a annotation
+        // coverage to avoid false positives on legitimate workers
+        // that touch unannotated stdlib internals.  Phase 5b'
+        // upgrades to deep + Level::Error once the sweep is done.
+        if !self.first_pass && fn_d_nr != u32::MAX {
+            if let Some(callee_name) =
+                crate::scopes::worker_calls_parent_write(&self.data, fn_d_nr)
+            {
+                let worker_name = self.data.def(fn_d_nr).original_name();
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "par() worker '{}' directly calls parent-write fn '{}'.  \
+                     Worker writes to non-local state silently vanish at thread join \
+                     (plan-06 D2.0).  Consider returning the value instead.  \
+                     Phase 5b' will upgrade this to a compile error.",
+                    worker_name,
+                    callee_name
+                );
+            }
+        }
 
         // Comma separating worker from thread count.
         self.lexer.token(",");
