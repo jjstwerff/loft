@@ -597,6 +597,7 @@ fn OpLengthText(v1: text) -> integer;
 pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
+#pure
 
 fn OpSizeText(v1: text) -> integer;
 #rust"@v1.chars().count() as i64"
@@ -604,12 +605,14 @@ fn OpSizeText(v1: text) -> integer;
 pub fn size(both: text) -> integer {
   OpSizeText(both)
 }
+#pure
 
 fn OpLengthCharacter(v1: character) -> integer;
 // Byte length of the character's UTF-8 encoding (1–4).
 pub fn len(both: character) -> integer {
   OpLengthCharacter(both)
 }
+#pure
 
 fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
@@ -783,6 +786,7 @@ fn OpLengthVector(r: vector) -> integer;
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)
 }
+#pure
 
 fn OpClearVector(r: vector);
 #rust"vector::clear_vector(&@r, &mut s.database.allocations);"
@@ -844,10 +848,17 @@ pub fn assert(test: boolean, message: text, file: text, line: integer);
 pub fn panic(message: text, file: text, line: integer);
 // Write a structured log record at the chosen severity.
 // The file and line are injected by the compiler; do not pass them manually.
+// Plan-06 phase 5a: log_* are #impure(host_io) — observable side
+// effect (writes to log sink) but the host serialises calls across
+// par workers, so they're par-safe.
 pub fn log_info(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_warn(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_error(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_fatal(message: text, file: text, line: integer);
+#impure(host_io)
 fn OpPrint(v1: text);
 #rust"#[cfg(all(target_arch = \"wasm32\", not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(not(target_arch = \"wasm32\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
@@ -855,11 +866,13 @@ fn OpPrint(v1: text);
 pub fn print(v1: text) {
   OpPrint(v1);
 }
+#impure(host_io)
 // Writes v followed by a newline. The standard choice for line-oriented output.
 
 pub fn println(v1: text) {
   OpPrint("{v1}\n");
 }
+#impure(host_io)
 
 type keys_definition;
 fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> integer;

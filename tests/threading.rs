@@ -600,13 +600,40 @@ fn purity_annotations_parsed_from_stdlib() {
     // Phase 5a sample sweep — body fns annotated #pure.  More
     // categories land as the sweep continues; this is the gate
     // that catches accidental annotation drift.
-    for name in &["n_abs", "n_min", "n_max", "n_clamp"] {
+    let pure_fns = &[
+        "n_abs", "n_min", "n_max", "n_clamp", // arithmetic
+        "n_len", "n_size", // text/character/vector length
+    ];
+    for name in pure_fns {
         let d_nr = p.data.def_nr(name);
         if d_nr != u32::MAX {
             assert_eq!(
                 p.data.def(d_nr).purity,
                 Purity::Pure,
                 "{name} should be #pure"
+            );
+        }
+    }
+
+    // Phase 5a sample sweep — host-IO annotations.  These are
+    // observable side effects (write to log sink / stdout) but
+    // serialise through the host bridge, so par workers may call
+    // them.
+    let host_io_fns = &[
+        "n_log_info",
+        "n_log_warn",
+        "n_log_error",
+        "n_log_fatal",
+        "n_print",
+        "n_println",
+    ];
+    for name in host_io_fns {
+        let d_nr = p.data.def_nr(name);
+        if d_nr != u32::MAX {
+            assert_eq!(
+                p.data.def(d_nr).purity,
+                Purity::Impure(ImpureCategory::HostIo),
+                "{name} should be #impure(host_io)"
             );
         }
     }
