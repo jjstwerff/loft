@@ -1581,7 +1581,7 @@ pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
 ///
 /// Runs workers in parallel via the shared `parallel::parallel_workers`
 /// template (rayon work-stealing pool, plan-06 phase 1.5), mirroring the
-/// interp path's `run_parallel_raw` in `src/parallel.rs`.
+/// interp path's `run_parallel_direct` in `src/parallel.rs` (post-phase-3c).
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,

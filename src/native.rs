@@ -6,8 +6,7 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "threading")]
 use crate::parallel::{
-    WorkerProgram, run_parallel_direct, run_parallel_raw, run_parallel_ref,
-    run_parallel_text,
+    WorkerProgram, run_parallel_direct, run_parallel_ref, run_parallel_text,
 };
 use crate::platform::sep;
 use crate::state::{Call, State};
@@ -875,11 +874,20 @@ fn parallel_execute_and_collect(
                 }
             }
         }
-        Stitch::ConcatLegacy { ret_size, .. } if ret_size >= 4 => {
-            // Primitive 4-or-more-byte (i32, i64, f32, f64, fn-ref).
-            // Workers write directly into the result store via the
-            // per-worker output slot mechanism (phase 1); main thread
-            // copies bytes back into the contiguous result buffer.
+        Stitch::ConcatLegacy { .. } => {
+            // Primitive return — any inline byte width 1..=8 (bool,
+            // byte, i32, i64, single, float, fn-ref).  Workers write
+            // directly into per-worker output slots via the phase-1
+            // mechanism; main thread copies the slot bytes back into
+            // the contiguous result buffer at offset `start*ret_sz`.
+            //
+            // Plan-06 phase 3c consolidation: this single arm replaced
+            // the prior (ret_size>=4 → run_parallel_direct) /
+            // (ret_size<4 → run_parallel_raw + set_byte) split.  Both
+            // paths end up at the same byte offsets — buffer(vec_rec)
+            // begins at `ptr + vec_rec*8 + 8`, and set_byte(vec_rec,
+            // 8+i, 0, _) writes to `ptr + vec_rec*8 + 8 + i` — so
+            // run_parallel_direct subsumes the sub-4-byte case.
             let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
             run_parallel_direct(
                 stores,
@@ -893,25 +901,6 @@ fn parallel_execute_and_collect(
                 out_ptr,
                 n,
             );
-        }
-        Stitch::ConcatLegacy { .. } => {
-            // Primitive sub-4-byte (bool, byte).  Workers return
-            // `u64` per row; main thread re-sequences and writes
-            // single-byte values into the result store.
-            let results = run_parallel_raw(
-                stores,
-                program,
-                fn_pos,
-                input,
-                element_size,
-                return_size,
-                n_threads,
-                extra_args,
-            );
-            let store = stores.store_mut(&result_db);
-            for (i, &raw) in results.iter().enumerate() {
-                store.set_byte(vec_rec, 8u32 + i as u32, 0, raw as i32);
-            }
         }
         // Discard / Reduce / Queue: not wired through this path
         // today — phase 7 routes them via Value::ParFor instead.

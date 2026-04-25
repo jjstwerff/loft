@@ -533,7 +533,14 @@ pub fn run_parallel_direct(
     }
 }
 
-/// Channel-based parallel: one u64 per row (for bool and other sub-4-byte types).
+/// Channel-based parallel: one u64 per row.
+///
+/// Plan-06 phase 3c: production paths now use `run_parallel_direct`
+/// uniformly (it handles every inline byte width 1..=8 via per-worker
+/// output slots).  This helper survives because `tests/threading.rs`
+/// drives it directly to verify the parallel runtime returns one
+/// `u64` per row in the right order.
+///
 /// # Panics
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
@@ -542,6 +549,7 @@ pub fn run_parallel_direct(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
+#[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-3c
 #[must_use]
 pub fn run_parallel_raw(
     stores: &Stores,
