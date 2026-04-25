@@ -358,48 +358,59 @@ pub fn run_parallel_text(
     if n_rows == 0 {
         return Vec::new();
     }
+    // Plan-06 phase 1 step 3: each worker collects its own batch
+    // of (start_idx, Vec<String>) and returns it via thread::scope's
+    // ScopedJoinHandle — no mpsc channel.  Main thread re-sequences
+    // by start_idx into the contiguous result vector.  The intermediate
+    // `String`s stay Rust-owned for now; phase 1 step 3b (folded with
+    // step 4 in the ref path) writes them into a per-worker text-Store
+    // output slot via OpSetText, completing the "all results live in
+    // a Store" promise.  Removing the channel is the load-bearing win.
     #[cfg(feature = "threading")]
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, String)>>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
-                    batch.push((row_idx, s));
+        thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let start = t * n_rows / threads;
+                    let end = (t + 1) * n_rows / threads;
+                    let worker_stores = stores.clone_for_worker();
+                    let prog = Arc::clone(&program);
+                    let input_t = *input;
+                    let extras = extra_args.to_vec();
+                    let handle = s.spawn(move || {
+                        let mut state = prog.new_state(worker_stores);
+                        let mut batch = Vec::with_capacity(end - start);
+                        for row_idx in start..end {
+                            let row_ref = vector::get_vector(
+                                &input_t,
+                                element_size,
+                                row_idx as i64,
+                                &state.database.allocations,
+                            );
+                            let s = state.execute_at_text(
+                                fn_pos,
+                                &row_ref,
+                                &extras,
+                                n_hidden_text,
+                            );
+                            batch.push(s);
+                        }
+                        batch
+                    });
+                    (start, end, handle)
+                })
+                .collect();
+            let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
+            for (start, _end, handle) in handles {
+                let batch = handle.join().expect("worker thread panicked");
+                for (offset, val) in batch.into_iter().enumerate() {
+                    results[start + offset] = val;
                 }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
             }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
+            results
+        })
     }
     #[cfg(not(feature = "threading"))]
     {
