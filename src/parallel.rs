@@ -442,6 +442,7 @@ pub fn run_parallel_direct(
     extra_args: &[u64],
     out_ptr: *mut u8,
     n_rows: usize,
+    primitive_input_size: u32,
 ) {
     if n_rows == 0 {
         return;
@@ -449,7 +450,7 @@ pub fn run_parallel_direct(
     // WASM threading dispatches to JS host bridge (Worker Threads).
     #[cfg(all(feature = "threading", feature = "wasm"))]
     {
-        let _ = (stores, program, extra_args);
+        let _ = (stores, program, extra_args, primitive_input_size);
         // Call globalThis.loftHost.parallel_run(fn_pos, input_store, input_rec,
         //   input_pos, element_size, return_size, n_threads, out_store, out_rec, out_pos, n_rows)
         let args = js_sys::Array::new();
@@ -474,6 +475,7 @@ pub fn run_parallel_direct(
         let input_t = *input;
         let extras = extra_args.to_vec();
         let prog = Arc::new(program);
+        let prim_in = primitive_input_size;
         let results = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
             let row_count = end - start;
             let bytes_needed = row_count * ret_sz;
@@ -490,7 +492,19 @@ pub fn run_parallel_direct(
                     row_idx as i64,
                     &state.database.allocations,
                 );
-                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                // Plan-06 phase 1 G2 — primitive-input dispatch.
+                let val = if prim_in > 0 {
+                    let v = read_primitive_at(&state.database, &row_ref, prim_in);
+                    state.execute_at_raw_primitive_input(
+                        fn_pos,
+                        v,
+                        prim_in,
+                        &extras,
+                        ret_sz as u32,
+                    )
+                } else {
+                    state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
+                };
                 unsafe {
                     let dst = slot_ptr.add(local_idx * ret_sz);
                     std::ptr::copy_nonoverlapping(
@@ -524,7 +538,18 @@ pub fn run_parallel_direct(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            let val = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            let val = if primitive_input_size > 0 {
+                let v = read_primitive_at(&state.database, &row_ref, primitive_input_size);
+                state.execute_at_raw_primitive_input(
+                    fn_pos,
+                    v,
+                    primitive_input_size,
+                    extra_args,
+                    return_size,
+                )
+            } else {
+                state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size)
+            };
             unsafe {
                 let dst = out_ptr.add(row_idx * ret_sz);
                 std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
@@ -768,6 +793,7 @@ pub fn run_parallel_light(
     out_ptr: *mut u8,
     n_rows: usize,
     pool: &mut WorkerPool,
+    primitive_input_size: u32,
 ) {
     if n_rows == 0 {
         return;
@@ -789,6 +815,7 @@ pub fn run_parallel_light(
                 let extras = extra_args.to_vec();
                 let out_t = Arc::clone(&out);
                 let ret_sz = return_size as usize;
+                let prim_in = primitive_input_size;
 
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
@@ -800,7 +827,23 @@ pub fn run_parallel_light(
                             row_idx_i32,
                             &state.database.allocations,
                         );
-                        let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                        // Plan-06 phase 1 G2 — primitive-input dispatch.
+                        // Workers whose first param is a primitive
+                        // (1/4/8 bytes) need the inline value, not a
+                        // DbRef.  read_primitive_at extracts the
+                        // appropriate width from the row record.
+                        let val = if prim_in > 0 {
+                            let v = read_primitive_at(&state.database, &row_ref, prim_in);
+                            state.execute_at_raw_primitive_input(
+                                fn_pos,
+                                v,
+                                prim_in,
+                                &extras,
+                                ret_sz as u32,
+                            )
+                        } else {
+                            state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
+                        };
                         unsafe {
                             let dst = out_t.0.add(row_idx * ret_sz);
                             std::ptr::copy_nonoverlapping(
@@ -826,7 +869,18 @@ pub fn run_parallel_light(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            let val = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            let val = if primitive_input_size > 0 {
+                let v = read_primitive_at(&state.database, &row_ref, primitive_input_size);
+                state.execute_at_raw_primitive_input(
+                    fn_pos,
+                    v,
+                    primitive_input_size,
+                    extra_args,
+                    return_size,
+                )
+            } else {
+                state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size)
+            };
             unsafe {
                 let dst = out_ptr.add(row_idx * return_size as usize);
                 std::ptr::copy_nonoverlapping(
@@ -835,6 +889,27 @@ pub fn run_parallel_light(
                     return_size as usize,
                 );
             }
+        }
+    }
+}
+
+/// Plan-06 phase 1 G2 — read a 1/4/8-byte primitive from a row
+/// `DbRef`.  Returns the value zero-extended into a `u64` for
+/// uniform passing to `execute_at_raw_primitive_input`.
+#[allow(dead_code)] // not threading: only the sequential branch uses it
+fn read_primitive_at(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    size: u32,
+) -> u64 {
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        match size {
+            1 => u64::from(*p),
+            4 => u64::from(*p.cast::<u32>()),
+            _ => *p.cast::<u64>(),
         }
     }
 }
