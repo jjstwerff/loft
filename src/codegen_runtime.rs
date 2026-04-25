@@ -1652,57 +1652,28 @@ where
     if n == 0 {
         return Vec::new();
     }
-    #[cfg(all(feature = "threading", not(feature = "wasm")))]
-    {
-        let threads = (n_threads.max(1) as usize).min(n);
-        let mut results = vec![0i64; n];
-        std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(threads);
-            for t in 0..threads {
-                let start = t * n / threads;
-                let end = (t + 1) * n / threads;
-                let mut worker_stores = stores.clone_for_worker();
-                let input_t = *input;
-                handles.push(s.spawn(move || {
-                    let mut local: Vec<(usize, i64)> = Vec::with_capacity(end - start);
-                    for row_idx in start..end {
-                        let elm = vector::get_vector(
-                            &input_t,
-                            elem_size as u32,
-                            row_idx as i64,
-                            &worker_stores.allocations,
-                        );
-                        let val = worker(&mut worker_stores.stores, elm);
-                        local.push((row_idx, val));
-                    }
-                    local
-                }));
-            }
-            for h in handles {
-                let local = h.join().expect("worker thread panicked");
-                for (idx, val) in local {
-                    results[idx] = val;
-                }
-            }
-        });
-        results
-    }
-    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
-    {
-        let _ = n_threads;
-        let mut worker_stores = stores.clone_for_worker();
-        let mut results = Vec::with_capacity(n);
-        for row_idx in 0..n {
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut local: Vec<i64> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let elm = vector::get_vector(
-                input,
+                &input_t,
                 elem_size as u32,
                 row_idx as i64,
-                &worker_stores.allocations,
+                &ws.allocations,
             );
-            results.push(worker(&mut worker_stores.stores, elm));
+            local.push(worker(&mut ws.stores, elm));
         }
-        results
+        (start, local)
+    });
+    let mut results = vec![0i64; n];
+    for (start, local) in batches {
+        for (offset, val) in local.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
+    results
 }
 
 /// Text-returning variant of `n_parallel_for_native`.  The worker closure returns
@@ -1769,57 +1740,28 @@ where
     if n == 0 {
         return Vec::new();
     }
-    #[cfg(all(feature = "threading", not(feature = "wasm")))]
-    {
-        let threads = (n_threads.max(1) as usize).min(n);
-        let mut results: Vec<String> = (0..n).map(|_| String::new()).collect();
-        std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(threads);
-            for t in 0..threads {
-                let start = t * n / threads;
-                let end = (t + 1) * n / threads;
-                let mut worker_stores = stores.clone_for_worker();
-                let input_t = *input;
-                handles.push(s.spawn(move || {
-                    let mut local: Vec<(usize, String)> = Vec::with_capacity(end - start);
-                    for row_idx in start..end {
-                        let elm = vector::get_vector(
-                            &input_t,
-                            elem_size as u32,
-                            row_idx as i64,
-                            &worker_stores.allocations,
-                        );
-                        let val = worker(&mut worker_stores.stores, elm);
-                        local.push((row_idx, val));
-                    }
-                    local
-                }));
-            }
-            for h in handles {
-                let local = h.join().expect("worker thread panicked");
-                for (idx, val) in local {
-                    results[idx] = val;
-                }
-            }
-        });
-        results
-    }
-    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
-    {
-        let _ = n_threads;
-        let mut worker_stores = stores.clone_for_worker();
-        let mut results = Vec::with_capacity(n);
-        for row_idx in 0..n {
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut local: Vec<String> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let elm = vector::get_vector(
-                input,
+                &input_t,
                 elem_size as u32,
                 row_idx as i64,
-                &worker_stores.allocations,
+                &ws.allocations,
             );
-            results.push(worker(&mut worker_stores.stores, elm));
+            local.push(worker(&mut ws.stores, elm));
         }
-        results
+        (start, local)
+    });
+    let mut results: Vec<String> = (0..n).map(|_| String::new()).collect();
+    for (start, local) in batches {
+        for (offset, val) in local.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
+    results
 }
 
 /// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure
@@ -1902,54 +1844,22 @@ where
     if n == 0 {
         return Vec::new();
     }
-    #[cfg(all(feature = "threading", not(feature = "wasm")))]
-    {
-        let threads = (n_threads.max(1) as usize).min(n);
-        std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(threads);
-            for t in 0..threads {
-                let start = t * n / threads;
-                let end = (t + 1) * n / threads;
-                let mut worker_stores = stores.clone_for_worker();
-                let input_t = *input;
-                handles.push(s.spawn(move || {
-                    let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(end - start);
-                    for row_idx in start..end {
-                        let elm = vector::get_vector(
-                            &input_t,
-                            elem_size as u32,
-                            row_idx as i64,
-                            &worker_stores.allocations,
-                        );
-                        let r = worker(&mut worker_stores.stores, elm);
-                        batch.push((row_idx, r));
-                    }
-                    (batch, worker_stores.stores)
-                }));
-            }
-            handles
-                .into_iter()
-                .map(|h| h.join().expect("worker thread panicked"))
-                .collect()
-        })
-    }
-    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
-    {
-        let _ = n_threads;
-        let mut worker_stores = stores.clone_for_worker();
-        let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(n);
-        for row_idx in 0..n {
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let elm = vector::get_vector(
-                input,
+                &input_t,
                 elem_size as u32,
                 row_idx as i64,
-                &worker_stores.allocations,
+                &ws.allocations,
             );
-            let r = worker(&mut worker_stores.stores, elm);
+            let r = worker(&mut ws.stores, elm);
             batch.push((row_idx, r));
         }
-        vec![(batch, worker_stores.stores)]
-    }
+        (batch, ws.stores)
+    })
 }
 
 /// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.

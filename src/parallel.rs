@@ -97,36 +97,39 @@ impl WorkerProgram {
 // pool stores.  Phase 5's `Arc<Store>` rewrite makes every path light by
 // default; at that point the template absorbs run_parallel_light too.
 
-/// Common scope-spawn-collect scaffolding for the five non-light
-/// `run_parallel_*` variants.
+/// Common scope-spawn-collect scaffolding for the parallel runtime.
 ///
-/// The closure `f` receives `(start, end, worker_stores, &Arc<WorkerProgram>)`
-/// and must produce a `Send` value `R`.  Each worker's R is collected in
-/// worker-id order and returned as `Vec<R>`.
+/// Spawns N worker threads (N = `min(n_threads, n_rows)`), each running
+/// `f(start, end, worker_stores) -> R` over its row range with a fresh
+/// `clone_for_worker` snapshot.  Returns `Vec<R>` in worker-id order.
+///
+/// Used by both the interpreter dispatchers in this file and the native
+/// codegen dispatchers in `src/codegen_runtime.rs`.  The interpreter
+/// path needs an `Arc<WorkerProgram>`; it constructs its own and the
+/// closure captures it.  The native path constructs no extra context;
+/// it just runs a Rust closure per row.
 ///
 /// Implementation notes:
-/// - `f` is captured by reference inside the spawn closures.  The spawn
-///   closures are `move`, so they capture `&f` by `Copy`; rust enforces
-///   `f: Sync` so concurrent calls are safe.
-/// - Each worker gets its own `WorkerStores` via `clone_for_worker`; the
-///   closure may call `add_output_slot` / `take_slot` as needed and
-///   include them in its `R` payload.
+/// - `f` is captured by reference inside the spawn closures.  The
+///   spawn closures are `move`, so they capture `&f` by `Copy`; the
+///   `Sync` bound ensures concurrent calls are safe.
+/// - Each worker gets its own `WorkerStores` via `clone_for_worker`;
+///   the closure may call `add_output_slot` / `take_slot` as needed
+///   and include them in its `R` payload.
 /// - `n_threads` is clamped to `min(n_threads, n_rows)`; for `n_rows == 0`
 ///   the caller is expected to short-circuit before calling.
 #[cfg(feature = "threading")]
-fn parallel_workers<R, F>(
+pub(crate) fn parallel_workers<R, F>(
     stores: &Stores,
-    program: WorkerProgram,
     n_threads: usize,
     n_rows: usize,
     f: F,
 ) -> Vec<R>
 where
     R: Send,
-    F: Fn(usize, usize, WorkerStores, &Arc<WorkerProgram>) -> R + Sync,
+    F: Fn(usize, usize, WorkerStores) -> R + Sync,
 {
     let threads = n_threads.max(1).min(n_rows.max(1));
-    let program = Arc::new(program);
     thread::scope(|s| {
         let f_ref = &f;
         let handles: Vec<_> = (0..threads)
@@ -134,8 +137,7 @@ where
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 let worker_stores = stores.clone_for_worker();
-                let prog = Arc::clone(&program);
-                s.spawn(move || f_ref(start, end, worker_stores, &prog))
+                s.spawn(move || f_ref(start, end, worker_stores))
             })
             .collect();
         handles
@@ -149,19 +151,17 @@ where
 /// Runs the closure once with `start = 0`, `end = n_rows`, and a single
 /// `clone_for_worker()` snapshot.  Returned `Vec<R>` always has length 1.
 #[cfg(not(feature = "threading"))]
-fn parallel_workers<R, F>(
+pub(crate) fn parallel_workers<R, F>(
     stores: &Stores,
-    program: WorkerProgram,
     _n_threads: usize,
     n_rows: usize,
     f: F,
 ) -> Vec<R>
 where
-    F: FnOnce(usize, usize, WorkerStores, &Arc<WorkerProgram>) -> R,
+    F: FnOnce(usize, usize, WorkerStores) -> R,
 {
     let worker_stores = stores.clone_for_worker();
-    let prog = Arc::new(program);
-    vec![f(0, n_rows, worker_stores, &prog)]
+    vec![f(0, n_rows, worker_stores)]
 }
 
 /// Run workers, writing results directly into `out_ptr`.
@@ -227,40 +227,35 @@ pub fn run_parallel_direct(
         let ret_sz = return_size as usize;
         let input_t = *input;
         let extras = extra_args.to_vec();
-        let results = parallel_workers(
-            stores,
-            program,
-            n_threads,
-            n_rows,
-            |start, end, mut ws, prog| {
-                let row_count = end - start;
-                let bytes_needed = row_count * ret_sz;
-                let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
-                let slot = ws.add_output_slot(slot_words);
-                let mut state = prog.new_state(ws);
-                // SAFETY: slot's buffer was just allocated for this worker;
-                // we write exactly bytes_needed bytes contiguously.
-                let slot_ptr = state.database.allocations[slot.store_nr as usize].base_ptr();
-                for (local_idx, row_idx) in (start..end).enumerate() {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
+        let prog = Arc::new(program);
+        let results = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
+            let row_count = end - start;
+            let bytes_needed = row_count * ret_sz;
+            let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
+            let slot = ws.add_output_slot(slot_words);
+            let mut state = prog.new_state(ws);
+            // SAFETY: slot's buffer was just allocated for this worker;
+            // we write exactly bytes_needed bytes contiguously.
+            let slot_ptr = state.database.allocations[slot.store_nr as usize].base_ptr();
+            for (local_idx, row_idx) in (start..end).enumerate() {
+                let row_ref = vector::get_vector(
+                    &input_t,
+                    element_size,
+                    row_idx as i64,
+                    &state.database.allocations,
+                );
+                let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                unsafe {
+                    let dst = slot_ptr.add(local_idx * ret_sz);
+                    std::ptr::copy_nonoverlapping(
+                        (&raw const val).cast::<u8>(),
+                        dst,
+                        ret_sz,
                     );
-                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                    unsafe {
-                        let dst = slot_ptr.add(local_idx * ret_sz);
-                        std::ptr::copy_nonoverlapping(
-                            (&raw const val).cast::<u8>(),
-                            dst,
-                            ret_sz,
-                        );
-                    }
                 }
-                (state.database, slot.store_nr, bytes_needed, start)
-            },
-        );
+            }
+            (state.database, slot.store_nr, bytes_needed, start)
+        });
         for (worker_db, slot_nr, n_bytes, start) in results {
             // SAFETY: per-worker disjoint ranges; n_bytes ≤ slot capacity.
             unsafe {
@@ -318,7 +313,8 @@ pub fn run_parallel_raw(
     }
     let input_t = *input;
     let extras = extra_args.to_vec();
-    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
         let mut state = prog.new_state(ws);
         let mut batch = Vec::with_capacity(end - start);
         for row_idx in start..end {
@@ -367,7 +363,8 @@ pub fn run_parallel_text(
     }
     let input_t = *input;
     let extras = extra_args.to_vec();
-    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
         let mut state = prog.new_state(ws);
         let mut batch: Vec<String> = Vec::with_capacity(end - start);
         for row_idx in start..end {
@@ -416,7 +413,8 @@ pub fn run_parallel_ref(
     }
     let input_t = *input;
     let extras = extra_args.to_vec();
-    parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+    let prog = Arc::new(program);
+    parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
         let mut state = prog.new_state(ws);
         let mut batch = Vec::with_capacity(end - start);
         for row_idx in start..end {
@@ -454,7 +452,8 @@ pub fn run_parallel_int(
         return Vec::new();
     }
     let input_t = *input;
-    let batches = parallel_workers(stores, program, n_threads, n_rows, |start, end, ws, prog| {
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
         let mut state = prog.new_state(ws);
         let mut batch = Vec::with_capacity(end - start);
         for row_idx in start..end {
