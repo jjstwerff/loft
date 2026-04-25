@@ -31,26 +31,40 @@ different**, not just different runtime fns:
   (threading + wasm, threading + non-wasm, no-threading).  The
   worker is a bytecode fn dispatched via `state.execute_at_raw()`.
 - `src/codegen_runtime.rs:1581::n_parallel_for_native` (the
-  native-codegen path) is **sequential** today — a plain
-  `for i in 0..n` loop calling the worker closure inline.  No
-  `thread::scope`, no parallelism.
+  native-codegen path) is **sequential today, by mistake** — a
+  plain `for i in 0..n` loop calling the worker closure inline.
+  No `thread::scope`, no parallelism, despite the function name.
 
-Phase 1's "workers write to output stores" migration applies to
-both, but the shape differs:
+The native path's missing parallelism is a real bug: a `loft --native`
+build of a program using `par(items, work, 4)` runs the par as a
+serial for-loop and ignores the thread count.  Bench/11_par's 12 ms
+loft-native is **single-threaded** running against rust's 4 ms
+**parallel-on-4-threads**, so the gap is bigger than the table
+suggests — apples-to-apples (rust serial vs loft-native serial)
+would put loft-native further behind, and proper native parallelism
+should bring it to the same ~4 ms range as rust.
 
-- For `run_parallel_direct` (interpreter): each worker thread
-  receives an exclusive output Store; the parent reads from per-
-  worker stores after join.
-- For `n_parallel_for_native` (native sequential): the calling
-  thread writes results into ONE output Store while iterating;
-  no per-worker split needed.  The same store-API surface serves
-  both paths; the threading-vs-sequential distinction stays.
+**G4 — `n_parallel_for_native` is sequential.**  Plan-06 phase 1
+fixes this as part of the output-store migration.  Both paths
+need:
+- Per-worker output Stores (workers write into their own store).
+- `thread::scope` × N workers actually running in parallel.
 
-Parallelising the native path is **out of scope for plan-06** —
-bench/11_par's 12 ms loft-native vs. 4 ms rust shows the sequential
-native path is already competitive when the worker inner loop is
-well-optimised by rustc.  Filed as a follow-up: "native par
-parallelism".
+Phase 1's migration shape is therefore the **same** for both
+paths, not different:
+
+- Each worker thread receives an exclusive output Store.
+- The parent reads from per-worker stores after join.
+- The interpreter path already has the threading scaffolding;
+  phase 1 just changes where the worker writes.
+- The native path needs the threading scaffolding added; the
+  generated Rust closure must be Send-friendly (most compute
+  workers already are).
+
+After phase 1 the native bench should be in rust's range — that's
+the regression test: loft-native ≤ ~5 ms on the bench-11 workload
+(today's 4 ms rust threshold + a small loft-overhead margin).
+If it's not, phase 1's native-side work is incomplete.
 
 ## Why transitional
 

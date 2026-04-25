@@ -51,13 +51,15 @@ auto-light heuristic at `src/parser/builtins.rs:362`.
 Phase 0a's source survey + characterisation tests + bench surfaced
 findings that change how subsequent phases approach the work:
 
-1. **The interpreter + native paths are structurally different.**
-   `run_parallel_direct` (interpreter) IS parallel via `thread::scope`;
-   `n_parallel_for_native` (native codegen) is sequential.  Phase 1's
-   "workers write to output stores" migration handles both but with
-   different shapes (per-worker stores for the interpreter, one
-   shared output store for the sequential native path).  See
-   01-output-store.md "Important finding from phase 0a".
+1. **The interpreter is parallel; the native-codegen path is
+   sequential by mistake.**  `run_parallel_direct` (interpreter)
+   uses `thread::scope` × N workers; `n_parallel_for_native` (native
+   codegen) iterates `for i in 0..n` in the calling thread, ignoring
+   the user's thread count argument.  This is a real bug — `--native`
+   builds of par-using programs lose the parallelism the keyword
+   promises.  Tracked as **G4**; phase 1 closes both paths to the
+   same shape (per-worker output stores + `thread::scope` × N).
+   See 01-output-store.md "Important finding from phase 0a".
 
 2. **The fused for-loop syntax `for x in ls par(r = foo(x), 4) { … }`
    already works today.**  Phase 7 isn't building this construction;
@@ -65,12 +67,14 @@ findings that change how subsequent phases approach the work:
    value-position desugar + `par_fold` sugar.  See 07-fused-for-par.md
    "Insight from phase 0a".
 
-3. **Three surface gaps tracked under plan-06:** G1 (struct-enum
+3. **Four surface gaps tracked under plan-06:** G1 (struct-enum
    return rejected), G2 (primitive-element input gives garbage),
-   G3 (`--native-wasm` rejects par at codegen).  All three close in
-   plan-06 phases 1 / 4 / 1+D6 respectively.  Each has an
-   `#[ignore]`d canary in `tests/threading_chars.rs` waiting to be
-   un-ignored.
+   G3 (`--native-wasm` rejects par at codegen), G4
+   (`n_parallel_for_native` is sequential despite the parallel
+   keyword).  All four close in plan-06 phase 1 (G1, G3, G4) or
+   phase 4 (G2).  Each has an `#[ignore]`d canary in
+   `tests/threading_chars.rs` or a phase-1-acceptance bench
+   threshold (G4: loft-native ≤ ~5 ms on bench-11).
 
 4. **D11 type-spectrum tracker** in 00-baseline-and-bench.md § 0d:
    17 `#[ignore]`d canaries cover the shapes plan-06 must accept

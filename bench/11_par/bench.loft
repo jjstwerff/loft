@@ -9,11 +9,16 @@
 // - python: multiprocessing.Pool(4)  (4 worker processes — GIL
 //   prevents threads from speeding up CPU-bound work)
 // - rust:   std::thread::spawn × 4   (range-partitioned)
+// - loft-interp: par(items, work, 4) — real 4-thread parallelism
+//   via thread::scope.
+// - loft-native: today's `n_parallel_for_native` runs sequentially
+//   despite the keyword (G4 — plan-06 phase 1 fixes this).  Until
+//   phase 1 lands, this column measures single-threaded native
+//   throughput; expected post-phase-1 it drops into rust's range.
 // - loft-wasm: today's wasm codegen rejects par (OpFreeRef et al
-//   not emitted in the wasm path).  Plan-06 phase 1's typed
-//   pipeline + D6 single-threaded fallback fix this; the column
-//   then measures loft's *serial* throughput in WASM.  Until then
-//   the column shows `-`.
+//   not emitted in the wasm path; G3).  Plan-06 phase 1 + D6
+//   single-threaded fallback fix this; the column then measures
+//   loft's *serial* throughput in WASM.  Until then `-`.
 //
 // Plan-06 phases re-run this and assert no regression past ±5 %.
 

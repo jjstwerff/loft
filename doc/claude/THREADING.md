@@ -236,13 +236,14 @@ Workload: `bench/11_par/bench.loft` — 100 K-element vector,
 | Column | Time | Notes |
 |---|---|---|
 | python | 33ms | `multiprocessing.Pool(4)` — 4 worker processes |
-| loft-interp | 44ms | `par(items, work, 4)` — 4 threads |
-| loft-native | 12ms | same loft source, native-compiled, 4 threads |
+| loft-interp | 44ms | `par(items, work, 4)` — 4 threads (real parallel) |
+| loft-native | 12ms | **single-threaded** — G4: `n_parallel_for_native` ignores the thread count and runs sequentially.  Plan-06 phase 1 fixes this; expected post-phase-1 number is ~4ms in line with rust |
 | loft-wasm | `-` | par codegen rejects today (G3 — fixed by phase 1) |
 | rust | 4ms | `std::thread::spawn × 4` — std-only, range-partitioned |
 
-Plan-06 phases re-run `make bench` and assert no regression past
-±5 % on the loft-interp + loft-native columns.
+Plan-06 phase 1's bench gate: loft-interp within ±5 % of 44 ms;
+loft-native ≤ ~5 ms (drop into rust's range as G4 closes).
+Subsequent phases assert ±5 % regression on both columns.
 
 ## See also
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
