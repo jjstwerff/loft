@@ -585,16 +585,36 @@ fn purity_annotations_parsed_from_stdlib() {
         Purity::Impure(ImpureCategory::ParCall),
         "parallel_for_light should be #impure(par_call)"
     );
-    // Sanity: an unannotated stdlib fn should be Purity::Unknown
-    // (the conservative default — phase 5b's analyser treats it as
-    // ParentWrite-impure for safety until annotated).
-    let now_d_nr = p.data.def_nr("n_now");
-    if now_d_nr != u32::MAX {
+    // Sanity: a fn that is genuinely Unknown should stay so.  We
+    // pick a deeply internal one that no plan-06 5a sweep is going
+    // to touch.  (n_now used to live here, but phase 5a annotated
+    // it as #impure(host_io) — clock reads have an observable host
+    // effect even though they're par-safe.)
+    let unknown_d_nr = p.data.def_nr("n_OpClearScratch");
+    if unknown_d_nr != u32::MAX {
         assert_eq!(
-            p.data.def(now_d_nr).purity,
+            p.data.def(unknown_d_nr).purity,
             Purity::Unknown,
-            "n_now is unannotated → Purity::Unknown"
+            "n_OpClearScratch is unannotated → Purity::Unknown"
         );
+    }
+    // Verify the new annotations from phase 5a image/file/env/time
+    // sweep landed correctly.
+    for (name, expected) in &[
+        ("n_now", Purity::Impure(ImpureCategory::HostIo)),
+        ("n_ticks", Purity::Impure(ImpureCategory::HostIo)),
+        ("n_env_variable", Purity::Impure(ImpureCategory::HostIo)),
+        ("n_file", Purity::Impure(ImpureCategory::Io)),
+        ("n_delete", Purity::Impure(ImpureCategory::Io)),
+    ] {
+        let d_nr = p.data.def_nr(name);
+        if d_nr != u32::MAX {
+            assert_eq!(
+                p.data.def(d_nr).purity,
+                *expected,
+                "{name} should be {expected:?}"
+            );
+        }
     }
 
     // Phase 5a sample sweep — body fns annotated #pure.  More
