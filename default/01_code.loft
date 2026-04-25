@@ -1031,18 +1031,21 @@ fn __add_int(a: integer, b: integer) -> integer { a + b }
 
 // Sum of all integer elements. Returns 0 for an empty vector.
 pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
+#pure
 // Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
 pub fn min_of<T: Ordered>(v: vector<T>) -> T {
   result = v[0];
   for i in 1..v.len() { if v[i] < result { result = v[i] } };
   result
 }
+#pure
 // Largest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
 pub fn max_of<T: Ordered>(v: vector<T>) -> T {
   result = v[0];
   for i in 1..v.len() { if result < v[i] { result = v[i] } };
   result
 }
+#pure
 // Sum of vector elements with caller-supplied identity.  Works on any Addable type.
 // Example: sum([10, 20, 12], 0) == 42
 pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
@@ -1050,6 +1053,7 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
   for i in 0..v.len() { result = result + v[i] };
   result
 }
+#pure
 
 // --- Field iteration support types ---
 
