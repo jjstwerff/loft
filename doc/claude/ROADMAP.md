@@ -125,6 +125,19 @@ the ground for 0.9.0's `PKG.EXTRACT` library-repo split.
 | PKG.7   | Lock file (`loft.lock`) for reproducible builds        | S  | ✓      | manifest.rs      |
 | PKG.REG | Central package registry MVP — `loft install <name>` fetches from a GitHub-hosted `registry.txt`; 3–5 first-party libraries seed the ecosystem so newcomers hit `loft install graphics` / `loft install json` and get working dependencies on day one.  Registered libraries stay in-repo for 0.8.6; the extraction into separate GitHub projects is 0.9.0's PKG.EXTRACT.  | M  | ✓      | PACKAGES.md      |
 
+### Language server foundation
+
+The Loft Language Server is the highest-leverage editor-integration
+investment: one server unlocks first-class support across VSCode,
+Eclipse (via LSP4E), JetBrains (via LSP4IJ), Helix, Neovim, Sublime,
+and the future browser IDE (W2 in 1.0.0).  See SH.2's VSCode extension
+as the test ground; this entry upgrades the experience from
+grammar-only highlighting to semantic, type-aware editing.
+
+| ID    | Title                                                  | E  | Design | Source           |
+|-------|--------------------------------------------------------|----|--------|------------------|
+| LSP.1 | `loft-lsp` MVP binary — `publishDiagnostics`, `documentSymbol`, `hover`.  Reuses the existing parser + type checker; exposes them over JSON-RPC.  Requires a public `parse_file(text) -> (Data, Vec<Diagnostic>)` accessor and a stable diagnostic-range struct (today errors print to stderr; LSP needs `(start, end, severity, message, code)`).  Runs against any LSP4E-capable editor on day one — Eclipse + Neovim parity for diagnostics + outline + hover. | M | — | this-session |
+
 ### Ship criteria
 
 - `loft install <name>` resolves and installs from the public
@@ -136,6 +149,9 @@ the ground for 0.9.0's `PKG.EXTRACT` library-repo split.
 - All Tier 1 tooling (SH.1 / SH.2 / DX.1 / DX.3 from 0.8.5) still
   green against the registry-resolved libraries — no tutorial
   drift.
+- `loft-lsp` MVP serves diagnostics + outline + hover under both
+  VSCode and Eclipse on a sample 1k-line program, with re-parse
+  latency under 100 ms in release mode.
 
 ---
 
@@ -221,6 +237,18 @@ avoid adding serde to the default feature set.
 
 *(Tooling polish — SH.1, SH.2, DX.1, DX.3, DX.4 — shipped in 0.8.5.)*
 
+### Language server — full editing surface
+
+Builds on LSP.1 from 0.8.6.  Once these land, "first-class" support
+across LSP-capable IDEs is achievable: VSCode and Eclipse get
+parity with what JDT delivers for Java, modulo Eclipse's optional
+project-wizard / debug-perspective polish.
+
+| ID     | Title                                                  | E  | Design | Source           |
+|--------|--------------------------------------------------------|----|--------|------------------|
+| LSP.2  | `loft-lsp` editing — `completion`, `definition`, `references`, `rename`, `semanticTokens`, `codeAction`.  Requires a public `Definition` → `(file, line, col)` index over `Data`, a completion engine over the AST, and a fix-it catalogue (most diagnostics already know the fix). | MH | — | this-session |
+| LSP.3  | `loft-dap` MVP — Debug Adapter Protocol server: `launch`, `setBreakpoints`, `stackTrace`, `variables`, `next` / `stepIn` / `stepOut`.  Reuses the TR1.3 `vector<StackFrame>` capture and `LOFT_LOG=minimal` step-trace plumbing; needs an in-process pause/step API on the interpreter. | MH | — | this-session |
+
 ### Library extraction
 
 | ID          | Title                                                  | E  | Design | Source           |
@@ -247,6 +275,24 @@ with hands-on testing on every supported platform.
 | W4    | Multi-file projects (IndexedDB)                        | M  | ✓      | WEB_IDE.md       |
 | W5    | Docs & examples browser                                | M  | ✓      | WEB_IDE.md       |
 | W6    | Export/import ZIP + PWA offline                        | M  | ✓      | WEB_IDE.md       |
+
+### Desktop IDE plugins
+
+The LSP + DAP servers from 0.8.6 / 0.9.0 land here as thin per-IDE
+shims.  Each is a few hundred lines of glue — the heavy lifting is
+the language server itself.  Marketplace listings let users get
+first-class Loft support inside their existing toolchain without
+switching editors.
+
+| ID            | Title                                                  | E  | Design | Source           |
+|---------------|--------------------------------------------------------|----|--------|------------------|
+| IDE.ECLIPSE   | Eclipse plugin via LSP4E + DSP4E — register `.loft` content type, point the generic editor at `loft-lsp`, point the debug launcher at `loft-dap`.  Optional polish: project wizard, run-config UI.  Marketplace listing on Eclipse.org. | S | — | this-session |
+| IDE.JETBRAINS | JetBrains plugin via LSP4IJ — same shim shape, IntelliJ / RustRover / PyCharm marketplaces. | S | — | this-session |
+| IDE.NEOVIM    | Neovim documentation + sample `nvim-lspconfig` snippet pointing at `loft-lsp` (plus `nvim-dap` for debugger).  No plugin to maintain — just docs. | XS | — | this-session |
+
+*(Web IDE — W2–W6 above — uses the same `loft-lsp` server compiled
+to WASM; it's not a fourth editor binding, just the LSP server in
+a different host.)*
 
 ### Scene scripting
 
