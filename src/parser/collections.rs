@@ -1384,9 +1384,12 @@ use #count instead"
         }
 
         // A14.5/A14.6: auto-select light path for eligible workers.
+        // Heap-typed returns (Reference, struct-enum, Text, Unknown) need the
+        // heavy path's deep-copy machinery — the light path's `execute_at_raw`
+        // memcpy only handles inline returns ≤ 8 bytes.
         let is_primitive_return = !matches!(
             ret_type,
-            Type::Text(_) | Type::Reference(_, _) | Type::Unknown(_)
+            Type::Text(_) | Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Unknown(_)
         );
         let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
             self.check_light_eligible(fn_d_nr)
