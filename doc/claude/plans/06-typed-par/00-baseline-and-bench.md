@@ -169,6 +169,97 @@ Phase 0 has three commits, each landed independently:
   numbers and pointing at the harness.
 - Add a note to the plan-06 README marking phase 0 done.
 
+### 0d — Type-coverage commitments tracker
+
+Phase 0a's characterisation suite covers what works **today**.
+DESIGN.md D11 lists the **full type spectrum** par must accept after
+plan-06.  Several shapes in D11 don't work today; some don't even
+have a canary test yet.
+
+Phase 0d adds a **single tracking table** in this file that lists
+every shape from D11 with its current status, the test name (existing
+or planned), and the phase that's expected to close it.  The table
+is the contract: every phase commit must update the relevant rows.
+
+| Shape | Today | Test name | Closes |
+|---|---|---|---|
+| **Inputs** | | | |
+| `vector<Struct>` | ✅ | `par_struct_to_*` (positive) | — |
+| `vector<integer>` | ❌ garbage | `par_int_to_int_t4_primitive_input` (`#[ignore]`) | phase 4 |
+| `vector<float>` | ❌ | `par_float_input_t4` (`#[ignore]`) | phase 4 |
+| `vector<i32>` | ❌ | `par_i32_input_t4` (`#[ignore]`) | phase 4 |
+| `vector<u8>` | ❌ | `par_u8_input_t4` (`#[ignore]`) | phase 4 |
+| `vector<text>` | ❌ | `par_text_input_t4` (`#[ignore]`) | phase 4 |
+| `vector<EnumTag>` (plain enum, 1-byte) | ❓ untested | **add** `par_enum_input_t4` (`#[ignore]`) | phase 1 |
+| `vector<Reference<X>>` (vector of refs) | ❓ untested | **add** `par_vec_of_refs_input_t4` (`#[ignore]`) | phase 1 |
+| `vector<vector<T>>` (nested) | ❓ untested | **add** `par_nested_vector_input_t4` (`#[ignore]`) | phase 4 |
+| `vector<fn(T) -> U>` (vector of fn-refs) | ❓ untested | **add** `par_vec_of_fns_input_t4` (`#[ignore]`) | phase 1 |
+| `sorted<T[key]>` | ❓ untested | **add** `par_sorted_input_t4` (`#[ignore]`) | phase 4 |
+| `hash<T[key]>` | ❓ untested | **add** `par_hash_input_t4` (`#[ignore]`) | phase 4 |
+| `index<T[key]>` | ❓ untested | **add** `par_index_input_t4` (`#[ignore]`) | phase 4 |
+| **Outputs** | | | |
+| primitive scalars (1–8 B) | ✅ | `par_struct_to_int/float/i32/byte/bool` etc. | — |
+| text | ✅ | `par_struct_to_text_t4` | — |
+| Reference<Struct> | ✅ | `par_struct_to_struct_t4` | — |
+| Plain enum | ✅ | `par_struct_to_enum_t4` | — |
+| StructEnum (variant w/ fields) | ❌ size > 8 | `par_struct_to_struct_enum_t4` (`#[ignore]`) | phase 1 |
+| Large value-struct (size > 8) | ❌ | **add** `par_struct_to_large_struct_t4` (`#[ignore]`) | phase 1 |
+| `vector<T>` (worker returns a vector) | ❌ | **add** `par_struct_to_vector_t4` (`#[ignore]`) | phase 1 |
+| `hash<T>` / `sorted<T>` / `index<T>` | ❌ | **add** `par_struct_to_keyed_collection_t4` (`#[ignore]`) | phase 1 |
+| fn-ref | ❌ | **add** `par_struct_to_fn_t4` (`#[ignore]`) | phase 1 |
+| Optional<T> (nullable) | ❓ | **add** `par_struct_to_optional_t4` (`#[ignore]`) | phase 1 |
+| Tuple (1.1+) | n/a | (skipped — type doesn't exist yet) | post-1.1 |
+| **Negative cases** | | | |
+| Cross-worker reference graph (worker A returns ref into B's output) | ❌ rejected | **add** `par_cross_worker_ref_rejected` (positive — asserts the diagnostic) | phase 1 (compile-time enforcement) |
+
+### Per-phase obligation
+
+When a phase commits, it must:
+
+1. **Add the canary** (`#[ignore]`) for any shape from D11 it
+   intends to close, if not already in `tests/threading_chars.rs`.
+2. **Un-`#[ignore]`** every canary it closes; the test asserts the
+   correct (positive) behaviour.
+3. **Update the table above** — change the test name's marker from
+   `#[ignore]` to "positive" and mark the row's "Today" column as ✅.
+
+A phase that closes a shape without un-ignoring its canary fails its
+own acceptance criterion: the gap is unverified.  A phase that adds
+a new canary (one that didn't exist before) updates the table to
+record it.
+
+### How phase 0d ships
+
+Phase 0d's commit (separate from 0a/0b/0c) adds the **canaries that
+don't yet exist** in `tests/threading_chars.rs` — every row in the
+table marked **add** + `#[ignore]`.  This pre-populates the file
+so each subsequent phase has a concrete entry to un-ignore, rather
+than authoring fresh tests as it goes.
+
+Counts:
+
+- 4 new input-side canaries (`par_enum_input_t4`,
+  `par_vec_of_refs_input_t4`, `par_nested_vector_input_t4`,
+  `par_vec_of_fns_input_t4`).
+- 3 keyed-collection input canaries (`par_sorted_input_t4`,
+  `par_hash_input_t4`, `par_index_input_t4`).
+- 5 output-side canaries (`par_struct_to_large_struct_t4`,
+  `par_struct_to_vector_t4`, `par_struct_to_keyed_collection_t4`,
+  `par_struct_to_fn_t4`, `par_struct_to_optional_t4`).
+- 1 negative case (`par_cross_worker_ref_rejected`).
+
+Total: 13 new `#[ignore]`d canaries, all asserting the eventual
+correct behaviour — they fail today (the shape doesn't compile or
+gives garbage) and become passing tests when each phase lands.
+
+After 0d, the file has:
+- 16 working positive tests (today's correct behaviour).
+- 6 today-broken canaries (5 G2 primitive-input + 1 G1 struct-enum
+  return) — already in place after 0a.
+- 13 not-yet-tested canaries — added by 0d.
+
+That's **35 entries total** covering D11's full spectrum.
+
 ## Acceptance criteria
 
 - All 20–30 characterisation tests pass on Linux x86_64, macOS
@@ -176,6 +267,9 @@ Phase 0 has three commits, each landed independently:
 - `make bench-par` runs in under 60 s end-to-end.
 - `scripts/compare_par_bench.sh` passes with the recorded baseline.
 - `make ci` green; no test count regression.
+- Phase 0d's tracker table covers every shape in DESIGN.md D11.
+- Every D11 shape has either a positive test (working today) or
+  an `#[ignore]`d canary (with a phase number in the ignore reason).
 
 ## Risks
 

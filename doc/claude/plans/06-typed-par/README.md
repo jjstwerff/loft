@@ -69,7 +69,7 @@ single PR with its own `make ci` run.
 
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
-| 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | open | XS | Pin current behaviour with characterisation tests; record perf baseline so later phases prove no regression. |
+| 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | 0a done | S | Pin current behaviour (0a — done), record perf baseline (0b/0c — open), pre-populate canaries for D11's full type spectrum (0d — open).  Each subsequent phase un-`#[ignore]`s the canaries for shapes it closes. |
 | 1 | [01-output-store.md](01-output-store.md) | open | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Three native fns still exist; phase 1 only changes where results land. |
 | 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | open | M | Main-thread stitch via store-pointer rebase, retiring `copy_block` + `copy_claims`.  Closes P1-R3 + P1-R5 from THREADING.md. |
 | 3 | [03-one-native-fn.md](03-one-native-fn.md) | open | S | Collapse `n_parallel_for_native` / `_text_native` / `_ref_native` into one polymorphic `n_parallel_native(stitch)`.  Drop the four `parallel_get_*` getters.  Sub-phase 3e implements `Stitch::Reduce` runtime (per-worker partial fold + main-thread combine). |
