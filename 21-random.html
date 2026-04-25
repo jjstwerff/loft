@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Random</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <span class="cur">Random</span> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-random.html">Random</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Random</h1>
+<article>
+<p>Loft provides three functions for randomness:</p>
+<pre><code>rand(lo, hi)      — a random integer in [lo, hi] inclusive.
+rand_seed(seed)   — seed the random number generator for reproducible results.
+rand_indices(n)   — a vector of n integers [0..n-1] in a random order.
+</code></pre>
+<p>The generator is a fast PCG64 algorithm. Without an explicit seed the generator starts from a fixed default seed, so results are reproducible across runs unless you seed with a time-based value.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="basic-random-integers">Basic random integers</h2>
+<p><code>rand(lo, hi)</code> returns a uniformly distributed integer in [lo, hi]. Call <code>rand_seed</code> first to choose the sequence.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">42</span>);
+  r = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">1</span>, <span class="nm">6</span>);</code></pre>
+<p>simulated die roll: 1..6</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(r &gt;= <span class="nm">1</span> &amp;&amp; r &lt;= <span class="nm">6</span>, <span class="st">"die roll out of range: {r}"</span>);</code></pre>
+<p>The same seed always produces the same sequence.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
+  a = <span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>);
+  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">0</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">0</span>, <span class="nm">999</span>) == a, <span class="st">"seeded rand must be reproducible"</span>);</code></pre>
+<p><code>rand</code> returns null when lo &gt; hi.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="fn-call"><a href="stdlib-random.html">rand</a></span>(<span class="nm">10</span>, <span class="nm">5</span>), <span class="st">"invalid range returns null"</span>);</code></pre>
+<h2 id="random-ordering-rand-indices">Random ordering: rand_indices</h2>
+<p><code>rand_indices(n)</code> returns a vector containing 0, 1, ..., n-1 in a random order.  Use the indices to visit another collection in random order without copying it.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">7</span>);
+  order = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="nm">5</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(order) == <span class="nm">5</span>, <span class="st">"size must be 5"</span>);</code></pre>
+<p>Every value 0..4 appears exactly once.</p>
+<pre><code>  items =[<span class="st">"apple"</span>, <span class="st">"banana"</span>, <span class="st">"cherry"</span>, <span class="st">"date"</span>, <span class="st">"elderberry"</span>];
+  seen =[<span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..5</span> {
+    <span class="kw">false</span>
+  }];
+  <span class="kw">for</span> idx <span class="kw">in</span> order {
+    seen[idx] = <span class="kw">true</span>;
+  }
+  all_seen = <span class="kw">true</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> seen {
+    <span class="kw">if</span> !s {
+      all_seen = <span class="kw">false</span>
+    }
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(all_seen, <span class="st">"rand_indices must cover all positions"</span>);</code></pre>
+<h2 id="sampling-without-replacement">Sampling without replacement</h2>
+<p>Pick k distinct items from a list by taking the first k indices.</p>
+<pre><code>  <span class="fn-call"><a href="stdlib-random.html">rand_seed</a></span>(<span class="nm">1</span>);
+  indices = <span class="fn-call"><a href="stdlib-random.html">rand_indices</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(items));</code></pre>
+<p>Take the first 3 items in random order.</p>
+<pre><code>  picked = <span class="st">""</span>;
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="nm">0..3</span> {
+    <span class="kw">if</span> i &gt; <span class="nm">0</span> {
+      picked += <span class="st">", "</span>
+    }
+    picked += items[indices[i]]
+  }</code></pre>
+<p><code>picked</code> now contains 3 distinct fruit names in a random order.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(picked) &gt; <span class="nm">0</span>, <span class="st">"should have picked some items: {picked}"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

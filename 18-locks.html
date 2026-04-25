@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Store Locks</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <span class="cur">Store Locks</span> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Store Locks</h1>
+<article>
+<p>Loft gives you two separate ways to protect a value from accidental changes:</p>
+<p>1. <strong>Compile-time const</strong>: mark a variable or parameter with <code>const</code> and the compiler refuses to compile any code that tries to reassign it. The check happens before the program even runs — zero runtime cost.</p>
+<p>2. <strong>Runtime lock</strong>: the <code>#lock</code> attribute on a reference lets you lock a store at runtime so that any write attempt panics immediately, even across function boundaries. This is useful for debugging: turn it on when you suspect an unexpected mutation.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Counter</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<h2 id="const-parameters">const parameters</h2>
+<p><code>const</code> on a parameter is a compile-time promise: "this function will not modify this value." The compiler enforces it — any assignment to a const parameter is a compile error, caught before you run anything.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">read_value</span>(self: const <span class="en">Counter</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  self.value
+}</code></pre>
+<p>A non-const parameter leaves the store unlocked so the function can write.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">increment</span>(self: <span class="en">Counter</span>) {
+  self.value += <span class="nm">1</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="const-local-variables">const local variables</h2>
+<p>Declare a local variable with <code>const</code> to signal that it will not change after its first assignment. The compiler rejects any later assignment to it — reassigning or appending to a const variable is a compile error.</p>
+<p>This is handy for configuration values or lookup tables that should never be overwritten by accident deep inside a long function.</p>
+<pre><code>  const <span class="kw">limit</span> = <span class="nm">100</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">limit</span> == <span class="nm">100</span>, <span class="st">"const integer is readable"</span>);</code></pre>
+<p>const also works for struct references.</p>
+<pre><code>  const cfg = <span class="en">Counter</span> {value: <span class="nm">42</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(cfg.value == <span class="nm">42</span>, <span class="st">"const reference is readable"</span>);</code></pre>
+<p>Passing a const reference to a const parameter is always allowed.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(cfg) == <span class="nm">42</span>, <span class="st">"const passed to const param"</span>);</code></pre>
+<h2 id="calling-methods-on-const-references">Calling methods on const references</h2>
+<p>A non-const method can still be called on a non-const variable even after you have manually locked the store; the lock is a runtime check.</p>
+<pre><code>  c = <span class="en">Counter</span> {value: <span class="nm">10</span> };
+  <span class="fn-call">increment</span>(c);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.value == <span class="nm">11</span>, <span class="st">"increment modified c"</span>);</code></pre>
+<h2 id="runtime-store-locks-with-lock">Runtime store locks with #lock</h2>
+<p><code>#lock</code> is an attribute on any reference variable. Setting it to true turns on a runtime guard: any write to that store will panic immediately, wherever it happens. A freshly created reference starts unlocked.</p>
+<pre><code>  d = <span class="en">Counter</span> {value: <span class="nm">5</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!d#lock, <span class="st">"new store starts unlocked"</span>);
+  d#lock = <span class="kw">true</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(d#lock, <span class="st">"store is locked after assignment"</span>);</code></pre>
+<p>You can still read from a locked store — only writes are blocked.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">read_value</span>(d) == <span class="nm">5</span>, <span class="st">"locked store is still readable"</span>);</code></pre>
+<h2 id="when-to-use-each-approach">When to use each approach</h2>
+<ul>
+<li>Use <code>const</code> on parameters and locals to express your design intent and get compile-time safety at zero cost.</li>
+<li>Use <code>#lock = true</code> when you want a runtime tripwire: you suspect some code path is mutating a value it should not touch, and you want the program to panic with a precise location rather than corrupt silently.</li>
+</ul>
+<p>get_store_lock() is the function form of the #lock attribute. Both return the same boolean.</p>
+<pre><code>  e = <span class="en">Counter</span> {value: <span class="nm">99</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">get_store_lock</span>(e) == e#lock, <span class="st">"function form matches attribute before lock"</span>);
+  e#lock = <span class="kw">true</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">get_store_lock</span>(e) == e#lock, <span class="st">"function form matches attribute after lock"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

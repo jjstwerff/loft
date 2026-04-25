@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft Graphics Gallery</title>
+<style>
+:root {
+  --bg: #1e1e2e;
+  --panel: #181825;
+  --surface: #11111b;
+  --border: #313244;
+  --text: #cdd6f4;
+  --subtext: #6c7086;
+  --accent: #89b4fa;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --yellow: #f9e2af;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+header h1 { font-size: 16px; color: var(--accent); font-weight: 600; }
+.toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+button {
+  background: var(--accent);
+  color: var(--surface);
+  border: none;
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.4; cursor: default; }
+select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.main { flex: 1; display: flex; min-height: 0; }
+.canvas-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  background: #000;
+  align-items: center;
+  justify-content: center;
+}
+.source-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pane-header {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--subtext);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#gl-canvas { max-width: 100%; max-height: 100%; }
+#source {
+  flex: 1;
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+#output {
+  height: 120px;
+  min-height: 40px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.status-bar {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.status-bar .ok { color: var(--green); }
+.status-bar .err { color: var(--red); }
+.status-bar .info { color: var(--subtext); }
+#loading {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--accent);
+  z-index: 100;
+}
+</style>
+</head>
+<body>
+<div id="loading">Loading Loft runtime...</div>
+
+<header>
+  <h1>Loft Graphics Gallery</h1>
+  <div class="toolbar">
+    <select id="examples"><option value="">-- Select example --</option></select>
+    <button id="run-btn" onclick="runExample()" disabled>&#9654; Run</button>
+    <button id="stop-btn" onclick="loftGL.shouldClose=true">&#9632; Stop</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="canvas-col">
+    <canvas id="gl-canvas" width="800" height="600"></canvas>
+  </div>
+  <div class="source-col">
+    <div class="pane-header">Source</div>
+    <pre id="source">Select an example to view its source code.</pre>
+    <div class="pane-header">Output</div>
+    <div id="output"></div>
+  </div>
+</div>
+
+<div class="status-bar">
+  <span id="status" class="info">Ready</span>
+  <span id="timing" class="info"></span>
+</div>
+
+<script type="module">
+import init, { compile_and_start, resume_frame } from './pkg/loft.js';
+import { initLoftGL } from './loft-gl.js';
+import { GALLERY_EXAMPLES, GALLERY_LIST } from './gallery-examples.js';
+
+// ── WebGL bridge from library ────────────────────────────────────────────────
+const canvas = document.getElementById('gl-canvas');
+let loftGL = null;
+
+// Asset map: example key → list of { name, type } to pre-load.
+// type: 'image' = decode as HTMLImageElement, 'binary' = store as base64.
+const ASSET_MAP = {
+  '04-textures': [{ name: 'wall.jpg', type: 'image' }],
+  '20-textured-cube': [{ name: 'DejaVuSans-Bold.ttf', type: 'binary' }],
+};
+const ASSET_BASE = './assets/';
+// Font search: example 20 tries system paths; map them to our served file.
+const FONT_ALIASES = {
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf': 'DejaVuSans-Bold.ttf',
+  'C:/Windows/Fonts/arial.ttf': 'DejaVuSans-Bold.ttf',
+};
+
+// Cache fetched assets across runs — only fetch once per session.
+const assetCache = {};
+
+async function preloadAssets(exampleKey) {
+  if (!loftGL) return;
+  loftGL.assets = {};
+  const entries = ASSET_MAP[exampleKey];
+  if (!entries) return;
+  for (const entry of entries) {
+    const cacheKey = entry.name;
+    if (assetCache[cacheKey]) {
+      Object.assign(loftGL.assets, assetCache[cacheKey]);
+      continue;
+    }
+    const registered = {};
+    if (entry.type === 'image') {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise(resolve => {
+        img.onload = resolve;
+        img.onerror = () => { console.warn('Failed to load:', entry.name); resolve(); };
+        img.src = ASSET_BASE + entry.name;
+      });
+      registered[entry.name] = { image: img };
+      registered['examples/' + entry.name] = { image: img };
+    } else if (entry.type === 'binary') {
+      try {
+        const resp = await fetch(ASSET_BASE + entry.name);
+        const bytes = new Uint8Array(await resp.arrayBuffer());
+        registered[entry.name] = { bytes };
+        for (const [alias, target] of Object.entries(FONT_ALIASES)) {
+          if (target === entry.name) {
+            registered[alias] = { bytes };
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load binary asset:', entry.name, e);
+      }
+    }
+    assetCache[cacheKey] = registered;
+    Object.assign(loftGL.assets, registered);
+  }
+}
+
+// ── UI ───────────────────────────────────────────────────────────────────────
+const exampleSelect = document.getElementById('examples');
+const sourceEl = document.getElementById('source');
+const outputEl = document.getElementById('output');
+const statusEl = document.getElementById('status');
+const timingEl = document.getElementById('timing');
+const runBtn = document.getElementById('run-btn');
+
+let currentSource = '';
+let currentKey = '';
+let loftReady = false;
+
+for (const ex of GALLERY_LIST) {
+  const opt = document.createElement('option');
+  opt.value = ex.key;
+  opt.textContent = ex.name;
+  exampleSelect.appendChild(opt);
+}
+
+exampleSelect.addEventListener('change', () => {
+  const key = exampleSelect.value;
+  if (key && GALLERY_EXAMPLES[key]) {
+    currentKey = key;
+    currentSource = GALLERY_EXAMPLES[key];
+    sourceEl.textContent = currentSource;
+    outputEl.textContent = '';
+    statusEl.textContent = 'Ready';
+    statusEl.className = 'info';
+    timingEl.textContent = '';
+  }
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+//
+// Friendly-error guard — the native error surface for a stale gallery
+// build is `LinkError: WebAssembly.instantiate(): Failed to grow table`
+// or `ImportObject ... function import mismatch`.  Those messages do
+// not tell the user what to do.  We catch them here and print the
+// actionable recovery steps.
+function explainLoadError(e) {
+  const msg = String(e && e.message || e);
+  if (msg.includes('grow table') || msg.includes('function import') ||
+      msg.includes('imported function') || msg.includes('link error')) {
+    return (
+      'The gallery\u2019s WASM bundle and JS glue are out of sync ' +
+      '(classic "failed to grow table" error). This usually means ' +
+      'the deployed build is stale. On a local clone, run ' +
+      '"make gallery" to rebuild both together. If you are on the ' +
+      'deployed site and still see this, please file an issue.'
+    );
+  }
+  return 'Failed to load: ' + msg;
+}
+
+async function initLoft() {
+  try {
+    await init();
+    loftReady = true;
+    runBtn.disabled = false;
+    document.getElementById('loading').style.display = 'none';
+    loftGL = initLoftGL(canvas);
+    statusEl.textContent = 'Ready';
+    statusEl.className = 'ok';
+  } catch (e) {
+    document.getElementById('loading').textContent = explainLoadError(e);
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'err';
+  }
+}
+
+// ── Run with frame yield ─────────────────────────────────────────────────────
+let animFrame = 0;
+let frameCount = 0;
+
+window.runExample = async function() {
+  if (!loftReady || !currentSource) return;
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = 0; }
+  loftGL.shouldClose = false;
+  outputEl.textContent = '';
+  statusEl.textContent = 'Loading assets...';
+  statusEl.className = 'info';
+  timingEl.textContent = '';
+  frameCount = 0;
+
+  // Pre-load assets for this example
+  const selectedKey = currentKey;
+  await preloadAssets(selectedKey);
+
+  statusEl.textContent = 'Compiling...';
+  const files = JSON.stringify([{ name: 'main.loft', content: currentSource }]);
+  let result;
+  try {
+    result = JSON.parse(compile_and_start(files));
+  } catch (e) {
+    outputEl.textContent = 'Internal error: ' + e.message;
+    statusEl.textContent = 'Error';
+    statusEl.className = 'err';
+    return;
+  }
+
+  if (!result.ok) {
+    outputEl.textContent = result.error || 'Compilation failed';
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'err';
+    return;
+  }
+
+  if (!result.running) {
+    outputEl.textContent = result.output || '';
+    statusEl.textContent = 'Ok';
+    statusEl.className = 'ok';
+    return;
+  }
+
+  statusEl.textContent = 'Running';
+  statusEl.className = 'ok';
+  canvas.focus();
+
+  function frame() {
+    frameCount++;
+    let r;
+    try {
+      r = JSON.parse(resume_frame());
+    } catch (e) {
+      outputEl.textContent = 'Runtime error: ' + e.message;
+      statusEl.textContent = 'Error';
+      statusEl.className = 'err';
+      animFrame = 0;
+      return;
+    }
+    if (r.running && !loftGL.shouldClose) {
+      timingEl.textContent = `frame ${frameCount}`;
+      animFrame = requestAnimationFrame(frame);
+    } else {
+      animFrame = 0;
+      outputEl.textContent = r.output || r.error || '';
+      statusEl.textContent = r.error ? 'Error' : 'Done';
+      statusEl.className = r.error ? 'err' : 'ok';
+      timingEl.textContent = `${frameCount} frames`;
+    }
+  }
+  animFrame = requestAnimationFrame(frame);
+};
+
+initLoft();
+</script>
+</body>
+</html>

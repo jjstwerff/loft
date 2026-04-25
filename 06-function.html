@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Functions</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <span class="cur">Functions</span> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Functions</h1>
+<article>
+<p>Functions let you give a reusable piece of logic a name so you can call it from multiple places without copying code. This page covers: declaring functions, default argument values, reference parameters (so a function can modify the caller's variable), early return, const parameters, and type-based dispatch.</p>
+<h2 id="declaring-functions">Declaring Functions</h2>
+<p>The keyword <code>fn</code> starts a function definition. List parameters as <code>name: type</code> separated by commas. <code>-&gt; type</code> declares what the function gives back. The last expression in the body is returned automatically — no <code>return</code> needed there. Default values let callers skip optional arguments.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">greet</span>(name: <span class="ty"><a href="stdlib-types.html">text</a></span>, greeting: <span class="ty"><a href="stdlib-types.html">text</a></span> = <span class="st">"Hello"</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  greeting + <span class="st">", "</span> + name + <span class="st">"!"</span>
+}</code></pre>
+<h2 id="default-arguments-that-involve-other-arguments">Default arguments that involve other arguments</h2>
+<p>Loft defaults must be literal values, not expressions referencing other parameters. When one argument's default should be derived from another, use a sentinel value and compute the actual default inside the function body. The convention is to use -1 (or 0) as "not provided" for integer parameters.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">substring</span>(t: <span class="ty"><a href="stdlib-types.html">text</a></span>, start: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>, end: <span class="ty"><a href="stdlib-types.html">integer</a></span> = -<span class="nm">1</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  actual_end = <span class="kw">if</span> end &lt; <span class="nm">0</span> { <span class="bi"><a href="stdlib-text.html">len</a></span>(t) } <span class="kw">else</span> { end };
+  t[start..actual_end]
+}</code></pre>
+<h2 id="named-arguments">Named Arguments</h2>
+<p>When a function has several parameters with defaults, you can skip middle ones by naming the arguments you want to provide. Positional arguments come first; once you use a name, all remaining arguments must also be named.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">connect</span>(host: <span class="ty"><a href="stdlib-types.html">text</a></span>, port: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">8080</span>, tls: <span class="ty"><a href="stdlib-types.html">boolean</a></span> = <span class="kw">true</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"{host}:{port}:{tls}"</span>
+}</code></pre>
+<h2 id="reference-parameters-and-defaults">Reference Parameters and Defaults</h2>
+<p>A function with no <code>-&gt; type</code> is called for its side effects, not its result. Adding <code>&amp;</code> before a parameter type makes it a reference: the function receives a direct link to the caller<code>s variable and can read or write it. Without </code>&amp;<code>, Loft copies the value in, so changes inside the function stay local. Default values (written </code>= value' after the type) are substituted when the caller omits that argument.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">add</span>(a:  &amp; <span class="ty"><a href="stdlib-types.html">integer</a></span>, b: <span class="ty"><a href="stdlib-types.html">integer</a></span>, c: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="nm">0</span>) {
+  a += b + c;
+}</code></pre>
+<h2 id="early-return">Early Return</h2>
+<p>Use <code>return value;</code> to exit a function before reaching the end. This is handy for guard clauses: handle the special cases first, then write the normal path without extra nesting.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">classify</span>(n: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="kw">if</span> n &lt; <span class="nm">0</span> {
+    <span class="kw">return</span> <span class="st">"negative"</span>;
+  }
+  <span class="kw">if</span> n == <span class="nm">0</span> {
+    <span class="kw">return</span> <span class="st">"zero"</span>;
+  }
+  <span class="st">"positive"</span>
+}</code></pre>
+<h2 id="const-and-reference-parameters">Const and Reference Parameters</h2>
+<p><code>const</code> on a parameter tells the compiler "this function must never change this value." The compiler enforces it — any assignment to a const parameter is a compile error. <code>&amp;</code> is the opposite promise: "this function will modify this value." Declaring <code>&amp;</code> without actually writing to the parameter is also a compile error. These rules make it easy to read a function signature and know what it does to its inputs.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">scale</span>(a: <span class="ty"><a href="stdlib-types.html">integer</a></span>, factor: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  a * factor
+}</code></pre>
+<h2 id="type-based-dispatch">Type-Based Dispatch</h2>
+<p>You can define two functions with the same name as integer as their parameter types differ. Loft picks the right one at compile time based on the type of the argument you pass.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">describe_int</span>(v: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"integer:{v}"</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">describe_text</span>(v: <span class="ty"><a href="stdlib-types.html">text</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  <span class="st">"text:{v}"</span>
+}</code></pre>
+<h2 id="function-references">Function References</h2>
+<p><code>fn &lt;name&gt;</code> creates a reference to a named function that you can store or pass around. The compiler checks that the name exists and is a function — a typo is a compile error. The result has type <code>fn(param_types) -&gt; return_type</code> and can be: - stored in a variable, - called directly with <code>f(args)</code>, and - passed as a parameter to another function.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">double_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  x * <span class="nm">2</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">negate_it</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  - x
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">apply_fn</span>(f:  <span class="kw">fn</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span>, x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  <span class="fn-call">f</span>(x)
+}</code></pre>
+<h2 id="lambda-expressions">Lambda Expressions</h2>
+<p>A lambda is an anonymous (unnamed) function written right where you need it. Use the full form when you want to be explicit about types: fn(param: type) -&gt; return_type { body } Use the short form (pipe-bar syntax) when the call site already knows the types: |param| { body } Both forms work anywhere a function reference is expected — especially with map, filter, and reduce.  The short form does not allow type annotations; use the full fn(…) form when you need explicit types. Lambdas that need outer variables can capture them: see the Closures page.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>Passing both arguments explicitly overrides the default.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>, <span class="st">"Hi"</span>) == <span class="st">"Hi, World!"</span>, <span class="st">"Explicit argument"</span>);</code></pre>
+<p>Leaving out the second argument causes Loft to use the default "Hello".</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(<span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"Default argument"</span>);</code></pre>
+<p><code>add</code> takes <code>a</code> by reference, so every call updates the original variable <code>v</code>. Watch how v accumulates: 1 -&gt; 3 -&gt; 8.</p>
+<pre><code>  v = <span class="nm">1</span>;
+  <span class="fn-call">add</span>(v, <span class="nm">2</span>);</code></pre>
+<p>v = 1 + 2 = 3</p>
+<pre><code>  <span class="fn-call">add</span>(v, <span class="nm">4</span>, <span class="nm">1</span>);</code></pre>
+<p>v = 3 + 4 + 1 = 8</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(v == <span class="nm">8</span>, <span class="st">"Reference parameter: {v}"</span>);</code></pre>
+<p><code>classify</code> uses early returns to handle each case separately.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(-<span class="nm">5</span>) == <span class="st">"negative"</span>, <span class="st">"Classify negative"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">0</span>) == <span class="st">"zero"</span>, <span class="st">"Classify zero"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">classify</span>(<span class="nm">3</span>) == <span class="st">"positive"</span>, <span class="st">"Classify positive"</span>);</code></pre>
+<p><code>scale</code> marks both parameters <code>const</code>, so the compiler verifies they are not changed.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">scale</span>(<span class="nm">3</span>, <span class="nm">7</span>) == <span class="nm">21</span>, <span class="st">"scale(3,7)"</span>);</code></pre>
+<p>Loft selects the right function based on the type of the argument.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_int</span>(<span class="nm">42</span>) == <span class="st">"integer:42"</span>, <span class="st">"Integer describe"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">describe_text</span>(<span class="st">"hi"</span>) == <span class="st">"text:hi"</span>, <span class="st">"Text describe"</span>);</code></pre>
+<p>A function reference is stored in a variable with type <code>fn(...) -&gt; ...</code>. Calling it looks exactly like a regular function call.</p>
+<pre><code>  f = double_it;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">f</span>(<span class="nm">5</span>) == <span class="nm">10</span>, <span class="st">"fn-ref stored and called: {f(5)}"</span>);</code></pre>
+<p>Pass function references as arguments to higher-order functions.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(double_it, <span class="nm">7</span>) == <span class="nm">14</span>, <span class="st">"fn-ref as arg (double)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(negate_it, <span class="nm">3</span>) == -<span class="nm">3</span>, <span class="st">"fn-ref as arg (negate)"</span>);</code></pre>
+<p>Lambdas with map, filter, and reduce. Use |...| short form — types are inferred from the call site.</p>
+<pre><code>  nums = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>, <span class="nm">4</span>, <span class="nm">5</span>];
+  doubled = <span class="fn-call">map</span>(nums, |x| { x * <span class="nm">2</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"lambda map first element"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(doubled[<span class="nm">4</span>] == <span class="nm">10</span>, <span class="st">"lambda map last element"</span>);</code></pre>
+<p>filter keeps only elements where the lambda returns true.</p>
+<pre><code>  evens = <span class="fn-call">filter</span>(nums, |x| { x % <span class="nm">2</span> == <span class="nm">0</span> });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">0</span>] == <span class="nm">2</span>, <span class="st">"filter evens first"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(evens[<span class="nm">1</span>] == <span class="nm">4</span>, <span class="st">"filter evens second"</span>);</code></pre>
+<p>reduce collapses the whole list into one value. The lambda receives the running total (acc) and the next element (x).</p>
+<pre><code>  total = <span class="fn-call">reduce</span>(nums, <span class="nm">0</span>, |acc, x| { acc + x });
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">15</span>, <span class="st">"reduce sum: {total}"</span>);</code></pre>
+<p>Use fn(...) long form when you need explicit types — for example when storing a lambda in a variable or passing it without call-site context.</p>
+<pre><code>  negate = <span class="kw">fn</span>(x: <span class="ty"><a href="stdlib-types.html">integer</a></span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> { -x };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">negate</span>(<span class="nm">7</span>) == -<span class="nm">7</span>, <span class="st">"stored lambda: {negate(7)}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">apply_fn</span>(|x| { x * x }, <span class="nm">6</span>) == <span class="nm">36</span>, <span class="st">"lambda as arg: 6^2"</span>);</code></pre>
+<p>--- Named arguments ---</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>) == <span class="st">"example.com:8080:true"</span>, <span class="st">"all defaults"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"skip port"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(host: <span class="st">"example.com"</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:8080:false"</span>, <span class="st">"all named"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">connect</span>(<span class="st">"example.com"</span>, port: <span class="nm">443</span>, tls: <span class="kw">false</span>) == <span class="st">"example.com:443:false"</span>, <span class="st">"mixed"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">greet</span>(name: <span class="st">"World"</span>) == <span class="st">"Hello, World!"</span>, <span class="st">"named with default greeting"</span>);</code></pre>
+<p>--- Default argument that depends on another argument --- <code>end</code> defaults to -1 (sentinel); inside the body it becomes len(t).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">1</span>, <span class="nm">3</span>) == <span class="st">"el"</span>, <span class="st">"explicit start and end"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>, <span class="nm">2</span>) == <span class="st">"llo"</span>, <span class="st">"end defaults to len(t)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">substring</span>(<span class="st">"hello"</span>) == <span class="st">"hello"</span>, <span class="st">"both defaults"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Boolean</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <span class="cur">Boolean</span> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Boolean</h1>
+<article>
+<p>A boolean value is either <code>true</code> or <code>false</code>. Booleans appear naturally wherever you make a decision: in <code>if</code> conditions, loop filters, and comparisons. Loft adds a third state called <code>null</code> — meaning "no value" — which behaves like false whenever a boolean is expected.</p>
+<p>This design means you rarely need to write a separate null-check: <code>!x</code> is true both when x is false and when x is null.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>A comparison produces a boolean result directly. <code>!</code> flips a boolean: true → false, false → true.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">3</span> &gt; <span class="nm">2</span> + <span class="nm">4</span>), <span class="st">"3 is not greater than 6"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="kw">true</span> <span class="kw">as</span> <span class="ty"><a href="stdlib-types.html">text</a></span> == <span class="st">"true"</span>, <span class="st">"Convert boolean to text"</span>);</code></pre>
+<h2 id="logical-operators-and-or">Logical operators: and / or</h2>
+<p><code>and</code> (also <code>&amp;&amp;</code>) is true only when both sides are true. <code>or</code>  (also <code>||</code>) is true when at least one side is true. Both skip the right side when the left side already determines the result. For example, <code>false and X</code> is always false, so X is never evaluated. This matters when the right side could produce null or has a side effect.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> &gt; <span class="nm">0</span> <span class="kw">and</span> <span class="nm">2</span> &gt; <span class="nm">1</span>, <span class="st">"Both conditions true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> &gt; <span class="nm">2</span> <span class="kw">or</span> <span class="nm">3</span> &gt; <span class="nm">2</span>, <span class="st">"Second condition true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> &amp;&amp; <span class="nm">3</span> &gt; <span class="nm">2</span>), <span class="st">"First false → whole 'and' is false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span> || <span class="nm">3</span> &gt; <span class="nm">4</span>), <span class="st">"Both false → 'or' is false"</span>);</code></pre>
+<h2 id="null-in-boolean-context">Null in boolean context</h2>
+<p>Division by zero (and other failed operations) produce null. Null in a boolean context is treated as false, so <code>!</code> is true. This lets you write guard clauses without a separate null-check syntax: if !result { ... handle missing value ... }</p>
+<pre><code>  zero = <span class="nm">0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">12</span> / zero), <span class="st">"null from division-by-zero is false-like"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">12</span> &gt; <span class="nm">0</span>, <span class="st">"positive integer is true"</span>);</code></pre>
+<h2 id="bitwise-operators">Bitwise operators</h2>
+<p>While <code>and</code>/<code>or</code> work on true/false values, bitwise operators work on the individual bits of an integer. They are useful for flags, masks, and low-level data manipulation.</p>
+<pre><code>'&amp;'  — keeps only bits set in BOTH operands (AND)
+'|'  — keeps bits set in EITHER operand (OR)
+'&lt;&lt;' — shift bits left N positions  (×2^N)
+'&gt;&gt;' — shift bits right N positions (÷2^N)
+</code></pre>
+<p>Tip: <code>&amp;</code> binds less tightly than comparison operators. Use parentheses when you mix bitwise and comparison expressions in the same condition.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0x0f</span> &amp; <span class="nm">0xa8</span>) == <span class="nm">8</span>, <span class="st">"Bitwise AND: keeps only bits in both"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0xf0</span> | <span class="nm">0x0f</span>) == <span class="nm">0xff</span>, <span class="st">"Bitwise OR: combines bits from either"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">1</span> &lt;&lt; <span class="nm">4</span> == <span class="nm">16</span>, <span class="st">"Left shift: 1 × 2^4 = 16"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">256</span> &gt;&gt; <span class="nm">3</span> == <span class="nm">32</span>, <span class="st">"Right shift: 256 ÷ 2^3 = 32"</span>);</code></pre>
+<h2 id="negation">Negation</h2>
+<p><code>!</code> is the logical NOT operator. It flips any boolean expression.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!<span class="kw">false</span>, <span class="st">"not false is true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(<span class="nm">1</span> &gt; <span class="nm">2</span>), <span class="st">"not false comparison is true"</span>);</code></pre>
+<h2 id="formatting-booleans">Formatting booleans</h2>
+<p>Booleans can be embedded in a format string like any other value. The <code>^</code> alignment specifier centres the value in a field of given width. <code>&lt;</code> aligns left, <code>&gt;</code> aligns right (right-alignment is the default).</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1{true:^7}2"</span> == <span class="st">"1 true  2"</span>, <span class="st">"Centred boolean in field of width 7"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"Plain boolean format"</span>);</code></pre>
+<h2 id="vs-and"><code>&amp;</code> vs <code>and</code></h2>
+<p><code>&amp;</code> is bitwise AND on integers; <code>and</code> (or <code>&amp;&amp;</code>) is logical AND on booleans. Writing <code>a &amp; b</code> where both sides are booleans is a compile error — the compiler requires <code>and</code> or <code>&amp;&amp;</code> for boolean logic.</p>
+<pre><code>  flag_a = <span class="nm">3</span> &gt; <span class="nm">1</span>;</code></pre>
+<p>true</p>
+<pre><code>  flag_b = <span class="nm">4</span> &gt; <span class="nm">2</span>;</code></pre>
+<p>true</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(flag_a <span class="kw">and</span> flag_b, <span class="st">"Correct: logical AND on two booleans"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

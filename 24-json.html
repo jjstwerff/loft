@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - JSON</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <span class="cur">JSON</span> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>JSON</h1>
+<article>
+<p>Loft has built-in JSON support: any struct can be serialised to JSON with a format flag, and parsed back from JSON text.  No annotations or code generation needed — it works on every struct automatically.</p>
+<h2 id="serialisation-struct-to-json">Serialisation — struct to JSON</h2>
+<p>Use the <code>:j</code> format flag inside a format string to produce JSON output. Field names become quoted keys; strings are escaped; numbers and booleans are written as JSON literals.</p>
+<pre><code>"{my_struct:j}"
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">User</span> {
+  id: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  email: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<h2 id="parsing-json-to-struct">Parsing — JSON to struct</h2>
+<p>Call <code>Type.parse(text)</code> to create a struct from JSON text. Text arguments are auto-wrapped through <code>json_parse</code> internally, so malformed input lands in <code>json_errors()</code> rather than silently corrupting the struct.  Missing fields get null sentinels.</p>
+<pre><code>user = User.parse(json_text)
+</code></pre>
+<p>Callers wanting explicit staging can write <code>User.parse(json_parse(text))</code> to inspect <code>json_errors()</code> between the two steps.</p>
+<h2 id="vectors">Vectors</h2>
+<p>Parse a JSON array into a vector of structs with <code>vector&lt;T&gt;.parse(text)</code>.</p>
+<pre><code>scores = vector&lt;Score&gt;.parse("[{\"v\":1},{\"v\":2}]")
+</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Score</span> {
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<h2 id="parse-errors">Parse Errors</h2>
+<p>Call <code>json_errors()</code> to see what went wrong with a malformed input.  Schema-level mismatches (e.g. a field declared integer but receiving a JSON string) currently land as the loft null sentinel in the struct; Q1 schema-side diagnostics will add path-qualified reports in a follow-up.</p>
+<pre><code>data = MyType.parse(bad_json);
+if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
+</code></pre>
+<h2 id="nested-structs">Nested Structs</h2>
+<p>Structs with struct-typed fields parse nested JSON objects automatically.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Address</span> {
+  city: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  zip: <span class="ty"><a href="stdlib-types.html">text</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Contact</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  address: <span class="en">Address</span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  u = <span class="en">User</span> { id: <span class="nm">42</span>, name: <span class="st">"Alice"</span>, email: <span class="st">"alice@example.com"</span> };
+  json = <span class="st">"{u:j}"</span>;
+  expected = `{{<span class="st">"id"</span>:<span class="nm">42</span>,<span class="st">"name"</span>:<span class="st">"Alice"</span>,<span class="st">"email"</span>:<span class="st">"alice@example.com"</span>}}`;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(json == expected, <span class="st">"to json"</span>);</code></pre>
+<pre><code>  bob = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">7</span>,<span class="st">"name"</span>:<span class="st">"Bob"</span>,<span class="st">"email"</span>:<span class="st">"bob@test.org"</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.id == <span class="nm">7</span>, <span class="st">"parsed id: {bob.id}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.name == <span class="st">"Bob"</span>, <span class="st">"parsed name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bob.email == <span class="st">"bob@test.org"</span>, <span class="st">"parsed email"</span>);</code></pre>
+<pre><code>  u2 = <span class="en">User</span>.<span class="fn-call">parse</span>(<span class="st">"{u:j}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.id == u.id, <span class="st">"round-trip id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(u2.name == u.name, <span class="st">"round-trip name"</span>);</code></pre>
+<p>Type-mismatched fields (id: string, name: number) parse as JSON fine but the struct unwrap produces null sentinels. Schema-level diagnostics are a Q1 follow-up — for now verify the unwrap does not crash on mismatched shapes.</p>
+<pre><code>  bad = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="st">"not_a_number"</span>,<span class="st">"name"</span>:<span class="nm">42</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad.id == <span class="kw">null</span>, <span class="st">"type-mismatched id becomes null: {bad.id}"</span>);</code></pre>
+<pre><code>  scores = <span class="ty"><a href="stdlib-collections.html">vector</a></span>&lt;<span class="en">Score</span>&gt;.<span class="fn-call">parse</span>(`[{{<span class="st">"value"</span>:<span class="nm">10</span>}},{{<span class="st">"value"</span>:<span class="nm">20</span>}},{{<span class="st">"value"</span>:<span class="nm">30</span>}}]`);
+  total = <span class="nm">0</span>;
+  <span class="kw">for</span> s <span class="kw">in</span> scores {
+    total += s.value;
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(total == <span class="nm">60</span>, <span class="st">"vector sum: {total}"</span>);</code></pre>
+<pre><code>  c = <span class="en">Contact</span>.<span class="fn-call">parse</span>(`{{<span class="st">"name"</span>:<span class="st">"Carol"</span>,<span class="st">"address"</span>:{{<span class="st">"city"</span>:<span class="st">"Amsterdam"</span>,<span class="st">"zip"</span>:<span class="st">"1012"</span>}}}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.name == <span class="st">"Carol"</span>, <span class="st">"nested name"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.city == <span class="st">"Amsterdam"</span>, <span class="st">"nested city: {c.address.city}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(c.address.zip == <span class="st">"1012"</span>, <span class="st">"nested zip"</span>);</code></pre>
+<h2 id="missing-fields-get-null">Missing fields get null</h2>
+<p>When a field is absent from the JSON, the struct field gets its null sentinel. For text, that is the NUL character <code>\0</code> (not the empty string ""); for integer it is the minimum i32 value. Check with <code>!</code> before use, or assign a default with <code>??</code>.</p>
+<pre><code>  partial = <span class="en">User</span>.<span class="fn-call">parse</span>(`{{<span class="st">"id"</span>:<span class="nm">1</span>}}`);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(partial.id == <span class="nm">1</span>, <span class="st">"partial id"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!partial.name, <span class="st">"missing name is null"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Structs</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <span class="cur">Structs</span> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Structs</h1>
+<article>
+<p>A struct groups related values under one name. Instead of keeping a product<code>s name, price, and stock count in three separate variables that can drift out of sync, you bundle them together into a Product struct. Each piece of data inside the struct is called a field. You read and write fields using dot notation: </code>product.price'. Here is a simple product record. All four fields are plain integers or text.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Product</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  price: <span class="ty"><a href="stdlib-types.html">integer</a></span>,
+  stock: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<h2 id="field-constraints">Field Constraints</h2>
+<p>You can restrict what values a field may hold. <code>limit(min, max)</code> rejects any value outside that range at runtime. <code>not null</code> tells the field that zero is a real data value — without it, zero is treated as "no value" (null). Colour channels can all be zero (pure black is a valid colour), so all three need <code>not null</code>. Fields you omit in a constructor receive zero (or null for nullable fields) by default.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Colour</span> {
+  r: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
+  g: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>,
+  b: <span class="ty"><a href="stdlib-types.html">integer</a></span> <span class="kw">limit</span>(<span class="nm">0</span>, <span class="nm">255</span>) <span class="kw">not</span> <span class="kw">null</span>
+}</code></pre>
+<h2 id="methods">Methods</h2>
+<p>A method is a function whose first parameter is named <code>self</code>. Loft uses the type of <code>self</code> to decide which struct the method belongs to. Call it with dot notation: <code>c.to_hex()</code>. A method can read fields via <code>self.field</code> and return any type.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">to_hex</span>(self: <span class="en">Colour</span>) -&gt; <span class="ty"><a href="stdlib-types.html">integer</a></span> {
+  self.r * <span class="nm">0x10000</span> + self.g * <span class="nm">0x100</span> + self.b
+}</code></pre>
+<p>A method can also return a completely new struct value. Write <code>-&gt; StructName</code> as the return type and construct the value in the body. The original struct is not modified — the caller gets a brand-new copy.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">dimmed</span>(self: <span class="en">Colour</span>) -&gt; <span class="en">Colour</span> {
+  <span class="en">Colour</span> {r: self.r / <span class="nm">2</span>, g: self.g / <span class="nm">2</span>, b: self.b / <span class="nm">2</span> }
+}</code></pre>
+<h2 id="defaults-and-computed-fields">Defaults and Computed Fields</h2>
+<p>Write <code>= expression</code> after the type to set a stored default, filled at construction. Use <code>computed(expression)</code> for a field that recalculates every time you read it — it takes no space in the record and always reflects the current state. Inside both, <code>$</code> refers to the struct.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Item</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  name_length: <span class="ty"><a href="stdlib-types.html">integer</a></span> = <span class="bi"><a href="stdlib-text.html">len</a></span>($.name)
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Circle</span> {
+  radius: <span class="ty"><a href="stdlib-types.html">float</a></span>,
+  area: <span class="ty"><a href="stdlib-types.html">float</a></span> <span class="fn-call">computed</span>(<span class="nm">3.14159265</span> * $.radius * $.radius)
+}</code></pre>
+<h2 id="storing-many-structs-in-a-vector">Storing many structs in a vector</h2>
+<p><code>Area</code> uses smaller integer types to save memory: <code>u16</code> holds values 0–65535, and <code>u8</code> holds values 0–255. This matters when you have millions of records (such as tiles in a game map) and memory usage counts.</p>
+<pre><code><span class="kw">struct</span> <span class="en">Area</span> {
+  height: <span class="ty"><a href="stdlib-types.html">u16</a></span>,
+  terrain: <span class="ty"><a href="stdlib-types.html">u8</a></span>,
+  water: <span class="ty"><a href="stdlib-types.html">u8</a></span>,
+  direction: <span class="ty"><a href="stdlib-types.html">u8</a></span>
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<p>Constructing a struct: name the fields you want to set. Fields you leave out default to zero (or null for nullable fields).</p>
+<pre><code>  apple = <span class="en">Product</span> {name: <span class="st">"Apple"</span>, price: <span class="nm">120</span>, stock: <span class="nm">50</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(apple.price == <span class="nm">120</span>, <span class="st">"price field: {apple.price}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(apple.name == <span class="st">"Apple"</span>, <span class="st">"name field: {apple.name}"</span>);</code></pre>
+<p>You can read and write individual fields after construction.</p>
+<pre><code>  apple.stock -= <span class="nm">1</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(apple.stock == <span class="nm">49</span>, <span class="st">"stock after one sale: {apple.stock}"</span>);</code></pre>
+<p>A field omitted from the constructor gets zero as its default.</p>
+<pre><code>  col = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(col.g == <span class="nm">0</span>, <span class="st">"omitted green channel defaults to zero"</span>);</code></pre>
+<p>Formatting a struct shows all fields compactly.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col}"</span> == <span class="st">"{{r:128,g:0,b:128}}"</span>, <span class="st">"Struct compact formatting"</span>);</code></pre>
+<p><code>:j</code> produces JSON output — a text format used by many web APIs and config tools.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{col:j}"</span> == <span class="st">"{{\"</span>r\<span class="st">":128,\"</span>g\<span class="st">":0,\"</span>b\<span class="st">":128}}"</span>, <span class="st">"JSON format"</span>);</code></pre>
+<p>Call a method on a variable using dot notation.</p>
+<pre><code>  purple = <span class="en">Colour</span> {r: <span class="nm">128</span>, b: <span class="nm">128</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{purple.to_hex():x}"</span> == <span class="st">"800080"</span>, <span class="st">"hex method result"</span>);</code></pre>
+<p>You can call a method directly on a constructor expression.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="en">Colour</span> {r: <span class="nm">255</span>, g: <span class="nm">0</span>, b: <span class="nm">0</span> }.<span class="fn-call">to_hex</span>() == <span class="nm">0xff0000</span>, <span class="st">"method on constructor"</span>);</code></pre>
+<p><code>dimmed</code> returns a new Colour with each channel halved. The original variable is unchanged.</p>
+<pre><code>  dark = purple.<span class="fn-call">dimmed</span>();
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.r == <span class="nm">64</span>, <span class="st">"dimmed r: {dark.r}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.b == <span class="nm">64</span>, <span class="st">"dimmed b: {dark.b}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(dark.g == <span class="nm">0</span>, <span class="st">"dimmed g: {dark.g}"</span>);</code></pre>
+<p>Stored defaults are filled once at construction time.</p>
+<pre><code>  it = <span class="en">Item</span> {name: <span class="st">"hello"</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(it.name_length == <span class="nm">5</span>, <span class="st">"stored default name_length: {it.name_length}"</span>);</code></pre>
+<p>computed() fields recalculate on every access — changing radius updates area.</p>
+<pre><code>  ci = <span class="en">Circle</span> { radius: <span class="nm">5.0</span> };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ci.area &gt; <span class="nm">78.0</span>, <span class="st">"computed area: {ci.area}"</span>);
+  ci.radius = <span class="nm">10.0</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(ci.area &gt; <span class="nm">314.0</span>, <span class="st">"recomputed area: {ci.area}"</span>);</code></pre>
+<p>Fill a vector with copies of the same struct using <code>; count</code> syntax. This creates 16 Area records, all with the same initial values.</p>
+<pre><code>  map =[<span class="en">Area</span> {height: <span class="nm">0</span>, terrain: <span class="nm">1</span>, water: <span class="nm">1</span>, direction: <span class="nm">1</span> };
+  <span class="nm">16</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{map[3]}"</span> == <span class="st">"{{height:0,terrain:1,water:1,direction:1}}"</span>, <span class="st">"tile record"</span>);
+  map[<span class="nm">3</span>].height = <span class="nm">200</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(map[<span class="nm">3</span>].height == <span class="nm">200</span>, <span class="st">"individual tile update"</span>);</code></pre>
+<h2 id="sizeof">sizeof</h2>
+<p><code>sizeof(Type)</code> returns the packed byte size used when the type is stored as a struct field or vector element. Range-constrained integer types like u8 and u16 report their packed size, not the 4-byte stack slot size.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">integer</a></span>) == <span class="nm">8</span>, <span class="st">"integer: 8 bytes (post-2c i64 storage)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u8</a></span>) == <span class="nm">1</span>, <span class="st">"u8: 1 byte (packed)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="ty"><a href="stdlib-types.html">u16</a></span>) == <span class="nm">2</span>, <span class="st">"u16: 2 bytes (packed)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Colour</span>) == <span class="nm">3</span>, <span class="st">"Colour: 3 × u8 = 3 bytes"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">sizeof</span>(<span class="en">Area</span>) == <span class="nm">5</span>, <span class="st">"Area: u16 + 3 × u8 = 5 bytes"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Formatting</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <span class="cur">Formatting</span> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Formatting</h1>
+<article>
+<p>Loft strings can embed expressions inside <code>{...}</code> braces.  A colon after the expression introduces a format specifier that controls width, alignment, precision, number base, and output style.</p>
+<h2 id="basic-interpolation">Basic interpolation</h2>
+<p>Any expression inside <code>{...}</code> is evaluated and converted to text.</p>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  name = <span class="st">"world"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"hello {name}"</span> == <span class="st">"hello world"</span>, <span class="st">"basic interpolation"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"1 + 2 = {1 + 2}"</span> == <span class="st">"1 + 2 = 3"</span>, <span class="st">"expression in braces"</span>);</code></pre>
+<h2 id="width-and-alignment">Width and alignment</h2>
+<p>A number after <code>:</code> sets the minimum width.  The value is padded with spaces to fill the width. {val:6}   — right-aligned (default for numbers) {val:&gt;6}  — right-aligned (explicit) {val:&lt;6}  — left-aligned {val:^6}  — centered For text, the default alignment is left.  For numbers, right.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:6}"</span> == <span class="st">"    42"</span>, <span class="st">"default number align is right"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&gt;6}"</span> == <span class="st">"    42"</span>, <span class="st">"explicit right-align"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:&lt;6}"</span> == <span class="st">"42    "</span>, <span class="st">"left-align number"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:^6}"</span> == <span class="st">"  42  "</span>, <span class="st">"center-align number"</span>);
+  s = <span class="st">"hi"</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:6}"</span> == <span class="st">"hi    "</span>, <span class="st">"default text align is left"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:&gt;6}"</span> == <span class="st">"    hi"</span>, <span class="st">"right-align text"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{s:^6}"</span> == <span class="st">"  hi  "</span>, <span class="st">"center-align text"</span>);</code></pre>
+<h2 id="zero-padding">Zero padding</h2>
+<p>Prefix the width with <code>0</code> to pad with zeros instead of spaces.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{7:03}"</span> == <span class="st">"007"</span>, <span class="st">"zero-padded 3 digits"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:05}"</span> == <span class="st">"00042"</span>, <span class="st">"zero-padded 5 digits"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-1:04}"</span> == <span class="st">"-001"</span>, <span class="st">"zero-padded negative: sign before zeros"</span>);</code></pre>
+<h2 id="signed-format">Signed format</h2>
+<p><code>+</code> forces a sign on positive numbers.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{42:+}"</span> == <span class="st">"+42"</span>, <span class="st">"explicit positive sign"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-42:+}"</span> == <span class="st">"-42"</span>, <span class="st">"negative sign always shown"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0:+}"</span> == <span class="st">"+0"</span>, <span class="st">"sign on zero"</span>);</code></pre>
+<h2 id="hexadecimal-binary-octal">Hexadecimal, binary, octal</h2>
+<p><code>:x</code> for lowercase hex, <code>:#x</code> for hex with <code>0x</code> prefix. <code>:b</code> for binary, <code>:o</code> for octal.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:x}"</span> == <span class="st">"ff"</span>, <span class="st">"hex lowercase"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{255:#x}"</span> == <span class="st">"0xff"</span>, <span class="st">"hex with prefix"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{10:b}"</span> == <span class="st">"1010"</span>, <span class="st">"binary"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{8:o}"</span> == <span class="st">"10"</span>, <span class="st">"octal"</span>);</code></pre>
+<h2 id="float-precision">Float precision</h2>
+<p><code>.N</code> after the colon limits decimal places.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.1}"</span> == <span class="st">"3.1"</span>, <span class="st">"1 decimal place"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.2}"</span> == <span class="st">"3.12"</span>, <span class="st">"2 decimal places"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:.0}"</span> == <span class="st">"3"</span>, <span class="st">"0 decimal places"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{0.0:.3}"</span> == <span class="st">"0.000"</span>, <span class="st">"trailing zeros"</span>);</code></pre>
+<h2 id="width-precision">Width + precision</h2>
+<p>Combine width and precision: <code>{val:W.P}</code> where W is total width and P is decimal places.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{3.125:8.2}"</span> == <span class="st">"    3.12"</span>, <span class="st">"width 8 precision 2"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{-3.125:8.2}"</span> == <span class="st">"   -3.12"</span>, <span class="st">"negative width+precision"</span>);</code></pre>
+<h2 id="json-format">JSON format</h2>
+<p><code>:j</code> serialises a struct or value as JSON. <code>:j</code> serialises a struct as JSON.  Use it on struct values, not primitives. See the JSON documentation page for full details.</p>
+<h2 id="vector-format">Vector format</h2>
+<p>Vectors are formatted as <code>[a,b,c]</code> by default. A format specifier inside a <code>for</code> loop applies to each element.</p>
+<pre><code>  v = [<span class="nm">1</span>, <span class="nm">2</span>, <span class="nm">3</span>];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{v}"</span> == <span class="st">"[1,2,3]"</span>, <span class="st">"default vector format"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{for fmt_n in 1..4 {fmt_n * 10}:04}"</span> == <span class="st">"[0010,0020,0030]"</span>, <span class="st">"formatted vector elements"</span>);</code></pre>
+<h2 id="long-and-single-types">Long and single types</h2>
+<p>Long integers and single-precision floats use the same format specifiers.</p>
+<pre><code>  n = <span class="nm">1000000</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n}"</span> == <span class="st">"1000000"</span>, <span class="st">"long default"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{n:&gt;10}"</span> == <span class="st">"   1000000"</span>, <span class="st">"long right-aligned"</span>);
+  f = <span class="nm">1.5f</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{f}"</span> == <span class="st">"1.5"</span>, <span class="st">"single default"</span>);</code></pre>
+<h2 id="character-format">Character format</h2>
+<pre><code>  c = <span class="ch">'A'</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{c}"</span> == <span class="st">"A"</span>, <span class="st">"character default"</span>);</code></pre>
+<h2 id="boolean-format">Boolean format</h2>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{true}"</span> == <span class="st">"true"</span>, <span class="st">"boolean true"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{false}"</span> == <span class="st">"false"</span>, <span class="st">"boolean false"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

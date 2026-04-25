@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Sorted</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <span class="cur">Sorted</span> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Sorted</h1>
+<article>
+<p>A <code>sorted</code> collection holds records in order by one or more fields you choose as the sort criteria (called "key fields"). You can look up a record by those fields instantly and iterate all records in that order. The collection stays sorted as you add new elements — no manual sorting needed. Declare the key fields inside angle brackets: <code>field</code> sorts A→Z / 0→9 (ascending), <code>-field</code> sorts Z→A / 9→0 (descending).</p>
+<pre><code><span class="kw">struct</span> <span class="en">Elm</span> {
+  key: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  value: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Db</span> {
+  map: <span class="ty"><a href="stdlib-collections.html">sorted</a></span> &lt; <span class="en">Elm</span>[-key] &gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
+<h2 id="adding-elements">Adding Elements</h2>
+<p>You initialise a sorted collection the same way as a vector. The elements are automatically placed in the right position as you add them.</p>
+<pre><code>  db = <span class="en">Db</span> {map: [
+  <span class="en">Elm</span> {key: <span class="st">"One"</span>, value: <span class="nm">1</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Two"</span>, value: <span class="nm">2</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Three"</span>, value: <span class="nm">3</span> },
+  <span class="en">Elm</span> {key: <span class="st">"Four"</span>, value: <span class="nm">4</span> }
+  ] };</code></pre>
+<h2 id="looking-up-by-key">Looking Up by Key</h2>
+<p>Use square brackets with the key value to find a record instantly. If the key is not present the result is null — you can check it with <code>!</code>.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Two"</span>].value == <span class="nm">2</span>, <span class="st">"Key lookup: Two"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Three"</span>].value == <span class="nm">3</span>, <span class="st">"Key lookup: Three"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="st">"Five"</span>], <span class="st">"Missing key returns null"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db.map[<span class="kw">null</span>], <span class="st">"Null key returns null"</span>);</code></pre>
+<p>Append new elements with <code>+=</code>; they are placed in the correct sorted position.</p>
+<pre><code>  db.map +=[<span class="en">Elm</span> {key: <span class="st">"Zero"</span>, value: <span class="nm">0</span> }];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db.map[<span class="st">"Zero"</span>].value == <span class="nm">0</span>, <span class="st">"Newly added element"</span>);</code></pre>
+<h2 id="iterating-in-order">Iterating in Order</h2>
+<p>A <code>for</code> loop over a sorted collection visits elements in key order. Here the key is <code>-key</code> (descending text), so the order is: Zero, Two, Three, One, Four.</p>
+<pre><code>  sum = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    sum = sum * <span class="nm">10</span> + v.value;
+  }</code></pre>
+<p>Zero(0), Two(2), Three(3), One(1), Four(4) → 0*10+2=2, *10+3=23, *10+1=231, *10+4=2314</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum == <span class="nm">2314</span>, <span class="st">"Sorted iteration total: {sum}"</span>);</code></pre>
+<h2 id="iterating-in-reverse">Iterating in Reverse</h2>
+<p>Wrap the collection in rev() to visit elements from last to first key order. Here the collection is sorted by <code>-key</code> (descending text), so the stored order is Zero, Two, Three, One, Four.  rev() visits them in the opposite order.</p>
+<pre><code>  rev_sum = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> <span class="bi">rev</span>(db.map) {
+    rev_sum = rev_sum * <span class="nm">10</span> + v.value;
+  }</code></pre>
+<p>Four(4), One(1), Three(3), Two(2), Zero(0) → 4*10+1=41, *10+3=413, *10+2=4132, *10+0=41320</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(rev_sum == <span class="nm">41320</span>, <span class="st">"Reverse iteration total: {rev_sum}"</span>);</code></pre>
+<h2 id="loop-helpers-first-count-and-remove">Loop Helpers: #first, #count, and #remove</h2>
+<p><code>v#first</code> is true for the very first element visited. <code>v#count</code> is a running index starting at 0. <code>v#remove</code> removes the current element while iterating.</p>
+<pre><code>  first_key = <span class="st">""</span>;
+  labels = <span class="st">""</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    <span class="kw">if</span> v#first {
+      first_key = v.key
+    }
+    <span class="kw">if</span> !v#first {
+      labels += <span class="st">","</span>
+    }
+    labels += <span class="st">"{v#count}:{v.key}"</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(first_key == <span class="st">"Zero"</span>, <span class="st">"First element: {first_key}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(labels == <span class="st">"0:Zero,1:Two,2:Three,3:One,4:Four"</span>, <span class="st">"Labels: {labels}"</span>);</code></pre>
+<p>Remove elements with value &gt; 2 while iterating.</p>
+<pre><code>  <span class="kw">for</span> v <span class="kw">in</span> db.map <span class="kw">if</span> v.value &gt; <span class="nm">2</span> {
+    v#remove
+  }
+  sum2 = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db.map {
+    sum2 += v.value
+  }</code></pre>
+<p>Remaining: Zero(0), Two(2), One(1) → sum = 3</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum2 == <span class="nm">3</span>, <span class="st">"Sum after remove: {sum2}"</span>);</code></pre>
+<h2 id="removing-by-key">Removing by Key</h2>
+<p>Assigning null to a sorted subscript removes the element with that key. Removing a key that is not present is a safe no-op.</p>
+<pre><code>  db2 = <span class="en">Db</span> {map: [
+  <span class="en">Elm</span> {key: <span class="st">"A"</span>, value: <span class="nm">10</span> },
+  <span class="en">Elm</span> {key: <span class="st">"B"</span>, value: <span class="nm">20</span> },
+  <span class="en">Elm</span> {key: <span class="st">"C"</span>, value: <span class="nm">30</span> }
+  ] };
+  db2.map[<span class="st">"B"</span>] = <span class="kw">null</span>;
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!db2.map[<span class="st">"B"</span>], <span class="st">"B was removed"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"A"</span>].value == <span class="nm">10</span>, <span class="st">"A still present"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(db2.map[<span class="st">"C"</span>].value == <span class="nm">30</span>, <span class="st">"C still present"</span>);
+  db2.map[<span class="st">"missing"</span>] = <span class="kw">null</span>;</code></pre>
+<p>no-op; does not panic</p>
+<pre><code>  sum3 = <span class="nm">0</span>;
+  <span class="kw">for</span> v <span class="kw">in</span> db2.map {
+    sum3 += v.value
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(sum3 == <span class="nm">40</span>, <span class="st">"Sum after key removal: {sum3}"</span>);</code></pre>
+<p>Note: #index is not available on sorted — use #count for a sequential counter.</p>
+<pre><code>}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Word</span> {
+  name: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+  score: <span class="ty"><a href="stdlib-types.html">integer</a></span>
+}</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">Dict</span> {
+  words: <span class="ty"><a href="stdlib-collections.html">sorted</a></span>&lt;<span class="en">Word</span>[name]&gt;
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main_ranges</span>() {</code></pre>
+<h2 id="iterating-a-key-range">Iterating a Key Range</h2>
+<p>Use an <code>if</code> guard inside a <code>for</code> loop to visit only records whose key falls within a range. Because the collection is sorted the guard still sees all elements, but the body only runs for the matching ones.</p>
+<pre><code>  d = <span class="en">Dict</span> { words: [
+    <span class="en">Word</span> { name: <span class="st">"apple"</span>,      score: <span class="nm">5</span> },
+    <span class="en">Word</span> { name: <span class="st">"banana"</span>,     score: <span class="nm">3</span> },
+    <span class="en">Word</span> { name: <span class="st">"cherry"</span>,     score: <span class="nm">8</span> },
+    <span class="en">Word</span> { name: <span class="st">"date"</span>,       score: <span class="nm">2</span> },
+    <span class="en">Word</span> { name: <span class="st">"elderberry"</span>, score: <span class="nm">1</span> }
+  ] };</code></pre>
+<p>Closed range: keys &gt;= "banana" and &lt;= "date".</p>
+<pre><code>  range_total = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"date"</span> {
+    range_total += w.score
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(range_total == <span class="nm">13</span>, <span class="st">"banana(3)+cherry(8)+date(2) = {range_total}"</span>);</code></pre>
+<h2 id="open-ended-range-tail">Open-ended Range (tail)</h2>
+<p>All records from "cherry" onward to the end of the sorted order.</p>
+<pre><code>  tail_count = <span class="nm">0</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"cherry"</span> {
+    tail_count += <span class="nm">1</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(tail_count == <span class="nm">3</span>, <span class="st">"cherry, date, elderberry = {tail_count}"</span>);</code></pre>
+<h2 id="open-ended-range-head">Open-ended Range (head)</h2>
+<p>All records up to and including "banana".</p>
+<pre><code>  head_names = <span class="st">""</span>;
+  <span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &lt;= <span class="st">"banana"</span> {
+    head_names += w.name + <span class="st">" "</span>
+  }
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(head_names == <span class="st">"apple banana "</span>, <span class="st">"apple and banana: '{head_names}'"</span>);</code></pre>
+<h2 id="range-outside-the-for-building-a-result-vector">Range outside the for (building a result vector)</h2>
+<p>Collect matching records into a vector for later use.</p>
+<pre><code>  subset = [<span class="kw">for</span> w <span class="kw">in</span> d.words <span class="kw">if</span> w.name &gt;= <span class="st">"banana"</span> &amp;&amp; w.name &lt;= <span class="st">"cherry"</span> { w.score }];
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">0</span>] == <span class="nm">3</span>, <span class="st">"first in range: {subset[0]}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(subset[<span class="nm">1</span>] == <span class="nm">8</span>, <span class="st">"second in range: {subset[1]}"</span>);
+}</code></pre>
+<p>filling and finding values</p>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

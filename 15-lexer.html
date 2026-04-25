@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Lexer</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <span class="cur">Lexer</span> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Lexer</h1>
+<article>
+<p>The lexer library breaks a text into tokens so your program can understand its structure. Tokens are the smallest meaningful pieces: numbers, names (like variable and function names), operators, and quoted strings. You tell the lexer which multi-character sequences count as one token and which words are reserved keywords, and it handles the rest.</p>
+<h2 id="setting-up-the-lexer">Setting Up the Lexer</h2>
+<p>Create a <code>lexer::Lexer</code> and register your language's rules before you parse anything. <code>set_tokens</code> ensures operators like <code>+=</code> or <code>&gt;&gt;</code> are scanned as one token instead of two separate characters. <code>set_keywords</code> prevents reserved words from being treated as ordinary names — the lexer will report them exactly as written so your parser can treat them specially.</p>
+<pre><code><span class="kw">use</span> lexer;
+<span class="kw">fn</span> <span class="fn-call">main</span>() {
+  l = lexer::<span class="en">Lexer</span> { };
+  l.<span class="fn-call">set_tokens</span>([<span class="st">"+="</span>, <span class="st">"*="</span>, <span class="st">"-="</span>, <span class="st">"&lt;="</span>, <span class="st">"&gt;="</span>, <span class="st">"!="</span>, <span class="st">"=="</span>, <span class="st">"&gt;&gt;"</span>, <span class="st">"&lt;&lt;"</span>, <span class="st">"-&gt;"</span>, <span class="st">"=&gt;"</span>, <span class="st">"&gt;&gt;&gt;"</span>, <span class="st">".."</span>, <span class="st">"..="</span>, <span class="st">"&amp;&amp;"</span>, <span class="st">"||"</span>]);
+  l.<span class="fn-call">set_keywords</span>([<span class="st">"for"</span>, <span class="st">"in"</span>, <span class="st">"if"</span>, <span class="st">"else"</span>, <span class="st">"fn"</span>, <span class="st">"pub"</span>, <span class="st">"use"</span>, <span class="st">"struct"</span>, <span class="st">"enum"</span>, <span class="st">"match"</span>, <span class="st">"and"</span>, <span class="st">"or"</span>]);</code></pre>
+<h2 id="reading-tokens">Reading Tokens</h2>
+<p><code>parse_string(name, source)</code> feeds source text into the lexer. The name is used in error messages and position reports. After that, call the typed reader functions one by one to consume tokens in order.</p>
+<p><code>int()</code> consumes and returns the next integer token, or null if the current token is not an integer. <code>long_int()</code> does the same for integers suffixed with <code>l</code>. <code>matches(s)</code> consumes the next token only when it equals s and returns true; otherwise it leaves the token in place and returns false. <code>peek()</code> returns the next token as text without consuming it. <code>position()</code> returns the current location as <code>file:line:col</code>.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Tokens"</span>, <span class="st">"12 += -2 * 3 &gt;&gt; 4"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">12</span>, <span class="st">"Integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect plus"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">peek</span>() != <span class="st">"+"</span>, <span class="st">"Incorrect plus"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+="</span>), <span class="st">"Incorrect plus_is"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == -<span class="nm">2</span>, <span class="st">"Second integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"*"</span>), <span class="st">"Incorrect multiply"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">3</span>, <span class="st">"Third number"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:14"</span>, <span class="st">"Incorrect position {l.position()}"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">matches</span>(<span class="st">"&gt;"</span>), <span class="st">"Incorrect higher"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"&gt;&gt;"</span>), <span class="st">"Incorrect logical shift"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">position</span>() == <span class="st">"Tokens:1:17"</span>, <span class="st">"Incorrect position {l.position()}"</span>);</code></pre>
+<h2 id="string-literals-and-comments">String Literals and Comments</h2>
+<p><code>constant_text()</code> reads a double-quoted string and handles special codes like \n (newline) and \\ (backslash). <code>constant_character()</code> reads a single-quoted character literal and returns it as text.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Texts"</span>, <span class="st">"\"</span><span class="nm">123</span>\<span class="st">" + '4'"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"123"</span>, <span class="st">"Incorrect text literal"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect add"</span>);</code></pre>
+<p>P111: constant_character() returns a character, not text "123". This assert was passing only because char == text always returned true. TODO: fix the test to match actual constant_character() semantics. assert("{l.constant_character()}" == "123", "Incorrect text literal"); The lexer collects <code>//</code> comments automatically as it scans. You do not need to handle them yourself. <code>last_comment()</code> returns the accumulated comment text since the last consumed token. When multiple comment lines appear in a row they are joined with newlines into a single string. <code>comment_behind()</code> is true when the comment appeared on the same line as the preceding token rather than on its own line above. <code>is_finished()</code> returns true once every token has been consumed.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Comments"</span>, <span class="st">"// starting comments\n123 // same line comment\n// extra comment\n4"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">comment_behind</span>(), <span class="st">"Initial comment not behind"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"starting comments"</span>, <span class="st">"Initial comment"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">123</span>, <span class="st">"Content integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">comment_behind</span>(), <span class="st">"Second comment is behind"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">"same line comment\nextra comment"</span>, <span class="st">"Second comment"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">is_finished</span>(), <span class="st">"Not Ready"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">4</span>, <span class="st">"Second integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">last_comment</span>() == <span class="st">""</span>, <span class="st">"No remaining comment"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_finished</span>(), <span class="st">"Ready"</span>);</code></pre>
+<h2 id="embedded-format-expressions">Embedded Format Expressions</h2>
+<p>Loft string literals can embed expressions with <code>{expr}</code>. The lexer exposes a protocol that lets you parse these yourself. When <code>constant_text()</code> reaches a <code>{</code>, it returns the literal text before it and sets <code>is_formatting()</code> to true. At that point call <code>set_formatting(false)</code> and parse the embedded expression normally using the usual token readers. When the expression is done, call <code>set_formatting(true)</code> and consume the closing <code>}}</code>. Then <code>constant_text()</code> continues with the next segment of the string.</p>
+<pre><code>  l.<span class="fn-call">parse_string</span>(<span class="st">"Formatting"</span>, <span class="st">"\"</span>abc{{<span class="nm">12</span> + <span class="nm">34</span>}}def\<span class="st">""</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"abc"</span>, <span class="st">"Before formatting"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">is_formatting</span>(), <span class="st">"Formatting"</span>);
+  l.<span class="fn-call">set_formatting</span>(<span class="kw">false</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">12</span>, <span class="st">"First integer"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"+"</span>), <span class="st">"Incorrect plus"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">int</span>() == <span class="nm">34</span>, <span class="st">"Second integer"</span>);
+  l.<span class="fn-call">set_formatting</span>(<span class="kw">true</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">matches</span>(<span class="st">"}}"</span>), <span class="st">"Incorrect closing brace"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(l.<span class="fn-call">constant_text</span>() == <span class="st">"def"</span>, <span class="st">"After formatting"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!l.<span class="fn-call">is_formatting</span>(), <span class="st">"Formatting"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>

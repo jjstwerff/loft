@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft Language</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="index-header">
+<div class="index-hero">
+<h1>Loft</h1>
+<p class="tagline">Build small games and interactive things — share a link, anyone plays.</p>
+<p class="subtagline">A statically-typed scripting language inspired by Rust.</p>
+<p class="version">v0.8.4</p>
+<div class="hero-ctas">
+<a class="hero-btn hero-btn-primary" href="playground.html">Try it in the browser</a>
+<a class="hero-btn" href="gallery.html">See the gallery</a>
+<a class="hero-btn" href="install.html">Install</a>
+</div>
+</div>
+<div class="search-wrap index-search">
+<input id="search" type="search" placeholder="Search docs…" autocomplete="off">
+<div class="search-results" id="search-results" hidden></div>
+</div>
+</header>
+<section class="showcase">
+<a class="showcase-tile showcase-hero" href="brick-buster.html">
+<img src="images/hero-brick-buster.png" alt="Brick Buster — a complete loft game" loading="lazy">
+<div class="showcase-caption">
+<span class="showcase-tag">Built with loft</span>
+<h2>Brick Buster</h2>
+<p>A complete arcade game — hand-designed levels, cel-shaded sprites, heart lives, round ball with a velocity-directional squash, rising balloon bombs, fireball after-images, chiptune music. Written in loft, runs in your browser.</p>
+</div>
+</a>
+<div class="showcase-side">
+<a class="showcase-tile showcase-sub" href="playground.html">
+<div class="showcase-caption">
+<span class="showcase-tag">No install</span>
+<h3>Live playground</h3>
+<p>Type a few lines of loft code. Press run. See output. That is the whole tutorial.</p>
+</div>
+</a>
+<a class="showcase-tile showcase-sub" href="gallery.html">
+<div class="showcase-caption">
+<span class="showcase-tag">24 demos</span>
+<h3>Graphics gallery</h3>
+<p>From a hello-triangle to physically-based rendering with shadows — all running live in WebGL.</p>
+</div>
+</a>
+</div>
+</section>
+<section class="intro">
+<p>Welcome to Loft! Loft is a concise, statically-typed language designed to be safe and easy to embed in larger Rust projects. It is great for scripting game logic, configuration, data transformations, and anywhere you want a friendly language backed by a fast Rust runtime.</p>
+<p>These documentation pages are your guided tour — each page is also a live test, so every example you see has already been verified to work exactly as shown. The best way to get started is to read the pages in order. This first page introduces the handful of ideas that shape every other part of the language.</p>
+</section>
+<section class="topics">
+<h2 class="topics-heading">Getting Started</h2>
+<div class="grid">
+      <a class="card card-featured" href="install.html"><h2>Install</h2><p>Get loft running and write your first Loft program in minutes.</p></a>
+      <a class="card" href="roadmap.html"><h2>Roadmap</h2><p>Planned features for version 1.0 and beyond, with syntax previews.</p></a>
+</div>
+</section>
+<section class="topics">
+<h2 class="topics-heading">Language</h2>
+<div class="grid">
+      <a class="card card-featured" href="00-vs-rust.html"><h2>vs Rust</h2><p>Key differences for developers coming from Rust.</p></a>
+<a class="card card-featured" href="00-vs-python.html"><h2>vs Python</h2><p>Key differences for developers coming from Python.</p></a>
+<a class="card card-featured" href="00-performance.html"><h2>Performance</h2><p>Benchmark results across interpreter, native, wasm, and Rust.</p></a>
+      <a class="card" href="01-keywords.html"><h2>Keywords</h2><p>Keywords and control flow</p></a>
+      <a class="card" href="02-text.html"><h2>Texts</h2><p>Text handling and functions</p></a>
+      <a class="card" href="03-integer.html"><h2>Integers</h2><p>Whole numbers and arithmetic</p></a>
+      <a class="card" href="04-boolean.html"><h2>Boolean</h2><p>True, false, and null</p></a>
+      <a class="card" href="05-float.html"><h2>Float</h2><p>Floating point operations and math functions</p></a>
+      <a class="card" href="06-function.html"><h2>Functions</h2><p>User defined functions</p></a>
+      <a class="card" href="07-vector.html"><h2>Vector</h2><p>Vector creation and use</p></a>
+      <a class="card" href="08-struct.html"><h2>Structs</h2><p>Grouping related data with structs</p></a>
+      <a class="card" href="09-enum.html"><h2>Enums</h2><p>Named choices with optional data</p></a>
+      <a class="card" href="10-sorted.html"><h2>Sorted</h2><p>Keeping records in sorted order automatically</p></a>
+      <a class="card" href="11-index.html"><h2>Index</h2><p>Fast lookup and range queries over records</p></a>
+      <a class="card" href="12-hash.html"><h2>Hash</h2><p>Instant key lookup with a hash table</p></a>
+      <a class="card" href="13-file.html"><h2>File</h2><p>File system — text, binary, and directory access.</p></a>
+      <a class="card" href="15-lexer.html"><h2>Lexer</h2><p>Lexer library.</p></a>
+      <a class="card" href="16-parser.html"><h2>Parser</h2><p>Parsing Loft source code programmatically</p></a>
+      <a class="card" href="17-libraries.html"><h2>Libraries</h2><p>Library system — importing and using external loft modules.</p></a>
+      <a class="card" href="18-locks.html"><h2>Store Locks</h2><p>Immutability with const and runtime store locks</p></a>
+      <a class="card" href="19-threading.html"><h2>Parallel execution</h2><p>Parallel processing with the par(...) for-loop clause</p></a>
+      <a class="card" href="20-logging.html"><h2>Logging</h2><p>Recording events with the logging system</p></a>
+      <a class="card" href="22-time.html"><h2>Time</h2><p>Wall-clock time and elapsed time</p></a>
+      <a class="card" href="23-safety.html"><h2>Safety</h2><p>Language traps and how to avoid them</p></a>
+      <a class="card" href="24-json.html"><h2>JSON</h2><p>JSON parsing and generation</p></a>
+      <a class="card" href="25-generics.html"><h2>Generics</h2><p>Generic functions</p></a>
+      <a class="card" href="26-closures.html"><h2>Closures</h2><p>Capturing variables from the surrounding scope</p></a>
+      <a class="card" href="27-coroutines.html"><h2>Coroutines</h2><p>Lazy sequences with generators and yield</p></a>
+      <a class="card" href="28-tuples.html"><h2>Tuples</h2><p>Grouping values without defining a struct</p></a>
+      <a class="card" href="29-match.html"><h2>Match</h2><p>Pattern matching with match expressions</p></a>
+      <a class="card" href="30-formatting.html"><h2>Formatting</h2><p>Format strings — interpolation, alignment, and number bases</p></a>
+      <a class="card" href="31-ref-forward.html"><h2>Reference parameter forwarding</h2><p>Forwarding & parameters between functions</p></a>
+</div>
+</section>
+<section class="topics">
+<h2 class="topics-heading">Standard Library</h2>
+<div class="grid">
+      <a class="card" href="stdlib-types.html"><h2>Types</h2><p>Primitive type conversions and null checks</p></a>
+      <a class="card" href="stdlib-interfaces.html"><h2>Interfaces</h2></a>
+      <a class="card" href="stdlib-math.html"><h2>Math</h2><p>Arithmetic, rounding, and trigonometry</p></a>
+      <a class="card" href="stdlib-exp-ln-log2-log10.html"><h2>exp / ln / log2 / log10</h2></a>
+      <a class="card" href="stdlib-min-max-clamp.html"><h2>min / max / clamp</h2></a>
+      <a class="card" href="stdlib-text.html"><h2>Text</h2><p>String manipulation and formatting</p></a>
+      <a class="card" href="stdlib-collections.html"><h2>Collections</h2><p>Vector, sorted, index, and hash operations</p></a>
+      <a class="card" href="stdlib-output-and-diagnostics.html"><h2>Output and Diagnostics</h2><p>Print, assert, and diagnostic functions</p></a>
+      <a class="card" href="stdlib-vector-aggregates.html"><h2>Vector aggregates</h2></a>
+      <a class="card" href="stdlib-field-iteration-support-types.html"><h2>Field iteration support types</h2></a>
+      <a class="card" href="stdlib-file-system.html"><h2>File System</h2><p>File, directory, and path operations</p></a>
+      <a class="card" href="stdlib-environment.html"><h2>Environment</h2><p>Command-line arguments and program state</p></a>
+      <a class="card" href="stdlib-time.html"><h2>Time</h2></a>
+</div>
+</section>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

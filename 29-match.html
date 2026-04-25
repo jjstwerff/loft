@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loft - Match</title>
+<link rel="stylesheet" href="style.css">
+<style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
+</head>
+<body>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="cur">Match</span> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<h1>Match</h1>
+<article>
+<p>The <code>match</code> expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to <code>switch</code> in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include <code>if</code> guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.</p>
+<h2 id="simple-enum-matching">Simple enum matching</h2>
+<p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — the compiler checks exhaustiveness.</p>
+<pre><code><span class="kw">enum</span> <span class="en">Direction</span> { <span class="en">North</span>, <span class="en">South</span>, <span class="en">East</span>, <span class="en">West</span> }</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">direction_name</span>(d: <span class="en">Direction</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
+  match d {
+    <span class="en">North</span> =&gt; <span class="st">"north"</span>,
+    <span class="en">South</span> =&gt; <span class="st">"south"</span>,
+    <span class="en">East</span>  =&gt; <span class="st">"east"</span>,
+    <span class="en">West</span>  =&gt; <span class="st">"west"</span>,
+  }
+}</code></pre>
+<pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">direction_name</span>(<span class="en">North</span>) == <span class="st">"north"</span>, <span class="st">"simple enum match"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call">direction_name</span>(<span class="en">West</span>) == <span class="st">"west"</span>, <span class="st">"west"</span>);</code></pre>
+<h2 id="match-as-expression">Match as expression</h2>
+<p>Because match returns a value you can use it in assignments and arguments.</p>
+<pre><code>  score = match <span class="en">Direction</span>.<span class="en">East</span> {
+    <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="nm">10</span>,
+    <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="nm">20</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(score == <span class="nm">20</span>, <span class="st">"match expression: {score}"</span>);</code></pre>
+<h2 id="struct-enum-destructuring">Struct-enum destructuring</h2>
+<p>When an enum has variants with fields (a struct-enum) you can bind the fields to variables in the match arm. Circle { radius } — binds the <code>radius</code> field to a local variable Rect { w, h }     — binds both <code>w</code> and <code>h</code> The variable names must match the field names exactly.</p>
+<h2 id="guards">Guards</h2>
+<p>Add <code>if condition</code> after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.</p>
+<pre><code>  v = <span class="nm">42</span>;
+  label = match v {
+    <span class="nm">0</span>      =&gt; <span class="st">"zero"</span>,
+    _ <span class="kw">if</span> v &lt; <span class="nm">0</span> =&gt; <span class="st">"negative"</span>,
+    _ <span class="kw">if</span> v &gt; <span class="nm">100</span> =&gt; <span class="st">"large"</span>,
+    _      =&gt; <span class="st">"normal"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(label == <span class="st">"normal"</span>, <span class="st">"guard: {label}"</span>);</code></pre>
+<h2 id="wildcard">Wildcard <code>_</code></h2>
+<p>The underscore <code>_</code> matches anything.  Put it last as a catch-all. Without it, the compiler will reject the match if any value could fall through without matching.</p>
+<pre><code>  x = <span class="nm">7</span>;
+  kind = match x {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+    _ =&gt; <span class="st">"other"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(kind == <span class="st">"other"</span>, <span class="st">"wildcard: {kind}"</span>);</code></pre>
+<h2 id="integer-matching">Integer matching</h2>
+<p>Match works on integers — each arm is compared with <code>==</code>.</p>
+<pre><code>  name = match <span class="nm">3</span> {
+    <span class="nm">1</span> =&gt; <span class="st">"one"</span>,
+    <span class="nm">2</span> =&gt; <span class="st">"two"</span>,
+    <span class="nm">3</span> =&gt; <span class="st">"three"</span>,
+    _ =&gt; <span class="st">"many"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(name == <span class="st">"three"</span>, <span class="st">"integer match: {name}"</span>);</code></pre>
+<h2 id="text-matching">Text matching</h2>
+<p>Match also works on text values.</p>
+<pre><code>  greeting = <span class="st">"hi"</span>;
+  reply = match greeting {
+    <span class="st">"hello"</span> =&gt; <span class="st">"formal"</span>,
+    <span class="st">"hi"</span>    =&gt; <span class="st">"casual"</span>,
+    _       =&gt; <span class="st">"unknown"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(reply == <span class="st">"casual"</span>, <span class="st">"text match: {reply}"</span>);</code></pre>
+<h2 id="multiple-patterns-with">Multiple patterns with <code>|</code></h2>
+<p>Combine patterns with <code>|</code> to share the same arm body.</p>
+<pre><code>  d = <span class="en">Direction</span>.<span class="en">South</span>;
+  axis = match d {
+    <span class="en">North</span> | <span class="en">South</span> =&gt; <span class="st">"vertical"</span>,
+    <span class="en">East</span> | <span class="en">West</span>   =&gt; <span class="st">"horizontal"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(axis == <span class="st">"vertical"</span>, <span class="st">"multi-pattern: {axis}"</span>);</code></pre>
+<h2 id="nested-match">Nested match</h2>
+<p>Match can appear inside other expressions, including other match arms.</p>
+<pre><code>  n = <span class="nm">15</span>;
+  result = match n % <span class="nm">2</span> == <span class="nm">0</span> {
+    <span class="kw">true</span>  =&gt; <span class="st">"even"</span>,
+    <span class="kw">false</span> =&gt; match n % <span class="nm">3</span> == <span class="nm">0</span> {
+      <span class="kw">true</span>  =&gt; <span class="st">"odd multiple of 3"</span>,
+      <span class="kw">false</span> =&gt; <span class="st">"odd"</span>,
+    },
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(result == <span class="st">"odd multiple of 3"</span>, <span class="st">"nested: {result}"</span>);
+}</code></pre>
+
+  </article>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+<script>
+(function(){
+var m={"Keywords":"keywords","Texts":"texts","Integers":"integers","Boolean":"boolean","Float":"float","Functions":"functions","Vector":"vector","Structs":"structs","Enums":"enums","Sorted":"sorted","Index":"index","Hash":"hash","File":"file","Lexer":"lexer","Parser":"parser","Libraries":"libraries","Store Locks":"store_locks","Parallel execution":"parallel_execution","Logging":"logging","Time":"time","Safety":"safety","JSON":"json","Generics":"generics","Closures":"closures","Coroutines":"coroutines","Tuples":"tuples","Match":"match","Formatting":"formatting"};
+var h=document.querySelector('h1');
+if(!h)return;
+var key=m[h.textContent];
+if(!key)return;
+var a=document.createElement('a');
+a.className='playground-link';
+a.href='playground.html?example='+key;
+a.textContent='\u25B6 Try in Playground';
+h.parentNode.insertBefore(a,h.nextSibling);
+})();
+</script>
+</body>
+</html>
