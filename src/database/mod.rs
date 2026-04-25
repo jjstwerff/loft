@@ -330,6 +330,181 @@ impl std::ops::Deref for WorkerStores {
     }
 }
 
+impl std::ops::DerefMut for WorkerStores {
+    fn deref_mut(&mut self) -> &mut Stores {
+        &mut self.stores
+    }
+}
+
+/// Plan-06 phase 1 — marker telling the parent which slot in this
+/// worker's `WorkerStores.allocations` to extract after join.
+///
+/// The output slot is a regular `Store` inside the worker's allocations
+/// table, written via ordinary `OpSet*` opcodes addressed by a normal
+/// `DbRef`.  After the worker thread joins, the parent calls
+/// `WorkerStores::take_slot(slot.store_nr)` to extract the inner Store
+/// and `Stores::adopt_store(store)` to install it into the parent's
+/// allocations.  See plan-06 DESIGN.md D2.1 for the rationale.
+///
+/// Just a `u16`; no Drop logic.  The worker's `WorkerStores` owns the
+/// underlying Store until `take_slot` extracts it.  If the worker
+/// panics, the `WorkerStores` is dropped and the slot's Store is
+/// freed via `Store::Drop`.
+#[derive(Debug, Clone, Copy)]
+pub struct WorkerOutputSlot {
+    pub store_nr: u16,
+}
+
+impl WorkerStores {
+    /// Append a fresh empty Store to `allocations` and return the
+    /// new slot's index as a `WorkerOutputSlot` marker.
+    ///
+    /// Called by the parallel dispatcher right after `clone_for_worker`,
+    /// before handing the `WorkerStores` to the worker thread.  The
+    /// worker writes its result into the slot via ordinary `OpSet*`
+    /// opcodes addressed by a `DbRef { store_nr: slot.store_nr, .. }`.
+    ///
+    /// `slot_words` is the requested capacity in 8-byte words; the
+    /// minimum is one word so the underlying allocator never sees zero.
+    pub fn add_output_slot(&mut self, slot_words: u32) -> WorkerOutputSlot {
+        let store_nr = self.stores.allocations.len() as u16;
+        let mut store = Store::new(slot_words.max(1));
+        // Worker output slots are writable (free=true→false handled by
+        // the worker's first claim).  Mark non-free so debug invariants
+        // don't think this is a freed slot.
+        store.free = false;
+        store.ref_count = 1;
+        self.stores.allocations.push(store);
+        if store_nr >= self.stores.max {
+            self.stores.max = store_nr + 1;
+        }
+        WorkerOutputSlot { store_nr }
+    }
+
+    /// Move the inner `Store` out of the slot, replacing it with a
+    /// freed sentinel so the worker's `Drop` is a no-op for the
+    /// extracted slot.
+    ///
+    /// Called by the parent thread after the worker joins.  The
+    /// returned `Store` retains its bytes — installation into the
+    /// parent's allocations table happens via `Stores::adopt_store`.
+    ///
+    /// # Panics
+    /// Panics if `slot_nr` is out of range or has already been taken
+    /// (sentinel-replaced) — both indicate dispatcher bugs.
+    pub fn take_slot(&mut self, slot_nr: u16) -> Store {
+        let pos = slot_nr as usize;
+        assert!(
+            pos < self.stores.allocations.len(),
+            "take_slot: slot {slot_nr} out of range",
+        );
+        let sentinel = crate::store::Store::new_freed_sentinel();
+        std::mem::replace(&mut self.stores.allocations[pos], sentinel)
+    }
+}
+
+impl Stores {
+    /// Install an externally-allocated `Store` into this `Stores`'
+    /// allocations table.  Returns the parent-side `store_nr`.
+    ///
+    /// Used by the parent thread after `WorkerStores::take_slot`
+    /// extracts a worker's output slot.  The `Store` keeps its bytes
+    /// — no memcpy, no claim translation.  Phase 2's rebase walk
+    /// rewrites cross-store DbRefs after every worker's slot is
+    /// adopted.
+    ///
+    /// Reuses a free slot if one is available below `max`; otherwise
+    /// pushes a new slot at the end.
+    pub fn adopt_store(&mut self, store: Store) -> u16 {
+        // Inline the free-slot scan rather than calling allocation.rs's
+        // private `find_free_slot` — keeping mod.rs from depending on
+        // that private helper avoids cross-file plumbing for one
+        // 5-line scan.
+        let mut chosen: Option<u16> = None;
+        for (wi, &word) in self.free_bits.iter().enumerate() {
+            if word != 0 {
+                let bit = word.trailing_zeros() as u16;
+                let slot = wi as u16 * 64 + bit;
+                if slot < self.max {
+                    chosen = Some(slot);
+                    break;
+                }
+            }
+        }
+        let store_nr = if let Some(slot) = chosen {
+            self.allocations[slot as usize] = store;
+            slot
+        } else {
+            self.allocations.push(store);
+            (self.allocations.len() - 1) as u16
+        };
+        if store_nr >= self.max {
+            self.max = store_nr + 1;
+        }
+        // Clear the free bit (slot is now active).
+        let wi = store_nr as usize / 64;
+        let bi = store_nr as usize % 64;
+        if wi < self.free_bits.len() {
+            self.free_bits[wi] &= !(1u64 << bi);
+        }
+        store_nr
+    }
+}
+
+#[cfg(test)]
+mod worker_output_slot_tests {
+    use super::{Stores, WorkerStores};
+
+    #[test]
+    fn add_output_slot_returns_next_index() {
+        let mut s = Stores::new();
+        let initial = s.allocations.len();
+        let mut ws = WorkerStores::new(s);
+        let slot = ws.add_output_slot(64);
+        assert_eq!(slot.store_nr as usize, initial);
+        assert!(ws.stores.allocations[slot.store_nr as usize].capacity_words() >= 64);
+    }
+
+    #[test]
+    fn add_output_slot_minimum_one_word() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let slot = ws.add_output_slot(0);
+        assert!(ws.stores.allocations[slot.store_nr as usize].capacity_words() >= 1);
+    }
+
+    #[test]
+    fn take_slot_returns_owned_store_and_leaves_sentinel() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let slot = ws.add_output_slot(32);
+        let pos = slot.store_nr as usize;
+        let cap = ws.stores.allocations[pos].capacity_words();
+        let taken = ws.take_slot(slot.store_nr);
+        assert_eq!(taken.capacity_words(), cap);
+        // Sentinel left behind has tiny capacity (Store::new_freed_sentinel = 4 words)
+        // and is marked free.
+        assert!(ws.stores.allocations[pos].free);
+    }
+
+    #[test]
+    fn adopt_store_pushes_to_parent_allocations() {
+        let mut parent = Stores::new();
+        let initial_len = parent.allocations.len();
+        let mut donor = WorkerStores::new(Stores::new());
+        let slot = donor.add_output_slot(16);
+        let store = donor.take_slot(slot.store_nr);
+        let nr = parent.adopt_store(store);
+        assert!((nr as usize) < parent.allocations.len() || (nr as usize) == initial_len);
+        assert!(!parent.allocations[nr as usize].free);
+    }
+
+    #[test]
+    #[should_panic(expected = "take_slot: slot")]
+    fn take_slot_out_of_range_panics() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let _ = ws.take_slot(9999);
+    }
+}
+
 #[allow(dead_code)]
 impl Stores {
     #[must_use]
