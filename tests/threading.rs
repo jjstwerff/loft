@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 #![cfg(feature = "threading")]
 
-//! Integration tests for parallel execution (`parallel_for_int`).
+//! Integration tests for parallel execution.
 //!
 //! Each test compiles a loft program, builds a vector in Rust, and calls
-//! `parallel::run_parallel_int` to verify that workers execute correctly and
-//! return results in the right order.
+//! `parallel::run_parallel_int` (or `_text`) to verify that workers execute
+//! correctly and return results.  Plan-06 phase 4b' retired the loft-side
+//! `parallel_for_int` (string-based dispatch) but kept the Rust-side
+//! `run_parallel_int` helper alive specifically for these tests — they
+//! exercise the parallel runtime independent of the parser/codegen stack.
 
 extern crate loft;
 
@@ -35,7 +38,7 @@ fn compile(code: &str) -> (State, loft::data::Data) {
 }
 
 /// Build an integer vector in a fresh store inside `stores` and return the
-/// `DbRef` pointing to the vector "header" field (as `parallel_for_int` expects).
+/// `DbRef` pointing to the vector "header" field.
 ///
 /// Element size is 8 bytes post-2c (a single `integer` = i64 per element).
 fn build_int_vector(stores: &mut Stores, values: &[i32]) -> DbRef {

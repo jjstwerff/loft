@@ -931,9 +931,6 @@ fn set_store_lock(r: reference, locked: boolean);
 // `gl_swap_buffers` sets when running with real graphics.
 fn yield_frame();
 // --- Parallel ---
-// Internal: run a loft function over every element of a vector in parallel.
-// Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.
-fn parallel_for_int(func: text, input: reference, element_size: integer, threads: integer) -> reference;
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.
 // Raw 5-arg internal signature; not callable from user code.

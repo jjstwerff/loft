@@ -522,7 +522,16 @@ pub fn run_parallel_ref(
     })
 }
 
-/// Parallel integer returns: one `i32` per row, original order.
+/// Parallel integer returns: one `i64` per row, original order.
+///
+/// Plan-06 phase 4b': the loft-surface `parallel_for_int` (string-based
+/// dispatch) and its `n_parallel_for_int` native impl have been retired,
+/// but this helper stays as a tested Rust-side API — `tests/threading.rs`
+/// drives it directly to verify the parallel runtime semantics.  It's
+/// equivalent to `run_parallel_raw` with `return_size=8`, but exists as
+/// a separate fn for the no-extras / fixed-i64-return ergonomics that
+/// the threading tests rely on.
+///
 /// # Panics
 /// Panics if a worker thread panics.
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
@@ -530,6 +539,7 @@ pub fn run_parallel_ref(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
+#[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-4b'
 #[must_use]
 pub fn run_parallel_int(
     stores: &Stores,

@@ -1501,7 +1501,7 @@ impl State {
         let pos = data.def(d_nr).code_position;
 
         // Expose bytecode, library, and Data to native functions
-        // that need to spawn worker threads (e.g. n_parallel_for_int).
+        // that need to spawn worker threads (e.g. n_parallel_for / _light).
         let bc_ptr = &raw const self.bytecode;
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
@@ -1760,8 +1760,9 @@ impl State {
     pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i64 {
         // Fix #92: propagate data_ptr, stack_trace_lib_nr, and fn_positions from
         // ParallelCtx so that stack_trace() works inside parallel workers called via
-        // n_parallel_for_int.  When parallel_ctx is None (direct run_parallel_* path),
-        // stack_trace_lib_nr is already set by WorkerProgram::new_state — don't clobber it.
+        // the n_parallel_for / _light dispatch.  When parallel_ctx is None (direct
+        // run_parallel_* path), stack_trace_lib_nr is already set by
+        // WorkerProgram::new_state — don't clobber it.
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
             self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;

@@ -6,7 +6,7 @@ use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "threading")]
 use crate::parallel::{
-    WorkerProgram, run_parallel_direct, run_parallel_int, run_parallel_raw, run_parallel_ref,
+    WorkerProgram, run_parallel_direct, run_parallel_raw, run_parallel_ref,
     run_parallel_text,
 };
 use crate::platform::sep;
@@ -57,8 +57,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_get_store_lock", n_get_store_lock),
     ("n_set_store_lock", n_set_store_lock),
     ("n_yield_frame", n_yield_frame),
-    #[cfg(feature = "threading")]
-    ("n_parallel_for_int", n_parallel_for_int),
     #[cfg(feature = "threading")]
     ("n_parallel_for", n_parallel_for),
     #[cfg(feature = "threading")]
@@ -482,88 +480,6 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 }
 
 // ── Parallel threading functions (feature = "threading") ──────────────
-
-/// Dispatch a compiled loft function over every row of an input vector,
-/// running `threads` OS threads in parallel.
-/// The worker function must have the signature `fn f(row: &T) -> integer`.
-/// Returns a `reference` pointing to a freshly allocated vector of integers,
-/// one per input row in the original order.
-#[cfg(feature = "threading")]
-fn n_parallel_for_int(stores: &mut Stores, stack: &mut DbRef) {
-    // Pop arguments (last-pushed first).
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as u32;
-    let v_input = *stores.get::<DbRef>(stack);
-    let v_func = *stores.get::<Str>(stack);
-
-    // Resolve function name → bytecode position via ParallelCtx.
-    let (fn_pos, program) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for_int called outside State::execute()");
-        // SAFETY: pointers are valid for the duration of State::execute().
-        let data = unsafe { &*ctx.data };
-        let func_name = v_func.str();
-        let d_nr = data.def_nr(&format!("n_{func_name}"));
-        assert_ne!(
-            d_nr,
-            u32::MAX,
-            "parallel_for_int: unknown function '{func_name}'"
-        );
-        let fn_pos = data.def(d_nr).code_position;
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                // n_parallel_for path does not propagate line_numbers; workers
-                // get function name + file but report line 0.  Fixing this
-                // requires threading line_numbers through ParallelCtx.
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-        )
-    };
-
-    let element_size = v_element_size;
-    let n_threads = (v_threads as usize).max(1);
-
-    let results = run_parallel_int(stores, program, fn_pos, &v_input, element_size, n_threads);
-    let n = results.len();
-
-    // Build an integer-vector result in a fresh store.
-    let result_db = stores.null(); // allocates an empty store
-    // Post-2c: fld=4 count, fld=8+ elements (8 bytes each = i64).
-    // Record size in 8-byte units: ceil((8 + n*8) / 8).
-    let vec_words = (n as u32) + 1;
-    let vec_words = vec_words.max(1);
-    let vec_cr = stores.claim(&result_db, vec_words);
-    let vec_rec = vec_cr.rec;
-    // Header record: fld=4 holds the pointer to vec_rec.
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        for (i, &val) in results.iter().enumerate() {
-            store.set_int(vec_rec, 8 + i as u32 * 8, val);
-        }
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-
-    let result_ref = DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    };
-    stores.put(stack, result_ref);
-}
 
 #[cfg(feature = "threading")]
 /// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.

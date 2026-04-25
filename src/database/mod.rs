@@ -38,8 +38,9 @@ use std::time::Instant;
 pub type Call = fn(&mut Stores, &mut DbRef);
 
 /// Context injected into `Stores` by `State::execute()` so that native
-/// functions such as `n_parallel_for_int` can access the interpreter's
-/// bytecode, text segment, library, and compiled data for spawning workers.
+/// functions such as `n_parallel_for` / `n_parallel_for_light` can access
+/// the interpreter's bytecode, text segment, library, and compiled data
+/// for spawning workers.
 ///
 /// All raw pointers are valid for the duration of the `execute()` call
 /// that set them.
