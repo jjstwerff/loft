@@ -62,3 +62,9 @@ pub struct StackFrame {
 /// }
 /// ```
 pub fn stack_trace() -> vector<StackFrame>;
+// Plan-06 phase 5a: #impure(host_io) — reads worker-local
+// execution state (call stack + variable slots) and allocates
+// the result vector into the worker's own stores.  Doesn't
+// touch parent state, so par-safe; flagged impure because each
+// call observes a different host snapshot (non-deterministic).
+#impure(host_io)
