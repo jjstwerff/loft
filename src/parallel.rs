@@ -129,21 +129,38 @@ where
     R: Send,
     F: Fn(usize, usize, WorkerStores) -> R + Sync,
 {
+    // Plan-06 phase 1.5 — use rayon's global work-stealing pool
+    // instead of `std::thread::scope` per-call.  Per-call cost drops
+    // from ~200 µs (thread spawn × N) to ~5 µs (task submission ×
+    // N).  Nested par submits onto the same pool — no thread-count
+    // explosion at depth K.  Matches the browser's
+    // wasm-bindgen-rayon model so the two scheduler stories converge.
+    use rayon::prelude::*;
     let threads = n_threads.max(1).min(n_rows.max(1));
-    thread::scope(|s| {
-        let f_ref = &f;
-        let handles: Vec<_> = (0..threads)
+    let pool = rayon_pool();
+    pool.install(|| {
+        (0..threads)
+            .into_par_iter()
             .map(|t| {
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 let worker_stores = stores.clone_for_worker();
-                s.spawn(move || f_ref(start, end, worker_stores))
+                f(start, end, worker_stores)
             })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("worker thread panicked"))
             .collect()
+    })
+}
+
+/// Lazily-initialised global rayon pool.  Threading-feature only.
+/// Uses `num_cpus`'s default thread count (rayon's default).
+#[cfg(feature = "threading")]
+fn rayon_pool() -> &'static rayon::ThreadPool {
+    use std::sync::OnceLock;
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .build()
+            .expect("rayon pool init failed")
     })
 }
 
