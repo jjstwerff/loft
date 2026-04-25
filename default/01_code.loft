@@ -942,12 +942,6 @@ fn parallel_for(input: reference, element_size: integer, return_size: integer, t
 // The compiler automatically selects this when the worker qualifies (no recursive store
 // allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
 fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
-// Internal: read element idx from a parallel_for result reference.
-// Emitted by the compiler for the `par(...)` syntax; do not call directly.
-fn parallel_get_int(r: reference, idx: integer) -> integer;
-fn parallel_get_long(r: reference, idx: integer) -> integer;
-fn parallel_get_float(r: reference, idx: integer) -> float;
-fn parallel_get_bool(r: reference, idx: integer) -> boolean;
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);

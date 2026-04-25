@@ -63,14 +63,6 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_for", n_parallel_for),
     #[cfg(feature = "threading")]
     ("n_parallel_for_light", n_parallel_for_light),
-    #[cfg(feature = "threading")]
-    ("n_parallel_get_int", n_parallel_get_int),
-    #[cfg(feature = "threading")]
-    ("n_parallel_get_long", n_parallel_get_long),
-    #[cfg(feature = "threading")]
-    ("n_parallel_get_float", n_parallel_get_float),
-    #[cfg(feature = "threading")]
-    ("n_parallel_get_bool", n_parallel_get_bool),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -804,7 +796,8 @@ fn parallel_light_execute_and_collect(
         n,
         &mut pool,
     );
-    // Return with pos=4 (not pos=8 from claim) — parallel_get_int reads at v_ref.pos.
+    // Return with pos=4 (not pos=8 from claim) — par result vector readers
+    // expect the header pointer at v_ref.pos.
     DbRef {
         store_nr: result_db.store_nr,
         rec: header_rec,
@@ -931,46 +924,6 @@ fn parallel_execute_and_collect(
         rec: header_rec,
         pos: 4,
     }
-}
-
-#[cfg(feature = "threading")]
-fn n_parallel_get_int(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i64>(stack) as i32;
-    let v_ref = *stores.get::<DbRef>(stack);
-    let store = stores.store(&v_ref);
-    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
-    let val = store.get_int(vec_rec, 8 + v_idx as u32 * 8);
-    stores.put(stack, val);
-}
-
-#[cfg(feature = "threading")]
-fn n_parallel_get_long(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i64>(stack) as i32;
-    let v_ref = *stores.get::<DbRef>(stack);
-    let store = stores.store(&v_ref);
-    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
-    let val = store.get_long(vec_rec, 8 + v_idx as u32 * 8);
-    stores.put(stack, val);
-}
-
-#[cfg(feature = "threading")]
-fn n_parallel_get_float(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i64>(stack) as i32;
-    let v_ref = *stores.get::<DbRef>(stack);
-    let store = stores.store(&v_ref);
-    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
-    let bits = store.get_long(vec_rec, 8 + v_idx as u32 * 8);
-    stores.put(stack, f64::from_bits(bits as u64));
-}
-
-#[cfg(feature = "threading")]
-fn n_parallel_get_bool(stores: &mut Stores, stack: &mut DbRef) {
-    let v_idx = *stores.get::<i64>(stack) as i32;
-    let v_ref = *stores.get::<DbRef>(stack);
-    let store = stores.store(&v_ref);
-    let vec_rec = store.get_u32_raw(v_ref.rec, v_ref.pos);
-    let val = store.get_byte(vec_rec, 8 + v_idx as u32, 0);
-    stores.put(stack, val != 0);
 }
 
 /// Parse a `LOFT_FAKE_*` env var into an `i64`.  Empty / unset / unparseable

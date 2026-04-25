@@ -1868,67 +1868,6 @@ where
     })
 }
 
-/// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.
-/// Returns a `DbRef` pointing to the inline struct data at the given index.
-pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: i32) -> DbRef {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    DbRef {
-        store_nr: r.store_nr,
-        rec: v_rec,
-        pos: 8 + (idx as u32) * (struct_size as u32),
-    }
-}
-
-/// Read an integer result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_i32_raw(v_rec, 8 + (idx as u32) * 4)
-}
-
-/// Read a long result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_long(v_rec, 8 + (idx as u32) * 8)
-}
-
-/// Read a float result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    let bits = stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_long(v_rec, 8 + (idx as u32) * 8);
-    f64::from_bits(bits as u64)
-}
-
-/// Read a boolean result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_byte(v_rec, 8 + idx as u32, 0)
-        != 0
-}
-
 // ── N8b.1: Native coroutine runtime ─────────────────────────────────────────
 
 /// Sentinel `store_nr` for `DbRef`s that point to native coroutine generators.
