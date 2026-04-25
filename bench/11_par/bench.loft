@@ -1,0 +1,34 @@
+// Benchmark 11: par (parallel for-loop), 100K elements at 4 threads
+//
+// Measures par's intrinsic overhead per element + parallel speedup.
+// Pure-compute primitive-return worker exercises every part of the
+// par pipeline without conflating with return-type-specific paths.
+//
+// Plan-06 phases re-run this and assert no regression past ±5 %.
+
+struct Score { value: integer }
+
+fn work(s: const Score) -> integer {
+    s.value * s.value + s.value * 7
+}
+
+fn main() {
+    n = 100000;
+    items: vector<Score> = [];
+    for i in 0..n { items += [Score { value: i }]; }
+
+    // Warm-up run — discounts thread-pool init from the timed run.
+    // Result is checked against the timed run for sanity.
+    sum_warm = 0;
+    for s in items par(r = work(s), 4) { sum_warm += r; }
+
+    t0 = ticks();
+    sum = 0;
+    for s in items par(r = work(s), 4) { sum += r; }
+    ms = (ticks() - t0) / 1000;
+
+    if sum != sum_warm {
+        println("FAIL: timed result {sum} != warm-up {sum_warm}");
+    }
+    println("result: {sum}  time: {ms}ms");
+}

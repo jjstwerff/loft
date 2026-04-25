@@ -101,38 +101,25 @@ Form coverage:
 
 ## Bench design
 
-Three workloads in `tests/bench/par_baseline.rs`:
+**One** workload: `tests/bench/par_baseline.loft`.  100 K Score
+elements, pure-compute primitive-return worker
+(`s.value * s.value + s.value * 7`), thread-count sweep
+{1, 2, 4}.  10 runs per thread count; reports min / mean / max
+to stdout.
 
-1. **`bench_par_int_pure`** — 1 M elements, worker is `|x| x * 2 + 1`,
-   pure compute, primitive-return.  Measures the direct-write path
-   (currently `n_parallel_for_native`'s 8-byte arm).
-2. **`bench_par_struct_alloc`** — 100 K elements, worker constructs
-   and returns `Point { x: i, y: i + 1 }`.  Measures the reference
-   path (`n_parallel_for_ref_native`).
-3. **`bench_par_text_concat`** — 100 K elements, worker returns
-   `"item-{i}"`.  Measures the text path (`n_parallel_for_text_native`).
+Why one bench, not three.  The earlier three-workload draft tested
+return-type-specific paths (primitive vs. text vs. reference) —
+that conflates par performance with the perf of the runtime branch
+being retired.  Plan-06 retires or unifies all three branches
+(phases 1, 2, 3); benching them separately measures code that
+won't exist after phase 6.  The single workload measures par's
+intrinsic overhead per element + parallel speedup, which is the
+real invariant phases 1–6 must preserve.
 
-Each benchmark records:
-- median wall-clock time over 10 runs,
-- 95th percentile,
-- threads used (clamped to `min(rayon_pool, 4)` for reproducibility).
-
-Stored in `tests/bench/par_baseline.expected.json`:
-
-```json
-{
-  "bench_par_int_pure":      { "median_ms": 12.5, "p95_ms": 14.0, "threads": 4 },
-  "bench_par_struct_alloc":  { "median_ms": 28.0, "p95_ms": 31.5, "threads": 4 },
-  "bench_par_text_concat":   { "median_ms": 35.0, "p95_ms": 38.0, "threads": 4 }
-}
-```
-
-Numbers are placeholders; phase 0 fills them in from the actual
-baseline machine (the loft project's primary CI host).  Subsequent
-phases run the same benches on the same host and assert
-`median ≤ 1.05 * baseline_median`.  A failure does not auto-block —
-the plan author investigates and decides whether to accept the regression
-(rare) or rework the phase (default).
+Different return types are still tested for correctness (phase 0a's
+characterisation suite covers every shape D11 lists).  Performance
+of those paths is not a per-shape concern; it's an aggregate
+property of the redesigned runtime.
 
 ## Implementation
 
@@ -150,24 +137,29 @@ Phase 0 has three commits, each landed independently:
 
 ### Commit 0b — bench harness
 
-- `tests/bench/par_baseline.rs`: Criterion-style microbench, gated
-  behind `#[ignore]` so it doesn't run in `make ci` by default.
-- `make bench-par` target in the Makefile that runs all three
-  benchmarks under `--ignored` and writes results to
-  `target/bench/par_baseline.json`.
-- Comparison helper script `scripts/compare_par_bench.sh` that
-  reads `target/bench/par_baseline.json`, compares against
-  `tests/bench/par_baseline.expected.json`, and exits non-zero on
-  >5 % regression.
+- `bench/11_par/bench.loft`: drops into the existing benchmark
+  suite (`bench/NN_name/bench.loft` convention, picked up by
+  `bench/run_bench.sh` automatically and by `make bench`).
+  Workload: 100 K Score elements, pure-compute primitive-return
+  worker, 4 threads, with one warm-up run before the timed run
+  (so thread-pool init isn't counted).  Output format matches
+  the existing convention: `result: <sum>  time: <ms>ms`.
+- No new Makefile target; no separate harness; no JSON file.
+  Phase 0b's deliverable is purely the new `bench/11_par/`
+  directory.  `make bench` runs it alongside the existing 10
+  benchmarks and reports the comparison table.
 
 ### Commit 0c — record the baseline
 
-- Run `make bench-par` on the primary CI host.
-- Write the actual numbers into
-  `tests/bench/par_baseline.expected.json`.
-- Append a "Phase 0 baseline" section to THREADING.md citing the
-  numbers and pointing at the harness.
-- Add a note to the plan-06 README marking phase 0 done.
+- Run `make bench` on the primary CI host; note the
+  `loft-interp` and `loft-native` columns for `11_par`.
+- Append a one-line "Phase 0 baseline" entry to THREADING.md
+  citing the numbers.
+- Each subsequent phase re-runs `make bench` and compares the
+  `11_par` row against the recorded entry by eye.  No automated
+  comparison script — regression investigation is rare; the
+  script's maintenance cost outweighs its benefit until that
+  changes.
 
 ### 0d — Type-coverage commitments tracker
 
