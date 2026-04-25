@@ -562,3 +562,38 @@ fn main() {
     // function being present; silence "data unused" by referencing it.
     let _ = data.def_nr("n_st_named_worker");
 }
+
+/// Plan-06 phase 5a — verifies that `#impure(par_call)` annotations
+/// in `default/01_code.loft` round-trip through the parser into
+/// `Definition::purity` correctly.
+#[test]
+fn purity_annotations_parsed_from_stdlib() {
+    use loft::data::{ImpureCategory, Purity};
+    let mut p = loft::parser::Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    let pf_d_nr = p.data.def_nr("n_parallel_for");
+    assert_ne!(pf_d_nr, u32::MAX, "n_parallel_for must be defined");
+    assert_eq!(
+        p.data.def(pf_d_nr).purity,
+        Purity::Impure(ImpureCategory::ParCall),
+        "parallel_for should be #impure(par_call)"
+    );
+    let pfl_d_nr = p.data.def_nr("n_parallel_for_light");
+    assert_ne!(pfl_d_nr, u32::MAX, "n_parallel_for_light must be defined");
+    assert_eq!(
+        p.data.def(pfl_d_nr).purity,
+        Purity::Impure(ImpureCategory::ParCall),
+        "parallel_for_light should be #impure(par_call)"
+    );
+    // Sanity: an unannotated stdlib fn should be Purity::Unknown
+    // (the conservative default — phase 5b's analyser treats it as
+    // ParentWrite-impure for safety until annotated).
+    let now_d_nr = p.data.def_nr("n_now");
+    if now_d_nr != u32::MAX {
+        assert_eq!(
+            p.data.def(now_d_nr).purity,
+            Purity::Unknown,
+            "n_now is unannotated → Purity::Unknown"
+        );
+    }
+}

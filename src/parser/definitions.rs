@@ -870,6 +870,51 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else if id == Some("pure".to_string()) {
+                // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
+                // declares "no observable side effects, no
+                // parent-store writes".  Always par-safe.
+                self.data.definitions[self.context as usize].purity =
+                    crate::data::Purity::Pure;
+            } else if id == Some("impure".to_string()) {
+                // Plan-06 phase 5a (DESIGN.md D8.1):
+                // `#impure(category)` classifies the side effect.
+                // Five categories: host_io, prng, io, parent_write,
+                // par_call.
+                if !self.lexer.has_token("(") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect '(' after #impure — use #impure(host_io|prng|io|parent_write|par_call)"
+                    );
+                    self.lexer.revert(link);
+                    break;
+                }
+                let category = self.lexer.has_identifier();
+                let cat = match category.as_deref() {
+                    Some("host_io") => crate::data::ImpureCategory::HostIo,
+                    Some("prng") => crate::data::ImpureCategory::Prng,
+                    Some("io") => crate::data::ImpureCategory::Io,
+                    Some("parent_write") => crate::data::ImpureCategory::ParentWrite,
+                    Some("par_call") => crate::data::ImpureCategory::ParCall,
+                    other => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown #impure category {:?} — expected host_io|prng|io|parent_write|par_call",
+                            other.unwrap_or("(missing)")
+                        );
+                        self.lexer.revert(link);
+                        break;
+                    }
+                };
+                if !self.lexer.has_token(")") {
+                    diagnostic!(self.lexer, Level::Error, "Expect ')' after #impure category");
+                    self.lexer.revert(link);
+                    break;
+                }
+                self.data.definitions[self.context as usize].purity =
+                    crate::data::Purity::Impure(cat);
             } else {
                 // Not a recognised annotation — put the `#` back and stop.
                 self.lexer.revert(link);

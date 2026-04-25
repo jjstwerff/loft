@@ -935,10 +935,15 @@ fn yield_frame();
 // The compiler rewrites `par(...)` clauses into calls to this function.
 // Raw 5-arg internal signature; not callable from user code.
 fn parallel_for(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
+// Plan-06 phase 5a (DESIGN.md D8.1): #impure(par_call) — par-safety
+// analyser allows nested calls when the inner worker fn is itself
+// par-safe (D8 R2 / D2.1.1 recursive Arc promotion).
+#impure(par_call)
 // Internal: lightweight parallel map — borrows stores read-only instead of deep-copying.
 // The compiler automatically selects this when the worker qualifies (no recursive store
 // allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
 fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
+#impure(par_call)
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);

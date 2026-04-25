@@ -939,6 +939,58 @@ impl Debug for Attribute {
     }
 }
 
+/// Plan-06 phase 5a (DESIGN.md D8.1) — purity classification of a
+/// function definition for the `is_par_safe` analyser.
+///
+/// Set by the `#pure` and `#impure(category)` annotations parsed
+/// from `default/*.loft` (and user code, future).  Phase 5b's
+/// analyser uses this to short-circuit: a worker fn that calls a
+/// `Pure` or `Impure(HostIo|Prng|Io)` stdlib fn is itself still
+/// par-safe; calls into `Impure(ParentWrite|ParCall)` are rejected.
+///
+/// `Unknown` (the default) means "no annotation provided" — phase
+/// 5b conservatively treats this as `Impure(ParentWrite)` to avoid
+/// false-positive par-safety classifications.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Purity {
+    /// No annotation — conservatively treated as parent-write
+    /// impure by the analyser to avoid false positives.
+    #[default]
+    Unknown,
+    /// `#pure` — no observable side effects, no parent-store writes.
+    /// Always par-safe.
+    Pure,
+    /// `#impure(category)` — observable side effect, classified by
+    /// category for the par-safety analyser's per-call check.
+    Impure(ImpureCategory),
+}
+
+/// Plan-06 phase 5a (DESIGN.md D8.1) — sub-classification of
+/// observable side effects.  Distinguishes "writes parent state"
+/// (forbidden in par workers) from "has side effects but doesn't
+/// write parent state" (allowed; host bridges serialise).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImpureCategory {
+    /// Host I/O — log_*, print, file read/write through host
+    /// bridges.  Allowed in par workers; the host serialises.
+    HostIo,
+    /// PRNG state mutation — random_int, random_seed, etc.  Allowed
+    /// in par workers (non-deterministic across runs but correct).
+    Prng,
+    /// Filesystem / network I/O beyond host_io — write_file,
+    /// delete_file, network ops.  Allowed in par workers; user
+    /// accepts that I/O happens in parallel.
+    Io,
+    /// Writes to a parent-side store via its first argument
+    /// (vector_add, hash_set, vector_insert, vector_remove, etc.).
+    /// Compile error in par workers when first arg is non-local.
+    ParentWrite,
+    /// Spawns parallel workers — par, par_fold, parallel_for.
+    /// Allowed if inner worker fn is par-safe (DESIGN.md D8 R2);
+    /// the analyser recurses.
+    ParCall,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum DefType {
     // Not yet known, must be filled in after the first parse pass.
@@ -1027,6 +1079,12 @@ pub struct Definition {
     /// limit()-based heuristic; `Some(n)` forces the stored-width to n
     /// bytes (n ∈ {1, 2, 4, 8}).
     pub forced_size: Option<u8>,
+    /// Plan-06 phase 5a (DESIGN.md D8.1) — purity classification set
+    /// by `#pure` / `#impure(category)` annotations.  Default
+    /// `Purity::Unknown` (no annotation provided); phase 5b's
+    /// `is_par_safe` analyser treats unknown as ParentWrite-impure
+    /// for safety.
+    pub purity: Purity,
 }
 
 impl Definition {
@@ -1373,6 +1431,7 @@ impl Data {
             bounds: Vec::new(),
             const_ref: None,
             forced_size: None,
+            purity: Purity::Unknown,
         };
         self.definitions.push(new_def);
         rec
