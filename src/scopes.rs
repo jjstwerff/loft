@@ -2287,3 +2287,185 @@ mod par_fixpoint_tests {
         assert!(result.is_empty());
     }
 }
+
+// ── Plan-06 phase 5b' shallow check (precise, no false positives) ────────────
+
+/// Plan-06 phase 5b' — precise shallow par-safety check.
+///
+/// Walks `worker_d_nr`'s body looking for **direct** calls to fns
+/// classified `Impure(ParentWrite)`.  Does NOT recurse into callee
+/// bodies — so it only fires when the worker code itself contains
+/// the offending call, not when a transitive callee does.  This
+/// produces ZERO false positives because every `parent_write`
+/// classification is explicit (came from a `#impure(parent_write)`
+/// annotation in the stdlib or user code).
+///
+/// Trade-off vs the full `is_par_safe`: misses transitive
+/// violations.  A worker that calls a user fn that calls
+/// vector_add slips through.  But unlike the full check, it
+/// never warns on a worker that's actually safe — making it
+/// usable as a parser warning today, before the 5a annotation
+/// sweep is comprehensive.
+///
+/// Returns `Some(callee_name)` if a direct ParentWrite call was
+/// found; `None` otherwise.
+#[allow(dead_code)]
+#[must_use]
+pub fn worker_calls_parent_write(data: &Data, worker_d_nr: u32) -> Option<String> {
+    if worker_d_nr == u32::MAX || (worker_d_nr as usize) >= data.definitions.len() {
+        return None;
+    }
+    let def = &data.definitions[worker_d_nr as usize];
+    walk_shallow_parent_write(&def.code, data)
+}
+
+#[allow(dead_code)]
+fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
+    match value {
+        Value::Call(callee, args) => {
+            // Check this call's purity.
+            if (*callee as usize) < data.definitions.len() {
+                let cdef = &data.definitions[*callee as usize];
+                if matches!(
+                    cdef.purity,
+                    Purity::Impure(ImpureCategory::ParentWrite)
+                ) {
+                    return Some(cdef.name.clone());
+                }
+            }
+            // Walk arg expressions (could contain nested Call).
+            for a in args {
+                if let Some(name) = walk_shallow_parent_write(a, data) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        // Don't recurse into CallRef target (runtime fn-ref); shallow.
+        Value::CallRef(_, args) => {
+            for a in args {
+                if let Some(name) = walk_shallow_parent_write(a, data) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Value::Block(b) => {
+            for v in &b.operators {
+                if let Some(name) = walk_shallow_parent_write(v, data) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Value::Insert(vs) => {
+            for v in vs {
+                if let Some(name) = walk_shallow_parent_write(v, data) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Value::If(c, t, e) => walk_shallow_parent_write(c, data)
+            .or_else(|| walk_shallow_parent_write(t, data))
+            .or_else(|| walk_shallow_parent_write(e, data)),
+        Value::Loop(body) => {
+            for v in &body.operators {
+                if let Some(name) = walk_shallow_parent_write(v, data) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Value::Set(_, rhs) => walk_shallow_parent_write(rhs, data),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod par_shallow_tests {
+    use super::worker_calls_parent_write;
+    use crate::data::{Data, DefType, ImpureCategory, Purity, Value};
+    use crate::lexer::Position;
+
+    fn pos() -> Position {
+        Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn direct_parent_write_call_detected() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(bad, vec![]);
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("vector_add".to_string())
+        );
+    }
+
+    #[test]
+    fn pure_call_not_detected() {
+        let mut d = Data::new();
+        let safe = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[safe as usize].purity = Purity::Pure;
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(safe, vec![]);
+        assert!(worker_calls_parent_write(&d, worker).is_none());
+    }
+
+    #[test]
+    fn unannotated_call_not_detected() {
+        // Shallow check is precise: only fires for explicit
+        // ParentWrite annotations.  Unknown stays None (the full
+        // is_par_safe rejects this; shallow doesn't).
+        let mut d = Data::new();
+        let unknown = d.add_def("mystery", &pos(), DefType::Function);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(unknown, vec![]);
+        assert!(worker_calls_parent_write(&d, worker).is_none());
+    }
+
+    #[test]
+    fn transitive_parent_write_not_detected() {
+        // Worker calls inner; inner calls vector_add.  Shallow
+        // does NOT recurse into inner — only the worker fn's
+        // direct calls are checked.  Plan-06 phase 5b' (eventual)
+        // adds transitive detection once 5a annotation coverage
+        // is comprehensive enough not to false-positive.
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let inner = d.add_def("inner", &pos(), DefType::Function);
+        d.definitions[inner as usize].code = Value::Call(bad, vec![]);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(inner, vec![]);
+        assert!(worker_calls_parent_write(&d, worker).is_none());
+    }
+
+    #[test]
+    fn parent_write_inside_arg_detected() {
+        // bad_call(vector_add(...)) — the arg evaluation is also
+        // a parent-write site.
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let safe = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[safe as usize].purity = Purity::Pure;
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code =
+            Value::Call(safe, vec![Value::Call(bad, vec![])]);
+        assert_eq!(
+            worker_calls_parent_write(&d, worker),
+            Some("vector_add".to_string())
+        );
+    }
+}
