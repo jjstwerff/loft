@@ -881,6 +881,7 @@ fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 // id via `sizeof`-style introspection (not yet exposed).  Inefficient
 // by design — walks + sorts all records per call.  See CAVEATS.md C60.
 pub fn hash_sorted(h: reference, tp: integer) -> reference;
+#pure
 type index size(4);
 // type spacial;
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
@@ -893,11 +894,15 @@ fn OpPanic(message: text);
 // Panics with message if test is false. Use to verify invariants during development.
 // In production mode (--production), logs an error instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
+// Plan-06 phase 5a: #impure(host_io) — assertion failures write to
+// log/stderr (host bridges serialise), so par workers may call assert.
 pub fn assert(test: boolean, message: text, file: text, line: integer);
+#impure(host_io)
 // Immediately terminates execution with message. Use for unrecoverable error states.
 // In production mode (--production), logs a fatal entry instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
 pub fn panic(message: text, file: text, line: integer);
+#impure(host_io)
 // Write a structured log record at the chosen severity.
 // The file and line are injected by the compiler; do not pass them manually.
 // Plan-06 phase 5a: log_* are #impure(host_io) — observable side
