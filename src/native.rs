@@ -854,11 +854,12 @@ fn parallel_execute_and_collect(
             extra_args,
             n,
         );
-        // Deep-copy each worker-created struct directly into the result vector
-        // at the inline element position.  The struct bytes live at
-        // vec_rec offset `8 + i * struct_size`; OpGetVector will return a DbRef
-        // pointing there so field access works without extra indirection.
+        // Phase 2 step 2b: structs without owned sub-fields (no text,
+        // no DbRef sub-fields) take the cheaper `copy_from_worker_unowned`
+        // path that skips copy_claims.  Structs with owned fields keep
+        // the full deep-copy path until phase 2's full rebase walk lands.
         let struct_size = u32::from(stores.size(known_type));
+        let unowned = !stores.has_owned_sub_fields(known_type);
         for (batch, mut worker_stores) in batches {
             for (i, src_ref) in batch {
                 let dest = DbRef {
@@ -866,7 +867,16 @@ fn parallel_execute_and_collect(
                     rec: vec_rec,
                     pos: 8 + (i as u32) * struct_size,
                 };
-                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
+                if unowned {
+                    stores.copy_from_worker_unowned(
+                        &src_ref,
+                        &dest,
+                        &mut worker_stores,
+                        known_type,
+                    );
+                } else {
+                    stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
+                }
             }
         }
     } else if is_text {

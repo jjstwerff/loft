@@ -1802,6 +1802,8 @@ where
 
     let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
 
+    // Phase 2 step 2b: cheap path for self-contained structs.
+    let unowned = !stores.has_owned_sub_fields(kt);
     for (batch, mut worker_stores) in batches {
         for (i, src_ref) in batch {
             let dest = DbRef {
@@ -1809,7 +1811,11 @@ where
                 rec: vec_rec,
                 pos: 8 + (i as u32) * sz,
             };
-            stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+            if unowned {
+                stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
+            } else {
+                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+            }
         }
     }
 

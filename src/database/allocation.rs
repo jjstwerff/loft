@@ -438,6 +438,58 @@ impl Stores {
         );
     }
 
+    /// Plan-06 phase 2 step 2b — narrow rebase path for structs whose
+    /// fields are entirely self-contained (no text, no DbRef sub-fields).
+    /// `copy_block`s the struct bytes from the worker store into the
+    /// dest record without invoking `copy_claims` — there's nothing to
+    /// deep-copy.  The graft + ungraft swap is replaced by a single
+    /// graft (the worker's store is borrowed via the existing slot
+    /// for the duration of the copy_block, then swapped back).
+    ///
+    /// Caller MUST verify `Stores::has_owned_sub_fields(tp) == false`
+    /// before calling — otherwise the dest's text/DbRef fields will
+    /// reference invalid positions/store_nrs after the worker's stores
+    /// are dropped at thread join.
+    ///
+    /// This is the "no copy_claims" version of `copy_from_worker`,
+    /// applicable to ~40 % of typical struct returns (those without
+    /// text or nested references — the common case for compute-heavy
+    /// workloads returning numeric records).
+    pub fn copy_from_worker_unowned(
+        &mut self,
+        src_ref: &DbRef,
+        dest: &DbRef,
+        worker_stores: &mut Stores,
+        tp: u16,
+    ) {
+        debug_assert!(
+            !self.has_owned_sub_fields(tp),
+            "copy_from_worker_unowned called with owned-fields struct (tp={tp})",
+        );
+
+        let ws = src_ref.store_nr as usize;
+        while self.allocations.len() <= ws {
+            self.allocations.push(Store::new(100));
+        }
+
+        // Graft the worker's store in (so copy_block can read from it
+        // through the parent's allocations table).
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+
+        let size = u32::from(self.size(tp));
+        self.copy_block(src_ref, dest, size);
+        // No copy_claims — caller verified the struct is self-contained.
+
+        // Un-graft.
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+    }
+
     /// Clone all current stores as locked read-only copies for use in a worker thread.
     /// The returned `Stores` has the same type schema but no files and no `parallel_ctx`.
     /// When a worker `State` is created from this, `State::new()` will allocate its own

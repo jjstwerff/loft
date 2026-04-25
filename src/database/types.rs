@@ -799,6 +799,74 @@ impl Stores {
         }
     }
 
+    /// Plan-06 phase 2 — true iff `tp` (a struct or struct-enum-variant)
+    /// contains any field that owns out-of-line data: text, references,
+    /// vectors, hashes, sorted/index/spacial, or nested struct-enums.
+    ///
+    /// When this returns false, a struct of type `tp` can be safely
+    /// `copy_block`-copied across stores without further deep-copy
+    /// work — its bytes are self-contained.  Rebase-eligible.
+    ///
+    /// When true, the struct contains store-local positions or DbRefs
+    /// that need translation/deep-copy across the worker→parent
+    /// boundary; the caller falls back to `copy_from_worker`.
+    ///
+    /// For `Parts::Enum` (untyped enum, just a 1-byte discriminant):
+    /// returns false — no owned data.
+    /// For `Parts::Struct` / `Parts::EnumValue`: true iff any field
+    /// is owned (text or DbRef-shaped).
+    /// For other Parts (Base, Byte, Int, Vector, etc.): conservative
+    /// true since the type itself is owned.
+    #[must_use]
+    pub fn has_owned_sub_fields(&self, tp: u16) -> bool {
+        if tp == u16::MAX {
+            return false;
+        }
+        match &self.types[tp as usize].parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().any(|f| self.is_field_owned(f.content))
+            }
+            // Untyped enum (Parts::Enum) is a 1-byte discriminant; no
+            // owned data.  But a struct-enum's owning type is the
+            // parent Enum, whose variants are EnumValue records — so
+            // for ANY enum tp passed here, we have to inspect variants.
+            Parts::Enum(variants) => variants
+                .iter()
+                .any(|(v_tp, _)| self.has_owned_sub_fields(*v_tp)),
+            // Bare types: conservative.
+            _ => true,
+        }
+    }
+
+    /// Internal helper for `has_owned_sub_fields`: classify a single
+    /// field's content type.  Primitive integer/float/bool variants
+    /// are unowned; everything that owns out-of-line data is owned.
+    fn is_field_owned(&self, content: u16) -> bool {
+        if content == u16::MAX {
+            return false;
+        }
+        match &self.types[content as usize].parts {
+            // text is tp==5 in the seed types; also catch Parts::Base
+            // narrow-text shapes.
+            Parts::Base if content == 5 => true,
+            Parts::Base => false,
+            Parts::Byte(_, _) | Parts::Short(_, _) | Parts::Int(_, _) | Parts::ShortRaw(_, _) => {
+                false
+            }
+            Parts::Enum(variants) => {
+                // Untyped enum (1-byte disc) is owned-free; struct-enum
+                // (variants with payload) is owned because it carries
+                // sub-data.
+                variants.iter().any(|(v_tp, _)| self.has_owned_sub_fields(*v_tp))
+            }
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                fields.iter().any(|f| self.is_field_owned(f.content))
+            }
+            // Owning types: vector, hash, sorted, index, spacial, array.
+            _ => true,
+        }
+    }
+
     /// For EnumValue types, return the parent enum's size (which covers
     /// the largest variant).  For all other types, return their own size.
     /// B2-runtime: unit enum variants may have a smaller type size than
