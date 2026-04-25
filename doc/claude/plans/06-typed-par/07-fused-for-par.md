@@ -7,6 +7,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Status: open**
 
+## Insight from phase 0a
+
+The fused for-loop syntax **already exists in the parser today** —
+`tests/scripts/22-threading.loft` and the new
+`tests/threading_chars.rs` both exercise it.  Phase 7 is therefore
+NOT about introducing the construction; it's about:
+
+1. Making the fused form route through plan-06's typed pipeline
+   (phases 1–5's runtime work).
+2. Adding the desugar of the value-position call form
+   `par(input, fn, threads)` so it produces the same `Value::ParFor`
+   IR.
+3. Adding `par_fold(...)` as a sibling sugar that auto-routes to
+   `Stitch::Reduce`.
+4. Removing `par_light` from the user surface entirely.
+5. Auto-detecting pure-fold body in the fused for-loop and routing
+   to `Stitch::Reduce` automatically.
+
+The "Goal" section below kept its original wording for context;
+read it as "the goal of plan-06 around this construction is..."
+not "the goal of phase 7 is to build this".
+
 ## Goal
 
 Replace the planned phase-7 three-variant API (`par_for_each`,

@@ -46,6 +46,43 @@ code retire across `src/parallel.rs` (currently 683 lines) and
 `src/codegen_runtime.rs:1581-1805` (224 lines), plus the parser
 auto-light heuristic at `src/parser/builtins.rs:362`.
 
+## Phase 0 findings folded back into the plan
+
+Phase 0a's source survey + characterisation tests + bench surfaced
+findings that change how subsequent phases approach the work:
+
+1. **The interpreter + native paths are structurally different.**
+   `run_parallel_direct` (interpreter) IS parallel via `thread::scope`;
+   `n_parallel_for_native` (native codegen) is sequential.  Phase 1's
+   "workers write to output stores" migration handles both but with
+   different shapes (per-worker stores for the interpreter, one
+   shared output store for the sequential native path).  See
+   01-output-store.md "Important finding from phase 0a".
+
+2. **The fused for-loop syntax `for x in ls par(r = foo(x), 4) { … }`
+   already works today.**  Phase 7 isn't building this construction;
+   it's making it route through the typed pipeline + adding the
+   value-position desugar + `par_fold` sugar.  See 07-fused-for-par.md
+   "Insight from phase 0a".
+
+3. **Three surface gaps tracked under plan-06:** G1 (struct-enum
+   return rejected), G2 (primitive-element input gives garbage),
+   G3 (`--native-wasm` rejects par at codegen).  All three close in
+   plan-06 phases 1 / 4 / 1+D6 respectively.  Each has an
+   `#[ignore]`d canary in `tests/threading_chars.rs` waiting to be
+   un-ignored.
+
+4. **D11 type-spectrum tracker** in 00-baseline-and-bench.md § 0d:
+   17 `#[ignore]`d canaries cover the shapes plan-06 must accept
+   after the redesign — every input/output type combination from
+   D11.  Each plan phase un-ignores the canaries it closes.
+
+5. **Bench numbers recorded** in THREADING.md § "Plan-06 phase 0
+   baseline".  Plan-06 phases re-run `make bench` and assert
+   ±5 % on `11_par`'s loft-interp + loft-native columns.  Today:
+   loft-interp 44 ms, loft-native 12 ms (vs python multiprocessing
+   33 ms, rust threads 4 ms).
+
 ## Architectural anchor — "everything is a store"
 
 The whole interpreter is already store-organised: every allocation,
@@ -69,7 +106,7 @@ single PR with its own `make ci` run.
 
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
-| 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | 0a done | S | Pin current behaviour (0a — done), record perf baseline (0b/0c — open), pre-populate canaries for D11's full type spectrum (0d — open).  Each subsequent phase un-`#[ignore]`s the canaries for shapes it closes. |
+| 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | **done** | S | Characterisation suite (0a — `tests/threading_chars.rs` 16 positives + 17 canaries), realistic perf bench (0b — `bench/11_par/` with python + rust + loft-wasm columns), baseline recorded in THREADING.md (0c), D11 type-coverage tracker pre-populated (0d).  Surface gaps G1 / G2 / G3 surfaced and tracked. |
 | 1 | [01-output-store.md](01-output-store.md) | open | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Three native fns still exist; phase 1 only changes where results land. |
 | 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | open | M | Main-thread stitch via store-pointer rebase, retiring `copy_block` + `copy_claims`.  Closes P1-R3 + P1-R5 from THREADING.md. |
 | 3 | [03-one-native-fn.md](03-one-native-fn.md) | open | S | Collapse `n_parallel_for_native` / `_text_native` / `_ref_native` into one polymorphic `n_parallel_native(stitch)`.  Drop the four `parallel_get_*` getters.  Sub-phase 3e implements `Stitch::Reduce` runtime (per-worker partial fold + main-thread combine). |

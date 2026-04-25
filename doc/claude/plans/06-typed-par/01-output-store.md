@@ -22,6 +22,36 @@ What changes is **where the worker writes the result**.  Stitching
 into a single result vector still goes through the existing copy
 logic — phase 2 retires that.
 
+**Important finding from phase 0a's source survey.**  The
+interpreter and native-codegen paths are **structurally
+different**, not just different runtime fns:
+
+- `src/parallel.rs::run_parallel_direct` (the interpreter path)
+  IS parallel — uses `thread::scope` with three `#[cfg]` variants
+  (threading + wasm, threading + non-wasm, no-threading).  The
+  worker is a bytecode fn dispatched via `state.execute_at_raw()`.
+- `src/codegen_runtime.rs:1581::n_parallel_for_native` (the
+  native-codegen path) is **sequential** today — a plain
+  `for i in 0..n` loop calling the worker closure inline.  No
+  `thread::scope`, no parallelism.
+
+Phase 1's "workers write to output stores" migration applies to
+both, but the shape differs:
+
+- For `run_parallel_direct` (interpreter): each worker thread
+  receives an exclusive output Store; the parent reads from per-
+  worker stores after join.
+- For `n_parallel_for_native` (native sequential): the calling
+  thread writes results into ONE output Store while iterating;
+  no per-worker split needed.  The same store-API surface serves
+  both paths; the threading-vs-sequential distinction stays.
+
+Parallelising the native path is **out of scope for plan-06** —
+bench/11_par's 12 ms loft-native vs. 4 ms rust shows the sequential
+native path is already competitive when the worker inner loop is
+well-optimised by rustc.  Filed as a follow-up: "native par
+parallelism".
+
 ## Why transitional
 
 Trying to unify everything (output store + stitch + native dispatch)
