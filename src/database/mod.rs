@@ -401,6 +401,37 @@ impl WorkerStores {
         let sentinel = crate::store::Store::new_freed_sentinel();
         std::mem::replace(&mut self.stores.allocations[pos], sentinel)
     }
+
+    /// Plan-06 phase 2 — extract every worker-allocated Store
+    /// (those at index ≥ `parent_store_count`) for adoption by the
+    /// parent.  Returns `(worker_local_store_nr, Store)` pairs in
+    /// ascending store_nr order.
+    ///
+    /// Each returned slot is sentinel-replaced in the worker's
+    /// allocations table, so the worker's `Drop` won't double-free
+    /// adopted stores.  Slots that were freed by the worker during
+    /// execution (free=true) are skipped.
+    ///
+    /// `parent_store_count` is the number of stores the parent had
+    /// before the worker ran — these are clones of parent stores
+    /// (the worker only read them) and must NOT be adopted.
+    ///
+    /// Used by the parent's stitch logic in conjunction with
+    /// `Stores::adopt_store` and the `StoreRebase` rebase map (see
+    /// `src/parallel.rs::StoreRebase`).
+    pub fn take_all_owned(&mut self, parent_store_count: u16) -> Vec<(u16, Store)> {
+        let mut out = Vec::new();
+        let total = self.stores.allocations.len();
+        for nr in (parent_store_count as usize)..total {
+            if self.stores.allocations[nr].free {
+                continue;
+            }
+            let sentinel = crate::store::Store::new_freed_sentinel();
+            let s = std::mem::replace(&mut self.stores.allocations[nr], sentinel);
+            out.push((nr as u16, s));
+        }
+        out
+    }
 }
 
 impl Stores {
@@ -502,6 +533,104 @@ mod worker_output_slot_tests {
     fn take_slot_out_of_range_panics() {
         let mut ws = WorkerStores::new(Stores::new());
         let _ = ws.take_slot(9999);
+    }
+
+    #[test]
+    fn take_all_owned_skips_parent_clone_slots() {
+        // Parent has 2 stores; worker will get 2 clones + add 1 output.
+        let mut parent = Stores::new();
+        parent.allocations.push(crate::store::Store::new(8));
+        parent.allocations.push(crate::store::Store::new(8));
+        parent.max = 2;
+        let parent_count = parent.allocations.len() as u16;
+
+        // Build a synthetic worker view with 2 cloned slots + 1 output.
+        let mut ws_inner = Stores::new();
+        ws_inner.allocations.push(crate::store::Store::new(8));
+        ws_inner.allocations.push(crate::store::Store::new(8));
+        ws_inner.max = 2;
+        let mut ws = WorkerStores::new(ws_inner);
+        let _slot = ws.add_output_slot(16);
+
+        let owned = ws.take_all_owned(parent_count);
+        assert_eq!(owned.len(), 1, "only worker-allocated slot is adopted");
+        assert_eq!(owned[0].0, 2, "adopted slot is at parent_count");
+    }
+
+    #[test]
+    fn take_all_owned_returns_multiple_in_order() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let _s0 = ws.add_output_slot(8);
+        let _s1 = ws.add_output_slot(16);
+        let _s2 = ws.add_output_slot(32);
+        let owned = ws.take_all_owned(0);
+        assert_eq!(owned.len(), 3);
+        assert_eq!(owned[0].0, 0);
+        assert_eq!(owned[1].0, 1);
+        assert_eq!(owned[2].0, 2);
+    }
+
+    #[test]
+    fn take_all_owned_skips_freed_slots() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let s0 = ws.add_output_slot(8);
+        let _s1 = ws.add_output_slot(16);
+        // Mark s0 as freed.
+        ws.stores.allocations[s0.store_nr as usize].free = true;
+        let owned = ws.take_all_owned(0);
+        assert_eq!(owned.len(), 1, "freed slot skipped");
+        assert_eq!(owned[0].0, 1);
+    }
+}
+
+#[cfg(test)]
+mod store_rebase_tests {
+    use super::DbRef;
+    use crate::parallel::StoreRebase;
+
+    #[test]
+    fn translate_passes_through_unmapped() {
+        let r = StoreRebase::new();
+        let db = DbRef {
+            store_nr: 5,
+            rec: 10,
+            pos: 8,
+        };
+        let out = r.translate(&db);
+        assert_eq!(out.store_nr, 5);
+        assert_eq!(out.rec, 10);
+        assert_eq!(out.pos, 8);
+    }
+
+    #[test]
+    fn translate_rewrites_mapped() {
+        let mut r = StoreRebase::new();
+        r.add(2, 7);
+        let db = DbRef {
+            store_nr: 2,
+            rec: 1,
+            pos: 4,
+        };
+        let out = r.translate(&db);
+        assert_eq!(out.store_nr, 7, "store_nr translated");
+        assert_eq!(out.rec, 1, "rec preserved");
+        assert_eq!(out.pos, 4, "pos preserved");
+    }
+
+    #[test]
+    fn multiple_translations_disjoint() {
+        let mut r = StoreRebase::new();
+        r.add(2, 7);
+        r.add(3, 8);
+        r.add(4, 9);
+        for (worker_nr, expected_parent) in [(2, 7), (3, 8), (4, 9)] {
+            let db = DbRef {
+                store_nr: worker_nr,
+                rec: 0,
+                pos: 0,
+            };
+            assert_eq!(r.translate(&db).store_nr, expected_parent);
+        }
     }
 }
 

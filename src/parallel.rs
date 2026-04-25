@@ -164,6 +164,74 @@ where
     vec![f(0, n_rows, worker_stores)]
 }
 
+// ── Plan-06 phase 2 — store-rebase infrastructure ─────────────────────────────
+//
+// Today's `copy_from_worker` (src/database/allocation.rs:409) deep-copies
+// every struct result from a worker's WorkerStores into the parent's
+// result vector via `copy_block` + `copy_claims`.  For a 100K-element
+// result of 256-byte structs that's 25.6 MB of memcpy per parallel call.
+//
+// Phase 2's `StoreRebase` replaces deep-copy with **store adoption +
+// DbRef translation**: the worker's allocated stores are moved into
+// the parent's allocations table (store ownership transferred); any
+// DbRef referring to those stores from the worker's local namespace
+// is translated to the parent's new store_nr.  Bytes never move.
+//
+// See plan-06 DESIGN.md D2.1 (slot-marker design) and DESIGN.md D11c
+// (the per-field worker-own / parent-shared / cross-worker translation
+// rule).
+
+/// Translates DbRefs across the worker→parent adoption boundary.
+///
+/// Built once per `parallel_for` call: every worker-allocated store
+/// is adopted into the parent (via `Stores::adopt_store`), recording
+/// its worker-local store_nr → parent-side store_nr mapping in a
+/// per-worker `StoreRebase`.  When the parent later inspects a DbRef
+/// the worker handed back, it calls `StoreRebase::translate` to rewrite
+/// the `store_nr` field.
+///
+/// The translation is per-worker: each worker's DbRefs come from a
+/// different worker-local namespace, so the rebase map is constructed
+/// fresh for each worker.
+#[derive(Debug, Default)]
+pub struct StoreRebase {
+    /// Maps worker-local `store_nr` → parent-side `store_nr` for stores
+    /// adopted from one worker's WorkerStores.  A DbRef whose `store_nr`
+    /// is **not** in the map either points at a parent-shared store
+    /// (the original parent allocations the worker only read, store_nr
+    /// < parent_store_count) or at a worker-local store that wasn't
+    /// adopted (which would be a codegen bug).
+    pub map: std::collections::HashMap<u16, u16>,
+}
+
+impl StoreRebase {
+    /// Construct an empty rebase map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a worker-local → parent-side translation.
+    pub fn add(&mut self, worker_local: u16, parent_nr: u16) {
+        self.map.insert(worker_local, parent_nr);
+    }
+
+    /// Translate a DbRef from the worker's local namespace to the
+    /// parent's namespace.  If `db.store_nr` is not in the map, the
+    /// DbRef is returned unchanged (parent-shared / pass-through).
+    #[must_use]
+    pub fn translate(&self, db: &DbRef) -> DbRef {
+        match self.map.get(&db.store_nr) {
+            Some(&parent_nr) => DbRef {
+                store_nr: parent_nr,
+                rec: db.rec,
+                pos: db.pos,
+            },
+            None => *db,
+        }
+    }
+}
+
 /// Run workers, writing results directly into `out_ptr`.
 /// # Panics
 /// Panics if a worker thread panics.
