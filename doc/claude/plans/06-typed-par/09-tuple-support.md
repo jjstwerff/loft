@@ -96,19 +96,46 @@ the rebase pass (phase 2) translates the DbRef when stitching.
 
 ## Per-commit landing plan
 
-### 9a — T1.8a function-return convention (prerequisite)
+### 9a — T1.8a function-return convention (standalone prerequisite)
 
-Land T1.8a as a standalone change before wiring it into par.
-Self-contained ~200 LOC; lives outside par scope.
+Land T1.8a as a **standalone milestone with its own acceptance
+criteria** before wiring it into par.  Self-contained ~200 LOC;
+lives outside par scope and benefits any `-> (A, B)` function in
+loft, not just par workers.
 
-- `Value::ReturnTuple` IR variant.
-- `OpReturnTuple(size)` that copies callee stack to caller's
-  pre-allocated slot.
+**Why standalone, not "first sub-commit of phase 9".**  T1.8a is
+tracked independently in PLANNING.md § T1.8 and TUPLES.md § T1.8;
+multiple unrelated features depend on it (e.g. `match foo() { ... }`
+where `foo` returns a tuple).  Folding it into phase 9 as a sub-
+phase obscures its independent value and makes phase 9 the chokepoint
+for any unrelated tuple-return work.  9a-as-prerequisite means it can
+land and be released even if phases 9b–9e slip.
+
+**Acceptance criteria for 9a (independent of par):**
+- `Value::ReturnTuple` IR variant lands in `src/data.rs`.
+- `OpReturnTuple(size)` opcode in `src/fill.rs` copies callee
+  stack to caller's pre-allocated slot.
 - Codegen at the call site: allocate tuple slot, pass slot pointer
   via the call frame, generate `OpReturnTuple` at the return.
-- Tests: `tests/tuples.rs` adds `tuple_return_int_int`,
-  `tuple_return_int_text`, `tuple_return_struct_text`.
-- Closes T1.8a in PLANNING.md; un-blocks phase 9b.
+- `tests/tuples.rs` gains `tuple_return_int_int`,
+  `tuple_return_int_text`, `tuple_return_struct_text`.  All three
+  green on Linux / macOS / Windows.
+- PLANNING.md § T1.8a entry transitions from "Pulled into plan-06
+  phase 9a" to "✅ shipped — see commit XXX"; the entry remains
+  cross-referenced from this plan but is no longer dependent on
+  plan-06's overall schedule.
+
+**Failure-mode contract.**  If 9a slips past plan-06's milestone
+window, phases 9b–9e ship without tuple-return support — they are
+explicitly gated on 9a's `OpReturnTuple` being available.  D11b's
+"✅ when tuples land" caveat in DESIGN.md stays in place until 9a
+ships.  No "partial 9" scenario.
+
+**Cross-reference update.**  PLANNING.md § T1.8a is updated in
+the same commit as 9a's landing to drop the "phase 9a" wording and
+reflect its independent status.  This plan's README phase-9 entry
+keeps the prerequisite reference for context but no longer
+implies 9a is plan-06-internal.
 
 ### 9b — Tuple-element vector inputs to par
 
@@ -128,8 +155,19 @@ Self-contained ~200 LOC; lives outside par scope.
 - Stitch (phase 2's rebase) walks tuple records like struct records
   — `Type::Tuple` exposes the same `owned_elements` info that
   struct types do, so the rebase pass needs no tuple-specific code.
+- **Reference rules in tuple elements** — DESIGN.md D11c.1 governs:
+  `(integer, Reference<ParentSharedStruct>)` is allowed (the ref
+  passes through unchanged); `(integer, Reference<WorkerOwnedStruct>)`
+  is allowed (the ref's `store_nr` gets translated by the rebase
+  walk); `(integer, Reference<PeerWorkerOwnedStruct>)` is forbidden
+  (no way for a worker to construct one — type system prevents it
+  post-phase-4).  Identical to struct-field rules.
 - Test (un-ignore): `par_tuple_return_int_int`,
   `par_tuple_return_int_text`, `par_tuple_return_struct_text`.
+- New test: `par_tuple_return_with_parent_shared_ref` — worker
+  returns `(integer, Reference<GlobalConfig>)`; assert the
+  `Reference` pointed at the parent stdlib store before AND after
+  the rebase (no translation, pass-through).
 
 ### 9d — Fused `for (a, b) in pairs par(...) { … }`
 
@@ -192,8 +230,10 @@ Phase 9 closes these `#[ignore]`d canaries from
 
 | Risk | Mitigation |
 |---|---|
+| 9a slips and orphans phases 9b–9e | 9a is now a standalone milestone with its own acceptance criteria (see 9a above) — it ships and gets released independently of par work.  Phases 9b–9e are explicitly gated on 9a; if 9a slips, plan-06 ships without tuple-par support and D11b's "✅ when tuples land" placeholder remains. |
 | T1.8a's caller-pre-allocated-slot convention conflicts with the worker dispatch trampoline | Keep T1.8a's slot-pointer parameter convention symmetric with how struct returns work today; the trampoline already passes a result-slot pointer |
-| Tuple-with-text return needs DbRef rebase across tuple element offsets | Phase 2's rebase already walks `owned_elements`; tuples expose the same accessor — no new rebase code |
+| Tuple-with-text return needs DbRef rebase across tuple element offsets | Phase 2's rebase already walks `owned_elements`; tuples expose the same accessor — no new rebase code.  D11c.1 covers the per-element category rules (worker-own / parent-shared / cross-worker) without tuple-specific runtime logic. |
+| Tuple element holds a `Reference<ParentSharedStruct>` (e.g. shared cache) | Per D11c.1: parent-shared references pass through the rebase unchanged.  Test `par_tuple_return_with_parent_shared_ref` (added in 9c) asserts this. |
 | Tuple elements with nested vectors / hashes | Out of scope for phase 9 — covered by D11a "nested vector input" canary which closes in phase 4; tuple elements are either primitive, text, or DbRef in plan-06 |
 | Bench data shapes change between phases (struct → tuple) | Keep both shapes in `bench/11_par/`; mark which is the canonical apples-to-apples reference |
 

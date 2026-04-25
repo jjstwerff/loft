@@ -13,7 +13,9 @@ Replace the integer-positional encoding of today's `parallel_for`
 with a fully typed surface where the worker fn's `T → U` signature
 drives everything.  Remove the runtime `element_size` / `return_size`
 integer args; both are inferred from types via `Data::fn_return_type`
-(DESIGN.md D3).
+(DESIGN.md D3) **plus** a parser-side compiler special-case (the
+same shape `map` uses today — see "Loft-side prerequisites" for
+why).
 
 Today:
 
@@ -26,14 +28,22 @@ fn parallel_for(input: reference, element_size: integer,
 After phase 4:
 
 ```loft
-pub fn parallel_for<T, U>(input: vector<T>,
-                          fn: fn(T) -> U,
-                          threads: integer) -> vector<U>;
+pub fn parallel_for(input: vector<T>,
+                    fn: fn(T) -> U,
+                    threads: integer) -> vector<U>;
 ```
 
 Two integer arguments retire (`element_size`, `return_size`); the
-type checker validates the worker fn signature against the input
-vector's element type.
+parser's compiler special-case (mirroring `map`) extracts `T` from
+the input vector and `U` from the worker fn's return type, then
+validates the worker fn signature against the input vector's
+element type.
+
+Note: the `<T, U>` after `parallel_for` in the declaration is
+**not** bounded-generic syntax — it's a type-variable placeholder
+recognised by the parser's compiler-special-case path, exactly as
+`pub fn map<T, U>(...)` works today.  See "Loft-side
+prerequisites" for the verified-against-source explanation.
 
 ## What changes user-visibly
 
@@ -62,14 +72,19 @@ new typed surface.
 
 - Update `default/01_code.loft` to declare the typed shape:
   ```loft
-  pub fn parallel_for<T, U>(input: vector<T>,
-                            fn: fn(T) -> U,
-                            threads: integer) -> vector<U>;
+  pub fn parallel_for(input: vector<T>,
+                      fn: fn(T) -> U,
+                      threads: integer) -> vector<U>;
   ```
 - Add `Data::fn_return_type` accessor (per DESIGN.md D3).
-- Add bounded-generic resolution: when called with concrete
-  `vector<i32>` and `fn(i32) -> f64`, the type checker substitutes
-  `T = i32, U = f64` and confirms the signature matches.
+- Add a parser-side compiler-special-case `parse_parallel_for` in
+  `src/parser/builtins.rs` mirroring `parse_map` in
+  `src/parser/collections.rs:1490` — extract `T` from the input
+  vector type, extract `U` from the worker fn's return type
+  (via the new `Data::fn_return_type`), validate the worker's
+  arg type matches `T`, return `vector<U>` as the call's result
+  type.  No generic monomorphisation runs — the parser special-case
+  is the only mechanism.
 - Migrate every internal caller in `default/`, `lib/`, `tests/`:
   drop the `elem_size` and `ret_size` args; the function call now
   has 3 args, not 5.
@@ -94,31 +109,55 @@ transition (one parser branch checks arg count and pattern-matches).
 Acceptance: `default/01_code.loft` size drops by ~30 lines;
 phase-0 suite still passes.
 
-### 4c — remove `Stitch::Concat`'s redundant size fields
+### 4c — rename `Stitch::ConcatLegacy` → `Stitch::Concat` (drop payload)
 
 - After 4a + 4b, the worker fn's `Type` is the source of truth for
-  element / return sizes.  The `Stitch::Concat { elem_size,
-  ret_size }` payload from phase 3 is redundant.
-- Codegen reads the sizes from `Data::fn_return_type` and from
-  `vector<T>`'s element type at codegen time; embeds them as
-  opcode-local constants.
-- `Stitch::Concat` variant becomes parameterless (matches DESIGN.md
-  D1's target shape).
-- Opcode payload shrinks by 4 bytes per call.
+  element / return sizes.  The `Stitch::ConcatLegacy { elem_size,
+  ret_size }` payload from phase 3 is redundant — codegen already
+  embeds sizes from `Data::fn_return_type` (per phase 3d) and from
+  `vector<T>`'s element type.
+- Rename the variant `ConcatLegacy` → `Concat` (matches DESIGN.md
+  D1b — the **final** shape).  Drop the `{ elem_size, ret_size }`
+  payload.
+- Opcode payload shrinks by 2 bytes per call (per DESIGN.md D1).
+- Update every `Stitch::ConcatLegacy` match arm in `src/parallel.rs`
+  and `src/codegen_runtime.rs` to `Stitch::Concat`.
 
-Acceptance: opcode count and shape stable; payload size measurably
-smaller (verified by `LOFT_LOG=static` dump comparison).
+Acceptance: `grep ConcatLegacy src/` returns zero matches after
+4c; opcode count stable; payload size measurably smaller (verified
+by `LOFT_LOG=static` dump comparison vs. phase-3 baseline).
 
 ## Loft-side prerequisites
 
-- **Bounded-generic substitution.**  `fn parallel_for<T, U>(...)`
-  needs the type checker to bind `T` and `U` from call-site types.
-  Loft's existing generics already support this — verify by
-  examining how `pub fn map<T, U>(input: vector<T>, fn: fn(T) -> U)`
-  in the stdlib works today; reuse the same machinery.
-- **`Data::fn_return_type` accessor.**  Per DESIGN.md D3.
+- **Parser-side compiler special-case (mirroring `map`).**
+  Verified by reading `src/parser/collections.rs:1490::parse_map`:
+  loft's `pub fn map<T, U>(input: vector<T>, fn: fn(T) -> U) ->
+  vector<U>` is **not** monomorphised by a bounded-generics pass —
+  it is a compiler special-case that the parser inlines as a
+  for-comprehension.  `parse_map` extracts the input vector's
+  element type and infers the output element type from the worker
+  fn's return type.  No generic substitution machinery executes.
+
+  Phase 4 follows the same pattern: a new
+  `parse_parallel_for` compiler special-case in
+  `src/parser/builtins.rs` extracts `T` from the input vector
+  and `U` from the worker fn (via `Data::fn_return_type`), then
+  emits the typed `OpParallel` opcode with the resolved types.
+  Cost: ~120 LOC mirroring `parse_map`.
+
+- **`Data::fn_return_type` accessor.**  Per DESIGN.md D3.  Verified
+  not to exist as of 2026-04-25; phase 4a adds it.
+
 - **Type-checker call-arity diagnostic.**  When the parser sees a
   5-arg call to `parallel_for`, emit the migration message.
+
+**What phase 4 does NOT need.**  Phase 4 does not require
+bounded-generic substitution, monomorphisation across call sites,
+or any new generic-resolution infrastructure.  Treating
+`parallel_for` as a parser-side special-case (option 1 in DESIGN.md
+D3's "Why not 'reuse map's machinery'") is the explicit chosen
+default; the alternative (landing real bounded generics) is
+out-of-scope for plan-06.
 
 ## Test fixtures
 
@@ -144,9 +183,9 @@ smaller (verified by `LOFT_LOG=static` dump comparison).
 
 | Risk | Mitigation |
 |---|---|
-| Bounded-generic substitution doesn't already work for fn-typed args | Verified in phase 0 by reading `pub fn map<T, U>` in `default/01_code.loft`; if missing, phase 4 adds it (medium effort) and the timeline grows by ~1 week |
+| Bounded-generic substitution does not exist as plan-06 originally assumed | Verified against `src/parser/collections.rs:1490::parse_map` (2026-04-25): `map` is a parser-side compiler special-case, not generic monomorphisation.  Phase 4 follows the same pattern explicitly — no new generics infrastructure required.  See "Loft-side prerequisites". |
 | External callers using `parallel_for(input, elem_size, return_size, threads, fn)` directly | The 5-arg form was always documented as "compiler-checked internal"; users who hand-typed it get the migration diagnostic |
-| `Stitch::Concat` size-field removal breaks an internal caller that didn't go through the parser | Phase 4c is the last sub-phase; if any caller still passes integer sizes through the runtime, it's caught by `make ci`'s clippy + tests |
+| `Stitch::ConcatLegacy` → `Concat` rename in 4c breaks an internal caller | 4c is purely a Rust-source rename + payload removal; `cargo build` would fail at every legacy callsite if any existed in handwritten code (no callsite is generated by codegen-emitted-Rust on the native path because the `Stitch` enum is constructed only inside `src/parallel.rs` and `src/codegen_runtime.rs`).  `make ci` catches the rest. |
 | The `parallel_for_int(func: text, ...)` string-based dispatch was used for runtime fn lookup | Today's only caller is the legacy par interface; verify by grep, then retire entirely.  No replacement — the typed form covers every use case |
 
 ## Out of scope

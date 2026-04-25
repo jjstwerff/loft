@@ -42,24 +42,27 @@ The store-typed redesign collapses all of this to:
 | Reference via `copy_block` + `copy_claims` channel | Reference in the worker's output Store; main thread merges by store-pointer rebase |
 
 The size of the saving is real: ~1500 lines of bespoke marshalling
-code retire across `src/parallel.rs` (currently 683 lines) and
-`src/codegen_runtime.rs:1581-1805` (224 lines), plus the parser
-auto-light heuristic at `src/parser/builtins.rs:362`.
+code retire across `src/parallel.rs` (currently 739 lines —
+verified 2026-04-25) and `src/codegen_runtime.rs:1581-1805` (224
+lines), plus the parser auto-light heuristic at
+`src/parser/builtins.rs:403::check_light_eligible`.
 
 ## Phase 0 findings folded back into the plan
 
 Phase 0a's source survey + characterisation tests + bench surfaced
 findings that change how subsequent phases approach the work:
 
-1. **The interpreter is parallel; the native-codegen path is
-   sequential by mistake.**  `run_parallel_direct` (interpreter)
-   uses `thread::scope` × N workers; `n_parallel_for_native` (native
-   codegen) iterates `for i in 0..n` in the calling thread, ignoring
-   the user's thread count argument.  This is a real bug — `--native`
-   builds of par-using programs lose the parallelism the keyword
-   promises.  Tracked as **G4**; phase 1 closes both paths to the
-   same shape (per-worker output stores + `thread::scope` × N).
-   See 01-output-store.md "Important finding from phase 0a".
+1. **The interpreter is parallel; the native-codegen path was
+   sequential by mistake.**  Originally surfaced in phase 0a:
+   `run_parallel_direct` (interpreter) uses `thread::scope` × N
+   workers; `n_parallel_for_native` (native codegen) iterated
+   `for i in 0..n` in the calling thread, ignoring the user's
+   thread count argument.  Tracked as **G4**; **phase 1a already
+   landed** the `thread::scope` fix — the comment header at
+   `src/codegen_runtime.rs:1582` documents the closure.  Phases
+   1b/1c still need the per-worker-output-store migration for text
+   and reference paths.  See 01-output-store.md "Important finding
+   from phase 0a".
 
 2. **The fused for-loop syntax `for x in ls par(r = foo(x), 4) { … }`
    already works today.**  Phase 7 isn't building this construction;
@@ -114,14 +117,15 @@ single PR with its own `make ci` run.
 |---|---|---|---|---|
 | 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | **done** | S | Characterisation suite (0a — `tests/threading_chars.rs` 16 positives + 17 canaries), realistic perf bench (0b — `bench/11_par/` with python + rust + loft-wasm columns), baseline recorded in THREADING.md (0c), D11 type-coverage tracker pre-populated (0d).  Surface gaps G1 / G2 / G3 surfaced and tracked. |
 | 1 | [01-output-store.md](01-output-store.md) | open | M | Workers write to per-worker output Stores instead of `out_ptr` / channel.  Three native fns still exist; phase 1 only changes where results land. |
+| 1.5 | [01.5-rayon-pool.md](01.5-rayon-pool.md) | open | S | Switch native runtime from `thread::scope` per-call to a shared rayon work-stealing pool.  Matches the browser's `wasm-bindgen-rayon` model.  Required for nested `par(...)` to scale beyond ~3 levels of nesting (each level otherwise spawns M fresh OS threads on top of the outer's M).  Independent of phases 2–9 — can land any time after phase 1. |
 | 2 | [02-stitch-not-copy.md](02-stitch-not-copy.md) | open | M | Main-thread stitch via store-pointer rebase, retiring `copy_block` + `copy_claims`.  Closes P1-R3 + P1-R5 from THREADING.md. |
 | 3 | [03-one-native-fn.md](03-one-native-fn.md) | open | S | Collapse `n_parallel_for_native` / `_text_native` / `_ref_native` into one polymorphic `n_parallel_native(stitch)`.  Drop the four `parallel_get_*` getters.  Sub-phase 3e implements `Stitch::Reduce` runtime (per-worker partial fold + main-thread combine). |
 | 4 | [04-typed-input-output.md](04-typed-input-output.md) | open | M | Typed surface: `parallel_for(input: vector<T>, fn: fn(T) -> U, threads: integer) -> vector<U>` — `element_size` and `return_size` retire; the type system carries them. |
-| 5 | [05-auto-light.md](05-auto-light.md) | open | MH | Scope-analysis pass that proves a worker writes nothing outside its own output store; codegen picks the light path automatically.  Sub-phase 5e adds fixed-point iteration over the call graph so mutually-recursive pure fns are classified correctly (no cycle pessimism). |
+| 5 | [05-auto-light.md](05-auto-light.md) | open | MH | Scope-analysis pass that proves a worker writes nothing outside its own output store; codegen picks the light path automatically.  Sub-phase 5b' adds the caller-graph infrastructure (`Data::user_fn_d_nrs`, `Data::callers_of` — see DESIGN.md D12) that 5e then uses.  Sub-phase 5e adds fixed-point iteration over the call graph so mutually-recursive pure fns are classified correctly (no cycle pessimism). |
 | 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Delete the now-unreachable runtime variants (~520 lines from `src/parallel.rs`, ~336 from `codegen_runtime.rs`, ~70 from `default/01_code.loft`); rewrite THREADING.md's par sections; CHANGELOG entry. |
 | 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | MH | Fused `for x in ls par(r = foo(x), 4) { … }` construction + parser-side desugaring of the value-position `par(input, fn, threads)` call form to the same `Value::ParFor` IR node.  Sub-phase 7d adds `par_fold(input, init, fold, threads) -> U` surface and auto-detects pure-fold bodies in the fused for-loop, both compiling to `Stitch::Reduce`.  One primitive (the fused form); two sugar shortcuts (`par`, `par_fold`); one runtime path; smart compiler-side policy selection.  `par_light` is removed from the user surface entirely. |
-| 8 | [08-browser-workers.md](08-browser-workers.md) | open | MH | Browser parallel par via `wasm-bindgen-rayon` Web Worker pool.  Per-worker output Stores from phase 1 + the Stitch policy from phase 3 plug directly into a 4-worker pool.  COOP/COEP headers on the deployed gallery + playground enable SharedArrayBuffer.  After phase 8, the only acceptable sequential par is no-threads-feature WASM minimal builds — every other target (interp / native / browser) is real-parallel.  Vital for the "Brick Buster in your browser" story; replaces the previously-deferred ROADMAP W1.14 entry. |
-| 9 | [09-tuple-support.md](09-tuple-support.md) | open | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  Sub-phase 9a lands T1.8a (function tuple-return convention) as a prerequisite; 9b–9d wire it into the worker call site, the per-worker output Store, and the parser.  Closes the "✅ when tuples land" placeholder in DESIGN D11 and gives plan-06 full type coverage on the tuple axis. |
+| 8 | [08-browser-workers.md](08-browser-workers.md) | open | MH | Browser parallel par via `wasm-bindgen-rayon` Web Worker pool.  Per-worker output Stores from phase 1 + the Stitch policy from phase 3 plug directly into a 4-worker pool.  COOP/COEP headers on the deployed gallery + playground enable SharedArrayBuffer.  Phase-2 rebase walk runs after `postMessage` transfer to rewrite worker-local `store_nr` fields (DESIGN.md D13).  Hashed WASM filenames + JS-shim runtime check on `crossOriginIsolated` close the cache-coherence gap.  After phase 8, the only acceptable sequential par is no-threads-feature WASM minimal builds — every other target (interp / native / browser) is real-parallel.  Vital for the "Brick Buster in your browser" story; replaces the previously-deferred ROADMAP W1.14 entry. |
+| 9 | [09-tuple-support.md](09-tuple-support.md) | open | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  Phase 9 has T1.8a (function tuple-return convention) as a **standalone prerequisite milestone** — it ships independently of plan-06 and benefits any `-> (A, B)` function in loft, not just par.  Phases 9b–9e are gated on T1.8a; if T1.8a slips, plan-06 ships without tuple-par support and D11b's "✅ when tuples land" placeholder remains.  When all sub-phases land, closes the placeholder and gives plan-06 full type coverage on the tuple axis. |
 
 ## Ground rules
 
@@ -183,18 +187,25 @@ These are not addressed by plan-06 even though they're tempting:
 ## Cross-references
 
 - [DESIGN.md](DESIGN.md) — cross-cutting decisions referenced from
-  every phase: Stitch policy enum (D1), worker / parent store
-  relationship (D2), fn return-type accessor (D3), failure model
-  (D4), degenerate-input handling (D5), WASM fallback (D6),
-  `Value::ParFor` IR shape (D7), auto-light heuristic (D8),
-  source-span propagation (D9), call-site migration (D10).
+  every phase: Stitch policy enum (D1 — transitional D1a +
+  final D1b), worker / parent store relationship (D2 — three
+  enforcement layers spelled out per phase), fn return-type
+  accessor (D3 — incl. why "reuse `map`'s machinery" is wrong),
+  failure model (D4), degenerate-input handling (D5), WASM
+  fallback (D6), `Value::ParFor` IR shape (D7), auto-light
+  heuristic (D8), source-span propagation (D9), call-site
+  migration (D10), type spectrum + reference-graph rules (D11
+  / D11c / D11c.1), caller-graph infrastructure (D12 — phase
+  5b' prerequisite for 5e), SAB transfer + DbRef rebase across
+  worker boundary + cache coherence (D13 — phase 8 details).
 - [THREADING.md](../../THREADING.md) — current par design, especially
   §§ "Data flow" and "Isolation guarantees".
 - [ROADMAP.md § 1.1+ A14 / A15 / W1.14](../../ROADMAP.md#11-backlog) —
   related parallel work; this plan is independent but compatible.
-- [src/parallel.rs](../../../../src/parallel.rs) — current 683-line
-  runtime; ~520 lines retired in phase 6 (~800 lines net across
-  plan-06 phases).
+- [src/parallel.rs](../../../../src/parallel.rs) — current 739-line
+  runtime (7 `run_parallel_*` variants verified 2026-04-25);
+  ~520 lines retired in phase 6 (~800 lines net across plan-06
+  phases).
 - [src/codegen_runtime.rs:1581-1805](../../../../src/codegen_runtime.rs) —
   current 3-fn native dispatch; collapses in phase 3.
 - [doc/claude/plans/README.md](../README.md) — global plan ground rules.

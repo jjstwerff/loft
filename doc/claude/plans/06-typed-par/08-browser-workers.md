@@ -82,26 +82,80 @@ Phase 8 makes it the **default** for browser deploys.
 
 ### Per-worker output Stores in the browser
 
-The same `WorkerOutputStore` concept from phase 1 applies — each
-Web Worker owns an exclusive Store, writes via the standard
-Store API.  Cross-thread sharing of the input store needs
-SharedArrayBuffer-backed memory; loft's `Store` already uses a
-flat byte buffer that maps trivially onto SAB.
+The same per-worker output-slot concept from phase 1 applies —
+each Web Worker has an output slot in its `WorkerStores.allocations`,
+writes via the standard `OpSet*` opcodes, and the parent extracts
+the slot's Store after join.
+
+**Cross-thread sharing requires a SAB-backed Store allocator —
+this is a hard prerequisite, not a free side-effect.**  Today's
+`Store::new(size)` calls `std::alloc::alloc_zeroed` against the
+process global allocator; the resulting buffer lives in the main
+thread's linear memory only.  Web Workers run in separate WASM
+instances with separate linear memories — they **cannot see**
+main-thread allocations regardless of pointer values.
+
+Phase 8's prerequisite (sub-phase **8a'**, must land before 8a):
+
+- Add a `Store::new_shared(size)` constructor that allocates from
+  a `WebAssembly.Memory({shared: true})` SAB pool when the
+  `wasm-threads` feature is enabled; falls back to the system
+  allocator otherwise.
+- When `wasm-threads` is enabled, `Stores::database` and
+  `WorkerStores::add_output_slot` route through `new_shared`.
+- The SAB pool's growth strategy mirrors the system allocator's
+  (page-aligned blocks, no fragmentation guarantees beyond what
+  the JS engine provides).
+- A runtime feature-detection check on parent-store creation
+  asserts the SAB-backing succeeded; failure falls back to the
+  sequential WASM path with a `console.warn`.
+
+**Implication**: existing parent state (the const store, user-
+allocated parent data) accumulated **before** the first
+`par(...)` call must already be SAB-backed.  The decision is
+made at parent-store-allocation time, not par-call time.  A
+parent that allocated stores via `new` (system allocator) and
+then enables `wasm-threads` mid-program cannot make those stores
+visible to workers without copying — and copying defeats the
+purpose.
+
+**For workloads with hundreds of MB of parent state**: the SAB
+allocator must work end-to-end from the parent's first
+allocation; this includes the loft const store (often the
+largest single allocation in any non-trivial program).  The
+existing CONST_STORE initialisation path in `State::new` must
+route through `new_shared` under the `wasm-threads` feature.
 
 After workers finish, the parent reads from each worker's output
-store via the rebase pass (phase 2).  No new logic — the rebase
-walks per-worker stores regardless of whether they're OS threads,
-green threads, or Web Workers.
+slot via the **same rebase walk from phase 2** — see DESIGN.md
+D13a.  The rebase is not optional: a Web Worker's output Store
+contains DbRefs whose `store_nr` is **worker-local** in the
+worker's runtime instance.  After `postMessage` transfer, those
+`store_nr` bytes name a worker-local store that doesn't exist
+in the parent's store table.  The parent must run the rebase walk
+to rewrite each `store_nr` field to the parent-side store_nr
+returned by `Stores::adopt_store`.
 
-### `postMessage` is the join
+For primitive-only output Stores (no DbRef fields, per D13b), the
+rebase walk is a no-op and the SAB transfer is zero-cost — parent
+reads the SAB-backed buffer directly.
 
-Native: `thread::scope` join is implicit when the closure exits.
-Browser: each Web Worker posts a "done" message + transferred
-ArrayBuffer when it finishes.  The parent collects all 4 messages
-before stitching.
+### `postMessage` is the join, rebase is the stitch
 
-The transfer is zero-copy if the buffer is `Transferable` (which
-loft Stores are, when backed by SAB).  No serialisation cost.
+Native: `thread::scope` join is implicit when the closure exits;
+phase-2 rebase walks the per-worker output Stores.
+
+Browser: each Web Worker posts a "done" message + Transferable
+ArrayBuffer holding its output slot's SAB-backed buffer (and any
+intermediate worker stores) when it finishes.  The parent collects
+all N messages, reconstitutes each buffer as a `Store` and calls
+`Stores::adopt_store(store) -> u16` to install it, populating the
+rebase map with `(worker_id, worker_local_store_nr) →
+parent_store_nr`, then runs the rebase walk per DESIGN.md D13a.
+
+The buffer transfer is zero-copy because SAB is `Transferable`.
+The rebase walk's cost is the same as native (per-DbRef-field
+rewrites scoped to `data::owned_elements`).
 
 ## Per-commit landing plan
 
@@ -121,7 +175,15 @@ loft Stores are, when backed by SAB).  No serialisation cost.
   1's WASM fallback with a real `wasm-bindgen-rayon`
   `par_iter().map(...).collect()` shape.
 - Per-worker output Stores allocated as SAB-backed buffers.
-- Parent rebase pass (phase 2) handles the join.
+- Parent rebase pass (phase 2) handles the join — explicitly
+  invoke `rebase_walk_record` from `src/parallel.rs` after
+  `postMessage`-receive, before exposing the result vector to
+  user code.  Per DESIGN.md D13a, this is **not optional**:
+  worker-local `store_nr` values must be rewritten to parent-side
+  ones for any DbRef field in the output.
+- For primitive-only outputs (D13b): skip the rebase walk; SAB
+  transfer alone is sufficient.  Detected by inspecting the
+  worker fn's return `Type` at codegen time.
 
 ### 8c — Other Stitch policies
 
@@ -132,7 +194,7 @@ loft Stores are, when backed by SAB).  No serialisation cost.
   parent body pops.  Most complex; requires SharedArrayBuffer
   atomics.
 
-### 8d — COOP/COEP deployment
+### 8d — COOP/COEP deployment + cache coherence
 
 - `doc/gallery.html` + `doc/playground.html` add the meta-tag
   COOP/COEP headers.
@@ -140,6 +202,21 @@ loft Stores are, when backed by SAB).  No serialisation cost.
   same.
 - CI's `make gallery` step verifies the deployed pages serve
   with the right headers (probe via `node` + a fetch test).
+- **HTML/WASM version pinning** — per DESIGN.md D13c, the
+  `<script src=…>` reference for the WASM module is regenerated
+  alongside the WASM bundle so any HTML/WASM pair is mutually
+  consistent.  `wasm-pack` already emits hashed filenames
+  (`loft_wasm_bg.<hash>.wasm`); `make gallery` updates the HTML
+  to reference the freshly-built hash.
+- CI assertion (in `make gallery`): after build,
+  `grep loft_wasm_bg gallery.html | grep -o 'loft_wasm_bg\.[a-f0-9]*\.wasm'`
+  equals the file actually shipped to `doc/pkg/`.  Mismatch fails
+  the build.
+- **Runtime fallback** — JS shim checks `crossOriginIsolated`
+  before initialising the worker pool.  If false (cached HTML
+  pre-COOP/COEP, embedded webview, older Safari), the shim
+  falls back to the sequential WASM path with a `console.warn`.
+  No crash, no silent wrong answer.
 
 ### 8e — Bench + doc
 
@@ -181,8 +258,10 @@ loft Stores are, when backed by SAB).  No serialisation cost.
 | Risk | Mitigation |
 |---|---|
 | GitHub Pages doesn't support COOP/COEP via HTTP headers | Use the `<meta http-equiv>` approach.  Verified to work for SharedArrayBuffer in Chrome / Firefox / Safari ≥ 2022. |
+| Cached pre-COOP/COEP HTML loads with new WASM (silent SAB failure) | Per DESIGN.md D13c, hashed WASM filenames + JS-shim runtime check on `crossOriginIsolated` give defence in depth — old HTML references old WASM (still works); new HTML references new WASM (works); mismatch falls back to sequential with a console warning instead of crashing. |
+| Forgetting to invoke the rebase walk after `postMessage` (would corrupt DbRefs in worker results) | The browser dispatcher's `adopt_browser_worker_output(buffers, worker_id)` helper combines `adopt_store` per buffer + rebase walk in one call; no path adopts a worker output without running the walk.  Asserted by `tests/issues.rs::par_phase8_browser_dbref_rebased` — a fixture worker that returns `vector<Reference<T>>` from a Web Worker; assert every result DbRef's `store_nr` resolves to a valid parent store after stitch. |
 | `wasm-bindgen-rayon` build takes > 5 min in CI | Cache the build via the existing `actions/cache` step in `.github/workflows/release.yml`. |
-| Some browsers (older Safari, embedded webviews) lack SAB support | Fall back to sequential gracefully (the WASM minimal-feature path).  Detected at runtime; user code sees identical results, just slower. |
+| Some browsers (older Safari, embedded webviews) lack SAB support | Fall back to sequential gracefully (the WASM minimal-feature path).  Detected at runtime via `crossOriginIsolated` check; user code sees identical results, just slower. |
 | Worker pool startup overhead on first par call | Initialise the pool eagerly when the WASM module loads, not on first par.  ~5 ms one-time cost amortised over the program's lifetime. |
 | postMessage overhead per call dominates short workloads | Document: parallelism is worthwhile for workloads > ~1 ms total compute.  Below that, the user can use the sequential fallback explicitly (or just accept the overhead). |
 

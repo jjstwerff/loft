@@ -160,11 +160,58 @@ results = {
 }
 ```
 
-`U` is inferred from `foo`'s return type (already in
-`Data::definitions` after pass 1).  The block expression is
-expression-positioned, so every existing call site (argument
-position, tail expression, `if`/`match` arms, return statement,
-struct-field initialiser) keeps working unchanged.
+`U` is inferred from `foo`'s return type via `Data::fn_return_type`
+(per DESIGN.md D3).  The block expression is expression-positioned,
+so every existing call site (argument position, tail expression,
+`if`/`match` arms, return statement, struct-field initialiser)
+keeps working unchanged.
+
+### Where `__par_acc` and friends get their slots
+
+Loft's parser runs in two passes; scope analysis (variable→slot
+assignment in `src/variables/`) runs **after** parse pass 2 but
+**before** codegen.  The desugar must produce IR that the existing
+scope-analysis pass can process — it cannot pre-allocate slots
+itself, because the surrounding fn's variable table is built later.
+
+**The rule.**  The desugar runs in parse pass 2 and emits IR that
+introduces `__par_acc`, `__par_r`, `__par_x` as **new local
+declarations in the surrounding fn's `Function::variables`
+table**.  Specifically:
+
+1. The desugar uses the existing `Parser::fresh_var(prefix:
+   "__par_acc")` helper (already used by format-string desugaring
+   for its temporaries — `src/parser/expressions.rs`).
+   `fresh_var` allocates a unique name AND registers it in the
+   enclosing function's variable table with the right `Type` and
+   `Scope`.
+2. The synthesized `Value::Block` references the variables by
+   name; scope analysis allocates the slots in the enclosing fn's
+   frame at its normal pass.
+3. Lifetime: the variables are scoped to the synthesized block;
+   `get_free_vars` emits `OpFreeRef` at block exit using the
+   existing scope-exit mechanism — no special-casing.
+
+**Why this works.**  Format-string desugaring already creates
+synthesized locals this way (e.g. for the temporary holding the
+formatted result before assignment); the same mechanism handles
+`par`.  The desugarer is a **producer** of variables, not a
+**slot-allocator** — slot assignment stays with scope analysis as
+the single owner.
+
+**What does NOT work.**  Trying to desugar `par(...)` into a
+`Value::Block` with locally-scoped variables that bypass the
+enclosing fn's variable table would break: `Value::ParFor`'s body
+references slots, and slots are only meaningful in the context of
+a function's frame.  The desugar must thread its variables through
+the same machinery normal user-written variables use.
+
+**Verification.**  Phase 7c adds
+`tests/issues.rs::par_call_desugar_slot_independence` —
+a fixture that has 30 distinct `par(...)` calls in one fn (each
+desugaring to its own `__par_acc`/`__par_r` pair); asserts
+`fresh_var`'s monotonic counter produces unique slot allocations
+and no slot collisions occur.
 
 **Why a desugar, not a deprecation:** today's call form is the
 ergonomic shape for "I need a vector"; phase 7's fused form is
@@ -604,16 +651,25 @@ carries a `// desugared from: par(ls, foo, 4) at file.loft:42`
 comment in the dump, matching the existing convention for format
 strings and `?? return`.
 
-### C9 — Synthesised variable name collisions
+### C9 — Synthesised variable name collisions and slot allocation
 
 **Concern.** The desugarer names its accumulator `__par_acc` and
 its loop variables `__par_x` / `__par_r`; a user with `__par_acc`
-in the enclosing scope would shadow it.
+in the enclosing scope would shadow it.  Separately, the
+synthesized variables need slot numbers in the enclosing fn's
+frame — but the desugarer runs during parse pass 2, before scope
+analysis runs.
 
 **Mitigation.** Use the parser's existing fresh-var generator
-(`Parser::fresh_var(prefix)`), which produces collision-free names
-by appending a monotonic counter.  Same mechanism format-string
-desugaring already uses for its temporaries.
+(`Parser::fresh_var(prefix)`), which (a) produces collision-free
+names by appending a monotonic counter, and (b) registers the
+new variable in the enclosing `Function::variables` table so
+scope analysis allocates a slot for it at its normal pass.  Same
+mechanism format-string desugaring already uses for its
+temporaries.
+
+See "Where `__par_acc` and friends get their slots" earlier in
+this doc for the full ownership story.
 
 ### C10 — Empty input vector
 

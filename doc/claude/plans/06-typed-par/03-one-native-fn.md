@@ -32,39 +32,47 @@ after phase 2; users access it via normal vector ops.
 
 Net: 7 native fns + 3 opcodes retire.  One fn + one opcode lands.
 The opcode payload encodes the stitch policy:
-- 0x00 = Concat
+- 0x00 = ConcatLegacy (transitional — phases 3a..4b)
 - 0x01 = Discard
 - 0x02 = Reduce (reserved for future par_fold)
 - 0x03 = Queue
+
+Phase 3 ships the **transitional** `Stitch` enum from DESIGN.md
+D1a — `ConcatLegacy { elem_size: u8, ret_size: u8 }` carries
+size info that the runtime still needs because the typed surface
+(phase 4) has not landed.  Phase 4c renames `ConcatLegacy` →
+`Concat` and drops the payload (D1b).
+
+**Why two names, not "phase 3 has Concat with sizes; phase 4
+removes the sizes".**  Mid-phase contradictions in the enum
+discriminant (same name, different payload) make `match` arms
+flip-flop across phases and force readers of the source to track
+"which phase am I looking at".  Two distinct names — `ConcatLegacy`
+during 3a–4b, `Concat` from 4c — are unambiguous: a function
+matching `Stitch::ConcatLegacy` is provably from the transitional
+window and can be deleted by `grep` after phase 4c.
 
 `element_size` and `return_size` integer args disappear at the
 runtime call shape — the worker fn's own signature carries them
 (the type checker already validates this; phase 4 lifts the surface
 to use the type system end-to-end).  For phase 3, the existing
-parser code computes them per-call and stores them in the new
-`Stitch::Concat { elem_size, ret_size }` payload.
-
-Wait — the spec above says `Stitch::Concat` has no payload.  Reread
-DESIGN.md D1.
-
-The DESIGN.md D1 enum is the **target** shape after phase 4.  In
-phase 3 (transitional), `Stitch::Concat` carries `elem_size` /
-`ret_size` for backward compat with the today-shape runtime; phase 4
-moves those out by inferring them from the worker fn's type
-signature.
+parser code computes them per-call and embeds them in the
+`ConcatLegacy` payload at codegen time (not as runtime args).
 
 ## Per-commit landing plan
 
 ### 3a — `Stitch` enum + dispatcher skeleton
 
-- Add `Stitch` enum to `src/parallel.rs` with `Concat { elem_size,
-  ret_size }`, `Discard`, `Reduce { combine }`, `Queue { capacity }`.
+- Add `Stitch` enum to `src/parallel.rs` with `ConcatLegacy {
+  elem_size: u8, ret_size: u8 }`, `Discard`, `Reduce { fold_fn:
+  u32 }`, `Queue { capacity: u32 }`.
 - Add `n_parallel_native(input, threads, fn, stitch) -> DbRef` that
   inner-dispatches on `stitch`:
-  - `Concat` → today's `run_parallel_direct` / `_text` / `_ref` (via
-    a runtime check on `ret_size`-flavour for now).
+  - `ConcatLegacy { ret_size }` → today's `run_parallel_direct` /
+    `_text` / `_ref` (via a runtime check on `ret_size`-flavour for
+    now: 0 = primitive, sentinel for text, sentinel for reference).
   - `Discard` / `Reduce` / `Queue` → `unimplemented!()` (return
-    error; phase 7 fills `Queue`; future phases fill the others).
+    error; phase 7 fills `Queue`; phase 3e fills `Reduce`).
 - Codegen emits the new `OpParallel(0x00)` opcode for existing
   parser sites; old opcodes still work in parallel for one commit
   to validate the new path.
@@ -106,20 +114,21 @@ Acceptance: phase-0 suite still passes after the call-site
 rewrite; no `parallel_get_*` references in `default/`, `lib/`,
 `tests/`, or `doc/`.
 
-### 3d — opcode payload simplification
+### 3d — codegen-time embedding (always lands in 3d, not deferred)
 
-After the three return-type branches are unified, the single
-`Stitch::Concat` variant's `elem_size` and `ret_size` fields are
-the only runtime variation left.  Phase 3d audits whether they can
-be inferred at codegen time from the worker fn's signature instead
-of being passed at runtime.
+After 3a–3c, the `ConcatLegacy { elem_size, ret_size }` payload
+is the only runtime variation left.  Phase 3d ensures those sizes
+are **embedded at codegen time** from the worker fn's signature
+(via `data.rs::element_size` on the worker's argument and return
+types) rather than re-computed per call.  This is local — no
+typed-surface dependency.  Phase 4c later renames `ConcatLegacy`
+→ `Concat` and drops the payload entirely once the typed surface
+makes the sizes derivable at *runtime* from the fn's `Type`.
 
-Phase 3d is **conditional** on phase 4's typed surface — if
-phase 4 is landing in the same milestone window, phase 3d folds
-into 4a (typed input/output).  If phase 4 slips, phase 3d ships
-the local optimisation: codegen reads the worker fn's `Type` from
-`Data` and embeds the sizes in the opcode at codegen time, removing
-the runtime arg entirely.
+Phase 3d **always lands in this phase**, regardless of phase 4's
+schedule.  The earlier "conditional on phase 4" wording was
+incorrect — embedding sizes at codegen time is correct under both
+the legacy and typed surfaces.
 
 ### 3e — `Stitch::Reduce` runtime
 
@@ -234,9 +243,9 @@ New fixtures:
 | Risk | Mitigation |
 |---|---|
 | Existing user code calls `parallel_get_int(...)` directly | The user surface for that fn was always documented as "internal"; tests/lib uses are renamed in phase 3c.  External users get the deprecation diagnostic with a one-token fix. |
-| Codegen needs to inspect worker fn signature to compute `ret_size` for `Stitch::Concat` payload | Already does (today's parser computes `return_size: integer` in `parser/builtins.rs::parse_parallel_for`).  Phase 3 just moves the computation from runtime arg to opcode payload. |
-| The `Stitch::Concat { elem_size, ret_size }` payload duplicates info available from the worker fn type | Yes — phase 4 retires this duplication.  Phase 3 accepts the temporary redundancy as a transitional state |
-| Removing 3 opcodes + 7 native fns in one phase risks bytecode-format breakage | The bytecode format is internal — `.loftc` cache was retired in plan-01 (integer-i64 migration).  Phase 3 is a free internal rearrangement |
+| Codegen needs to inspect worker fn signature to compute `ret_size` for `ConcatLegacy` payload | Already does (today's parser computes `return_size: integer` in `parser/builtins.rs::parse_parallel_for`).  Phase 3 just moves the computation from runtime arg to opcode payload. |
+| The `ConcatLegacy { elem_size, ret_size }` payload duplicates info available from the worker fn type | Yes — phase 4c retires this duplication by renaming the variant to `Concat` (no payload).  Phase 3 accepts the transitional redundancy with explicit `Legacy` naming so the deletion target is greppable. |
+| Removing 3 opcodes + 7 native fns in one phase risks bytecode-format breakage | The bytecode format is internal — `.loftc` cache was retired in plan-01 (integer-i64 migration).  Phase 3 is a free internal rearrangement; every `make` rebuilds bytecode from source.  Test-fixture golden dumps under `tests/dumps/*.txt` are regenerated per build via `LOFT_LOG=static`, so no migration step is needed for them.  See DESIGN.md D1's "Binary-format change" note. |
 
 ## Out of scope
 
@@ -250,11 +259,12 @@ New fixtures:
 After phase 3 lands:
 - One native fn (`n_parallel_native`).
 - One opcode (`OpParallel`).
-- Four `Stitch` variants (only `Concat` actually used in 3a–3d).
-- The runtime arg shape `(input, threads, fn, stitch)` still has
-  `Stitch::Concat { elem_size, ret_size }` carrying redundant size
-  info.
+- Four `Stitch` variants (`ConcatLegacy` actually used in 3a–3d;
+  `Reduce` lands in 3e; `Discard` and `Queue` reserved for phase 7).
+- The runtime arg shape `(input, threads, fn, stitch)`; the
+  `ConcatLegacy { elem_size, ret_size }` payload carries
+  codegen-embedded sizes (no longer runtime args).
 
 Phase 4 lifts the surface to type-system input/output: the worker
-fn's `Type` carries `T → U`, and the runtime stops passing
-`elem_size` / `ret_size` because the type system has them.
+fn's `Type` carries `T → U`, and phase 4c renames `ConcatLegacy`
+→ `Concat` (DESIGN.md D1b), dropping the payload entirely.

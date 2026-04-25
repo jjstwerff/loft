@@ -109,22 +109,131 @@ at a separate sub-store for `coords` and another for the text.
 The rebase map handles this naturally — it's keyed by
 `(worker_id, worker_local_store_nr)`, so all of the worker's
 internal stores get adopted and translated together.  The walk
-recurses through DbRef fields; any field pointing at a store_nr in
-the rebase map gets translated, others stay (those are pointers to
-parent-shared / input stores, which the worker only read).
+recurses through DbRef fields; the per-field rule is precise (see
+below), not "any field pointing at a store_nr in the rebase map
+gets translated".
+
+### The per-field translation rule
+
+Three categories from DESIGN.md D11c apply at every DbRef-shaped
+field the walk visits:
+
+| `field.store_nr` | Category | Action |
+|---|---|---|
+| Matches an entry in this worker's rebase map | Worker-own | Translate to the parent-side `store_nr` |
+| Matches a parent-side `store_nr` (input store, stdlib const, parent-allocated read-only) | Parent-shared | Pass through unchanged |
+| Anything else | Cross-worker (or codegen bug) | Debug-build `panic!`; release-build `log_error!` and pass through (defensive — D2 layer-3 makes this unreachable from valid code post-phase-5) |
+
+The rebase walk distinguishes the categories by **direct lookup**:
+the walk's input is `(rebase_map: HashMap<(WorkerId, u32), u32>,
+parent_store_count: u32)`.  A field with `store_nr <
+parent_store_count` is parent-shared; otherwise it must be in the
+rebase map (worker-own); otherwise it is cross-worker.
+
+### How the walk knows where the DbRef fields are
+
+It does **not** scan the bytes blindly.  The walk is type-driven
+via existing `data.rs` accessors:
+
+- `data::owned_elements(elem_types) -> Vec<(offset, index)>` —
+  returns byte offsets of fields that need cleanup-style handling
+  (text, reference, vector, sorted, index, hash, struct-enum).
+  Same accessor used by `get_free_vars` for scope-exit cleanup.
+- `data::element_offsets(elem_types) -> Vec<usize>` — element-start
+  offsets in a tuple/struct record.
+
+Walk pseudocode:
+
+```rust
+// src/parallel.rs (new)
+fn rebase_walk_record(
+    record: &mut [u8],
+    record_type: &Type,
+    map: &StoreRebase,
+    parent_store_count: u32,
+    visited: &mut HashSet<(u32, u32, u32)>,
+) {
+    let elems = match record_type {
+        Type::Reference(struct_d, _) => /* fetch struct's field types */,
+        Type::Tuple(types) => types,
+        _ => return, // primitive — no DbRef fields
+    };
+    for (off, idx) in data::owned_elements(elems) {
+        let field_bytes = &mut record[off..off + element_size(&elems[idx])];
+        match &elems[idx] {
+            Type::Text(_) => rebase_str_field(field_bytes, map, parent_store_count),
+            Type::Reference(_, _) | Type::Vector(_, _)
+            | Type::Sorted(_, _, _) | Type::Index(_, _, _)
+            | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                rebase_dbref_field(field_bytes, map, parent_store_count, visited);
+            }
+            _ => unreachable!("owned_elements only returns owned types"),
+        }
+    }
+}
+```
+
+`rebase_dbref_field` reads the `(store_nr, rec, pos)`, applies the
+per-field rule from above, writes back if translated, and recurses
+into the pointed-at record (using the field's own `Type` for the
+next layer's `owned_elements` call).
+
+**Why type-driven, not byte-pattern-driven.**  Two reasons.  (a) A
+primitive `i64` field whose bits happen to encode a valid-looking
+DbRef must not be translated.  (b) The walk's cost is proportional
+to actual reference fields, not record size — primitive-heavy
+records walk near-instantly.
 
 **Cycle handling.**  Worker results may contain DbRef cycles
 (`a.next = b; b.next = a`).  The rebase walk uses a `visited`
 HashSet keyed by `(store_nr, rec, pos)` to break the cycle.
+
+### Worked example
+
+Worker A returns `vector<Job>` where:
+
+```loft
+struct Job {
+    name:        text,                        // worker-own (text in worker's output Store)
+    config:      Reference<GlobalConfig>,     // parent-shared (GlobalConfig in stdlib)
+    inputs:      vector<integer>,             // worker-own (allocated by worker)
+}
+```
+
+Worker A's output Store gets parent-side `store_nr = 5` after
+adoption (rebase map: `(worker_A, 0) → 5`).  The parent has 4
+stores in use (input, result-vector, stdlib_strings,
+stdlib_globals — `parent_store_count = 4`).
+
+The walk visits each `Job` record's three fields:
+
+| Field | Field's `store_nr` | Category | Action |
+|---|---|---|---|
+| `name` (text) | 0 (worker-local) | Worker-own | Rewrite to 5 |
+| `config` (Reference<GlobalConfig>) | 3 (stdlib_globals) | Parent-shared (3 < 4) | Pass through |
+| `inputs` (vector<integer>) | 0 (worker-local) | Worker-own | Rewrite to 5; recurse into the vector record (no DbRef fields → recurse exits) |
+
+After the walk, every field correctly references either the
+adopted worker store (parent_nr = 5) or the unchanged parent
+store.  No bytes were copied except the rewritten 4-byte
+`store_nr` fields.
 
 ## Per-commit landing plan
 
 ### 2a — `StoreRebase` infrastructure
 
 - Add `StoreRebase` struct + `translate` impl.
-- Add `Stores::adopt_worker_output(worker_output_store) -> u32`
-  that takes the worker's output store, gives it a parent-side
-  `store_nr`, returns the new store_nr.
+- Reuse `Stores::adopt_store(store) -> u16` (added in phase 1)
+  for installing each adopted worker store.  Phase 2 extends
+  adoption to **multiple stores per worker** — a worker that
+  allocated sub-stores during computation (e.g. text bytes) has
+  more than just its output slot to hand over.  New helper
+  `WorkerStores::take_all_owned() -> Vec<(u16, Store)>` returns
+  every worker-allocated slot (output + intermediate) keyed by
+  worker-local `store_nr`; the parent adopts each via
+  `adopt_store` and records the `(worker_id, local_nr) →
+  parent_nr` mapping in `StoreRebase`.
 - Unit tests in `tests/parallel_rebase.rs`: identity rebase
   (no cross-store refs), single-cross rebase, multi-store rebase,
   cyclic-ref rebase.
@@ -134,7 +243,8 @@ No runtime change yet; phase 1's `copy_block` collection still runs.
 ### 2b — switch reference path to rebase
 
 - `src/parallel.rs::run_parallel_ref` replaces `copy_block` +
-  `copy_claims` with `adopt_worker_output` + rebase walk.
+  `copy_claims` with `take_all_owned` + per-store `adopt_store`
+  + rebase walk.
 - The result vector's elements become DbRefs into the adopted
   worker stores instead of fresh DbRefs in the parent's result
   store.
@@ -179,14 +289,18 @@ parent.  They become regular parent stores, freed via the parent's
 existing store-deallocation when the result vector goes out of
 scope.
 
-**Risk:** if any worker output store is freed twice (once by the
-worker's `WorkerOutputStore::drop`, once by the parent's adoption
-+ later free), the runtime double-frees and corrupts.
+**Risk:** if any worker output store is freed twice (once when
+the worker's `WorkerStores` is dropped, once by the parent's
+adoption + later free), the runtime double-frees and corrupts.
 
-**Mitigation:** `WorkerOutputStore::drop` checks an `adopted: bool`
-flag set by `adopt_worker_output`.  If adopted, drop is a no-op
-(the parent owns the store now).  If not adopted (worker panicked
-mid-flight, or adoption failed), drop frees normally.
+**Mitigation:** `WorkerStores::take_slot` and `take_all_owned`
+**move** the `Store` out of the worker's `allocations` Vec
+(replacing the slot with a `Store::new_freed_sentinel()`).  When
+the worker's `WorkerStores` is later dropped, the sentinel slots
+are no-op drops; only un-taken slots are actually freed.  This
+mirrors how `mem::take` works on `Option<Store>`.  No `adopted`
+boolean to set/check — the move is the proof that adoption
+happened.
 
 ## Cross-cutting interactions
 
@@ -206,7 +320,7 @@ New fixtures:
 |---|---|
 | `tests/issues.rs::par_phase2_rebase_correctness` | A worker returning a struct with a sub-vector field; rebase preserves the cross-store DbRef |
 | `tests/issues.rs::par_phase2_cycle_safe` | Worker returns a struct with a self-cycle; rebase handles via `visited` HashSet |
-| `tests/issues.rs::par_phase2_no_double_free` | Worker panics; the `WorkerOutputStore` drops normally; the parent never adopted; no leak, no double-free |
+| `tests/issues.rs::par_phase2_no_double_free` | Worker panics; the worker's `WorkerStores` (including untaken output slot) drops normally; the parent never called `take_slot`; no leak, no double-free |
 | `tests/leak.rs::par_phase2_leak_check` | Run all phase-0 fixtures under `LOFT_STORES=warn`; count parent-store allocations.  Compare with phase 1's count.  Adopted-stores count appears in the parent now (expected; the bytes have to live somewhere) but no extra orphan allocations |
 
 ## Acceptance criteria
@@ -224,7 +338,8 @@ New fixtures:
 
 | Risk | Mitigation |
 |---|---|
-| Cross-store DbRef rebase walks miss a field type | Phase 0's struct/sub-struct/text fixtures cover the common cases; add a generic walk based on `Type::field_offsets` so any future struct shape is covered automatically |
+| Cross-store DbRef rebase walks miss a field type | The walk is type-driven via `data::owned_elements` (the same accessor that drives scope-exit cleanup) — any new owned type added to loft is automatically picked up because `owned_elements` is the single source of truth for "this type owns memory".  Test fixture `par_phase2_walk_covers_all_owned_types` enumerates every variant returned by `owned_elements` and confirms the walk handles each. |
+| Misclassifying a parent-shared `store_nr` as worker-own (would corrupt parent state) | The parent-shared classifier is `field.store_nr < parent_store_count` where `parent_store_count` is captured **before** any worker output is adopted.  Adoption monotonically increases the parent's store count, so any pre-existing parent store has a `store_nr` lower than every adopted worker store.  Asserted by `par_phase2_parent_shared_pass_through` fixture |
 | Cycle detection's `visited` HashSet is slow for very-deep nested results | Cycle is rare in worker results (most workers return acyclic data); accept the cost.  If a real workload regresses, switch to a per-store visited bit (1 bit/record) |
 | Adopted stores don't fit in the parent's store table | The parent's store table is dynamically grown; phase 2 doesn't change that.  100-thread workloads adopt 100 stores — well within today's limits |
 | Existing leak tests fail because adopted stores show up as parent allocations | Update the leak test's accounting to subtract the count of intentionally-adopted stores; this is a test-harness accounting fix, not a runtime change |

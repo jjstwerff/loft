@@ -12,8 +12,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Replace the three different "where does worker output go?" paths
 (`out_ptr` raw bytes, `Vec<String>` channel, `Vec<DbRef>` channel)
 with one uniform path: every worker writes its output into a
-pre-allocated per-worker output Store, exactly the way every loft
-fn already writes its return value.
+pre-allocated **slot in its own `WorkerStores.allocations`**,
+exactly the way every loft fn already writes its return value.
+
+The output slot is a regular `Store` inside the worker's
+`WorkerStores` table — addressable via a normal `DbRef` and
+written via existing `OpSet*` opcodes.  After join, the parent
+calls `WorkerStores::take_slot(N)` to extract that one Store and
+`Stores::adopt_store(store)` to install it into the parent's
+allocations.  See DESIGN.md D2 / D2.1 for the rationale (no
+opcode surface change; uses the existing return-value convention
+across the thread boundary).
 
 Phase 1 is **transitional**: the three native fns
 (`n_parallel_for_native` / `_text_native` / `_ref_native`) still
@@ -23,35 +32,33 @@ into a single result vector still goes through the existing copy
 logic — phase 2 retires that.
 
 **Important finding from phase 0a's source survey.**  The
-interpreter and native-codegen paths are **structurally
-different**, not just different runtime fns:
+interpreter and native-codegen paths were originally **structurally
+different**:
 
 - `src/parallel.rs::run_parallel_direct` (the interpreter path)
   IS parallel — uses `thread::scope` with three `#[cfg]` variants
   (threading + wasm, threading + non-wasm, no-threading).  The
   worker is a bytecode fn dispatched via `state.execute_at_raw()`.
-- `src/codegen_runtime.rs:1581::n_parallel_for_native` (the
-  native-codegen path) is **sequential today, by mistake** — a
-  plain `for i in 0..n` loop calling the worker closure inline.
-  No `thread::scope`, no parallelism, despite the function name.
+- `src/codegen_runtime.rs:1582::n_parallel_for_native` (the
+  native-codegen path) **was sequential by mistake** — a plain
+  `for i in 0..n` loop calling the worker closure inline.
 
-The native path's missing parallelism is a real bug: a `loft --native`
-build of a program using `par(items, work, 4)` runs the par as a
-serial for-loop and ignores the thread count.  Bench/11_par's 12 ms
-loft-native is **single-threaded** running against rust's 4 ms
-**parallel-on-4-threads**, so the gap is bigger than the table
-suggests — apples-to-apples (rust serial vs loft-native serial)
-would put loft-native further behind, and proper native parallelism
-should bring it to the same ~4 ms range as rust.
+**G4 status (verified 2026-04-25):** phase 1a's
+`thread::scope` fix has **already landed** — the comment header
+at `codegen_runtime.rs:1582` documents the closure ("Plan-06
+phase 1a (G4): runs workers in parallel via `thread::scope` with
+per-worker `Stores` clones").  Bench/11_par should now reflect
+real native parallelism; verify with `make bench` before
+calling phase 1a fully done.
 
-**G4 — `n_parallel_for_native` is sequential.**  Plan-06 phase 1
-fixes this as part of the output-store migration.  Both paths
-need:
-- Per-worker output Stores (workers write into their own store).
-- `thread::scope` × N workers actually running in parallel.
+Phase 1b (text output stores) and 1c (reference output stores)
+remain open — the per-worker-output-store migration for those two
+return shapes still needs the workers to write into output Stores
+instead of channels.
 
-Phase 1's migration shape is therefore the **same** for both
-paths, not different:
+Phase 1's migration shape is therefore the **same** for the
+remaining text/reference paths as for the now-shipped primitive
+path:
 
 - Each worker thread receives an exclusive output Store.
 - The parent reads from per-worker stores after join.
@@ -78,14 +85,19 @@ collection side.  Phase 0's bench harness gates the perf regression.
 
 | Today's path | Worker writes to | After phase 1 worker writes to |
 |---|---|---|
-| Direct (primitive) | `out_ptr` raw byte slice owned by main thread | Per-worker output Store; main thread copies from store into result vector |
-| Text | `Vec<String>` sent via mpsc channel | Per-worker output Store with text fields; main thread reads strings from store |
-| Reference (struct) | `Vec<DbRef>` sent via mpsc channel + `copy_block` + `copy_claims` | Per-worker output Store containing the worker's struct results; main thread `copy_block`s from worker store into result store (one less indirection — no channel) |
+| Direct (primitive) | `out_ptr` raw byte slice owned by main thread | Output slot in worker's `WorkerStores` (regular Store, written via `OpSetInt`/`OpSetLong`); main thread `take_slot` + `adopt_store` |
+| Text | `Vec<String>` sent via mpsc channel | Output slot with text fields (`OpSetText`); main thread reads via the adopted store |
+| Reference (struct) | `Vec<DbRef>` sent via mpsc channel + `copy_block` + `copy_claims` | Output slot containing the worker's struct records (`OpSetRef`/`OpVectorAdd`); main thread `copy_block`s from the adopted slot into the result store (one less indirection — no channel; phase 2 retires the `copy_block` itself) |
 
 The three paths still **dispatch to three different native fns**
 because the result-vector type differs (vector<i32> vs. vector<text>
 vs. vector<Struct>).  Phase 3 collapses the dispatch.  Phase 1 only
 makes the workers' write target uniform.
+
+**No new opcodes** — workers use the same `OpSet*` opcodes any loft
+fn uses to write its return value.  The output slot is just a
+regular `WorkerStores.allocations[N]` entry; the dispatcher tells
+the worker its slot number `N` via the call frame.
 
 ## Changes per cross-cutting concern
 
@@ -103,19 +115,31 @@ makes the workers' write target uniform.
 Touch points:
 - `src/parallel.rs::run_parallel_direct` (currently writes via `out_ptr`).
 - `src/codegen_runtime.rs:1581-1700` (`n_parallel_for_native` and the four `parallel_get_*` getters).
-- `src/database/allocation.rs:449` (`clone_for_worker`).
+- `src/database/allocation.rs:449` (`clone_for_worker` — needs to leave a slot at index `N` writable for the output).
+- `src/database/mod.rs` (`WorkerStores::add_output_slot`,
+  `WorkerStores::take_slot`, `WorkerOutputSlot { store_nr: u16 }`
+  marker, `Stores::adopt_store`).
 
 Mechanic:
-1. Before spawning workers, allocate `threads` output stores via
-   `Stores::alloc_worker_output(elem_type, slots_per_worker)`.
-   Slot count = `(input_count + threads - 1) / threads`.
-2. Each worker receives ownership of its output store.
-3. Worker's loop body changes from `out_ptr.add(t * slots).write(r)` to
-   `worker_output_store.set_long(slot_idx, r)` (or `.set_i32_raw`,
-   etc., based on element type).
-4. After join, main-thread loop walks the per-worker output stores
-   in order, copying their values into the result vector via
-   existing `vector_add`-style ops.
+1. Before spawning workers, the dispatcher constructs each worker's
+   `WorkerStores` (cloned from parent) and calls
+   `WorkerStores::add_output_slot(slot_words)` to append a fresh
+   empty Store at index `N`.  Returns `WorkerOutputSlot { store_nr: N }`.
+   `slot_words` is sized for `(input_count + threads - 1) / threads`
+   elements at the worker fn's return-type element width.
+2. Each worker receives its `WorkerStores` AND its
+   `WorkerOutputSlot` via the dispatcher's call frame.  The worker
+   writes return values into a `DbRef { store_nr: N, rec, pos }`
+   using the existing `OpSet*` opcodes — no new opcode path.
+3. After join, main thread calls
+   `worker_stores.take_slot(N) -> Store` to extract the output
+   buffer, then `parent.adopt_store(store) -> u16` to install it
+   in the parent's `allocations`.  The Store keeps its bytes —
+   no memcpy.
+4. For phase 1's transitional state, the parent then walks the
+   adopted store and copies values into the existing
+   `out_ptr`-shaped result vector using existing `vector_add`-style
+   ops.  Phase 2 retires this copy via the rebase pass.
 
 Post-commit: `make ci` green; phase 0 characterisation suite passes;
 bench-1 (1 M `i64`, 4 threads) within ±5 % of phase 0 baseline (the
@@ -132,16 +156,19 @@ Touch points:
 - `src/codegen_runtime.rs::n_parallel_for_text_native`.
 
 Mechanic:
-1. Per-worker output store allocated as a `vector<text>` store.
-2. Worker writes its `String` result via `set_str(slot_idx, &result)`
-   — same path text always uses inside loft.
-3. After join, main-thread copies the text-pointer entries from each
-   worker store into the result vector.  No channel.
+1. Worker's output slot allocated as a `vector<text>`-shaped Store
+   in the worker's `WorkerStores.allocations[N]`.
+2. Worker writes its text result via the existing `OpSetText`
+   opcode targeting `DbRef { store_nr: N, rec, pos }` — same path
+   text always uses inside loft.
+3. After join, main-thread `take_slot(N)` + `adopt_store` per
+   worker; copies the text-pointer entries from each adopted
+   store into the result vector.  No channel.
 
 Specific issue resolved: today's `Vec<String>` channel allocates a
 `String` per result + an `mpsc` slot + a final main-thread copy.
-Phase 1b reduces this to one store write per result + main-thread
-copy; the channel is gone.
+Phase 1b reduces this to one `OpSetText` write per result + main-
+thread copy; the channel is gone.
 
 Bench-3 (100 K text results) expected: ±5 % of phase 0 baseline,
 likely slightly faster from removing the channel.
@@ -154,16 +181,23 @@ Touch points:
 - `src/codegen_runtime.rs::n_parallel_for_ref_native`.
 
 Mechanic:
-1. Per-worker output store allocated as a `vector<Reference<T>>`
-   store.
-2. Worker constructs its struct result in its own store, then
-   `vector_add(worker_output, struct_dbref)` — same path any loft
-   fn returning a struct uses.
-3. After join, main-thread `copy_block`s each worker's vector
-   contents into the result vector.  Channel removed.
+1. Worker's output slot allocated as a `vector<Reference<T>>`-shaped
+   Store in the worker's `WorkerStores.allocations[N]`.
+2. Worker constructs its struct result inside its own
+   `WorkerStores` (any slot); the result-vector record gets pushed
+   into slot `N` via `OpVectorAdd` — same path any loft fn
+   returning a struct uses.  Internal worker stores
+   (allocations[0..N-1] sub-stores allocated during the worker's
+   computation, e.g. text bytes pointed at by the output records)
+   stay in the worker's `WorkerStores` — they will also be adopted
+   in phase 2 (the rebase pass walks all referenced sub-stores).
+3. After join, main-thread `take_slot(N)` + `adopt_store` per
+   worker; `copy_block`s each adopted slot's vector contents into
+   the result vector.  Channel removed.
 
 The `copy_claims` machinery still runs in phase 1c — phase 2 retires
-it via the rebase pass.
+it via the rebase pass (which adopts ALL referenced worker stores,
+not just the output slot, and rewrites cross-store DbRefs).
 
 Bench-2 (100 K struct results) expected: similar to phase 0
 baseline; the channel removal saves a small amount, the extra
@@ -171,26 +205,49 @@ intermediate store costs a similar amount.
 
 ## Loft-side prerequisites
 
-One new accessor in `Stores`:
+Three new accessors — all small, all on existing types.  See
+DESIGN.md D2.1 for why these collapse to slot-marker + adoption
+instead of a parallel wrapper type.
 
 ```rust
-// src/database/allocation.rs
+// src/database/mod.rs
+/// Marker telling the parent which slot in this worker's
+/// WorkerStores to extract after join.  Just a u16 — no Drop logic;
+/// the worker's WorkerStores owns the Store until take_slot.
+pub struct WorkerOutputSlot {
+    pub store_nr: u16,
+}
+
+impl WorkerStores {
+    /// Append a fresh empty Store at the end of allocations and
+    /// return its slot index.  Called by the dispatcher right
+    /// after clone_for_worker, before handing the WorkerStores
+    /// to the worker thread.
+    pub fn add_output_slot(&mut self, slot_words: u32) -> WorkerOutputSlot;
+
+    /// Extract the Store at `slot_nr`, leaving a freed sentinel
+    /// in its place.  Called by the parent after join, before
+    /// adopting into its own table.
+    ///
+    /// # Panics
+    /// Panics if the slot has already been taken.
+    pub fn take_slot(&mut self, slot_nr: u16) -> Store;
+}
+
 impl Stores {
-    /// Allocate a per-worker output store sized for `slot_count`
-    /// elements of `elem_type`.  The worker takes ownership; the
-    /// store is freed when the worker join completes.
-    pub fn alloc_worker_output(
-        &mut self,
-        elem_type: u16,
-        slot_count: u32,
-    ) -> WorkerOutputStore { /* ... */ }
+    /// Install an externally-allocated Store into this Stores'
+    /// allocations table.  Returns the parent-side store_nr.
+    /// Used by the parent thread to adopt a worker's output slot.
+    pub fn adopt_store(&mut self, store: Store) -> u16;
 }
 ```
 
-`WorkerOutputStore` is a thin wrapper around `Store` with `Drop`
-that releases the store back to the parent when the worker finishes.
-Same lifetime contract as today's clone but unidirectional (worker
-writes → parent reads, never the reverse).
+Lifetime contract: the output slot lives inside the worker's
+`WorkerStores` until `take_slot` extracts it; if the worker
+panics and the parent never calls `take_slot`, the slot is freed
+along with the rest of the worker's `WorkerStores` (via
+`Store::Drop`).  Adoption is unidirectional — worker writes →
+parent reads, never the reverse.
 
 ## Test fixtures
 
@@ -202,10 +259,11 @@ New fixtures:
 
 | Fixture | Asserts |
 |---|---|
-| `tests/issues.rs::par_phase1_output_store_lifetime` | `WorkerOutputStore` allocated and released in matched pairs; no leak under `LOFT_STORES=warn` |
+| `tests/issues.rs::par_phase1_output_slot_lifetime` | Output slots allocated, written, taken, and adopted in matched pairs; no leak under `LOFT_STORES=warn` |
 | `tests/issues.rs::par_phase1_text_no_channel` | `mpsc` channel allocation is zero (verify by patching `tests/parallel_intrumentation.rs` to count channel allocs; the count drops to zero after 1b) |
-| `tests/issues.rs::par_phase1_empty_input_no_worker_alloc` | `len(input) == 0` returns immediately; no `WorkerOutputStore` allocated |
-| `tests/issues.rs::par_phase1_panic_propagation` | Worker panics on element 5; parent receives panic; no orphan worker stores remain |
+| `tests/issues.rs::par_phase1_empty_input_no_worker_alloc` | `len(input) == 0` returns immediately; no output slot allocated |
+| `tests/issues.rs::par_phase1_panic_propagation` | Worker panics on element 5; parent receives panic; the worker's `WorkerStores` (including the output slot) is dropped cleanly with no orphan stores; `LOFT_STORES=warn` reports zero leaks |
+| `tests/issues.rs::par_phase1_no_new_opcodes` | `LOFT_LOG=static` dump of a par-using program shows no new `OpSet*Output` opcodes — workers use existing `OpSetInt` / `OpSetText` / `OpSetRef` / `OpVectorAdd` |
 
 ## Acceptance criteria
 
