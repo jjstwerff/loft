@@ -218,6 +218,7 @@ fn OpAbsSingle(v1: single) -> single;
 pub fn abs(both: single) -> single {
   OpAbsSingle(both)
 }
+#pure
 
 fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
@@ -243,53 +244,63 @@ fn OpMathFuncSingle(fn_id: const i8, v1: single) -> single;
 pub fn cos(both: single) -> single {
   OpMathFuncSingle(0, both)
 }
+#pure
 // Sine. Use for circular motion: y = r * sin(angle).
 
 pub fn sin(both: single) -> single {
   OpMathFuncSingle(1, both)
 }
+#pure
 // Tangent. Use for slopes and perspective projection.
 
 pub fn tan(both: single) -> single {
   OpMathFuncSingle(2, both)
 }
+#pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
 pub fn acos(both: single) -> single {
   OpMathFuncSingle(3, both)
 }
+#pure
 // Arc sine. Returns the angle whose sine is v.
 
 pub fn asin(both: single) -> single {
   OpMathFuncSingle(4, both)
 }
+#pure
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
 
 pub fn atan(both: single) -> single {
   OpMathFuncSingle(5, both)
 }
+#pure
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
 
 pub fn ceil(both: single) -> single {
   OpMathFuncSingle(6, both)
 }
+#pure
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
 
 pub fn floor(both: single) -> single {
   OpMathFuncSingle(7, both)
 }
+#pure
 // Round to the nearest integer value (half rounds away from zero).
 
 pub fn round(both: single) -> single {
   OpMathFuncSingle(8, both)
 }
+#pure
 // Square root. Use for distances and normalization.
 
 pub fn sqrt(both: single) -> single {
   OpMathFuncSingle(9, both)
 }
+#pure
 
 fn OpMathFunc2Single(fn_id: const i8, v1: single, v2: single) -> single;
 #rust"match @fn_id {{ 0 => @v1.atan2(@v2), 1 => @v1.log(@v2), _ => f32::NAN }}"
@@ -794,6 +805,7 @@ fn OpClearVector(r: vector);
 pub fn clear(both: vector) {
   OpClearVector(both)
 }
+#impure(parent_write)
 
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];

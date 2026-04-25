@@ -601,8 +601,22 @@ fn purity_annotations_parsed_from_stdlib() {
     // categories land as the sweep continues; this is the gate
     // that catches accidental annotation drift.
     let pure_fns = &[
-        "n_abs", "n_min", "n_max", "n_clamp", // arithmetic
-        "n_len", "n_size", // text/character/vector length
+        "n_abs",
+        "n_min",
+        "n_max",
+        "n_clamp", // integer arithmetic
+        "n_len",
+        "n_size", // text/character/vector length
+        "n_cos",
+        "n_sin",
+        "n_tan",
+        "n_acos",
+        "n_asin",
+        "n_atan",
+        "n_ceil",
+        "n_floor",
+        "n_round",
+        "n_sqrt", // single-precision math
     ];
     for name in pure_fns {
         let d_nr = p.data.def_nr(name);
@@ -611,6 +625,21 @@ fn purity_annotations_parsed_from_stdlib() {
                 p.data.def(d_nr).purity,
                 Purity::Pure,
                 "{name} should be #pure"
+            );
+        }
+    }
+
+    // Phase 5a — parent-write mutators: vector.clear is the first
+    // tagged.  More mutators (vector_add, hash_set, etc.) get
+    // tagged in subsequent commits.
+    let parent_write_fns = &["n_clear"];
+    for name in parent_write_fns {
+        let d_nr = p.data.def_nr(name);
+        if d_nr != u32::MAX {
+            assert_eq!(
+                p.data.def(d_nr).purity,
+                Purity::Impure(ImpureCategory::ParentWrite),
+                "{name} should be #impure(parent_write)"
             );
         }
     }
