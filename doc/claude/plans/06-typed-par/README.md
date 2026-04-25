@@ -76,6 +76,7 @@ single PR with its own `make ci` run.
 | 4 | 04-typed-input-output.md | open | M | Surface change: `parallel_for(input: vector<T>, fn: fn(T) -> U, threads: integer) -> vector<U>` with element types in the type system, removing the `element_size` / `return_size` integer args. |
 | 5 | 05-retire-par-light.md | open | S | With store-typed I/O the compiler can detect "worker only writes to its output store" and skip the parent-store clone automatically.  `par_light` becomes an internal optimisation, not a user-facing variant. |
 | 6 | 06-cleanup-and-doc.md | open | XS | Delete the 7 retired runtime variants; collapse THREADING.md's "light vs. full" section into one explanation; CHANGELOG entry. |
+| 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | M | Fused `for x in ls par(r = foo(x), 4) { … }` construction.  One primitive covers for_each / fold / collect / iter — body picks the policy.  Result vector becomes opt-in (allocate explicitly in the body if you want one).  Replaces the earlier 3-variant idea (`par_for_each` / `par_fold` / `par_iter`). |
 
 ## Ground rules
 
