@@ -596,4 +596,18 @@ fn purity_annotations_parsed_from_stdlib() {
             "n_now is unannotated → Purity::Unknown"
         );
     }
+
+    // Phase 5a sample sweep — body fns annotated #pure.  More
+    // categories land as the sweep continues; this is the gate
+    // that catches accidental annotation drift.
+    for name in &["n_abs", "n_min", "n_max", "n_clamp"] {
+        let d_nr = p.data.def_nr(name);
+        if d_nr != u32::MAX {
+            assert_eq!(
+                p.data.def(d_nr).purity,
+                Purity::Pure,
+                "{name} should be #pure"
+            );
+        }
+    }
 }

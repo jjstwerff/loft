@@ -144,6 +144,7 @@ fn OpAbsInt(v1: integer) -> integer;
 pub fn abs(both: integer) -> integer {
   OpAbsInt(both)
 }
+#pure
 
 fn OpMinSingleInt(v1: integer) -> integer;
 #rust"ops::op_negate_int(@v1)"
@@ -501,6 +502,7 @@ pub fn min(both: integer, b: integer) -> integer {
     b
   }
 }
+#pure
 // Largest of two integer values.
 
 pub fn max(both: integer, b: integer) -> integer {
@@ -513,11 +515,13 @@ pub fn max(both: integer, b: integer) -> integer {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
   min(max(both, lo), hi)
 }
+#pure
 
 // Smallest of two single-precision float values.
 
