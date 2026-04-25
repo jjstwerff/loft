@@ -1579,11 +1579,9 @@ pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
 ///   `vec_rec`, `pos=4`    → element count (`n`)
 ///   `vec_rec`, `pos=8+i*S` → element `i`  (`S` = 4 int / 8 long+float / 1 bool bytes)
 ///
-/// Plan-06 phase 1a (G4): runs workers in parallel via `thread::scope` with
-/// per-worker `Stores` clones, mirroring the interp path's `run_parallel_raw`
-/// in `src/parallel.rs`.  Before phase 1a, `n_parallel_for_native` was a
-/// sequential `for i in 0..n` loop ignoring the `threads` argument — a real
-/// bug, so `--native` builds dropped the parallelism the keyword promised.
+/// Runs workers in parallel via the shared `parallel::parallel_workers`
+/// template (rayon work-stealing pool, plan-06 phase 1.5), mirroring the
+/// interp path's `run_parallel_raw` in `src/parallel.rs`.
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,
@@ -1680,9 +1678,9 @@ where
 /// an owned `String`; each result is stored in the result store via `set_str` and
 /// the 4-byte text position is written into the result vector.
 ///
-/// Plan-06 phase 1b: same parallelization shape as `n_parallel_for_native` —
-/// threads run via `thread::scope` with `clone_for_worker` snapshots.  Each
-/// thread accumulates `Vec<(idx, String)>`; main-thread merges and writes
+/// Same parallelization shape as `n_parallel_for_native` — uses the
+/// shared `parallel::parallel_workers` template.  Each worker
+/// accumulates `Vec<String>`; main-thread re-sequences and writes
 /// strings into the result store via `set_str` after join.
 pub fn n_parallel_for_text_native<F>(
     stores: &mut Stores,
@@ -1772,12 +1770,14 @@ where
 /// `struct_size` is the inline byte size of the struct (from `stores.size(known_type)`).
 /// `known_type` is the struct's type id for `copy_block` / `copy_claims`.
 ///
-/// Plan-06 phase 1c: workers run in parallel via `thread::scope` with
-/// `clone_for_worker` snapshots; each thread returns its `(idx, src_ref)`
-/// batch plus its `WorkerStores`, and the main thread deep-copies each
-/// struct into the result vector via `copy_from_worker`'s graft machinery
-/// (mirrors how `src/native.rs` already wires `run_parallel_ref` for the
-/// interpreter path).
+/// Workers run in parallel via the shared `parallel::parallel_workers`
+/// template (rayon work-stealing pool); each worker returns its
+/// `Vec<(idx, src_ref)>` batch plus its `WorkerStores`, and the main
+/// thread deep-copies each struct into the result vector via
+/// `copy_from_worker`'s graft machinery (or `copy_from_worker_unowned`
+/// for owned-free struct/variant payloads — plan-06 phase 2b refinement).
+/// Mirrors how `src/native.rs` wires `run_parallel_ref` for the
+/// interpreter path.
 pub fn n_parallel_for_ref_native<F>(
     stores: &mut Stores,
     input: DbRef,
