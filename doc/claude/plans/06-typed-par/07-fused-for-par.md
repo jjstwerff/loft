@@ -116,32 +116,56 @@ for x in items par(score = score_of(x), 4) {
 }
 ```
 
-### Backward compatibility
+### `par(...)` becomes a parser-side desugaring
 
-`par(input, fn) -> vector<U>` and `par_light(input, fn) -> vector<U>`
-keep working unchanged.  The fused form is additive.  Existing
-test fixtures and library examples need no edits.
-
-For users who want the *today-shape* (return a vector) with the
-*new runtime's* memory profile (no per-element vector grow), one
-sugar fn lands alongside:
+`par(input, fn, threads) -> vector<U>` and `par_light(input, fn, threads) -> vector<U>`
+**stop being independent runtime entry points** and become a
+parser-side desugaring of the fused form with an automatic
+collect body.  Source-level behaviour is identical to today; the
+implementation collapses to a single runtime path.
 
 ```loft
-pub fn par_collect(input: vector<T>, fn: fn(T) -> U,
-                   threads: integer) -> vector<U>;
+// User writes:
+results = par(ls, foo, 4)
+
+// Parser desugars to:
+results = {
+    __par_acc: vector<U> = vector_with_capacity(len(ls))
+    for x in ls par(__par_r = foo(x), 4) {
+        __par_acc += [__par_r]
+    }
+    __par_acc
+}
 ```
 
-Desugars internally to the fused form with a `vector_with_capacity`
-preallocation in the body.  Documented as "the recommended shape
-when you do need a vector".
+`U` is inferred from `foo`'s return type (already in
+`Data::definitions` after pass 1).  The block expression is
+expression-positioned, so every existing call site (argument
+position, tail expression, `if`/`match` arms, return statement,
+struct-field initialiser) keeps working unchanged.
+
+**Why a desugar, not a deprecation:** today's call form is the
+ergonomic shape for "I need a vector"; phase 7's fused form is
+the ergonomic shape for everything else.  Keeping both surfaces
+while collapsing the runtime to one path gives the best of both —
+no caller breaks, no two implementations to maintain, and the
+sugar form gets `vector_with_capacity` pre-alloc for free
+(impossible if users wrote the fused form by hand).
+
+**`par_light` collapses too.**  After plan-06 phase 5's auto-light
+heuristic, the compiler picks the light path automatically when
+the worker only writes its output store.  Desugared `par_light(...)`
+becomes a redundant alias for `par(...)`; phase 7 makes it a no-op
+synonym for one release, then a deprecation warning, then deletion
+in 1.0.0.
 
 ## Implementation
 
-### Parser changes
+### Parser changes — two recognition rules
 
-`src/parser/control.rs::parse_for_loop` extended to recognise the
-`par(...)` modifier between the input expression and the body.
-Grammar fragment (in pseudo-EBNF):
+**Rule 1 — fused for-loop modifier.**  `src/parser/control.rs::parse_for_loop`
+extended to recognise the `par(...)` modifier between the input
+expression and the body.  Grammar fragment (in pseudo-EBNF):
 
 ```
 for_loop := 'for' ident 'in' expr [par_clause] '{' body '}'
@@ -153,10 +177,37 @@ position, so existing `par(input, fn)` calls continue to parse as
 function calls.  Inside `for ... in expr <here> { body }`, the
 parser tries `par_clause` first and falls back to the brace-block.
 
+**Rule 2 — value-position desugar.**  `src/parser/control.rs::parse_call`
+recognises `par(input, fn, threads)` (and `par_light(...)`) at any
+expression position and rewrites it to a `Value::Block` containing:
+1. `Set(__par_acc, vector_with_capacity(len(input)))`,
+2. `Value::ParFor { input, worker_fn, threads, x_var, r_var, body: AppendVector(__par_acc, Var(r_var)) }`,
+3. `Var(__par_acc)` as the tail expression.
+
+Both rules emit the same `Value::ParFor` IR node; codegen has one
+target.
+
+**Source-span preservation.**  Every synthesized IR node carries
+the original `par(...)` call's source span (line, col, length)
+threaded through `Definition::position`.  Diagnostics in the
+desugared body refer to the user-written call site, not the
+synthesized for-loop; the same mechanism format-string desugaring
+and `?? return` already use.
+
+**Method-form support.**  `par(ls, .my_method, 4)` desugars with
+`r = x.my_method()` instead of `r = foo(x)`.  Detected by
+inspecting `fn` token type at parse time; one extra branch in the
+desugarer (~10 lines).
+
+**Lambda-form support.**  `par(ls, |x| x * 2, 4)` works without
+extra desugarer logic — lambdas are already callable values; the
+desugar emits `r = (lambda)(x)` which goes through the existing
+fn-ref dispatch.
+
 Lowered IR: a new `Value::ParFor` variant carrying `(input,
-worker_fn_d_nr, x_var, r_var, threads, body)`.  Codegen emits a
-runtime call that wraps plan-06's store-typed pipeline with a
-bounded-queue stitch policy.
+worker_fn_d_nr, x_var, r_var, threads, body, src_span)`.  Codegen
+emits a runtime call that wraps plan-06's store-typed pipeline
+with a bounded-queue stitch policy.
 
 ### Codegen changes
 
@@ -200,41 +251,59 @@ order" and drop the in-order constraint.
 ### Test fixtures
 
 `tests/scripts/22-threading.loft` already covers `par(...)` returning
-a vector.  Add three fixtures specifically for the fused form:
+a vector — those tests now exercise the **desugar path** (call form
+→ `Value::ParFor` with auto-collect body) and must keep passing
+unchanged.  Add five fixtures specifically for the new shapes:
 
 | Fixture | Body shape | Asserts |
 |---|---|---|
-| `tests/scripts/par_for_each.loft` | side-effect only | output log lines, no allocation |
-| `tests/scripts/par_for_fold.loft` | accumulate to a single value | final accumulator equals serial fold |
-| `tests/scripts/par_for_break.loft` | `break` early on first match | workers stopped, no further `foo(x)` calls |
+| `tests/scripts/par_for_each.loft` | side-effect only | output log lines; zero result-vector allocation (verify via `LOFT_STORES=warn`) |
+| `tests/scripts/par_for_fold.loft` | accumulate to a single value | final accumulator equals serial fold; only the queue store allocated |
+| `tests/scripts/par_for_break.loft` | `break` early on first match | workers stopped, no further `foo(x)` calls (verify via a counting `foo`) |
+| `tests/scripts/par_for_pair_aware.loft` | body uses `x` and `r` together | results pair with inputs in input order |
+| `tests/scripts/par_call_desugars.loft` | call form `par(ls, foo, 4)` | `LOFT_LOG=static` dump shows synthesized `Value::ParFor`; output identical to pre-desugar behaviour byte-for-byte |
 
-Plus a unit test in `tests/issues.rs::par_for_pair_aware` asserting
-that the body sees the original `x` paired with the parallel `r` in
-the order of the input vector.
+Plus three unit tests in `tests/issues.rs`:
+
+- `par_call_preserves_source_span` — diagnostics inside the
+  desugared body cite the original `par(...)` call site.
+- `par_call_with_method_form` — `par(ls, .my_method, 4)` desugars
+  correctly.
+- `par_call_with_lambda` — `par(ls, |x| x * 2, 4)` desugars correctly.
 
 ### Documentation
 
 - `LOFT.md` § Control flow: a new "Parallel for-loop" subsection
-  showing the four use shapes (for_each, fold, collect, break).
+  leading with the fused form (general primitive); the call form
+  introduced afterward as "the value-position shortcut for the
+  collect case, with auto-capacity pre-allocation".
 - `THREADING.md`: replace the existing "par variants" section with
-  one explanation centred on the fused construction; the existing
-  `par(...) -> vector<U>` becomes a side-note for backward compat.
-- `STDLIB.md`: `par_collect` entry as the documented "I want a
-  vector" shape.
+  one explanation centred on the fused construction.  Add a
+  "How `par(...)` desugars" subsection showing the IR.
 - `CHANGELOG.md`: user-facing entry framing it as "parallel
-  for-loops" — the natural audience-facing name.
+  for-loops" — the natural audience-facing name; mention that
+  existing `par(input, fn, threads)` callers automatically benefit
+  from the new runtime's memory profile.
 
 ## Acceptance criteria
 
-- All three new fixtures pass on Linux x86_64, macOS aarch64,
-  Windows MSVC.
+- All five new fixtures + three unit tests pass on Linux x86_64,
+  macOS aarch64, Windows MSVC.
+- Existing `tests/scripts/22-threading.loft` passes byte-for-byte
+  after the desugar lands (call form is still expression-positioned
+  and produces the same vector).
 - The plan-06 phase 0 baseline benchmarks rerun within ±5 % of
-  baseline (no regression on existing `par(...) -> vector<U>` users).
+  baseline (no regression on existing `par(...) -> vector<U>`
+  callers — the desugar path is the new hot path for them).
 - A new microbench `bench_par_for_no_collect` measures the fused
-  form's overhead vs. the today-vector form on bench-1 (1 M `i64`):
-  expected savings of ~3 ms and ~8 MB peak memory.
+  form's overhead vs. the call form on bench-1 (1 M `i64`):
+  expected savings of ~3 ms and ~8 MB peak memory when the body
+  drops `r` instead of collecting.
 - Eight-line snippet in `LOFT.md` shows a complete fused for-loop
   par; reads like idiomatic loft.
+- Source span fidelity: every diagnostic produced inside a
+  desugared `par(...)` call cites the user-written `par(...)`
+  source location, not `synthesized:0`.
 
 ## Sequencing
 
@@ -244,32 +313,238 @@ can land in either order.
 
 Implementation order within phase 7:
 
-1. **7a — parser + IR.**  New `Value::ParFor` IR node, parser
-   recognition of the `par(...)` modifier in for-loops, parse-error
-   tests for malformed shapes.  Body still falls through to the
-   today `par(...)` runtime as a stopgap (no perf win yet).
+1. **7a — parser + IR for the fused form.**  New `Value::ParFor`
+   IR node carrying `(input, x_var, r_var, worker_fn, threads,
+   body, src_span)`.  Parser recognises the `par(...)` modifier in
+   for-loops; parse-error tests for malformed shapes.  Body falls
+   through to today's `par(...)` runtime as a stopgap (no perf
+   win yet — that arrives in 7b).
 2. **7b — runtime queue store.**  `run_parallel_queue` in
-   `src/parallel.rs` (or the polymorphic dispatcher's queue policy).
-   Codegen now routes `Value::ParFor` to the queue policy.  Bench
-   shows the expected ~3 ms / 8 MB win on bench-1.
-3. **7c — `par_collect` sugar.**  Stdlib fn that desugars to the
-   fused form with capacity-pre-alloc body.  Optional; can defer
-   if no demand surfaces.
-4. **7d — doc + CHANGELOG.**  Replace `THREADING.md`'s "par variants"
-   section; new `LOFT.md` subsection; CHANGELOG entry.
+   `src/parallel.rs` (or the polymorphic dispatcher's queue policy
+   from phase 3).  Codegen routes `Value::ParFor` to the queue
+   policy.  Bench shows the expected ~3 ms / 8 MB win on bench-1
+   when the body doesn't collect.
+3. **7c — desugar the call form.**  `parse_call` rewrites
+   `par(input, fn, threads)` and `par_light(input, fn, threads)`
+   into `Value::Block` containing a `Value::ParFor` with an
+   auto-collect body using `vector_with_capacity(len(input))`.
+   Existing `tests/scripts/22-threading.loft` proves byte-equivalent
+   behaviour; the underlying runtime is now uniform.  Source spans
+   threaded through.
+4. **7d — doc + CHANGELOG + deprecation notice for `par_light`.**
+   Replace `THREADING.md`'s "par variants" section; new `LOFT.md`
+   subsection; CHANGELOG entry.  `par_light` documented as a
+   no-op alias for `par` after auto-light from phase 5.
 
 Each commit lands with `make ci` green.
 
-## Risks
+## Caveats and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| **Parser ambiguity** between the new `par(...)` modifier and a regular `par(...)` function call | Contextual keyword; parser only looks for the modifier in `for ... in expr <here>` position.  Spike the parse path before committing 7a — if conflict arises, fall back to a different keyword (`par_for`, or `for x in ls.par(r = foo(x), 4) { … }` method-style). |
-| **Body-in-parent-thread surprise** — users assume the body parallelises too | Document loudly in LOFT.md and in the parser's error messages.  Add a lint that fires when the body contains another nested `par()` (allowed but flagged). |
-| **`break` correctness** — workers must not deadlock on full queue when consumer stops reading | Queue uses bounded channel with a shutdown sentinel.  Worker write checks shutdown flag before block; if set, drops the result and exits.  Mirror of standard rust mpsc shutdown idiom. |
-| **Out-of-order delivery temptation** — in-order forces serialisation per index | Phase-7b ships in-order only.  If benchmarks show order-imposed stalls dominating, a follow-up `par(... unordered)` modifier or `par_unordered(...)` opt-in.  Out of scope for 7a/7b. |
-| **Worker panic** mid-iteration | Today's `par(...)` panics propagate to join; fused form same.  Documented.  Future improvement: surface the panic to the body's `r` as an enum variant once L1 error recovery lands. |
-| **Memory overhead of the queue store** scales with `threads` and element size | Bounded at `2 × threads × size_of<(T, U)>`.  For typical (8-byte primitives, 4 threads): 64 bytes peak.  For struct-heavy workloads (1 KB elements, 16 threads): 32 KB — still trivial vs. the today-vector's MB-scale peak. |
+Each caveat below is a real concern surfaced during the design;
+the mitigation is the concrete answer that lands in the phase
+implementation, not a future "we'll handle this later" promise.
+
+### C1 — Parser ambiguity between modifier and call
+
+**Concern.** `for x in ls par(r = foo(x), 4) { … }` versus
+`for x in get_data() { … }` where `get_data()` happens to be named
+`par`.  The parser must decide which shape it's looking at without
+backtracking through arbitrary expressions.
+
+**Mitigation.** `par` is recognised as the modifier **only** in
+the specific position `for ident 'in' expr <here> '(' …`.  The
+parser at this point has already consumed the input expression;
+the next token decides:
+- If the next token is `par` AND the token after is `(` AND the
+  token after that is an identifier followed by `=` → parse as
+  `par_clause`.
+- Else fall through to the brace-block.
+
+The three-token lookahead is bounded; no left-recursion.  Existing
+`par(...)` calls at expression position are unaffected because the
+modifier rule only activates inside the for-loop header.
+
+**Verification.** Add a parse-error test
+(`par_modifier_not_recognised_outside_for`) confirming
+`par(input, fn, 4)` outside a for-loop header still parses as a
+regular call.
+
+### C2 — Body-in-parent-thread surprise
+
+**Concern.** Users may assume the body parallelises too, leading
+to "why is my hashmap insert losing entries?" race-condition bugs.
+
+**Mitigation.**
+- LOFT.md's parallel-for subsection leads with the rule in bold:
+  **"the body runs sequentially in the parent thread; only the `r =`
+  expression is parallel."**
+- `THREADING.md` shows the data-flow diagram: workers compute → bounded
+  queue → parent body.
+- A new lint warning fires when the body contains another `par(...)`
+  call (allowed because nested fused loops are valid, but flagged
+  for review): `warning: nested par() inside parallel for-loop body;
+  the outer body runs sequentially — confirm this is intended`.
+- The DAP debugger (LSP.3) labels the parent body's frame as
+  "parent (sequential)" and the worker frames as "par worker N" so
+  users see the threading model at runtime.
+
+### C3 — `break` deadlock on full queue
+
+**Concern.** Worker holds a result; queue is full; consumer stops
+reading because of `break`.  Without care, worker blocks forever.
+
+**Mitigation.** Bounded queue uses an mpsc-style shutdown sentinel
+(matching idiomatic rust):
+1. `break` in the body sets `shutdown.store(true, Release)`.
+2. Each worker's queue-write checks the shutdown flag inside the
+   blocking-write retry loop; if set, the worker drops the
+   in-flight result and exits cleanly.
+3. Parent body drains the queue before the join — pending writes
+   are popped and discarded after `break` triggers shutdown, so no
+   producer is left blocked.
+
+**Verification.** Fixture `par_for_break_no_deadlock.loft` runs a
+4-worker fused loop with a body that breaks after the first result;
+asserts every worker exited and the test completes within a 1 s
+timeout.
+
+### C4 — In-order delivery vs. throughput
+
+**Concern.** In-order delivery serialises slot writes per input
+index; a slow worker on element N stalls workers on element N+1
+even if their results are ready.
+
+**Mitigation.** Phase 7b ships in-order only; matches the user's
+mental model of `for x in ls`.  If bench data shows order-imposed
+stalls dominating real workloads, a follow-up phase introduces
+either:
+- An explicit `unordered` keyword: `par(r = foo(x), 4, unordered)`,
+  documented as "results may arrive in any order".
+- An auto-detection pass that drops the order constraint when the
+  body provably doesn't depend on iteration order (no break, no
+  index-dependent state).
+
+Out of scope for plan-06 phase 7; flagged as future work in the
+CHANGELOG note.
+
+### C5 — Worker panic mid-iteration
+
+**Concern.** `foo(x)` panics for some `x`; what happens to the
+parent body and other workers?
+
+**Mitigation.** Same as today's `par(...)`: the panic is caught at
+the join point and propagated to the parent thread, which aborts
+the loop.  The body sees no further `(x, r)` pairs after the
+panicked element.  Documented in `THREADING.md`'s "panic semantics"
+subsection.
+
+**Future improvement.** Once L1 (error recovery) lands, the
+worker's result type can become `Result<U, Error>`; the body then
+sees the error as a normal value (`if r is Err(e) { … }`) instead
+of an aborting panic.  Tracked as a 1.0+ enhancement, not a
+phase-7 commitment.
+
+### C6 — Source span fidelity for desugared call form
+
+**Concern.** A type error inside a desugared `par(...)` call
+points users at synthesized IR they never wrote, not at the call
+site they wrote.
+
+**Mitigation.** `Value::ParFor`'s `src_span` field carries the
+original `par(...)` token range.  The diagnostic emitter uses
+`Value::source_span()` (the existing accessor for desugared
+nodes — already used by format strings and `?? return`) to surface
+the user-facing location.
+
+**Verification.** Unit test `par_call_preserves_source_span`
+deliberately constructs a `par(ls, broken_fn, 4)` where `broken_fn`
+has a wrong-type return; asserts the diagnostic message contains
+the file/line of the `par(...)` call, not `synthesized:0`.
+
+### C7 — Method-form (`par(ls, .my_method, 4)`)
+
+**Concern.** Method-bound callables today need `self` injected at
+the call site; the fused form's worker expression `r = foo(x)`
+doesn't naturally accommodate this.
+
+**Mitigation.** The desugarer inspects the `fn` argument's token
+type at parse time:
+- Plain identifier → emit `r = foo(x)`.
+- `.method_name` (method-ref token) → emit `r = x.method_name()`.
+- Lambda → emit `r = (lambda)(x)` (lambdas are callable values).
+
+One extra branch in the desugarer (~10 lines).  All three forms
+covered by the existing test matrix in
+`tests/scripts/22-threading.loft`; phase 7c adds explicit
+desugar-IR fixtures (`par_call_with_method_form`,
+`par_call_with_lambda`).
+
+### C8 — Inspecting the desugared IR
+
+**Concern.** Users debugging unexpected behaviour need to see what
+the parser produced from their `par(...)` call.
+
+**Mitigation.** The existing `LOFT_LOG=static` dump already prints
+post-desugar IR.  Phase 7c ensures the synthesized `Value::ParFor`
+carries a `// desugared from: par(ls, foo, 4) at file.loft:42`
+comment in the dump, matching the existing convention for format
+strings and `?? return`.
+
+### C9 — Synthesised variable name collisions
+
+**Concern.** The desugarer names its accumulator `__par_acc` and
+its loop variables `__par_x` / `__par_r`; a user with `__par_acc`
+in the enclosing scope would shadow it.
+
+**Mitigation.** Use the parser's existing fresh-var generator
+(`Parser::fresh_var(prefix)`), which produces collision-free names
+by appending a monotonic counter.  Same mechanism format-string
+desugaring already uses for its temporaries.
+
+### C10 — Empty input vector
+
+**Concern.** `par([], foo, 4)` — desugared body never executes;
+queue store never used; need to confirm no allocation goes to
+waste.
+
+**Mitigation.** The runtime checks `len(input) == 0` before
+spawning workers; returns an empty result store immediately.
+Auto-capacity pre-alloc passes 0 to `vector_with_capacity`, which
+the existing implementation handles cleanly (no allocation).
+
+**Verification.** Phase-0 characterisation suite already covers
+this (`par_empty_input`); it runs against the desugar path
+unchanged after 7c lands.
+
+### C11 — Memory overhead of the queue store
+
+**Concern.** The bounded queue allocates `2 × threads ×
+size_of<(T, U)>` bytes; for large element types and high thread
+counts this could be non-trivial.
+
+**Mitigation.** Quantified bounds:
+- 8-byte primitives, 4 threads: 64 bytes peak.
+- Struct-heavy workloads (1 KB elements, 16 threads): 32 KB peak.
+- Pathological (10 KB elements, 32 threads): 640 KB peak.
+
+All trivial vs. the today-vector's MB-scale peak.  If a user
+genuinely needs to tune the queue depth (e.g. extremely uneven
+worker latency), a future `par(r = foo(x), 4, queue_depth: 16)`
+modifier can be added; not in phase 7's scope.
+
+### C12 — `par_light` deprecation user impact
+
+**Concern.** `par_light(...)` is documented and used in libraries;
+deprecating it forces user changes.
+
+**Mitigation.** Phase 5's auto-light heuristic makes the
+distinction internal: the compiler picks the light path
+automatically when the worker only writes its output store.
+Phase 7c desugars `par_light(input, fn, threads)` identically to
+`par(input, fn, threads)` — no behaviour change; the auto-light
+heuristic does the right thing.  CHANGELOG marks `par_light` as
+"deprecated; alias for `par`".  One release later (1.0.0), the
+alias is removed.
 
 ## What this replaces in the plan-06 README
 
