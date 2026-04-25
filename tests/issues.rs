@@ -10086,8 +10086,9 @@ fn test() {
 ///      builder before `return`.
 ///   3. A subsequent sibling function allocates a local vector of its
 ///      own (any element type).
-///   After those three things, `atlas.width` — a scalar field set at
-///   struct-literal time — reads as a corrupt value.
+///
+/// After those three things, `atlas.width` — a scalar field set at
+/// struct-literal time — reads as a corrupt value.
 ///
 /// Drop any of the three and the bug disappears: no comprehension,
 /// no mutator call, or no post-return vector allocation → correct read.

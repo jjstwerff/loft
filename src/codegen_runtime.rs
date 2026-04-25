@@ -1578,16 +1578,22 @@ pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
 ///   `header_rec`, `pos=4` → `i32` pointing to `vec_rec`
 ///   `vec_rec`, `pos=4`    → element count (`n`)
 ///   `vec_rec`, `pos=8+i*S` → element `i`  (`S` = 4 int / 8 long+float / 1 bool bytes)
+///
+/// Plan-06 phase 1a (G4): runs workers in parallel via `thread::scope` with
+/// per-worker `Stores` clones, mirroring the interp path's `run_parallel_raw`
+/// in `src/parallel.rs`.  Before phase 1a, `n_parallel_for_native` was a
+/// sequential `for i in 0..n` loop ignoring the `threads` argument — a real
+/// bug, so `--native` builds dropped the parallelism the keyword promised.
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,
     elem_size: i32,
     return_size: i32,
-    _threads: i32,
-    mut worker: F,
+    threads: i32,
+    worker: F,
 ) -> DbRef
 where
-    F: FnMut(&mut Stores, DbRef) -> i64,
+    F: Fn(&mut Stores, DbRef) -> i64 + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let return_sz = return_size.clamp(1, 8) as u32;
@@ -1597,19 +1603,11 @@ where
     let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
     let header_rec = header_cr.rec;
-    // Collect results.
+
+    let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
+
     let mut fld = 8u32;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
-            }
-        };
-        let val = worker(stores, elm);
+    for &val in &results {
         let store = stores.store_mut(&result_db);
         match return_sz {
             8 => {
@@ -1633,6 +1631,77 @@ where
         store_nr: result_db.store_nr,
         rec: header_rec,
         pos: 4,
+    }
+}
+
+/// Parallel worker dispatcher for native primitive-return par.
+/// Mirrors `src/parallel.rs::run_parallel_raw` but takes a Rust closure
+/// instead of a bytecode fn pos.  Each thread gets its own `Stores` clone
+/// via `clone_for_worker`; per-thread results merge on the main thread.
+fn run_native_workers_primitive<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<i64>
+where
+    F: Fn(&mut Stores, DbRef) -> i64 + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    #[cfg(all(feature = "threading", not(feature = "wasm")))]
+    {
+        let threads = (n_threads.max(1) as usize).min(n);
+        let mut results = vec![0i64; n];
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(threads);
+            for t in 0..threads {
+                let start = t * n / threads;
+                let end = (t + 1) * n / threads;
+                let mut worker_stores = stores.clone_for_worker();
+                let input_t = *input;
+                handles.push(s.spawn(move || {
+                    let mut local: Vec<(usize, i64)> = Vec::with_capacity(end - start);
+                    for row_idx in start..end {
+                        let elm = vector::get_vector(
+                            &input_t,
+                            elem_size as u32,
+                            row_idx as i64,
+                            &worker_stores.allocations,
+                        );
+                        let val = worker(&mut worker_stores.stores, elm);
+                        local.push((row_idx, val));
+                    }
+                    local
+                }));
+            }
+            for h in handles {
+                let local = h.join().expect("worker thread panicked");
+                for (idx, val) in local {
+                    results[idx] = val;
+                }
+            }
+        });
+        results
+    }
+    #[cfg(any(not(feature = "threading"), feature = "wasm"))]
+    {
+        let _ = n_threads;
+        let mut worker_stores = stores.clone_for_worker();
+        let mut results = Vec::with_capacity(n);
+        for row_idx in 0..n {
+            let elm = vector::get_vector(
+                input,
+                elem_size as u32,
+                row_idx as i64,
+                &worker_stores.allocations,
+            );
+            results.push(worker(&mut worker_stores.stores, elm));
+        }
+        results
     }
 }
 

@@ -44,15 +44,11 @@
 mod testing;
 
 use loft::data::Value;
-use testing::*;
 
 // Shared test scaffolding: `Score { value }` wraps an integer; every
 // per-cell test instantiates a fresh `vector<Score>` and runs a
 // worker fn that operates on the score, returning the per-cell
 // output type.
-
-const SCORE_DEFS: &str = "struct Score { value: integer }
-";
 
 // ── primitive scalar return paths (Score input, primitive output) ──
 

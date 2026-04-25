@@ -237,12 +237,28 @@ Workload: `bench/11_par/bench.loft` — 100 K-element vector,
 |---|---|---|
 | python | 33ms | `multiprocessing.Pool(4)` — 4 worker processes |
 | loft-interp | 44ms | `par(items, work, 4)` — 4 threads (real parallel) |
-| loft-native | 12ms | **single-threaded** — G4: `n_parallel_for_native` ignores the thread count and runs sequentially.  Plan-06 phase 1 fixes this; expected post-phase-1 number is ~4ms in line with rust |
+| loft-native | 12ms | **single-threaded** — G4: `n_parallel_for_native` ignored the thread count and ran sequentially. |
 | loft-wasm | `-` | par codegen rejects today (G3 — fixed by phase 1) |
 | rust | 4ms | `std::thread::spawn × 4` — std-only, range-partitioned |
 
+### Phase 1a delta (G4 closed)
+
+Recorded 2026-04-25 after `n_parallel_for_native` was rewritten
+to use `thread::scope` × N + `clone_for_worker` (mirrors
+`run_parallel_raw` from the interpreter path).  Same workload,
+same host:
+
+| Column | Time | Δ vs phase 0 |
+|---|---|---|
+| loft-native | **6ms** | -50 % (sequential 12ms → parallel 6ms — G4 closed) |
+
+The native column now sits within ~2× of rust's 3-4ms — overhead
+is per-worker `Stores::clone_for_worker()` + result merge on the
+main thread.  Phase 2 (rebase pass retiring `copy_block`) and
+the per-worker output Store work in 1b/1c should reclaim the rest.
+
 Plan-06 phase 1's bench gate: loft-interp within ±5 % of 44 ms;
-loft-native ≤ ~5 ms (drop into rust's range as G4 closes).
+loft-native ≤ ~5 ms (further closure work ahead).
 Subsequent phases assert ±5 % regression on both columns.
 
 ## See also
