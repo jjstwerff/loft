@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!--
+  Copyright (c) 2026 Jurjen Stellingwerff
+  SPDX-License-Identifier: LGPL-3.0-or-later
+
+  Plan-06 phase 8 — golden-image fixture used by run_golden.sh.
+  Renders a deterministic WebGL pattern (one fullscreen triangle with a
+  vertical-gradient fragment shader) onto a 256×256 canvas.  The
+  resulting screenshot is compared to a reference PNG; any pixel drift
+  flags a regression in the SwiftShader-backed WebGL pipeline.
+-->
+<html><head><meta charset="utf-8">
+<style>html, body { margin: 0; padding: 0; background: #000; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="c" width="256" height="256"></canvas>
+<script>
+const c = document.getElementById('c');
+const gl = c.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+if (!gl) {
+  document.title = 'GOLDEN_FAIL: no WebGL';
+  throw new Error('no webgl');
+}
+const vs = `attribute vec2 p; varying vec2 uv; void main() { uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`;
+const fs = `precision mediump float; varying vec2 uv;
+void main() {
+  vec3 col = vec3(uv.x, uv.y, 0.5 + 0.5 * sin(uv.x * 6.28));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+function compile(t, src) {
+  const s = gl.createShader(t);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    document.title = 'GOLDEN_FAIL: shader: ' + gl.getShaderInfoLog(s);
+    throw new Error('shader');
+  }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+  -1, -1,  3, -1,  -1,  3,
+]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+gl.viewport(0, 0, 256, 256);
+gl.clearColor(0, 0, 0, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+gl.drawArrays(gl.TRIANGLES, 0, 3);
+gl.finish();
+document.title = 'GOLDEN_OK';
+</script>
+</body></html>
