@@ -280,10 +280,21 @@ positives (accepting Light for an unsafe fn) would be a real
 regression and must be impossible.  The criterion above accepts
 only constructs we can prove are write-isolated.
 
+**Recursion handling — fixed-point iteration (phase 5e).**  Phase
+5b's initial implementation uses a placeholder trick (insert
+`false` for the current fn before recursing) which over-rejects
+mutually-recursive pure fns (`is_even` / `is_odd`-shaped pairs).
+Phase 5e replaces this with monotonic fixed-point iteration over
+the call graph: every user fn starts optimistically light;
+demotions propagate via a worklist; pure cycles stay light, impure
+cycles correctly demote.  See phase 5's detail file for the
+algorithm.
+
 **Test coverage:** phase 5 adds positive and negative fixtures —
-fns provably-light, fns provably-not-light, fns the heuristic
-conservatively rejects (false negatives).  No fixture relies on
-the heuristic accepting an unsafe fn.
+fns provably-light, fns provably-not-light.  Phase 5e adds the
+mutual-recursion suite that the simple analyser would
+conservatively reject.  No fixture relies on the heuristic
+accepting an unsafe fn.
 
 ## D9 — Source-span propagation
 

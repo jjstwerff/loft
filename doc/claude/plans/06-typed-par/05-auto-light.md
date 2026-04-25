@@ -187,6 +187,140 @@ be faster if they restructure.  Diagnostic is emitted under
 `-W par-light-missed` (default off in 0.9.0; default on in 1.0.0
 once W-warn lands).
 
+### 5e — cycle-aware purity (fixed-point iteration)
+
+The simple analyser from 5b uses a placeholder trick to break
+recursion: insert `false` for the current fn before recursing, so
+self-calls and mutual-recursion calls short-circuit.  Correct, but
+**pessimistic** — pure mutually-recursive fns get classified `full`
+even though both are write-isolated.
+
+```loft
+// Both are pure; both end up classified `full` by 5b.
+fn is_even(n: integer) -> boolean {
+    if n == 0 { true } else { is_odd(n - 1) }
+}
+fn is_odd(n: integer) -> boolean {
+    if n == 0 { false } else { is_even(n - 1) }
+}
+```
+
+Phase 5e replaces the placeholder trick with a **monotonic
+fixed-point iteration** over the call graph.
+
+**Algorithm:**
+
+```rust
+fn analyse_purity_fixpoint(data: &Data) -> HashMap<u32, bool> {
+    // 1. Build the call graph.
+    let callers: HashMap<u32, Vec<u32>> = build_caller_index(data);
+
+    // 2. Initial state: every user fn starts OPTIMISTICALLY light.
+    //    Stdlib fns get their explicit annotation immediately
+    //    (#pure → true; #impure → false; unknown → false).
+    let mut classification: HashMap<u32, bool> = HashMap::new();
+    for d_nr in 0..data.definitions() {
+        let initial = match data.def(d_nr).purity {
+            Purity::Pure => true,
+            Purity::Impure | Purity::Unknown => {
+                // For user fns, start true; the iteration demotes
+                // those that turn out unsafe.
+                if is_user_fn(d_nr, data) { true } else { false }
+            }
+        };
+        classification.insert(d_nr, initial);
+    }
+
+    // 3. Worklist: any user fn whose body might demote it.
+    let mut worklist: VecDeque<u32> = data.user_fn_d_nrs().into_iter().collect();
+
+    while let Some(d_nr) = worklist.pop_front() {
+        if !classification[&d_nr] { continue; }       // already false
+        let body = &data.def(d_nr).code;
+        if !walk_with_current_classification(body, &classification) {
+            // This fn is now classified false; its callers may
+            // also need to demote.
+            classification.insert(d_nr, false);
+            for &caller in callers.get(&d_nr).unwrap_or(&vec![]) {
+                if classification[&caller] {
+                    worklist.push_back(caller);
+                }
+            }
+        }
+    }
+
+    classification
+}
+```
+
+**Why this works:**
+- Classifications are monotonic (`true → false`, never reverse),
+  so the iteration terminates in at most `N` steps where `N` is
+  the number of user fns.
+- Pure mutual cycles never produce a demotion event: if every
+  fn in the cycle is pure, no one triggers `false`, and the
+  cycle stays classified `true`.
+- Impure cycles (any fn writes shared state) propagate `false`
+  outward through the worklist: the impure fn flips first; its
+  callers are added to the worklist; they walk their bodies with
+  the updated classification and flip too if they call the
+  newly-impure fn.
+- Stdlib `#pure` / `#impure` annotations are respected — phase
+  5e never overrides them.
+
+**Cost analysis:**
+- Worst case: every user fn gets walked twice (once optimistically,
+  once after demotion).  For loft's stdlib (~150 fns) plus a
+  typical user codebase (a few hundred fns), the analyser runs
+  in a few milliseconds.
+- Memory: one `HashMap<u32, bool>` for classifications + one
+  `HashMap<u32, Vec<u32>>` for the caller index.  Linear in the
+  call-graph edge count.
+
+**Replacement for 5b's placeholder mechanism.**  Phase 5e
+*replaces* the recursive `analyse_light_safety` from 5b — it's
+the same accessor name, same return shape, just a different
+implementation underneath.  The cache/placeholder trick goes away.
+
+**Touch points:**
+- `src/scopes.rs::analyse_light_safety` (from 5b) — body rewritten
+  to use the fixed-point iteration.
+- `src/data.rs::Data::user_fn_d_nrs` — new accessor returning
+  every user fn's def_nr (excludes stdlib + native).
+- `src/data.rs::Data::callers_of(d_nr)` — new accessor returning
+  every user fn that calls `d_nr` (built once, cached).
+
+**Tests** (lifted from 5b's documented false negatives):
+- `tests/issues.rs::par_phase5e_mutual_recursion_pure` — the
+  `is_even` / `is_odd` pair from above; both classified light.
+- `tests/issues.rs::par_phase5e_cycle_with_one_impure_fn` — a
+  3-cycle where one fn calls `vector_add`; all three classified
+  full (impurity propagates correctly).
+- `tests/issues.rs::par_phase5e_self_recursion_pure` — `fn fact(n)
+  -> integer { if n <= 1 { 1 } else { n * fact(n - 1) } }`
+  classified light.
+- `tests/issues.rs::par_phase5e_par_light_recursive_pair_now_works`
+  — same fixture as 5b's documented `par_phase5_recursive_safe_pair_both_full`,
+  inverted: now both fns ARE classified light (the test name
+  changes; the previous test gets removed).
+- `tests/issues.rs::par_phase5e_termination` — synthetic case
+  with 100 fns in a fully-connected pure cycle; analyser
+  terminates within 100 ms.
+
+**Acceptance for 5e:**
+- All 5b tests still pass with the new analyser.
+- The mutual-recursion fixture that was previously a documented
+  false negative now classifies both fns as light.
+- The `par_phase5_recursive_safe_pair_both_full` fixture from 5b
+  is replaced by `par_phase5e_mutual_recursion_pure` with inverted
+  expectation.
+- DESIGN.md D8's "false negative — cycle pessimism" disclaimer
+  is updated to "false negative — only when stdlib fns aren't
+  annotated `#pure`; cycles among user fns are handled correctly".
+- Bench-1 with a mutual-recursion-heavy worker (synthetic case
+  forcing the cycle path) shows the same throughput as a
+  non-recursive equivalent.
+
 ## Cross-cutting interactions
 
 | DESIGN.md item | Phase 5 contribution |
@@ -204,7 +338,7 @@ once W-warn lands).
 | `tests/issues.rs::par_phase5_text_format_worker_is_light` | Worker `|x| "item-{x}"` classified light (format-string assembly is pure) |
 | `tests/issues.rs::par_phase5_struct_returning_worker_is_light` | Worker `|x| Point { x: x, y: x + 1 }` classified light (struct construction is pure if no field mutation outside) |
 | `tests/issues.rs::par_phase5_nested_par_is_full` | Worker that itself calls `par(...)` is full (R2) |
-| `tests/issues.rs::par_phase5_recursive_safe_pair_both_full` | Two mutually-recursive workers, both pure, classified full (R3 cycle pessimism) — known false negative; documented |
+| `tests/issues.rs::par_phase5_recursive_pair_resolved_in_5e` | Two mutually-recursive pure workers — 5b conservatively classifies both full; 5e's fixed-point pass classifies both light (this test moves classification expectation between sub-phases) |
 | `tests/issues.rs::par_phase5_par_light_alias_works` | Existing `par_light(...)` callers run; the auto-light path is selected; output identical to before |
 | `tests/issues.rs::par_phase5_diagnostic_under_warn_flag` | `loft -W par-light-missed program.loft` emits the "almost light" diagnostic for a near-miss worker; not emitted for clean workers |
 
@@ -216,8 +350,9 @@ once W-warn lands).
 - No false positives: the analyser never marks a fn light-safe
   that is actually unsafe (verified by every fixture in the
   full-path category).
-- False negatives are documented: cycle-recursive workers, workers
-  using opaque stdlib fns not yet annotated `#pure`.
+- After 5e: false negatives reduce to "workers using stdlib fns
+  not yet annotated `#pure`".  Cycles among user fns are handled
+  correctly by the fixed-point pass.
 - Bench-1 (light-eligible primitive worker) within ±5 % of
   hand-annotated `par_light` baseline.
 
@@ -226,14 +361,13 @@ once W-warn lands).
 | Risk | Mitigation |
 |---|---|
 | Annotating ~150 stdlib fns as `#pure` is mechanical but error-prone | Phase 5a's audit fixture lists each fn's classification with rationale; review by reading every annotation before commit; CI's purity-audit test catches drift |
-| Cycle pessimism over-rejects | Documented as a known false negative.  Future improvement: fixed-point analysis (compute purity in waves) — out of scope for plan-06 |
+| Cycle pessimism over-rejects | Closed in sub-phase 5e via fixed-point iteration over the call graph; pure mutual cycles correctly classified light |
 | New `Value` variants in future code default to "not light-safe" | This is the safe default; future contributors who add new variants explicitly classify them |
 | The `-W par-light-missed` diagnostic is noisy | Default off until 1.0.0; when on, can be suppressed per-fn with `#allow(par-light-missed)` |
 | Parser changes for `#pure` / `#impure` annotations conflict with existing `#native` / `#rust` | Annotations stack — a fn can be `#pure #native` (a pure native fn).  Parser's annotation list grows; no syntactic conflict |
 
 ## Out of scope
 
-- Cycle-aware fixed-point purity analysis.
 - User-facing `#pure` annotations (only stdlib gets them in
   phase 5; user fns get inferred-only purity).
 - Effects / capability tracking beyond the binary pure / impure
