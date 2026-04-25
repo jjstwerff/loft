@@ -413,7 +413,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-primitive-input: vector<text> input gives garbage; planned fix in plan-06 phase 4"]
+#[ignore = "par-text-input: vector<text> input causes stack underflow — text args use 16-byte Str slots but the dispatcher pushes a 12-byte DbRef.  Needs a text-input variant of execute_at_raw_primitive_input that reads the Str at row_ref.pos and pushes 16 bytes (planned for plan-06 phase 4 typed surface)."]
 fn par_text_input_t4() {
     code!(
         "fn count_chars(s: text) -> integer { len(s) }
@@ -481,7 +481,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vec-of-refs-input: vector<Reference<X>> input untested; planned canary for plan-06 phase 1"]
 fn par_vec_of_refs_input_t4() {
     // Workers receive a Reference (DbRef into the parent's store)
     // and return a derived value.  Distinct from vector<Struct>
@@ -504,7 +503,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-nested-vector-input: vector<vector<T>> input untested; planned canary for plan-06 phase 4"]
 fn par_nested_vector_input_t4() {
     // Worker iterates the inner vector.  Outer is the par input.
     code!(
@@ -552,7 +550,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-sorted-input: sorted<T[key]> input untested; planned canary for plan-06 phase 4 (typed input)"]
+#[ignore = "par-sorted-input: sorted<T[key]> input hangs the worker — sorted/hash/index storage uses a tree/hashmap layout, not a flat vector, so vector::get_vector(input, stride, idx) doesn't index correctly.  Needs a Stitch::* dispatch that walks the keyed collection's iterator instead.  Planned for plan-06 phase 4 (typed input)."]
 fn par_sorted_input_t4() {
     code!(
         "struct Score { value: integer not null }
@@ -572,7 +570,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-hash-input: hash<T[key]> input untested; planned canary for plan-06 phase 4"]
+#[ignore = "par-hash-input: hash<T[key]> input — see par_sorted_input_t4."]
 fn par_hash_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
@@ -592,7 +590,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-index-input: index<T[key]> input untested; planned canary for plan-06 phase 4"]
+#[ignore = "par-index-input: index<T[key]> input — see par_sorted_input_t4."]
 fn par_index_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
