@@ -137,6 +137,7 @@ grammar-only highlighting to semantic, type-aware editing.
 | ID    | Title                                                  | E  | Design | Source           |
 |-------|--------------------------------------------------------|----|--------|------------------|
 | LSP.1 | `loft-lsp` MVP binary — `publishDiagnostics`, `documentSymbol`, `hover`.  Reuses the existing parser + type checker; exposes them over JSON-RPC.  Requires a public `parse_file(text) -> (Data, Vec<Diagnostic>)` accessor and a stable diagnostic-range struct (today errors print to stderr; LSP needs `(start, end, severity, message, code)`).  Runs against any LSP4E-capable editor on day one — Eclipse + Neovim parity for diagnostics + outline + hover. | M | — | this-session |
+| NDB.0 | `--native-debug` CLI flag — pass `-Cdebuginfo=2` (and drop `-O` even under `--native-release`) so the rustc invocation produces DWARF that stock GDB / LLDB can consume out of the box.  Native binaries become steppable in any GDB-driven front-end (CLI, Emacs gud, vim termdebug, Eclipse CDT, KDevelop) — variable names show as the rust-internal `var_x` form until NDB.1 lands. | XS | — | this-session |
 
 ### Ship criteria
 
@@ -248,6 +249,7 @@ project-wizard / debug-perspective polish.
 |--------|--------------------------------------------------------|----|--------|------------------|
 | LSP.2  | `loft-lsp` editing — `completion`, `definition`, `references`, `rename`, `semanticTokens`, `codeAction`.  Requires a public `Definition` → `(file, line, col)` index over `Data`, a completion engine over the AST, and a fix-it catalogue (most diagnostics already know the fix). | MH | — | this-session |
 | LSP.3  | `loft-dap` MVP — Debug Adapter Protocol server: `launch`, `setBreakpoints`, `stackTrace`, `variables`, `next` / `stepIn` / `stepOut`.  Reuses the TR1.3 `vector<StackFrame>` capture and `LOFT_LOG=minimal` step-trace plumbing; needs an in-process pause/step API on the interpreter. | MH | — | this-session |
+| NDB.1  | `.loft.map` source-map emission + GDB / LLDB plugins.  `--native-debug` writes a sidecar mapping `(rs_file, rs_line) → (loft_file, loft_line)` and `(rs_var) → (loft_var)`.  Ship `loft-gdb.py` and `loft-lldb.py` that read the sidecar and rewrite GDB's view: `step` walks loft lines, `bt` shows loft fn names, `info locals` shows the user's identifiers.  Same source-map data feeds LSP.3's breakpoint resolution — write it once, consume it twice. | M | — | this-session |
 
 ### Library extraction
 
@@ -357,6 +359,7 @@ before tagging — no "appears fixed" exceptions.
 | A4     | Spatial index operations                               | M  | ✓      | PLANNING.md         |
 | O4     | Native: direct-emit local collections                  | M  | ✓      | PLANNING.md         |
 | O5     | Native: omit `stores` from pure functions              | M  | ✓      | PLANNING.md         |
+| NDB.2  | DWARF rewrite — post-process the rustc DWARF (using `gimli` to read/write `.debug_line` + `.debug_info` sections) so file/line entries point directly at `.loft` source.  Stock GDB / LLDB needs no plugin; works in Eclipse CDT, Emacs gud, vim termdebug, KDevelop without any Loft-aware tooling.  Polish on top of NDB.1 — most users get enough from the plugin. | MH | — | this-session |
 
 ---
 
