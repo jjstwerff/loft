@@ -80,6 +80,8 @@ findings that change how subsequent phases approach the work:
    17 `#[ignore]`d canaries cover the shapes plan-06 must accept
    after the redesign — every input/output type combination from
    D11.  Each plan phase un-ignores the canaries it closes.
+   Phase 9 adds 6 more tuple-flavoured canaries; the "✅ when
+   tuples land" caveat in D11b retires when phase 9 closes.
 
 5. **Bench numbers recorded** in THREADING.md § "Plan-06 phase 0
    baseline".  Plan-06 phases re-run `make bench` and assert
@@ -118,6 +120,8 @@ single PR with its own `make ci` run.
 | 5 | [05-auto-light.md](05-auto-light.md) | open | MH | Scope-analysis pass that proves a worker writes nothing outside its own output store; codegen picks the light path automatically.  Sub-phase 5e adds fixed-point iteration over the call graph so mutually-recursive pure fns are classified correctly (no cycle pessimism). |
 | 6 | [06-cleanup-and-doc.md](06-cleanup-and-doc.md) | open | XS | Delete the now-unreachable runtime variants (~520 lines from `src/parallel.rs`, ~336 from `codegen_runtime.rs`, ~70 from `default/01_code.loft`); rewrite THREADING.md's par sections; CHANGELOG entry. |
 | 7 | [07-fused-for-par.md](07-fused-for-par.md) | open | MH | Fused `for x in ls par(r = foo(x), 4) { … }` construction + parser-side desugaring of the value-position `par(input, fn, threads)` call form to the same `Value::ParFor` IR node.  Sub-phase 7d adds `par_fold(input, init, fold, threads) -> U` surface and auto-detects pure-fold bodies in the fused for-loop, both compiling to `Stitch::Reduce`.  One primitive (the fused form); two sugar shortcuts (`par`, `par_fold`); one runtime path; smart compiler-side policy selection.  `par_light` is removed from the user surface entirely. |
+| 8 | [08-browser-workers.md](08-browser-workers.md) | open | MH | Browser parallel par via `wasm-bindgen-rayon` Web Worker pool.  Per-worker output Stores from phase 1 + the Stitch policy from phase 3 plug directly into a 4-worker pool.  COOP/COEP headers on the deployed gallery + playground enable SharedArrayBuffer.  After phase 8, the only acceptable sequential par is no-threads-feature WASM minimal builds — every other target (interp / native / browser) is real-parallel.  Vital for the "Brick Buster in your browser" story; replaces the previously-deferred ROADMAP W1.14 entry. |
+| 9 | [09-tuple-support.md](09-tuple-support.md) | open | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  Sub-phase 9a lands T1.8a (function tuple-return convention) as a prerequisite; 9b–9d wire it into the worker call site, the per-worker output Store, and the parser.  Closes the "✅ when tuples land" placeholder in DESIGN D11 and gives plan-06 full type coverage on the tuple axis. |
 
 ## Ground rules
 

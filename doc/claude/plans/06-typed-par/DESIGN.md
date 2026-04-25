@@ -171,46 +171,51 @@ Phase 0's characterisation suite covers all three cases under
 today's runtime.  Each subsequent phase re-runs that suite plus
 adds a one-element fixture for the new code path.
 
-## D6 — WASM single-threaded fallback
+## D6 — WASM threading: parallel by default, sequential fallback
 
-Today (`#[cfg(feature = "threading")]` blocks throughout
-`src/parallel.rs`): under `--features wasm` without `threading`,
-the parallel call becomes a sequential for-loop in the calling
-thread.  No actual parallelism.
+Plan-06's stance: **`par(...)` must be actually parallel on every
+target except no-threads minimal WASM builds.**  WASM is the only
+target permitted to run par sequentially — and even then only
+when the threading feature isn't compiled in.  Native and
+interpreter sequential are bugs (G4 closes the native one);
+plan-06 phase 1 makes both real-parallel.
 
-Plan-06 preserves this fallback unchanged.  Each phase's queue /
-output-store / stitch logic is gated:
+WASM has two compilation modes:
+
+| Mode | Cargo features | Threading | Where used |
+|---|---|---|---|
+| **wasm + threading** (default for browser deploys) | `wasm`, `wasm-threads` | Real 4-thread Web Worker pool via `wasm-bindgen-rayon` | doc/pkg/ gallery + playground (after phase 8) |
+| **wasm minimal** (cdylib, embedded targets) | `wasm` only | Sequential fallback | rare; CI smoke tests only |
+
+The default browser deploy uses **wasm + threading** with a
+4-worker pool — phase 8 wires this up and makes it the only real
+WASM path users encounter.  The minimal sequential fallback exists
+for the narrow case where Web Workers aren't available (no
+SharedArrayBuffer / no cross-origin isolation / pre-2022 browsers);
+its bench numbers are not load-bearing for plan-06's perf gate.
 
 ```rust
-#[cfg(feature = "threading")]
-fn run_parallel_with_workers(...) { /* real workers */ }
+#[cfg(all(feature = "wasm", feature = "wasm-threads"))]
+fn run_parallel_browser(...) { /* Web Worker pool — phase 8 */ }
 
-#[cfg(not(feature = "threading"))]
-fn run_parallel_sequential(...) {
-    // Single-thread: allocate output store directly into the result;
-    // no queue, no stitch pass.  Output identical to the worker
-    // path for any pure worker fn.
-}
+#[cfg(all(feature = "threading", not(feature = "wasm")))]
+fn run_parallel_native(...) { /* thread::scope — phase 1 */ }
+
+#[cfg(not(any(feature = "threading", feature = "wasm-threads")))]
+fn run_parallel_sequential(...) { /* fallback only */ }
 ```
 
-The user-visible surface is identical: `par(...)` in WASM-single
-gives the same result as on threaded targets, just slower.  Phase
-0's bench harness records WASM numbers as a separate column;
-later phases assert no regression on WASM either.
+**Today's gaps fixed by phase 1 + phase 8:**
 
-**Future W1.14** (Web Worker pool, ROADMAP 1.1+): adds real
-parallelism on WASM via `wasm-bindgen-rayon`.  Plan-06 is forward-
-compatible — same `Stitch` policy enum, same queue store layout,
-just a different scheduler.
+- **G3** — `--native-wasm` rejects par at codegen (`OpFreeRef not
+  found in scope` on the wasm path).  Phase 1's typed pipeline +
+  per-worker output stores fix the codegen; phase 8 wires it to
+  the Web Worker pool.
+- **G4** — `n_parallel_for_native` is sequential by mistake.
+  Phase 1 adds the missing `thread::scope` scaffolding.
 
-**Today's gap** (G3 — discovered while building bench/11_par).
-The `--native-wasm` codegen path currently rejects par with
-`OpFreeRef not found in this scope` and similar — the wasm codegen
-doesn't emit the worker-cleanup ops.  Plan-06 phase 1's typed
-pipeline + this section's single-threaded fallback together close
-this; until then, bench/11_par's loft-wasm column shows `-`.
-Test canary added in `tests/threading_chars.rs` once a phase
-gates on it.
+After both phases, the only acceptable sequential par is **WASM
+minimal-feature builds** — every other path is real-parallel.
 
 ## D7 — `Value::ParFor` IR shape
 
@@ -363,6 +368,7 @@ removed by the store-typed pipeline.
 | `sorted<T[key]>` / `hash<T[key]>` / `index<T[key]>` | ❌ rejected | ✅ | phase 4 — `for x in sorted/hash/index` semantics already exist; typed surface plumbs them through |
 | `vector<vector<T>>` (nested) | ❓ | ✅ | phase 4 — element is a Reference<vector<T>>; workers iterate inner via normal vector ops |
 | `vector<fn(...) -> T>` | ❓ | ✅ | phase 1 — fn-refs are 16-byte values, same path as primitives |
+| `vector<(T, U)>` (tuple element) | ❌ rejected today | ✅ | phase 9 — tuple records have layout via `Type::Tuple::element_size`/`element_offsets`; same stride machinery as struct elements |
 | Generic `vector<T>` (bounded) | ❓ depends on monomorphisation | ✅ | bounded generics already monomorphise at call site |
 
 The general rule: **iterable in a regular for-loop ⇒ acceptable as
@@ -386,7 +392,7 @@ gap canaries (`#[ignore]`d); the closing phase un-ignores each.
 | fn-ref | ❌ likely rejected | ✅ | phase 1 — 16-byte values, primitive-path equivalent |
 | null | ✅ degenerate | ✅ | — |
 | Optional<T> (nullable) | ✅ for primitives | ✅ for everything | sentinel-based; orthogonal to par |
-| Tuples | n/a (1.1+) | ✅ when tuples land | tuples are synthetic structs; ride the same path |
+| `(T, U)` tuple return | ❌ rejected today | ✅ | phase 9 — T1.8a function-return convention writes the tuple record into the worker's per-worker output Store; rebase walks tuple `owned_elements` like struct ones |
 
 ### D11c — Principled exception: cross-worker reference graphs
 

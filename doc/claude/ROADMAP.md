@@ -318,7 +318,6 @@ before tagging — no "appears fixed" exceptions.
 | ID     | Title                                                  | E  | Design | Source              |
 |--------|--------------------------------------------------------|----|--------|---------------------|
 | C57    | Route decorator syntax (`@get`, `@post`, `@ws`)       | H  | ✓      | SERVER_FEATURES.md  |
-| W1.14  | WASM Tier 2: Web Worker pool; `par()` parallelism     | VH | ✓      | WASM.md             |
 | I13    | Iterator protocol (`for msg in ws` via `fn next`)     | MH | ✓      | SERVER_FEATURES.md  |
 | I12    | Interfaces: factory methods (`fn zero() -> Self`)     | S  | ✓      | INTERFACES.md       |
 | A12    | Lazy work-variable initialization                      | M  | ✓      | PLANNING.md         |

@@ -708,3 +708,121 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(70));
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 9 canaries — tuple input/output for par.
+//
+// Plan-06 promises full type coverage; tuples are first-class.
+// These canaries un-ignore in plan-06 phase 9 (after T1.8a's function
+// tuple-return convention lands as 9a).
+// See doc/claude/plans/06-typed-par/09-tuple-support.md.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "par-tuple-input: vector<(integer, integer)> input untested; planned fix in plan-06 phase 9b"]
+fn par_tuple_input_int_int() {
+    // Worker reads a tuple element and returns a primitive.
+    code!(
+        "fn first(p: const (integer, integer)) -> integer { p.0 }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30), (4, 40)];
+    sum = 0;
+    for p in pairs par(r = first(p), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(10));
+}
+
+#[test]
+#[ignore = "par-tuple-input: vector<(integer, text)> input untested; planned fix in plan-06 phase 9b"]
+fn par_tuple_input_int_text() {
+    // Worker reads a text element from a tuple input.
+    code!(
+        "fn label_len(p: const (integer, text)) -> integer { len(p.1) }
+fn run() -> integer {
+    pairs: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    sum = 0;
+    for p in pairs par(r = label_len(p), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(11));
+}
+
+#[test]
+#[ignore = "par-tuple-return: worker returning (integer, integer) rejected today; planned fix in plan-06 phase 9c"]
+fn par_tuple_return_int_int() {
+    // Worker returns a tuple of two integers; main collects sum of both elements.
+    code!(
+        "struct Score { value: integer }
+fn split(s: const Score) -> (integer, integer) { (s.value, s.value * 2) }
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }, Score { value: 3 }];
+    sum = 0;
+    for s in sl par(r = split(s), 4) { sum += r.0 + r.1; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(18));
+}
+
+#[test]
+#[ignore = "par-tuple-return: worker returning (integer, text) rejected today; planned fix in plan-06 phase 9c"]
+fn par_tuple_return_int_text() {
+    // Worker returns a tuple containing text; rebase must translate the DbRef.
+    code!(
+        "struct Score { value: integer }
+fn tag(s: const Score) -> (integer, text) { (s.value, \"v{s.value}\") }
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }];
+    total_len = 0;
+    for s in sl par(r = tag(s), 4) { total_len += len(r.1); }
+    total_len
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(4));
+}
+
+#[test]
+#[ignore = "par-tuple-return: worker returning (Reference<Struct>, text) rejected today; planned fix in plan-06 phase 9c"]
+fn par_tuple_return_struct_text() {
+    // Worker returns a tuple combining a struct ref and text;
+    // rebase must walk both DbRef element offsets.
+    code!(
+        "struct Point { x: integer, y: integer }
+struct Score { value: integer }
+fn make(s: const Score) -> (Point, text) {
+    (Point { x: s.value, y: s.value + 1 }, \"p{s.value}\")
+}
+fn run() -> integer {
+    sl: vector<Score> = [Score { value: 1 }, Score { value: 2 }];
+    sum = 0;
+    for s in sl par(r = make(s), 4) { sum += r.0.x + r.0.y + len(r.1); }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(11));
+}
+
+#[test]
+#[ignore = "par-tuple-destructure: fused for (a, b) in pairs par(...) { ... } binding untested; planned fix in plan-06 phase 9d"]
+fn par_tuple_destructure_in_for() {
+    // Tuple destructuring directly in the fused-for-par binding.
+    code!(
+        "fn add(a: integer, b: integer) -> integer { a + b }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 2), (3, 4), (5, 6), (7, 8)];
+    sum = 0;
+    for (a, b) in pairs par(r = add(a, b), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(36));
+}

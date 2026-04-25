@@ -436,7 +436,7 @@ left at the last successful checkpoint.
 - **T1.8** — Tuple function return convention + struct-ref element lifetime tracking.
   Three sub-issues remain after T1.1–T1.7:
 
-  **T1.8a — Function return convention:** A function declared `-> (A, B)` must write its return value directly into the caller’s pre-allocated slot.  This requires (1) codegen to allocate the tuple on the caller’s stack before the call; (2) a `ReturnTuple` IR variant; (3) `OpReturnTuple(size)` that copies from the callee stack to the pre-allocated slot.
+  **T1.8a — Function return convention:** A function declared `-> (A, B)` must write its return value directly into the caller’s pre-allocated slot.  This requires (1) codegen to allocate the tuple on the caller’s stack before the call; (2) a `ReturnTuple` IR variant; (3) `OpReturnTuple(size)` that copies from the callee stack to the pre-allocated slot.  **Pulled into plan-06 phase 9a** as a prerequisite for tuple-shaped `par`; see [doc/claude/plans/06-typed-par/09-tuple-support.md](plans/06-typed-par/09-tuple-support.md).
 
   **T1.8b — Text elements:** `Type::Text` inside a `Type::Tuple` needs lifetime tracking and `OpFreeRef`-style cleanup for the text slot on scope exit.  `owned_elements` in `data.rs` must enumerate text positions within a tuple so `get_free_vars` can emit the right cleanup sequence.
 
