@@ -431,12 +431,14 @@ fn OpMathFunc2Float(fn_id: const i8, v1: float, v2: float) -> float;
 pub fn atan2(both: float, v2: float) -> float {
   OpMathFunc2Float(0, both, v2)
 }
+#pure
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
 pub fn log(both: float, v2: float) -> float {
   OpMathFunc2Float(1, both, v2)
 }
+#pure
 
 fn OpPowFloat(v1: float, v2: float) -> float;
 #rust"@v1.powf(@v2)"
@@ -445,43 +447,52 @@ fn OpPowFloat(v1: float, v2: float) -> float;
 pub fn pow(both: float, v2: float) -> float {
   OpPowFloat(both, v2)
 }
+#pure
 // --- exp / ln / log2 / log10 ---
 // Raises E (2.71828…) to the power v. Use for exponential growth models.
 
 pub fn exp(both: single) -> single {
   pow(E as single, both)
 }
+#pure
 
 pub fn exp(both: float) -> float {
   pow(E, both)
 }
+#pure
 // Natural logarithm (base E). Use for growth rates and information entropy.
 
 pub fn ln(both: single) -> single {
   log(both, E as single)
 }
+#pure
 
 pub fn ln(both: float) -> float {
   log(both, E)
 }
+#pure
 // Base-2 logarithm. Use for bit-count calculations and information theory.
 
 pub fn log2(both: single) -> single {
   log(both, 2.0f)
 }
+#pure
 
 pub fn log2(both: float) -> float {
   log(both, 2.0)
 }
+#pure
 // Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
 
 pub fn log10(both: single) -> single {
   log(both, 10.0f)
 }
+#pure
 
 pub fn log10(both: float) -> float {
   log(both, 10.0)
 }
+#pure
 
 fn OpMinSingleFloat(v1: float) -> float;
 #rust"-@v1"
@@ -557,6 +568,7 @@ pub fn min(both: single, b: single) -> single {
     b
   }
 }
+#pure
 // Largest of two single-precision float values.
 
 pub fn max(both: single, b: single) -> single {
@@ -569,11 +581,13 @@ pub fn max(both: single, b: single) -> single {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: single, lo: single, hi: single) -> single {
   min(max(both, lo), hi)
 }
+#pure
 // Smallest of two double-precision float values.
 
 pub fn min(both: float, b: float) -> float {
@@ -586,6 +600,7 @@ pub fn min(both: float, b: float) -> float {
     b
   }
 }
+#pure
 // Largest of two double-precision float values.
 
 pub fn max(both: float, b: float) -> float {
@@ -598,11 +613,13 @@ pub fn max(both: float, b: float) -> float {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: float, lo: float, hi: float) -> float {
   min(max(both, lo), hi)
 }
+#pure
 // --- Text ---
 // Functions for working with text (UTF-8 strings) and character values.
 // Read the value of a variable and put a reference to it on the stack
