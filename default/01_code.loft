@@ -990,10 +990,16 @@ fn OpClearStackText(pos: const u16);
 // Read the lock state of the store containing a reference.
 // Returns true when the store is locked against writes.
 fn get_store_lock(r: reference) -> boolean;
+#pure
 // Lock the store containing a reference, preventing further writes.
 // Only `true` is accepted from loft code via d#lock = true.
 // A non-const variable may also use d#lock = false to unlock.
+// Plan-06 phase 5b': #pure from a par-safety standpoint — workers
+// receive their own cloned stores, and (un)locking a worker-local
+// store cannot affect parent state.  Compiler-generated `const`
+// wrappers call this around every `const` ref param.
 fn set_store_lock(r: reference, locked: boolean);
+#pure
 // Yield control back to the host frame loop.  Sets the interpreter's
 // `frame_yield` flag, which makes `state.execute_argv` return after
 // the current opcode.  The host then drives the next frame: in WASM

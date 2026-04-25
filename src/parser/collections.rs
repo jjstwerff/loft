@@ -1186,35 +1186,30 @@ use #count instead"
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
             self.parse_parallel_worker(elem_var, &elem_tp);
 
-        // Plan-06 phase 5b' — par-safety SHALLOW check.  Emits a
-        // Level::Warning when the worker fn's body directly calls
-        // a Purity::Impure(ParentWrite) callee.  Shallow (no
-        // recursion into callees) so it produces ZERO false
-        // positives — every flagged worker has an actual
-        // parent-write call right in its body.
+        // Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
+        // Recurses through user-fn callees until it hits a direct
+        // call to a `Purity::Impure(ParentWrite)` stdlib fn, or
+        // until every path bottoms out in pure/host_io/prng/io/
+        // par_call/native primitives.  Unannotated declared-only
+        // natives (Op*, n_*) are treated as safe — they're C-level
+        // primitives, and the ones that DO write to parent state
+        // are explicitly tagged in `default/01_code.loft`.
         //
-        // The deep `scopes::is_par_safe` analyser (transitively
-        // checks callees) and the fixed-point variant
-        // `analyse_par_safety_fixpoint` are implemented and
-        // tested (commits 227acc8, c0cda7f) but not yet invoked
-        // here — they require comprehensive 5a annotation
-        // coverage to avoid false positives on legitimate workers
-        // that touch unannotated stdlib internals.  Phase 5b'
-        // upgrades to deep + Level::Error once the sweep is done.
+        // Emits Level::Error: writes from a worker to parent state
+        // silently vanish at thread join (D2.0).  The error gives
+        // the full reachability chain so the user can see exactly
+        // which helper introduces the offending call.
         if !self.first_pass && fn_d_nr != u32::MAX {
-            if let Some(callee_name) =
-                crate::scopes::worker_calls_parent_write(&self.data, fn_d_nr)
+            if let Some(chain) =
+                crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
             {
-                let worker_name = self.data.def(fn_d_nr).original_name();
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
-                    "par() worker '{}' directly calls parent-write fn '{}'.  \
+                    Level::Error,
+                    "par() worker reaches a parent-write callee: {}.  \
                      Worker writes to non-local state silently vanish at thread join \
-                     (plan-06 D2.0).  Consider returning the value instead.  \
-                     Phase 5b' will upgrade this to a compile error.",
-                    worker_name,
-                    callee_name
+                     (plan-06 D2.0).  Return the value instead.",
+                    chain
                 );
             }
         }

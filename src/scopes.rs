@@ -2319,6 +2319,132 @@ pub fn worker_calls_parent_write(data: &Data, worker_d_nr: u32) -> Option<String
     walk_shallow_parent_write(&def.code, data)
 }
 
+/// Plan-06 phase 5b' — DEEP parent-write check for par() workers.
+/// Recurses through user-fn callees (those with a body) until it
+/// finds a direct call to a `Purity::Impure(ParentWrite)` stdlib fn.
+/// Returns the chain "worker → helper → bad_callee" or None.
+///
+/// Crucially, unannotated declared-only natives (Op*, n_*, t_* with
+/// `code == Value::Null` and `purity == Unknown`) are treated as
+/// safe — they're C primitives that don't write to parent state
+/// unless explicitly tagged.  This is what avoids the 16 false
+/// positives the strict `par_unsafe_reason` walk would produce.
+///
+/// `Purity::Impure(ParCall)` stdlib fns (parallel_for / _light)
+/// are also safe — D8 R2 and D2.1.1 cover recursive Arc promotion.
+pub fn worker_calls_parent_write_deep(
+    data: &Data,
+    worker_d_nr: u32,
+) -> Option<String> {
+    if worker_d_nr == u32::MAX || (worker_d_nr as usize) >= data.definitions.len() {
+        return None;
+    }
+    let mut visited = std::collections::HashSet::new();
+    let def = &data.definitions[worker_d_nr as usize];
+    let worker_name = def.name.clone();
+    walk_deep_parent_write(&def.code, data, &mut visited).map(|chain| {
+        if chain == worker_name {
+            chain
+        } else {
+            format!("{worker_name}{chain}")
+        }
+    })
+}
+
+#[allow(dead_code)]
+fn walk_deep_parent_write(
+    value: &Value,
+    data: &Data,
+    visited: &mut std::collections::HashSet<u32>,
+) -> Option<String> {
+    match value {
+        Value::Call(callee, args) => {
+            if let Some(chain) = call_deep_parent_write(*callee, data, visited) {
+                return Some(chain);
+            }
+            for a in args {
+                if let Some(chain) = walk_deep_parent_write(a, data, visited) {
+                    return Some(chain);
+                }
+            }
+            None
+        }
+        // Don't recurse into CallRef target (callee unknown until runtime).
+        Value::CallRef(_, args) => {
+            for a in args {
+                if let Some(chain) = walk_deep_parent_write(a, data, visited) {
+                    return Some(chain);
+                }
+            }
+            None
+        }
+        Value::Block(b) => {
+            for v in &b.operators {
+                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                    return Some(chain);
+                }
+            }
+            None
+        }
+        Value::Insert(vs) => {
+            for v in vs {
+                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                    return Some(chain);
+                }
+            }
+            None
+        }
+        Value::If(c, t, e) => walk_deep_parent_write(c, data, visited)
+            .or_else(|| walk_deep_parent_write(t, data, visited))
+            .or_else(|| walk_deep_parent_write(e, data, visited)),
+        Value::Loop(body) => {
+            for v in &body.operators {
+                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                    return Some(chain);
+                }
+            }
+            None
+        }
+        Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, visited),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+fn call_deep_parent_write(
+    callee: u32,
+    data: &Data,
+    visited: &mut std::collections::HashSet<u32>,
+) -> Option<String> {
+    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
+        return None;
+    }
+    let def = &data.definitions[callee as usize];
+    match def.purity {
+        Purity::Pure
+        | Purity::Impure(ImpureCategory::HostIo)
+        | Purity::Impure(ImpureCategory::Prng)
+        | Purity::Impure(ImpureCategory::Io)
+        | Purity::Impure(ImpureCategory::ParCall) => None,
+        Purity::Impure(ImpureCategory::ParentWrite) => {
+            Some(format!(" → {}", def.name))
+        }
+        Purity::Unknown => {
+            // Declared-only native (no body) → trust as safe.
+            if matches!(def.code, Value::Null) {
+                None
+            } else if !visited.insert(callee) {
+                // Cycle — optimistic short-circuit (consistent with
+                // is_par_safe / fixpoint convergence).
+                None
+            } else {
+                walk_deep_parent_write(&def.code, data, visited)
+                    .map(|chain| format!(" → {}{}", def.name, chain))
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
     match value {
@@ -2467,5 +2593,74 @@ mod par_shallow_tests {
             worker_calls_parent_write(&d, worker),
             Some("vector_add".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod par_deep_tests {
+    use super::worker_calls_parent_write_deep;
+    use crate::data::{Data, DefType, ImpureCategory, Purity, Value};
+    use crate::lexer::Position;
+
+    fn pos() -> Position {
+        Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn deep_walks_through_user_helper() {
+        // Worker calls helper; helper calls vector_add.  Deep walk
+        // returns the chain.
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let helper = d.add_def("helper", &pos(), DefType::Function);
+        d.definitions[helper as usize].code = Value::Call(bad, vec![]);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(helper, vec![]);
+        let result = worker_calls_parent_write_deep(&d, worker);
+        assert!(result.is_some());
+        let chain = result.unwrap();
+        assert!(chain.contains("worker"));
+        assert!(chain.contains("helper"));
+        assert!(chain.contains("vector_add"));
+    }
+
+    #[test]
+    fn deep_skips_unannotated_native() {
+        // Worker calls OpAddInt (Unknown + Value::Null) → safe.
+        let mut d = Data::new();
+        let op = d.add_def("OpAddInt", &pos(), DefType::Function);
+        // purity defaults to Unknown, code defaults to Null
+        let _ = op;
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(op, vec![]);
+        assert!(worker_calls_parent_write_deep(&d, worker).is_none());
+    }
+
+    #[test]
+    fn deep_handles_recursive_user_fn() {
+        // Worker calls itself — visited set prevents infinite loop.
+        let mut d = Data::new();
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(worker, vec![]);
+        // No parent-write reachable, even with the cycle.
+        assert!(worker_calls_parent_write_deep(&d, worker).is_none());
+    }
+
+    #[test]
+    fn deep_par_call_callee_is_safe() {
+        // parallel_for_light is Impure(ParCall) — D8 R2 says nested
+        // par() is safe under recursive Arc promotion.
+        let mut d = Data::new();
+        let pf = d.add_def("parallel_for_light", &pos(), DefType::Function);
+        d.definitions[pf as usize].purity = Purity::Impure(ImpureCategory::ParCall);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code = Value::Call(pf, vec![]);
+        assert!(worker_calls_parent_write_deep(&d, worker).is_none());
     }
 }
