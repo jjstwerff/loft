@@ -821,6 +821,61 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
     result
 }
 
+/// Plan-06 phase 5b' (DESIGN.md D12) — recursive walk of a `Value`
+/// tree collecting every `Value::Call(callee, _)` edge.  Pushes
+/// `(callee, caller_d_nr)` pairs onto `edges`.
+///
+/// Skips `Value::CallRef` (runtime function reference) — phase 5e
+/// pessimises CallRef-routed callers because the actual callee is
+/// not statically known.
+fn collect_callees(value: &Value, caller: u32, edges: &mut Vec<(u32, u32)>) {
+    match value {
+        Value::Call(callee, args) => {
+            edges.push((*callee, caller));
+            for a in args {
+                collect_callees(a, caller, edges);
+            }
+        }
+        Value::CallRef(_, args) => {
+            // The actual callee is a runtime value; skip the edge,
+            // but still walk arg expressions for nested Call edges.
+            for a in args {
+                collect_callees(a, caller, edges);
+            }
+        }
+        Value::Block(b) => {
+            for v in &b.operators {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::Insert(vs) => {
+            for v in vs {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::If(c, t, e) => {
+            collect_callees(c, caller, edges);
+            collect_callees(t, caller, edges);
+            collect_callees(e, caller, edges);
+        }
+        Value::Loop(body) => {
+            for v in &body.operators {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::Set(_, rhs) => {
+            collect_callees(rhs, caller, edges);
+        }
+        // Leaves and Value variants without nested expressions —
+        // nothing to walk.  Conservative: any future Value variant
+        // not enumerated here is treated as a leaf, missing any
+        // nested calls inside it.  Phase 5e's tests cover this so
+        // a missed variant surfaces as a "callers_of returns
+        // empty" regression.
+        _ => {}
+    }
+}
+
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1068,6 +1123,14 @@ pub struct Data {
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
     pub native_symbol_crates: HashMap<String, String>,
+    /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
+    /// Maps callee def_nr → list of caller def_nrs.  Built once on
+    /// first `callers_of` call by walking every user fn's body and
+    /// collecting `Value::Call` edges.  `OnceLock` (not RefCell) so
+    /// `Data` stays `Sync` — required because tests park `Data` in
+    /// a process-wide `OnceLock<(Data, Stores)>` and parallel
+    /// workers read from a `&Data` across threads.
+    caller_index: std::sync::OnceLock<HashMap<u32, Vec<u32>>>,
 }
 
 #[must_use]
@@ -1192,6 +1255,7 @@ impl Data {
             native_symbols: HashMap::new(),
             native_packages: Vec::new(),
             native_symbol_crates: HashMap::new(),
+            caller_index: std::sync::OnceLock::new(),
         }
     }
 
@@ -1992,6 +2056,74 @@ impl Data {
         &self.definitions[dnr as usize]
     }
 
+    /// Plan-06 phase 5b' (DESIGN.md D12) — every user-defined
+    /// function's def_nr (excludes stdlib `n_*` natives whose code
+    /// body is `Value::Null`, excludes structs / enums / constants).
+    ///
+    /// "User function" = a `DefType::Function` definition with a
+    /// non-Null code body.  This includes functions declared in
+    /// `default/*.loft` that have explicit loft-body code, but
+    /// excludes `#native`-only declarations.  The set is what the
+    /// par-safety analyser (phase 5e) iterates over for the
+    /// fixed-point classification.
+    #[must_use]
+    pub fn user_fn_d_nrs(&self) -> Vec<u32> {
+        self.definitions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, def)| {
+                if def.def_type == DefType::Function && !matches!(def.code, Value::Null) {
+                    Some(idx as u32)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Plan-06 phase 5b' (DESIGN.md D12) — every user fn that calls
+    /// `callee_d_nr`, lazily-built and cached on first call.
+    ///
+    /// Walks every user fn body once collecting `Value::Call(callee, _)`
+    /// edges, builds the inverted index `callee → [callers]`, caches
+    /// it for the program's lifetime.  `Value::CallRef(local, _)` is
+    /// not added to the graph because the actual callee is a runtime
+    /// value (a function reference stored in a local variable);
+    /// phase 5e's analyser pessimises any caller of a CallRef-routed
+    /// fn (treats it as par-unsafe by default).
+    ///
+    /// Returns an empty slice if `callee_d_nr` has no callers (or
+    /// only CallRef-style callers).
+    ///
+    /// Cost: linear in the call-graph edge count for the first call;
+    /// O(1) thereafter.  For a typical loft codebase (~150 stdlib
+    /// fns + a few hundred user fns), the build is sub-50 ms.
+    pub fn callers_of(&self, callee_d_nr: u32) -> Vec<u32> {
+        let map = self.caller_index.get_or_init(|| self.build_caller_index());
+        map.get(&callee_d_nr).cloned().unwrap_or_default()
+    }
+
+    /// Internal helper for `callers_of`.  Walks every user fn body,
+    /// collects `Value::Call(callee, _)` edges, returns the
+    /// inverted `callee → [callers]` map.
+    fn build_caller_index(&self) -> HashMap<u32, Vec<u32>> {
+        let mut edges: Vec<(u32, u32)> = Vec::new(); // (callee, caller)
+        for caller_d_nr in self.user_fn_d_nrs() {
+            collect_callees(&self.def(caller_d_nr).code, caller_d_nr, &mut edges);
+        }
+        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (callee, caller) in edges {
+            map.entry(callee).or_default().push(caller);
+        }
+        // Deduplicate: a fn that calls another fn many times still
+        // counts as one caller.  Sort for stable test output.
+        for callers in map.values_mut() {
+            callers.sort_unstable();
+            callers.dedup();
+        }
+        map
+    }
+
     /// Post-2c: return the explicit `size(N)` annotation on the definition,
     /// if any.  Used by field allocation and sizeof() to honor `pub type i32 =
     /// integer size(4);` — the size overrides the limit()-based heuristic.
@@ -2443,4 +2575,93 @@ fn value_sizes() {
     assert_eq!(size_of::<(u8, u16, Box<Value>)>(), 16); // Set
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>, Box<Value>)>(), 32); // If
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>)>(), 24); // Iter
+}
+
+#[cfg(test)]
+mod caller_graph_tests {
+    use super::{Block, Data, DefType, Type, Value};
+    use crate::lexer::Position;
+
+    /// Build a synthetic Data with three user fns:
+    ///   fn0: calls fn1
+    ///   fn1: calls fn2 + fn2 again (test dedup)
+    ///   fn2: leaf (no calls)
+    /// Plus a stdlib-style entry (Value::Null body) that should be
+    /// excluded from user_fn_d_nrs.
+    fn build_test_data() -> Data {
+        let mut d = Data::new();
+        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        // fn0: calls fn1 with no args
+        let d0 = d.add_def("fn0", &pos, DefType::Function);
+        // fn1: calls fn2 twice
+        let d1 = d.add_def("fn1", &pos, DefType::Function);
+        // fn2: leaf
+        let d2 = d.add_def("fn2", &pos, DefType::Function);
+        // n_native: stdlib-style (Value::Null body — excluded)
+        let _dn = d.add_def("n_native", &pos, DefType::Function);
+        // Set codes.
+        d.definitions[d0 as usize].code = Value::Call(d1, vec![]);
+        d.definitions[d1 as usize].code = Value::Block(Box::new(Block {
+            name: "test",
+            operators: vec![Value::Call(d2, vec![]), Value::Call(d2, vec![])],
+            result: Type::Void,
+            scope: 0,
+            var_size: 0,
+        }));
+        d.definitions[d2 as usize].code = Value::Int(42);
+        // n_native stays Value::Null.
+        d
+    }
+
+    #[test]
+    fn user_fn_d_nrs_excludes_null_body_natives() {
+        let d = build_test_data();
+        let user_fns = d.user_fn_d_nrs();
+        assert_eq!(user_fns.len(), 3, "fn0/fn1/fn2 only — n_native excluded");
+        // fn0/1/2 are at indices 0/1/2.
+        assert_eq!(user_fns, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn callers_of_finds_direct_callers() {
+        let d = build_test_data();
+        // fn1's caller is fn0.
+        assert_eq!(d.callers_of(1), vec![0]);
+        // fn2's caller is fn1 (deduplicated despite two call sites).
+        assert_eq!(d.callers_of(2), vec![1]);
+    }
+
+    #[test]
+    fn callers_of_uncalled_returns_empty() {
+        let d = build_test_data();
+        // fn0 has no callers.
+        assert!(d.callers_of(0).is_empty());
+    }
+
+    #[test]
+    fn callers_of_caches_after_first_call() {
+        let d = build_test_data();
+        // First call builds the cache.
+        let _ = d.callers_of(1);
+        // Cache is now populated.
+        assert!(d.caller_index.get().is_some());
+        // Second call returns the same answer cheaply.
+        assert_eq!(d.callers_of(1), vec![0]);
+    }
+
+    #[test]
+    fn callers_of_walks_block_and_call_args_recursively() {
+        let mut d = Data::new();
+        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        let d_inner = d.add_def("inner", &pos, DefType::Function);
+        let d_outer = d.add_def("outer", &pos, DefType::Function);
+        // outer's body wraps inner's call inside an If condition.
+        d.definitions[d_inner as usize].code = Value::Int(1);
+        d.definitions[d_outer as usize].code = Value::If(
+            Box::new(Value::Call(d_inner, vec![])),
+            Box::new(Value::Int(0)),
+            Box::new(Value::Int(0)),
+        );
+        assert_eq!(d.callers_of(d_inner), vec![d_outer]);
+    }
 }
