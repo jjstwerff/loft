@@ -350,6 +350,7 @@ fn OpAbsFloat(v1: float) -> float;
 pub fn abs(both: float) -> float {
   OpAbsFloat(both)
 }
+#pure
 
 fn OpMathPiFloat() -> float;
 #rust"std::f64::consts::PI"
@@ -365,53 +366,63 @@ fn OpMathFuncFloat(fn_id: const i8, v1: float) -> float;
 pub fn cos(both: float) -> float {
   OpMathFuncFloat(0, both)
 }
+#pure
 // Sine. Use for circular motion: y = r * sin(angle).
 
 pub fn sin(both: float) -> float {
   OpMathFuncFloat(1, both)
 }
+#pure
 // Tangent. Use for slopes and perspective projection.
 
 pub fn tan(both: float) -> float {
   OpMathFuncFloat(2, both)
 }
+#pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
 pub fn acos(both: float) -> float {
   OpMathFuncFloat(3, both)
 }
+#pure
 // Arc sine. Returns the angle whose sine is v.
 
 pub fn asin(both: float) -> float {
   OpMathFuncFloat(4, both)
 }
+#pure
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
 
 pub fn atan(both: float) -> float {
   OpMathFuncFloat(5, both)
 }
+#pure
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
 
 pub fn ceil(both: float) -> float {
   OpMathFuncFloat(6, both)
 }
+#pure
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
 
 pub fn floor(both: float) -> float {
   OpMathFuncFloat(7, both)
 }
+#pure
 // Round to the nearest integer value (half rounds away from zero).
 
 pub fn round(both: float) -> float {
   OpMathFuncFloat(8, both)
 }
+#pure
 // Square root. Use for distances and normalization.
 
 pub fn sqrt(both: float) -> float {
   OpMathFuncFloat(9, both)
 }
+#pure
 
 fn OpMathFunc2Float(fn_id: const i8, v1: float, v2: float) -> float;
 #rust"match @fn_id {{ 0 => @v1.atan2(@v2), 1 => @v1.log(@v2), _ => f64::NAN }}"

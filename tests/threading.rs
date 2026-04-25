@@ -607,6 +607,11 @@ fn purity_annotations_parsed_from_stdlib() {
         "n_clamp", // integer arithmetic
         "n_len",
         "n_size", // text/character/vector length
+        // Single + double precision math share the same fn names
+        // (cos/sin/tan/etc.) — Data interns them by signature so
+        // the def_nr lookup picks one (typically the float
+        // overload).  Audit checks one of each name regardless
+        // of which overload was registered.
         "n_cos",
         "n_sin",
         "n_tan",
@@ -616,7 +621,7 @@ fn purity_annotations_parsed_from_stdlib() {
         "n_ceil",
         "n_floor",
         "n_round",
-        "n_sqrt", // single-precision math
+        "n_sqrt",
     ];
     for name in pure_fns {
         let d_nr = p.data.def_nr(name);
