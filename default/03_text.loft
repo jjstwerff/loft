@@ -7,95 +7,120 @@
 // Returns true if self begins with value. Use for prefix matching (e.g., protocol detection).
 pub fn starts_with(self: text, value: text) -> boolean;
 #rust"@self.starts_with(@value)"
+#pure
 // Returns true if self ends with value. Use for suffix matching (e.g., file extension checks).
 pub fn ends_with(self: text, value: text) -> boolean;
 #rust"@self.ends_with(@value)"
+#pure
 // Removes leading and trailing whitespace. Use when processing user input or file content.
 pub fn trim(both: text) -> text[both];
 #rust"@both.trim()"
+#pure
 // Removes leading whitespace only.
 pub fn trim_start(self: text) -> text[self];
 #rust"@self.trim_start()"
+#pure
 // Removes trailing whitespace only.
 pub fn trim_end(self: text) -> text[self];
 #rust"@self.trim_end()"
+#pure
 // Returns the byte index of the first occurrence of value, or null if not found.
 // Use to locate substrings before slicing.
 pub fn find(self: text, value: text) -> integer;
 #rust"if let Some(v) = @self.find(@value) {{ v as i64 }} else {{ i64::MIN }}"
+#pure
 // Returns the byte index of the last occurrence of value, or null if not found.
 // Use to find file extensions or the last path separator.
 pub fn rfind(self: text, value: text) -> integer;
 #rust"if let Some(v) = @self.rfind(@value) {{ v as i64 }} else {{ i64::MIN }}"
+#pure
 // Returns true if value appears anywhere in self.
 // Simpler than find when you only need a yes/no answer.
 pub fn contains(self: text, value: text) -> boolean;
 #rust"@self.contains(@value)"
+#pure
 // Returns a copy of self with every occurrence of value replaced by with.
 pub fn replace(self: text, value: text, with: text) -> text;
 #rust"@self.replace(@value, @with)"
+#pure
 // Returns a lowercase copy. Use for case-insensitive comparisons.
 pub fn to_lowercase(self: text) -> text;
 #rust"@self.to_lowercase()"
+#pure
 // Returns an uppercase copy.
 pub fn to_uppercase(self: text) -> text;
 #rust"@self.to_uppercase()"
+#pure
 // True if all characters are lowercase letters.
 pub fn is_lowercase(self: text) -> boolean {
   for c in self { if !c.is_lowercase() { return false } }
   true
 }
+#pure
 // True if the character is a lowercase letter.
 pub fn is_lowercase(self: character) -> boolean;
 #rust"@self.is_lowercase()"
+#pure
 // True if all characters are uppercase letters.
 pub fn is_uppercase(self: text) -> boolean {
   for c in self { if !c.is_uppercase() { return false } }
   true
 }
+#pure
 // True if the character is an uppercase letter.
 pub fn is_uppercase(self: character) -> boolean;
 #rust"@self.is_uppercase()"
+#pure
 // True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
 pub fn is_numeric(self: text) -> boolean {
   for c in self { if !c.is_numeric() { return false } }
   true
 }
+#pure
 // True if the character is a numeric digit.
 pub fn is_numeric(self: character) -> boolean;
 #rust"@self.is_numeric()"
+#pure
 // True if all characters are letters or digits. Use to validate identifiers or tokens.
 pub fn is_alphanumeric(self: text) -> boolean {
   for c in self { if !c.is_alphanumeric() { return false } }
   true
 }
+#pure
 // True if the character is a letter or digit.
 pub fn is_alphanumeric(self: character) -> boolean;
 #rust"@self.is_alphanumeric()"
+#pure
 // True if all characters are alphabetic.
 pub fn is_alphabetic(self: text) -> boolean {
   for c in self { if !c.is_alphabetic() { return false } }
   true
 }
+#pure
 // True if the character is alphabetic.
 pub fn is_alphabetic(self: character) -> boolean;
 #rust"@self.is_alphabetic()"
+#pure
 // True if all characters are whitespace. Use to detect blank lines.
 pub fn is_whitespace(self: text) -> boolean {
   for c in self { if !c.is_whitespace() { return false } }
   true
 }
+#pure
 // True if the character is whitespace.
 pub fn is_whitespace(self: character) -> boolean;
 #rust"@self.is_whitespace()"
+#pure
 // True if all characters are control characters.
 pub fn is_control(self: text) -> boolean {
   for c in self { if !c.is_control() { return false } }
   true
 }
+#pure
 // True if the character is a control character.
 pub fn is_control(self: character) -> boolean;
 #rust"@self.is_control()"
+#pure
 // Joins parts with sep between each consecutive pair. Returns "" for an empty vector.
 // Use to build comma-separated lists, path segments, or any delimited output.
 pub fn join(parts: vector < text >, sep: text) -> text {
@@ -108,6 +133,7 @@ pub fn join(parts: vector < text >, sep: text) -> text {
   }
   result
 }
+#pure
 // --- Environment ---
 // Functions for interacting with the host operating system.
 // Returns the script-level arguments passed after the script path.
@@ -115,19 +141,24 @@ pub fn join(parts: vector < text >, sep: text) -> text {
 
 pub fn arguments() -> vector < text >;
 #rust"stores.os_arguments()"
+#impure(host_io)
 // Returns the current working directory, optionally with v appended as a subpath.
 // Use to construct absolute paths relative to where the program was launched.
 pub fn directory(v:  & text = "") -> text;
 #rust"Stores::os_directory_native()"
+#impure(host_io)
 // Returns the current user's home directory, optionally with v appended.
 // Use for storing user-specific data or configuration.
 pub fn user_directory(v:  & text = "") -> text;
 #rust"Stores::os_home_native()"
+#impure(host_io)
 // Returns the directory containing the running executable, optionally with v appended.
 // Use to locate assets bundled alongside the program.
 pub fn program_directory(v:  & text = "") -> text;
 #rust"Stores::os_executable_native()"
+#impure(host_io)
 // Returns the directory containing the main source file being executed.
 // Use to locate data files relative to the script, regardless of working directory.
 pub fn source_dir() -> text;
 #rust"Stores::source_dir_native()"
+#impure(host_io)
