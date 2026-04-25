@@ -70,6 +70,57 @@ opcode stream; runtime never branches on user data.
 **Memory:** the largest variant is `Reduce` at 4 bytes; the opcode
 payload is fixed at the variant-max size.
 
+### D1c — Result order is NOT preserved
+
+**Plan-06 par() returns results in completion order, not input
+order.**  This is a deliberate design choice: enforcing input
+order requires either a per-worker pre-allocated slice (forcing
+even chunking; bad for unbalanced workloads) or a serialised
+write into a shared result buffer (defeats parallelism).
+
+User contract:
+
+```loft
+results = par([1, 2, 3, 4, 5], double, 4)
+// results contains {2, 4, 6, 8, 10} as a vector — but order
+// is implementation-defined and may vary run-to-run.
+```
+
+If a user needs ordered output, they sort post-hoc:
+
+```loft
+unordered = par(items, score_of, 4)
+ordered = unordered.sort_by(|s| s.input_idx)
+```
+
+Or they include the input index in the worker's return value to
+re-sort later.  The cost is on the user; the runtime stays fast.
+
+**Implications:**
+- Workers write into the result vector in completion order via a
+  shared atomic write-cursor (one fetch_add per result).  No
+  per-worker slice allocation; no order-preserving stitch pass.
+- `Stitch::Reduce` is unaffected — the fold's monoid contract
+  already required associativity, which means order doesn't
+  matter for the result.
+- `Stitch::Queue` (fused for-loop body delivery) **also drops
+  order**: the parent body sees `(x, r)` pairs in completion
+  order, not input order.  Documented in phase 7's surface doc;
+  users who need ordered iteration use a regular `for` loop.
+
+**Why this matters for testing**: with order non-preserving,
+**run-to-run output order variation is direct evidence of
+parallelism**.  A test that asserts `set(results) == expected_set`
+(equal as multiset) AND observes order changes across repeated
+runs **proves parallel execution** — see DESIGN.md D8.2 / phase
+8f.2 for the test gates.
+
+**Optional ordered policy** (deferred to 1.1+): a
+`Stitch::ConcatOrdered` variant could be added if a use case
+emerges for ordered output without sort overhead.  Not in
+plan-06 scope; the typical workloads (compute → reduce, compute →
+hash-by-key, compute → display) don't need it.
+
 **Choice rationale:** trait + vtable dispatch was considered but
 rejected — the four policies have very different control-flow
 shapes (concat returns a vector store, queue runs a parent body,

@@ -280,30 +280,121 @@ Fixture set (`tests/browser_par/*.html` + matching loft programs):
 | `par_panic` | Worker panics on element 5; assert main thread receives the panic + clean shutdown (no orphan workers visible via `navigator.hardwareConcurrency`-derived oversubscription detection) |
 | `par_empty` | `par([], fn, 4)` returns empty vector; no worker spawn measurable |
 
-#### 8f.2 — par-parallelism in the browser (timing-based)
+#### 8f.2 — par-parallelism in the browser (three-pronged gate)
 
 Correctness alone doesn't prove parallel execution — a sequential
-fallback would also pass.  Phase 8f.2 adds a **timing-based
-parallelism gate**:
+fallback would also pass.  Plan-06 DESIGN.md D1c **dropped the
+input-order guarantee** for par results, which makes order
+non-determinism itself a parallelism gate (sequential execution
+yields a deterministic order; parallel doesn't).  Three
+independent tests together cover the question from different
+angles:
 
-1. Browser-side fixture runs `par(items, slow_fn, threads)` with
-   `slow_fn` doing measurable compute (~50 ms per element ×
-   N=20 elements).
-2. Measures wall-clock via `performance.now()`.
-3. Asserts: `wall_clock < (serial_baseline / 2)` for `threads=4`.
-   I.e. **at least 2× speedup** required to pass.
-4. Reports actual speedup ratio in `document.title` so a
-   regression from 4× → 1.1× is visible without crossing the
-   acceptance threshold.
+**8f.2a — Concurrent observation (primary, definitive proof)**
 
-Threshold rationale: SwiftShader and postMessage overhead
-prevent us from claiming 4× linear speedup; 2× is the conservative
-floor that distinguishes "real parallelism" from "sequential
-fallback".  When real GPU + native browser scheduling is
-available (CI hosts with Vulkan-capable hardware), the threshold
-auto-tightens to 3×.
+Worker fn records `(worker_id, started_ns, finished_ns)` per
+invocation.  After join, the parent walks all traces and
+asserts: at least one pair has **overlapping `[started,
+finished]` intervals**.
 
-Fixture: `scripts/browser/par/par_parallelism.html` +
+```loft
+fn timed_work(x: integer) -> Trace {
+    s = now_ns()
+    busy_loop_ms(20)         // measurable, deterministic compute
+    e = now_ns()
+    Trace { wid: worker_id(), s: s, e: e }
+}
+traces = par([1..16], timed_work, 4)
+// Test asserts: ∃ i, j s.t. traces[i].s < traces[j].s < traces[i].e
+```
+
+Why this is the canonical proof:
+- Overlap is mathematically impossible under sequential
+  execution.  No false negatives.
+- Doesn't depend on machine speed — a slow CPU just makes
+  individual intervals longer, doesn't change overlap.
+- Exposes the binary question "is parallelism happening" with
+  the smallest possible workload.
+
+Plan-06 phase 8 ships `worker_id()` and `now_ns()` as
+host-bridge stdlib fns specifically to support this test.
+
+**8f.2c — Result-order non-determinism (secondary, run-to-run)**
+
+Per D1c, parallel par returns results in completion order, not
+input order.  Sequential execution produces a deterministic
+order (always the same across runs); parallel execution produces
+a varying order (different across runs because thread scheduling
+varies).
+
+Test:
+
+```loft
+fn ident_with_id(x: integer) -> Pair {
+    Pair { input: x, wid: worker_id() }
+}
+runs = 5
+orders: vector<vector<integer>> = []
+for _ in 0..runs {
+    result = par([1..N], ident_with_id, 4)
+    orders += [result.map(|p| p.input)]
+}
+// Assert: at least 2 of the 5 orders differ from each other.
+distinct_orders = orders.dedup_by_value().length()
+assert(distinct_orders >= 2, "no order variation across 5 runs")
+```
+
+Why this is meaningful:
+- Sequential execution would give 5 identical orders (`distinct
+  == 1`).
+- Parallel execution gives `distinct >= 2` with overwhelming
+  probability for N >= 16.
+- Catches "compiler picked the sequential fallback" bugs that
+  the timing test might miss on a fast machine.
+
+False-negative probability: with 4 workers and N=64 elements,
+two consecutive runs producing identical orders happens with
+probability roughly `1 / 64! / (16!^4 / 4!)` — astronomically
+small.  Five runs makes it negligible.
+
+False-positive probability: zero — sequential execution is
+strictly deterministic, so if the test sees variation, parallel
+execution is the only explanation.
+
+**8f.2b — Speedup ratio (tertiary, end-to-end perf)**
+
+Browser-side fixture runs `par(items, slow_fn, threads)` with
+`slow_fn` doing measurable compute (~50 ms per element ×
+N=20 elements).  Measures wall-clock via `performance.now()`.
+
+Asserts: `wall_clock < (serial_baseline / 2)` for `threads=4`
+— at least 2× speedup required to pass.  Reports actual
+ratio in `document.title` so a 4× → 1.1× regression is
+visible even when above threshold.
+
+Threshold rationale: SwiftShader + postMessage overhead
+prevent claims of 4× linear speedup; 2× is the conservative
+floor distinguishing "real parallelism" from "sequential
+fallback".  Auto-tightens to 3× on GPU-capable CI hosts
+(detected via the WebGL renderer string — Vulkan/Metal/D3D
+reports get the higher threshold; SwiftShader keeps 2×).
+
+**Why three gates, not just one:**
+
+| Gate | Catches | Misses |
+|---|---|---|
+| 8f.2a (overlap) | Definitive: at any moment, ≥ 2 workers were running | Doesn't catch "parallel-but-no-speedup" (e.g. global lock contention) |
+| 8f.2c (order var) | Definitive: scheduler is non-deterministic | Doesn't catch "no perf win"; rare false-negative on N too small |
+| 8f.2b (speedup) | End-to-end perf delivery; the user-visible question | Noisy on fast machines; needs careful baseline |
+
+Together they answer: "is parallelism happening" (8f.2a +
+8f.2c) AND "is parallelism delivering value" (8f.2b).  All
+three failing on a passing build would require either a code
+regression caught by other tests OR a host environment bug
+(missing chrome, no chromedriver, etc.).
+
+Fixtures: `scripts/browser/par/par_overlap.html`,
+`par_orderdiff.html`, `par_speedup.html`, driven by
 `run_par_parallelism.sh`.
 
 #### 8f.3 — postMessage DbRef-rebase verification
@@ -328,22 +419,36 @@ Fixture (`scripts/browser/par/par_rebase.html`):
    the test FAILS with a recognisable corruption signature
    (validates the test isn't accidentally trivial).
 
-#### 8f.4 — browser-vs-native equivalence
+#### 8f.4 — browser-vs-native equivalence (multiset, not sequence)
 
-For every fixture in 8f.1 and 8f.2, also run the same loft
-program through the **interpreter** (cargo test, not headless
-chrome) and assert:
+For every fixture in 8f.1, also run the same loft program
+through the **interpreter** (cargo test, not headless chrome)
+and assert:
 
-- Output bytes match between interp and browser, modulo
-  documented differences (PRNG state, time, host-IO ordering).
-- Result-vector layout is identical (verifiable via a
-  deterministic byte-dump of the result store).
+- **Multiset equality**: `set(browser_results) ==
+  set(native_results)` — same elements with same multiplicities.
+  Per D1c, sequence equality is wrong (parallel runs produce
+  different orders); multiset equality is the right invariant.
+- For struct/text element types: per-element field-by-field
+  equivalence after sorting both sides by a canonical key
+  (e.g. the input index if workers preserve it, or the value's
+  natural order).
+- Documented exclusions: PRNG-derived values, timestamps,
+  host-IO ordering — these vary even within a single execution
+  mode.
 
 This catches "the browser path silently produces different
 results" — e.g. if SAB transfer copies stale bytes, if a worker
 reads from the wrong slot, etc.  Browser-vs-native equivalence
 is the most load-bearing test in phase 8f because it rules out
 the entire class of "almost works" failures.
+
+**Why multiset, not sequence**: per DESIGN.md D1c, parallel par
+returns results in completion order which varies across runs.
+Asserting sequence equality would either fail randomly (false-
+negative the test) or only pass under sequential execution
+(false-positive the parallelism gate).  Multiset equality is the
+correct invariant for the no-order contract.
 
 #### 8f.5 — WebGL regression gate (golden images)
 
@@ -421,16 +526,21 @@ optionally under a feature flag (`CI_BROWSER=1`).
 
 - `run_caps.sh` smoke passes: SAB available, `crossOriginIsolated
   === true`, WebGL context obtainable, console output captured.
-- **Every par fixture in 8f.1 returns byte-identical results
-  in the browser vs the native interpreter** (the load-bearing
-  equivalence test — rules out the "browser path silently
-  produces different results" class of bugs).
+- **Every par fixture in 8f.1 returns multiset-equivalent
+  results in the browser vs the native interpreter** (8f.4 —
+  the load-bearing equivalence test).  Sequence equality is
+  not a valid assertion (D1c: parallel runs produce
+  completion-order results that vary across runs); multiset
+  equality + per-element field equivalence is the right
+  invariant.
 - `tests/threading_chars.rs` runs under WASM-with-threads via
   the test harness (a new `loft-wasm` cargo nextest profile or
   similar) — same correctness as native + interpreter.
-- **Browser par actually parallelises** (8f.2): timing-based
-  test asserts ≥ 2× speedup at threads=4 vs serial baseline.
-  Documented threshold; auto-tightens to 3× on GPU-capable hosts.
+- **Browser par actually parallelises** (8f.2): three independent
+  gates — concurrent overlap (8f.2a, definitive), result-order
+  non-determinism across runs (8f.2c, definitive given D1c's
+  no-order contract), and speedup ratio ≥ 2× at threads=4
+  (8f.2b, end-to-end perf).  All three must pass.
 - **DbRef rebase verified after postMessage** (8f.3): a worker
   returning `vector<Reference<X>>` produces correct
   cross-store references in the parent; negative-test confirms

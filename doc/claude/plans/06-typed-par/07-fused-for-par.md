@@ -314,19 +314,31 @@ Behaviour:
 2. Spawn `threads` worker threads, each in a loop:
    - claim next input index via shared atomic counter,
    - compute `r = foo(x)`,
-   - push `(idx, x, r)` onto the queue (blocks if full),
+   - push `(x, r)` onto the queue (blocks if full),
    - on shutdown signal: drain pending writes and exit.
 3. Parent body loop:
-   - pop next-in-order tuple from queue (blocks if empty),
+   - pop next available tuple from queue (blocks if empty),
    - bind `x_var` and `r_var` in the body's scope,
    - execute body,
    - on `break`: signal shutdown to workers, drain queue.
 4. Join workers; deallocate queue store.
 
-In-order delivery: queue is keyed by input index; consumer reads
-slot `i` only after the producer for index `i` writes it.  A small
-optimisation later (phase 7c?) can detect "body doesn't care about
-order" and drop the in-order constraint.
+**Completion-order delivery, not input-order** (per DESIGN.md
+D1c).  The queue is FIFO over completion events; the parent body
+sees `(x, r)` pairs in whatever order workers finish, not the
+order they appeared in `input`.
+
+This trades a small ergonomic surprise for substantial perf
+freedom:
+- No per-input-index synchronisation point — workers can post
+  results as fast as they finish.
+- No head-of-line blocking when one worker is slow.
+- Aligns with the call-form `par(...)`'s contract: `vector<U>`
+  is an unordered multiset.
+
+Users who need ordered iteration should use a regular `for` loop
+(no par); plan-06 is explicit that ordered parallel iteration is
+out of scope.
 
 ### Test fixtures
 
@@ -340,7 +352,7 @@ unchanged.  Add five fixtures specifically for the new shapes:
 | `tests/scripts/par_for_each.loft` | side-effect only | output log lines; zero result-vector allocation (verify via `LOFT_STORES=warn`) |
 | `tests/scripts/par_for_fold.loft` | accumulate to a single value via the auto-detect pattern | final accumulator equals serial fold; **`Stitch::Reduce` selected** (verify via `LOFT_LOG=static` showing no queue store allocated, just per-worker 1-element output stores) |
 | `tests/scripts/par_for_break.loft` | `break` early on first match | workers stopped, no further `foo(x)` calls (verify via a counting `foo`) |
-| `tests/scripts/par_for_pair_aware.loft` | body uses `x` and `r` together | results pair with inputs in input order |
+| `tests/scripts/par_for_pair_aware.loft` | body uses `x` and `r` together | per-pair correctness: every `(x, r)` pair seen by the body satisfies `r == foo(x)`.  **Order across pairs is not asserted** (per D1c — completion-order delivery; running the test multiple times typically shows order variation, which is direct evidence of parallelism) |
 | `tests/scripts/par_call_desugars.loft` | call form `par(ls, foo, 4)` | `LOFT_LOG=static` dump shows synthesized `Value::ParFor` with `Stitch::Concat`; output identical to pre-desugar behaviour byte-for-byte |
 | `tests/scripts/par_fold_sum.loft` | `par_fold(xs, 0, |a, b| a + b, 4)` | parallel reduction; result equals serial fold; bench shows ≥ 30 % faster than `par(xs, identity, 4).sum()` two-pass |
 | `tests/scripts/par_fold_text_concat.loft` | `par_fold(strings, "", |a, b| a + b, 4)` | result preserves worker-id ordering; equal to serial concat |
@@ -569,21 +581,33 @@ reading because of `break`.  Without care, worker blocks forever.
 asserts every worker exited and the test completes within a 1 s
 timeout.
 
-### C4 — In-order delivery vs. throughput
+### C4 — Completion-order delivery (resolved by D1c)
 
-**Concern.** In-order delivery serialises slot writes per input
-index; a slow worker on element N stalls workers on element N+1
-even if their results are ready.
+**Concern (originally).** In-order delivery serialises slot
+writes per input index; a slow worker on element N stalls workers
+on element N+1 even if their results are ready.
 
-**Mitigation.** Phase 7b ships in-order only; matches the user's
-mental model of `for x in ls`.  If bench data shows order-imposed
-stalls dominating real workloads, a follow-up phase introduces
-either:
-- An explicit `unordered` keyword: `par(r = foo(x), 4, unordered)`,
-  documented as "results may arrive in any order".
-- An auto-detection pass that drops the order constraint when the
-  body provably doesn't depend on iteration order (no break, no
-  index-dependent state).
+**Resolution.** Plan-06 DESIGN.md D1c drops the input-order
+guarantee entirely.  Workers post results in completion order via
+a shared atomic write-cursor; no head-of-line blocking, no
+per-input-index synchronisation.
+
+User contract for the fused for-loop body: `(x, r)` pairs arrive
+in **completion order**, not input order.  Per-pair correctness
+holds (`r == foo(x)`); cross-pair ordering does not.  Documented
+in LOFT.md's parallel-for subsection in bold:
+
+> **The body sees `(x, r)` pairs in the order workers finish,
+> not the order `x` appears in `input`.**  If you need ordered
+> processing, use a regular `for` loop.
+
+This change is the load-bearing perf decision — without it, par
+would have to either pre-allocate even chunks (bad for unbalanced
+workloads) or serialise stitch-time writes (defeats parallelism).
+
+**Side benefit for testing**: completion-order delivery makes
+**run-to-run order variation a direct parallelism proof** (see
+phase 8f.2 / DESIGN.md D8.2 for the test gate).
 
 Out of scope for plan-06 phase 7; flagged as future work in the
 CHANGELOG note.
