@@ -528,7 +528,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vec-of-fns-input: vector<fn(...) -> T> input untested; planned canary for plan-06 phase 1"]
+#[ignore = "par-vec-of-fns-input: vector<fn(...) -> T> input hangs the worker — fn-ref vector elements are 20 bytes, but G2 dispatcher infers element_size from the type and reads garbage that causes an infinite loop in the worker.  Needs typed-input fn-ref handling, planned for plan-06 phase 4."]
 fn par_vec_of_fns_input_t4() {
     // Workers receive a fn-ref and call it on a fixed input.
     // Whether vector<fn> is even constructable today is part of
@@ -677,7 +677,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-fn-return: worker returning a fn-ref untested; planned canary for plan-06 phase 1"]
+#[ignore = "par-fn-return: parser rejects fn-ref return because var_size=20 (8B d_nr + 12B closure DbRef) exceeds the par worker's 8-byte return cap.  Needs a fn-ref return mode similar to text — workers write 20-byte fn-refs into per-worker output slots; main thread copies bytes back.  Planned for plan-06 phase 4 (typed surface)."]
 fn par_struct_to_fn_t4() {
     // Worker selects and returns a fn-ref based on its input.
     code!(
