@@ -181,6 +181,160 @@ where
     vec![f(0, n_rows, worker_stores)]
 }
 
+// ── Plan-06 phase 3a — Stitch policy enum (DESIGN.md D1) ─────────────────────
+//
+// The unified runtime entry point that phase 3b lands will be
+// `n_parallel_native(stores, program, fn_pos, input, threads, fn, stitch)`,
+// inner-dispatching on the `Stitch` policy.  Today the runtime branches
+// on three native fns (`n_parallel_for_native` / `_text_native` /
+// `_ref_native`) selected at codegen time by inspecting the worker fn's
+// return type; phase 3 collapses those into one polymorphic dispatcher
+// parameterised by `Stitch`.
+//
+// Phase 3a (this commit) lands just the type — no dispatcher, no opcode,
+// no production caller.  The variants exist so that phase 3b/3d/3e have
+// a stable shape to compile against, and so that `OpParallel(stitch_id)`
+// payload encoding can be designed with the final variant set in mind.
+//
+// Two enum shapes documented in DESIGN.md:
+//   D1a (transitional, phases 3a..4b): `ConcatLegacy { elem_size, ret_size }`
+//                                      carries sizes the runtime still
+//                                      needs while the typed surface
+//                                      (phase 4) hasn't landed.
+//   D1b (final, phase 4c onward):      `Concat` (no payload — sizes come
+//                                      from `Data::fn_return_type`).
+// We land D1a now; phase 4c renames `ConcatLegacy` → `Concat`.
+
+/// Plan-06 phase 3a (DESIGN.md D1a) — selects the per-call stitch
+/// policy that the unified `n_parallel_native` dispatcher will use.
+///
+/// Runtime enum (not compile-time generics) so codegen emits one
+/// `OpParallel(stitch_id)` opcode regardless of policy; the policy is
+/// selected at parse / scope-analysis time and hardcoded into the
+/// opcode stream.
+///
+/// **Currently dead code** — phase 3b lands the dispatcher that
+/// consumes this; until then no production caller exists.  The type
+/// is here so that downstream phases (3d codegen-embedding, 3e
+/// `Stitch::Reduce` runtime) have a stable shape.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stitch {
+    /// Concatenate per-worker output stores into one result vector.
+    /// Carries the legacy element + return sizes that the runtime
+    /// still needs while the typed surface (phase 4) hasn't landed.
+    /// Phase 4c renames this to `Concat` (no payload) once
+    /// `Data::fn_return_type` is the source of truth for sizes.
+    ///
+    /// `ret_size` sentinel values during phases 3a..4b:
+    ///   `0`        → text mode (worker returns String)
+    ///   `u8::MAX`  → reference mode (worker returns DbRef)
+    ///   `1..=8`    → primitive mode (worker returns u64; size is the
+    ///                inline byte width — 1, 4, 8, etc.)
+    ConcatLegacy { elem_size: u8, ret_size: u8 },
+
+    /// Run workers, drop their results.  Used by the fused for-loop
+    /// when the body never references `r`, and by future
+    /// `par_for_each`.  Lands in plan-06 phase 7.
+    Discard,
+
+    /// Each worker accumulates over its slice via a user-supplied
+    /// monoidal fold; main thread combines per-worker partials with
+    /// the same fold fn.  Used by `par_fold(input, init, fold,
+    /// threads) -> U` and by the fused for-loop when the body is a
+    /// pure single-accumulator update (auto-detected at scope
+    /// analysis).  Runtime lands in phase 3e; surface in phase 7e.
+    ///
+    /// `fold_fn` is the fold function's def_nr; `init` lives in the
+    /// opcode payload separately (sized to `U`).
+    Reduce { fold_fn: u32 },
+
+    /// Bounded queue: workers push, parent body pops in completion
+    /// order (per D1c — input order is NOT preserved).  Used by the
+    /// fused for-loop when the body references `r` or has side
+    /// effects.  Runtime lands in phase 7b.
+    ///
+    /// `capacity` is the queue depth in elements (typically
+    /// `2 × threads` to absorb worker-burstiness without blocking).
+    Queue { capacity: u32 },
+}
+
+#[cfg(test)]
+mod stitch_tests {
+    use super::Stitch;
+
+    #[test]
+    fn enum_size_is_at_most_8_bytes() {
+        // Largest variant is Reduce { fold_fn: u32 } or Queue {
+        // capacity: u32 } — both 4 bytes payload + 1 disc + 3
+        // padding = 8.  Validates the opcode payload budget.
+        assert!(
+            std::mem::size_of::<Stitch>() <= 8,
+            "Stitch enum size {} bytes — opcode payload budget is 8",
+            std::mem::size_of::<Stitch>()
+        );
+    }
+
+    #[test]
+    fn variants_distinguishable_by_match() {
+        let cases = [
+            Stitch::ConcatLegacy {
+                elem_size: 8,
+                ret_size: 8,
+            },
+            Stitch::Discard,
+            Stitch::Reduce { fold_fn: 42 },
+            Stitch::Queue { capacity: 16 },
+        ];
+        let names: Vec<&str> = cases
+            .iter()
+            .map(|s| match s {
+                Stitch::ConcatLegacy { .. } => "concat_legacy",
+                Stitch::Discard => "discard",
+                Stitch::Reduce { .. } => "reduce",
+                Stitch::Queue { .. } => "queue",
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec!["concat_legacy", "discard", "reduce", "queue"]
+        );
+    }
+
+    #[test]
+    fn concat_legacy_ret_size_sentinels() {
+        // Plan-06 phase 3a sentinel encoding:
+        //   ret_size = 0       → text
+        //   ret_size = u8::MAX → reference
+        //   ret_size = 1..=8   → primitive
+        // Phase 4c retires these sentinels (typed surface infers
+        // sizes from worker fn signature).
+        let text = Stitch::ConcatLegacy {
+            elem_size: 8,
+            ret_size: 0,
+        };
+        let reference = Stitch::ConcatLegacy {
+            elem_size: 8,
+            ret_size: u8::MAX,
+        };
+        let primitive = Stitch::ConcatLegacy {
+            elem_size: 8,
+            ret_size: 8,
+        };
+        for s in [text, reference, primitive] {
+            if let Stitch::ConcatLegacy { ret_size, .. } = s {
+                let mode = match ret_size {
+                    0 => "text",
+                    u8::MAX => "reference",
+                    1..=8 => "primitive",
+                    _ => "invalid",
+                };
+                assert_ne!(mode, "invalid", "ret_size {ret_size} unhandled");
+            }
+        }
+    }
+}
+
 // ── Plan-06 phase 2 — store-rebase infrastructure ─────────────────────────────
 //
 // Today's `copy_from_worker` (src/database/allocation.rs:409) deep-copies
