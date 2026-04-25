@@ -152,12 +152,23 @@ no caller breaks, no two implementations to maintain, and the
 sugar form gets `vector_with_capacity` pre-alloc for free
 (impossible if users wrote the fused form by hand).
 
-**`par_light` collapses too.**  After plan-06 phase 5's auto-light
-heuristic, the compiler picks the light path automatically when
-the worker only writes its output store.  Desugared `par_light(...)`
-becomes a redundant alias for `par(...)`; phase 7 makes it a no-op
-synonym for one release, then a deprecation warning, then deletion
-in 1.0.0.
+**`par_light` is removed from the user-visible surface entirely.**
+The "light-path" execution strategy was a stopgap user-facing flag
+because the runtime had no way to detect when scratch memory could
+be skipped.  After plan-06 phase 5's auto-light heuristic, the
+compiler picks the light path automatically — it's a property of
+the worker fn, not a user choice.
+
+Phase 7c removes `parallel_for_light` from `default/01_code.loft`
+and renames the existing `par_light(...)` call sites in
+`tests/scripts/`, `lib/`, and any internal docs to plain `par(...)`.
+The auto-light heuristic produces the same execution profile.
+
+Result: `par_light` ceases to exist in the language.  A user
+writing `par_light(...)` after 0.9.0 gets a normal "unknown
+function: par_light — did you mean par?" error from the parser,
+same as any other typo.  The compiler still picks the light
+internal path when applicable; users never need to know.
 
 ## Implementation
 
@@ -324,17 +335,27 @@ Implementation order within phase 7:
    from phase 3).  Codegen routes `Value::ParFor` to the queue
    policy.  Bench shows the expected ~3 ms / 8 MB win on bench-1
    when the body doesn't collect.
-3. **7c — desugar the call form.**  `parse_call` rewrites
-   `par(input, fn, threads)` and `par_light(input, fn, threads)`
-   into `Value::Block` containing a `Value::ParFor` with an
-   auto-collect body using `vector_with_capacity(len(input))`.
+3. **7c — desugar the call form + remove `par_light`.**  Three sub-steps:
+   - `parse_call` rewrites `par(input, fn, threads)` into
+     `Value::Block` containing a `Value::ParFor` with an
+     auto-collect body using `vector_with_capacity(len(input))`.
+     Source spans threaded through.
+   - Delete `parallel_for_light` from `default/01_code.loft`.
+   - Rename every `par_light(...)` call site in
+     `tests/scripts/`, `tests/docs/`, `lib/`, and any tutorial /
+     example files to `par(...)`.  The auto-light heuristic from
+     phase 5 produces the same execution profile.
+
    Existing `tests/scripts/22-threading.loft` proves byte-equivalent
-   behaviour; the underlying runtime is now uniform.  Source spans
-   threaded through.
-4. **7d — doc + CHANGELOG + deprecation notice for `par_light`.**
-   Replace `THREADING.md`'s "par variants" section; new `LOFT.md`
-   subsection; CHANGELOG entry.  `par_light` documented as a
-   no-op alias for `par` after auto-light from phase 5.
+   behaviour; the underlying runtime is now uniform.  After 7c
+   lands, `par_light` is not a name in the language — a user
+   writing it gets `unknown function: par_light — did you mean
+   par?` from the regular parser-side undefined-name diagnostic.
+4. **7d — doc + CHANGELOG.**  Replace `THREADING.md`'s "par variants"
+   section; new `LOFT.md` subsection; CHANGELOG entry.  CHANGELOG
+   notes `par_light` was an internal flag that no longer exists at
+   the user surface; users who hand-typed it receive an "unknown
+   function" error and rename to `par`.
 
 Each commit lands with `make ci` green.
 
@@ -532,19 +553,37 @@ genuinely needs to tune the queue depth (e.g. extremely uneven
 worker latency), a future `par(r = foo(x), 4, queue_depth: 16)`
 modifier can be added; not in phase 7's scope.
 
-### C12 — `par_light` deprecation user impact
+### C12 — `par_light` removal user impact
 
-**Concern.** `par_light(...)` is documented and used in libraries;
-deprecating it forces user changes.
+**Concern.** `par_light(...)` exists today as a user-visible
+function in `default/01_code.loft` and is used in tests/lib.
+Removing it could break user programs.
 
-**Mitigation.** Phase 5's auto-light heuristic makes the
-distinction internal: the compiler picks the light path
-automatically when the worker only writes its output store.
-Phase 7c desugars `par_light(input, fn, threads)` identically to
-`par(input, fn, threads)` — no behaviour change; the auto-light
-heuristic does the right thing.  CHANGELOG marks `par_light` as
-"deprecated; alias for `par`".  One release later (1.0.0), the
-alias is removed.
+**Mitigation.** The "light-path" execution was always a runtime
+optimisation that leaked into the surface because we had no way to
+detect it automatically.  After phase 5's auto-light heuristic the
+distinction is purely internal — the compiler picks the light
+path when the worker doesn't allocate, regardless of what the user
+typed.
+
+Phase 7c performs the cleanup in three steps:
+1. Delete `parallel_for_light` from `default/01_code.loft`.
+2. Rename every internal call site (`tests/scripts/22-threading.loft`,
+   any `lib/` examples, any tutorial code) to `par(...)`.
+3. Verify the renamed callers produce identical output and the
+   auto-light heuristic from phase 5 picks the light path for
+   them.
+
+User-program impact: any third-party loft program that hand-typed
+`par_light(...)` after 0.9.0 receives a regular parser
+`unknown function: par_light` error — the same diagnostic that
+fires for any unknown name, with the standard "did you mean par?"
+suggestion already in the unknown-fn path.  The fix is a one-token
+rename.
+
+This is intentional surface reduction, not a deprecation cycle.
+The internal optimisation continues to fire automatically; users
+never need to know it exists.
 
 ## What this replaces in the plan-06 README
 
