@@ -13,8 +13,6 @@ use crate::state::State;
 use crate::vector;
 use std::sync::Arc;
 #[cfg(feature = "threading")]
-use std::sync::mpsc;
-#[cfg(feature = "threading")]
 use std::thread;
 
 /// Shared bytecode + library for a single `parallel_for` dispatch.
@@ -273,48 +271,54 @@ pub fn run_parallel_raw(
     if n_rows == 0 {
         return Vec::new();
     }
+    // Plan-06 phase 1 step 4: same channel→scope swap as
+    // run_parallel_text/_ref.  Workers return Vec<u64> via
+    // ScopedJoinHandle; main thread re-sequences.
     #[cfg(feature = "threading")]
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, u64)>>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
-                    batch.push((row_idx, val));
+        thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let start = t * n_rows / threads;
+                    let end = (t + 1) * n_rows / threads;
+                    let worker_stores = stores.clone_for_worker();
+                    let prog = Arc::clone(&program);
+                    let input_t = *input;
+                    let extras = extra_args.to_vec();
+                    let handle = s.spawn(move || {
+                        let mut state = prog.new_state(worker_stores);
+                        let mut batch = Vec::with_capacity(end - start);
+                        for row_idx in start..end {
+                            let row_ref = vector::get_vector(
+                                &input_t,
+                                element_size,
+                                row_idx as i64,
+                                &state.database.allocations,
+                            );
+                            let val = state.execute_at_raw(
+                                fn_pos,
+                                &row_ref,
+                                &extras,
+                                return_size,
+                            );
+                            batch.push(val);
+                        }
+                        batch
+                    });
+                    (start, handle)
+                })
+                .collect();
+            let mut results = vec![0u64; n_rows];
+            for (start, h) in handles {
+                let batch = h.join().expect("worker thread panicked");
+                for (offset, val) in batch.into_iter().enumerate() {
+                    results[start + offset] = val;
                 }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = vec![0u64; n_rows];
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
             }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
+            results
+        })
     }
     #[cfg(not(feature = "threading"))]
     {
@@ -454,47 +458,49 @@ pub fn run_parallel_ref(
     if n_rows == 0 {
         return Vec::new();
     }
+    // Plan-06 phase 1 step 4: each worker collects its
+    // (Vec<(row_idx, DbRef)>, Stores) tuple and returns it via
+    // thread::scope's ScopedJoinHandle — no mpsc channel.  The
+    // returned Stores still carries the worker's intermediate
+    // allocations (which the parent's copy_from_worker grafts to
+    // deep-copy struct results); phase 2 retires this in favour
+    // of the rebase walk that adopts worker stores by store_nr.
     #[cfg(feature = "threading")]
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<(Vec<(usize, DbRef)>, crate::database::Stores)>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
-                    batch.push((row_idx, val));
-                }
-                tx_t.send((batch, state.database))
-                    .expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = Vec::with_capacity(threads);
-        for batch in rx {
-            results.push(batch);
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
+        thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let start = t * n_rows / threads;
+                    let end = (t + 1) * n_rows / threads;
+                    let worker_stores = stores.clone_for_worker();
+                    let prog = Arc::clone(&program);
+                    let input_t = *input;
+                    let extras = extra_args.to_vec();
+                    s.spawn(move || {
+                        let mut state = prog.new_state(worker_stores);
+                        let mut batch = Vec::with_capacity(end - start);
+                        for row_idx in start..end {
+                            let row_ref = vector::get_vector(
+                                &input_t,
+                                element_size,
+                                row_idx as i64,
+                                &state.database.allocations,
+                            );
+                            let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
+                            batch.push((row_idx, val));
+                        }
+                        (batch, state.database)
+                    })
+                })
+                .collect();
+            let mut results = Vec::with_capacity(threads);
+            for h in handles {
+                results.push(h.join().expect("worker thread panicked"));
+            }
+            results
+        })
     }
     #[cfg(not(feature = "threading"))]
     {
@@ -536,50 +542,47 @@ pub fn run_parallel_int(
     if n_rows == 0 {
         return Vec::new();
     }
+    // Plan-06 phase 1 step 4: same channel→scope swap as the
+    // other run_parallel_* variants.  Workers return Vec<i64> via
+    // ScopedJoinHandle; main thread re-sequences.
     #[cfg(feature = "threading")]
     {
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, i64)>>();
-
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_idx_i32 = row_idx as i64;
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx_i32,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at(fn_pos, &row_ref);
-                    batch.push((row_idx, val));
+        thread::scope(|s| {
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    let start = t * n_rows / threads;
+                    let end = (t + 1) * n_rows / threads;
+                    let worker_stores = stores.clone_for_worker();
+                    let prog = Arc::clone(&program);
+                    let input_t = *input;
+                    let handle = s.spawn(move || {
+                        let mut state = prog.new_state(worker_stores);
+                        let mut batch = Vec::with_capacity(end - start);
+                        for row_idx in start..end {
+                            let row_ref = vector::get_vector(
+                                &input_t,
+                                element_size,
+                                row_idx as i64,
+                                &state.database.allocations,
+                            );
+                            batch.push(state.execute_at(fn_pos, &row_ref));
+                        }
+                        batch
+                    });
+                    (start, handle)
+                })
+                .collect();
+            let mut results = vec![i64::MIN; n_rows];
+            for (start, h) in handles {
+                let batch = h.join().expect("worker thread panicked");
+                for (offset, val) in batch.into_iter().enumerate() {
+                    results[start + offset] = val;
                 }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = vec![i64::MIN; n_rows];
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
             }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
+            results
+        })
     }
     #[cfg(not(feature = "threading"))]
     {
