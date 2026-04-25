@@ -1606,3 +1606,242 @@ fn check_ref_leaks(
         }
     }
 }
+
+// ── Plan-06 phase 5b — par-safety analyser (DESIGN.md D8) ────────────────────
+
+use crate::data::{ImpureCategory, Purity};
+
+/// Plan-06 phase 5b minimal — purity-driven `is_par_safe` classifier.
+///
+/// Returns `true` iff `d_nr`'s body contains only par-safe calls per
+/// the Purity classification (DESIGN.md D8.1).  Recursive into user
+/// fn callees; cycles short-circuit to `true` (5b's placeholder
+/// trick — phase 5e replaces with proper monotonic fixed-point).
+///
+/// **Minimum implementation — covers Purity-driven rejection only.**
+/// Full D8 rules require additional analysis not in this commit:
+/// - R1 (writes to non-local) — partially captured via stdlib's
+///   `Impure(ParentWrite)` annotations on `vector_add`/`hash_set`/etc.
+///   The per-call "is first arg local?" check is missing; today
+///   any call to a `ParentWrite` fn is rejected outright.
+/// - R2 (nested par) — `Impure(ParCall)` returns true here; full
+///   5b proper recurses into the inner worker fn.
+/// - R4 (mutation through captured Reference) — not yet detected.
+///
+/// Non-`Function` def_nrs return `false` (only fns can be par
+/// workers).  `CallRef` (runtime fn-ref) callsites pessimise to
+/// `false` — the actual callee is not statically known.
+///
+/// Currently no production caller — phase 5b proper hooks the
+/// analyser into codegen so par worker fns that return false here
+/// produce a compile error per D8 diagnostics.  The accessor +
+/// helpers carry `#[allow(dead_code)]` until then.
+#[allow(dead_code)]
+#[must_use]
+pub fn is_par_safe(data: &Data, d_nr: u32) -> bool {
+    if d_nr == u32::MAX || (d_nr as usize) >= data.definitions.len() {
+        return false;
+    }
+    let mut visited = HashSet::new();
+    walk_par_safe(data, d_nr, &mut visited)
+}
+
+#[allow(dead_code)]
+fn walk_par_safe(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> bool {
+    if !visited.insert(d_nr) {
+        // Cycle detected — break recursion optimistically (placeholder
+        // trick).  Phase 5e replaces this with monotonic fixed-point
+        // iteration so mutually-recursive pure pairs classify correctly.
+        return true;
+    }
+    if d_nr == u32::MAX || (d_nr as usize) >= data.definitions.len() {
+        return false;
+    }
+    let def = &data.definitions[d_nr as usize];
+    if !matches!(def.def_type, DefType::Function) {
+        return false;
+    }
+    walk_par_safe_value(&def.code, data, visited)
+}
+
+#[allow(dead_code)]
+fn walk_par_safe_value(value: &Value, data: &Data, visited: &mut HashSet<u32>) -> bool {
+    match value {
+        Value::Call(callee, args) => {
+            let safe = call_is_par_safe(*callee, data, visited);
+            safe && args.iter().all(|a| walk_par_safe_value(a, data, visited))
+        }
+        Value::CallRef(_, _args) => {
+            // Runtime fn-ref — actual callee is unknown at compile
+            // time.  Conservative: reject.
+            false
+        }
+        Value::Block(b) => b
+            .operators
+            .iter()
+            .all(|v| walk_par_safe_value(v, data, visited)),
+        Value::Insert(vs) => vs.iter().all(|v| walk_par_safe_value(v, data, visited)),
+        Value::If(c, t, e) => {
+            walk_par_safe_value(c, data, visited)
+                && walk_par_safe_value(t, data, visited)
+                && walk_par_safe_value(e, data, visited)
+        }
+        Value::Loop(body) => body
+            .operators
+            .iter()
+            .all(|v| walk_par_safe_value(v, data, visited)),
+        Value::Set(_, rhs) => walk_par_safe_value(rhs, data, visited),
+        // Leaves — primitive literals, var reads, etc.  Safe.
+        _ => true,
+    }
+}
+
+#[allow(dead_code)]
+fn call_is_par_safe(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> bool {
+    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
+        return false;
+    }
+    let def = &data.definitions[callee as usize];
+    match def.purity {
+        Purity::Pure => true,
+        Purity::Impure(ImpureCategory::HostIo)
+        | Purity::Impure(ImpureCategory::Prng)
+        | Purity::Impure(ImpureCategory::Io) => true,
+        Purity::Impure(ImpureCategory::ParCall) => {
+            // Nested par: D8 R2 says inner worker fn must itself be
+            // par-safe.  Minimum impl returns true; full 5b looks
+            // up the worker fn arg and recurses into it.
+            true
+        }
+        Purity::Impure(ImpureCategory::ParentWrite) => false,
+        Purity::Unknown => {
+            if matches!(def.code, Value::Null) {
+                // Native stdlib fn with no annotation — conservative.
+                false
+            } else {
+                // User fn: recurse into its body.
+                walk_par_safe(data, callee, visited)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod par_safety_tests {
+    use super::is_par_safe;
+    use crate::data::{Block, Data, DefType, ImpureCategory, Purity, Type, Value};
+    use crate::lexer::Position;
+
+    fn pos() -> Position {
+        Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn pure_fn_with_no_calls_is_par_safe() {
+        let mut d = Data::new();
+        let id = d.add_def("pure_leaf", &pos(), DefType::Function);
+        d.definitions[id as usize].code = Value::Int(42);
+        assert!(is_par_safe(&d, id));
+    }
+
+    #[test]
+    fn fn_calling_pure_stdlib_is_par_safe() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[stdlib as usize].purity = Purity::Pure;
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        assert!(is_par_safe(&d, user));
+    }
+
+    #[test]
+    fn fn_calling_parent_write_stdlib_is_not_par_safe() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[stdlib as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        assert!(!is_par_safe(&d, user));
+    }
+
+    #[test]
+    fn fn_calling_host_io_stdlib_is_par_safe() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("log_warn", &pos(), DefType::Function);
+        d.definitions[stdlib as usize].purity = Purity::Impure(ImpureCategory::HostIo);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        assert!(is_par_safe(&d, user));
+    }
+
+    #[test]
+    fn fn_calling_unannotated_native_is_not_par_safe() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("mystery_native", &pos(), DefType::Function);
+        // purity defaults to Unknown; code defaults to Value::Null
+        // (native fn with no body).
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        assert!(!is_par_safe(&d, user));
+    }
+
+    #[test]
+    fn fn_calling_callref_is_not_par_safe() {
+        let mut d = Data::new();
+        let user = d.add_def("user", &pos(), DefType::Function);
+        // Var slot 5, no args — runtime fn-ref of unknown target.
+        d.definitions[user as usize].code = Value::CallRef(5, vec![]);
+        assert!(!is_par_safe(&d, user));
+    }
+
+    #[test]
+    fn user_fn_recursion_into_par_safe_callee() {
+        let mut d = Data::new();
+        let pure_stdlib = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[pure_stdlib as usize].purity = Purity::Pure;
+        let inner = d.add_def("inner", &pos(), DefType::Function);
+        d.definitions[inner as usize].code = Value::Call(pure_stdlib, vec![]);
+        let outer = d.add_def("outer", &pos(), DefType::Function);
+        d.definitions[outer as usize].code = Value::Call(inner, vec![]);
+        assert!(is_par_safe(&d, outer));
+    }
+
+    #[test]
+    fn cycle_breaks_optimistically() {
+        // Mutually recursive a→b→a — placeholder trick returns true.
+        // Phase 5e's fixed-point iteration handles this properly.
+        let mut d = Data::new();
+        let a = d.add_def("a", &pos(), DefType::Function);
+        let b = d.add_def("b", &pos(), DefType::Function);
+        d.definitions[a as usize].code = Value::Call(b, vec![]);
+        d.definitions[b as usize].code = Value::Call(a, vec![]);
+        assert!(is_par_safe(&d, a));
+    }
+
+    #[test]
+    fn block_walks_every_operator() {
+        let mut d = Data::new();
+        let pure_fn = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[pure_fn as usize].purity = Purity::Pure;
+        let bad_fn = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad_fn as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Block(Box::new(Block {
+            name: "test",
+            operators: vec![Value::Call(pure_fn, vec![]), Value::Call(bad_fn, vec![])],
+            result: Type::Void,
+            scope: 0,
+            var_size: 0,
+        }));
+        assert!(
+            !is_par_safe(&d, user),
+            "block walk must reject when any operator calls a parent-write fn"
+        );
+    }
+}
