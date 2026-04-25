@@ -1845,3 +1845,245 @@ mod par_safety_tests {
         );
     }
 }
+
+// ── Plan-06 phase 5d — par-safety diagnostic helpers (DESIGN.md D8) ──────────
+
+/// Plan-06 phase 5d (DESIGN.md D8 diagnostic shapes) — explains
+/// **why** a fn is par-unsafe by walking its body once and
+/// returning the first violating call's information.
+///
+/// Returns `None` if the fn is par-safe (no violations to report).
+/// Returns `Some(reason)` describing the first encountered violation
+/// — currently one of:
+///   - `"call to parent-write stdlib fn '<name>'"`
+///   - `"call to unannotated native fn '<name>'"`
+///   - `"runtime fn-ref call (callee unknown at compile time)"`
+///   - `"recursive descent into par-unsafe user fn '<name>'"`
+///
+/// Used by phase 5b proper's codegen integration: when
+/// `is_par_safe(d_nr) == false`, the parser calls
+/// `par_unsafe_reason(d_nr)` to embed the specific cause in the
+/// compile-error diagnostic body, matching D8's example error
+/// shape with `--> file:line` + offending construct + fix-it.
+///
+/// Currently no production caller — phase 5b proper hooks it.
+#[allow(dead_code)]
+#[must_use]
+pub fn par_unsafe_reason(data: &Data, d_nr: u32) -> Option<String> {
+    if d_nr == u32::MAX || (d_nr as usize) >= data.definitions.len() {
+        return Some(format!("invalid def_nr {d_nr}"));
+    }
+    let mut visited = HashSet::new();
+    walk_par_unsafe_reason(data, d_nr, &mut visited)
+}
+
+#[allow(dead_code)]
+fn walk_par_unsafe_reason(
+    data: &Data,
+    d_nr: u32,
+    visited: &mut HashSet<u32>,
+) -> Option<String> {
+    if !visited.insert(d_nr) {
+        // Cycle — same optimistic short-circuit as is_par_safe.
+        return None;
+    }
+    if d_nr == u32::MAX || (d_nr as usize) >= data.definitions.len() {
+        return Some(format!("invalid def_nr {d_nr}"));
+    }
+    let def = &data.definitions[d_nr as usize];
+    if !matches!(def.def_type, DefType::Function) {
+        return Some(format!("def {} is not a function", def.name));
+    }
+    walk_par_unsafe_reason_value(&def.code, data, visited)
+}
+
+#[allow(dead_code)]
+fn walk_par_unsafe_reason_value(
+    value: &Value,
+    data: &Data,
+    visited: &mut HashSet<u32>,
+) -> Option<String> {
+    match value {
+        Value::Call(callee, args) => {
+            if let Some(r) = call_reason(*callee, data, visited) {
+                return Some(r);
+            }
+            for a in args {
+                if let Some(r) = walk_par_unsafe_reason_value(a, data, visited) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        Value::CallRef(_, _args) => Some(
+            "runtime fn-ref call (callee unknown at compile time)".to_string(),
+        ),
+        Value::Block(b) => {
+            for v in &b.operators {
+                if let Some(r) = walk_par_unsafe_reason_value(v, data, visited) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        Value::Insert(vs) => {
+            for v in vs {
+                if let Some(r) = walk_par_unsafe_reason_value(v, data, visited) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        Value::If(c, t, e) => walk_par_unsafe_reason_value(c, data, visited)
+            .or_else(|| walk_par_unsafe_reason_value(t, data, visited))
+            .or_else(|| walk_par_unsafe_reason_value(e, data, visited)),
+        Value::Loop(body) => {
+            for v in &body.operators {
+                if let Some(r) = walk_par_unsafe_reason_value(v, data, visited) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        Value::Set(_, rhs) => walk_par_unsafe_reason_value(rhs, data, visited),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+fn call_reason(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> Option<String> {
+    if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
+        return Some(format!("invalid callee def_nr {callee}"));
+    }
+    let def = &data.definitions[callee as usize];
+    match def.purity {
+        Purity::Pure
+        | Purity::Impure(ImpureCategory::HostIo)
+        | Purity::Impure(ImpureCategory::Prng)
+        | Purity::Impure(ImpureCategory::Io)
+        | Purity::Impure(ImpureCategory::ParCall) => None,
+        Purity::Impure(ImpureCategory::ParentWrite) => Some(format!(
+            "call to parent-write stdlib fn '{}'",
+            def.name
+        )),
+        Purity::Unknown => {
+            if matches!(def.code, Value::Null) {
+                Some(format!("call to unannotated native fn '{}'", def.name))
+            } else {
+                walk_par_unsafe_reason(data, callee, visited).map(|inner| {
+                    format!(
+                        "recursive descent into par-unsafe user fn '{}': {}",
+                        def.name, inner
+                    )
+                })
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod par_diag_tests {
+    use super::par_unsafe_reason;
+    use crate::data::{Block, Data, DefType, ImpureCategory, Purity, Type, Value};
+    use crate::lexer::Position;
+
+    fn pos() -> Position {
+        Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn par_safe_fn_has_no_reason() {
+        let mut d = Data::new();
+        let id = d.add_def("safe", &pos(), DefType::Function);
+        d.definitions[id as usize].code = Value::Int(0);
+        assert!(par_unsafe_reason(&d, id).is_none());
+    }
+
+    #[test]
+    fn parent_write_call_reports_offending_fn_name() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[stdlib as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        let r = par_unsafe_reason(&d, user).unwrap();
+        assert!(
+            r.contains("vector_add") && r.contains("parent-write"),
+            "expected parent-write reason mentioning vector_add; got: {r}"
+        );
+    }
+
+    #[test]
+    fn unannotated_native_reports_specifically() {
+        let mut d = Data::new();
+        let stdlib = d.add_def("mystery", &pos(), DefType::Function);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
+        let r = par_unsafe_reason(&d, user).unwrap();
+        assert!(
+            r.contains("unannotated") && r.contains("mystery"),
+            "got: {r}"
+        );
+    }
+
+    #[test]
+    fn callref_reports_runtime_unknown() {
+        let mut d = Data::new();
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::CallRef(3, vec![]);
+        let r = par_unsafe_reason(&d, user).unwrap();
+        assert!(r.contains("runtime fn-ref"), "got: {r}");
+    }
+
+    #[test]
+    fn nested_user_fn_reports_the_chain() {
+        let mut d = Data::new();
+        let bad = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
+        let inner = d.add_def("inner", &pos(), DefType::Function);
+        d.definitions[inner as usize].code = Value::Call(bad, vec![]);
+        let outer = d.add_def("outer", &pos(), DefType::Function);
+        d.definitions[outer as usize].code = Value::Call(inner, vec![]);
+        let r = par_unsafe_reason(&d, outer).unwrap();
+        assert!(
+            r.contains("recursive descent")
+                && r.contains("inner")
+                && r.contains("vector_add"),
+            "expected chain explanation through inner→vector_add; got: {r}"
+        );
+    }
+
+    #[test]
+    fn first_violating_call_in_block_wins() {
+        let mut d = Data::new();
+        let pure_fn = d.add_def("min", &pos(), DefType::Function);
+        d.definitions[pure_fn as usize].purity = Purity::Pure;
+        let bad_first = d.add_def("vector_add", &pos(), DefType::Function);
+        d.definitions[bad_first as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let bad_second = d.add_def("hash_set", &pos(), DefType::Function);
+        d.definitions[bad_second as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let user = d.add_def("user", &pos(), DefType::Function);
+        d.definitions[user as usize].code = Value::Block(Box::new(Block {
+            name: "test",
+            operators: vec![
+                Value::Call(pure_fn, vec![]),
+                Value::Call(bad_first, vec![]),
+                Value::Call(bad_second, vec![]),
+            ],
+            result: Type::Void,
+            scope: 0,
+            var_size: 0,
+        }));
+        let r = par_unsafe_reason(&d, user).unwrap();
+        // First violator wins: should mention vector_add, not hash_set.
+        assert!(r.contains("vector_add"), "got: {r}");
+        assert!(!r.contains("hash_set"), "second violator leaked: {r}");
+    }
+}
