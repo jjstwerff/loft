@@ -52,7 +52,9 @@ the canonical example of this discipline in action.
 
 ## Current initiatives
 
-*(none — next initiative opens a new numbered subdirectory.)*
+| Dir | Initiative | Status |
+|---|---|---|
+| [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`. | Phase 0 (characterisation + bench) open |
 
 ## Finished initiatives
 
