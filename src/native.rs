@@ -766,14 +766,6 @@ fn parallel_execute_and_collect(
     // them into a single polymorphic worker once the layout work in
     // phase 2's full rebase walk lands.
     use crate::parallel::Stitch;
-    // ret_size sentinel encoding (D1a): 0=text, u8::MAX=reference,
-    // 1..=8=primitive with inline byte width.
-    let (is_ref, is_text) = match stitch {
-        Stitch::ConcatLegacy { ret_size, .. } => (ret_size == u8::MAX, ret_size == 0),
-        // Discard / Reduce / Queue: not yet wired through this path —
-        // phase 7 routes them via Value::ParFor instead.
-        _ => unreachable!("parallel_execute_and_collect only handles ConcatLegacy today"),
-    };
 
     let result_db = stores.null();
     let vec_words = ((n as u32) * return_size + 15) / 8;
@@ -788,88 +780,114 @@ fn parallel_execute_and_collect(
         .store_mut(&result_db)
         .set_u32_raw(header_rec, 4, vec_rec);
 
-    if is_ref {
-        let batches = run_parallel_ref(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            n_threads,
-            extra_args,
-            n,
-        );
-        // Phase 2 step 2b: structs without owned sub-fields (no text,
-        // no DbRef sub-fields) take the cheaper `copy_from_worker_unowned`
-        // path that skips copy_claims.  Structs with owned fields keep
-        // the full deep-copy path until phase 2's full rebase walk lands.
-        let struct_size = u32::from(stores.size(known_type));
-        let unowned = !stores.has_owned_sub_fields(known_type);
-        for (batch, mut worker_stores) in batches {
-            for (i, src_ref) in batch {
-                let dest = DbRef {
-                    store_nr: result_db.store_nr,
-                    rec: vec_rec,
-                    pos: 8 + (i as u32) * struct_size,
-                };
-                if unowned {
-                    stores.copy_from_worker_unowned(
-                        &src_ref,
-                        &dest,
-                        &mut worker_stores,
-                        known_type,
-                    );
-                } else {
-                    stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
+    // ret_size sentinel encoding (DESIGN.md D1a): 0=text,
+    // u8::MAX=reference, 1..=3=primitive sub-4-byte, 4..=8=primitive
+    // 4-or-more-byte.  Phase 3c collapses these arms into one
+    // polymorphic worker; today they call into the existing
+    // run_parallel_* helpers per arm.
+    match stitch {
+        Stitch::ConcatLegacy { ret_size: 0, .. } => {
+            // Text: workers return owned `String`; main thread
+            // interns each into the result store via set_str.
+            let strings = run_parallel_text(
+                stores,
+                program,
+                fn_pos,
+                input,
+                element_size,
+                n_threads,
+                extra_args,
+                n,
+                n_hidden_text,
+            );
+            let store = stores.store_mut(&result_db);
+            for (i, s) in strings.iter().enumerate() {
+                let s_pos = store.set_str(s);
+                store.set_u32_raw(vec_rec, 8 + i as u32 * 4, s_pos);
+            }
+        }
+        Stitch::ConcatLegacy {
+            ret_size: u8::MAX, ..
+        } => {
+            // Reference / struct-enum: workers return DbRef into
+            // their own stores; main thread copies (or rebases per
+            // phase 2's narrow path when the struct is owned-free).
+            let batches = run_parallel_ref(
+                stores,
+                program,
+                fn_pos,
+                input,
+                element_size,
+                n_threads,
+                extra_args,
+                n,
+            );
+            let struct_size = u32::from(stores.size(known_type));
+            let unowned = !stores.has_owned_sub_fields(known_type);
+            for (batch, mut worker_stores) in batches {
+                for (i, src_ref) in batch {
+                    let dest = DbRef {
+                        store_nr: result_db.store_nr,
+                        rec: vec_rec,
+                        pos: 8 + (i as u32) * struct_size,
+                    };
+                    if unowned {
+                        stores.copy_from_worker_unowned(
+                            &src_ref,
+                            &dest,
+                            &mut worker_stores,
+                            known_type,
+                        );
+                    } else {
+                        stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
+                    }
                 }
             }
         }
-    } else if is_text {
-        let strings = run_parallel_text(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            n_threads,
-            extra_args,
-            n,
-            n_hidden_text,
-        );
-        let store = stores.store_mut(&result_db);
-        for (i, s) in strings.iter().enumerate() {
-            let s_pos = store.set_str(s);
-            store.set_u32_raw(vec_rec, 8 + i as u32 * 4, s_pos);
+        Stitch::ConcatLegacy { ret_size, .. } if ret_size >= 4 => {
+            // Primitive 4-or-more-byte (i32, i64, f32, f64, fn-ref).
+            // Workers write directly into the result store via the
+            // per-worker output slot mechanism (phase 1); main thread
+            // copies bytes back into the contiguous result buffer.
+            let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
+            run_parallel_direct(
+                stores,
+                program,
+                fn_pos,
+                input,
+                element_size,
+                return_size,
+                n_threads,
+                extra_args,
+                out_ptr,
+                n,
+            );
         }
-    } else if return_size >= 4 {
-        let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
-        run_parallel_direct(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            return_size,
-            n_threads,
-            extra_args,
-            out_ptr,
-            n,
-        );
-    } else {
-        let results = run_parallel_raw(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            return_size,
-            n_threads,
-            extra_args,
-        );
-        let store = stores.store_mut(&result_db);
-        for (i, &raw) in results.iter().enumerate() {
-            store.set_byte(vec_rec, 8u32 + i as u32, 0, raw as i32);
+        Stitch::ConcatLegacy { .. } => {
+            // Primitive sub-4-byte (bool, byte).  Workers return
+            // `u64` per row; main thread re-sequences and writes
+            // single-byte values into the result store.
+            let results = run_parallel_raw(
+                stores,
+                program,
+                fn_pos,
+                input,
+                element_size,
+                return_size,
+                n_threads,
+                extra_args,
+            );
+            let store = stores.store_mut(&result_db);
+            for (i, &raw) in results.iter().enumerate() {
+                store.set_byte(vec_rec, 8u32 + i as u32, 0, raw as i32);
+            }
         }
+        // Discard / Reduce / Queue: not wired through this path
+        // today — phase 7 routes them via Value::ParFor instead.
+        _ => unreachable!(
+            "parallel_execute_and_collect only handles Stitch::ConcatLegacy; \
+             Discard/Reduce/Queue land via Value::ParFor in phase 7"
+        ),
     }
     DbRef {
         store_nr: result_db.store_nr,
