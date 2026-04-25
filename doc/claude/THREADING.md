@@ -227,10 +227,28 @@ fn main() {
 
 ---
 
+## Plan-06 phase 0 baseline
+
+Recorded 2026-04-25 on the loft project's primary CI host.
+Workload: `bench/11_par/bench.loft` — 100 K-element vector,
+50-iteration Newton's-method sqrt per element, 4 worker threads.
+
+| Column | Time | Notes |
+|---|---|---|
+| python | 33ms | `multiprocessing.Pool(4)` — 4 worker processes |
+| loft-interp | 44ms | `par(items, work, 4)` — 4 threads |
+| loft-native | 12ms | same loft source, native-compiled, 4 threads |
+| loft-wasm | `-` | par codegen rejects today (G3 — fixed by phase 1) |
+| rust | 4ms | `std::thread::spawn × 4` — std-only, range-partitioned |
+
+Plan-06 phases re-run `make bench` and assert no regression past
+±5 % on the loft-interp + loft-native columns.
+
 ## See also
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API
 - [PLANNING.md](PLANNING.md) — A1 (parallel workers: extra args + text/ref returns)
+- [plans/06-typed-par/](plans/06-typed-par/) — typed-par redesign (in progress)
 - See `par_light(...)` and thread safety sections below
 
 ---
