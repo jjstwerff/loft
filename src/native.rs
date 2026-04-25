@@ -651,7 +651,9 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     };
 
     // For reference returns, look up the struct's known_type for deep-copy
-    // and compute the inline struct size for the result vector.
+    // and compute the inline struct size for the result vector.  Both
+    // Type::Reference and Type::Enum(_, true, _) (heap-allocated struct-enum)
+    // route through this path; heap_def_nr() catches both — plan-06 G1.
     let (known_type, return_size) = if is_ref {
         let ctx = stores
             .parallel_ctx
@@ -659,9 +661,9 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_for: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let kt = match &def.returned {
-            crate::data::Type::Reference(d_nr, _) => data.def(*d_nr).known_type,
-            _ => u16::MAX,
+        let kt = match def.returned.heap_def_nr() {
+            Some(d_nr) => data.def(d_nr).known_type,
+            None => u16::MAX,
         };
         let sz = u32::from(stores.size(kt));
         (kt, sz)

@@ -765,10 +765,14 @@ impl Output<'_> {
                     self.emit_i32_slot(w, &vals[1])?;
                     write!(w, ", ")?;
                     if is_ref {
-                        // For ref mode, pass struct_size and known_type instead of return_size.
+                        // For ref mode, pass struct_size and known_type instead
+                        // of return_size.  Both Type::Reference and
+                        // Type::Enum(_, true, _) (heap-allocated struct-enum)
+                        // route through the ref path; heap_def_nr() returns
+                        // the def for both.
                         let (struct_size, known_type) =
-                            if let Type::Reference(d_nr, _) = &worker_ret {
-                                let kt = self.data.def(*d_nr).known_type;
+                            if let Some(d_nr) = worker_ret.heap_def_nr() {
+                                let kt = self.data.def(d_nr).known_type;
                                 (i32::from(self.stores.size(kt)), i32::from(kt))
                             } else {
                                 (0, 0)
@@ -789,23 +793,28 @@ impl Output<'_> {
                         s
                     };
                     // Generate closure with return-type-specific conversion.
-                    match &worker_ret {
-                        Type::Text(_) => write!(
+                    // Heap-typed returns (Reference + struct-enum) all use the
+                    // ref-path closure shape; heap_def_nr() catches both.
+                    if matches!(&worker_ret, Type::Text(_)) {
+                        write!(
                             w,
                             ", |stores, elm| {{ let mut _w = String::new(); {worker_name}(stores, elm{extras}, &mut _w); _w }})"
-                        )?,
-                        Type::Reference(_, _) => write!(
+                        )?;
+                    } else if worker_ret.heap_def_nr().is_some() {
+                        write!(
                             w,
                             ", |stores, elm| {{ {worker_name}(stores, elm{extras}) }})"
-                        )?,
-                        Type::Float | Type::Single => write!(
+                        )?;
+                    } else if matches!(&worker_ret, Type::Float | Type::Single) {
+                        write!(
                             w,
                             ", |stores, elm| {{ {worker_name}(stores, elm{extras}).to_bits() as i64 }})"
-                        )?,
-                        _ => write!(
+                        )?;
+                    } else {
+                        write!(
                             w,
                             ", |stores, elm| {{ {worker_name}(stores, elm{extras}) as i64 }})"
-                        )?,
+                        )?;
                     }
                     // Close the let-binding braces.
                     for _ in 0..n_extra {

@@ -433,14 +433,12 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-struct-enum-return: parser rejects size > 8; planned fix in plan-06 phase 1 (per-worker output stores remove the fixed-size dispatch)"]
 fn par_struct_to_struct_enum_t4() {
-    // Struct-enum (variant with fields) currently fires the parser
-    // diagnostic `Parallel worker return type '<Enum>' (size N) is
-    // not supported` because the runtime hard-codes return-type
-    // dispatch on size <= 8.  After plan-06 phase 1 lands, workers
-    // write into per-worker output Stores using normal struct-write
-    // ops; arbitrary variant payloads work uniformly.
+    // Struct-enum (variant with fields) returned from a par worker.
+    // Plan-06 phase 1 G1: the parser routes any heap-typed return
+    // (`heap_def_nr().is_some()`) through the ref path, so worker
+    // returns of `Enum(_, true, _)` deep-copy via copy_from_worker
+    // exactly like `Reference<T>` returns.
     code!(
         "struct Score { value: integer }
 enum Verdict {
@@ -448,7 +446,9 @@ enum Verdict {
     Fail { reason: text }
 }
 fn classify(s: const Score) -> Verdict {
-    if s.value >= 0 { Pass { score: s.value } } else { Fail { reason: \"negative\" } }
+    v: Verdict = Pass { score: s.value };
+    if s.value < 0 { v = Fail { reason: \"negative\" }; }
+    v
 }
 fn run() -> integer {
     sl: vector<Score> = [Score { value: 10 }, Score { value: -5 }, Score { value: 20 }];
