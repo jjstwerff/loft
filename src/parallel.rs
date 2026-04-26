@@ -196,18 +196,10 @@ where
 // a stable shape to compile against, and so that `OpParallel(stitch_id)`
 // payload encoding can be designed with the final variant set in mind.
 //
-// Two enum shapes documented in DESIGN.md:
-//   D1a (transitional, phases 3a..4b): `ConcatLegacy { elem_size, ret_size }`
-//                                      carries sizes the runtime still
-//                                      needs while the typed surface
-//                                      (phase 4) hasn't landed.
-//   D1b (final, phase 4c onward):      `Concat` (no payload — sizes come
-//                                      from `Data::fn_return_type` and the
-//                                      caller's `DispatchMode`).
-// Phase 4c (this file): both variants coexist; production code emits
-// `Concat` and the dispatcher routes via `DispatchMode`.  `ConcatLegacy`
-// stays alive only as a documented sentinel + test fixture for the
-// transition window — DESIGN.md will retire it once phase 4d lands.
+// Phase 4c shape (DESIGN.md D1b):
+//   `Concat` (no payload — sizes come from `Data::fn_return_type` and
+//   the caller's `DispatchMode`).  Phase 4c retired the transitional
+//   `{ elem_size, ret_size }` payload that earlier phases needed.
 
 /// Plan-06 phase 3a (DESIGN.md D1a) — selects the per-call stitch
 /// policy that the unified `n_parallel_native` dispatcher will use.
@@ -225,23 +217,10 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stitch {
     /// Concatenate per-worker output stores into one result vector.
-    /// Carries the legacy element + return sizes that the runtime
-    /// still needs while the typed surface (phase 4) hasn't landed.
-    /// Phase 4c renames this to `Concat` (no payload) once
-    /// `Data::fn_return_type` is the source of truth for sizes.
-    ///
-    /// `ret_size` sentinel values during phases 3a..4b:
-    ///   `0`        → text mode (worker returns String)
-    ///   `u8::MAX`  → reference mode (worker returns DbRef)
-    ///   `1..=8`    → primitive mode (worker returns u64; size is the
-    ///                inline byte width — 1, 4, 8, etc.)
-    ConcatLegacy { elem_size: u8, ret_size: u8 },
-
-    /// Phase 4c shape (DESIGN.md D1b): no payload.  The dispatcher
-    /// routes by the caller-supplied `DispatchMode` (Text / Ref /
-    /// Primitive) and reads sizes from `Data::fn_return_type`.
-    /// Production code emits this; `ConcatLegacy` stays as a
-    /// fixture for the transition window.
+    /// No payload — the dispatcher routes by the caller-supplied
+    /// `DispatchMode` (Text / Ref / Primitive) and reads sizes from
+    /// `Data::fn_return_type`.  This is the phase-4c (DESIGN.md
+    /// D1b) **final** shape.
     Concat,
 
     /// Run workers, drop their results.  Used by the fused for-loop
@@ -289,10 +268,6 @@ mod stitch_tests {
     #[test]
     fn variants_distinguishable_by_match() {
         let cases = [
-            Stitch::ConcatLegacy {
-                elem_size: 8,
-                ret_size: 8,
-            },
             Stitch::Concat,
             Stitch::Discard,
             Stitch::Reduce { fold_fn: 42 },
@@ -301,50 +276,13 @@ mod stitch_tests {
         let names: Vec<&str> = cases
             .iter()
             .map(|s| match s {
-                Stitch::ConcatLegacy { .. } => "concat_legacy",
                 Stitch::Concat => "concat",
                 Stitch::Discard => "discard",
                 Stitch::Reduce { .. } => "reduce",
                 Stitch::Queue { .. } => "queue",
             })
             .collect();
-        assert_eq!(
-            names,
-            vec!["concat_legacy", "concat", "discard", "reduce", "queue"]
-        );
-    }
-
-    #[test]
-    fn concat_legacy_ret_size_sentinels() {
-        // Plan-06 phase 3a sentinel encoding:
-        //   ret_size = 0       → text
-        //   ret_size = u8::MAX → reference
-        //   ret_size = 1..=8   → primitive
-        // Phase 4c retires these sentinels (typed surface infers
-        // sizes from worker fn signature).
-        let text = Stitch::ConcatLegacy {
-            elem_size: 8,
-            ret_size: 0,
-        };
-        let reference = Stitch::ConcatLegacy {
-            elem_size: 8,
-            ret_size: u8::MAX,
-        };
-        let primitive = Stitch::ConcatLegacy {
-            elem_size: 8,
-            ret_size: 8,
-        };
-        for s in [text, reference, primitive] {
-            if let Stitch::ConcatLegacy { ret_size, .. } = s {
-                let mode = match ret_size {
-                    0 => "text",
-                    u8::MAX => "reference",
-                    1..=8 => "primitive",
-                    _ => "invalid",
-                };
-                assert_ne!(mode, "invalid", "ret_size {ret_size} unhandled");
-            }
-        }
+        assert_eq!(names, vec!["concat", "discard", "reduce", "queue"]);
     }
 }
 

@@ -826,11 +826,7 @@ fn parallel_execute_and_collect(
 ) -> DbRef {
     // Plan-06 phase 4c (DESIGN.md D1b) — Stitch::Concat carries no
     // payload; routing is by `dispatch_mode` (Text / Ref / Primitive).
-    // The legacy `Stitch::ConcatLegacy { ret_size: 0/u8::MAX/_ }`
-    // sentinel decoding is now a pure compatibility arm — no
-    // production caller emits it after phase 4c, but keeping it
-    // green protects test fixtures and keeps the transition window
-    // open for `parallel.rs::stitch_tests`.
+    // Sizes flow from the typed input vector and `Data::fn_return_type`.
     use crate::parallel::Stitch;
 
     let result_db = stores.null();
@@ -846,26 +842,17 @@ fn parallel_execute_and_collect(
         .store_mut(&result_db)
         .set_u32_raw(header_rec, 4, vec_rec);
 
-    // Phase 4c (DESIGN.md D1b): both `Stitch::Concat` and the
-    // legacy `Stitch::ConcatLegacy { ret_size: 0/u8::MAX/_ }`
-    // shapes route through the same Text/Ref/Primitive arms.
-    // `Concat` uses the caller-supplied `dispatch_mode`; the
-    // legacy variant decodes its `ret_size` sentinel for the
-    // transition-window tests in `parallel.rs::stitch_tests`.
-    let mode = match stitch {
-        Stitch::Concat => dispatch_mode,
-        Stitch::ConcatLegacy { ret_size: 0, .. } => DispatchMode::Text,
-        Stitch::ConcatLegacy {
-            ret_size: u8::MAX, ..
-        } => DispatchMode::Ref,
-        Stitch::ConcatLegacy { .. } => DispatchMode::Primitive,
-        _ => unreachable!(
-            "parallel_execute_and_collect only handles Stitch::Concat / \
-             Stitch::ConcatLegacy; Discard/Reduce/Queue land via Value::ParFor \
-             in phase 7"
-        ),
-    };
-    match mode {
+    // Phase 4c: only `Stitch::Concat` reaches this path.  The
+    // routing is by the caller-supplied `dispatch_mode`.
+    // Discard / Reduce / Queue land through `Value::ParFor` in
+    // phase 7 and never reach this function.
+    debug_assert!(
+        matches!(stitch, Stitch::Concat),
+        "parallel_execute_and_collect only handles Stitch::Concat; \
+         Discard/Reduce/Queue land via Value::ParFor in phase 7"
+    );
+    let _ = stitch;
+    match dispatch_mode {
         DispatchMode::Text => {
             // Text: workers return owned `String`; main thread
             // interns each into the result store via set_str.

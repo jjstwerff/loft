@@ -144,7 +144,7 @@ transition (one parser branch checks arg count and pattern-matches).
 Acceptance: `default/01_code.loft` size drops by ~30 lines;
 phase-0 suite still passes.
 
-### 4c — rename `Stitch::ConcatLegacy` → `Stitch::Concat` (drop payload)
+### 4c — rename `Stitch::ConcatLegacy` → `Stitch::Concat` (drop payload) — **done (2026-04-26)**
 
 - After 4a + 4b, the worker fn's `Type` is the source of truth for
   element / return sizes.  The `Stitch::ConcatLegacy { elem_size,
