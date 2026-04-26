@@ -202,8 +202,12 @@ where
 //                                      needs while the typed surface
 //                                      (phase 4) hasn't landed.
 //   D1b (final, phase 4c onward):      `Concat` (no payload — sizes come
-//                                      from `Data::fn_return_type`).
-// We land D1a now; phase 4c renames `ConcatLegacy` → `Concat`.
+//                                      from `Data::fn_return_type` and the
+//                                      caller's `DispatchMode`).
+// Phase 4c (this file): both variants coexist; production code emits
+// `Concat` and the dispatcher routes via `DispatchMode`.  `ConcatLegacy`
+// stays alive only as a documented sentinel + test fixture for the
+// transition window — DESIGN.md will retire it once phase 4d lands.
 
 /// Plan-06 phase 3a (DESIGN.md D1a) — selects the per-call stitch
 /// policy that the unified `n_parallel_native` dispatcher will use.
@@ -232,6 +236,13 @@ pub enum Stitch {
     ///   `1..=8`    → primitive mode (worker returns u64; size is the
     ///                inline byte width — 1, 4, 8, etc.)
     ConcatLegacy { elem_size: u8, ret_size: u8 },
+
+    /// Phase 4c shape (DESIGN.md D1b): no payload.  The dispatcher
+    /// routes by the caller-supplied `DispatchMode` (Text / Ref /
+    /// Primitive) and reads sizes from `Data::fn_return_type`.
+    /// Production code emits this; `ConcatLegacy` stays as a
+    /// fixture for the transition window.
+    Concat,
 
     /// Run workers, drop their results.  Used by the fused for-loop
     /// when the body never references `r`, and by future
@@ -282,6 +293,7 @@ mod stitch_tests {
                 elem_size: 8,
                 ret_size: 8,
             },
+            Stitch::Concat,
             Stitch::Discard,
             Stitch::Reduce { fold_fn: 42 },
             Stitch::Queue { capacity: 16 },
@@ -290,6 +302,7 @@ mod stitch_tests {
             .iter()
             .map(|s| match s {
                 Stitch::ConcatLegacy { .. } => "concat_legacy",
+                Stitch::Concat => "concat",
                 Stitch::Discard => "discard",
                 Stitch::Reduce { .. } => "reduce",
                 Stitch::Queue { .. } => "queue",
@@ -297,7 +310,7 @@ mod stitch_tests {
             .collect();
         assert_eq!(
             names,
-            vec!["concat_legacy", "discard", "reduce", "queue"]
+            vec!["concat_legacy", "concat", "discard", "reduce", "queue"]
         );
     }
 
