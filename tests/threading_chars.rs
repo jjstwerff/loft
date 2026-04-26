@@ -628,7 +628,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vector-return: two coupled blockers — (1) parser rejects vector<T> return because var_size=12 (DbRef) > 8; (2) deep par-safety analyser flags OpNewRecord as ParentWrite even when the call mutates a worker-local vector.  Needs per-arg locality flow analysis or a vector-output Stitch mode where workers construct in their own output stores.  Planned for plan-06 phase 7 (par_fold + fused for-loop)."]
+#[ignore = "par-vector-return: G5 cleared the par-safety false positive on local-arg writes (chain `n_replicate → OpNewRecord` no longer fires).  Two remaining blockers: (1) parser rejects `vector<integer>` return because var_size=12 > 8; (2) par dispatcher passes 0 extras but worker expects 1 (hidden return arg from ref_return promotion needs special par plumbing).  Planned for plan-06 phase 7."]
 fn par_struct_to_vector_t4() {
     // Worker constructs and returns a vector per element.  Today
     // the runtime can't represent this.  After phase 1, the per-

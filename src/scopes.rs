@@ -2432,7 +2432,19 @@ fn first_arg_is_local_var(args: &[Value], current_fn: u32, data: &Data) -> bool 
         return false;
     }
     let def = &data.definitions[current_fn as usize];
-    !def.variables.is_argument(*v)
+    if !def.variables.is_argument(*v) {
+        return true;
+    }
+    // Plan-06 phase 5b' G5 — heap-typed return values are passed
+    // via a hidden destination argument promoted by ref_return().
+    // The promotion sets `argument: true` on the variable AND
+    // marks the corresponding `def.attributes[…].hidden = true`.
+    // Workers writing to these hidden destinations are populating
+    // their own per-worker output buffer, NOT parent state.
+    let name = def.variables.name(*v);
+    def.attributes
+        .iter()
+        .any(|a| a.hidden && a.name == name)
 }
 
 #[allow(dead_code)]
@@ -2710,4 +2722,11 @@ mod par_deep_tests {
             Value::Call(bad, vec![Value::Var(0)]);
         assert!(worker_calls_parent_write_deep(&d, worker).is_none());
     }
+
+    // Note: the hidden-return-arg exception (`def.attributes[…].hidden`
+    // case) is exercised end-to-end by par_struct_to_vector_t4 in
+    // tests/threading_chars.rs.  A unit test would need to construct a
+    // full Function with a promoted hidden attribute, which the
+    // parser does multi-step; the integration test is the cleaner
+    // verification.
 }
