@@ -2342,7 +2342,7 @@ pub fn worker_calls_parent_write_deep(
     let mut visited = std::collections::HashSet::new();
     let def = &data.definitions[worker_d_nr as usize];
     let worker_name = def.name.clone();
-    walk_deep_parent_write(&def.code, data, &mut visited).map(|chain| {
+    walk_deep_parent_write(&def.code, data, worker_d_nr, &mut visited).map(|chain| {
         if chain == worker_name {
             chain
         } else {
@@ -2355,15 +2355,16 @@ pub fn worker_calls_parent_write_deep(
 fn walk_deep_parent_write(
     value: &Value,
     data: &Data,
+    current_fn: u32,
     visited: &mut std::collections::HashSet<u32>,
 ) -> Option<String> {
     match value {
         Value::Call(callee, args) => {
-            if let Some(chain) = call_deep_parent_write(*callee, data, visited) {
+            if let Some(chain) = call_deep_parent_write(*callee, args, data, current_fn, visited) {
                 return Some(chain);
             }
             for a in args {
-                if let Some(chain) = walk_deep_parent_write(a, data, visited) {
+                if let Some(chain) = walk_deep_parent_write(a, data, current_fn, visited) {
                     return Some(chain);
                 }
             }
@@ -2372,7 +2373,7 @@ fn walk_deep_parent_write(
         // Don't recurse into CallRef target (callee unknown until runtime).
         Value::CallRef(_, args) => {
             for a in args {
-                if let Some(chain) = walk_deep_parent_write(a, data, visited) {
+                if let Some(chain) = walk_deep_parent_write(a, data, current_fn, visited) {
                     return Some(chain);
                 }
             }
@@ -2380,7 +2381,7 @@ fn walk_deep_parent_write(
         }
         Value::Block(b) => {
             for v in &b.operators {
-                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                if let Some(chain) = walk_deep_parent_write(v, data, current_fn, visited) {
                     return Some(chain);
                 }
             }
@@ -2388,32 +2389,58 @@ fn walk_deep_parent_write(
         }
         Value::Insert(vs) => {
             for v in vs {
-                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                if let Some(chain) = walk_deep_parent_write(v, data, current_fn, visited) {
                     return Some(chain);
                 }
             }
             None
         }
-        Value::If(c, t, e) => walk_deep_parent_write(c, data, visited)
-            .or_else(|| walk_deep_parent_write(t, data, visited))
-            .or_else(|| walk_deep_parent_write(e, data, visited)),
+        Value::If(c, t, e) => walk_deep_parent_write(c, data, current_fn, visited)
+            .or_else(|| walk_deep_parent_write(t, data, current_fn, visited))
+            .or_else(|| walk_deep_parent_write(e, data, current_fn, visited)),
         Value::Loop(body) => {
             for v in &body.operators {
-                if let Some(chain) = walk_deep_parent_write(v, data, visited) {
+                if let Some(chain) = walk_deep_parent_write(v, data, current_fn, visited) {
                     return Some(chain);
                 }
             }
             None
         }
-        Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, visited),
+        Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
         _ => None,
     }
+}
+
+/// Plan-06 phase 5b' G5 — for a `ParentWrite` callee, treat the
+/// call as safe when its first argument is a LOCAL variable
+/// (defined within the calling function, not a parameter).  Avoids
+/// the false positive on `out: vector<integer> = []; out += [i]`
+/// where `OpAppendVector(out, ...)` mutates a worker-local
+/// vector — `out` was just allocated locally and isn't shared
+/// with the parent.
+///
+/// This is a heuristic: a local variable could still hold a
+/// reference to parent data (e.g. via `let v = some_param_field`),
+/// so the rule is conservative for the common pattern but may
+/// miss adversarial aliases.  Future precision work could track
+/// per-var initialiser provenance.
+fn first_arg_is_local_var(args: &[Value], current_fn: u32, data: &Data) -> bool {
+    let Some(Value::Var(v)) = args.first() else {
+        return false;
+    };
+    if current_fn == u32::MAX || (current_fn as usize) >= data.definitions.len() {
+        return false;
+    }
+    let def = &data.definitions[current_fn as usize];
+    !def.variables.is_argument(*v)
 }
 
 #[allow(dead_code)]
 fn call_deep_parent_write(
     callee: u32,
+    args: &[Value],
     data: &Data,
+    current_fn: u32,
     visited: &mut std::collections::HashSet<u32>,
 ) -> Option<String> {
     if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
@@ -2427,7 +2454,11 @@ fn call_deep_parent_write(
         | Purity::Impure(ImpureCategory::Io)
         | Purity::Impure(ImpureCategory::ParCall) => None,
         Purity::Impure(ImpureCategory::ParentWrite) => {
-            Some(format!(" → {}", def.name))
+            if first_arg_is_local_var(args, current_fn, data) {
+                None
+            } else {
+                Some(format!(" → {}", def.name))
+            }
         }
         Purity::Unknown => {
             // Declared-only native (no body) → trust as safe.
@@ -2438,7 +2469,7 @@ fn call_deep_parent_write(
                 // is_par_safe / fixpoint convergence).
                 None
             } else {
-                walk_deep_parent_write(&def.code, data, visited)
+                walk_deep_parent_write(&def.code, data, callee, visited)
                     .map(|chain| format!(" → {}{}", def.name, chain))
             }
         }
@@ -2661,6 +2692,22 @@ mod par_deep_tests {
         d.definitions[pf as usize].purity = Purity::Impure(ImpureCategory::ParCall);
         let worker = d.add_def("worker", &pos(), DefType::Function);
         d.definitions[worker as usize].code = Value::Call(pf, vec![]);
+        assert!(worker_calls_parent_write_deep(&d, worker).is_none());
+    }
+
+    #[test]
+    fn deep_local_arg_to_parent_write_is_safe() {
+        // Plan-06 phase 5b' G5 — calling a ParentWrite stdlib fn
+        // on a worker-LOCAL variable is safe.  worker calls
+        // OpAppendVector(local_v, ...); local_v isn't an arg.
+        // Var(0) defaults to argument=false (local).
+        let mut d = Data::new();
+        let bad = d.add_def("OpAppendVector", &pos(), DefType::Function);
+        d.definitions[bad as usize].purity =
+            Purity::Impure(ImpureCategory::ParentWrite);
+        let worker = d.add_def("worker", &pos(), DefType::Function);
+        d.definitions[worker as usize].code =
+            Value::Call(bad, vec![Value::Var(0)]);
         assert!(worker_calls_parent_write_deep(&d, worker).is_none());
     }
 }

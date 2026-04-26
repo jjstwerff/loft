@@ -702,29 +702,30 @@ fn purity_annotations_parsed_from_stdlib() {
     }
 }
 
-/// Plan-06 phase 5b' — verifies the shallow par-safety warning
-/// actually fires for a worker that directly calls a fn classified
-/// `Impure(ParentWrite)`.  End-to-end proof of the wire-up in
-/// parse_parallel_for_loop.
+/// Plan-06 phase 5b' — verifies the deep par-safety check actually
+/// fires for a worker that calls a fn classified `Impure(ParentWrite)`
+/// on a non-local first argument.  End-to-end proof of the wire-up
+/// in parse_parallel_for_loop.
+///
+/// Plan-06 phase 5b' G5 update: clearing a worker-LOCAL vector is
+/// safe (the local var was allocated in worker stores), so the test
+/// scenario was rewritten to clear a vector PARAMETER — a true
+/// parent reference that the deep walker correctly flags.
 #[test]
 fn par_warning_fires_for_direct_parent_write_worker() {
-    // Parse a synthetic worker fn that calls vector clear()
-    // (which is annotated #impure(parent_write)) on its arg.
-    // Then a par() loop using that worker triggers the warning.
     let mut p = loft::parser::Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse_str(
         r#"
-fn bad_worker(x: integer) -> integer {
-  v: vector<integer> = [];
+fn bad_worker(v: vector<integer>) -> integer {
   v.clear();
-  x * 2
+  42
 }
 
 fn main() {
   total = 0;
   items: vector<integer> = [1, 2, 3];
-  for i in items par(r = bad_worker(i), 2) {
+  for i in items par(r = bad_worker(items), 2) {
     total += r;
   }
 }
