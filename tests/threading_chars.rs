@@ -608,7 +608,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-large-struct-return: worker returning a value-struct > 8 bytes is rejected; planned fix in plan-06 phase 1"]
 fn par_struct_to_large_struct_t4() {
     // Today's parser-side check_light_eligible / parse_parallel_for
     // rejects any return type with var_size > 8 unless it's a
@@ -629,7 +628,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vector-return: worker returning vector<T> rejected today; planned fix in plan-06 phase 1"]
+#[ignore = "par-vector-return: two coupled blockers — (1) parser rejects vector<T> return because var_size=12 (DbRef) > 8; (2) deep par-safety analyser flags OpNewRecord as ParentWrite even when the call mutates a worker-local vector.  Needs per-arg locality flow analysis or a vector-output Stitch mode where workers construct in their own output stores.  Planned for plan-06 phase 7 (par_fold + fused for-loop)."]
 fn par_struct_to_vector_t4() {
     // Worker constructs and returns a vector per element.  Today
     // the runtime can't represent this.  After phase 1, the per-
@@ -653,7 +652,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-keyed-collection-return: worker returning hash/sorted/index rejected; planned fix in plan-06 phase 1"]
+#[ignore = "par-keyed-collection-return: worker returning sorted<T[key]> hits the same blockers as par-vector-return — see par_struct_to_vector_t4."]
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }
