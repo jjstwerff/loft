@@ -652,7 +652,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-keyed-collection-return: blocked by P188 (out += Tag {...} on sorted<Tag[id]> rejected by the type-checker — keyed-collection += codegen doesn't recognise the RHS as a singleton element).  Independent of par; closing P188 unblocks this canary as a side effect."]
+#[ignore = "par-keyed-collection-return: P188 fix (local-var sorted/hash/index/spacial init) lands sorted-build-and-return outside par.  The remaining blocker is par engine support for keyed-collection return types: parallel_execute_and_collect rejects worker fns whose return type is sorted/hash/index/spacial with 'Parallel worker return type ... is not supported'.  Punted to plan-06 phase 4 (typed surface)."]
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }

@@ -921,6 +921,68 @@ impl State {
         }
     }
 
+    /// P188: first-assignment init for a keyed-collection local
+    /// (`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`,
+    /// `spacial<T[key]>`).  Allocates a fresh store and claims a
+    /// record sized for the collection type at the local's slot.
+    /// `set_default_value` zero-initialises the root-pointer field;
+    /// subsequent `OpNewRecord` / `OpFinishRecord` operations will
+    /// dispatch through `record_new`'s `Parts::Sorted/Hash/Index/Spacial`
+    /// arms and grow the collection in-place.
+    pub(super) fn gen_set_first_keyed_null(&mut self, stack: &mut Stack, v: u16) {
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = slot_end - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.position - stack.function.stack(v);
+        if stack.function.is_skip_free(v) || stack.function.is_inline_ref(v) {
+            stack.add_op("OpInitRefSentinel", self);
+            self.code_add(slot_offset);
+            return;
+        }
+        // Resolve the database type id for the specific keyed-collection
+        // instantiation.  `database.sorted/hash/index/spacial` is idempotent —
+        // it returns the existing registered type id when the (content, key)
+        // pair has been registered (every struct field of the same shape
+        // does so via `fill_database`), otherwise registers a new one.
+        let tp = stack.function.tp(v).clone();
+        let tp_nr = match &tp {
+            Type::Sorted(td, key, _) => {
+                let c = stack.data.def(*td).known_type;
+                self.database.sorted(c, key)
+            }
+            Type::Hash(td, key, _) => {
+                let c = stack.data.def(*td).known_type;
+                self.database.hash(c, key)
+            }
+            Type::Index(td, key, _) => {
+                let c = stack.data.def(*td).known_type;
+                self.database.index(c, key)
+            }
+            Type::Spacial(td, key, _) => {
+                let c = stack.data.def(*td).known_type;
+                self.database.spacial(c, key)
+            }
+            _ => unreachable!("gen_set_first_keyed_null on non-keyed type"),
+        };
+        debug_assert_ne!(
+            tp_nr,
+            u16::MAX,
+            "Unregistered keyed-collection type for {} in {}",
+            stack.function.name(v),
+            stack.function.name,
+        );
+        stack.add_op("OpInitRef", self);
+        self.code_add(slot_offset);
+        stack.add_op("OpDatabase", self);
+        self.code_add(slot_offset);
+        self.code_add(tp_nr);
+    }
+
     /// Emit a null sentinel for the given type onto the stack.
     /// Used when Value::Null appears in a typed context (e.g. function argument).
     fn emit_typed_null(&mut self, stack: &mut Stack, tp: &Type) {
@@ -1205,6 +1267,15 @@ impl State {
             }
         } else if matches!(stack.function.tp(v), Type::Vector(_, _)) && *value == Value::Null {
             self.gen_set_first_vector_null(stack, v);
+        } else if matches!(
+            stack.function.tp(v),
+            Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        ) && *value == Value::Null
+        {
+            self.gen_set_first_keyed_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Tuple(_)) && *value == Value::Null {
             self.gen_set_first_tuple_null(stack, v);
         } else if matches!(stack.function.tp(v), Type::Function(_, _, _)) {

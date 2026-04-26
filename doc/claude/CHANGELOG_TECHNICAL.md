@@ -130,6 +130,29 @@ Type extractors: `as_text()`, `as_number()`, `as_long()`, `as_bool()`.
 a struct from a JsonValue. Type mismatches are reported via
 `json_errors()`.
 
+### Local-var keyed collections (P188)
+
+`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`, and
+`spacial<T[key]>` now work as locals; previously they were only
+usable as struct fields.  Patterns like
+
+```loft
+fn build() -> sorted<Tag[id]> {
+    out: sorted<Tag[id]> = [];
+    out += Tag { id: 1, label: "v1" };
+    out
+}
+```
+
+used to crash at runtime with an out-of-bounds `mut_store`
+because the slot allocator gave `out` a position but neither the
+bytecode codegen nor the native generator emitted the
+`OpDatabase` init that allocates the backing store and zeroes
+the root pointer.  Both paths now allocate the backing record on
+first assignment, and subsequent `+= T {...}` operations grow the
+collection in place via `record_new`'s
+`Parts::Sorted/Hash/Index/Spacial` dispatch.
+
 ### Crash fixes
 
 Three crashes that affected programs using `match` on complex types

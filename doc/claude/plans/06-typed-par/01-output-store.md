@@ -474,8 +474,12 @@ filled destinations into the par result vector after join.  G6
 finishes when 4e ships.
 
 `par_struct_to_vector_t4` and `par_struct_to_keyed_collection_t4`
-remain `#[ignore]`d (the latter blocked by P188 — keyed-collection
-`+= literal`, separate from this construction).
+remain `#[ignore]`d.  P188 (local-var keyed-collection
+initialisation) is fixed, so `out: sorted<Tag[id]> = []; out += …`
+now compiles and runs outside par; the remaining blocker for the
+keyed-collection canary is par engine support for keyed-collection
+return types (`parallel_execute_and_collect` rejects them with
+"Parallel worker return type … is not supported").
 
 ### G7 — flat-vector-only input iteration (designed, deferred to phase 4d)
 

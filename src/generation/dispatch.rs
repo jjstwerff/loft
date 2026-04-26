@@ -299,9 +299,13 @@ impl Output<'_> {
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
         let owns_store = match variables.tp(var) {
-            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
-                dep.is_empty()
-            }
+            Type::Reference(_, dep)
+            | Type::Vector(_, dep)
+            | Type::Enum(_, true, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep) => dep.is_empty(),
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || !owns_store {
@@ -309,11 +313,64 @@ impl Output<'_> {
         } else {
             let ref_buf_type_id = {
                 let var_tp = variables.tp(var).clone();
-                if let Type::Vector(elm_tp, _) = &var_tp {
-                    let elm_name = elm_tp.name(self.data);
-                    self.data.name_type(&format!("main_vector<{elm_name}>"), 0)
-                } else {
-                    u16::MAX
+                match &var_tp {
+                    Type::Vector(elm_tp, _) => {
+                        let elm_name = elm_tp.name(self.data);
+                        self.data.name_type(&format!("main_vector<{elm_name}>"), 0)
+                    }
+                    // P188: keyed-collection locals need an OpDatabase
+                    // call against the specific keyed-collection type so
+                    // the backing store is allocated and the root pointer
+                    // is zero-initialised.  Resolves to the same database
+                    // type id that struct-field registration uses.
+                    Type::Sorted(td, key, _) | Type::Index(td, key, _) => {
+                        let c = self.data.def(*td).known_type;
+                        if c == u16::MAX {
+                            u16::MAX
+                        } else {
+                            let prefix = match &var_tp {
+                                Type::Sorted(_, _, _) => "sorted",
+                                Type::Index(_, _, _) => "index",
+                                _ => unreachable!(),
+                            };
+                            let mut name =
+                                format!("{prefix}<{}[", self.stores.types[c as usize].name);
+                            for (k_nr, (k, asc)) in key.iter().enumerate() {
+                                if k_nr > 0 {
+                                    name += ",";
+                                }
+                                if !*asc {
+                                    name += "-";
+                                }
+                                name += k;
+                            }
+                            name += "]>";
+                            self.stores.name(&name)
+                        }
+                    }
+                    Type::Hash(td, key, _) | Type::Spacial(td, key, _) => {
+                        let c = self.data.def(*td).known_type;
+                        if c == u16::MAX {
+                            u16::MAX
+                        } else {
+                            let prefix = match &var_tp {
+                                Type::Hash(_, _, _) => "hash",
+                                Type::Spacial(_, _, _) => "spacial",
+                                _ => unreachable!(),
+                            };
+                            let mut name =
+                                format!("{prefix}<{}[", self.stores.types[c as usize].name);
+                            for (k_nr, k) in key.iter().enumerate() {
+                                if k_nr > 0 {
+                                    name += ",";
+                                }
+                                name += k;
+                            }
+                            name += "]>";
+                            self.stores.name(&name)
+                        }
+                    }
+                    _ => u16::MAX,
                 }
             };
             if ref_buf_type_id == u16::MAX {

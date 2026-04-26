@@ -10133,3 +10133,28 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+// ── P188: local-var keyed collections ────────────────────────────────────────
+// `out: sorted<T[key]> = []; out += T {...}; out` used to panic at
+// `keys::mut_store` because the local's slot was never allocated a backing
+// store: the slot allocator gave it a position but neither the bytecode
+// codegen nor the native generator emitted an OpDatabase init for keyed
+// collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
+// `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
+// store and zero the root pointer; subsequent `+= T {...}` operations grow
+// the collection in place via record_new's Parts::Sorted/Hash/Index/Spacial
+// dispatch.
+#[test]
+fn p188_sorted_local_via_plus_equals() {
+    code!(
+        "struct P188Tag { id: integer not null, label: text }
+fn build() -> sorted<P188Tag[id]> {
+    out: sorted<P188Tag[id]> = [];
+    out += P188Tag { id: 2, label: \"v2\" };
+    out += P188Tag { id: 1, label: \"v1\" };
+    out
+}"
+    )
+    .expr("build().len()")
+    .result(Value::Int(2));
+}
