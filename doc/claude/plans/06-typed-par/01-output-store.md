@@ -296,63 +296,180 @@ New fixtures:
 
 ## Surface gaps closed by phase 1
 
-Phase 0's characterisation work surfaced two **pre-existing par
-limitations** that the new uniform output-store mechanism resolves
-naturally as a side effect.  Each is captured as an `#[ignore]`d
-test in `tests/threading_chars.rs`; phase 1's commit un-`#[ignore]`s
-them.
+Phase 0's characterisation work surfaced 3 pre-existing par
+limitations (G1, G2, G3) that the new uniform output-store mechanism
+resolves.  Implementation surfaced 4 more (G2.1, G4, G5/G5.1, G6)
+that needed targeted dispatcher work beyond the original plan.
 
-### G1 — struct-enum return types
+The inventory below captures what landed vs what remains.  Each
+gap has an `#[ignore]`d test in `tests/threading_chars.rs`; the
+gap's "closed" status means the matching test is now positive.
 
-Today's parser at `src/parser/collections.rs:1209` rejects worker
-return types whose `var_size > 8` with the diagnostic
-`Parallel worker return type '<Enum>' (size N) is not supported`.
-Struct-enums (variant with fields) typically have size 12+ (1-byte
-discriminant + variant payload + alignment) and hit this gate.
+### G1 — struct-enum return types — **closed**
 
-After phase 1, workers write into per-worker output Stores using
-the same `OpSet*` ops every loft fn uses to write its return value.
-The runtime no longer needs to know the return type's byte width
-upfront — the output store carries it via the existing type
-schema.  The size-8 gate at `parser/collections.rs:1209` is deleted
-in phase 1; the matching test
-`tests/threading_chars.rs::par_struct_to_struct_enum_t4` becomes
-positive.
+Original diagnosis: parser at `src/parser/collections.rs:1209`
+rejected worker return types with `var_size > 8`.
 
-### G3 — `--native-wasm` rejects par at codegen
+Actual fix (deviation): the parser was already routing
+`Type::Enum(_, true, _)` (struct-enums) through the ref path with
+`return_size = -1`, but `is_primitive_return` in
+`src/parser/collections.rs` did NOT exclude that type, so workers
+auto-routed to `n_parallel_for_light` instead.  The light path's
+`execute_at_raw` truncates returns at 8 bytes, silently dropping
+the variant payload — the test returned `0` instead of `30`
+because all output slots stayed uninitialised (dump showed
+`unknown(0)` / `unknown(160)` instead of variant data).
 
-The wasm codegen path emits `loft_wasm.rs` that references
-`OpFreeRef` and friends but doesn't generate the worker-cleanup
-ops; `rustc` fails with `not found in this scope`.  After phase 1's
-per-worker output stores + D6's single-threaded fallback, the wasm
-path runs par as a sequential for-loop in the calling thread (no
-real threads in default WASM build).
+Fix: added `Type::Enum(_, true, _)` to the
+`is_primitive_return` exclusion list so struct-enums route to the
+heavy `n_parallel_for` path that has the deep-copy machinery.
+`tests/threading_chars.rs::par_struct_to_struct_enum_t4` is now
+positive.  Closes via commit `0717c7f`.
 
-User-visible: `bench/11_par`'s `loft-wasm` column shows `-` today;
-it becomes a real serial-throughput number after phase 1.  No
-canary needed in `tests/threading_chars.rs` (the harness's `code!`
-runs interpret-only); the bench is the reproducer.
+### G2 — primitive-element input vectors — **closed**
 
-### G2 — primitive-element input vectors
+Original diagnosis: workers read input elements with a 12-byte
+DbRef stride regardless of the actual narrow encoding.  Workers
+of `vector<integer>` etc. saw garbage.
 
-Today's runtime reads input vector elements with a fixed 12-byte
-DbRef stride regardless of the actual narrow encoding.  Result:
-`vector<integer>`, `vector<float>`, `vector<i32>`, `vector<u8>`,
-`vector<text>` inputs all give garbage to workers.  Plain
-non-par `for x in vector<integer>` works correctly — the bug is
-specific to par's worker-dispatch.
+Actual fix (deviation): the bug had two layers, not one.
 
-Phase 1 partially closes this when workers compute their input slice
-using the type-driven element stride (matching what the codegen for
-plain `for ... in items` already does).  Phase 4's typed surface
-makes the closure complete by reading the element type from
-`vector<T>`'s schema instead of trusting a parser-computed
-integer.
+1. **Worker first-param dispatch** — workers whose first
+   parameter is a primitive type (bool / byte / integer / single /
+   float / character / non-payload enum) need the inline value in
+   slot 0, NOT a `DbRef`.  The original plan assumed the existing
+   ref-passing convention worked for primitives; it doesn't.
+   Required: new `State::execute_at_raw_primitive_input(fn_pos,
+   value, slot_size, extras, ret_size)` that pushes the primitive
+   at its native byte width (1/4/8) into slot 0; new
+   `read_primitive_at(stores, row_ref, size)` helper.
+   `run_parallel_light` and `run_parallel_direct` gain a
+   `primitive_input_size` parameter selecting the dispatch path.
+   Detection via `primitive_first_arg_slot_size(def)` in
+   `src/native.rs`.
 
-`tests/threading_chars.rs::par_int_to_int_t4_primitive_input` and
-its 4 siblings (`par_float_input_t4`, `par_i32_input_t4`,
-`par_u8_input_t4`, `par_text_input_t4`) become positive between
-phase 1 and phase 4.
+2. **Narrow-integer stride (G2.1)** — the parser-side
+   `elem_size` for `vector<u8>` / `vector<i32>` used
+   `var_size(Type::Integer(_), Argument)` which returns `8` for
+   any Integer.  The actual storage stride for typedef-narrowed
+   integers honours `IntegerSpec::vector_narrow_width()` (1/2/4).
+   Required: parser fix to query `vector_narrow_width()` first,
+   matching the iterator dispatch in `collections.rs:105-113`
+   for non-par for loops.
+
+3. **Slot-width promotion (G2.1 cont)** — even with stride
+   fixed, narrow integer ARGS get promoted to 8-byte integer
+   slots by loft's calling convention (e.g. `fn dbl(x: i32) ->
+   integer` reads `x` via `OpVarInt` → 8 bytes from slot 0).
+   Required: split `read_size = element_size` (vector stride)
+   from `push_size = primitive_first_arg_slot_size(def)` (worker
+   slot width, always 1/4/8 from arg type).  `read_primitive_at`
+   reads at the smaller width; `execute_at_raw_primitive_input`
+   pushes into the wider slot.
+
+Closes 5 canaries: `par_enum_input_t4` (1-byte enum),
+`par_int_to_int_t4_primitive_input` (8-byte integer),
+`par_float_input_t4` (8-byte float), `par_i32_input_t4` (4-byte
+narrow), `par_u8_input_t4` (1-byte narrow).  Commits `b13d01c`,
+`a9c2f1e`.
+
+### G3 — `--native-wasm` rejects par at codegen — **scoped to phase 8**
+
+Pre-existing wasm codegen issue documented in original plan;
+deferred to phase 8 (browser workers).  Phase 1 doesn't touch it.
+
+### G3 (different gap) — text-input par dispatch — **closed**
+
+Surfaced during G2 work: workers whose first param is `Type::Text(_)`
+need a 16-byte `Str { ptr, len }` slot in slot 0, not a 12-byte
+`DbRef`.  The original plan didn't separate this from the
+primitive case, but the slot widths differ (text=16 vs primitive
+≤ 8) and Str values must be reconstructed from the row's text
+pointer.
+
+Fix: `State::execute_at_raw_text_input(fn_pos, str, extras,
+ret_size)` pushes a 16-byte Str; `read_text_at(stores, row_ref)`
+reconstructs the Str by reading the u32 text-rec at `row.pos`
+and calling `store.get_str()`.  `primitive_input_size` gains a
+sentinel `u32::MAX` selecting the text path.
+
+`tests/threading_chars.rs::par_text_input_t4` is now positive.
+Commit `11f1a73`.
+
+### G4 — fn-ref return — **partial scaffolding, codegen layout pending**
+
+Not in original plan.  Surfaced when investigating remaining
+canaries: `par_struct_to_fn_t4` returns a 20-byte fn-ref (8B
+d_nr + 12B closure DbRef) which exceeded the 8-byte primitive
+return cap.
+
+Partial fix landed: `State::execute_at_raw_to(fn_pos, arg, extras,
+return_size, dst)` copies arbitrary `return_size` bytes from
+worker stack to a destination buffer; `run_parallel_direct` uses
+it for `ret_sz > 8`.  Parser accepts `Type::Function` returns
+(sz=20) and excludes them from the light path.  `n_parallel_for`
+derives `return_size=20` for fn-ref returns.
+
+Remaining blocker: stack snapshot at Return time shows the
+worker's d_nr correctly at `stack[4..11]` but the closure DbRef
+sentinel appears at `stack[20..23]` instead of `stack[12..23]` —
+the codegen's `stack_pos` accounting for `n_pick` uses a
+different convention than `execute_at_raw_to`'s setup, and
+reconciling needs deep codegen-side work.  Deferred to phase 4
+(typed surface).
+
+`par_struct_to_fn_t4` remains `#[ignore]`d.
+
+### G5 / G5.1 — par-safety analyser precision — **closed**
+
+Not in original plan.  Surfaced after the deep par-safety check
+landed at `Level::Error`: legitimate workers writing to
+worker-LOCAL vectors got false positives from the
+`OpAppendVector` / `OpNewRecord` recursion.
+
+G5: the deep walker now treats `Purity::Impure(ParentWrite)`
+calls as safe when the first argument is a `Value::Var(v)` and
+`v` is NOT an argument of the calling function.  Required
+threading `current_fn: u32` through `walk_deep_parent_write`.
+
+G5.1: heap-typed return values get promoted by `ref_return()` to
+a hidden caller argument with `argument: true` AND
+`def.attributes[…].hidden = true`.  These hidden destinations
+are worker-local output buffers, not parent state.  G5 was
+extended to look up the variable's name in `def.attributes` and
+treat it as local if the matching attribute has `hidden: true`.
+
+The end-to-end test
+`par_warning_fires_for_direct_parent_write_worker` was rewritten
+to pass a vector PARAMETER (a true parent ref) instead of relying
+on the now-correct local-vector behaviour.  3 unit tests in
+`scopes::par_deep_tests` cover the precision rules.  Commits
+`6b71d79`, `70b6018`.
+
+### G6 — vector-return par dispatch — **partial scaffolding, destination plumbing pending**
+
+Not in original plan.  Surfaced when retrying
+`par_struct_to_vector_t4` after G5/G5.1 cleared the par-safety
+side.
+
+Partial fix landed: parser routes `Type::Vector(_, _)` returns
+through the ref path (`return_size = -1`); `is_primitive_return`
+excludes vectors so they go through the heavy path; the
+extra-arg check at `parse_parallel_worker` skips
+`def.attributes[…].hidden = true` so it doesn't complain about
+the missing hidden destination arg.
+
+Remaining blocker: vector-returning workers like
+`out: vector<integer> = []; ...; out` get the local var
+promoted to a hidden caller destination arg, but the par
+dispatcher passes 0 extras — the worker writes into the
+parent's locked store at thread join.  Fix needs the par
+dispatcher to allocate per-worker destinations in worker output
+stores and pass them as the hidden arg.  Deferred to plan-06
+phase 7 (par_fold) where this hidden-arg machinery lives.
+
+`par_struct_to_vector_t4` and `par_struct_to_keyed_collection_t4`
+remain `#[ignore]`d.
 
 ### Why these aren't in PROBLEMS.md
 
@@ -362,7 +479,7 @@ that get un-`#[ignore]`d when the relevant phase lands; the plan
 file owns the inventory.  Filing per-gap PROBLEMS.md entries would
 duplicate the plan and create maintenance churn.
 
-When phase 1 / phase 4 land, the same commit:
+When a gap's fix lands, the same commit:
 1. Removes the runtime restriction.
 2. Un-`#[ignore]`s the corresponding tests in `threading_chars.rs`.
 3. Updates this section to mark the gap closed.

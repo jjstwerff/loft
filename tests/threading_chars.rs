@@ -675,7 +675,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-fn-return: G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct, but the worker's stack layout for fn-refs places the closure DbRef at an offset that doesn't match the (d_nr, closure) flat 20-byte layout the consumer reads.  Bytes 0-7 carry the d_nr correctly; bytes 8-19 are misaligned (closure DbRef shifted +8).  Likely needs codegen change in n_pick to emit closure-then-d_nr or change the calling convention.  Punted from G4 to plan-06 phase 4."]
+#[ignore = "par-fn-return: G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct.  Stack snapshot at Return time shows d_nr correctly at stack[4..11] (i64 523) but the closure DbRef sentinel appears at stack[20..23] (0xFFFF) instead of stack[12..23] — i.e. the InitRefSentinel(var[24]) wrote 4 bytes higher than expected.  The codegen's stack_pos accounting for n_pick uses a different convention than execute_at_raw_to's setup; reconciling needs deep codegen-side work.  Punted to plan-06 phase 4 (typed surface)."]
 fn par_struct_to_fn_t4() {
     // Worker selects and returns a fn-ref based on its input.
     code!(

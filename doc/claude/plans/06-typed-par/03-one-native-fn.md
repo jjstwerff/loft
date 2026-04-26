@@ -114,21 +114,42 @@ Acceptance: phase-0 suite still passes after the call-site
 rewrite; no `parallel_get_*` references in `default/`, `lib/`,
 `tests/`, or `doc/`.
 
-### 3d — codegen-time embedding (always lands in 3d, not deferred)
+### 3d — codegen-time embedding (always lands in 3d, not deferred) — **landed**
 
-After 3a–3c, the `ConcatLegacy { elem_size, ret_size }` payload
-is the only runtime variation left.  Phase 3d ensures those sizes
-are **embedded at codegen time** from the worker fn's signature
-(via `data.rs::element_size` on the worker's argument and return
-types) rather than re-computed per call.  This is local — no
-typed-surface dependency.  Phase 4c later renames `ConcatLegacy`
-→ `Concat` and drops the payload entirely once the typed surface
-makes the sizes derivable at *runtime* from the fn's `Type`.
+What landed (commit `e8ffd87`): the runtime in `n_parallel_for`
+and `n_parallel_for_light` now derives dispatch mode + size from
+the worker fn's `def.returned`, NOT from the parser's `0 / -1
+/ 1..=8` sentinels:
 
-Phase 3d **always lands in this phase**, regardless of phase 4's
-schedule.  The earlier "conditional on phase 4" wording was
-incorrect — embedding sizes at codegen time is correct under both
-the legacy and typed surfaces.
+- `Type::Text(_)` → `DispatchMode::Text`, size = 4 (text
+  pointer slot)
+- `def.returned.heap_def_nr() == Some(_)` → `DispatchMode::Ref`,
+  size from `database.size(known_type)`
+- `Type::Function(_, _, _)` → `DispatchMode::Primitive`,
+  size = 20 (G4 fn-ref scaffolding)
+- everything else → `DispatchMode::Primitive`, size = derived
+  from `def.returned` via `crate::variables::size`
+
+The parser still emits the historic `return_size` sentinel on
+the stack for binary compatibility, but the runtime treats it
+as a **backstop only** (used when `def.returned` is `Unknown`
+during partial parses).  The new private `DispatchMode` enum in
+`src/native.rs` documents the three modes.
+
+Phase 4c retires both the sentinel and the backstop once the
+typed surface lands.
+
+### 3c consolidation (collapsed primitive arms) — **landed**
+
+Implementation also collapsed the prior `(ret_size >= 4 →
+run_parallel_direct)` / `(ret_size < 4 → run_parallel_raw +
+set_byte)` split in `parallel_execute_and_collect` — both byte-
+offset analyses agree (`buffer(vec_rec).as_mut_ptr()` begins at
+`ptr + vec_rec*8 + 8`, and `set_byte(vec_rec, 8+i, 0, _)`
+writes to the same location).  Single primitive arm now handles
+every inline byte width 1..=8 uniformly.  `run_parallel_raw`
+retained as test-only (`#[allow(dead_code)]`) since
+`tests/threading.rs` drives it directly.  Commit `0498fa9`.
 
 ### 3e — `Stitch::Reduce` runtime
 

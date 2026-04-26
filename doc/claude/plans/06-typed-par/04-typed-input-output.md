@@ -5,7 +5,42 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 4 — Typed input/output surface
 
-**Status: open**
+**Status: scoping changed by phase-1 G2/G3/G4 work — see "Deviation note" below.**
+
+## Deviation note
+
+The original phase-4 plan assumed that `element_size` /
+`return_size` would retire only when the typed surface lands.
+Phase-1 implementation work (G2/G2.1/G3/G4) had to reach into
+the same area earlier:
+
+- **G2 / G2.1 — primitive-input dispatch**: workers receiving
+  primitive inputs need the inline value in slot 0, not a
+  DbRef.  Required new `execute_at_raw_primitive_input` and
+  per-worker-input-type detection.  Closed before phase 4.
+- **G3 — text-input dispatch**: workers receiving `text` args
+  need a 16-byte `Str` in slot 0.  Required new
+  `execute_at_raw_text_input` + `read_text_at`.  Closed before
+  phase 4.
+- **G4 — fn-ref return (partial)**: workers returning fn-refs
+  (20 bytes) exceed the 8-byte primitive return cap.  New
+  `execute_at_raw_to(.., dst, return_size)` writes arbitrary
+  bytes from worker stack.  Worker codegen layout reconciliation
+  pending — phase 4 finishes G4 by aligning the calling
+  convention.
+- **3d — runtime DispatchMode derivation** (commit `e8ffd87`):
+  the runtime no longer relies on the parser's `0 / -1 / 1..=8`
+  sentinels.  It inspects `def.returned` directly:
+  `Type::Text` → text mode (size=4), `heap_def_nr Some` → ref
+  mode (size from db), `Type::Function` → 20-byte primitive,
+  else → primitive (size from def).  The parser still emits
+  the historic sentinels for binary compatibility but the
+  runtime ignores them as the primary signal.
+
+What remains for phase 4: drop the sentinel encoding from the
+parser side entirely (only the runtime backstop remains in
+phase 5+), and the typed `parallel_for(input: vector<T>, fn:
+fn(T) -> U, threads: integer) -> vector<U>` surface.
 
 ## Goal
 

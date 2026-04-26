@@ -203,6 +203,54 @@ calls.
   - nested-par worker → full
   - mutually-recursive worker pair, one safe one unsafe → both full
 
+### 5b' — par-safety check (deviation: deep + Error wired before auto-light)
+
+What landed (commits `83aa15f`, `0fe2180`, `6b71d79`, `70b6018`):
+
+1. **Shallow → deep walker.**  Initial wire-point used a SHALLOW
+   `worker_calls_parent_write` (no recursion into callees) to
+   avoid false positives.  After 5a coverage reached the threshold,
+   `worker_calls_parent_write_deep` recurses through user-fn
+   callees via a visited set and returns the chain
+   `worker → helper → bad_callee`.  Unannotated declared-only
+   natives (Op*, n_* with `code == Value::Null` and
+   `Purity::Unknown`) are treated as safe — they're C-level
+   primitives, and the ones that DO write to parent state are
+   explicitly `#impure(parent_write)`.
+
+2. **Warning → Error.**  Once the deep walker was clean across
+   the test suite, the diagnostic level switched from
+   `Level::Warning` to `Level::Error`.
+
+3. **G5 — local-arg ParentWrite exception (deviation).**
+   Implementation surfaced a precision gap: the deep walker
+   flagged ANY `Purity::Impure(ParentWrite)` call regardless of
+   whether the first argument was a worker-LOCAL variable or a
+   parameter.  The common pattern
+   `out: vector<integer> = []; out += [i]` triggered a false
+   positive on `OpAppendVector(out, ...)` because `out` was
+   reachable through user code.  Fix: when args[0] is
+   `Value::Var(v)` and v is NOT a function argument, treat the
+   call as safe.  Required threading `current_fn: u32` through
+   `walk_deep_parent_write` so the analyser knows which
+   variable table to consult.
+
+4. **G5.1 — hidden return-arg exception (deviation).**  Heap-typed
+   return values (`vector<T>`, `Reference<T>`, struct-enum)
+   get promoted by `ref_return()` (in
+   `src/parser/control.rs::ref_return`) to a hidden caller
+   argument with `argument: true` AND
+   `def.attributes[…].hidden = true`.  G5's first cut still
+   flagged these as parameters.  Fix: when the var is_argument,
+   look up its name in `def.attributes` and treat as local if
+   the matching attribute has `hidden: true`.
+
+The deep walker now lives in `src/scopes.rs` as
+`worker_calls_parent_write_deep`; precision tests in
+`scopes::par_deep_tests` (5 unit tests).  The full
+`is_par_safe` / fixed-point machinery for auto-light selection
+(below) is still pending.
+
 ### 5b' — caller-graph infrastructure (prerequisite for 5e)
 
 Per DESIGN.md D12: phase 5e's fixed-point iteration needs two
