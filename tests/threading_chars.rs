@@ -652,7 +652,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-keyed-collection-return: type-checker rejects `out += Tag {...}` in build_tags — sorted<Tag[id]> + Tag operand inference fails before par-safety analysis runs.  Independent of G5; needs sorted-collection += codegen fix.  Planned for plan-06 phase 7."]
+#[ignore = "par-keyed-collection-return: blocked by P188 (out += Tag {...} on sorted<Tag[id]> rejected by the type-checker — keyed-collection += codegen doesn't recognise the RHS as a singleton element).  Independent of par; closing P188 unblocks this canary as a side effect."]
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }
