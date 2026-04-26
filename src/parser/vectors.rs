@@ -1484,6 +1484,23 @@ impl Parser {
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
+            } else if let Value::Tuple(values) = p {
+                // P189c — vector-element tuple literal.  Emit
+                // per-attribute writes against the synthetic
+                // `__tuple<T1,T2,…>` struct that P189's `tuple_def`
+                // registered.  Mirrors the struct-literal path
+                // (`Value::Insert` arm below) but tuple literals
+                // arrive as `Value::Tuple([v0, v1, …])` without
+                // pre-emitted `SetField` steps — `parse_single` at
+                // src/parser/vectors.rs:223 builds a bare wrapper —
+                // so we emit them here.  `ed_nr` is already the
+                // synthetic struct's d_nr (`type_def_nr(Type::Tuple)`),
+                // and `set_field` with an explicit attribute index
+                // routes through the standard per-field layout
+                // dispatch (Integer/Text/Reference/etc.).
+                for (i, val) in values.iter().enumerate() {
+                    ls.push(self.set_field(ed_nr, i, 0, Value::Var(elm), val.clone()));
+                }
             } else if let Value::Insert(steps) = p {
                 for l in steps {
                     ls.push(l.clone());

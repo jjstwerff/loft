@@ -10179,3 +10179,27 @@ fn p189_vector_tuple_literal_constructs() {
     .expr("build()")
     .result(Value::Int(3));
 }
+
+/// P189c — `vector<(integer, integer)>` element bytes are now
+/// written via per-attribute `set_field` calls in `new_record`'s
+/// `Value::Tuple` arm (mirrors the struct-literal `Value::Insert`
+/// path).  Verifies via the par worker (which reads the tuple via
+/// the wide-input dispatch landed in 4d.A) that the bytes round-trip
+/// correctly: each pair (i, i*10) has i+i*10 = 11*i, summed across
+/// rows = 11*(1+2+3+4) = 110.  This avoids P189b's broken sequential
+/// `pairs[0].0` access path by reading via the worker's slot 0
+/// (which gets the raw 16 bytes pushed by execute_at_raw_primitive_input_wide).
+#[test]
+fn p189c_vector_tuple_element_bytes_written() {
+    code!(
+        "fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30), (4, 40)];
+    sum = 0;
+    for p in pairs par(r = pair_sum(p), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(110));
+}

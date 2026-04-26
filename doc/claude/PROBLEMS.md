@@ -30,7 +30,8 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr | (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
+| 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr \| (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
+| 189d | `vector<(T1, text)>` element write returns 0 length for the text element.  P189c closed the per-attribute write path for primitive tuple elements (`(int, int)` works), but text elements within a vector-of-tuple read back as empty / zero-length.  Surfaced via `par_tuple_input_int_text` — workers see `len(p.1) == 0` instead of the expected `3, 3, 5`.  Likely root cause: `set_field`'s `Type::Text` arm in `src/parser/mod.rs:1716` writes via `OpSetText` which interns the string into the field's local store, but a vector-element write needs a different routing because the "field" is a tuple element inside a vector record (different store / different position computation). | Low | **Workaround:** wrap the tuple in a `struct` containing a text field — works correctly via the standard struct path. |
 
 ## Interpreter Robustness
 
@@ -79,6 +80,48 @@ follow-up to T1.8a tuple-return-convention).
 **Severity:** Low — the workaround (use a named `struct`) is
 idiomatic loft and gives correct access via the existing struct
 field-resolution path.
+
+### 189d. `vector<(T1, text)>` text element reads as zero-length
+
+**Symptom:** after P189c closed the `(int, int)` case, vector-of-
+tuple elements containing `text` come back empty:
+
+```loft
+fn label_len(p: const (integer, text)) -> integer { len(p.1) }
+fn run() -> integer {
+  pairs: vector<(integer, text)> = [(1, "one"), (2, "two"), (3, "three")];
+  sum = 0;
+  for p in pairs par(r = label_len(p), 4) { sum += r; }
+  sum
+}
+```
+
+Expected sum: `3 + 3 + 5 = 11`.  Got `0`.
+
+**Where:** P189c's `Value::Tuple` arm in
+`src/parser/vectors.rs::new_record` emits per-attribute
+`set_field(tuple_def_d_nr, i, 0, elm, val)` calls.  For
+text values, `set_field`'s `Type::Text` arm at
+`src/parser/mod.rs:1716` emits `OpSetText` which writes a
+4-byte text-pointer into the field at the right offset.  The
+write itself probably executes, but the resulting text
+either isn't readable through the worker's tuple-element
+access path or the pointer is interpreted in the wrong store.
+
+Probably interacts with P189b (tuple field access via DbRef)
+since reading `p.1` where `p` is a tuple-via-DbRef needs
+DbRef-aware unboxing.  Worth investigating P189b first.
+
+**Fix path:** trace what `set_field` emits for the text case
+(probably `OpSetText` at offset 8 of the synthetic
+`__tuple<integer,text>` struct), then verify whether the
+worker's `OpTupleGet(slot=0, offset=8)` reads it as a text
+pointer or as raw bytes.  Likely the worker needs to use
+`OpGetText` against the DbRef rather than `OpTupleGet`
+against the slot.
+
+**Severity:** Low — workaround (use a named struct with a
+text field) works today.
 
 ## Web Services
 

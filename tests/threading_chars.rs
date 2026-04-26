@@ -706,7 +706,6 @@ fn run() -> integer {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "par-tuple-input: phase 4d.A landed wide-input dispatch (InputKind::Primitive { size: 1..=64 } via execute_at_raw_primitive_input_wide) and the parser now accepts vector<(integer, integer)> via sub_type's tuple branch.  Remaining blocker: `Type::Tuple` has no `def_nr` for the wrapper struct, so parser/vectors.rs:1398 panics with `Unknown type tuple([...])` when the vector literal `[(1, 10), ...]` is built.  Closing this needs phase 9 vector-of-tuple storage support: a tuple_def helper analogous to vector_def that registers `main_vector<tuple<T1, T2>>` + element-write codegen for the new_record path.  Planned fix in plan-06 phase 9b."]
 fn par_tuple_input_int_int() {
     // Worker reads a tuple element and returns a primitive.
     code!(
@@ -723,7 +722,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-input: same shape as par_tuple_input_int_int — wide-input dispatch ready (4d.A), waits on vector-of-tuple storage in phase 9b.  After 4d.A: parser accepts vector<(integer, text)> declaration but vector literal construction panics at vectors.rs:1398 (Type::Tuple has no def_nr)."]
+#[ignore = "par-tuple-input: P189c (per-attribute writes for tuple-element literals) closed the (int, int) case but text elements within tuples need separate handling — runtime returns 0 instead of the expected sum-of-lengths.  Filed as P189d: investigate whether set_field's Type::Text arm needs a vector-element write path, or whether tuple-element text reads need DbRef-aware unboxing similar to P189b."]
 fn par_tuple_input_int_text() {
     // Worker reads a text element from a tuple input.
     code!(

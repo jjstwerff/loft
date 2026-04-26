@@ -835,6 +835,21 @@ pub fn run_parallel_light(
                                 &extras,
                                 ret_sz as u32,
                             )
+                        } else if prim_in > 8 {
+                            // P189c — wide-input path for tuple /
+                            // fn-ref / 9..=64 byte first-arg slots.
+                            // Mirrors the run_parallel_direct branch.
+                            let buf = read_primitive_at_wide(
+                                &state.database,
+                                &row_ref,
+                                element_size,
+                            );
+                            state.execute_at_raw_primitive_input_wide(
+                                fn_pos,
+                                &buf[..prim_in as usize],
+                                &extras,
+                                ret_sz as u32,
+                            )
                         } else if prim_in > 0 {
                             let v = read_primitive_at(
                                 &state.database,
@@ -879,6 +894,15 @@ pub fn run_parallel_light(
             let val = if primitive_input_size == u32::MAX {
                 let s = read_text_at(&state.database, &row_ref);
                 state.execute_at_raw_text_input(fn_pos, s, extra_args, return_size)
+            } else if primitive_input_size > 8 {
+                // P189c — wide-input path.
+                let buf = read_primitive_at_wide(&state.database, &row_ref, element_size);
+                state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..primitive_input_size as usize],
+                    extra_args,
+                    return_size,
+                )
             } else if primitive_input_size > 0 {
                 let v = read_primitive_at(&state.database, &row_ref, element_size);
                 state.execute_at_raw_primitive_input(
