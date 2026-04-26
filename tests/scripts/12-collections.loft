@@ -65,6 +65,9 @@ fn main() {
   assert(!db.map[null], "sorted null key is null");
   db.map +=[SortElm {key: "Zero", value: 0 }];
   assert(db.map["Zero"].value == 0, "sorted newly added");
+  // len() on sorted — opcode added 2026-04-26 (was previously
+  // rejected with "Unknown field reference.len").
+  assert(db.map.len() == 5, "sorted len: {db.map.len()}");
   // Descending: Zero, Two, Three, One, Four → 0,2,3,1,4
   sum = 0;
   for v in db.map {

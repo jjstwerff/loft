@@ -827,6 +827,17 @@ pub fn len(both: vector) -> integer {
 }
 #pure
 
+// sorted<T[key]> shares vector's length-prefixed allocation layout
+// (length word at offset 4 of the backing record), so the runtime
+// helper is identical — only the parser-side type tag differs.
+fn OpLengthSorted(r: sorted) -> integer;
+#rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
+// Number of elements in a sorted collection.
+pub fn len(both: sorted) -> integer {
+  OpLengthSorted(both)
+}
+#pure
+
 fn OpClearVector(r: vector);
 #rust"vector::clear_vector(&@r, &mut s.database.allocations);"
 // Remove all elements from the vector, setting its length to 0.

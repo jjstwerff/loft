@@ -7,7 +7,7 @@ use crate::ops;
 use crate::state::State;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 240] = &[
+pub const OPERATORS: &[fn(&mut State); 241] = &[
     goto,
     goto_word,
     goto_false,
@@ -186,6 +186,7 @@ pub const OPERATORS: &[fn(&mut State); 240] = &[
     set_text,
     var_vector,
     length_vector,
+    length_sorted,
     clear_vector,
     get_vector,
     vector_ref,
@@ -1547,6 +1548,12 @@ fn var_vector(s: &mut State) {
 }
 
 fn length_vector(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn length_sorted(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
     s.put_stack(new_value);

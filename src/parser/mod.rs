@@ -898,6 +898,25 @@ impl Parser {
             {
                 return true;
             }
+            // Bare collection parameter (sorted / hash / index / spacial)
+            // accepts the corresponding parameterised collection
+            // argument.  Mirrors how `Type::Vector(_, _)` matches via
+            // is_same: the parameter type carries no element-type
+            // constraint, so any concrete instantiation is structurally
+            // compatible.  Used for stdlib helpers like `len(both: sorted)`.
+            if let Type::Reference(r, _) = should {
+                let r = *r;
+                let bare = (r == self.data.def_nr("sorted")
+                    && matches!(test_type, Type::Sorted(_, _, _)))
+                    || (r == self.data.def_nr("hash") && matches!(test_type, Type::Hash(_, _, _)))
+                    || (r == self.data.def_nr("index")
+                        && matches!(test_type, Type::Index(_, _, _)))
+                    || (r == self.data.def_nr("spacial")
+                        && matches!(test_type, Type::Spacial(_, _, _)));
+                if bare {
+                    return true;
+                }
+            }
             // Text types with different dep lists are structurally compatible.
             if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
                 return true;

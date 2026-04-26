@@ -58,7 +58,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Character);
             data.definitions[d_nr as usize].known_type = 6;
         }
-        "radix" | "hash" | "reference" | "index" => {
+        "radix" | "hash" | "reference" | "index" | "sorted" | "spacial" => {
             data.set_returned(d_nr, Type::Reference(d_nr, Vec::new()));
         }
         "keys_definition" => {
