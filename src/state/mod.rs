@@ -1943,6 +1943,89 @@ impl State {
         }
     }
 
+    /// Plan-06 phase 1 G4 — variable-width-return worker dispatch.
+    /// Same as `execute_at_raw` but copies the worker's return
+    /// value as `return_size` raw bytes from the top of the stack
+    /// to `dst`, instead of reading at most 8 bytes.  Used for
+    /// fn-ref returns (20 bytes), large-tuple returns, and other
+    /// inline returns that exceed the u64 width.
+    ///
+    /// SAFETY: caller must ensure `dst` points to at least
+    /// `return_size` writable bytes.  The function does no bounds
+    /// checking on the destination buffer.
+    pub fn execute_at_raw_to(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        extra_args: &[u64],
+        return_size: u32,
+        dst: *mut u8,
+    ) {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        self.put_stack(*arg);
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        // Copy `return_size` bytes from the top of the worker
+        // stack to `dst`.  Stack grows upward; the return value
+        // occupies the topmost `return_size` bytes.
+        assert!(
+            return_size <= self.stack_pos,
+            "execute_at_raw_to: return_size {} exceeds stack_pos {}",
+            return_size,
+            self.stack_pos
+        );
+        let src_offset = self.stack_pos - return_size;
+        let store = self.database.store(&self.stack_cur);
+        unsafe {
+            let src = store.base_ptr().offset(
+                self.stack_cur.rec as isize * 8
+                    + self.stack_cur.pos as isize
+                    + src_offset as isize,
+            );
+            std::ptr::copy_nonoverlapping(src, dst, return_size as usize);
+        }
+        self.stack_pos = src_offset;
+    }
+
     /// Plan-06 phase 1 G3 — text-input worker dispatch.
     /// Same as `execute_at_raw` but the first param is a `text`
     /// argument: pushes a 16-byte `Str { ptr, len }` slot built

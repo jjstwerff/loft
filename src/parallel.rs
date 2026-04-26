@@ -492,26 +492,45 @@ pub fn run_parallel_direct(
                     row_idx as i64,
                     &state.database.allocations,
                 );
-                // Plan-06 phase 1 G2 — primitive-input dispatch.
-                let val = if prim_in > 0 {
-                    let v = read_primitive_at(&state.database, &row_ref, element_size);
-                    state.execute_at_raw_primitive_input(
+                // Plan-06 phase 1 G2/G3/G4 — pick the worker call by
+                // input/return shape:
+                //   ret_sz > 8 → write directly to slot via _to
+                //                (handles fn-ref 20B + future tuples)
+                //   prim_in == u32::MAX → text input
+                //   prim_in > 0          → primitive input
+                //   else                 → DbRef input
+                let dst = unsafe { slot_ptr.add(local_idx * ret_sz) };
+                if ret_sz > 8 {
+                    state.execute_at_raw_to(
                         fn_pos,
-                        v,
-                        prim_in,
+                        &row_ref,
                         &extras,
                         ret_sz as u32,
-                    )
-                } else {
-                    state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
-                };
-                unsafe {
-                    let dst = slot_ptr.add(local_idx * ret_sz);
-                    std::ptr::copy_nonoverlapping(
-                        (&raw const val).cast::<u8>(),
                         dst,
-                        ret_sz,
                     );
+                } else {
+                    let val = if prim_in == u32::MAX {
+                        let s = read_text_at(&state.database, &row_ref);
+                        state.execute_at_raw_text_input(fn_pos, s, &extras, ret_sz as u32)
+                    } else if prim_in > 0 {
+                        let v = read_primitive_at(&state.database, &row_ref, element_size);
+                        state.execute_at_raw_primitive_input(
+                            fn_pos,
+                            v,
+                            prim_in,
+                            &extras,
+                            ret_sz as u32,
+                        )
+                    } else {
+                        state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
+                    };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            (&raw const val).cast::<u8>(),
+                            dst,
+                            ret_sz,
+                        );
+                    }
                 }
             }
             (state.database, slot.store_nr, bytes_needed, start)

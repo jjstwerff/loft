@@ -620,6 +620,12 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             let kt = data.def(heap_d_nr).known_type;
             let sz = u32::from(stores.size(kt));
             (DispatchMode::Ref, kt, sz, pis)
+        } else if matches!(def.returned, crate::data::Type::Function(_, _, _)) {
+            // Plan-06 phase 1 G4 — fn-ref return: 20 bytes (8B
+            // d_nr + 12B closure DbRef).  Workers write the
+            // 20-byte fn-ref into per-worker output slots via
+            // run_parallel_direct's execute_at_raw_to path.
+            (DispatchMode::Primitive, u16::MAX, 20u32, pis)
         } else {
             // Primitive (or partial-parse Unknown).  Trust v_return_size.
             (DispatchMode::Primitive, u16::MAX, v_return_size.clamp(1, 8) as u32, pis)

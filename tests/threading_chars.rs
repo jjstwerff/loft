@@ -675,7 +675,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-fn-return: parser rejects fn-ref return because var_size=20 (8B d_nr + 12B closure DbRef) exceeds the par worker's 8-byte return cap.  Needs a fn-ref return mode similar to text — workers write 20-byte fn-refs into per-worker output slots; main thread copies bytes back.  Planned for plan-06 phase 4 (typed surface)."]
+#[ignore = "par-fn-return: G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct, but the worker's stack layout for fn-refs places the closure DbRef at an offset that doesn't match the (d_nr, closure) flat 20-byte layout the consumer reads.  Bytes 0-7 carry the d_nr correctly; bytes 8-19 are misaligned (closure DbRef shifted +8).  Likely needs codegen change in n_pick to emit closure-then-d_nr or change the calling convention.  Punted from G4 to plan-06 phase 4."]
 fn par_struct_to_fn_t4() {
     // Worker selects and returns a fn-ref based on its input.
     code!(

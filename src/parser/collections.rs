@@ -1236,7 +1236,16 @@ use #count instead"
             -1
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
-            if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || sz > 8) {
+            // Plan-06 phase 1 G4 — accept Type::Function returns
+            // (size 20 = 8B d_nr + 12B closure DbRef).  Workers
+            // write the 20-byte fn-ref into per-worker output
+            // slots; main thread copies bytes back via the
+            // execute_at_raw_to path in run_parallel_direct.
+            let is_fn_ref = matches!(&ret_type, Type::Function(_, _, _));
+            if !self.first_pass
+                && fn_d_nr != u32::MAX
+                && (sz == 0 || (sz > 8 && !is_fn_ref))
+            {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -1395,9 +1404,17 @@ use #count instead"
         // Heap-typed returns (Reference, struct-enum, Text, Unknown) need the
         // heavy path's deep-copy machinery — the light path's `execute_at_raw`
         // memcpy only handles inline returns ≤ 8 bytes.
+        // Plan-06 phase 1 G4 — fn-ref returns (Type::Function, 20 bytes)
+        // also need the heavy path's per-worker output slot mechanism;
+        // the light path writes via 8-byte execute_at_raw and would
+        // truncate the closure DbRef.
         let is_primitive_return = !matches!(
             ret_type,
-            Type::Text(_) | Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Unknown(_)
+            Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Function(_, _, _)
+                | Type::Unknown(_)
         );
         let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
             self.check_light_eligible(fn_d_nr)
