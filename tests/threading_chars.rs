@@ -549,7 +549,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-sorted-input: sorted<T[key]> input hangs the worker — sorted/hash/index storage uses a tree/hashmap layout, not a flat vector, so vector::get_vector(input, stride, idx) doesn't index correctly.  Needs a Stitch::* dispatch that walks the keyed collection's iterator instead.  Planned for plan-06 phase 4 (typed input)."]
+#[ignore = "par-sorted-input: blocked by TWO independent gaps.  (1) Plan-06 phase 4d.B parser-side desugar — the par dispatcher today rejects keyed-collection input because vector::get_vector(stride, idx) doesn't walk tree/hashmap storage; design is to materialize into vector<reference<T>> and re-route.  (2) P190 — even before reaching the par dispatcher, the canary's local-var sorted (`sorted_items: sorted<Score[value]> = []; sorted_items += ...`) panics at codegen.rs:1689 'Too few parameters on OpIterate' because get_type() can't find the registered db type name for local-var keyed collections.  Both must land before this canary closes."]
 fn par_sorted_input_t4() {
     code!(
         "struct Score { value: integer not null }
@@ -569,7 +569,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-hash-input: hash<T[key]> input — see par_sorted_input_t4."]
+#[ignore = "par-hash-input: hash<T[key]> input — same two-blocker shape as par_sorted_input_t4 (4d.B parser desugar + P190 local-var iteration codegen)."]
 fn par_hash_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
@@ -589,7 +589,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-index-input: index<T[key]> input — see par_sorted_input_t4."]
+#[ignore = "par-index-input: index<T[key]> input — same two-blocker shape as par_sorted_input_t4 (4d.B parser desugar + P190 local-var iteration codegen)."]
 fn par_index_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }

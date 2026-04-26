@@ -30,10 +30,59 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
+| 190 | `for x in <local sorted/hash/index>` panics at `src/state/codegen.rs:1689` with `Too few parameters on OpIterate (got 2, need 6)`.  P188 enabled local-var keyed collections but the iteration path's `get_type(Type::Sorted/Hash/Index)` at `src/parser/vectors.rs:1626` looks up the database type name (e.g. `sorted<Score[value]>`) which is only registered via `fill_database` for struct fields — local-var keyed collections don't trigger the field-typedef pass.  `get_type` returns `u16::MAX`, `fill_iter` exits early, `OpIterate` gets only 2 args (the trailing zeros) instead of the 6 it needs.  Independent of par; sequential iteration over a local-var sorted hits the same panic.  **Blocks plan-06 phase 4d.B (par over keyed collections)** because the canaries (`par_sorted_input_t4` etc.) use local-var sorted as input. | Low | **Workaround:** put the keyed collection in a struct field (`struct Db { items: sorted<...> }; for x in db.items`) — the field path triggers fill_database registration and OpIterate gets the right args. |
 | 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr \| (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
 | 189d | `vector<(T1, text)>` element write returns 0 length for the text element.  P189c closed the per-attribute write path for primitive tuple elements (`(int, int)` works), but text elements within a vector-of-tuple read back as empty / zero-length.  Surfaced via `par_tuple_input_int_text` — workers see `len(p.1) == 0` instead of the expected `3, 3, 5`.  Likely root cause: `set_field`'s `Type::Text` arm in `src/parser/mod.rs:1716` writes via `OpSetText` which interns the string into the field's local store, but a vector-element write needs a different routing because the "field" is a tuple element inside a vector record (different store / different position computation). | Low | **Workaround:** wrap the tuple in a `struct` containing a text field — works correctly via the standard struct path. |
 
 ## Interpreter Robustness
+
+### 190. Local-var keyed collection iteration panics in OpIterate
+
+**Symptom:** `for x in <local sorted/hash/index/spacial>` panics:
+
+```loft
+fn test() {
+  sorted_items: sorted<Score[value]> = [];
+  sorted_items += Score { value: 30 };
+  sorted_items += Score { value: 10 };
+  sum = 0;
+  for s in sorted_items { sum += s.value; }   // ← panics here
+}
+```
+
+```
+thread 'main' panicked at src/state/codegen.rs:1689:9:
+Too few parameters on OpIterate (got 2, need 6)
+```
+
+**Where:** `src/parser/vectors.rs::get_type` at line 1669-1688
+looks up the database type name for `Type::Sorted/Hash/Index` by
+constructing a name string (`sorted<Score[value]>`) and calling
+`self.database.name(name)`.  This name is only registered via
+`fill_database` when the keyed collection appears as a struct
+field — local-var keyed collections (enabled by P188) don't
+trigger this registration path, so the lookup returns `u16::MAX`.
+`fill_iter` then exits early at vectors.rs:680, leaving `ls` with
+only the 2 trailing zero ints that the caller pushed afterward —
+when `OpIterate` (which has 6 attributes) is built from `ls`,
+the parameter-count assert fires.
+
+**Independent of par.**  Sequential iteration over a local-var
+sorted hits the same panic.  **But it blocks plan-06 phase 4d.B**
+(par over keyed collections) because the canaries
+(`par_sorted_input_t4`, `par_hash_input_t4`, `par_index_input_t4`)
+all use local-var keyed collections as input.
+
+**Fix path:** P188's `gen_set_first_keyed_null` (the codegen
+helper that allocates the backing store for a local-var keyed
+collection) needs to also call the database to register the type
+name — or `get_type` needs a fallback that registers the type
+on demand if the lookup misses.  The struct-field path's
+fill_database registration produces the right type registration;
+mirror that for the local-var path.
+
+**Severity:** Low — workaround (put the keyed collection in a
+struct field) is the canonical loft pattern and works today.
 
 ### 189b. Tuple-as-vector-element field access reads garbage
 
