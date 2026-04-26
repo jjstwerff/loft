@@ -1025,6 +1025,36 @@ use #count instead"
                 && kw == "par"
             {
                 self.lexer.has_identifier(); // consume "par"
+                // Plan-06 phase 4d.B — par-over-keyed-collection
+                // desugar.  When the input is sorted/hash/index/
+                // spacial, the par dispatcher's flat-vector iteration
+                // doesn't know how to walk the tree/hashmap layout.
+                // Pre-materialise into a `vector<reference<T>>` and
+                // re-route par() to use the materialised vector.
+                if matches!(
+                    in_type,
+                    Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
+                    self.materialise_keyed_for_par(&in_type, &expr)
+                {
+                    let combined_fill = if fill == Value::Null {
+                        mat_fill_ir
+                    } else {
+                        v_block(vec![fill, mat_fill_ir], Type::Void, "Combined par fill")
+                    };
+                    self.parse_parallel_for_loop(
+                        code,
+                        &id,
+                        &mat_in_type,
+                        &Value::Var(mat_var),
+                        combined_fill,
+                        loop_nr,
+                    );
+                    return;
+                }
                 self.parse_parallel_for_loop(code, &id, &in_type, &expr, fill, loop_nr);
                 return;
             }
@@ -1103,6 +1133,126 @@ use #count instead"
         } else {
             diagnostic!(self.lexer, Level::Error, "Expect variable after for");
         }
+    }
+
+    /// Plan-06 phase 4d.B — materialise a keyed-collection input
+    /// (`sorted/hash/index/spacial<T[key]>`) into a temporary
+    /// `vector<reference<T>>` so the par dispatcher's flat-vector
+    /// path can iterate it.  Returns `(fill_ir, mat_var, mat_in_type)`
+    /// or None if the source can't be unwrapped.  Mirrors the IR
+    /// shape that the parser emits for the manual workaround
+    /// `refs += [s]`: OpPreAllocVector + OpNewRecord + OpCopyRecord
+    /// + OpFinishRecord per loop iteration.
+    pub(crate) fn materialise_keyed_for_par(
+        &mut self,
+        in_type: &Type,
+        source_expr: &Value,
+    ) -> Option<(Value, u16, Type)> {
+        let (content_d, dep) = match in_type {
+            Type::Sorted(c, _, dep)
+            | Type::Hash(c, _, dep)
+            | Type::Index(c, _, dep)
+            | Type::Spacial(c, _, dep) => (*c, dep.clone()),
+            _ => return None,
+        };
+        let elem_ref_tp = Type::Reference(content_d, dep);
+        let vec_ref_tp = Type::Vector(Box::new(elem_ref_tp.clone()), Vec::new());
+        let mat_var = self.create_unique("__par_mat", &vec_ref_tp);
+        self.vars.defined(mat_var);
+        // Register the wrapper struct EARLY (both passes) so the
+        // typedef pass between pass 1 and pass 2 runs fill_database
+        // and assigns a real `known_type`.
+        let _ = self.data.vector_def(&mut self.lexer, &elem_ref_tp);
+        if self.first_pass {
+            return Some((Value::Null, mat_var, vec_ref_tp));
+        }
+        // Allocate the backing store for __par_mat.
+        let db_setup = self.vector_db(&elem_ref_tp, mat_var);
+        let iter_idx = self.create_unique("__par_mat_idx", &I32);
+        self.vars.defined(iter_idx);
+        let elm_var = self.create_unique("__par_mat_e", &elem_ref_tp);
+        self.vars.defined(elm_var);
+        // Drive the keyed-collection iterator via iterator() — same
+        // helper that powers `for x in sorted_items`.
+        let mut create_iter = source_expr.clone();
+        let it_marker = Type::Iterator(Box::new(elem_ref_tp.clone()), Box::new(Type::Null));
+        let iter_next = self.iterator(&mut create_iter, in_type, &it_marker, iter_idx, None);
+        if iter_next == Value::Null {
+            return None;
+        }
+        // Build the per-element append IR.  Mirrors the manual case
+        // `refs += [s]` which lowers to:
+        //   OpPreAllocVector(refs, 1, elem_size)
+        //   tmp = OpNewRecord(refs, vec_tp, u16::MAX)
+        //   OpCopyRecord(elm_var, tmp, content_tp)
+        //   OpFinishRecord(refs, tmp, vec_tp, u16::MAX)
+        let content_known = self.data.def(content_d).known_type;
+        let elem_size = if content_known == u16::MAX {
+            8
+        } else {
+            i32::from(self.database.size(content_known))
+        };
+        let vec_known = i32::from(self.vector_of(&elem_ref_tp));
+        let prealloc = self.cl(
+            "OpPreAllocVector",
+            &[Value::Var(mat_var), Value::Int(1), Value::Int(elem_size)],
+        );
+        let tmp_var = self.create_unique("__par_mat_t", &elem_ref_tp);
+        self.vars.defined(tmp_var);
+        let new_rec = self.cl(
+            "OpNewRecord",
+            &[
+                Value::Var(mat_var),
+                Value::Int(vec_known),
+                Value::Int(i32::from(u16::MAX)),
+            ],
+        );
+        let copy_rec = self.cl(
+            "OpCopyRecord",
+            &[
+                Value::Var(elm_var),
+                Value::Var(tmp_var),
+                Value::Int(i32::from(content_known)),
+            ],
+        );
+        let finish_rec = self.cl(
+            "OpFinishRecord",
+            &[
+                Value::Var(mat_var),
+                Value::Var(tmp_var),
+                Value::Int(vec_known),
+                Value::Int(i32::from(u16::MAX)),
+            ],
+        );
+        let body = Value::Insert(vec![
+            prealloc,
+            v_set(tmp_var, new_rec),
+            copy_rec,
+            finish_rec,
+        ]);
+        // Loop body: read next via iter_next into elm_var, break on
+        // null, otherwise append (body).
+        let for_next = v_set(elm_var, iter_next);
+        let mut lp = vec![for_next];
+        let mut test_for = Value::Var(elm_var);
+        self.convert(&mut test_for, &elem_ref_tp, &Type::Boolean);
+        test_for = self.cl("OpNot", &[test_for]);
+        lp.push(v_if(
+            test_for,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        ));
+        lp.push(body);
+        // Assemble the materialisation Block.
+        let mut for_steps: Vec<Value> = Vec::new();
+        for s in &db_setup {
+            for_steps.push(s.clone());
+        }
+        for_steps.push(create_iter);
+        for_steps.push(v_loop(lp, "Materialise par input"));
+        let fill_ir = v_block(for_steps, Type::Void, "Materialise par");
+        let mat_in_type = vec_ref_tp.depending(mat_var);
+        Some((fill_ir, mat_var, mat_in_type))
     }
 
     // Desugar `for a in vec par(b = worker(a), N) { body }` into an

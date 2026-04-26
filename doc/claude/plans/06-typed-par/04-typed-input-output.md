@@ -322,30 +322,40 @@ weren't visible from outside:
    programmatic `OpIterate` emission panics with "Too few
    parameters on OpIterate (got 2, need 6)".
 
-2. **vector<reference<T>> += ref deep-copy semantics** (still
-   open): the implementation used `new_record` to emit the
-   per-element append.  For a `Type::Reference` element type,
-   `new_record`'s Reference branch dispatches to `OpCopyRecord`,
-   which deep-copies the source record into the vector slot
-   instead of just appending the DbRef bytes.  When workers
-   then read `s.value` via the par dispatcher's
-   `InputKind::Ref` path, they read the copied record's bytes —
-   which can come back as `null` because the deep-copy
-   interaction with the parent store's iteration cleanup
-   leaves a stale DbRef.  Manual `refs += [s]` works because
-   the parser's `+=` operator emits a different code path
-   (likely `OpAppendVector` after building a temp vec literal),
-   but synthesising that programmatically requires either
-   re-using the parser's `+=` machinery (intricate) or emitting
-   the equivalent IR shape directly (which my attempt missed).
+2. **Programmatic IR construction for `__par_mat += [elm]`**
+   (still open): the implementation used `new_record` to emit
+   the per-element append.  Inspecting the IR `cargo run --
+   --dump` produces for the manual case `refs += [a]` reveals
+   the true required shape:
+
+   ```
+   OpPreAllocVector(refs, 1, 8)             ← preallocate slot
+   _elm_1 = OpNewRecord(refs, 66, 65535)    ← claim slot
+   OpCopyRecord(a, _elm_1, 64)              ← deep-copy source into slot
+   OpFinishRecord(refs, _elm_1, 66, 65535)  ← finalise
+   ```
+
+   The deep-copy via `OpCopyRecord` IS correct — `vector<reference<T>>`
+   actually stores T inline, the "reference" prefix is parser-level
+   semantics meaning "this var holds a reference to an existing T",
+   not "stored as a reference".  The manual case works because the
+   parser's `+=` operator + vector-literal handler combine to emit
+   the full sequence above, INCLUDING `OpPreAllocVector`.
+
+   My direct `new_record` call missed `OpPreAllocVector`, leading
+   workers to read 0/null from the unallocated vector storage.
+   Approach A (mirror the IR shape) is now well-understood; the fix
+   is to prepend `OpPreAllocVector(mat_var, 1, elem_size)` to the
+   per-iteration append step.
 
 The implementation reverted in working tree.  Going forward, the
 right approach is one of:
 
-- **A: Use `OpAppendVector` directly.**  Build a single-element
-  temp vec from `Var(elm_var)` (one OpNewRecord/OpFinishRecord
-  pair into a fresh slot), then OpAppendVector(mat_var, temp,
-  type_id).  Mirrors what the parser's `refs += [s]` lowers to.
+- **A (preferred — IR shape now understood):** Mirror the
+  `OpPreAllocVector + OpNewRecord + OpCopyRecord + OpFinishRecord`
+  sequence the parser emits for `refs += [s]`.  Add the
+  `OpPreAllocVector` call before the per-element insertion.  All
+  the helpers exist; the previous attempt just missed this opcode.
 - **B: Reuse the parser's `+=` operator.**  Synthesise a
   `Value::Insert` that wraps the materialisation logic and
   feeds it through `compute_op_code` with op="+=".  Avoids
@@ -357,10 +367,6 @@ right approach is one of:
   via `vector::sorted_iter` / `hash_sorted` / `tree_iter`.
   Avoids parser-side IR construction entirely.  More work in
   the runtime but cleaner separation.
-
-Original design was approach A (simplified to just call
-`new_record`); approach C might be the right call given the
-deep-copy gotcha.
 
 Original spec follows:
 

@@ -549,7 +549,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-sorted-input: P190 (local-var keyed iteration codegen) closed via on-demand database.sorted() registration in get_type().  Remaining blocker: plan-06 phase 4d.B parser-side desugar — the par dispatcher rejects keyed-collection input at runtime because vector::get_vector(stride, idx) doesn't walk tree/hashmap storage; design is to materialize into vector<reference<T>> via a parser-emitted pre-loop and re-route the par dispatch.  Manual workaround works today (sequential `for s in items { refs += [s]; }` then par over refs) — the canary uses the direct shape that needs the desugar."]
 fn par_sorted_input_t4() {
     code!(
         "struct Score { value: integer not null }
@@ -569,7 +568,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-hash-input: hash<T[key]> input — same two-blocker shape as par_sorted_input_t4 (4d.B parser desugar + P190 local-var iteration codegen)."]
+#[ignore = "par-hash-input: 4d.B desugar closes par_sorted_input_t4 but hash interacts with parse_for's pre-existing hash-special-case (collections.rs:990-1008 calls n_hash_sorted to materialise into a u32-stride scratch).  My desugar sees in_type=Hash but expr is already rewritten to Var(scratch), causing iterator() to mis-route.  Needs separate handling for the already-pre-materialised hash case OR re-ordering of parse_for's hash special-case vs the par desugar.  Got 171798692448 instead of 120 (worker reads garbage from doubled materialisation)."]
 fn par_hash_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
@@ -589,7 +588,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-index-input: index<T[key]> input — same two-blocker shape as par_sorted_input_t4 (4d.B parser desugar + P190 local-var iteration codegen)."]
+#[ignore = "par-index-input: similar to par_hash_input_t4 — index iteration via 4d.B desugar produces wrong values.  May share the same root cause as hash (interaction with parse_for's pre-existing iterator special-cases) or have a separate index-specific issue.  Needs separate investigation."]
 fn par_index_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }

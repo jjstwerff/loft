@@ -10204,6 +10204,34 @@ fn run() -> integer {
     .result(Value::Int(110));
 }
 
+/// Plan-06 phase 4d.B (sorted) — `for s in sorted_items par(...)`
+/// no longer hangs the worker.  The desugar in
+/// `parse_for` (collections.rs) detects keyed-collection input,
+/// allocates a temp `vector<reference<T>>` via `materialise_keyed_for_par`,
+/// walks the source via `OpIterate`/`OpStep` appending each element,
+/// and re-routes par() to the materialised vector.  Closes the
+/// `par_sorted_input_t4` canary; `par_hash_input_t4` and
+/// `par_index_input_t4` still ignored (different interaction with
+/// pre-existing iterator special-cases).
+#[test]
+fn p4d_b_par_over_sorted_via_materialise() {
+    code!(
+        "struct P4dScore { value: integer not null }
+fn p4d_dbl(s: const P4dScore) -> integer { s.value * 2 }
+fn run() -> integer {
+    items: sorted<P4dScore[value]> = [];
+    items += P4dScore { value: 30 };
+    items += P4dScore { value: 10 };
+    items += P4dScore { value: 20 };
+    sum = 0;
+    for s in items par(r = p4d_dbl(s), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(120));
+}
+
 /// P190 — `for x in <local sorted/hash/index>` used to panic at
 /// `src/state/codegen.rs:1689` with "Too few parameters on
 /// OpIterate (got 2, need 6)".  Root cause: P188 enabled local-var
