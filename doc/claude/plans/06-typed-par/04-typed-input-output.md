@@ -404,6 +404,224 @@ Five details:
 - `cargo test --release --no-fail-fast --test issues
   --test parse_errors --test threading` — no regressions.
 
+## Phase 4e — caller-supplied destination via ref_return() hidden arg
+
+**Status: designed 2026-04-26 after G6 partial scaffolding identified
+this as the dominant remaining construction problem; not yet shipped.**
+
+The compiler's `ref_return()` mechanism at
+`src/parser/control.rs:2411-2458` promotes local variables referenced
+in heap-typed return expressions to **hidden caller-supplied
+destination arguments**.  When a function like
+
+```loft
+fn replicate(s: const Score) -> vector<integer> {
+  out: vector<integer> = [];
+  for i in 0..s.value { out += [i]; }
+  out
+}
+```
+
+is parsed, ref_return walks the return expression's dep list and:
+- Adds a new attribute named `out` of type `vector<integer>` to
+  `def.attributes`, with `attribute.hidden = true`.
+- Calls `become_argument(out_var)` so the local var is now treated as
+  an argument (`stack_allocated = true`, `argument = true`).
+- Extends `def.returned`'s dep list to include the new attribute index.
+
+For **normal calls** (`src/state/codegen.rs:1006-1060`) the caller
+side detects this convention and emits `ReserveFrame(N)` +
+`InitRef(slot)` + `Database(slot, tp)` to allocate the destination,
+then pushes the destination DbRef as a mutable hidden argument
+during the call.  The callee writes into the caller-provided slot.
+
+For **par** (`src/native.rs::n_parallel_for`) the dispatcher passes
+0 extras → the worker has no destination → at thread join the
+worker's writes fall onto the parent's locked store →
+*"Write to locked store at rec=2 fld=4"* panic.
+
+This blocks two canaries with the same construction:
+
+- **`par_struct_to_vector_t4`** (G6 partial in
+  [01-output-store.md](01-output-store.md#g6--vector-return-par-dispatch--partial-scaffolding-destination-plumbing-pending))
+  — vector-return worker; `out` gets promoted.
+- **`par_struct_to_fn_t4`** (G4 partial in
+  [01-output-store.md](01-output-store.md#g4--fn-ref-return--partial-scaffolding-codegen-layout-pending))
+  — fn-ref return; the worker frame's `InitRefSentinel(var[24])`
+  fills a hidden destination slot the par dispatcher never
+  allocated, so the closure DbRef ends up at `stack[20..23]`
+  instead of `stack[12..23]`.  Same root cause via a different shape.
+
+### Fix shape
+
+The par dispatcher plays the role of "caller" for ref_return-promoted
+workers: per-row, allocate a destination in the worker's output store,
+push it as a hidden extra prefix, then collect the worker-filled
+destination into the par result vector.
+
+Five concrete changes:
+
+1. **Detect hidden args at the dispatcher.**  In
+   `src/native.rs::n_parallel_for` (around line 533, alongside the
+   `DispatchMode` derivation at line 51-90), inspect
+   `def.attributes` for entries with `hidden = true`.  Build a
+   `Vec<usize>` of hidden-arg indices that need destinations.  For
+   the typical case there's exactly one (the return-value
+   destination).
+
+2. **Extend `DispatchMode` (or add `OutputKind`)** to carry whether
+   the worker uses caller-supplied destinations:
+
+   ```rust
+   enum OutputKind {
+       Primitive { size: u8 },          // worker returns up to 8 bytes via stack
+       Text,                            // worker returns String via execute_at_text
+       RefDirect,                       // worker returns DbRef via execute_at_ref
+                                        //   (locally-allocated, e.g. make_point)
+       RefHiddenDest { type_nr: u16 },  // worker writes into caller-supplied
+                                        //   destination (this phase)
+   }
+   ```
+
+   `RefHiddenDest` carries the type number so the dispatcher knows
+   the destination's inline size.  Distinction from `RefDirect`:
+   `RefDirect` workers return a self-allocated DbRef from
+   `execute_at_ref`; `RefHiddenDest` workers write nothing back via
+   stack — the result is in the caller's destination after the call.
+
+3. **Allocate per-worker per-row destinations in worker output
+   stores.**  The phase-1 `WorkerStores::add_output_slot(words)` at
+   `src/database/mod.rs:359-404` already returns a fresh `Store`
+   appended to `allocations`, returning a `WorkerOutputSlot {
+   store_nr }`.  For `RefHiddenDest`, before each row's worker
+   call, allocate a destination DbRef:
+
+   ```
+   let dest_slot = worker_stores.add_output_slot(dest_words);
+   let dest_ref = DbRef { store_nr: dest_slot.store_nr, rec: …, pos: … };
+   // (rec/pos computed via Database-style claim on the new slot)
+   ```
+
+   Each row gets its own slot — workers don't share destinations
+   across rows.  The slot exists for the duration of the row's
+   call; afterwards its contents (the filled return value) are
+   transferred to the par result vector.
+
+4. **Push the destination DbRef as a hidden extra prefix.**  The
+   existing `extra_args: Vec<u64>` channel carries 8-byte primitives;
+   DbRefs are 12 bytes and don't fit.  Two options, pick one:
+
+   **Option A (preferred): add a `hidden_dests: Vec<DbRef>` parameter**
+   to the `execute_at_raw_*` / `run_parallel_*` chain.  Pushed
+   *before* the user-visible extras in the worker frame so they
+   land at attribute slots 1..N+1 (matching ref_return's
+   "appended-at-end-of-attributes" placement).  Adjust
+   `args_size` accordingly (`args_size = 12 + 12 *
+   hidden_dests.len() + 8 * extras.len()`).
+
+   **Option B (rejected): pack DbRefs into 2 extras each.**  Loses
+   type clarity, breaks the `args_size` accounting that worker
+   frames rely on, requires every dispatcher to special-case
+   "this extra is two slots".
+
+5. **Worker fills destination via standard ref_return convention.**
+   No worker-side bytecode changes — the worker's existing
+   bytecode (e.g. `replicate`'s `out += [i]` becoming
+   `OpNewRecord(out_arg, ...)`) already addresses the hidden arg
+   by attribute position.  The G5/G5.1 par-safety analyser already
+   recognises hidden args as worker-local destinations and doesn't
+   flag the `OpAppendVector` / `OpNewRecord` calls.
+
+6. **Collect destinations into the par result vector.**  After all
+   workers join, each row's destination contains the worker's
+   filled result (a `vector<integer>` header + backing record, or
+   a fn-ref's 20 bytes, etc.).  Use the existing
+   `Stores::copy_from_worker` (or `copy_from_worker_unowned` for
+   the fast path, when `has_owned_sub_fields(type) == false`) at
+   `src/database/allocation.rs:409` to deep-copy the destination
+   bytes into the par result vector at offset `row_idx *
+   struct_size`.  This mirrors what `Stitch::ConcatLegacy { ret_size:
+   u8::MAX, .. }` already does for `RefDirect` workers
+   (`src/native.rs:879-947`) — same code path, different source
+   slot.
+
+### Why this design over alternatives
+
+- **Per-worker (not per-row) slot pool**: simpler accounting at the
+  cost of one Store allocation per row.  Acceptable because the
+  destinations are small (typical struct size 16-64 bytes) and
+  Store allocation is `Vec::push` of an empty `Store`.  A future
+  optimisation could pool slots per-worker and reuse across rows.
+
+- **Allocate in worker store, not parent**: keeps writes off the
+  locked parent.  After collection, the destination's bytes live in
+  parent stores (via copy_from_worker), so the post-join state
+  matches the non-par equivalent.
+
+- **No worker-fn-rewrite alternative**: an alternate design would
+  generate a separate "par-friendly" version of each
+  ref_return-promoted fn that uses a local Database allocation
+  instead of the hidden destination.  Rejected: doubles the
+  function-table size, complicates name resolution, breaks the
+  invariant that "each user fn has one IR".  The dispatcher-side
+  fix is contained.
+
+### Ship order
+
+This is a single sub-phase (no A/B split) because the five steps are
+interdependent — you can't ship "allocate destinations" without
+"push them to workers" without "collect them after".
+
+Lands AFTER 4d (the typed `InputKind` / `OutputKind` enum precedent)
+and AFTER phase 5c's Arc-wrap parent stores (which lets workers
+read from `Arc<Stores>` without locking — lifts the parent-write
+risk surface that motivates this in the first place).  Specifically:
+
+- 4d.A introduces `InputKind` and the precedent for typed dispatch
+  enums; 4e introduces `OutputKind` in the same shape.
+- 5c's Arc-wrapping is independent — 4e doesn't *require* it, but
+  5c reduces the cost of the per-row slot allocation by letting
+  the dispatcher know the parent stores are immutable.
+
+### Acceptance
+
+- **`par_struct_to_vector_t4`** un-`#[ignore]`d and passes (the
+  G6 finish).
+- **`par_struct_to_fn_t4`** un-`#[ignore]`d and passes (the G4
+  finish — same construction, fn-ref shape).
+- `par_struct_to_struct_t4` still passes — `RefDirect` workers
+  (locally-allocated returns like `make_point`) didn't regress.
+- `par_struct_to_struct_enum_t4` still passes — struct-enum
+  returns route through the right `OutputKind`.
+- `par_struct_to_text_t4` still passes — text returns retain
+  their dedicated path.
+- New unit test: `output_kind_for_def` returns
+  `OutputKind::RefHiddenDest { type_nr }` for a fn whose
+  `def.attributes` contains a `hidden: true` entry, and
+  `OutputKind::RefDirect` for one without.
+- New end-to-end test: `par_vector_return_with_extras` verifies
+  hidden destinations and user-visible extras coexist on the
+  worker frame without offset confusion.
+
+**End-to-end:**
+- `cargo test --release --no-fail-fast --test threading_chars` —
+  ignored count drops from 7 → 5 (2 more canaries closed beyond
+  4d's 6).  Combined with 4d, total drops from 13 → 5.
+- `cargo test --release --no-fail-fast --test issues
+  --test parse_errors --test threading` — no regressions.
+
+### Cost contract
+
+- **One `Store` allocation per row** (the destination slot).  Empty
+  `Store::new` + slot append into the worker's `allocations`.  For
+  N rows: O(N) extra empty stores, freed when workers finish.
+- **One `copy_from_worker` per row** at collection time.  Same
+  cost as the existing `RefDirect` path uses, just with a
+  different source slot.
+- **No per-row parent-store touch during the worker phase.**  The
+  destination lives entirely in worker stores; parent stores stay
+  read-only (D2.0).
+
 ## Out of scope
 
 - Auto-light heuristic (phase 5).

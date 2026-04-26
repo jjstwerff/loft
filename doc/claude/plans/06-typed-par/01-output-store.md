@@ -412,11 +412,13 @@ derives `return_size=20` for fn-ref returns.
 
 Remaining blocker: stack snapshot at Return time shows the
 worker's d_nr correctly at `stack[4..11]` but the closure DbRef
-sentinel appears at `stack[20..23]` instead of `stack[12..23]` —
-the codegen's `stack_pos` accounting for `n_pick` uses a
-different convention than `execute_at_raw_to`'s setup, and
-reconciling needs deep codegen-side work.  Deferred to phase 4
-(typed surface).
+sentinel appears at `stack[20..23]` instead of `stack[12..23]`.
+**Identified 2026-04-26**: this is the same construction problem
+as G6 — `n_pick`'s `InitRefSentinel(var[24])` is filling a hidden
+destination slot the par dispatcher never allocated.  Designed as
+[phase 4e](04-typed-input-output.md#phase-4e--caller-supplied-destination-via-ref_return-hidden-arg)
+(caller-supplied destination via ref_return hidden arg); G4
+finishes when 4e ships.
 
 `par_struct_to_fn_t4` remains `#[ignore]`d.
 
@@ -463,13 +465,17 @@ Remaining blocker: vector-returning workers like
 `out: vector<integer> = []; ...; out` get the local var
 promoted to a hidden caller destination arg, but the par
 dispatcher passes 0 extras — the worker writes into the
-parent's locked store at thread join.  Fix needs the par
-dispatcher to allocate per-worker destinations in worker output
-stores and pass them as the hidden arg.  Deferred to plan-06
-phase 7 (par_fold) where this hidden-arg machinery lives.
+parent's locked store at thread join.  Designed as
+[phase 4e](04-typed-input-output.md#phase-4e--caller-supplied-destination-via-ref_return-hidden-arg):
+the par dispatcher allocates per-worker destinations in worker
+output stores via the existing `WorkerStores::add_output_slot`
+mechanism, pushes them as a hidden extras prefix, and copies the
+filled destinations into the par result vector after join.  G6
+finishes when 4e ships.
 
 `par_struct_to_vector_t4` and `par_struct_to_keyed_collection_t4`
-remain `#[ignore]`d.
+remain `#[ignore]`d (the latter blocked by P188 — keyed-collection
+`+= literal`, separate from this construction).
 
 ### G7 — flat-vector-only input iteration (designed, deferred to phase 4d)
 
