@@ -471,6 +471,32 @@ phase 7 (par_fold) where this hidden-arg machinery lives.
 `par_struct_to_vector_t4` and `par_struct_to_keyed_collection_t4`
 remain `#[ignore]`d.
 
+### G7 — flat-vector-only input iteration (designed, deferred to phase 4d)
+
+Two distinct construction failures share one root cause: the par
+dispatcher assumes the input is flat-vector storage AND that inline
+elements are ≤ 8 bytes.
+
+- **Large-inline elements** (`par_tuple_input_int_int`,
+  `par_tuple_input_int_text`, `par_vec_of_fns_input_t4`):
+  vector storage is fine, but `primitive_first_arg_slot_size` at
+  `src/native.rs:31-43` returns 0 for tuple / fn-ref / Reference, so
+  the dispatcher falls through to the DbRef path and the worker
+  hangs trying to dereference garbage.
+- **Keyed-collection inputs** (`par_sorted_input_t4`,
+  `par_hash_input_t4`, `par_index_input_t4`):
+  parser at `src/parser/collections.rs:1123` rejects with
+  *"par(...) requires a vector<T> input"* — the runtime's
+  `vector::get_vector(input, stride, idx)` only works on flat
+  vector storage.
+
+Designed as **phase 4d** in
+[04-typed-input-output.md](04-typed-input-output.md#phase-4d--flat-vector-only-input-iteration-fix)
+— two independently-shippable sub-phases (4d.A typed `InputKind`
+enum + wide-slot dispatch; 4d.B parser-side desugar to
+`vector<reference<T>>` via `OpIterate`/`OpStep`).  Closes 6
+canaries when both ship.
+
 ### Why these aren't in PROBLEMS.md
 
 Plan-06 is the single source of truth for "what par needs to
