@@ -1819,6 +1819,35 @@ impl Data {
         }
     }
 
+    /// P189 — register a synthetic struct definition for a tuple type
+    /// shape `(T1, T2, ...)`.  Each tuple shape resolves to a single
+    /// struct with attributes named `_0`, `_1`, ... so the rest of the
+    /// type system (vector storage, field access, fill_database) can
+    /// treat tuple-as-vector-element identically to struct-as-vector-element.
+    ///
+    /// Idempotent: returns the existing def_nr on subsequent calls
+    /// for the same tuple shape.
+    pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
+        let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+        let name = format!("__tuple<{}>", inner_names.join(","));
+        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+            return nr;
+        }
+        if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
+            return nr;
+        }
+        let d = self.add_def(&name, lexer.pos(), DefType::Struct);
+        // Register globally (source 0) so other files referencing the
+        // same tuple shape resolve to the same def.
+        self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        for (i, t) in types.iter().enumerate() {
+            let aname = format!("_{i}");
+            self.add_attribute(lexer, d, &aname, t.clone());
+        }
+        d
+    }
+
     pub fn check_vector(&mut self, d_nr: u32, vec_tp: u16, pos: &Position) -> u32 {
         let vec_name = format!("vector<{}>", self.def(d_nr).name);
         let mut v_nr = self.def_nr(&vec_name);
@@ -2250,6 +2279,16 @@ impl Data {
             Type::Sorted(_, _, _) => self.source_nr(0, "sorted"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
+            // P189: look up the synthetic tuple struct registered by
+            // `tuple_def` at parse time.  Returns u32::MAX if the
+            // tuple shape was never registered (caller must register
+            // via `tuple_def` before reaching here, e.g. in `sub_type`
+            // when parsing `vector<(...)>`).
+            Type::Tuple(types) => {
+                let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+                let name = format!("__tuple<{}>", inner_names.join(","));
+                self.def_nr(&name)
+            }
             _ => u32::MAX,
         }
     }
@@ -2277,6 +2316,14 @@ impl Data {
             }
             Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Hash(_, _, _) => {
                 self.source_nr(0, "reference")
+            }
+            // P189: tuple element types resolve to the synthetic
+            // tuple struct registered by `tuple_def`.  Same lookup
+            // as `type_def_nr`'s Tuple arm.
+            Type::Tuple(types) => {
+                let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+                let name = format!("__tuple<{}>", inner_names.join(","));
+                self.def_nr(&name)
             }
             _ => u32::MAX,
         }

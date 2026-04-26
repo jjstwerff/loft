@@ -463,6 +463,17 @@ pub fn run_parallel_direct(
                     let val = if prim_in == u32::MAX {
                         let s = read_text_at(&state.database, &row_ref);
                         state.execute_at_raw_text_input(fn_pos, s, &extras, ret_sz as u32)
+                    } else if prim_in > 8 {
+                        // Phase 4d.A wide-input path — tuple, fn-ref,
+                        // or any 9..=64 byte inline first-arg slot.
+                        let buf =
+                            read_primitive_at_wide(&state.database, &row_ref, element_size);
+                        state.execute_at_raw_primitive_input_wide(
+                            fn_pos,
+                            &buf[..prim_in as usize],
+                            &extras,
+                            ret_sz as u32,
+                        )
                     } else if prim_in > 0 {
                         let v = read_primitive_at(&state.database, &row_ref, element_size);
                         state.execute_at_raw_primitive_input(
@@ -508,7 +519,17 @@ pub fn run_parallel_direct(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            let val = if primitive_input_size > 0 {
+            let val = if primitive_input_size > 8 {
+                // Phase 4d.A wide-input path.
+                let buf =
+                    read_primitive_at_wide(&state.database, &row_ref, element_size);
+                state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..primitive_input_size as usize],
+                    extra_args,
+                    return_size,
+                )
+            } else if primitive_input_size > 0 {
                 let v = read_primitive_at(&state.database, &row_ref, primitive_input_size);
                 state.execute_at_raw_primitive_input(
                     fn_pos,
@@ -920,6 +941,31 @@ fn read_primitive_at(
             _ => *p.cast::<u64>(),
         }
     }
+}
+
+/// Plan-06 phase 4d.A — wide-inline element reader for tuple,
+/// fn-ref, and other 9..=64 byte first-arg types.  Returns a
+/// stack-allocated `[u8; 64]` filled with `size` bytes copied from
+/// the row record; bytes past `size` are zero.  Caller passes the
+/// resulting buffer + `size` to `execute_at_raw_primitive_input_wide`.
+///
+/// Stays separate from `read_primitive_at` so the inline-fast-path
+/// (1/4/8-byte primitives) keeps its `u64` channel — no regression
+/// risk for primitive worker calls that already work today.
+pub(crate) fn read_primitive_at_wide(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    size: u32,
+) -> [u8; 64] {
+    debug_assert!(size as usize <= 64, "wide read size {size} exceeds 64-byte cap");
+    let mut buf = [0u8; 64];
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        std::ptr::copy_nonoverlapping(p, buf.as_mut_ptr(), size as usize);
+    }
+    buf
 }
 
 // ── A14.2 — WorkerPool ──────────────────────────────────────────────────────

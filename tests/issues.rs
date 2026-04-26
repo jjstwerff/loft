@@ -10158,3 +10158,24 @@ fn build() -> sorted<P188Tag[id]> {
     .expr("build().len()")
     .result(Value::Int(2));
 }
+
+/// P189 — `vector<(T1, T2, …)>` literal construction used to panic
+/// at `src/parser/vectors.rs:1398` because `Type::Tuple` had no
+/// `def_nr` (no `tuple_def` analogue of `vector_def`).  Fix: register
+/// a synthetic struct (`__tuple<T1,T2,…>`) at parse time when
+/// `sub_type` sees `vector<(...)>`, expose it via `type_def_nr` /
+/// `type_elm`'s new Tuple arm.  This test pins the construction +
+/// `len()` path; element ACCESS via `pairs[0].0` is still broken
+/// (TupleGet reads the DbRef's bytes as inline tuple) and stays
+/// out-of-scope here.
+#[test]
+fn p189_vector_tuple_literal_constructs() {
+    code!(
+        "fn build() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    pairs.len()
+}"
+    )
+    .expr("build()")
+    .result(Value::Int(3));
+}

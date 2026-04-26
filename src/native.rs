@@ -17,28 +17,60 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-/// Plan-06 phase 1 G2/G3 — given a worker fn's def, classify
-/// the first parameter's input dispatch kind:
-///   `0`        → struct/ref/etc, push 12-byte `DbRef`
-///   `u32::MAX` → text, push 16-byte `Str` built from the row
-///   `1/4/8`    → primitive, push that many bytes (slot width;
-///                may differ from vector stride — i32 args
-///                promote to 8-byte integer slots)
+/// Plan-06 phase 4d.A — typed worker-input dispatch.  Replaces the
+/// sentinel-encoded `primitive_first_arg_slot_size` channel with an
+/// explicit enum so the dispatcher's pre-loop code reads as a plain
+/// match, and so wide-inline first args (tuples, fn-refs, anything
+/// 9..=64 bytes) are not silently misrouted as "DbRef-by-pointer"
+/// when their vector storage is actually inline.
 ///
-/// `u32::MAX` is the chosen sentinel because no slot is ever
-/// 4 GiB wide; reusing the `primitive_input_size` channel keeps
-/// the dispatcher signatures stable (one arg, one branch each).
-fn primitive_first_arg_slot_size(def: &crate::data::Definition) -> u32 {
+/// Cap at 64 bytes: anything wider falls back to `Ref` so the
+/// per-row push doesn't blow the worker stack frame budget.  64 is
+/// one cache line plus headroom for 4-element tuples of Long /
+/// Float.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum InputKind {
+    /// Worker takes a `DbRef` in slot 0 (struct-by-ref, vector,
+    /// keyed collection, or any inline-typed first arg whose slot
+    /// width exceeds the 64-byte inline cap).
+    Ref,
+    /// Worker takes a 16-byte `Str` in slot 0.  The G3 path
+    /// (text-input dispatch) hooks here.
+    Text,
+    /// Worker takes `size` bytes inline in slot 0.  `size` is the
+    /// stack-representation width from `variables::size` (which
+    /// reports 20 for fn-ref, 16 for `(int, int)`, etc.) — not the
+    /// 4-byte vector storage width.
+    Primitive { size: u8 },
+}
+
+/// Maximum bytes accepted for `InputKind::Primitive`.  Anything
+/// wider falls back to `InputKind::Ref` so the worker stack frame
+/// stays bounded.
+const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
+
+fn input_kind_for_first_arg(def: &crate::data::Definition) -> InputKind {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
-        return 0;
+        // No args — treat as Ref (the dispatcher won't push anything
+        // either way; this matches the legacy fall-through to the
+        // DbRef-passing path).
+        return InputKind::Ref;
     };
     match &first.typedef {
-        Type::Boolean | Type::Enum(_, false, _) => 1,
-        Type::Single | Type::Character => 4,
-        Type::Integer(_) | Type::Float => 8,
-        Type::Text(_) => u32::MAX,
-        _ => 0,
+        Type::Text(_) => InputKind::Text,
+        Type::Boolean | Type::Enum(_, false, _) => InputKind::Primitive { size: 1 },
+        Type::Single | Type::Character => InputKind::Primitive { size: 4 },
+        Type::Integer(_) | Type::Float => InputKind::Primitive { size: 8 },
+        Type::Function(_, _, _) | Type::Tuple(_) => {
+            let sz = crate::variables::size(&first.typedef, &crate::data::Context::Argument);
+            if (sz as usize) <= INPUT_PRIMITIVE_MAX_BYTES && sz > 0 {
+                InputKind::Primitive { size: sz as u8 }
+            } else {
+                InputKind::Ref
+            }
+        }
+        _ => InputKind::Ref,
     }
 }
 
@@ -613,7 +645,20 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_for: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let pis = primitive_first_arg_slot_size(def);
+        // Plan-06 phase 4d.A — typed input dispatch.  Encode the
+        // resolved `InputKind` back onto the legacy `prim_in: u32`
+        // channel that `run_parallel_*` still consumes, so the
+        // dispatcher's pre-loop branch reads:
+        //   prim_in == 0       → InputKind::Ref (DbRef-by-pointer)
+        //   prim_in == u32::MAX → InputKind::Text (Str slot 0)
+        //   prim_in in 1..=64  → InputKind::Primitive { size: prim_in }
+        // Sizes 9..=64 route through the new wide-input variants
+        // (`read_primitive_at_wide` + `execute_at_raw_primitive_input_wide`).
+        let pis = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
         if matches!(def.returned, crate::data::Type::Text(_)) {
             (DispatchMode::Text, u16::MAX, 4u32, pis)
         } else if let Some(heap_d_nr) = def.returned.heap_def_nr() {
@@ -727,7 +772,14 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
         } else {
             v_return_size.clamp(1, 8) as u32
         };
-        let pis = primitive_first_arg_slot_size(def);
+        // Phase 4d.A — typed input dispatch (mirrors the heavy
+        // path in `n_parallel_for`).  Encodes InputKind back onto
+        // the legacy `prim_in: u32` channel.
+        let pis = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
         (rs, pis)
     };
     let n_threads = (v_threads as usize).max(1);

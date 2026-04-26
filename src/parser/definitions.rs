@@ -1207,6 +1207,43 @@ impl Parser {
     }
 
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
+        // Plan-06 phase 4d.A — accept tuple as the inner type of
+        // `vector<(T1, T2, ...)>` (and reserve the same shape for
+        // `iterator<(T1, T2)>` once that lands).  Without this, the
+        // identifier-only check below would reject `(` and the parser
+        // would mis-parse the rest of `<(...)>` as a less-than
+        // expression on a bare `vector` type.
+        if self.lexer.peek_token("(") {
+            let tp = self.parse_type_full(on_d, false)?;
+            // P189: register a synthetic tuple struct so the rest of
+            // the type system (fill_database, type_def_nr, vector_of)
+            // can treat the tuple identically to a named struct.
+            // Idempotent — the same tuple shape resolves to the same
+            // def_nr across the program.
+            if let Type::Tuple(types) = &tp {
+                self.data.tuple_def(&mut self.lexer, types);
+            }
+            return Some(match type_name {
+                "vector" => {
+                    self.lexer.closing_angle();
+                    Type::Vector(Box::new(tp), Vec::new())
+                }
+                "iterator" => {
+                    self.lexer.closing_angle();
+                    Type::Iterator(Box::new(tp), Box::new(Type::Null))
+                }
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "{type_name}<(...)> not supported — tuple element types only \
+                         allowed on vector / iterator"
+                    );
+                    self.lexer.has_closing_angle();
+                    Type::Unknown(0)
+                }
+            });
+        }
         if let Some(sub_name) = self.lexer.has_identifier() {
             // before trying to resolve the element type, fail fast if the
             // identifier shadows a non-type definition (constant, function).
