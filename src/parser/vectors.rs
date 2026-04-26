@@ -1402,6 +1402,33 @@ impl Parser {
             in_t.name(&self.data),
             self.lexer.pos()
         );
+        // P188: when the LHS local is a keyed collection
+        // (sorted/hash/index/spacial<T[key]>), the container type id
+        // must be the keyed-collection's own known_type so OpNewRecord
+        // dispatches to sorted_new / hash::add / tree::add / etc.
+        // Falling back to `vector_of(in_t)` returns the wrap-`vector<T>`
+        // id which would route through `Parts::Vector` → vector_append
+        // and crash with index 65535.
+        let lhs_known = if !is_field && vec != u16::MAX && !self.first_pass {
+            let lhs_tp = self.vars.tp(vec).clone();
+            match lhs_tp {
+                Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _) => {
+                    let nr = self.data.type_def_nr(&lhs_tp);
+                    if nr == u32::MAX {
+                        None
+                    } else {
+                        let kt = self.data.def(nr).known_type;
+                        if kt == u16::MAX { None } else { Some(kt) }
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -1409,7 +1436,7 @@ impl Parser {
             // this the literal-append path would register
             // `vector<integer>` (8-byte stride) into a narrow-registered
             // local, and reads would mis-align with writes.
-            let known = Value::Int(i32::from(self.vector_of(in_t)));
+            let known = Value::Int(i32::from(lhs_known.unwrap_or_else(|| self.vector_of(in_t))));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()

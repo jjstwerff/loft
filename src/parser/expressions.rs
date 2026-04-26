@@ -543,6 +543,42 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
+        // P188 — local-var collection `+= elem` for vector/sorted/hash/
+        // index/spacial.  Routes the singleton element through
+        // OpNewRecord + OpFinishRecord (per-kind dispatch via
+        // record_finish: vector_finish / hash::add / sorted_finish /
+        // tree::add / ordered_finish).  Returns Type::Void before
+        // change_var fires the "cannot change type from sorted<…> to T"
+        // diagnostic that would otherwise reject this shape.
+        if op == "+="
+            && var_nr != u16::MAX
+            && matches!(
+                f_type,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
+            let elm_tp = f_type.content();
+            if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
+                if !self.first_pass {
+                    let elm = self.unique_elm_var(f_type, &elm_tp, var_nr);
+                    let scalar = code.clone();
+                    let ls = self.new_record(
+                        &mut Value::Var(var_nr),
+                        f_type,
+                        elm,
+                        var_nr,
+                        &[scalar],
+                        &elm_tp,
+                    );
+                    *code = Value::Insert(ls);
+                }
+                return Type::Void;
+            }
+        }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
         // (e.g. `x: u32 = 100` where `u32` promoted to Long), run

@@ -1249,7 +1249,11 @@ impl State {
                 Type::Vector(_, _)
                 | Type::Reference(_, _)
                 | Type::Enum(_, true, _)
-                | Type::Iterator(_, _) => stack.add_op("OpPutRef", self),
+                | Type::Iterator(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _) => stack.add_op("OpPutRef", self),
                 Type::Tuple(elems) => {
                     let offsets = crate::data::element_offsets(&elems);
                     let tuple_var_base = stack.function.stack(v);
@@ -2065,6 +2069,27 @@ impl State {
                     }
                     self.database.vector(tp_nr)
                 };
+                if known != u16::MAX {
+                    self.types.insert(self.code_pos, known);
+                }
+                stack.add_op("OpVarVector", self);
+            }
+            // P188 — keyed collections as local vars share the
+            // 4-byte u32 in-stack representation with vectors (a
+            // record pointer).  Emit OpVarVector so the load reads
+            // the same 4 bytes; field access / `+=` codegen handles
+            // the per-collection-kind dispatch via record_finish.
+            Type::Sorted(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _) => {
+                let tp = stack.function.tp(variable);
+                let name = tp.name(stack.data);
+                let mut tp_nr = self.database.name(&name);
+                if tp_nr == u16::MAX {
+                    tp_nr = self.database.db_type(tp, stack.data);
+                }
+                let known = self.database.vector(tp_nr);
                 if known != u16::MAX {
                     self.types.insert(self.code_pos, known);
                 }
