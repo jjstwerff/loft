@@ -628,7 +628,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vector-return: G5 cleared the par-safety false positive on local-arg writes (chain `n_replicate → OpNewRecord` no longer fires).  Two remaining blockers: (1) parser rejects `vector<integer>` return because var_size=12 > 8; (2) par dispatcher passes 0 extras but worker expects 1 (hidden return arg from ref_return promotion needs special par plumbing).  Planned for plan-06 phase 7."]
+#[ignore = "par-vector-return: G6 partial — parser now accepts vector<T> return (routed through ref path) and the extra-arg check skips `hidden: true` attributes from ref_return promotion.  Remaining blocker: vector-returning workers like `out: vector<integer> = []; ...; out` get the local var promoted to a hidden caller destination arg, but the par dispatcher passes 0 extras → the worker writes into the parent's locked store at thread join.  Fix needs the par dispatcher to allocate per-worker destinations in worker output stores and pass them as the hidden arg.  Planned for plan-06 phase 7 (par_fold) where this hidden-arg machinery lives."]
 fn par_struct_to_vector_t4() {
     // Worker constructs and returns a vector per element.  Today
     // the runtime can't represent this.  After phase 1, the per-

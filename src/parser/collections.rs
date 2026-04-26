@@ -1226,13 +1226,20 @@ use #count instead"
         // return_size = -1 signals reference (struct) mode.
         let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
-        } else if matches!(&ret_type, Type::Reference(_, _) | Type::Enum(_, true, _)) {
+        } else if matches!(
+            &ret_type,
+            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+        ) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
             // phase 1 G1: struct-enum returns (Enum variants with
             // payload, e.g. `Verdict::Pass{score}`) are heap-typed
             // (`heap_def_nr().is_some()`) so they share the ref path
             // verbatim.  This closes the size-8 gate for variant payloads.
+            // Plan-06 phase 1 G6: vector<T> returns also route here —
+            // the worker constructs the vector in its own output
+            // store and the main thread deep-copies it via the same
+            // copy_from_worker mechanism.
             -1
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
@@ -1414,6 +1421,7 @@ use #count instead"
                 | Type::Reference(_, _)
                 | Type::Enum(_, true, _)
                 | Type::Function(_, _, _)
+                | Type::Vector(_, _)
                 | Type::Unknown(_)
         );
         let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
