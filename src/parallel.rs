@@ -827,16 +827,24 @@ pub fn run_parallel_light(
                             row_idx_i32,
                             &state.database.allocations,
                         );
-                        // Plan-06 phase 1 G2 — primitive-input dispatch.
-                        // Workers whose first param is a primitive
-                        // need the inline value, not a DbRef.  Read
-                        // `element_size` bytes from the row (vector
-                        // stride; honours `IntegerSpec.forced_size`)
-                        // and push them into a slot of `prim_in`
-                        // bytes (the worker's calling-convention slot
-                        // width — i32 args promote to 8-byte integer
-                        // slots, so prim_in=8 even when read=4).
-                        let val = if prim_in > 0 {
+                        // Plan-06 phase 1 G2/G3 — input-type dispatch.
+                        // Three paths selected by prim_in:
+                        //   0          → struct/ref input, push DbRef
+                        //   u32::MAX   → text input, read &str at row
+                        //                offset and push 16-byte Str
+                        //   1/4/8      → primitive input (slot width);
+                        //                read element_size bytes and
+                        //                zero-extend into a slot of
+                        //                that width
+                        let val = if prim_in == u32::MAX {
+                            let s = read_text_at(&state.database, &row_ref);
+                            state.execute_at_raw_text_input(
+                                fn_pos,
+                                s,
+                                &extras,
+                                ret_sz as u32,
+                            )
+                        } else if prim_in > 0 {
                             let v = read_primitive_at(
                                 &state.database,
                                 &row_ref,
@@ -877,7 +885,10 @@ pub fn run_parallel_light(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            let val = if primitive_input_size > 0 {
+            let val = if primitive_input_size == u32::MAX {
+                let s = read_text_at(&state.database, &row_ref);
+                state.execute_at_raw_text_input(fn_pos, s, extra_args, return_size)
+            } else if primitive_input_size > 0 {
                 let v = read_primitive_at(&state.database, &row_ref, element_size);
                 state.execute_at_raw_primitive_input(
                     fn_pos,
@@ -899,6 +910,25 @@ pub fn run_parallel_light(
             }
         }
     }
+}
+
+/// Plan-06 phase 1 G3 — read the `&str` slice that the input row's
+/// 4-byte text-pointer field points to.  Returns a `Str { ptr, len }`
+/// borrowing into the input store's allocation; the worker's frame
+/// receives this as a 16-byte slot.  Safe for the lifetime of the
+/// par call because the parent stores are pinned (D2.0 read-only-
+/// parent).
+#[allow(dead_code)] // not threading: only the sequential branch uses it
+fn read_text_at(stores: &crate::database::Stores, row_ref: &DbRef) -> crate::keys::Str {
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    // 4-byte u32 text-pointer at row.pos.
+    let text_rec = unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        *p.cast::<u32>()
+    };
+    let s = store.get_str(text_rec);
+    crate::keys::Str::new(s)
 }
 
 /// Plan-06 phase 1 G2 — read a 1/4/8-byte primitive from a row

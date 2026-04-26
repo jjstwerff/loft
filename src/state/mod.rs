@@ -1943,6 +1943,68 @@ impl State {
         }
     }
 
+    /// Plan-06 phase 1 G3 — text-input worker dispatch.
+    /// Same as `execute_at_raw` but the first param is a `text`
+    /// argument: pushes a 16-byte `Str { ptr, len }` slot built
+    /// from the input row's `&str` instead of a 12-byte `DbRef`.
+    /// `args_size` is fixed at 16 (Str width).
+    pub fn execute_at_raw_text_input(
+        &mut self,
+        fn_pos: u32,
+        input_str: crate::keys::Str,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 16,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        self.put_stack(input_str); // 16 bytes
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        match return_size {
+            8 => *self.get_stack::<u64>(),
+            1 => u64::from(*self.get_stack::<u8>()),
+            _ => u64::from(*self.get_stack::<u32>()),
+        }
+    }
+
     /// Execute a worker function that returns a struct reference (`DbRef`).
     /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
     /// record lives in `self.database` (the worker's cloned stores).

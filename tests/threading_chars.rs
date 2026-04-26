@@ -413,7 +413,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-text-input: vector<text> input causes stack underflow — text args use 16-byte Str slots but the dispatcher pushes a 12-byte DbRef.  Needs a text-input variant of execute_at_raw_primitive_input that reads the Str at row_ref.pos and pushes 16 bytes (planned for plan-06 phase 4 typed surface)."]
 fn par_text_input_t4() {
     code!(
         "fn count_chars(s: text) -> integer { len(s) }

@@ -17,18 +17,17 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-/// Plan-06 phase 1 G2 — given a worker fn's def, return the
-/// inline byte width of its first parameter SLOT when the param
-/// is a primitive type.  Returns `0` for non-primitive (struct/
-/// ref/text) first params, which take a `DbRef` in slot 0 and
-/// route through the existing `execute_at_raw` path.
+/// Plan-06 phase 1 G2/G3 — given a worker fn's def, classify
+/// the first parameter's input dispatch kind:
+///   `0`        → struct/ref/etc, push 12-byte `DbRef`
+///   `u32::MAX` → text, push 16-byte `Str` built from the row
+///   `1/4/8`    → primitive, push that many bytes (slot width;
+///                may differ from vector stride — i32 args
+///                promote to 8-byte integer slots)
 ///
-/// This is the WORKER's slot width, not the input-vector stride.
-/// For a `vector<i32>` input feeding `fn dbl(x: i32) -> integer`,
-/// the vector stride is 4 (forced_size) but the worker promotes
-/// i32 to integer for the calling convention — slot 0 is 8 bytes
-/// wide.  The dispatcher reads `element_size` bytes from the row
-/// and pushes them zero-extended into a slot of this width.
+/// `u32::MAX` is the chosen sentinel because no slot is ever
+/// 4 GiB wide; reusing the `primitive_input_size` channel keeps
+/// the dispatcher signatures stable (one arg, one branch each).
 fn primitive_first_arg_slot_size(def: &crate::data::Definition) -> u32 {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
@@ -38,6 +37,7 @@ fn primitive_first_arg_slot_size(def: &crate::data::Definition) -> u32 {
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         Type::Integer(_) | Type::Float => 8,
+        Type::Text(_) => u32::MAX,
         _ => 0,
     }
 }
