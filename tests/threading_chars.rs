@@ -706,7 +706,7 @@ fn run() -> integer {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "par-tuple-input: vector<(integer, integer)> input untested; planned fix in plan-06 phase 9b"]
+#[ignore = "par-tuple-input: hangs the worker — vector<(integer, integer)> stores tuple elements with a layout that vector::get_vector(stride, idx) doesn't index correctly.  Same shape as the keyed-collection hang.  Planned fix in plan-06 phase 9b."]
 fn par_tuple_input_int_int() {
     // Worker reads a tuple element and returns a primitive.
     code!(
@@ -740,7 +740,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-return: worker returning (integer, integer) rejected today; planned fix in plan-06 phase 9c"]
+#[ignore = "par-tuple-return: parser rejects tuple return because var_size=16 (tuple) > 8.  Tuples don't pass through the heap_def_nr() ref-routing branch.  Needs a tuple-output Stitch dispatch.  Planned for plan-06 phase 9c."]
 fn par_tuple_return_int_int() {
     // Worker returns a tuple of two integers; main collects sum of both elements.
     code!(
