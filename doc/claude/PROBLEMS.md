@@ -98,27 +98,56 @@ fn run() -> integer {
 
 Expected sum: `3 + 3 + 5 = 11`.  Got `0`.
 
-**Where:** P189c's `Value::Tuple` arm in
-`src/parser/vectors.rs::new_record` emits per-attribute
-`set_field(tuple_def_d_nr, i, 0, elm, val)` calls.  For
-text values, `set_field`'s `Type::Text` arm at
-`src/parser/mod.rs:1716` emits `OpSetText` which writes a
-4-byte text-pointer into the field at the right offset.  The
-write itself probably executes, but the resulting text
-either isn't readable through the worker's tuple-element
-access path or the pointer is interpreted in the wrong store.
+**Root cause — text has different in-vector vs on-stack
+representation.** Text in a struct field (in-database / in-vector
+storage) is a **4-byte text-pointer** that interns into the
+field's local store.  Text in a stack tuple slot (variables::size
+in Argument context) is a **16-byte `Str` struct** (8-byte
+length + 8-byte pointer-to-bytes).  For non-tuple struct fields
+this is bridged transparently — `OpGetText` at field-access time
+inflates the 4-byte pointer to the full `Str`.  For tuples-as-
+vector-elements, the worker's tuple-element access goes through
+`OpTupleGet(slot=0, offset=8)` which reads raw bytes from the
+slot — but the slot was filled by P189c's wide-input dispatch
+which `memcpy`s `element_size` bytes from the row record.  The
+12 bytes (8 int + 4 text-pointer) of the in-vector tuple don't
+fit the worker's expected 24 bytes (8 int + 16 Str).
 
-Probably interacts with P189b (tuple field access via DbRef)
-since reading `p.1` where `p` is a tuple-via-DbRef needs
-DbRef-aware unboxing.  Worth investigating P189b first.
+**Specifically:**
+- `tuple_def`'s synthetic `__tuple<integer,text>` struct has
+  fields `_0: integer` (8B) and `_1: text` (4B in struct layout).
+  Database struct size = 12B.
+- Worker's `p: (integer, text)` parameter expects slot 0 to be
+  24 bytes (`variables::size` for tuple = 8 + `size_of::<Str>()`
+  = 8 + 16 = 24).
+- `read_primitive_at_wide` reads `element_size` bytes from the
+  row record.  If element_size = 12 (the database stride), the
+  worker reads 12 bytes into a 24-byte slot — text bytes 13-24
+  are zeros, and the worker's text-Str access reads
+  length-and-pointer of zero (empty string).
+- If element_size = 24 (var_size), the read overflows the 12-byte
+  row record into the next row.
 
-**Fix path:** trace what `set_field` emits for the text case
-(probably `OpSetText` at offset 8 of the synthetic
-`__tuple<integer,text>` struct), then verify whether the
-worker's `OpTupleGet(slot=0, offset=8)` reads it as a text
-pointer or as raw bytes.  Likely the worker needs to use
-`OpGetText` against the DbRef rather than `OpTupleGet`
-against the slot.
+**Fix path:** the per-row read for tuple elements containing text
+needs to (a) read the in-vector representation (4-byte text-pointer
+at the field offset), (b) inflate to the 16-byte `Str` for the
+worker's slot.  Either:
+- A new `read_tuple_at_wide(types, row_ref, struct_def_nr)` that
+  walks the tuple's elements per-type and assembles the worker
+  slot bytes (inflating text fields).  More complex than
+  `read_primitive_at_wide`'s plain memcpy.
+- OR force tuples-as-vector-elements to use the stack
+  representation throughout (24 bytes for `(int, text)`) — but
+  that wastes vector storage and conflicts with the tuple_def
+  struct layout.
+- OR teach the worker to access tuple-of-text differently when
+  the source is a vector — emit `OpGetText` against the field
+  offset (struct-style) instead of `OpTupleGet`.
+
+Interacts with P189b (tuple field access via DbRef) — solving
+P189b might subsume P189d, since both are about teaching the
+parser/codegen to recognize "this tuple lives in heap storage,
+unbox via per-field opcodes" instead of the stack-tuple opcodes.
 
 **Severity:** Low — workaround (use a named struct with a
 text field) works today.

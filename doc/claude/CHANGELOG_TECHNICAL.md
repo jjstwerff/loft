@@ -130,6 +130,60 @@ Type extractors: `as_text()`, `as_number()`, `as_long()`, `as_bool()`.
 a struct from a JsonValue. Type mismatches are reported via
 `json_errors()`.
 
+### Plan-06 phases 4c + 4d.A — typed parallel-for dispatch
+
+Two coupled phases of plan-06 ("simple typed `par`: everything is a
+store") landed.  User-visible only as one extra par canary closing
+(`tests/threading_chars.rs::par_tuple_input_int_int`); structurally
+this lays the foundation for the remaining phase 4 work (4d.B
+keyed-collection input materialisation, 4e caller-supplied
+destinations).
+
+**Phase 4c (DESIGN.md D1b):** `Stitch::ConcatLegacy { elem_size,
+ret_size }` retired in favour of payload-free `Stitch::Concat`.
+`parallel_execute_and_collect` now takes `dispatch_mode:
+DispatchMode` and routes via the `Text / Ref / Primitive` arms
+keyed on the caller-supplied dispatch mode.  `grep ConcatLegacy
+src/` returns zero (spec acceptance).  Opcode payload shrinks 2
+bytes per call.
+
+**Phase 4d.A:** typed worker-input dispatch via `InputKind` enum
+(`Ref / Text / Primitive { size: u8 }`) with a 64-byte cap on the
+`Primitive` slot.  New `read_primitive_at_wide` (stack-allocated
+`[u8; 64]` reader) and `execute_at_raw_primitive_input_wide`
+(byte-chunk push) handle 9..=64 byte first-arg slots — tuples,
+fn-refs, and any inline-typed first arg whose stack representation
+exceeds 8 bytes.  Both `run_parallel_direct` and
+`run_parallel_light` got matching `prim_in > 8` arms.  Retires
+the sentinel-encoded `primitive_first_arg_slot_size` channel.
+
+### Vector-of-tuple support (P189 / P189c)
+
+`vector<(T1, T2, …)>` now parses, constructs, and serves its
+elements correctly via the par worker path.  Previously the type
+was rejected at parse, then panicked at construction, then read
+garbage — three layers fixed jointly:
+
+- `src/parser/definitions.rs::sub_type` accepts `(...)` as the
+  inner type of `vector<T>` / `iterator<T>`.
+- `src/data.rs::tuple_def(lexer, types) -> u32` registers a
+  synthetic struct (`__tuple<T1,T2,…>`) with attributes `_0, _1,
+  …` typed per the tuple element.  Idempotent — same shape →
+  same def_nr.  `Type::Tuple` arms in `type_def_nr` and
+  `type_elm` look up the registered struct.
+- `src/parser/vectors.rs::new_record` got a `Value::Tuple(values)`
+  arm that emits per-attribute `set_field(tuple_struct_d_nr, i, 0,
+  elm, values[i])` calls, mirroring the struct-literal path's
+  per-field writes (which are pre-emitted via Value::Insert).
+
+**Open follow-ups documented in PROBLEMS.md:**
+- P189b: `pairs[0].0` (DbRef-aware tuple field access) reads the
+  DbRef bytes as inline tuple — needs heap-tuple unboxing opcodes.
+- P189d: `vector<(integer, text)>` text element reads as
+  zero-length — text has different in-vector (4-byte pointer) vs
+  on-stack (16-byte Str) representation; read path needs to
+  inflate.
+
 ### Local-var keyed collections (P188)
 
 `sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`, and
