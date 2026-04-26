@@ -311,6 +311,59 @@ side.
 Closes `par_sorted_input_t4`, `par_hash_input_t4`,
 `par_index_input_t4`.
 
+**Status: deeper than initially scoped.**  An attempted parser-
+side desugar (2026-04-27) revealed two interlocking gaps that
+weren't visible from outside:
+
+1. **P190** (closed by commit `6ffbe6a`): the iteration codegen
+   path's `get_type` couldn't resolve `sorted<T[key]>` for
+   local-var keyed collections — needed on-demand
+   `database.sorted` registration.  Without this, even the
+   programmatic `OpIterate` emission panics with "Too few
+   parameters on OpIterate (got 2, need 6)".
+
+2. **vector<reference<T>> += ref deep-copy semantics** (still
+   open): the implementation used `new_record` to emit the
+   per-element append.  For a `Type::Reference` element type,
+   `new_record`'s Reference branch dispatches to `OpCopyRecord`,
+   which deep-copies the source record into the vector slot
+   instead of just appending the DbRef bytes.  When workers
+   then read `s.value` via the par dispatcher's
+   `InputKind::Ref` path, they read the copied record's bytes —
+   which can come back as `null` because the deep-copy
+   interaction with the parent store's iteration cleanup
+   leaves a stale DbRef.  Manual `refs += [s]` works because
+   the parser's `+=` operator emits a different code path
+   (likely `OpAppendVector` after building a temp vec literal),
+   but synthesising that programmatically requires either
+   re-using the parser's `+=` machinery (intricate) or emitting
+   the equivalent IR shape directly (which my attempt missed).
+
+The implementation reverted in working tree.  Going forward, the
+right approach is one of:
+
+- **A: Use `OpAppendVector` directly.**  Build a single-element
+  temp vec from `Var(elm_var)` (one OpNewRecord/OpFinishRecord
+  pair into a fresh slot), then OpAppendVector(mat_var, temp,
+  type_id).  Mirrors what the parser's `refs += [s]` lowers to.
+- **B: Reuse the parser's `+=` operator.**  Synthesise a
+  `Value::Insert` that wraps the materialisation logic and
+  feeds it through `compute_op_code` with op="+=".  Avoids
+  duplicating the `+=` semantics but requires synthetic Value
+  construction.
+- **C: Runtime materialisation in the par dispatcher.**  Add a
+  Stitch::* variant or pre-loop step in `n_parallel_for` that
+  detects keyed-collection input and materialises at runtime
+  via `vector::sorted_iter` / `hash_sorted` / `tree_iter`.
+  Avoids parser-side IR construction entirely.  More work in
+  the runtime but cleaner separation.
+
+Original design was approach A (simplified to just call
+`new_record`); approach C might be the right call given the
+deep-copy gotcha.
+
+Original spec follows:
+
 Replace the rejection at `src/parser/collections.rs:1123` with a
 **parser-side desugar**.  When `in_type` is `Type::Sorted / Hash /
 Index / Spacial`, emit IR equivalent to:
