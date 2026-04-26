@@ -549,7 +549,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-sorted-input: blocked by TWO independent gaps.  (1) Plan-06 phase 4d.B parser-side desugar — the par dispatcher today rejects keyed-collection input because vector::get_vector(stride, idx) doesn't walk tree/hashmap storage; design is to materialize into vector<reference<T>> and re-route.  (2) P190 — even before reaching the par dispatcher, the canary's local-var sorted (`sorted_items: sorted<Score[value]> = []; sorted_items += ...`) panics at codegen.rs:1689 'Too few parameters on OpIterate' because get_type() can't find the registered db type name for local-var keyed collections.  Both must land before this canary closes."]
+#[ignore = "par-sorted-input: P190 (local-var keyed iteration codegen) closed via on-demand database.sorted() registration in get_type().  Remaining blocker: plan-06 phase 4d.B parser-side desugar — the par dispatcher rejects keyed-collection input at runtime because vector::get_vector(stride, idx) doesn't walk tree/hashmap storage; design is to materialize into vector<reference<T>> via a parser-emitted pre-loop and re-route the par dispatch.  Manual workaround works today (sequential `for s in items { refs += [s]; }` then par over refs) — the canary uses the direct shape that needs the desugar."]
 fn par_sorted_input_t4() {
     code!(
         "struct Score { value: integer not null }

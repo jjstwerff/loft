@@ -10203,3 +10203,30 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(110));
 }
+
+/// P190 — `for x in <local sorted/hash/index>` used to panic at
+/// `src/state/codegen.rs:1689` with "Too few parameters on
+/// OpIterate (got 2, need 6)".  Root cause: P188 enabled local-var
+/// keyed collections but `src/parser/vectors.rs::get_type` looked
+/// up the database type-name (e.g. `sorted<Score[value]>`) which
+/// is only registered via `fill_database` for struct fields.  Fix:
+/// register the type on demand in `get_type` when the name lookup
+/// misses — mirrors the struct-field path's `database.sorted` /
+/// `database.hash` / `database.index` calls, idempotent so no
+/// double-registration risk.
+#[test]
+fn p190_local_var_sorted_iteration() {
+    code!(
+        "struct P190Score { value: integer not null }
+fn test() {
+    items: sorted<P190Score[value]> = [];
+    items += P190Score { value: 30 };
+    items += P190Score { value: 10 };
+    items += P190Score { value: 20 };
+    sum = 0;
+    for s in items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}

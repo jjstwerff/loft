@@ -1664,27 +1664,54 @@ impl Parser {
                 let mut name = "hash<".to_string() + &self.data.def(*tp).name + "[";
                 self.database
                     .field_name(self.data.def(*tp).known_type, key, &mut name);
-                self.database.name(&name)
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                // P190 — local-var hash iteration: register on demand.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.hash(c_tp, key)
             }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + &self.data.def(*tp).name + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
-                if r == u16::MAX {
-                    name = "ordered<".to_string() + &self.data.def(*tp).name + "[";
-                    field_id(key, &mut name);
+                if r != u16::MAX {
+                    return r;
                 }
-                self.database.name(&name)
+                let mut ordered = "ordered<".to_string() + &self.data.def(*tp).name + "[";
+                field_id(key, &mut ordered);
+                let r = self.database.name(&ordered);
+                if r != u16::MAX {
+                    return r;
+                }
+                // P190 — local-var keyed collection iteration: the
+                // sorted/ordered type wasn't pre-registered by
+                // fill_database (which only runs on struct fields).
+                // Register on demand here so OpIterate gets the right
+                // db type id and `fill_iter` produces all 6 args.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.sorted(c_tp, key)
             }
             Type::Index(tp, key, _) => {
                 let mut name = "index<".to_string() + &self.data.def(*tp).name + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
-                if r == u16::MAX {
-                    name = "index<".to_string() + &self.data.def(*tp).name + "[";
-                    field_id(key, &mut name);
+                if r != u16::MAX {
+                    return r;
                 }
-                self.database.name(&name)
+                // P190 — same on-demand registration for local-var index.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.index(c_tp, key)
             }
             Type::Vector(tp, _) => {
                 // route through `vector_of` so narrow-alias

@@ -157,6 +157,29 @@ exceeds 8 bytes.  Both `run_parallel_direct` and
 `run_parallel_light` got matching `prim_in > 8` arms.  Retires
 the sentinel-encoded `primitive_first_arg_slot_size` channel.
 
+### Local-var keyed collection iteration (P190)
+
+`for x in <local sorted/hash/index>` used to panic at
+`src/state/codegen.rs:1689` with "Too few parameters on
+OpIterate (got 2, need 6)".  P188 enabled local-var keyed
+collections but the iteration codegen path's
+`src/parser/vectors.rs::get_type` only resolved the database
+type-name for fields registered via `fill_database` — local-var
+keyed collections never reached that registration path, so the
+lookup returned `u16::MAX`, `fill_iter` exited early, and
+`OpIterate` got 2 args instead of the 6 it needed.
+
+Fix: register the type on demand in `get_type` when the name
+lookup misses, mirroring `fill_database`'s `database.sorted` /
+`database.hash` / `database.index` calls.  Idempotent — same
+content+keys → same type id.  Regression test
+`tests/issues.rs::p190_local_var_sorted_iteration`.
+
+Note: this unblocks the iteration codepath but plan-06 phase
+4d.B (par over keyed-collection input) still needs the
+parser-side materialisation desugar before the
+par_sorted/hash/index_input_t4 canaries can close.
+
 ### Vector-of-tuple support (P189 / P189c)
 
 `vector<(T1, T2, …)>` now parses, constructs, and serves its
