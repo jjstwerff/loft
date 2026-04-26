@@ -652,7 +652,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-keyed-collection-return: worker returning sorted<T[key]> hits the same blockers as par-vector-return — see par_struct_to_vector_t4."]
+#[ignore = "par-keyed-collection-return: type-checker rejects `out += Tag {...}` in build_tags — sorted<Tag[id]> + Tag operand inference fails before par-safety analysis runs.  Independent of G5; needs sorted-collection += codegen fix.  Planned for plan-06 phase 7."]
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }
