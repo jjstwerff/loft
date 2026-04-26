@@ -631,31 +631,11 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             (DispatchMode::Primitive, u16::MAX, v_return_size.clamp(1, 8) as u32, pis)
         }
     };
-    let is_text = dispatch_mode == DispatchMode::Text;
-    let is_ref = dispatch_mode == DispatchMode::Ref;
-
-    // Plan-06 phase 3b — synthesise the Stitch policy from the legacy
-    // (return_size, is_text, is_ref) booleans the parser still emits.
-    // ConcatLegacy's ret_size sentinel encoding (per DESIGN.md D1a):
-    //   0       → text
-    //   u8::MAX → reference
-    //   1..=8   → primitive (inline byte width)
-    let stitch = if is_text {
-        crate::parallel::Stitch::ConcatLegacy {
-            elem_size: element_size as u8,
-            ret_size: 0,
-        }
-    } else if is_ref {
-        crate::parallel::Stitch::ConcatLegacy {
-            elem_size: element_size as u8,
-            ret_size: u8::MAX,
-        }
-    } else {
-        crate::parallel::Stitch::ConcatLegacy {
-            elem_size: element_size as u8,
-            ret_size: return_size as u8,
-        }
-    };
+    // Plan-06 phase 4c — the Stitch policy is now `Concat` (no
+    // payload); dispatch mode (text / ref / primitive) flows
+    // through `dispatch_mode` directly, derived from `def.returned`
+    // earlier in this function (phase 3d).
+    let stitch = crate::parallel::Stitch::Concat;
 
     let result_ref = parallel_execute_and_collect(
         stores,
@@ -665,6 +645,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         element_size,
         return_size,
         stitch,
+        dispatch_mode,
         known_type,
         n_threads,
         &extra_args,
