@@ -632,6 +632,36 @@ pub fn previous(store: &Store, rec: &DbRef) -> u32 {
     moving(store, rec, RB_LEFT, RB_RIGHT)
 }
 
+/// Count the records in a red-black tree.
+///
+/// Walks `first` → `next` (in-order) and increments per record.
+/// O(n) in the number of records.  Returns 0 for an empty tree
+/// (root pointer == 0).
+///
+/// Powers `len(ix)` for `index<T[key]>` (P192).
+#[must_use]
+pub fn count(data: &DbRef, fields: u16, stores: &[Store]) -> u32 {
+    let mut cur = first(data, fields, stores).rec;
+    if cur == 0 {
+        return 0;
+    }
+    let store = keys::store(data, stores);
+    let mut total: u32 = 1;
+    loop {
+        let r = DbRef {
+            store_nr: data.store_nr,
+            rec: cur,
+            pos: u32::from(fields),
+        };
+        cur = next(store, &r);
+        if cur == 0 {
+            break;
+        }
+        total += 1;
+    }
+    total
+}
+
 /// Validate the tree
 /// # Panics
 /// When the tree is not correctly defined

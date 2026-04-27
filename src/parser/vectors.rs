@@ -1409,20 +1409,36 @@ impl Parser {
         // Falling back to `vector_of(in_t)` returns the wrap-`vector<T>`
         // id which would route through `Parts::Vector` → vector_append
         // and crash with index 65535.
+        //
+        // P188-followup: previously this used
+        // `data.def(type_def_nr(lhs_tp)).known_type`, but
+        // `type_def_nr` returns the GENERIC alias (`hash` / `index`)
+        // not the specific `hash<Score[name]>` instantiation.  The
+        // alias's `known_type` happened to be a vector type, so
+        // record_finish dispatched through `Parts::Vector` instead of
+        // `Parts::Hash`/`Parts::Index` — producing 6 records for 3
+        // adds (vector_finish appends without dedup) and bypassing
+        // tree::add entirely (1 record for 2 adds).  Fix: register
+        // the keyed-collection db type directly (idempotent — same
+        // call as gen_set_first_keyed_null and the typedef walker).
         let lhs_known = if !is_field && vec != u16::MAX && !self.first_pass {
             let lhs_tp = self.vars.tp(vec).clone();
-            match lhs_tp {
-                Type::Sorted(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _) => {
-                    let nr = self.data.type_def_nr(&lhs_tp);
-                    if nr == u32::MAX {
-                        None
-                    } else {
-                        let kt = self.data.def(nr).known_type;
-                        if kt == u16::MAX { None } else { Some(kt) }
-                    }
+            match &lhs_tp {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX { None } else { Some(self.database.sorted(c, key)) }
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX { None } else { Some(self.database.hash(c, key)) }
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX { None } else { Some(self.database.index(c, key)) }
+                }
+                Type::Spacial(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX { None } else { Some(self.database.spacial(c, key)) }
                 }
                 _ => None,
             }

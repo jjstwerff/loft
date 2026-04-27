@@ -2,12 +2,14 @@
 #![allow(unused_parens)]
 
 use crate::codegen_runtime;
+use crate::hash;
 use crate::keys::{DbRef, Str};
 use crate::ops;
 use crate::state::State;
+use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 241] = &[
+pub const OPERATORS: &[fn(&mut State); 243] = &[
     goto,
     goto_word,
     goto_false,
@@ -201,6 +203,8 @@ pub const OPERATORS: &[fn(&mut State); 241] = &[
     hash_add,
     hash_find,
     hash_remove,
+    length_hash,
+    length_index,
     eq_bool,
     ne_bool,
     panic,
@@ -1639,6 +1643,19 @@ fn hash_find(s: &mut State) {
 
 fn hash_remove(s: &mut State) {
     s.hash_remove();
+}
+
+fn length_hash(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(hash::count(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn length_index(s: &mut State) {
+    let v_fields = *s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(tree::count(&v_r, v_fields, &s.database.allocations));
+    s.put_stack(new_value);
 }
 
 fn eq_bool(s: &mut State) {

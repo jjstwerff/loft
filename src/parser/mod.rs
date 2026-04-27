@@ -1026,6 +1026,27 @@ impl Parser {
             self.call_with_named(code, d_nr, list, types, named_args, true)
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
+        } else if name == "len"
+            && !types.is_empty()
+            && matches!(types[0], Type::Index(_, _, _))
+        {
+            // P192: `len(ix)` for `ix: index<T[key]>`.  Dispatched
+            // here (not via stdlib overload) because the runtime
+            // helper `tree::count` needs the per-record bookkeeping
+            // byte offset, which is `database.fields(tp)` — only
+            // computable at parse time once the type is registered.
+            let known = self.get_type(&types[0]);
+            let op_d_nr = self.data.def_nr("OpLengthIndex");
+            if known != u16::MAX && op_d_nr != u32::MAX {
+                let fields = self.database.fields(known);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(fields)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            // Fall through to error path if op or type not registered.
+            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {

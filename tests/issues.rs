@@ -10259,6 +10259,147 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P188 follow-up — `field += elem` for keyed-collection fields
+/// (hash/sorted/index/spacial<T[key]>) and for vector fields with
+/// struct-literal RHS were broken.  Two bugs:
+///
+/// 1. The struct-literal RHS (`Score{name:"a", value:10}`) parses
+///    with the LHS field as its target, so the field-init steps
+///    wrote into the field's storage (overwriting the hash/index
+///    root pointer) instead of into a fresh element record.  Fix:
+///    after allocating a new element via `new_record_field_op`,
+///    walk the steps and substitute the LHS field expression with
+///    `Var(elm)` (`substitute_value` helper).
+///
+/// 2. The local-var `+=` codepath in `new_record` looked up the
+///    keyed-collection's known_type via
+///    `data.def(type_def_nr(lhs_tp)).known_type` — but
+///    `type_def_nr` returns the GENERIC alias (`hash` / `index`),
+///    not the specific `hash<Score[name]>` instantiation.  The
+///    alias's known_type pointed at a Vector type, so
+///    `record_finish` dispatched through `Parts::Vector` and
+///    appended raw bytes instead of calling `hash::add` /
+///    `tree::add`.  Fix: register the specific keyed-collection db
+///    type directly (`database.hash(c, key)` / `index(c, key)` /
+///    etc.) — idempotent with the gen_set_first_keyed_null and
+///    typedef-walker registrations.
+#[test]
+fn p188_struct_field_hash_pluseq_struct_literal() {
+    code!(
+        "struct P188aScore { name: text not null, value: integer }
+struct P188aDb { items: hash<P188aScore[name]> }
+fn test() {
+    db = P188aDb { items: [] };
+    db.items += P188aScore { name: \"a\", value: 10 };
+    db.items += P188aScore { name: \"b\", value: 20 };
+    db.items += P188aScore { name: \"c\", value: 30 };
+    assert(len(db.items) == 3, \"len={len(db.items)}, expected 3\");
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_struct_field_index_pluseq_struct_literal() {
+    code!(
+        "struct P188bScore { name: text not null, value: integer }
+struct P188bDb { items: index<P188bScore[name]> }
+fn test() {
+    db = P188bDb { items: [] };
+    db.items += P188bScore { name: \"a\", value: 10 };
+    db.items += P188bScore { name: \"b\", value: 20 };
+    db.items += P188bScore { name: \"c\", value: 30 };
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_local_var_hash_pluseq_struct_literal() {
+    code!(
+        "struct P188cScore { name: text not null, value: integer }
+fn test() {
+    h: hash<P188cScore[name]> = [];
+    h += P188cScore { name: \"a\", value: 10 };
+    h += P188cScore { name: \"b\", value: 20 };
+    h += P188cScore { name: \"c\", value: 30 };
+    assert(len(h) == 3, \"len={len(h)}, expected 3\");
+    sum = 0;
+    for s in h { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_local_var_index_pluseq_struct_literal() {
+    code!(
+        "struct P188dScore { name: text not null, value: integer }
+fn test() {
+    ix: index<P188dScore[name]> = [];
+    ix += P188dScore { name: \"a\", value: 10 };
+    ix += P188dScore { name: \"b\", value: 20 };
+    ix += P188dScore { name: \"c\", value: 30 };
+    sum = 0;
+    for s in ix { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P192 — `len()` was missing for `hash<T[key]>` and
+/// `index<T[key]>` collections.  Only `vector` and `sorted` had
+/// overloads.  Fix: added `OpLengthHash` (walks the bucket array
+/// via `hash::count`) and `OpLengthIndex` (walks the red-black
+/// tree via `tree::count`).  Hash gets a normal stdlib overload
+/// (`pub fn len(both: hash)`); index uses a parser hook in
+/// `src/parser/mod.rs::call()` because `OpLengthIndex` needs a
+/// `const u16` bookkeeping-offset arg that's only computable at
+/// parse time via `database.fields(tp)`.
+#[test]
+fn p192_len_hash_struct_field() {
+    code!(
+        "struct P192aScore { name: text not null, value: integer }
+struct P192aDb { items: hash<P192aScore[name]> }
+fn test() {
+    db = P192aDb { items: [
+        P192aScore { name: \"a\", value: 10 },
+        P192aScore { name: \"b\", value: 20 },
+        P192aScore { name: \"c\", value: 30 }
+    ] };
+    n = len(db.items);
+    assert(n == 3, \"hash len={n}, expected 3\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p192_len_index_struct_field() {
+    code!(
+        "struct P192bScore { name: text not null, value: integer }
+struct P192bDb { items: index<P192bScore[name]> }
+fn test() {
+    db = P192bDb { items: [
+        P192bScore { name: \"a\", value: 10 },
+        P192bScore { name: \"b\", value: 20 },
+        P192bScore { name: \"c\", value: 30 }
+    ] };
+    n = len(db.items);
+    assert(n == 3, \"index len={n}, expected 3\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P191 — `index<T[key]>` iteration produced wrong sums (e.g.
 /// `sum=10` instead of `sum=60` for three `Score` records).  Root
 /// cause: `database.index` (src/database/types.rs:957) appended

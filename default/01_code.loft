@@ -894,6 +894,24 @@ fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 pub fn hash_sorted(h: reference, tp: integer) -> reference;
 #pure
 type index size(4);
+
+// P192: hash<T[key]> bucket-array walk.  No const args needed —
+// the bucket array's size is read from the data record itself.
+fn OpLengthHash(r: hash) -> integer;
+#rust"i64::from(hash::count(&@r, &s.database.allocations))"
+// Number of elements in a hash collection.
+pub fn len(both: hash) -> integer {
+  OpLengthHash(both)
+}
+#pure
+
+// P192: index<T[key]> red-black tree walk.  `fields` is the
+// per-record bookkeeping byte offset (database.fields(tp));
+// the parser fills this constant when generating `len(ix)` for
+// `ix: index<T[key]>` — see parser/mod.rs `call()` special-case.
+fn OpLengthIndex(r: index, fields: const u16) -> integer;
+#rust"i64::from(tree::count(&@r, @fields, &s.database.allocations))"
+
 // type spacial;
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 == @v2"

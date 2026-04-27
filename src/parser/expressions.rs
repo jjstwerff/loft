@@ -63,6 +63,71 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
     }
 }
 
+/// Recursively replace every occurrence of `from` in `into` with a clone
+/// of `to`.  Used by the `field += elem` keyed-collection branch to
+/// retarget a struct-literal's field-init steps from the LHS field
+/// expression onto a freshly-allocated element variable.
+pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
+    if into == from {
+        *into = to.clone();
+        return;
+    }
+    match into {
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                substitute_value(a, from, to);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for s in &mut bl.operators {
+                substitute_value(s, from, to);
+            }
+        }
+        Value::Insert(steps) => {
+            for s in steps {
+                substitute_value(s, from, to);
+            }
+        }
+        Value::If(c, t, e) => {
+            substitute_value(c, from, to);
+            substitute_value(t, from, to);
+            substitute_value(e, from, to);
+        }
+        Value::Set(_, v)
+        | Value::Return(v)
+        | Value::Drop(v)
+        | Value::Yield(v)
+        | Value::BreakWith(_, v)
+        | Value::TuplePut(_, _, v) => substitute_value(v, from, to),
+        Value::Iter(_, a, b, c) => {
+            substitute_value(a, from, to);
+            substitute_value(b, from, to);
+            substitute_value(c, from, to);
+        }
+        Value::Tuple(vs) | Value::Parallel(vs) => {
+            for v in vs {
+                substitute_value(v, from, to);
+            }
+        }
+        // Leaf variants.
+        Value::Null
+        | Value::Int(_)
+        | Value::Enum(_, _)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Var(_)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _) => {}
+    }
+}
+
 impl Parser {
     // <code> = '{' <block> '}'
     /// Parse the code on the last inserted definition.
@@ -565,7 +630,14 @@ use a separate collection or add after the loop"
             if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
                 if !self.first_pass {
                     let elm = self.unique_elm_var(f_type, &elm_tp, var_nr);
-                    let scalar = code.clone();
+                    let mut scalar = code.clone();
+                    // Mirror of the field-+= retarget at line ~755:
+                    // a struct-literal RHS pre-parses with the LHS local
+                    // (`Var(var_nr)`) as its target.  After allocating a
+                    // fresh element via new_record, retarget the inits
+                    // onto `Var(elm)` so the writes land in the new
+                    // record instead of the local-var's storage.
+                    substitute_value(&mut scalar, &Value::Var(var_nr), &Value::Var(elm));
                     let ls = self.new_record(
                         &mut Value::Var(var_nr),
                         f_type,
@@ -707,7 +779,10 @@ use a separate collection or add after the loop"
             )]);
             return Type::Void;
         }
-        // Scalar `field += elem` where field is a vector field (var_nr == u16::MAX).
+        // Scalar `field += elem` where field is a vector field (var_nr == u16::MAX)
+        // and the RHS is a single expression (variable, function call) — NOT
+        // a struct literal.  Struct-literal RHS is handled by the keyed-
+        // collection branch below, which also covers vectors.
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="
@@ -728,6 +803,54 @@ use a separate collection or add after the loop"
             );
             *code = Value::Insert(ls);
             return Type::Void;
+        }
+        // P192 follow-up: `field += elem` for keyed-collection fields
+        // (hash/sorted/index/spacial<T[key]>) AND vector fields when
+        // the RHS is a struct literal (Value::Insert).  Without this,
+        // `db.h += Score{...}` emitted raw `OpSetText` / `OpSetInt`
+        // writes targeting the field itself — which for hash/index
+        // fields overwrote the root pointer (4-byte ref) and for
+        // vector fields wrote into the length-prefix word.  The
+        // pre-parsed struct-literal steps target `to` (the LHS field
+        // expression); after allocating a new element via
+        // `new_record_field_op`, walk the steps and substitute `to`
+        // → `Var(elm)` so each field write lands in the new record.
+        if !self.first_pass
+            && var_nr == u16::MAX
+            && op == "+="
+            && self.is_field(to)
+            && matches!(
+                f_type,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+            && matches!(code, Value::Insert(_))
+        {
+            let elm_tp = f_type.content();
+            // Only fire for single-element append (RHS type matches the
+            // collection's element type — e.g. `Score{}` for `hash<Score>`).
+            // Multi-element append (RHS is a vector literal of element-typed
+            // values like `[1, 2, 3]` for `vector<i32>`) keeps its
+            // pre-existing handling further down (OpAppendVector / direct
+            // bulk inits).
+            if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
+                let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, u16::MAX);
+                let mut scalar = code.clone();
+                substitute_value(&mut scalar, to, &Value::Var(elm));
+                let ls = self.new_record(
+                    &mut to.clone(),
+                    &lhs_parent_tp,
+                    elm,
+                    u16::MAX,
+                    &[scalar],
+                    &elm_tp,
+                );
+                *code = Value::Insert(ls);
+                return Type::Void;
+            }
         }
         // route the RHS of a simple assignment through `convert()`
         // so it picks up the same widening-with-explicit-narrowing policy
