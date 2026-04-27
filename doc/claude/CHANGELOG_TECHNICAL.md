@@ -175,10 +175,46 @@ lookup misses, mirroring `fill_database`'s `database.sorted` /
 content+keys → same type id.  Regression test
 `tests/issues.rs::p190_local_var_sorted_iteration`.
 
-Note: this unblocks the iteration codepath but plan-06 phase
-4d.B (par over keyed-collection input) still needs the
-parser-side materialisation desugar before the
-par_sorted/hash/index_input_t4 canaries can close.
+Note: this unblocked the iteration codepath; plan-06 phase
+4d.B for sorted then closed by the parser-side desugar (see
+the next entry).
+
+### Plan-06 phase 4d.B sorted — par-over-keyed-collection materialise
+
+`for s in sorted_items par(...)` now compiles end-to-end and
+closes the `par_sorted_input_t4` canary (1 more canary
+green; 11 ignored, was 12).
+
+When parse_for sees a par() clause with a sorted/hash/index/
+spacial input, the new `materialise_keyed_for_par` helper
+allocates a temporary `vector<reference<T>>`, walks the
+source via the existing `OpIterate`/`OpStep` machinery (the
+same helpers `for x in sorted_items` uses), and appends each
+element-DbRef.  The par dispatch then runs over the
+materialised vector — workers receive the same 12-byte
+DbRef as the closed `par_vec_of_refs_input_t4` canary.
+
+The IR shape mirrors the parser's emission for the manual
+workaround `refs += [s]`: `OpPreAllocVector` +
+`OpNewRecord` + `OpCopyRecord` + `OpFinishRecord` per loop
+iteration.  An earlier attempt missed `OpPreAllocVector`
+and produced uninitialised slots; this commit lands the full
+sequence.
+
+Cost contract: O(N) materialisation + 12-byte temporary
+vector + the par work itself.  Documented as known cost;
+users can opt out by materialising explicitly into
+`vector<reference<T>>` first.
+
+`par_hash_input_t4` and `par_index_input_t4` stay
+`#[ignore]`d on **P191** (filed in PROBLEMS.md) —
+sequential local-var iteration over hash/index produces
+wrong elements (0 for index, 195 instead of 30 for hash).
+After P191 closes, both canaries should pass via the same
+4d.B desugar.
+
+Regression test:
+`tests/issues.rs::p4d_b_par_over_sorted_via_materialise`.
 
 ### Vector-of-tuple support (P189 / P189c)
 

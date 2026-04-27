@@ -30,11 +30,54 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
+| 192 | `len()` not defined for `hash<T[key]>` or `index<T[key]>`.  Only `vector` and `sorted` have `len()` overloads (via `OpLengthVector` / `OpLengthSorted` which both delegate to `vector::length_vector`'s length-prefix read).  Hash needs `src/hash.rs::records().len()` (walks the bucket array, O(n)); index needs a tree traversal (O(n)).  Adding a `len()` overload for these would require a new runtime helper per kind that returns the count by full traversal. | Low | **Workaround:** count via iteration: `count = 0; for _ in h { count += 1; }` |
 | 191 | `for x in <local index/hash>` produces wrong results.  Sequential iteration over a local-var `index<T[key]>` returns **0 elements** (`for s in ix { sum += s.value }` over `ix` with two entries gives `sum=0`).  Sequential over a local-var `hash<T[key]>` returns wrong sums (`sum=195` instead of `30` for `{a:10, b:20}`).  Struct-field iteration works for both (`for s in db.items` returns the right values).  P190 fixed the on-demand db type registration so the iteration codegen no longer panics, but the underlying iteration (OpStep / fill_iter on=1 for index, n_hash_sorted-driven for hash) still doesn't produce the right element sequence for local-var keyed collections.  **Blocks par_index_input_t4 + par_hash_input_t4** which use the local-var pattern in their test setup. | Low | **Workaround:** put the index/hash inside a `struct` field (`struct Db { items: index<T[key]> }`) — works correctly today. |
 | 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr \| (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
 | 189d | `vector<(T1, text)>` element write returns 0 length for the text element.  P189c closed the per-attribute write path for primitive tuple elements (`(int, int)` works), but text elements within a vector-of-tuple read back as empty / zero-length.  Surfaced via `par_tuple_input_int_text` — workers see `len(p.1) == 0` instead of the expected `3, 3, 5`.  Likely root cause: `set_field`'s `Type::Text` arm in `src/parser/mod.rs:1716` writes via `OpSetText` which interns the string into the field's local store, but a vector-element write needs a different routing because the "field" is a tuple element inside a vector record (different store / different position computation). | Low | **Workaround:** wrap the tuple in a `struct` containing a text field — works correctly via the standard struct path. |
 
 ## Interpreter Robustness
+
+### 192. `len()` missing for hash and index
+
+**Symptom:** `len(h)` where `h: hash<T[key]>` errors with
+`Unknown function len — did you mean the method x.len(…) on
+text / character / vector / sorted / JsonValue?`.  Same for
+`len(ix)` on `index<T[key]>`.
+
+```loft
+struct Score { name: text not null, value: integer }
+struct Db { items: hash<Score[name]> }
+fn test() {
+  db = Db { items: [Score { name: "a", value: 10 }] };
+  println("count = {len(db.items)}");   // ← parse error
+}
+```
+
+**Where:** `default/01_code.loft` only declares:
+- `len(both: text)` (line 636)
+- `len(both: character)` (line 651)
+- `len(both: vector)` → `OpLengthVector` (line 825)
+- `len(both: sorted)` → `OpLengthSorted` (line 836, added
+  earlier this session for sorted parity).
+
+`OpLengthSorted` delegates to `vector::length_vector` which
+reads the length-prefix word at offset 4 of the backing
+record.  Sorted shares this layout with vector.  Hash and
+index do NOT — hash uses a bucket array (count requires
+walking via `src/hash.rs::records()`), index uses a red-black
+tree (count requires traversal via `src/tree.rs`).
+
+**Fix path:** add two new runtime helpers — one in `src/hash.rs`
+(`pub fn count(h: &DbRef, stores: &[Store]) -> u32` that walks
+the bucket array via the same loop as `records()`), one in
+`src/tree.rs` (recursive in-order count).  Then add
+`OpLengthHash` and `OpLengthIndex` in `default/01_code.loft`
+that delegate to these helpers.  Mirrors the OpLengthSorted
+shape; ~30 lines total.
+
+**Severity:** Low — `count = 0; for _ in h { count += 1 }` is
+a one-line workaround that gives the same O(n) cost as a
+traversal-based `len()` would.
 
 ### 191. Local-var index/hash iteration returns wrong elements
 
