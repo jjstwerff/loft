@@ -517,6 +517,49 @@ impl Parser {
                     // T1.5: element access through a reference-tuple parameter — pair.0, pair.1.
                     let elems = elems.clone();
                     self.parse_ref_tuple_elem(&mut t, code, &elems);
+                } else if let Type::Reference(d_nr, _) = t
+                    && self.data.def(d_nr).name.starts_with("__tuple<")
+                    && matches!(self.lexer.peek().has, crate::lexer::LexItem::Integer(_, _))
+                {
+                    // P189b: vector-of-tuple loop var / index result —
+                    // the loop variable is typed as `Reference(__tuple<…>)`
+                    // pointing at inline tuple bytes inside the vector
+                    // record.  `.0` / `.1` route through `get_val` so
+                    // both interpreter (`OpGetInt(off)` / `OpGetText(off)`)
+                    // and native codegen (per-type `stores.store(&db)`
+                    // pattern) read at the right field offset.  Element
+                    // types come from the synthetic struct's attributes.
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(d_nr)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    if let Some(idx) = self.lexer.has_integer() {
+                        let idx = idx as usize;
+                        if idx >= elems.len() {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Tuple index {idx} out of range — tuple has {} elements",
+                                elems.len()
+                            );
+                            t = Type::Unknown(0);
+                        } else {
+                            let offsets = crate::data::element_offsets(&elems);
+                            let elem_offset = offsets[idx] as u32;
+                            let elem_tp = elems[idx].clone();
+                            *code = self.get_val(
+                                &elem_tp,
+                                false,
+                                elem_offset,
+                                code.clone(),
+                                u32::MAX,
+                            );
+                            t = elem_tp;
+                        }
+                    }
                 } else {
                     t = self.field(code, t);
                 }

@@ -394,6 +394,7 @@ pub fn run_parallel_direct(
     out_ptr: *mut u8,
     n_rows: usize,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) {
     if n_rows == 0 {
         return;
@@ -427,7 +428,11 @@ pub fn run_parallel_direct(
         let extras = extra_args.to_vec();
         let prog = Arc::new(program);
         let prim_in = primitive_input_size;
+        // Wrap tuple types in an Arc so each worker thread can clone
+        // a cheap reference instead of cloning the Vec.
+        let tuple_types_arc = tuple_input_types.map(Arc::new);
         let results = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
+            let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
             let row_count = end - start;
             let bytes_needed = row_count * ret_sz;
             let slot_words = (bytes_needed.div_ceil(8)).max(1) as u32;
@@ -466,8 +471,14 @@ pub fn run_parallel_direct(
                     } else if prim_in > 8 {
                         // Phase 4d.A wide-input path — tuple, fn-ref,
                         // or any 9..=64 byte inline first-arg slot.
-                        let buf =
-                            read_primitive_at_wide(&state.database, &row_ref, element_size);
+                        // P189d: tuple inputs walk per-element so text
+                        // fields inflate from the 4-byte heap-pointer
+                        // into the 16-byte argument-slot `Str`.
+                        let buf = if let Some(ref types) = tuple_types_arc {
+                            read_tuple_at_wide(&state.database, &row_ref, types)
+                        } else {
+                            read_primitive_at_wide(&state.database, &row_ref, element_size)
+                        };
                         state.execute_at_raw_primitive_input_wide(
                             fn_pos,
                             &buf[..prim_in as usize],
@@ -521,8 +532,14 @@ pub fn run_parallel_direct(
             );
             let val = if primitive_input_size > 8 {
                 // Phase 4d.A wide-input path.
-                let buf =
-                    read_primitive_at_wide(&state.database, &row_ref, element_size);
+                // P189d: tuple inputs walk per-element so text fields
+                // inflate from the 4-byte heap-pointer into the
+                // 16-byte argument-slot `Str`.
+                let buf = if let Some(ref types) = tuple_input_types {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
                 state.execute_at_raw_primitive_input_wide(
                     fn_pos,
                     &buf[..primitive_input_size as usize],
@@ -785,6 +802,7 @@ pub fn run_parallel_light(
     n_rows: usize,
     pool: &mut WorkerPool,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) {
     if n_rows == 0 {
         return;
@@ -794,6 +812,9 @@ pub fn run_parallel_light(
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
         let out = Arc::new(SendMutPtr(out_ptr));
+        // P189d: Arc-wrap the per-element type list so each worker
+        // thread shares the same Vec instead of cloning it.
+        let tuple_types_arc = tuple_input_types.map(Arc::new);
 
         thread::scope(|s| {
             for t in 0..threads {
@@ -807,6 +828,7 @@ pub fn run_parallel_light(
                 let out_t = Arc::clone(&out);
                 let ret_sz = return_size as usize;
                 let prim_in = primitive_input_size;
+                let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
 
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
@@ -839,11 +861,18 @@ pub fn run_parallel_light(
                             // P189c — wide-input path for tuple /
                             // fn-ref / 9..=64 byte first-arg slots.
                             // Mirrors the run_parallel_direct branch.
-                            let buf = read_primitive_at_wide(
-                                &state.database,
-                                &row_ref,
-                                element_size,
-                            );
+                            // P189d: tuple inputs walk per-element so
+                            // text fields inflate from heap-pointer
+                            // into argument-slot `Str`.
+                            let buf = if let Some(ref types) = tuple_types {
+                                read_tuple_at_wide(&state.database, &row_ref, types)
+                            } else {
+                                read_primitive_at_wide(
+                                    &state.database,
+                                    &row_ref,
+                                    element_size,
+                                )
+                            };
                             state.execute_at_raw_primitive_input_wide(
                                 fn_pos,
                                 &buf[..prim_in as usize],
@@ -896,7 +925,13 @@ pub fn run_parallel_light(
                 state.execute_at_raw_text_input(fn_pos, s, extra_args, return_size)
             } else if primitive_input_size > 8 {
                 // P189c — wide-input path.
-                let buf = read_primitive_at_wide(&state.database, &row_ref, element_size);
+                // P189d: tuple inputs walk per-element so text fields
+                // inflate from heap-pointer into argument-slot `Str`.
+                let buf = if let Some(ref types) = tuple_input_types {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
                 state.execute_at_raw_primitive_input_wide(
                     fn_pos,
                     &buf[..primitive_input_size as usize],
@@ -988,6 +1023,76 @@ pub(crate) fn read_primitive_at_wide(
     unsafe {
         let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
         std::ptr::copy_nonoverlapping(p, buf.as_mut_ptr(), size as usize);
+    }
+    buf
+}
+
+/// P189d — wide-inline reader for `vector<(T1, T2, …)>` worker inputs
+/// where one or more elements need representation inflation between
+/// in-vector storage and the worker's argument slot.
+///
+/// In-vector layout (`data::element_size`):
+///   - `text`: 4-byte heap-pointer (interns into the input store).
+///   - `reference`: 12-byte `DbRef`.
+///   - others: same as their `Context::Argument` width.
+///
+/// Worker-slot layout (`variables::size(_, Context::Argument)`):
+///   - `text`: 16-byte `Str` (8B ptr + 8B len).
+///   - others: same as in-vector for primitives.
+///
+/// For each element this function copies `element_size` bytes from
+/// `row_ref + in_vec_offset` to `buf + arg_offset`, except for `Text`
+/// where the 4-byte pointer is inflated to a `Str` via
+/// `store.get_str(...)` — same path as `read_text_at`.
+///
+/// `elem_types` is the list of tuple element types (from the synthetic
+/// `__tuple<…>` struct's attributes).  Bytes outside the populated
+/// regions stay zero.
+#[allow(dead_code)] // not threading: only the sequential branch uses it
+pub(crate) fn read_tuple_at_wide(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    elem_types: &[crate::data::Type],
+) -> [u8; 64] {
+    let mut buf = [0u8; 64];
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    let in_vec_offsets = crate::data::element_offsets(elem_types);
+    let mut arg_offset: usize = 0;
+    for (i, t) in elem_types.iter().enumerate() {
+        let in_off = in_vec_offsets[i];
+        let in_sz = crate::data::element_size(t);
+        let arg_sz =
+            crate::variables::size(t, &crate::data::Context::Argument) as usize;
+        debug_assert!(
+            arg_offset + arg_sz <= 64,
+            "read_tuple_at_wide: tuple slot exceeds 64-byte cap"
+        );
+        unsafe {
+            let src = base.offset(row_ref.rec as isize * 8 + (row_ref.pos as usize + in_off) as isize);
+            if matches!(t, crate::data::Type::Text(_)) {
+                // Inflate the 4-byte heap text-pointer into a 16-byte
+                // Str for the worker's argument slot.
+                let text_rec = *src.cast::<u32>();
+                let s = store.get_str(text_rec);
+                let str_val = crate::keys::Str::new(s);
+                std::ptr::copy_nonoverlapping(
+                    (&raw const str_val).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset),
+                    arg_sz,
+                );
+            } else {
+                // Plain memcpy — in-vector and worker-slot widths
+                // match for primitives, references, and fn-refs.
+                let copy_n = in_sz.min(arg_sz);
+                std::ptr::copy_nonoverlapping(
+                    src,
+                    buf.as_mut_ptr().add(arg_offset),
+                    copy_n,
+                );
+            }
+        }
+        arg_offset += arg_sz;
     }
     buf
 }

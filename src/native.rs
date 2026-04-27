@@ -49,6 +49,20 @@ enum InputKind {
 /// stays bounded.
 const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 
+/// P189d — element types of a tuple first-arg, or `None` if the
+/// worker's first arg isn't a tuple.  Used by the wide-input path
+/// to dispatch `read_tuple_at_wide` (per-element inflation,
+/// notably 4 B heap text-pointer → 16 B stack `Str`) instead of
+/// `read_primitive_at_wide` (flat memcpy).
+fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::data::Type>> {
+    let first = def.attributes.first()?;
+    if let crate::data::Type::Tuple(elems) = &first.typedef {
+        Some(elems.clone())
+    } else {
+        None
+    }
+}
+
 fn input_kind_for_first_arg(def: &crate::data::Definition) -> InputKind {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
@@ -638,13 +652,14 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
     // during partial parses) we fall back to the parser-supplied
     // hint.  Once phase 4c lands the typed surface this fallback
     // can be deleted.
-    let (dispatch_mode, known_type, return_size, primitive_input_size) = {
+    let (dispatch_mode, known_type, return_size, primitive_input_size, tuple_input_types) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
             .expect("parallel_for: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
+        let tuple_types = tuple_first_arg_types(def);
         // Plan-06 phase 4d.A — typed input dispatch.  Encode the
         // resolved `InputKind` back onto the legacy `prim_in: u32`
         // channel that `run_parallel_*` still consumes, so the
@@ -660,20 +675,26 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
             InputKind::Primitive { size } => u32::from(size),
         };
         if matches!(def.returned, crate::data::Type::Text(_)) {
-            (DispatchMode::Text, u16::MAX, 4u32, pis)
+            (DispatchMode::Text, u16::MAX, 4u32, pis, tuple_types)
         } else if let Some(heap_d_nr) = def.returned.heap_def_nr() {
             let kt = data.def(heap_d_nr).known_type;
             let sz = u32::from(stores.size(kt));
-            (DispatchMode::Ref, kt, sz, pis)
+            (DispatchMode::Ref, kt, sz, pis, tuple_types)
         } else if matches!(def.returned, crate::data::Type::Function(_, _, _)) {
             // Plan-06 phase 1 G4 — fn-ref return: 20 bytes (8B
             // d_nr + 12B closure DbRef).  Workers write the
             // 20-byte fn-ref into per-worker output slots via
             // run_parallel_direct's execute_at_raw_to path.
-            (DispatchMode::Primitive, u16::MAX, 20u32, pis)
+            (DispatchMode::Primitive, u16::MAX, 20u32, pis, tuple_types)
         } else {
             // Primitive (or partial-parse Unknown).  Trust v_return_size.
-            (DispatchMode::Primitive, u16::MAX, v_return_size.clamp(1, 8) as u32, pis)
+            (
+                DispatchMode::Primitive,
+                u16::MAX,
+                v_return_size.clamp(1, 8) as u32,
+                pis,
+                tuple_types,
+            )
         }
     };
     // Plan-06 phase 4c — the Stitch policy is now `Concat` (no

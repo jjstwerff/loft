@@ -119,6 +119,15 @@ impl Parser {
                         if self.database.is_linked(db_tp) {
                             ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
                         }
+                    } else if matches!(*vtp.clone(), Type::Tuple(_)) {
+                        // P189b: vector-of-tuple — keep ref_expr as the
+                        // raw `OpGetVector` DbRef.  The loop var is typed
+                        // `Reference(__tuple<…>)` (see for_type) so codegen
+                        // reads elements via `OpVarRef` + `OpGet*(offset)`
+                        // per element type.  Without this skip,
+                        // `get_val(Tuple, …)` falls through the field-
+                        // type dispatch and errors with "Field access
+                        // not supported on type tuple([…])".
                     } else {
                         // route through `get_val` with the full
                         // element Type — preserves `IntegerSpec.forced_size`
@@ -128,13 +137,14 @@ impl Parser {
                         // which looked up `def(integer).returned` and lost
                         // the forced_size → emitted `OpGetInt` (8 bytes)
                         // into a 2-byte slot, producing off-bytes reads.
-                        // P189b note: vector-of-tuple `for p in pairs`
-                        // still hits the "Field access not supported"
-                        // error here — see PROBLEMS.md P189b — index
-                        // access via `pairs[i].0` works.
                         ref_expr = self.get_val(vtp, false, 0, ref_expr, u32::MAX);
                     }
                     let mut tp = *vtp.clone();
+                    if matches!(tp, Type::Tuple(_)) {
+                        // keep block type aligned with for_type's RefVar(Tuple)
+                        // — the next-expression yields a 12-byte DbRef.
+                        tp = Type::RefVar(Box::new(tp));
+                    }
                     for d in dep {
                         tp = tp.depending(*d);
                     }
@@ -156,9 +166,19 @@ impl Parser {
                     } else {
                         self.op("Add", i.clone(), Value::Int(1), I32.clone())
                     };
+                    // P189b: keep block type aligned with for_type's
+                    // Reference(__tuple<…>) — the next-expression yields
+                    // a 12-byte DbRef into vector storage.
+                    let block_tp = if let Type::Tuple(ref elems) = *vtp.clone() {
+                        let elems_clone = elems.clone();
+                        let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
+                        Type::Reference(tuple_d, vec![])
+                    } else {
+                        *vtp.clone()
+                    };
                     let next = v_block(
                         vec![v_set(iter_var, step), ref_expr],
-                        *vtp.clone(),
+                        block_tp,
                         "iter next",
                     );
                     self.vars

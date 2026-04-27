@@ -2278,6 +2278,19 @@ impl Parser {
             if let Type::Enum(nr, true, _) = t {
                 t = Type::Reference(nr, vec![]);
             }
+            // P189b: vector elements that are tuples live as inline bytes
+            // in the vector record.  Iteration yields a 12-byte DbRef
+            // pointing at those bytes; treat the loop var as a reference
+            // to the synthetic `__tuple<...>` struct so per-element loads
+            // happen through `OpVarRef` + `OpGet*(offset)` rather than the
+            // stack-tuple `OpTupleGet` which would read DbRef bytes as
+            // garbage integers.  parse_part recognises the def-name prefix
+            // `__tuple<` and routes `.0` / `.1` to TupleGet IR.
+            if let Type::Tuple(ref elems) = t {
+                let elems_clone = elems.clone();
+                let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
+                t = Type::Reference(tuple_d, vec![]);
+            }
             for d in dep {
                 t = t.depending(*d);
             }
