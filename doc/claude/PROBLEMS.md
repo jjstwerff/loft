@@ -30,10 +30,88 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
+| 191 | `for x in <local index/hash>` produces wrong results.  Sequential iteration over a local-var `index<T[key]>` returns **0 elements** (`for s in ix { sum += s.value }` over `ix` with two entries gives `sum=0`).  Sequential over a local-var `hash<T[key]>` returns wrong sums (`sum=195` instead of `30` for `{a:10, b:20}`).  Struct-field iteration works for both (`for s in db.items` returns the right values).  P190 fixed the on-demand db type registration so the iteration codegen no longer panics, but the underlying iteration (OpStep / fill_iter on=1 for index, n_hash_sorted-driven for hash) still doesn't produce the right element sequence for local-var keyed collections.  **Blocks par_index_input_t4 + par_hash_input_t4** which use the local-var pattern in their test setup. | Low | **Workaround:** put the index/hash inside a `struct` field (`struct Db { items: index<T[key]> }`) — works correctly today. |
 | 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr \| (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
 | 189d | `vector<(T1, text)>` element write returns 0 length for the text element.  P189c closed the per-attribute write path for primitive tuple elements (`(int, int)` works), but text elements within a vector-of-tuple read back as empty / zero-length.  Surfaced via `par_tuple_input_int_text` — workers see `len(p.1) == 0` instead of the expected `3, 3, 5`.  Likely root cause: `set_field`'s `Type::Text` arm in `src/parser/mod.rs:1716` writes via `OpSetText` which interns the string into the field's local store, but a vector-element write needs a different routing because the "field" is a tuple element inside a vector record (different store / different position computation). | Low | **Workaround:** wrap the tuple in a `struct` containing a text field — works correctly via the standard struct path. |
 
 ## Interpreter Robustness
+
+### 191. Local-var index/hash iteration returns wrong elements
+
+**Symptom:** sequential iteration over a local-var
+`index<T[key]>` returns 0 elements; over a local-var
+`hash<T[key]>` returns wrong sums.  Struct-field iteration
+of the same types works correctly.
+
+```loft
+fn test() {
+  ix: index<Score[name]> = [];
+  ix += Score { name: "a", value: 10 };
+  ix += Score { name: "b", value: 20 };
+  sum = 0;
+  for s in ix { sum += s.value; }
+  println("sum = {sum}");   // prints "sum = 0", expected 30
+}
+```
+
+```loft
+fn test() {
+  h: hash<Score[name]> = [];
+  h += Score { name: "a", value: 10 };
+  h += Score { name: "b", value: 20 };
+  sum = 0;
+  for s in h { sum += s.value; }
+  println("sum = {sum}");   // prints "sum = 195", expected 30
+}
+```
+
+The struct-field versions both return the correct sum (30):
+
+```loft
+struct Db { items: index<Score[name]> }
+// or: struct Db { items: hash<Score[name]> }
+db = Db { items: [Score { name: "a", value: 10 }, Score { name: "b", value: 20 }] };
+for s in db.items { sum += s.value; }   // sum = 30 ✅
+```
+
+**Where:** P190 (commit `6ffbe6a`) fixed the on-demand
+`database.index` / `database.hash` registration in
+`src/parser/vectors.rs::get_type` so the iteration codegen no
+longer panics on local-var keyed collections.  But the
+**underlying iteration mechanism** still doesn't produce the
+right element sequence for local-var index/hash:
+
+- **Index** (`fill_iter` on=1, `Parts::Index`): iteration walks
+  the tree.  For local-var index, returns 0 elements — likely
+  the tree root pointer is unset or the local's storage layout
+  differs from struct-field layout in a way that confuses
+  `OpStep`'s tree-walk.
+- **Hash** (`fill_iter` on=3, `Parts::Hash`): expects the
+  parser's hash-special-case at `src/parser/collections.rs:990-1008`
+  to have substituted the iterated expression with a
+  `n_hash_sorted` scratch.  For local-var hash this still runs,
+  but the resulting sum is wrong (195 vs 30) — likely a
+  store-rebase or scratch-layout interaction.
+
+**Sorted is unaffected** — P190 plus the standard
+`fill_iter` on=2 path produces correct results (verified by
+`tests/issues.rs::p190_local_var_sorted_iteration`).
+
+**Fix path:** investigate why local-var index has an unset/
+empty tree root after `+=`, and why local-var hash's
+n_hash_sorted produces a different scratch layout than the
+struct-field case.  May share a common root cause (some
+state not being initialised by P188's local-var keyed alloc
+that fill_database initialises for struct fields).
+
+**Severity:** Low — workaround (put the keyed collection in
+a struct field) is the canonical loft pattern and works.
+
+**Blocks:** plan-06 phase 4d.B's
+`par_hash_input_t4` and `par_index_input_t4` canaries —
+they use the local-var pattern in their test setup.  After
+P191 closes, both should pass via the same 4d.B desugar
+that closed `par_sorted_input_t4`.
 
 ### 189b. Tuple-as-vector-element field access reads garbage
 

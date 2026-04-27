@@ -568,7 +568,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-hash-input: 4d.B desugar closes par_sorted_input_t4 but hash interacts with parse_for's pre-existing hash-special-case (collections.rs:990-1008 calls n_hash_sorted to materialise into a u32-stride scratch).  My desugar sees in_type=Hash but expr is already rewritten to Var(scratch), causing iterator() to mis-route.  Needs separate handling for the already-pre-materialised hash case OR re-ordering of parse_for's hash special-case vs the par desugar.  Got 171798692448 instead of 120 (worker reads garbage from doubled materialisation)."]
+#[ignore = "par-hash-input: hash needs deeper work than sorted/index — fill_iter has no OpStep arm for raw Hash storage (its on=3 path requires the parser to pre-substitute via n_hash_sorted into a u32-stride scratch, see collections.rs:990-1008 + fields.rs:698-705).  Two approaches investigated: (1) skip n_hash_sorted pre-materialisation when par follows → fill_iter can't walk raw Hash → wrong values; (2) call n_hash_sorted from materialise_keyed_for_par + OpAppendVector its scratch → scratch lives in hash's store, refs don't relocate when copied → workers read garbage.  Needs either a new OpStep variant that walks raw hash buckets, OR a store-rebase pass that fixes up DbRefs after the OpAppendVector copy from hash's scratch."]
 fn par_hash_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
@@ -588,7 +588,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-index-input: similar to par_hash_input_t4 — index iteration via 4d.B desugar produces wrong values.  May share the same root cause as hash (interaction with parse_for's pre-existing iterator special-cases) or have a separate index-specific issue.  Needs separate investigation."]
+#[ignore = "par-index-input: blocked by P191 (filed in PROBLEMS.md) — sequential `for x in <local index>` returns 0 elements; struct-field index iteration works (sum=30 for {a:10,b:20}).  Independent of par.  After P191 closes, this canary should pass via the same 4d.B desugar that closed par_sorted_input_t4."]
 fn par_index_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
