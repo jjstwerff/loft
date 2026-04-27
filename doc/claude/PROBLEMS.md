@@ -97,12 +97,30 @@ right element sequence for local-var index/hash:
 `fill_iter` on=2 path produces correct results (verified by
 `tests/issues.rs::p190_local_var_sorted_iteration`).
 
-**Fix path:** investigate why local-var index has an unset/
-empty tree root after `+=`, and why local-var hash's
-n_hash_sorted produces a different scratch layout than the
-struct-field case.  May share a common root cause (some
-state not being initialised by P188's local-var keyed alloc
-that fill_database initialises for struct fields).
+**Fix path (investigated, found deeper than expected):**
+
+Initial hypothesis was that `gen_set_first_keyed_null`
+(P188's local-var alloc) registers the database type too
+late — after the struct-layout pass.  For `database.index`,
+this is a real concern: it appends bookkeeping fields
+(#left/#right/#color) to the content struct, and they need
+positions assigned by `finish_type`.  But pre-registering
+in `typedef.rs::fill_all` (a tested attempt) causes:
+- Index: SIGSEGV in the codegen path — appending fields
+  after `database.field` ran for the user fields shifts
+  layout and confuses downstream emission.
+- Hash: still returns 195 instead of 30 — `database.hash`
+  doesn't append fields, so the pre-registration changes
+  nothing.  Hash's bug is elsewhere (likely in
+  `n_hash_sorted` or its scratch-vector layout).
+
+The "register early" fix is insufficient; the right fix
+needs to either:
+- Properly thread the bookkeeping-field-add through the
+  struct-layout pass (potentially refactoring how
+  `database.index` interacts with `finish_type`), OR
+- Add a compile-time check that rejects local-var
+  index/hash and tells users to use a struct field.
 
 **Severity:** Low — workaround (put the keyed collection in
 a struct field) is the canonical loft pattern and works.
