@@ -309,64 +309,57 @@ side.
 ### 4d.B — Keyed-collection materialisation
 
 Closes `par_sorted_input_t4`, `par_hash_input_t4`,
-`par_index_input_t4`.
+`par_index_input_t4` — **all 3 landed** as of commit `592cde8`.
 
-**Status: deeper than initially scoped.**  An attempted parser-
-side desugar (2026-04-27) revealed two interlocking gaps that
-weren't visible from outside:
+**Status: done.**
 
-1. **P190** (closed by commit `6ffbe6a`): the iteration codegen
-   path's `get_type` couldn't resolve `sorted<T[key]>` for
-   local-var keyed collections — needed on-demand
-   `database.sorted` registration.  Without this, even the
-   programmatic `OpIterate` emission panics with "Too few
-   parameters on OpIterate (got 2, need 6)".
+The original `materialise_keyed_for_par` parser desugar landed
+for sorted in commit `d83eb0c`.  Hash and index needed two
+prerequisite fixes on the local-var keyed-collection path:
 
-2. **Programmatic IR construction for `__par_mat += [elm]`**
-   (still open): the implementation used `new_record` to emit
-   the per-element append.  Inspecting the IR `cargo run --
-   --dump` produces for the manual case `refs += [a]` reveals
-   the true required shape:
+1. **P191** (closed by commit `ab08ad0`): `database.index`'s
+   bookkeeping fields (`#left_N` / `#right_N`) were declared as
+   8-byte `integer` but `tree::add` writes them via
+   `set_i32_raw` at hardcoded offsets `[pos, pos+4, pos+8]` —
+   alignment-aware packing placed the 8-byte fields 8 bytes
+   apart, so tree pointers landed in the wrong record bytes
+   and iteration only returned the root element.  Fix: switch
+   bookkeeping to 4-byte `int<0,false>` so the layout matches
+   `tree::add`'s offsets.  Side benefit: indexed records shrink
+   by 8 bytes each.
 
-   ```
-   OpPreAllocVector(refs, 1, 8)             ← preallocate slot
-   _elm_1 = OpNewRecord(refs, 66, 65535)    ← claim slot
-   OpCopyRecord(a, _elm_1, 64)              ← deep-copy source into slot
-   OpFinishRecord(refs, _elm_1, 66, 65535)  ← finalise
-   ```
+2. **P188 follow-up** (closed by commit `592cde8`): the local-var
+   `+=` codepath in `new_record` looked up the keyed-collection's
+   known_type via `data.def(type_def_nr(lhs_tp)).known_type` —
+   but `type_def_nr` returns the GENERIC alias (`hash` /
+   `index`), not the specific instantiation.  The alias's
+   known_type pointed at a Vector type, so `record_finish`
+   dispatched through `Parts::Vector` and bypassed
+   `hash::add` / `tree::add` entirely (local-var hash showed
+   2× count, local-var index showed 1 of N).  Fix: register the
+   specific keyed-collection db type directly via
+   `database.{hash,index,sorted,spacial}(c, key)` —
+   idempotent with `gen_set_first_keyed_null` and the
+   typedef-walker registrations.
 
-   The deep-copy via `OpCopyRecord` IS correct — `vector<reference<T>>`
-   actually stores T inline, the "reference" prefix is parser-level
-   semantics meaning "this var holds a reference to an existing T",
-   not "stored as a reference".  The manual case works because the
-   parser's `+=` operator + vector-literal handler combine to emit
-   the full sequence above, INCLUDING `OpPreAllocVector`.
+Same commit also fixed **bug 1 on the same path** —
+struct-literal RHS retarget — which broke struct-field hash/
+index `+=` (root pointer overwritten by raw `OpSetText` /
+`OpSetInt` writes).  Fix: a new `substitute_value` walker
+replaces the LHS field expression with `Var(elm)` in the pre-
+parsed steps after `new_record_field_op` allocates the new
+element.
 
-   My direct `new_record` call missed `OpPreAllocVector`, leading
-   workers to read 0/null from the unallocated vector storage.
-   Approach A (mirror the IR shape) is now well-understood; the fix
-   is to prepend `OpPreAllocVector(mat_var, 1, elem_size)` to the
-   per-iteration append step.
+**P192** (closed by commit `592cde8`): added `len()` for
+`hash<T[key]>` and `index<T[key]>` via new `hash::count` and
+`tree::count` runtime helpers + `OpLengthHash` / `OpLengthIndex`
+ops.  This made the count discrepancy in (1) and (2) directly
+observable from loft, accelerating diagnosis.
 
-The implementation reverted in working tree.  Going forward, the
-right approach is one of:
-
-- **A (preferred — IR shape now understood):** Mirror the
-  `OpPreAllocVector + OpNewRecord + OpCopyRecord + OpFinishRecord`
-  sequence the parser emits for `refs += [s]`.  Add the
-  `OpPreAllocVector` call before the per-element insertion.  All
-  the helpers exist; the previous attempt just missed this opcode.
-- **B: Reuse the parser's `+=` operator.**  Synthesise a
-  `Value::Insert` that wraps the materialisation logic and
-  feeds it through `compute_op_code` with op="+=".  Avoids
-  duplicating the `+=` semantics but requires synthetic Value
-  construction.
-- **C: Runtime materialisation in the par dispatcher.**  Add a
-  Stitch::* variant or pre-loop step in `n_parallel_for` that
-  detects keyed-collection input and materialises at runtime
-  via `vector::sorted_iter` / `hash_sorted` / `tree_iter`.
-  Avoids parser-side IR construction entirely.  More work in
-  the runtime but cleaner separation.
+Verification: 8 P188/P191/P192 regression tests in
+`tests/issues.rs`; both keyed-input par canaries
+(`par_hash_input_t4`, `par_index_input_t4`) un-`#[ignore]`d and
+green.
 
 Original spec follows:
 

@@ -567,8 +567,13 @@ fn run() -> integer {
     .result(Value::Int(120));
 }
 
+/// Closed by commits `ab08ad0` (P191 — index bookkeeping layout) +
+/// `592cde8` (P188 follow-up — local-var keyed-collection += dispatch
+/// fix and struct-literal RHS retarget).  The 4d.B materialise-then-
+/// route desugar (sorted path) automatically extends to hash once
+/// the local-var hash + struct-literal `+=` and iteration paths are
+/// correct.
 #[test]
-#[ignore = "par-hash-input: hash needs deeper work than sorted/index — fill_iter has no OpStep arm for raw Hash storage (its on=3 path requires the parser to pre-substitute via n_hash_sorted into a u32-stride scratch, see collections.rs:990-1008 + fields.rs:698-705).  Two approaches investigated: (1) skip n_hash_sorted pre-materialisation when par follows → fill_iter can't walk raw Hash → wrong values; (2) call n_hash_sorted from materialise_keyed_for_par + OpAppendVector its scratch → scratch lives in hash's store, refs don't relocate when copied → workers read garbage.  Needs either a new OpStep variant that walks raw hash buckets, OR a store-rebase pass that fixes up DbRefs after the OpAppendVector copy from hash's scratch."]
 fn par_hash_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }
@@ -587,8 +592,12 @@ fn run() -> integer {
     .result(Value::Int(120));
 }
 
+/// Closed by commits `ab08ad0` (P191 — `database.index` bookkeeping
+/// fields are now 4-byte `int<0,false>` instead of 8-byte `integer`,
+/// matching `tree::add`'s hardcoded RB_LEFT=0 / RB_RIGHT=4 offsets)
+/// + `592cde8` (P188 — local-var `+=` dispatches to the specific
+/// `database.index(c, key)` instead of the generic `index` alias).
 #[test]
-#[ignore = "par-index-input: blocked by P191 (filed in PROBLEMS.md) — sequential `for x in <local index>` returns 0 elements; struct-field index iteration works (sum=30 for {a:10,b:20}).  Independent of par.  After P191 closes, this canary should pass via the same 4d.B desugar that closed par_sorted_input_t4."]
 fn par_index_input_t4() {
     code!(
         "struct Score { name: text not null, value: integer }

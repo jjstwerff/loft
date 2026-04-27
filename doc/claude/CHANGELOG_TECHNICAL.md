@@ -216,6 +216,103 @@ After P191 closes, both canaries should pass via the same
 Regression test:
 `tests/issues.rs::p4d_b_par_over_sorted_via_materialise`.
 
+### P191 — `index<T[key]>` bookkeeping field size mismatch
+
+`database.index` appended `#left_N` / `#right_N` bookkeeping
+fields declared as 8-byte `integer`, but `tree::add` writes
+those tree pointers via `set_i32_raw` at hardcoded offsets
+`[pos, pos+4, pos+8]` (RB_LEFT=0 / RB_RIGHT=4 / RB_FLAG=8).
+Alignment-aware packing placed the 8-byte fields 8 bytes
+apart, so tree pointers landed in the wrong record bytes.
+Iteration only returned the root element (e.g., a struct-
+field index iteration that should sum 60 returned 10).
+
+Fix: switch bookkeeping to 4-byte `int<0,false>` so the
+layout matches `tree::add`'s offsets.  Side benefit: indexed
+records shrink by 8 bytes each.  `tree.rs` already operates
+exclusively on i32 via `set_i32_raw` / `get_i32_raw`; no
+other code changes.
+
+Same commit also adds new `validate_layout` /
+`validate_all_layouts` / `debug_layout` / `layout_summary`
+helpers in `src/database/types.rs`, wired into the parser
+flow after `database.finish()` so future regressions surface
+as build-time errors.  16 unit tests cover overlap detection,
+beyond-size, bookkeeping-offset mismatch, enum-variant
+overlap-within-variant, and the layout-summary format.
+
+Regression test:
+`tests/issues.rs::p191_struct_field_index_iteration_after_layout_fix`.
+
+### P192 — `len()` for `hash<T[key]>` and `index<T[key]>`
+
+Only `vector` and `sorted` had `len()` overloads.  Added
+two new runtime helpers — `hash::count` (walks the bucket
+array, O(room)) and `tree::count` (walks via `first` +
+`next`, O(n)) — exposed via `OpLengthHash` (normal stdlib
+overload) and `OpLengthIndex` (parser hook in `call()` to
+inject the bookkeeping-offset const).
+
+Regression tests:
+`p192_len_hash_struct_field`,
+`p192_len_index_struct_field`.
+
+### P188 follow-up — `field += elem` for keyed-collection fields
+
+Two distinct bugs broke `db.x += Foo{...}` for hash / sorted /
+index / spacial fields and local-vars; vector-literal init
+(`db = Db { x: [...] }`) worked because its codegen built
+records directly.  Both surfaced once P192's `len()` made
+the broken state observable.
+
+**Bug 1 — struct-literal RHS retarget.**  `Score{name: "a",
+value: 10}` parses with the LHS field as its target, so the
+field-init steps wrote into the field's storage —
+overwriting the hash/index root pointer with stray bytes of
+the score record.  Struct-field hash with `+=` reported
+`len = 11` after one add then SIGSEGV on the next.
+
+Fix: extend the `field += elem` branch in `expressions.rs` to
+also match keyed-collection fields with struct-literal RHS,
+allocate a fresh element via `new_record_field_op`, and walk
+the parsed steps with a new `substitute_value` helper that
+replaces the LHS field expression with `Var(elm)` so each
+field write lands in the new record.  Gated on
+`elm_tp.is_equal(&s_type)` so vector field `+= [1, 2, 3]`
+(multi-element append) keeps its existing OpAppendVector path.
+
+**Bug 2 — local-var dispatch via wrong db type.**  `new_record`
+local-var branch looked up the keyed-collection's known_type
+via `data.def(type_def_nr(lhs_tp)).known_type`, but
+`type_def_nr` returns the GENERIC alias (`hash` / `index`),
+not the specific `hash<Score[name]>` instantiation.  The
+alias's known_type pointed at a Vector type, so
+`record_finish` dispatched through `Parts::Vector` and
+appended raw bytes — `hash::add` / `tree::add` never fired.
+Local-var hash with 3 adds showed 6 records (vector_finish
+appends without dedup); local-var index with 2 adds showed 1
+(tree::add was bypassed entirely).
+
+Fix: register the specific keyed-collection db type directly
+(`database.hash(c, key)` / `index(c, key)` / etc.) —
+idempotent with the gen_set_first_keyed_null and typedef-
+walker registrations.
+
+4 new P188 regression tests cover struct-field and local-var
+hash and index `+=` (each asserts both `len` and the
+iteration sum).
+
+### Plan-06 phase 4d.B hash + index — closed by P191/P192/P188
+
+`par_hash_input_t4` and `par_index_input_t4` un-`#[ignore]`d
+and pass once the underlying P191/P188 fixes landed: the same
+4d.B materialise-then-route desugar that closed
+`par_sorted_input_t4` extends to hash and index automatically
+once the local-var keyed-collection iteration and `+=` paths
+are correct.  Phase 4 partial → 4d.B fully done; remaining
+phase 4 work: 4a (typed-arity declaration), 4b (5-arg form
+retirement), 4e (caller-supplied destination via ref_return).
+
 ### Vector-of-tuple support (P189 / P189c)
 
 `vector<(T1, T2, …)>` now parses, constructs, and serves its
