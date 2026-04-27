@@ -53,7 +53,9 @@ struct SzIMain { s: index<SzIS[a, -c]> }
 
 fn test_sizeof_index_member() {
   m = SzIMain {};
-  assert(sizeof(SzIS) + 100 * sizeof(m) == 441, "index member sizes");
+  // P191: bookkeeping fields are 4-byte int<0,false> (was 8-byte
+  // integer), so SzIS shrank by 8 bytes (41→33). 33 + 100*4 = 433.
+  assert(sizeof(SzIS) + 100 * sizeof(m) == 433, "index member sizes");
 }
 
 struct SzRS { a: integer, b: integer, c: integer }

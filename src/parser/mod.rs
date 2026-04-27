@@ -2562,6 +2562,23 @@ impl Parser {
             start_def,
         );
         self.database.finish();
+        // Validate layouts of all registered types — catches late-
+        // mutation bugs (e.g. P191's bookkeeping fields landing at
+        // overlapping positions because finish_type already ran).
+        // Skip when the parser has already reported errors: an
+        // incomplete struct (e.g. a self-referential type that the
+        // parser correctly rejected) can have unlaid fields whose
+        // position == u16::MAX, and re-flagging that here just adds
+        // noise on top of the real diagnostic.
+        let already_failed = matches!(
+            self.lexer.diagnostics().level(),
+            Level::Error | Level::Fatal
+        );
+        if !already_failed {
+            for issue in self.database.validate_all_layouts() {
+                diagnostic!(self.lexer, Level::Error, "type layout: {}", issue);
+            }
+        }
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {

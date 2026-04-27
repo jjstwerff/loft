@@ -561,9 +561,13 @@ pub fn index() {
     let m = stores.structure("Main", 0);
     stores.field(m, "index", v);
     stores.finish();
+    // P191: bookkeeping fields are 4-byte int<0,false> (was 8-byte
+    // integer) so tree::add's hardcoded RB_LEFT=0/RB_RIGHT=4/RB_FLAG=8
+    // offsets line up with the actual field positions.  Saves 8 bytes
+    // per indexed record.
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[29/8]: parents [Main 9]{n:text[24], c:integer[0], #left_1:integer[8], #right_1:integer[16], #color_1:boolean[28]}"
+        "Elm[21/8]: parents [Main 10]{n:text[8], c:integer[0], #left_1:int<0,false>[12], #right_1:int<0,false>[16], #color_1:boolean[20]}"
     );
     assert_eq!(
         stores.dump_type("Main"),
@@ -615,9 +619,11 @@ pub fn index_deletions() {
     let m = stores.structure("Main", 0);
     stores.field(m, "index", v);
     stores.finish();
+    // P191: bookkeeping shrunk to 4-byte int<0,false> (was 8-byte
+    // integer); record size 33→25 user bytes.
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[33/8]: parents [Main 9]{k:integer[0], c:integer[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[32]}"
+        "Elm[25/8]: parents [Main 10]{k:integer[0], c:integer[8], #left_1:int<0,false>[16], #right_1:int<0,false>[20], #color_1:boolean[24]}"
     );
     let db = stores.database(2);
     let into = DbRef {
@@ -667,9 +673,10 @@ pub fn index_find() {
     stores.field(s, "value", stores.name("float"));
     let v = stores.index(s, &[("cat".to_string(), true), ("name".to_string(), true)]);
     stores.finish();
+    // P191: bookkeeping shrunk to 4-byte int<0,false>.
     assert_eq!(
         stores.dump_type("Elm"),
-        "Elm[37/8]:{cat:integer[0], name:text[32], value:float[8], #left_1:integer[16], #right_1:integer[24], #color_1:boolean[36]}"
+        "Elm[29/8]:{cat:integer[0], name:text[16], value:float[8], #left_1:int<0,false>[20], #right_1:int<0,false>[24], #color_1:boolean[28]}"
     );
     let db = stores.database(8);
     let into = DbRef {
@@ -744,7 +751,7 @@ fn find_rec(key: u8, before: bool, s: u16, v: u16, data: &DbRef, stores: &Stores
         rec: tree::find(
             data,
             before,
-            8 + 16,
+            stores.fields(v),
             &stores.allocations,
             stores.keys(v),
             &[Content::Long(key as i64)],

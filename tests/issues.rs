@@ -10258,3 +10258,36 @@ fn test() {
     )
     .result(Value::Null);
 }
+
+/// P191 — `index<T[key]>` iteration produced wrong sums (e.g.
+/// `sum=10` instead of `sum=60` for three `Score` records).  Root
+/// cause: `database.index` (src/database/types.rs:957) appended
+/// `#left_N` / `#right_N` bookkeeping fields with `content =
+/// self.name("integer")` (8 bytes), but `tree::add` writes those
+/// pointers via `set_i32_raw` at hardcoded offsets `[pos, pos+4,
+/// pos+8]` — an alignment-aware layout placed the 8-byte fields 8
+/// bytes apart, so tree pointers landed in the wrong record bytes
+/// and the right-child link was never followed during iteration.
+/// Fix: switch bookkeeping to 4-byte `int<0,false>` so the layout
+/// matches `tree::add`'s offsets.
+///
+/// Verified by `validate_all_layouts_index_bookkeeping_after_p191_fix_no_issues`
+/// in `src/database/types.rs::layout_tests`.
+#[test]
+fn p191_struct_field_index_iteration_after_layout_fix() {
+    code!(
+        "struct P191Score { name: text not null, value: integer }
+struct P191Db { items: index<P191Score[name]> }
+fn test() {
+    db = P191Db { items: [
+        P191Score { name: \"a\", value: 10 },
+        P191Score { name: \"b\", value: 20 },
+        P191Score { name: \"c\", value: 30 }
+    ] };
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}

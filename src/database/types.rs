@@ -352,6 +352,492 @@ impl Stores {
         String::new()
     }
 
+    /// Debug helper: pretty-print a type's storage layout — overall
+    /// size + alignment, plus every field's name, byte position, byte
+    /// size, and content type.  Fields are sorted by position so gaps
+    /// and overlaps are visually obvious.
+    ///
+    /// Useful for diagnosing layout bugs (e.g. tree::add writing
+    /// at wrong offsets when bookkeeping fields land at non-contiguous
+    /// positions per `calc::calculate_positions`'s alignment-aware
+    /// reordering).
+    ///
+    /// For Sorted/Hash/Index/Spacial: also shows the content struct's
+    /// layout indented underneath, since those types' bookkeeping
+    /// lives inside the content struct.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn debug_layout(&self, name: &str) -> String {
+        for t in 0..self.types.len() {
+            if self.types[t].name == name {
+                return self.debug_layout_by_nr(t as u16, 0);
+            }
+        }
+        format!("(unknown type: {name})\n")
+    }
+
+    /// Same as `debug_layout` but takes a type id directly.
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn debug_layout_by_nr(&self, tp: u16, indent: usize) -> String {
+        use std::fmt::Write;
+        if tp == u16::MAX || (tp as usize) >= self.types.len() {
+            return format!("(unknown type id: {tp})\n");
+        }
+        let pad = " ".repeat(indent);
+        let mut out = String::new();
+        let t = &self.types[tp as usize];
+        let kind = match &t.parts {
+            Parts::Struct(_) => "struct",
+            Parts::EnumValue(disc, _) => return self.debug_layout_enumvalue(tp, indent, *disc),
+            Parts::Enum(_) => "enum",
+            Parts::Vector(_) => "vector",
+            Parts::Array(_) => "array",
+            Parts::Sorted(_, _) => "sorted",
+            Parts::Ordered(_, _) => "ordered",
+            Parts::Hash(_, _) => "hash",
+            Parts::Index(_, _, _) => "index",
+            Parts::Spacial(_, _) => "spacial",
+            _ => "<other>",
+        };
+        let _ = writeln!(
+            out,
+            "{pad}[{tp}] {} {} (size={}, align={})",
+            t.name, kind, t.size, t.align
+        );
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &t.parts {
+            self.debug_layout_fields(&mut out, indent + 2, fields);
+        } else if let Parts::Vector(c)
+        | Parts::Array(c)
+        | Parts::Sorted(c, _)
+        | Parts::Ordered(c, _)
+        | Parts::Hash(c, _)
+        | Parts::Spacial(c, _) = t.parts
+        {
+            let _ = writeln!(
+                out,
+                "{pad}  content → [{c}] {} (size={}, align={})",
+                self.types[c as usize].name,
+                self.types[c as usize].size,
+                self.types[c as usize].align,
+            );
+            if matches!(
+                self.types[c as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                out += &self.debug_layout_by_nr(c, indent + 4);
+            }
+        } else if let Parts::Index(c, _, left_field_nr) = t.parts {
+            let _ = writeln!(
+                out,
+                "{pad}  content → [{c}] {} (size={}, align={}); bookkeeping starts at field index {left_field_nr}",
+                self.types[c as usize].name,
+                self.types[c as usize].size,
+                self.types[c as usize].align,
+            );
+            // Compute the byte offset where tree::add expects to find
+            // RB_LEFT — this is `database.fields(tp)`'s return value.
+            if let Parts::Struct(fs) | Parts::EnumValue(_, fs) =
+                &self.types[c as usize].parts
+            {
+                if (left_field_nr as usize) < fs.len() {
+                    let left = &fs[left_field_nr as usize];
+                    let _ = writeln!(
+                        out,
+                        "{pad}  tree::add starts at byte offset = 8 + {} (= field[{}] '{}' position) = {}",
+                        left.position,
+                        left_field_nr,
+                        left.name,
+                        8 + left.position,
+                    );
+                }
+                out += &self.debug_layout_by_nr(c, indent + 4);
+            }
+        }
+        if !t.keys.is_empty() {
+            let _ = writeln!(out, "{pad}  keys:");
+            for k in &t.keys {
+                let _ = writeln!(
+                    out,
+                    "{pad}    field {} type {} {}",
+                    k.position,
+                    k.type_nr.abs(),
+                    if k.type_nr < 0 { "desc" } else { "asc" },
+                );
+            }
+        }
+        out
+    }
+
+    /// Helper for `debug_layout_by_nr` — handles the EnumValue arm
+    /// separately so the disc byte is documented.
+    fn debug_layout_enumvalue(&self, tp: u16, indent: usize, disc: u8) -> String {
+        use std::fmt::Write;
+        let pad = " ".repeat(indent);
+        let mut out = String::new();
+        let t = &self.types[tp as usize];
+        let _ = writeln!(
+            out,
+            "{pad}[{tp}] {} enum-value (disc={disc}, size={}, align={})",
+            t.name, t.size, t.align
+        );
+        if let Parts::EnumValue(_, fields) = &t.parts {
+            self.debug_layout_fields(&mut out, indent + 2, fields);
+        }
+        out
+    }
+
+    /// Validate a type's storage layout — detects overlapping fields.
+    /// Only `Parts::Enum` (the tagged-union container) legitimately
+    /// overlaps its variants; everything else (struct, enum-value,
+    /// collection content) must have non-overlapping fields.
+    ///
+    /// Returns a list of human-readable issues; empty Vec means the
+    /// layout is internally consistent.  Recursively checks the
+    /// content type for collection kinds.
+    ///
+    /// Use this after `database.finish()` to catch layout bugs (e.g.
+    /// late-mutation that leaves bookkeeping fields at position 0
+    /// overlapping user data).
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn validate_layout(&self, name: &str) -> Vec<String> {
+        for t in 0..self.types.len() {
+            if self.types[t].name == name {
+                let mut visited = std::collections::HashSet::new();
+                let mut issues = Vec::new();
+                self.validate_layout_by_nr(t as u16, &mut visited, &mut issues);
+                return issues;
+            }
+        }
+        vec![format!("(unknown type: {name})")]
+    }
+
+    /// Walk every registered type and validate its layout.  Returns
+    /// a flat list of issues across all types (each line prefixed by
+    /// the type name).  Use this after `database.finish()` to catch
+    /// layout bugs in any user-defined struct / enum-value /
+    /// collection-content type before they corrupt runtime data.
+    ///
+    /// Skips synthetic database types whose names start with `__`
+    /// (currently none, but reserved for the parser-side `__tuple<…>`
+    /// shape and similar) and the built-in primitives.
+    #[must_use]
+    pub fn validate_all_layouts(&self) -> Vec<String> {
+        let mut visited = std::collections::HashSet::new();
+        let mut issues = Vec::new();
+        for tp in 0..self.types.len() {
+            let t = &self.types[tp];
+            // Skip primitive built-ins (no struct layout to validate)
+            // and types whose size is u16::MAX (unlaid-out — likely
+            // a parser placeholder that finish_type didn't reach).
+            if t.size == u16::MAX {
+                continue;
+            }
+            match t.parts {
+                Parts::Struct(_)
+                | Parts::EnumValue(_, _)
+                | Parts::Enum(_)
+                | Parts::Vector(_)
+                | Parts::Array(_)
+                | Parts::Sorted(_, _)
+                | Parts::Ordered(_, _)
+                | Parts::Hash(_, _)
+                | Parts::Index(_, _, _)
+                | Parts::Spacial(_, _) => {
+                    self.validate_layout_by_nr(tp as u16, &mut visited, &mut issues);
+                }
+                _ => {}
+            }
+        }
+        // Dedup — recursion can produce the same issue multiple times
+        // when a struct is referenced from many places.
+        issues.sort();
+        issues.dedup();
+        issues
+    }
+
+    /// Same as `validate_layout` but takes a type id directly.
+    /// `visited` prevents infinite recursion through cyclic
+    /// references (e.g. struct containing a vector of itself).
+    #[allow(dead_code)]
+    pub fn validate_layout_by_nr(
+        &self,
+        tp: u16,
+        visited: &mut std::collections::HashSet<u16>,
+        issues: &mut Vec<String>,
+    ) {
+        if tp == u16::MAX || (tp as usize) >= self.types.len() {
+            issues.push(format!("type id {tp} out of range"));
+            return;
+        }
+        if !visited.insert(tp) {
+            return;
+        }
+        let t = &self.types[tp as usize];
+        match &t.parts {
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                self.check_fields_overlap(tp, fields, issues);
+                self.check_fields_within_size(tp, fields, issues);
+                // Recurse into each field's content type.
+                for f in fields {
+                    self.validate_layout_by_nr(f.content, visited, issues);
+                }
+            }
+            Parts::Enum(_) => {
+                // Tagged-union variants legitimately overlap.  Each
+                // variant is a separate EnumValue type with its own
+                // layout — recurse into the children.  We trust the
+                // parent's `t.size` to be the max of variant sizes
+                // (set in finish_type for Parts::Enum at line 238).
+                let children: Vec<u16> = self
+                    .types
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, child)| {
+                        if let Parts::EnumValue(_, _) = &child.parts {
+                            // Heuristic: child belongs to this enum if
+                            // its name has the parent's name as prefix
+                            // OR if the child appears in `parents`.
+                            if child.parents.contains(&tp) {
+                                return Some(idx as u16);
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+                for c in children {
+                    self.validate_layout_by_nr(c, visited, issues);
+                }
+            }
+            Parts::Vector(c)
+            | Parts::Array(c)
+            | Parts::Sorted(c, _)
+            | Parts::Ordered(c, _)
+            | Parts::Hash(c, _)
+            | Parts::Spacial(c, _) => {
+                self.validate_layout_by_nr(*c, visited, issues);
+            }
+            Parts::Index(c, _, left_field_nr) => {
+                // Validate the content struct (which has bookkeeping
+                // fields appended).  Also verify the bookkeeping
+                // field index is in range and points at a `#left_*`
+                // field, since `database.fields(tp)` reads
+                // `fields[left_field_nr].position` and a wrong index
+                // would silently corrupt tree::add's offsets.
+                if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+                    &self.types[*c as usize].parts
+                {
+                    if (*left_field_nr as usize) >= fields.len() {
+                        issues.push(format!(
+                            "{}: Parts::Index left_field_nr={} out of range (content has {} fields)",
+                            t.name,
+                            left_field_nr,
+                            fields.len()
+                        ));
+                    } else {
+                        let f = &fields[*left_field_nr as usize];
+                        if !f.name.starts_with("#left_") {
+                            issues.push(format!(
+                                "{}: Parts::Index left_field_nr={} points at field '{}' (expected '#left_*')",
+                                t.name, left_field_nr, f.name
+                            ));
+                        }
+                        // Bookkeeping must be 3 contiguous fields:
+                        // #left (4B), #right (4B), #color (1B).  Their
+                        // positions can be anywhere (alignment may
+                        // reorder them) but tree::add reads them at
+                        // [pos, pos+4, pos+8] — so the LAYOUT must
+                        // place them contiguously.
+                        if (*left_field_nr as usize + 2) < fields.len() {
+                            let l = &fields[*left_field_nr as usize];
+                            let r = &fields[*left_field_nr as usize + 1];
+                            let cf = &fields[*left_field_nr as usize + 2];
+                            if l.position != u16::MAX
+                                && r.position != u16::MAX
+                                && cf.position != u16::MAX
+                            {
+                                let mut had = false;
+                                if r.position != l.position + 4 {
+                                    had = true;
+                                    issues.push(format!(
+                                        "{}: tree bookkeeping not at expected offsets — '{}'@{} '{}'@{} (tree::add expects right at left+4=int4 but layout has left as {}-byte content '{}')",
+                                        t.name,
+                                        l.name,
+                                        l.position,
+                                        r.name,
+                                        r.position,
+                                        self.types[l.content as usize].size,
+                                        self.types[l.content as usize].name,
+                                    ));
+                                }
+                                if cf.position != l.position + 8 {
+                                    had = true;
+                                    issues.push(format!(
+                                        "{}: tree bookkeeping not at expected offsets — '{}'@{} '{}'@{} (tree::add expects color at left+8 but layout disagrees)",
+                                        t.name, l.name, l.position, cf.name, cf.position
+                                    ));
+                                }
+                                if had {
+                                    issues.push(format!(
+                                        "  content layout: {}",
+                                        self.layout_summary(*c)
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                self.validate_layout_by_nr(*c, visited, issues);
+            }
+            _ => {}
+        }
+    }
+
+    /// Helper — render a type's full layout as a single line, used
+    /// to make validate_layout errors self-contained.  Format:
+    /// `Score(size=29,align=8){value:integer@0..8, ...}`.
+    fn layout_summary(&self, tp: u16) -> String {
+        let t = &self.types[tp as usize];
+        let mut out = format!("{}(size={},align={})", t.name, t.size, t.align);
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &t.parts {
+            out += "{";
+            let mut by_pos: Vec<(u16, usize, &Field)> = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.position, i, f))
+                .collect();
+            by_pos.sort_by_key(|(p, i, _)| (*p, *i));
+            for (n, (pos, idx, f)) in by_pos.iter().enumerate() {
+                if n > 0 {
+                    out += ", ";
+                }
+                let csz = self.types[f.content as usize].size;
+                let cname = &self.types[f.content as usize].name;
+                let pos_str = if *pos == u16::MAX {
+                    "?".to_string()
+                } else {
+                    pos.to_string()
+                };
+                let end = if *pos == u16::MAX || csz == u16::MAX {
+                    "?".to_string()
+                } else {
+                    (*pos + csz).to_string()
+                };
+                out += &format!("[{}]{}:{}@{}..{}", idx, f.name, cname, pos_str, end);
+            }
+            out += "}";
+        }
+        out
+    }
+
+    /// Helper — detect overlapping field byte ranges.  Each issue
+    /// includes the full layout summary so the user can see the
+    /// surrounding context without a separate debug_layout dump.
+    fn check_fields_overlap(&self, tp: u16, fields: &[Field], issues: &mut Vec<String>) {
+        let t_name = self.types[tp as usize].name.clone();
+        let mut by_pos: Vec<(u16, &Field)> = fields
+            .iter()
+            .filter(|f| f.position != u16::MAX)
+            .map(|f| (f.position, f))
+            .collect();
+        by_pos.sort_by_key(|(p, _)| *p);
+        let mut had_issue = false;
+        for window in by_pos.windows(2) {
+            let (a_pos, a) = window[0];
+            let (b_pos, b) = window[1];
+            let a_end = a_pos as u32 + self.types[a.content as usize].size as u32;
+            if (b_pos as u32) < a_end {
+                had_issue = true;
+                issues.push(format!(
+                    "{}: fields '{}' [@{}..{}) and '{}' [@{}..) overlap",
+                    t_name, a.name, a_pos, a_end, b.name, b_pos,
+                ));
+            }
+        }
+        if had_issue {
+            issues.push(format!("  layout: {}", self.layout_summary(tp)));
+        }
+    }
+
+    /// Helper — verify every field's [pos, pos+size) fits within the
+    /// type's reported size.  Issues include the full layout summary.
+    fn check_fields_within_size(&self, tp: u16, fields: &[Field], issues: &mut Vec<String>) {
+        let t = &self.types[tp as usize];
+        if t.size == u16::MAX {
+            return;
+        }
+        let t_name = t.name.clone();
+        let t_size = t.size;
+        let mut had_issue = false;
+        for f in fields {
+            if f.position == u16::MAX {
+                had_issue = true;
+                issues.push(format!(
+                    "{}: field '{}' has no position (u16::MAX)",
+                    t_name, f.name
+                ));
+                continue;
+            }
+            let csz = self.types[f.content as usize].size;
+            if csz == u16::MAX {
+                continue;
+            }
+            let end = f.position as u32 + csz as u32;
+            if end > t_size as u32 {
+                had_issue = true;
+                issues.push(format!(
+                    "{}: field '{}' [@{}..{}) extends beyond type size {}",
+                    t_name, f.name, f.position, end, t_size
+                ));
+            }
+        }
+        if had_issue {
+            issues.push(format!("  layout: {}", self.layout_summary(tp)));
+        }
+    }
+
+    /// Helper for `debug_layout_by_nr` — prints fields sorted by
+    /// position with content-type size info.  Reveals gaps + overlaps.
+    fn debug_layout_fields(&self, out: &mut String, indent: usize, fields: &[Field]) {
+        use std::fmt::Write;
+        let pad = " ".repeat(indent);
+        // Sort by position so layout is visually contiguous.
+        let mut by_pos: Vec<(u16, usize, &Field)> = fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.position, i, f))
+            .collect();
+        by_pos.sort_by_key(|(p, i, _)| (*p, *i));
+        let mut prev_end: i32 = -1;
+        for (pos, idx, f) in by_pos {
+            let csz = self.types[f.content as usize].size;
+            let cname = &self.types[f.content as usize].name;
+            // Show gap if this field's start > prev_end (when both
+            // positions are real, not the u16::MAX "not laid out" sentinel).
+            if prev_end >= 0
+                && pos != u16::MAX
+                && (pos as i32) > prev_end
+            {
+                let _ = writeln!(
+                    out,
+                    "{pad}     ── gap [{}..{}) ({} bytes) ──",
+                    prev_end,
+                    pos,
+                    pos as i32 - prev_end
+                );
+            }
+            let _ = writeln!(
+                out,
+                "{pad}field[{idx}] '{}' @{} size={} ({})",
+                f.name, pos, csz, cname
+            );
+            if pos != u16::MAX && csz != u16::MAX {
+                prev_end = pos as i32 + csz as i32;
+            }
+        }
+    }
+
     pub fn vector(&mut self, content: u16) -> u16 {
         let name = if content == u16::MAX {
             "vector".to_string()
@@ -481,7 +967,12 @@ impl Stores {
         if let Some(nr) = self.names.get(&name) {
             return *nr;
         }
-        let int_c = self.name("integer");
+        // P191: bookkeeping fields must be 4-byte ints to match
+        // tree::add's hardcoded RB_LEFT=0 / RB_RIGHT=4 offsets, which
+        // use set_i32_raw / get_i32_raw exclusively.  Using 8-byte
+        // `integer` here makes alignment-aware packing place them 8
+        // bytes apart, corrupting tree::add's writes.
+        let int4 = self.int(0, false);
         let bool_c = self.name("boolean");
         let mut nr = 1;
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
@@ -499,14 +990,14 @@ impl Stores {
             let left = fields.len();
             fields.push(Field {
                 name: format!("#left_{nr}"),
-                content: int_c,
+                content: int4,
                 position: 0,
                 default: Content::Long(0),
                 other_indexes: Vec::new(),
             });
             fields.push(Field {
                 name: format!("#right_{nr}"),
-                content: int_c,
+                content: int4,
                 position: 0,
                 default: Content::Long(0),
                 other_indexes: Vec::new(),
@@ -1105,5 +1596,289 @@ impl Type {
             | Parts::Spacial(c, _) => c == tp,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{Field, Parts, Stores};
+    use crate::keys::Content;
+
+    /// Build a clean two-field struct via the public API.
+    fn score_struct(s: &mut Stores) -> u16 {
+        let int_c = s.name("integer");
+        let txt_c = s.name("text");
+        let tp = s.structure("Score", 0);
+        s.field(tp, "name", txt_c);
+        s.field(tp, "value", int_c);
+        tp
+    }
+
+    #[test]
+    fn validate_all_layouts_clean_after_init_returns_no_issues() {
+        let s = Stores::new();
+        assert!(s.validate_all_layouts().is_empty());
+    }
+
+    #[test]
+    fn validate_layout_unknown_type_reports_unknown() {
+        let s = Stores::new();
+        let issues = s.validate_layout("DoesNotExist");
+        assert_eq!(issues, vec!["(unknown type: DoesNotExist)".to_string()]);
+    }
+
+    #[test]
+    fn validate_layout_clean_struct_after_finish_no_issues() {
+        let mut s = Stores::new();
+        score_struct(&mut s);
+        s.finish();
+        let issues = s.validate_layout("Score");
+        assert!(
+            issues.is_empty(),
+            "expected no issues for clean Score, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn debug_layout_clean_struct_includes_fields_and_size() {
+        let mut s = Stores::new();
+        score_struct(&mut s);
+        s.finish();
+        let dump = s.debug_layout("Score");
+        assert!(dump.contains("Score"), "dump missing type name: {dump}");
+        assert!(dump.contains("name"), "dump missing 'name' field: {dump}");
+        assert!(dump.contains("value"), "dump missing 'value' field: {dump}");
+        // Both fields must appear with positions (not u16::MAX).
+        assert!(
+            !dump.contains("@65535"),
+            "dump still has unlaid positions: {dump}"
+        );
+    }
+
+    #[test]
+    fn debug_layout_unknown_type_reports_unknown() {
+        let s = Stores::new();
+        let dump = s.debug_layout("Nope");
+        assert!(
+            dump.contains("unknown type: Nope"),
+            "expected 'unknown type' in: {dump}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_detects_overlapping_fields() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Bad", 0);
+        s.field(tp, "a", int_c);
+        s.field(tp, "b", int_c);
+        s.finish();
+        // Force overlap: rewrite both fields to position 0.
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &mut s.types[tp as usize].parts
+        {
+            fields[0].position = 0;
+            fields[1].position = 0;
+        }
+        let issues = s.validate_layout("Bad");
+        assert!(
+            issues.iter().any(|i| i.contains("overlap")),
+            "expected overlap issue, got: {issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.contains("layout:")),
+            "expected layout summary in issues, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_detects_field_beyond_size() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Tiny", 0);
+        s.field(tp, "v", int_c);
+        s.finish();
+        // Shrink the type's reported size below the field's end.
+        s.types[tp as usize].size = 4; // integer is 8 bytes, field at @0
+        let issues = s.validate_layout("Tiny");
+        assert!(
+            issues.iter().any(|i| i.contains("extends beyond type size")),
+            "expected beyond-size issue, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_detects_field_without_position() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Unlaid", 0);
+        s.field(tp, "v", int_c);
+        s.finish();
+        // Force the field's position back to u16::MAX (simulates a
+        // late-mutation that skipped finish_type).
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &mut s.types[tp as usize].parts
+        {
+            fields[0].position = u16::MAX;
+        }
+        let issues = s.validate_layout("Unlaid");
+        assert!(
+            issues.iter().any(|i| i.contains("no position")),
+            "expected no-position issue, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_all_layouts_index_bookkeeping_after_p191_fix_no_issues() {
+        // P191 fix: `database.index` now appends 4-byte int<0,false>
+        // bookkeeping fields (`#left_N`, `#right_N`) so they land
+        // contiguously at [pos, pos+4, pos+8] and match tree::add's
+        // hardcoded RB_LEFT=0, RB_RIGHT=4, RB_FLAG=8 offsets.  This
+        // test guards against regressing back to 8-byte `integer`
+        // bookkeeping (which would resurface the corruption).
+        let mut s = Stores::new();
+        let score_tp = score_struct(&mut s);
+        let _index_tp = s.index(score_tp, &[("name".to_string(), true)]);
+        s.finish();
+        let issues = s.validate_all_layouts();
+        assert!(
+            issues.is_empty(),
+            "expected no layout issues after P191 fix, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_index_left_field_nr_out_of_range() {
+        let mut s = Stores::new();
+        let score_tp = score_struct(&mut s);
+        let index_tp = s.index(score_tp, &[("name".to_string(), true)]);
+        s.finish();
+        // Force `Parts::Index`'s left_field_nr to point past the end.
+        if let Parts::Index(_, _, left) = &mut s.types[index_tp as usize].parts {
+            *left = 9999;
+        }
+        let issues = s.validate_layout("index<Score[name]>");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("Parts::Index left_field_nr=9999 out of range")),
+            "expected out-of-range issue, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_index_left_field_nr_points_at_wrong_field() {
+        let mut s = Stores::new();
+        let score_tp = score_struct(&mut s);
+        let index_tp = s.index(score_tp, &[("name".to_string(), true)]);
+        s.finish();
+        // Force `Parts::Index` to point at field 0 (the user `name`
+        // field, not `#left_*`).
+        if let Parts::Index(_, _, left) = &mut s.types[index_tp as usize].parts {
+            *left = 0;
+        }
+        let issues = s.validate_layout("index<Score[name]>");
+        assert!(
+            issues.iter().any(|i| i.contains("expected '#left_*'")),
+            "expected wrong-field-name issue, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn layout_summary_contains_size_align_and_field_byte_ranges() {
+        let mut s = Stores::new();
+        let tp = score_struct(&mut s);
+        s.finish();
+        let line = s.layout_summary(tp);
+        assert!(line.starts_with("Score("), "expected name prefix: {line}");
+        assert!(line.contains("size="), "expected size= in: {line}");
+        assert!(line.contains("align="), "expected align= in: {line}");
+        assert!(line.contains("name:text@"), "expected name field: {line}");
+        assert!(line.contains("value:integer@"), "expected value field: {line}");
+        // The byte-range form is `@start..end`.
+        assert!(line.contains(".."), "expected ..end in field range: {line}");
+    }
+
+    #[test]
+    fn validate_all_layouts_skips_unlaid_types() {
+        let mut s = Stores::new();
+        // Push a struct with size = u16::MAX (unlaid) — validate_all
+        // must skip it (no panic, no false positive).
+        let tp = s.structure("Unlaid", 0);
+        let int_c = s.name("integer");
+        s.field(tp, "v", int_c);
+        // Don't call finish() — type stays at size = u16::MAX.
+        assert_eq!(s.types[tp as usize].size, u16::MAX);
+        let issues = s.validate_all_layouts();
+        assert!(
+            issues.is_empty(),
+            "expected no issues for unlaid type, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_layout_enum_variant_overlap_within_variant_detected() {
+        // Within a single enum variant, fields must NOT overlap.  The
+        // legitimate "overlap" between *different* variants of the
+        // same enum is handled by the parent Parts::Enum arm walking
+        // each variant separately, so it never compares across them.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let enum_tp = s.enumerate("E");
+        let var_tp = s.structure("E_Variant", 1);
+        s.field(var_tp, "a", int_c);
+        s.field(var_tp, "b", int_c);
+        s.types[var_tp as usize].parents.insert(enum_tp);
+        s.enum_value(enum_tp, "Variant", var_tp);
+        s.finish();
+        // Force the two fields inside the variant to overlap.
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &mut s.types[var_tp as usize].parts
+        {
+            fields[0].position = 0;
+            fields[1].position = 0;
+        }
+        let issues = s.validate_layout("E_Variant");
+        assert!(
+            issues.iter().any(|i| i.contains("overlap")),
+            "expected within-variant overlap issue, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn debug_layout_index_includes_bookkeeping_fields() {
+        let mut s = Stores::new();
+        score_struct(&mut s);
+        let score_tp = s.name("Score");
+        s.index(score_tp, &[("name".to_string(), true)]);
+        s.finish();
+        let dump = s.debug_layout("Score");
+        assert!(dump.contains("#left_1"), "missing #left_1 in: {dump}");
+        assert!(dump.contains("#right_1"), "missing #right_1 in: {dump}");
+        assert!(dump.contains("#color_1"), "missing #color_1 in: {dump}");
+    }
+
+    #[test]
+    fn validate_layout_default_constructed_field_compiles() {
+        // Construct a Field directly via struct literal — guards
+        // against future reorderings that would break test setup.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Manual", 0);
+        if let Parts::Struct(f) = &mut s.types[tp as usize].parts {
+            f.push(Field {
+                name: "x".to_string(),
+                content: int_c,
+                position: 0,
+                default: Content::Long(0),
+                other_indexes: Vec::new(),
+            });
+        }
+        s.finish();
+        let issues = s.validate_layout("Manual");
+        assert!(
+            issues.is_empty(),
+            "expected no issues for Manual struct, got: {issues:?}"
+        );
     }
 }

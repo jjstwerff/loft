@@ -268,6 +268,62 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             fill_database(data, database, d_nr);
         }
     }
+    // P191 — pre-register database types for local-var keyed
+    // collections (index/hash/spacial) so their bookkeeping fields
+    // get appended to the content struct BEFORE database.finish()
+    // runs finish_type to assign positions.
+    //
+    // Only Index appends bookkeeping fields (#left/#right/#color)
+    // to the content struct; Hash/Spacial just create an entry in
+    // self.types without struct mutation.  But registering all three
+    // here keeps the codepath uniform with what gen_set_first_keyed_null
+    // would do later — and is idempotent (database.{index,hash,spacial}
+    // dedup on name).
+    //
+    // Sorted is NOT in this loop — sorted doesn't append bookkeeping
+    // fields, and P190's on-demand registration in get_type already
+    // handles it.  Adding Sorted here would be a no-op anyway.
+    //
+    // **Critical timing**: this runs at the end of fill_all, which
+    // runs at the end of EACH parse_file call.  At end of first-pass
+    // parse_file, function variables are populated by parse_code (line
+    // 804 of definitions.rs, called in both passes).  So the registration
+    // happens BEFORE second-pass body parsing, which means
+    // database.position() lookups during second-pass IR construction
+    // see the post-bookkeeping struct layout.  Without this timing,
+    // bookkeeping fields appended later (by gen_set_first_keyed_null
+    // at codegen) stay at position 0 because finish_type only runs
+    // for types with size == u16::MAX.
+    for d_nr in start_def..data.definitions() {
+        if !matches!(data.def_type(d_nr), DefType::Function) {
+            continue;
+        }
+        let var_count = data.def(d_nr).variables.count();
+        for v in 0..var_count {
+            let tp = data.def(d_nr).variables.tp(v).clone();
+            match tp {
+                Type::Hash(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.hash(c_tp, &key);
+                    }
+                }
+                Type::Index(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.index(c_tp, &key);
+                    }
+                }
+                Type::Spacial(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.spacial(c_tp, &key);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Check if struct `d_nr` contains itself as a value type (not reference) field,
