@@ -967,8 +967,18 @@ impl Scopes {
             if matches!(function.tp(v), Type::Text(_)) {
                 ls.push(call("OpFreeText", v, data));
             }
-            if let Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) =
-                function.tp(v)
+            // P193: include keyed collections (Sorted/Hash/Index/Spacial)
+            // — `gen_set_first_keyed_null` allocates a fresh store via
+            // `OpDatabase` for each local-var keyed collection, so each
+            // needs scope-exit `OpFreeRef`.  Without this they leak as
+            // "Stores not freed at program exit".
+            if let Type::Reference(_, dep)
+            | Type::Vector(_, dep)
+            | Type::Enum(_, true, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep) = function.tp(v)
             {
                 // check both the block result type (tp) and the function's
                 // declared return type.  When a closure escapes via implicit return,

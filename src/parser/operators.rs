@@ -136,6 +136,65 @@ impl Parser {
         }
     }
 
+    /// P193: eager init for `local: keyed_collection<T[key]> = []`.
+    ///
+    /// Without this, the empty `[]` literal parses to `Value::Insert(empty)`
+    /// which doesn't match either the `Set(v, Value::Null)` arm of
+    /// codegen (which would call `gen_set_first_keyed_null`) nor the
+    /// vector-style `create_vector` rewrite.  The variable then has no
+    /// init bytecode emitted: subsequent reads hit u16::MAX slot, and
+    /// when the FIRST WRITE is inside a loop body the lazy init runs
+    /// once per iteration — every iteration zeros the collection's
+    /// root pointer.  Symptom: `for i in 0..N { ix += ... }` over a
+    /// local-var keyed collection leaves `len(ix) == 1`.
+    ///
+    /// Fix: rewrite `Set(v, Insert(empty))` to `Set(v, Null)` for
+    /// keyed-collection types and op == "=", so the standard codegen
+    /// path emits `gen_set_first_keyed_null` at the declaration site
+    /// (outside any loop body).
+    ///
+    /// Returns true when the rewrite happened so the caller short-
+    /// circuits the rest of the assign pipeline.
+    pub(crate) fn create_keyed(
+        &mut self,
+        code: &mut Value,
+        f_type: &Type,
+        op: &str,
+        var_nr: u16,
+    ) -> bool {
+        if op != "="
+            || var_nr == u16::MAX
+            || !matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
+            return false;
+        }
+        let is_empty_insert = matches!(code, Value::Insert(ls) if ls.is_empty());
+        if !is_empty_insert {
+            return false;
+        }
+        if !self.first_pass && self.vars.is_const_param(var_nr) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot modify {} '{}'; remove 'const' or use a local copy",
+                self.vars.const_kind(var_nr),
+                self.vars.name(var_nr)
+            );
+        }
+        // Codegen's Set(v, Null) arm matches keyed types and dispatches
+        // to gen_set_first_keyed_null — emits OpInitRef + OpDatabase
+        // for the slot, anchored at the declaration's statement
+        // position (NOT inside any enclosing loop body).
+        *code = Value::Null;
+        true
+    }
+
     /// Check whether `val` is a call to a user-defined function that returns a struct
     /// via a temporary store.  Used by `copy_ref` to decide whether to free the source
     /// store after the deep copy.  The free bit is suppressed under WASM,

@@ -452,13 +452,21 @@ pub enum Type {
 
 impl Type {
     /// Returns the dep list if this is a heap-allocated, store-backed type
-    /// (Reference, Vector, or struct-enum with is_ref=true).
-    /// Use this instead of manual pattern matches on Reference/Vector/Enum
-    /// to avoid forgetting the Enum arm.
+    /// (Reference, Vector, struct-enum with is_ref=true, or any keyed
+    /// collection: Sorted/Hash/Index/Spacial — each `gen_set_first_keyed_null`
+    /// allocates a fresh store via `OpDatabase` that needs scope-exit
+    /// `OpFreeRef` cleanup).
+    /// Use this instead of manual pattern matches to avoid forgetting an arm.
     #[must_use]
     pub fn heap_dep(&self) -> Option<&Vec<u16>> {
         match self {
-            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => Some(dep),
+            Type::Reference(_, dep)
+            | Type::Vector(_, dep)
+            | Type::Enum(_, true, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep) => Some(dep),
             _ => None,
         }
     }

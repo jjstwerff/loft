@@ -567,7 +567,17 @@ impl Stores {
         visited: &mut std::collections::HashSet<u16>,
         issues: &mut Vec<String>,
     ) {
-        if tp == u16::MAX || (tp as usize) >= self.types.len() {
+        // u16::MAX is the canonical "unresolved type" sentinel — it
+        // appears on field.content during parser-recovery paths
+        // (e.g. an unknown type referenced from a struct field, or
+        // a `Type::Unknown(0)` that propagated into a database
+        // field).  Silently skip; the underlying parse error has
+        // already been reported.  Only flag IDs that are positive
+        // but past the end of the registry — that's a real bug.
+        if tp == u16::MAX {
+            return;
+        }
+        if (tp as usize) >= self.types.len() {
             issues.push(format!("type id {tp} out of range"));
             return;
         }
@@ -1625,6 +1635,33 @@ mod layout_tests {
         let s = Stores::new();
         let issues = s.validate_layout("DoesNotExist");
         assert_eq!(issues, vec!["(unknown type: DoesNotExist)".to_string()]);
+    }
+
+    #[test]
+    fn validate_layout_by_nr_silently_skips_u16_max() {
+        // `field.content == u16::MAX` happens during parser-recovery
+        // (unresolved field type) — the underlying parse error is
+        // already reported, so validation must NOT add noise on top.
+        let s = Stores::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut issues = Vec::new();
+        s.validate_layout_by_nr(u16::MAX, &mut visited, &mut issues);
+        assert!(issues.is_empty(), "expected no issues, got: {issues:?}");
+    }
+
+    #[test]
+    fn validate_layout_by_nr_flags_real_out_of_range() {
+        // A type id past the end of the registry IS a real bug —
+        // surface it.
+        let s = Stores::new();
+        let max = s.types.len() as u16;
+        let mut visited = std::collections::HashSet::new();
+        let mut issues = Vec::new();
+        s.validate_layout_by_nr(max, &mut visited, &mut issues);
+        assert!(
+            issues.iter().any(|i| i.contains("out of range")),
+            "expected out-of-range issue, got: {issues:?}"
+        );
     }
 
     #[test]

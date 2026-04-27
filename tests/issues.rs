@@ -10355,6 +10355,151 @@ fn test() {
     .result(Value::Null);
 }
 
+/// P189b — `vector<(T1, T2, …)>` index access used to return
+/// garbage because `OpGetVector` returns a 12-byte `DbRef` to the
+/// inline tuple bytes but `OpTupleGet` reads from the local slot
+/// directly (assuming inline-on-stack representation).  Result:
+/// `pairs[0].0` decoded the DbRef bytes (`store_nr | (rec << 32)`)
+/// as `i64`, producing `21474836482` instead of `1` for `(1, 10)`.
+///
+/// Fix: when index/iter access on `vector<(T1, T2, …)>` produces a
+/// DbRef, `unbox_tuple_from_dbref` (in `parser/fields.rs`) wraps
+/// the DbRef in a fresh work-ref and emits per-element loads via
+/// `get_val` (`OpGetInt` / `OpGetText` / etc.) into a
+/// `Value::Tuple` so the assignment target receives the proper
+/// stack-tuple representation.  Same helper handles text elements
+/// correctly because `OpGetText` inflates the 4-byte heap pointer
+/// to the 16-byte stack `Str`.
+///
+/// **Out of scope for this fix:** for-loop iteration `for p in pairs`
+/// — the iteration's break-check (`if OpNot(loop_var) { break }`)
+/// requires the loop var to be a DbRef so the null-sentinel works.
+/// Wrapping the loop var as `RefVar(Tuple)` would propagate the
+/// DbRef cleanly but `gen_set_first_at_tos` doesn't yet know how
+/// to allocate a RefVar(Tuple) slot.  Use index access (`pairs[i].0`)
+/// as a workaround until that codegen lands.
+#[test]
+fn p189b_vector_tuple_index_access() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    p = pairs[1];
+    assert(p.0 == 2, \"p.0={p.0}, expected 2\");
+    assert(p.1 == 20, \"p.1={p.1}, expected 20\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p189b_vector_tuple_int_text_index_access() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    p = pairs[2];
+    assert(p.0 == 3, \"p.0={p.0}, expected 3\");
+    assert(len(p.1) == 5, \"len(p.1)={len(p.1)}, expected 5\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P193 — eager init for `local: keyed_collection<T> = []`.
+///
+/// Without the fix, the empty `[]` literal parses to
+/// `Value::Insert(empty)` which doesn't match codegen's
+/// `Set(v, Null) → gen_set_first_keyed_null` arm — so the var
+/// gets no init bytecode.  Lazy init then fires on first WRITE,
+/// inside any enclosing loop body, re-allocating the data store
+/// per iteration and overwriting the root pointer.  Symptom:
+/// `for i in 0..N { ix += Score{id:i, value:i}; }` left
+/// `len(ix) == 1` (only the last add) and leaked N stores.
+///
+/// Fix path:
+/// - `parser/operators.rs::create_keyed` rewrites `Set(v, Insert([]))`
+///   to `Set(v, Null)` for keyed-collection types so codegen's
+///   gen_set_first_keyed_null fires at the declaration site.
+/// - `data.rs::heap_dep` and `scopes.rs::get_free_vars` now
+///   recognise Sorted/Hash/Index/Spacial as heap-owned, so
+///   scope-exit `OpFreeRef` is emitted (no more "stores not
+///   freed" warnings on program exit).
+#[test]
+fn p193_local_var_index_init_then_loop_add() {
+    code!(
+        "struct P193aScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P193aScore[id]> = [];
+    for i in 0..10 { ix += P193aScore { id: i, value: i }; }
+    assert(len(ix) == 10, \"len={len(ix)}, expected 10\");
+    sum = 0;
+    for s in ix { sum += s.value; }
+    assert(sum == 45, \"sum={sum}, expected 45\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p193_local_var_hash_init_then_loop_add() {
+    code!(
+        "struct P193bScore { id: integer not null, value: integer }
+fn test() {
+    h: hash<P193bScore[id]> = [];
+    for i in 0..10 { h += P193bScore { id: i, value: i }; }
+    assert(len(h) == 10, \"len={len(h)}, expected 10\");
+    sum = 0;
+    for s in h { sum += s.value; }
+    assert(sum == 45, \"sum={sum}, expected 45\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p193_local_var_index_read_before_write() {
+    // Reading the collection BEFORE any write used to panic with
+    // "Incorrect var ix[65535] versus N" because the init never
+    // emitted.  With eager init, len() returns 0 immediately.
+    code!(
+        "struct P193cScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P193cScore[id]> = [];
+    assert(len(ix) == 0, \"empty len={len(ix)}, expected 0\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Scale test for the P188 += keyed-collection fix when the adds
+/// happen OUTSIDE a loop and iteration runs over the result.  The
+/// 3-element test above proves dispatch correctness; this test
+/// proves the RB tree rebalance + iteration sequence hold for many
+/// inserts (sum 0..49 = 1225).  After P193 closed eager init, the
+/// loop-form scale test is also covered (`p193_local_var_index_init_then_loop_add`).
+#[test]
+fn p188_local_var_index_scale_50_elements_unrolled() {
+    let mut body = String::from(
+        "struct P188eScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P188eScore[id]> = [];\n",
+    );
+    for i in 0..50 {
+        body.push_str(&format!(
+            "    ix += P188eScore {{ id: {i}, value: {i} }};\n"
+        ));
+    }
+    body.push_str(
+        "    assert(len(ix) == 50, \"len={len(ix)}, expected 50\");
+    sum = 0;
+    n = 0;
+    for s in ix { sum += s.value; n += 1; }
+    assert(n == 50, \"iter count={n}, expected 50\");
+    assert(sum == 1225, \"sum={sum}, expected 1225\");
+}",
+    );
+    code!(&body).result(Value::Null);
+}
+
 /// P192 — `len()` was missing for `hash<T[key]>` and
 /// `index<T[key]>` collections.  Only `vector` and `sorted` had
 /// overloads.  Fix: added `OpLengthHash` (walks the bucket array

@@ -1027,7 +1027,8 @@ impl Parser {
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else if name == "len"
-            && !types.is_empty()
+            && types.len() == 1
+            && named_args.is_empty()
             && matches!(types[0], Type::Index(_, _, _))
         {
             // P192: `len(ix)` for `ix: index<T[key]>`.  Dispatched
@@ -1035,6 +1036,12 @@ impl Parser {
             // helper `tree::count` needs the per-record bookkeeping
             // byte offset, which is `database.fields(tp)` — only
             // computable at parse time once the type is registered.
+            //
+            // Strict arity / named-arg gates: `len(ix, x)` or
+            // `len(ix, key: 1)` should NOT route here — they would
+            // fall through standard dispatch to the existing
+            // `Unknown function len` error message which lists the
+            // method-style alternative.
             let known = self.get_type(&types[0]);
             let op_d_nr = self.data.def_nr("OpLengthIndex");
             if known != u16::MAX && op_d_nr != u32::MAX {
@@ -1044,7 +1051,9 @@ impl Parser {
                 *code = Value::Call(op_d_nr, args);
                 return crate::data::I64.clone();
             }
-            // Fall through to error path if op or type not registered.
+            // Type or op not registered — drop to the standard
+            // error path so the user sees the same diagnostic shape
+            // they get for any other unresolved `len()` call.
             diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
             Type::Unknown(0)
         } else {

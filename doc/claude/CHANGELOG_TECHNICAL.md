@@ -302,6 +302,38 @@ walker registrations.
 hash and index `+=` (each asserts both `len` and the
 iteration sum).
 
+### P193 — eager init for `local: keyed_collection<T> = []`
+
+`gen_set_first_keyed_null` (P188's local-var alloc) fired
+lazily on first WRITE.  When that first write was inside a
+`for` loop body, the OpInitRef + OpDatabase init bytecode
+landed inside the loop body — every iteration zeroed the
+collection's root pointer.  Symptom:
+`for i in 0..N { ix += ... }` over a local-var keyed
+collection left `len(ix) == 1` (only the last add) and leaked
+N stores.  Reading the collection BEFORE any write also
+panicked with `Incorrect var ix[65535] versus N`.
+
+Two fixes in concert:
+
+1. **Eager init via parser rewrite** (`parser/operators.rs::create_keyed`).
+   When the parser sees `Set(v, Insert(empty))` for a
+   keyed-collection local, rewrite to `Set(v, Null)` so
+   codegen's existing `gen_set_first_keyed_null` arm fires at
+   the declaration's statement position (outside any
+   enclosing loop body).
+
+2. **Scope-exit free** (`data.rs::heap_dep` and
+   `scopes.rs::get_free_vars`).  Recognise Sorted / Hash /
+   Index / Spacial as heap-owned (they each get a fresh
+   OpDatabase store on init), so the scope-exit OpFreeRef
+   pass emits cleanup for them.  Without this the store
+   leaked on program exit ("Stores not freed at program exit:
+   N(bc:M)").
+
+3 new P193 regression tests cover loop-form add (index +
+hash) and read-before-write.
+
 ### Plan-06 phase 4d.B hash + index — closed by P191/P192/P188
 
 `par_hash_input_t4` and `par_index_input_t4` un-`#[ignore]`d

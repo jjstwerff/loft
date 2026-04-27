@@ -698,6 +698,20 @@ use a separate collection or add after the loop"
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
+        // P193: rewrite `local: keyed_collection<T> = []` to
+        // `Set(v, Null)` so codegen's gen_set_first_keyed_null fires
+        // at the declaration site (not lazily on first write).
+        // Falls through to the standard assign path which emits
+        // Set(v, code) — codegen then takes the Null arm.
+        if var_nr != u16::MAX
+            && !self.first_pass
+            && self.create_keyed(code, f_type, op, var_nr)
+        {
+            // Don't return here — let the standard pipeline emit
+            // Set(v, Null) so codegen sees it.  No further special-
+            // case handling needed: the rest of the pipeline tolerates
+            // `code == Value::Null`.
+        }
         // vector-typed field whole-replacement.
         // `s.v = fresh` (RHS is a vector variable/expr) used to silently drop
         // the assignment because towards_set's vector branch returned bare

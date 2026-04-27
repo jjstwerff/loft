@@ -128,6 +128,10 @@ impl Parser {
                         // which looked up `def(integer).returned` and lost
                         // the forced_size → emitted `OpGetInt` (8 bytes)
                         // into a 2-byte slot, producing off-bytes reads.
+                        // P189b note: vector-of-tuple `for p in pairs`
+                        // still hits the "Field access not supported"
+                        // error here — see PROBLEMS.md P189b — index
+                        // access via `pairs[i].0` works.
                         ref_expr = self.get_val(vtp, false, 0, ref_expr, u32::MAX);
                     }
                     let mut tp = *vtp.clone();
