@@ -44,6 +44,7 @@ mod fill;
 mod formatter;
 mod generation;
 mod hash;
+mod introspect;
 mod json;
 mod keys;
 mod lexer;
@@ -1157,6 +1158,18 @@ fn main() {
     let mut native_wasm: Option<String> = None;
     let mut html_out: Option<String> = None;
     let mut tests_dir: Option<String> = None;
+    // Plan-08 phase 01: --introspect mode collects per-section
+    // selectors, output paths, and filters into one Options bundle.
+    // The flag itself only toggles the mode; sub-flags accumulate
+    // into `introspect_opts` and are flushed into a real
+    // `introspect::Options` after argv parsing.
+    let mut introspect_mode = false;
+    let mut introspect_sections: Vec<crate::introspect::Section> = Vec::new();
+    let mut introspect_bytecode_out: Option<String> = None;
+    let mut introspect_rust_out: Option<String> = None;
+    let mut introspect_slots_out: Option<String> = None;
+    let mut introspect_fn_filter: Vec<String> = Vec::new();
+    let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
     let mut check_only = false;
@@ -1236,6 +1249,35 @@ fn main() {
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
+        } else if a == "--introspect" {
+            // Plan-08 phase 01: introspection mode.  Default = emit
+            // bytecode + Rust + slots to stdout.  Sub-flags below
+            // narrow the section list, redirect per-section output
+            // to files, and filter by function name.
+            introspect_mode = true;
+            native_mode = false;
+        } else if a == "--show-bytecode" {
+            introspect_sections.push(crate::introspect::Section::Bytecode);
+        } else if a == "--show-rust" {
+            introspect_sections.push(crate::introspect::Section::Rust);
+        } else if a == "--show-slots" {
+            introspect_sections.push(crate::introspect::Section::Slots);
+        } else if a == "--bytecode-out" {
+            introspect_bytecode_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--rust-out" {
+            introspect_rust_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--slots-out" {
+            introspect_slots_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--fn" {
+            if let Some(name) = argv.get(i) {
+                introspect_fn_filter.push(name.clone());
+                i += 1;
+            }
+        } else if a == "--all-fns" {
+            introspect_all_fns = true;
         } else if a == "--native" {
             native_mode = true;
         } else if a == "--native-release" {
@@ -2261,6 +2303,26 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
     let main_nr = p.data.def_nr("n_main");
+    // Plan-08 phase 01: --introspect short-circuits everything.
+    // Bypass execution; emit bytecode + Rust + slots and exit.
+    if introspect_mode {
+        let opts = crate::introspect::Options {
+            sections: introspect_sections.clone(),
+            bytecode_out: introspect_bytecode_out.clone(),
+            rust_out: introspect_rust_out.clone(),
+            slots_out: introspect_slots_out.clone(),
+            fn_filter: introspect_fn_filter.clone(),
+            all_fns: introspect_all_fns,
+            lib_dirs: Vec::new(),
+            install_dir: String::new(),
+        };
+        let end_def = p.data.definitions();
+        if let Err(e) = crate::introspect::emit_all(&mut p.data, &mut state, end_def, &opts) {
+            eprintln!("loft: introspect failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if main_nr == u32::MAX && !dump_only {
         // No main() — wrap each zero-parameter user function in a synthetic
         // main() that calls it. This ensures proper scope cleanup: stores
