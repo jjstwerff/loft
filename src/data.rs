@@ -380,6 +380,34 @@ impl Value {
         }
         false
     }
+
+    /// Plan-07 phase 1 — wrap a fault-prone IR construction with its
+    /// source position.  Walkers see `Span(box (pos, inner))` and
+    /// recurse into `inner` while remembering `pos` as the
+    /// `current_span` for any diagnostic raised inside.  Codegen
+    /// records the entry pc → pos mapping in `Definition.source_spans`
+    /// (phase-1 step 1.D), which phase 3's pc→span table consumes.
+    ///
+    /// Caller must capture `pos` from the lexer at the *exact* token
+    /// the diagnostic should point to (e.g. the `/` of a binary
+    /// division), not at whatever the lexer drifted to while parsing
+    /// the inner construct.
+    #[must_use]
+    pub fn with_span(pos: Position, inner: Value) -> Value {
+        Value::Span(Box::new((pos, inner)))
+    }
+
+    /// Read a `Value::Span`'s `Position`.  Returns `None` for any
+    /// other variant.  Convenience for codegen / renderer that asks
+    /// "what's the span of the IR node I'm about to lower?".
+    #[must_use]
+    pub fn span_pos(&self) -> Option<&Position> {
+        if let Value::Span(b) = self {
+            Some(&b.0)
+        } else {
+            None
+        }
+    }
 }
 
 #[must_use]
