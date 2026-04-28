@@ -5,13 +5,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 01 — Introspection CLI
 
-**Status: open.**
+**Status: shipped.** First cut landed; extended 2026-04-28 with a
+fourth `--show-types` section + path-aware default-stdlib filter.
 
 ## Goal
 
 A `loft introspect <file>` (or `loft --introspect <file>`) entry
 that emits **bytecode disassembly + generated Rust + variable slot
-tables** for any loft program, packaged in one CLI surface.
+tables + per-fn type/dep tables** for any loft program, packaged in
+one CLI surface.
 
 Today these dumps are reachable via `LOFT_LOG=…` env variants
 writing to `tests/dumps/*.txt`, scattered single-purpose flags
@@ -51,13 +53,39 @@ fn n_test:
 ### Per-flag selection
 
 ```
-$ loft introspect --bytecode myprogram.loft     # bytecode only
-$ loft introspect --rust myprogram.loft          # Rust only (== --native-emit to stdout)
-$ loft introspect --slots myprogram.loft         # slot tables only
+$ loft --introspect --show-bytecode myprogram.loft   # bytecode only
+$ loft --introspect --show-rust     myprogram.loft   # Rust only
+$ loft --introspect --show-slots    myprogram.loft   # slot tables only
+$ loft --introspect --show-types    myprogram.loft   # per-fn type+deps
 ```
 
 When more than one is set, the output sections appear in fixed
-order: `bytecode`, `rust`, `slots`.
+order: `bytecode`, `rust`, `slots`, `types`.
+
+### `--show-types`: per-function type + dependency table
+
+Output shape:
+
+```
+fn n_first -> text["a"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0         a                        ref(A)
+  1    arg  s                        &text
+```
+
+Each variable's `Type` is rendered through `Type::show(data, vars)`,
+which appends a `[dep_var, …]` suffix for types that carry lifetime
+dependencies (`Text`, `Reference`, `Vector`, `Hash`, `Index`,
+`Sorted`, `Spacial`, `Function`, `Tuple`).  Designed to surface
+dep-propagation bugs at a glance: a variable that should carry a
+host dep but reads as `text` (no `[host]` suffix) is the dep-tracking
+analogue of an uninitialised slot.
+
+The function header includes the return type so callers can spot a
+function that returns `text` without the host dep — exactly the
+shape that produced P197 (a `text` element returned from a tuple
+struct field, lifetime not extended through the host record).
 
 ### Function filter
 

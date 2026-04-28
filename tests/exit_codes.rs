@@ -534,3 +534,47 @@ fn p166_content_on_text_file_no_warning() {
         "text file should not trigger the P166 warning; got stderr={stderr:?}"
     );
 }
+
+/// Plan-08 phase 01 — `--introspect --show-types` emits a per-fn
+/// type table where `Type::show()` includes dependency suffixes
+/// (e.g. `text["a"]`).  Designed to surface dep-tracking bugs at a
+/// glance; the post-P197 fix means a tuple-element text returned
+/// from a struct field carries the host as a dep.  This test pins
+/// the visible `text["a"]` annotation so any regression in dep
+/// propagation through `Type::Tuple` shows up here too.
+#[test]
+fn introspect_show_types_renders_deps() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_introspect_types_demo.loft");
+    let script = "struct A { v: (text, text) }\n\
+                  fn first() -> text {\n  \
+                      a = A { v: (\"hello\", \"world\") };\n  \
+                      a.v.0\n\
+                  }\n\
+                  fn main() { println(\"{first()}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    assert!(
+        stdout.contains("=== types ==="),
+        "expected types section header; got {stdout}"
+    );
+    // The fix for P197 propagates the host (`a`) as a dep through
+    // tuple-element text reads to the function's return type.
+    // If this assertion fails, the dep propagation in
+    // `Type::depending` / `parse_part` regressed.
+    assert!(
+        stdout.contains("n_first -> text[\"a\"]"),
+        "expected `n_first -> text[\"a\"]` (P197 dep propagation); got {stdout}"
+    );
+}

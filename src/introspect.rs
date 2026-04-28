@@ -25,13 +25,17 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-/// Section selector — mirrors the three things the introspection
+/// Section selector — mirrors the four things the introspection
 /// tool can emit, in canonical order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Bytecode,
     Rust,
     Slots,
+    /// Per-function variable types with dependency tracking — useful
+    /// for diagnosing lifetime / dep-propagation bugs (e.g. P197
+    /// where `s: text` should have read `s: text[a]`).
+    Types,
 }
 
 /// Options for `loft --introspect`.
@@ -45,6 +49,7 @@ pub struct Options {
     pub bytecode_out: Option<String>,
     pub rust_out: Option<String>,
     pub slots_out: Option<String>,
+    pub types_out: Option<String>,
     /// Restrict every section to functions whose name matches one of
     /// these strings (substring match, like `LOFT_LOG=fn:<name>`).
     /// Empty = include all user functions (filtered further by
@@ -70,6 +75,7 @@ impl Options {
             bytecode_out: None,
             rust_out: None,
             slots_out: None,
+            types_out: None,
             fn_filter: Vec::new(),
             all_fns: false,
             lib_dirs: Vec::new(),
@@ -175,6 +181,14 @@ pub fn emit_all(
         }
         emit_slots(&mut writer, data, end_def, opts)?;
     }
+    if opts.includes(Section::Types) {
+        let mut writer: Box<dyn Write> = make_writer(opts.types_out.as_deref(), &stdout)?;
+        if opts.types_out.is_none() {
+            writeln!(writer)?;
+            writeln!(writer, "=== types ===")?;
+        }
+        emit_types(&mut writer, data, end_def, opts)?;
+    }
     Ok(())
 }
 
@@ -249,7 +263,7 @@ fn emit_slots(
         if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
             continue;
         }
-        if !opts.all_fns && def.position.file.starts_with("default/") {
+        if !opts.all_fns && is_default_lib_path(&def.position.file) {
             continue;
         }
         if !opts.fn_filter.is_empty()
@@ -260,10 +274,80 @@ fn emit_slots(
         {
             continue;
         }
+        if def.variables.count() == 0 {
+            continue;
+        }
         writeln!(w, "fn {}:", def.name)?;
         variables::dump_variables(w, &def.variables, data)
             .map_err(|e| std::io::Error::other(format!("dump_variables: {e}")))?;
         writeln!(w)?;
     }
     Ok(())
+}
+
+/// Per-function variable types with dependency tracking.
+///
+/// Each variable's full `Type` is rendered via `Type::show(data, vars)`,
+/// which includes the `[dep_var, …]` suffix for types that carry
+/// lifetime dependencies (`Text`, `Reference`, `Vector`, `Hash`,
+/// etc.).  Designed to surface dep-propagation bugs at a glance —
+/// e.g. P197 showed `s: text` (no deps) for a tuple-element text
+/// read that should have inherited the host's `[a]` dependency.
+fn emit_types(
+    w: &mut dyn Write,
+    data: &Data,
+    end_def: u32,
+    opts: &Options,
+) -> std::io::Result<()> {
+    for d_nr in 0..end_def {
+        let def = data.def(d_nr);
+        if def.def_type != DefType::Function {
+            continue;
+        }
+        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+            continue;
+        }
+        if !opts.all_fns && is_default_lib_path(&def.position.file) {
+            continue;
+        }
+        if !opts.fn_filter.is_empty()
+            && !opts
+                .fn_filter
+                .iter()
+                .any(|f| def.name == *f || def.name == format!("n_{f}") || def.name.contains(f))
+        {
+            continue;
+        }
+        // Skip empty native-only fns (no user variables), which clutter
+        // the output without adding signal.
+        if def.variables.count() == 0 {
+            continue;
+        }
+        let ret_str = def.returned.show(data, &def.variables);
+        writeln!(w, "fn {} -> {ret_str}:", def.name)?;
+        writeln!(w, "  {:<4} {:<4} {:<24} {}", "#", "arg", "name", "type [deps]")?;
+        writeln!(w, "  {}", "-".repeat(70))?;
+        for idx in 0..def.variables.count() {
+            let arg_flag = if def.variables.is_argument(idx) {
+                "arg"
+            } else {
+                ""
+            };
+            let var_name = def.variables.name(idx).to_string();
+            let type_str = def.variables.tp(idx).show(data, &def.variables);
+            writeln!(
+                w,
+                "  {idx:<4} {arg_flag:<4} {var_name:<24} {type_str}"
+            )?;
+        }
+        writeln!(w)?;
+    }
+    Ok(())
+}
+
+/// True if `file` is inside the `default/` standard library directory.
+/// Handles both relative (`default/01_code.loft`) and absolute
+/// (`/abs/path/default/01_code.loft`) paths.
+fn is_default_lib_path(file: &str) -> bool {
+    file.starts_with("default/") || file.contains("/default/")
 }

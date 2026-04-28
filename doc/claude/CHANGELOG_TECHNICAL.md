@@ -9,6 +9,82 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### P194 — tuple-typed struct field reassignment
+
+`p.v = (1, 2)` (where `v` is a tuple-typed struct field) used to
+fail with `Tuple destructuring requires plain variable names`.
+Root cause: `get_val::Type::Tuple` returns `Value::Tuple([reads])`
+for a tuple field read, and the parser's destructuring branch
+matched any `Value::Tuple` LHS unconditionally.  Fix: detect
+"tuple of OpGet*-style reads (not all `Value::Var`) on a
+`Type::Tuple` LHS" in `parse_assign` and route through
+`emit_tuple_set_ops` instead of the destructuring branch.
+
+- New helper `leaf_tuple_lhs` walks the leftmost leaf of the
+  tuple-of-reads to recover `(host_ref, base_position)`; nested
+  tuple elements recurse cleanly.
+- `emit_tuple_set_ops` lifted to `pub(crate)` so the new branch in
+  `parse_assign` can call it.
+
+Tests: `p194_tuple_field_reassign`,
+`p194_tuple_field_reassign_twice` in `tests/issues.rs`.
+
+### P197 — returning `text` from tuple struct field corrupts memory
+
+Surfaced while regression-testing P194.  Returning a `text` element
+extracted from a tuple struct field returned garbage characters
+(`.0`) or hard-crashed (`.1`, `.2`) with `ptr::copy_nonoverlapping
+requires that both pointer arguments are aligned and non-null`.
+Construction + read-via-print worked; only the function-return
+path failed.
+
+Root cause was two-part — both fixed in the same commit:
+
+1. **`Type::Tuple` had no dep field**, so calling
+   `.depending(host)` on a struct field's tuple type fell into the
+   `_ => self.clone()` arm at `data.rs:580` and lost the host
+   dependency entirely.  Fix: `depending` now recurses into tuple
+   elements (each text/reference inside the tuple gets the host
+   dep), and `depend()` returns the union of element deps.
+2. **Native codegen materialised the tuple into a `(String,
+   String)` work-var temp**, then borrowed `&temp.0` past its
+   drop — `rustc` rejected with "borrowed value does not live long
+   enough".  Fix: when `code` is already a literal `Value::Tuple`,
+   `parse_part`'s tuple-index branch returns the indexed read
+   directly instead of allocating the work-var temp.
+
+Tests: `p197_text_returned_from_tuple_field`,
+`p197_text_returned_from_tuple_field_index_one`,
+`p197_text_returned_from_mixed_tuple_field` in `tests/issues.rs`.
+
+### Plan-06 phase 4d.C step 2 — `Parts::DbRef` storage shape + new opcodes
+
+Foundation pieces for closure storage in fn-ref struct fields and
+tuple elements.  No user-visible behaviour change yet — the
+parser still emits the truncated 4-byte `OpSetInt4` path, which
+phase 4d.C step 4 will replace with the new opcodes.
+
+**Database:**
+
+- New `Parts::DbRef` variant in `src/database/mod.rs` — 12-byte
+  raw `DbRef` storage cell (`u32` store_nr + `u32` rec + `u32`
+  pos).  Match arms wired through `database/io.rs`,
+  `database/structures.rs`, `database/format.rs`, and
+  `database/search.rs`.  Non-collection operations panic;
+  debug-format renders as `DbRef(s,r,p)` or `null` (rec == 0).
+- `Stores::dbref()` registers a primitive type named `"dbref"`
+  with `Parts::DbRef` and size 12 (idempotent).
+
+**Opcodes (`default/01_code.loft`):**
+
+- `OpSetDbRef(v1: reference, fld: const u16, val: reference)` —
+  writes 3 × `set_u32_raw` words at `v1.pos + fld`.
+- `OpGetDbRef(v1: reference, fld: const u16) -> reference` —
+  reads 3 × `get_u32_raw` words and assembles a `DbRef`.
+- OPERATORS array in `src/fill.rs` grown 243 → 245.  Interpreter
+  dispatch fns `set_db_ref` / `get_db_ref` regenerated via
+  `cargo test regen_fill_rs -- --ignored`.
+
 ### Slot allocator & frame layout (plans 04 + 05)
 
 Two companion plans closed together; user-visible only as the
