@@ -194,6 +194,47 @@ LOFT_IR=distance LOFT_LOG=full loft myprog.loft 2>trace.txt
 
 ---
 
+## Fast iteration loop — `make iter`
+
+For day-to-day "fix one bug, run one test" cycles:
+
+```
+make iter TEST=p197                        # all p197* tests
+make iter TEST=p194 TFILE=issues           # only p194* in tests/issues.rs
+make iter TEST=introspect TFILE=exit_codes # only introspect* in tests/exit_codes.rs
+```
+
+`make iter` runs `cargo test --release` filtered to `$(TEST)`,
+optionally restricted to one test binary via `$(TFILE)`.  When
+nothing has changed since the last build, runs in **under 1
+second**.  After a parser/codegen edit, rebuild is the standard
+release cost (~25s).  Reuses the same cache as `make test` /
+`make ci`, so alternating between them adds no extra rebuild.
+
+Why not use the dev profile (5-10s build instead of 25s)?  The
+loft bytecode interpreter runs **~1800x slower in debug mode**
+(see `Makefile:152-154`), making the runtime cost much larger
+than the build savings.  Release stays mandatory for tests.
+
+### Optional: `mold` linker
+
+Linker time is a small fraction (~3s) of the 25s release
+rebuild — most cost is LLVM codegen, not linking.  Switching to
+`mold` saves ~1s in measurement here.  If you still want to opt
+in (e.g. for the rare big-link rebuild):
+
+```
+sudo apt install mold                                      # one-time
+cp .cargo/config.toml.example .cargo/config.toml           # opt in
+```
+
+This is a per-checkout opt-in (gitignored).  Removing the file
+reverts to the system linker.  Note: the global cargo cache is
+keyed on `RUSTFLAGS`, so toggling mold on/off forces a one-time
+rebuild.
+
+---
+
 ## Introspection CLI (`--introspect`)
 
 `loft --introspect <file>` packages the dump primitives behind one

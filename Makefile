@@ -26,6 +26,12 @@
 #   make all        Format source + build the native binary.
 #   make test       Full test suite (fmt + clippy + tests). ~1-2 minutes.
 #   make quick      Same tests without the clippy/fmt gate. Faster iteration.
+#   make iter TEST=<filter> [TFILE=<binary>]
+#                   Run only tests matching <filter> in release mode.
+#                   Reuses the standard release cache, so alternating
+#                   with `make test` / `make ci` triggers no extra
+#                   rebuild.  Streams output; expects a single bug or
+#                   feature under iteration, not a full sweep.
 #   make ci         Mirror of .github/workflows/ci.yml — fmt, clippy
 #                   (deny warnings), build --all-targets, build
 #                   --no-default-features, nextest run --profile ci.
@@ -156,6 +162,42 @@ test: clippy rebuild-native-cdylibs
 
 quick: rebuild-native-cdylibs
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
+
+# make iter TEST=<filter> [TFILE=<test_binary>]
+#
+# Fast single-test iteration loop.  Runs `cargo test --release` filtered to
+# tests matching $(TEST).  Avoids the full-suite cost (~1-2 minutes) when
+# you're iterating on one bug — when nothing has changed the rebuild is
+# skipped entirely (sub-second), and even after a parser/codegen edit the
+# rebuild reuses the same release cache as `make test` / `make ci`.
+#
+# Streams output to the terminal (no result.txt redirect).
+#
+# TFILE optionally restricts to one test binary — e.g. TFILE=issues skips
+# every other test crate's rebuild + run.  Without it, all test binaries
+# are rebuilt but only matching tests execute.
+#
+# Why not also add `mold`?  The release-build cost is dominated by LLVM
+# codegen, not linking; a `RUSTFLAGS=-C link-arg=-fuse-ld=mold` swap
+# saved <1s in measurement here AND forced a separate cargo cache (so
+# alternating between `make ci` and `make iter` would invalidate both).
+# Devs who still want mold globally can copy
+# `.cargo/config.toml.example` to `.cargo/config.toml`.
+#
+# Examples:
+#   make iter TEST=p197                        # all p197* tests across all binaries
+#   make iter TEST=p194 TFILE=issues           # only p194* in tests/issues.rs
+#   make iter TEST=introspect TFILE=exit_codes # only introspect* in tests/exit_codes.rs
+iter:
+	@if [ -z "$(TEST)" ]; then \
+		echo "Usage: make iter TEST=<filter> [TFILE=<test_binary>]"; \
+		echo "Examples:"; \
+		echo "  make iter TEST=p197"; \
+		echo "  make iter TEST=p194 TFILE=issues"; \
+		exit 1; \
+	fi
+	@TFILE_ARG=$$([ -n "$(TFILE)" ] && echo "--test $(TFILE)" || echo ""); \
+	RUST_BACKTRACE=1 cargo test --release $$TFILE_ARG -- $(TEST) --nocapture
 
 profile:
 	RUSTFLAGS=-g cargo build --release >result.txt 2>&1
