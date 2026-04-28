@@ -204,34 +204,56 @@ make iter TEST=p194 TFILE=issues           # only p194* in tests/issues.rs
 make iter TEST=introspect TFILE=exit_codes # only introspect* in tests/exit_codes.rs
 ```
 
-`make iter` runs `cargo test --release` filtered to `$(TEST)`,
-optionally restricted to one test binary via `$(TFILE)`.  When
-nothing has changed since the last build, runs in **under 1
-second**.  After a parser/codegen edit, rebuild is the standard
-release cost (~25s).  Reuses the same cache as `make test` /
-`make ci`, so alternating between them adds no extra rebuild.
+`make iter` runs `cargo test` filtered to `$(TEST)`, optionally
+restricted to one test binary via `$(TFILE)`.  Defaults to the
+**dev profile**, which is specifically tuned in `Cargo.toml`:
 
-Why not use the dev profile (5-10s build instead of 25s)?  The
-loft bytecode interpreter runs **~1800x slower in debug mode**
-(see `Makefile:152-154`), making the runtime cost much larger
-than the build savings.  Release stays mandatory for tests.
+- `[profile.dev]` `opt-level = 1` (basic inlining)
+- `[profile.dev.package.loft]` `debug-assertions = false`
+  (skips the hot-path `Store::addr` / `keys::store` guards that
+  add ~270x overhead to interpreter-heavy tests)
+
+Measured here:
+
+| Scenario | Dev profile | Release profile |
+|---|---|---|
+| Warm cache, no source change | ~0.3s | ~0.3s |
+| Single-file edit, incremental rebuild | **~2.4s** | ~26.8s |
+| Cold rebuild after `make clean` | ~30s | ~60s |
+
+For most edits, dev profile is **~11x faster** on the inner
+debug loop.  Tests that depend on release-only behaviour
+(parallel timing windows, perf assertions) take `PROFILE=release`:
+
+```
+make iter TEST=par_throughput PROFILE=release
+```
+
+Sharing cache with `make test` / `make ci` (both release) means
+switching profiles forces a one-time rebuild.  Within a single
+debugging session, pick one and stay on it.
+
+`make iter` cleans `tests/dumps/` and `tests/generated/` before
+running — they pin per-test codegen output, and stale fixtures
+across profile/test-set changes can produce bogus errors
+(e.g. `attempt to add with overflow` from u16::MAX placeholder
+positions).  This mirrors what `make test` already does.
 
 ### Optional: `mold` linker
 
-Linker time is a small fraction (~3s) of the 25s release
-rebuild — most cost is LLVM codegen, not linking.  Switching to
-`mold` saves ~1s in measurement here.  If you still want to opt
-in (e.g. for the rare big-link rebuild):
+Linker time is a small fraction of the rebuild — most cost is
+LLVM codegen, not linking.  Switching to `mold` saved <1s in
+measurement here.  If you still want to opt in (e.g. for the
+rare big-link rebuild):
 
 ```
 sudo apt install mold                                      # one-time
 cp .cargo/config.toml.example .cargo/config.toml           # opt in
 ```
 
-This is a per-checkout opt-in (gitignored).  Removing the file
-reverts to the system linker.  Note: the global cargo cache is
-keyed on `RUSTFLAGS`, so toggling mold on/off forces a one-time
-rebuild.
+Per-checkout opt-in (gitignored).  Removing the file reverts to
+the system linker.  Note: the global cargo cache is keyed on
+`RUSTFLAGS`, so toggling mold on/off forces a one-time rebuild.
 
 ---
 
