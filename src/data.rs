@@ -2243,6 +2243,80 @@ impl Data {
         d
     }
 
+    /// Plan-06 phase 4d.C step 1 — register the synthetic struct
+    /// definition that backs `Type::Function` storage.  Mirrors
+    /// [`tuple_def`]: idempotent, globally registered (source 0),
+    /// returns the existing def_nr on subsequent calls.
+    ///
+    /// Storage layout (16 bytes total, finalised by `fill_database`
+    /// + `Stores::finish_type` in later phases):
+    /// - `_d_nr`: `i32` at offset 0 (4 bytes; `i32::MIN` = null fn-ref).
+    /// - `_closure`: 12-byte stored DbRef at offset 4 (store_nr +
+    ///   rec + pos pointing at the closure record in the same store).
+    ///
+    /// Phase 1 wires the **data-side definition only**; no database
+    /// type-id is assigned yet, no fill_database arm routes through
+    /// it, no codegen reads/writes it.  The function exists so phase
+    /// 2 (opcode addition + Parts::DbRef + database routing) and
+    /// phase 3 (codegen rework) have a single place to call.
+    ///
+    /// All fn-refs share the same storage shape regardless of
+    /// signature, so the synthetic struct's name carries no
+    /// argument-list suffix — `__fn_ref` is canonical and reused
+    /// across every `Type::Function(...)` value in the program.
+    pub fn fn_ref_def(&mut self, lexer: &mut Lexer) -> u32 {
+        let name = "__fn_ref".to_string();
+        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+            return nr;
+        }
+        if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
+            return nr;
+        }
+        let d = self.add_def(&name, lexer.pos(), DefType::Struct);
+        // Register globally (source 0) so every reference to
+        // `Type::Function` across all source files resolves to the
+        // same synthetic struct.
+        self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        // `_d_nr`: 4-byte signed integer holding the function's
+        // def-nr.  The integer alias `i32` carries the `size(4)`
+        // annotation that fill_database honours via
+        // `Data::forced_size(alias_d_nr)`.  When phase 2 routes
+        // `Type::Function` through this synthetic struct,
+        // fill_database registers `_d_nr` as `Parts::Int` (4-byte
+        // storage) automatically.
+        let i32_d_nr = self.def_nr("i32");
+        let d_nr_attr_idx = self.add_attribute(
+            lexer,
+            d,
+            "_d_nr",
+            Type::Integer(IntegerSpec {
+                min: i32::MIN + 1,
+                max: i32::MAX as u32,
+                not_null: false,
+                forced_size: NonZeroU8::new(4),
+            }),
+        );
+        if i32_d_nr != u32::MAX {
+            self.definitions[d as usize].attributes[d_nr_attr_idx].alias_d_nr = i32_d_nr;
+        }
+        // `_closure`: 12-byte stored DbRef pointing at the captured-
+        // state record in the host's store.  Phase 2 introduces
+        // `Parts::DbRef` (12B) and a `Type` shape that fill_database
+        // routes through it — for now we leave the attribute typed
+        // as `Type::Reference(d, _)` (self-reference is a benign
+        // placeholder that fill_database will overwrite once the
+        // real DbRef Parts variant lands).  The data-side definition
+        // is the load-bearing piece; the runtime layout is deferred.
+        self.add_attribute(
+            lexer,
+            d,
+            "_closure",
+            Type::Reference(d, Vec::new()),
+        );
+        d
+    }
+
 
     pub fn check_vector(&mut self, d_nr: u32, vec_tp: u16, pos: &Position) -> u32 {
         let vec_name = format!("vector<{}>", self.def(d_nr).name);
