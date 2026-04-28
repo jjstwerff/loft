@@ -239,21 +239,21 @@ across profile/test-set changes can produce bogus errors
 (e.g. `attempt to add with overflow` from u16::MAX placeholder
 positions).  This mirrors what `make test` already does.
 
-### Optional: `mold` linker
+### `mold` linker (committed default on Linux)
 
-Linker time is a small fraction of the rebuild — most cost is
-LLVM codegen, not linking.  Switching to `mold` saved <1s in
-measurement here.  If you still want to opt in (e.g. for the
-rare big-link rebuild):
+`.cargo/config.toml` activates `mold` on `x86_64-unknown-linux-gnu`.
+Linker time is a small fraction of the rebuild (LLVM codegen
+dominates), so the direct speedup is modest (~1s).  The bigger
+win is a **unified cache**: every `cargo` invocation from this
+checkout uses the same `RUSTFLAGS`, so alternating between
+`cargo build`, `cargo test`, and `make iter` shares one cache
+key.  Without this pin, ad-hoc `RUSTFLAGS=...` overrides force
+rebuilds.
 
-```
-sudo apt install mold                                      # one-time
-cp .cargo/config.toml.example .cargo/config.toml           # opt in
-```
-
-Per-checkout opt-in (gitignored).  Removing the file reverts to
-the system linker.  Note: the global cargo cache is keyed on
-`RUSTFLAGS`, so toggling mold on/off forces a one-time rebuild.
+First-time setup on Linux x64: `sudo apt-get install mold`.
+The CI workflow installs mold on its ubuntu runner.  macOS and
+Windows ignore the config (different target triples) and use
+their platform-native linkers.
 
 ---
 
