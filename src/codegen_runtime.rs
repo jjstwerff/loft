@@ -1725,9 +1725,15 @@ where
 }
 
 /// Parallel worker dispatcher for native text-return par.
-/// Each thread accumulates owned `String`s for its slice; main-thread
-/// merges per-thread vectors into a single ordered `Vec<String>` for
-/// the caller to write into the result store.
+///
+/// Plan-06 phase 1b: each worker reserves a per-worker output Store
+/// slot holding a `row_count`-entry s_pos array; the slot's store
+/// also interns the worker's text-bytes via `set_str`.  After join,
+/// the parent reads each adopted slot's s_pos array, retrieves the
+/// strings via `get_str`, and copies them into the caller's
+/// `Vec<String>`.  Replaces the prior per-thread `Vec<String>` heap
+/// accumulator — text results now flow through the same store-typed
+/// pipeline as every other field write.
 fn run_native_workers_text<F>(
     stores: &Stores,
     input: &DbRef,
@@ -1745,19 +1751,33 @@ where
     let input_t = *input;
     let n_threads = n_threads.max(1) as usize;
     let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
-        let mut local: Vec<String> = Vec::with_capacity(end - start);
-        for row_idx in start..end {
+        let row_count = end - start;
+        let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
+        let slot = ws.add_output_slot(array_words);
+        let array_rec = ws.stores.allocations[slot.store_nr as usize].claim(array_words);
+        for (local_idx, row_idx) in (start..end).enumerate() {
             let elm = vector::get_vector(
                 &input_t,
                 elem_size as u32,
                 row_idx as i64,
-                &ws.allocations,
+                &ws.stores.allocations,
             );
-            local.push(worker(&mut ws.stores, elm));
+            let s = worker(&mut ws.stores, elm);
+            let slot_store = &mut ws.stores.allocations[slot.store_nr as usize];
+            let s_pos = slot_store.set_str(&s);
+            slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
         }
-        (start, local)
+        (start, row_count, slot.store_nr, array_rec, ws.stores)
     });
-    crate::parallel::merge_batches(batches, n, String::new())
+    let mut results = vec![String::new(); n];
+    for (start, count, slot_nr, array_rec, worker_stores) in batches {
+        let slot_store = &worker_stores.allocations[slot_nr as usize];
+        for local_idx in 0..count {
+            let s_pos = slot_store.get_u32_raw(array_rec, (local_idx as u32) * 4);
+            results[start + local_idx] = slot_store.get_str(s_pos).to_string();
+        }
+    }
+    results
 }
 
 /// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure

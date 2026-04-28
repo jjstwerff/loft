@@ -672,21 +672,44 @@ pub fn run_parallel_text(
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
-    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+    // Plan-06 phase 1b: workers write text results into a per-worker
+    // output Store slot — same path text always uses inside loft.
+    // Each worker reserves a single record holding `row_count` u32
+    // s_pos pointers (`set_str` interns each string into the slot's
+    // store).  After join, the parent reads each adopted slot's
+    // s_pos array, calls `get_str` to retrieve the bytes, and copies
+    // them into the result `Vec<String>`.  The `Vec<String>` per-
+    // thread accumulation is gone — replaced by N store slots.
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
+        let row_count = end - start;
+        let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
+        let slot = ws.add_output_slot(array_words);
         let mut state = prog.new_state(ws);
-        let mut batch: Vec<String> = Vec::with_capacity(end - start);
-        for row_idx in start..end {
+        let array_rec =
+            state.database.allocations[slot.store_nr as usize].claim(array_words);
+        for (local_idx, row_idx) in (start..end).enumerate() {
             let row_ref = vector::get_vector(
                 &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            batch.push(state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text));
+            let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
+            let slot_store = &mut state.database.allocations[slot.store_nr as usize];
+            let s_pos = slot_store.set_str(&s);
+            slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
         }
-        (start, batch)
+        (start, row_count, slot.store_nr, array_rec, state.database)
     });
-    merge_batches(batches, n_rows, String::new())
+    let mut results = vec![String::new(); n_rows];
+    for (start, count, slot_nr, array_rec, worker_db) in batches {
+        let slot_store = &worker_db.allocations[slot_nr as usize];
+        for local_idx in 0..count {
+            let s_pos = slot_store.get_u32_raw(array_rec, (local_idx as u32) * 4);
+            results[start + local_idx] = slot_store.get_str(s_pos).to_string();
+        }
+    }
+    results
 }
 
 /// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
