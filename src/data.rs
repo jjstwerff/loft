@@ -2614,6 +2614,44 @@ impl Data {
         &self.definitions[dnr as usize]
     }
 
+    /// Plan-07 phase 5 suggestions.  Find a similar type name —
+    /// struct, enum, or enum-value — across all loaded definitions.
+    /// Skips synthetic compiler-generated types (`__tuple<…>`,
+    /// `__fn_ref`, `Self`, etc.) and single-character names (which
+    /// are almost always interface generic-type parameters like
+    /// `T` / `K` / `V` and would mis-suggest in user code).
+    ///
+    /// Free function on `Data` so both `Parser::suggest_type_name`
+    /// and `typedef::actual_types`'s "Undefined type" emitter can
+    /// reach it without threading the parser through.
+    #[must_use]
+    pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        let candidates: Vec<&str> = self
+            .definitions
+            .iter()
+            .filter_map(|d| {
+                if !matches!(
+                    d.def_type,
+                    DefType::Struct | DefType::Enum | DefType::EnumValue
+                ) {
+                    return None;
+                }
+                if d.name.starts_with("__") || d.name == "Self" {
+                    return None;
+                }
+                // Filter out single-character names — they're
+                // generic-type placeholders (`T`, `K`, `V`, …) on
+                // interface declarations; suggesting `T` for an
+                // unknown user type is more misleading than helpful.
+                if d.name.chars().count() <= 1 {
+                    return None;
+                }
+                Some(d.name.as_str())
+            })
+            .collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
+    }
+
     /// Plan-06 phase 5b' (DESIGN.md D12) — every user-defined
     /// function's def_nr (excludes stdlib `n_*` natives whose code
     /// body is `Value::Null`, excludes structs / enums / constants).

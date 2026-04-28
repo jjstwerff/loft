@@ -321,7 +321,15 @@ impl Parser {
         };
         if d_nr == u32::MAX {
             if !self.first_pass {
-                diagnostic!(self.lexer, Level::Error, "Unknown function '{name}'");
+                if let Some(s) = self.suggest_function_name(&name) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown function '{name}' — did you mean '{s}'?"
+                    );
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Unknown function '{name}'");
+                }
             }
             return Type::Unknown(0);
         }

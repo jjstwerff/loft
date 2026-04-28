@@ -8626,8 +8626,14 @@ fn run() -> integer {
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces
-/// the plain "Unknown field" message without a misleading
-/// "did you mean …" tail.
+/// the plain "Unknown field" message without a misleading "did you
+/// mean …" tail.
+///
+/// Plan-07 phase 5 added a generic Levenshtein-based field
+/// suggestion via `Parser::suggest_field_name`, but its length-aware
+/// cap (`min(2, name.len() / 4)`) suppresses suggestions for 1-char
+/// inputs like `z` — over-match risk is too high — so this test
+/// continues to assert the plain "Unknown field" message.
 #[test]
 fn quality_6c_unknown_field_without_free_fn_has_no_hint() {
     code!(

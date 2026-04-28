@@ -458,6 +458,8 @@ impl Parser {
             // Case (c): emit the deferred error
             let msg = if stub_name == "string" {
                 "Undefined type 'string' — did you mean 'text'?".to_string()
+            } else if let Some(s) = self.data.suggest_type_name(&stub_name) {
+                format!("Undefined type {stub_name} — did you mean '{s}'?")
             } else {
                 format!("Undefined type {stub_name}")
             };
@@ -1077,8 +1079,18 @@ impl Parser {
             }
             // Type or op not registered — drop to the standard
             // error path so the user sees the same diagnostic shape
-            // they get for any other unresolved `len()` call.
-            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            // they get for any other unresolved `len()` call.  P07.5
+            // adds a "did you mean" suffix when a similarly-named
+            // user function exists.
+            if let Some(s) = self.suggest_function_name(name) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown function {name} — did you mean '{s}'?"
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            }
             Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
@@ -1093,9 +1105,19 @@ impl Parser {
                 // `t_<LEN><Type>_<name>` exists on some other type, tell the
                 // user to call it as a method.  Mirror image of the
                 // field-access hint that covers the method→free direction.
+                // P07.5: when no method receiver is found EITHER, fall back to
+                // a similar-name suggestion across all user functions.
                 let method_types = self.find_method_receivers(name);
                 if method_types.is_empty() {
-                    diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                    if let Some(s) = self.suggest_function_name(name) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown function {name} — did you mean '{s}'?"
+                        );
+                    } else {
+                        diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                    }
                 } else {
                     let receivers = method_types.join(" / ");
                     diagnostic!(
@@ -3315,6 +3337,66 @@ impl Parser {
                     .push((dep_name.clone(), dir.to_string()));
             }
         }
+    }
+
+    /// Plan-07 phase 5 suggestions.  Find a similar user-defined
+    /// function name (typed without the `n_` prefix) that might be
+    /// the correct spelling.  Returns `None` when no candidate is
+    /// within Levenshtein distance 2.
+    ///
+    /// Uses the same `suggest_similar` primitive as the existing
+    /// variable-suggestion path at `parser/objects.rs::known_var_or_type`.
+    pub fn suggest_function_name(&self, name: &str) -> Option<String> {
+        let candidates_owned: Vec<String> = self
+            .data
+            .user_fn_d_nrs()
+            .iter()
+            .filter_map(|&d_nr| {
+                let n = &self.data.def(d_nr).name;
+                if let Some(stripped) = n.strip_prefix("n_") {
+                    // Skip synthetic lambda names — they're not user-typeable.
+                    if stripped.starts_with("__lambda_") {
+                        None
+                    } else {
+                        Some(stripped.to_string())
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let candidates: Vec<&str> = candidates_owned.iter().map(String::as_str).collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
+    }
+
+    /// Plan-07 phase 5 suggestions.  Find a similar field name on
+    /// the given struct definition.  Skips synthetic compiler-
+    /// generated attributes (those starting with `_` or `#`).
+    pub fn suggest_field_name(&self, struct_d_nr: u32, name: &str) -> Option<String> {
+        if struct_d_nr == u32::MAX {
+            return None;
+        }
+        let candidates_owned: Vec<&str> = self
+            .data
+            .def(struct_d_nr)
+            .attributes
+            .iter()
+            .filter_map(|a| {
+                if a.name.starts_with('_') || a.name.starts_with('#') {
+                    None
+                } else {
+                    Some(a.name.as_str())
+                }
+            })
+            .collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates_owned).map(String::from)
+    }
+
+    /// Plan-07 phase 5 suggestions.  Find a similar type name —
+    /// thin wrapper around `Data::suggest_type_name` so callers in
+    /// the parser don't have to thread `self.data` explicitly.
+    pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        self.data.suggest_type_name(name)
     }
 
     // Determine if there need to be special enum functions that call enum_value variants.

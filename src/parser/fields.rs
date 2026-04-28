@@ -36,12 +36,20 @@ impl Parser {
         };
         let enr = self.data.type_elm(&t);
         if enr == u32::MAX {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Unknown type {}",
-                t.show(&self.data, &self.vars)
-            );
+            let shown = t.show(&self.data, &self.vars);
+            if let Some(s) = self.suggest_type_name(&shown) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown type {shown} — did you mean '{s}'?"
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown type {shown}"
+                );
+            }
             return Type::Unknown(0);
         }
         let e_size = i32::from(self.database.size(self.data.def(enr).known_type));
@@ -124,6 +132,13 @@ impl Parser {
                             self.lexer,
                             Level::Error,
                             "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? (stdlib declared `{field}` as free-only; see LOFT.md § Methods and function calls)",
+                            self.data.def(dnr).name
+                        );
+                    } else if let Some(s) = self.suggest_field_name(dnr, &field) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown field {}.{field} — did you mean '{s}'?",
                             self.data.def(dnr).name
                         );
                     } else {

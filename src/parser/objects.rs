@@ -1174,12 +1174,21 @@ impl Parser {
         }
         let nr = self.data.attr(td_nr, &field);
         if nr == usize::MAX {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Unknown field {}.{field}",
-                self.data.def(td_nr).name
-            );
+            if let Some(s) = self.suggest_field_name(td_nr, &field) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown field {}.{field} — did you mean '{s}'?",
+                    self.data.def(td_nr).name
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown field {}.{field}",
+                    self.data.def(td_nr).name
+                );
+            }
         } else {
             let td = self.data.attr_type(td_nr, nr);
             let pos = self

@@ -118,6 +118,8 @@ pub fn actual_types_deferred(
                 let name = &data.def(d).name;
                 let msg = if name == "string" {
                     "Undefined type 'string' — did you mean 'text'?".to_string()
+                } else if let Some(s) = data.suggest_type_name(name) {
+                    format!("Undefined type {name} — did you mean '{s}'?")
                 } else {
                     format!("Undefined type {name}")
                 };

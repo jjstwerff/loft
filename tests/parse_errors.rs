@@ -35,6 +35,46 @@ fn typo_var_name() {
         .warning("Variable count is never read at typo_var_name:1:20");
 }
 
+// ── Plan-07 phase 5 — suggestion paths ──────────────────────────────────────
+
+/// Function-name typo (Levenshtein 1) appends `did you mean` suffix.
+/// Wires `Parser::suggest_function_name` at `mod.rs::call`'s
+/// "Unknown function" diagnostic.
+#[test]
+fn p07_suggest_unknown_function() {
+    code!(
+        "fn double(x: integer) -> integer { x + x }
+fn test() { doublet(5); }"
+    )
+    .error("Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:24");
+}
+
+/// Type-name typo (Levenshtein 1) appends `did you mean` suffix.
+/// Wires `Data::suggest_type_name` at `parser/mod.rs`'s deferred
+/// "Undefined type" emitter.
+#[test]
+fn p07_suggest_undefined_type() {
+    code!(
+        "struct Counter { n: integer }
+fn build() -> Conter { Counter { n: 0 } }
+fn test() {}"
+    )
+    .error(
+        "Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23",
+    );
+}
+
+// Field-suggestion paths (struct-literal + field-access) and the
+// 1-char cap behaviour are end-to-end-validated by
+// `quality_6c_unknown_field_without_free_fn_has_no_hint` in
+// `tests/issues.rs` (the existing assertion of plain "Unknown field
+// Point.z" depends on the length-aware cap suppressing the single-
+// char suggestion).  Adding dedicated `p07_suggest_*` tests for
+// these cases is blocked by `Variable v has unknown type` cascades
+// when an unknown-field expression is bound to a local; those
+// cascades are part of the parser's existing error-recovery shape
+// and would dominate the suggestion-specific assertion.
+
 #[test]
 fn use_before_define() {
     code!("fn test() { if a == 1 { panic(); }; a = 1; }")
