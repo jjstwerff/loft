@@ -5,7 +5,71 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 1 — Spans on IR
 
-Status: open
+Status: in-progress (1.A landed 2026-04-28 in `b3b2da2`; 1.B foundation
+in `4904669`; per-site wraps blocked on a `Value::unspan()` helper —
+see "Lessons learned 2026-04-28" below)
+
+## Lessons learned 2026-04-28 — `Value::unspan()` is a prerequisite
+
+The first activated wrap (binary `/` and `%` in
+`parser/operators.rs::handle_operator`) broke 4 tests in
+`tests/wrap.rs` (`collections`, `loft_suite`, `stress`, `vectors`).
+All four failures traced to second-pass code that pattern-matches
+`Value::Call(d_nr, args)` directly, e.g.:
+
+- `src/parser/collections.rs:67-68` — vector compound-assignment
+  optimisation peeks at the LHS shape.
+- `src/parser/collections.rs:296-389` — `compute_op_code` and
+  `call_to_set_op` extract the LHS def-nr and args.
+- `src/parser/operators.rs:40-69, 749` — append-text and
+  call-coercion both inspect `Value::Call(_, parms)`.
+- `src/parser/expressions.rs:550, 966, 1331` — lock-call
+  rewriting + lambda-arity checks pattern-match Call.
+
+When a `%`-call is wrapped in `Value::Span(box (pos, Call(...)))`,
+every one of these patterns silently misses, and the optimisation
+falls through to a fallback that produces wrong runtime behaviour
+(the `for v if v % 2 == 0 { v#remove }` filter went from "remove
+even" to "remove all").
+
+**Therefore** the order in the original landing sequence is wrong:
+the per-site wraps in 1.9-1.18 must NOT land before a
+`Value::unspan(&self) -> &Value` helper exists AND every Value-Call
+pattern match in second-pass code is updated to call it.
+
+### New step 1.B.0 — `Value::unspan()` helper + pattern-match audit
+
+Insert before 1.9:
+
+| # | Step | Test |
+|---|---|---|
+| 1.B.0 | Add `Value::unspan(&self) -> &Value` returning `b.1.unspan()` for `Span` and `self` otherwise.  Audit the ~12 sites listed above (and any others surfaced by the failing-test triage) and route their pattern matches through `unspan()`.  No wrap activated yet — this commit is pure infrastructure. | `tests/wrap.rs` stays green when run with a hand-injected `Value::Span` wrapper around the LHS Call of a compound assignment (one synthetic IR test in `tests/spans_on_ir.rs`). |
+| 1.B.1 | Activate the binary `/` `%` wrap in `handle_operator`.  This commit thread `op_pos` through and wraps the call. | `tests/spans_on_ir.rs` un-ignores `binary_div_wraps_in_span` and `binary_mod_wraps_in_span`.  Full test suite green. |
+| 1.11 | (renumber) Wrap vector index `v[i]` | … |
+
+After 1.B.0 and 1.B.1, the rest of the wraps (1.11-1.18) follow
+the original plan but each wrap commit must include a "pattern-match
+audit" line in its description listing every site updated.
+
+### Why not Option B (side-table) instead
+
+Option B's pros are exactly avoiding this pattern-match update:
+the `Value` shape stays untouched.  Reasons to stay on A despite
+this surprise:
+
+1. **Cloning still works** — `derive(Clone)` covers Span; Option B
+   would need every `Value` clone site to also clone the side-
+   table entry.
+2. **Pattern-match audit is one-time and mechanical** — each
+   `if let Value::Call(...)` site becomes
+   `if let Value::Call(...) = code.unspan()`.  ~12 sites, all
+   listed above; cargo errors if a site is missed once unspan()
+   exists and is exhausively used.
+3. **The `Span` arm is strictly additive in walkers** — every
+   walker already has its passthrough from 1.A.  Side-table
+   entries would be invisible at the IR level and easy to drop.
+
+So 1.B.0 is the cost; 1.B.1 onwards is straightforward.
 
 ## Goal
 
