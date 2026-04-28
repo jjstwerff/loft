@@ -30,51 +30,10 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 194 | Tuple-field reassignment `p.v = (1, 2)` parses as tuple destructuring (LHS `p.v` not recognised as a tuple-typed field expression).  Initial construction `Pair { v: (1, 2) }` works; only `p.v = (...)` is rejected. | Medium | Reassign element-by-element via existing field updates, or rebuild the host struct (`p = Pair { v: (1, 2) }`). |
 | 195 | Chained literal field indexing `n.v.0.0` mis-parses — the lexer reads `0.0` as a single float literal.  Affects any nested-tuple access where two consecutive integer indices appear without an intervening identifier. | Low | Stash the inner element first: `inner = n.v.0; inner.0`. |
 | 196 | Native codegen for `(fn(int) -> int, int)` (or any tuple containing a fn-ref) fails with `(u32, DbRef).0 as i32` — the fn-ref tuple element's runtime shape doesn't fit the OpSet/OpGet narrowing path used for primitive ints.  Interpreter mode works; only native compilation breaks. | Medium | Use a struct field for fn-ref instead of tucking it in a tuple: `struct H { f: fn(...) -> ..., n: int }`. |
 
 ## Interpreter Robustness
-
-### 194. Tuple-field reassignment parses as destructuring
-
-**Symptom:** updating a tuple struct field after construction fails
-to parse:
-
-```loft
-struct Pair { v: (integer, integer) }
-fn test() {
-  p = Pair { v: (3, 4) };        // OK
-  p.v = (100, 200);              // ← "Tuple destructuring requires
-                                 //   plain variable names"
-}
-```
-
-**Where:** the parser's tuple-LHS handler (in `parser/expressions.rs`,
-the `(a, b) = expr` destructuring path) fires whenever the left-hand
-side is a parenthesised list, regardless of whether the LHS is
-`(name, name)` (destructuring) or `(field_path, field_path)`
-(impossible) or — the case here — a single field whose RHS is a
-tuple literal.  The disambiguation key (LHS *value* is a `Value::Var`
-of tuple type vs. a parenthesised name list) isn't checked.
-
-**Fix path:** when the LHS parses as a single field-access expression
-and the RHS parses as a tuple literal, route through `set_field_check`
-with the `Type::Tuple` arm (which already exists and handles writes).
-Concretely: in the assignment parser, check if `lhs` is a
-`Value::Call(OpGetField, …)` or `Value::TupleGet(...)` of tuple type
-before falling into the destructuring branch.
-
-**Test:** add a test once fixed:
-
-```loft
-struct Pair { v: (integer, integer) }
-fn test() {
-  p = Pair { v: (3, 4) };
-  p.v = (100, 200);
-  assert(p.v.0 == 100);
-}
-```
 
 ### 195. Chained literal indexing — lexer reads `0.0` as float
 

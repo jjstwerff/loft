@@ -577,6 +577,14 @@ impl Type {
                 Type::Function(params.clone(), ret.clone(), v)
             }
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
+            // P197: Type::Tuple has no dep field of its own — propagate
+            // the dep into each element type so per-element reads
+            // (`OpGetText` / `OpGetRef` / nested tuple reads) retain
+            // the host's lifetime when the struct field is unboxed
+            // into per-element values via `get_val::Type::Tuple`.
+            // Without this, returning a `text` element from a tuple
+            // struct field reads from a freed host record (P197 abort).
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
             _ => self.clone(),
         }
     }
@@ -595,6 +603,17 @@ impl Type {
             | Type::Vector(_, dep)
             | Type::Function(_, _, dep) => v.append(&mut dep.clone()),
             Type::RefVar(tp) => return tp.depend(),
+            // P197: a tuple's effective dependencies are the union of
+            // its elements'.  Dedup to keep the vector compact.
+            Type::Tuple(elems) => {
+                for e in elems {
+                    for d in e.depend() {
+                        if !v.contains(&d) {
+                            v.push(d);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         v
@@ -734,6 +753,14 @@ impl Type {
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{}", Self::dep_var(dep, vars)),
+            Type::Tuple(elems) => {
+                let inner = elems
+                    .iter()
+                    .map(|e| e.show(data, vars))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({inner})")
+            }
             _ => self.to_string(),
         }
     }

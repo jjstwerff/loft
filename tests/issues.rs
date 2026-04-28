@@ -10922,3 +10922,100 @@ fn run() -> integer {
     .expr("run()")
     .result(Value::Int(20));
 }
+
+/// P194 — tuple-typed struct field reassignment.
+///
+/// Before the fix: `p.v = (100, 200)` triggered the "Tuple
+/// destructuring requires plain variable names" diagnostic because
+/// `get_val::Type::Tuple` returns `Value::Tuple([reads])` for the
+/// tuple field read, which then matched the destructuring branch
+/// in `parse_assign`.  The fix routes a tuple-of-reads LHS through
+/// `emit_tuple_set_ops` instead.
+#[test]
+fn p194_tuple_field_reassign() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn run() -> integer {
+    p = Pair { v: (3, 4) };
+    p.v = (100, 200);
+    p.v.0 + p.v.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(300));
+}
+
+/// P194 — tuple-typed reassignment with multiple writes.
+#[test]
+fn p194_tuple_field_reassign_twice() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn run() -> integer {
+    p = Pair { v: (3, 4) };
+    p.v = (100, 200);
+    p.v = (500, 600);
+    p.v.0 + p.v.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1100));
+}
+
+/// P197 — returning a `text` element from a tuple struct field.
+///
+/// Before the fix:
+/// - Index `.0` returned garbage characters (`Str` with a dangling
+///   ptr into a freed host record).
+/// - Index `.1` and indices in larger tuples hard-crashed with
+///   `ptr::copy_nonoverlapping requires that both pointer arguments
+///   are aligned and non-null`.
+/// - Native codegen produced a `(String, String)` work-var temp,
+///   then borrowed `&temp.0` past its drop — `rustc` rejected with
+///   `borrowed value does not live long enough`.
+///
+/// Two-part fix:
+/// 1. `Type::depending`/`Type::depend` now recurse into
+///    `Type::Tuple` elements so a tuple struct field read carries
+///    the host as a dep on each text/reference element.
+/// 2. `parse_part`'s tuple-index branch short-circuits when `code`
+///    is already a literal `Value::Tuple([reads])` — return the
+///    indexed read directly instead of materialising a
+///    `(String, String)` work-var temp.
+#[test]
+fn p197_text_returned_from_tuple_field() {
+    code!(
+        "struct A { v: (text, text) }
+fn first() -> text {
+    a = A { v: (\"hello\", \"world\") };
+    a.v.0
+}"
+    )
+    .expr("first()")
+    .result(Value::Text("hello".to_string()));
+}
+
+#[test]
+fn p197_text_returned_from_tuple_field_index_one() {
+    code!(
+        "struct A { v: (text, text) }
+fn second() -> text {
+    a = A { v: (\"hello\", \"world\") };
+    a.v.1
+}"
+    )
+    .expr("second()")
+    .result(Value::Text("world".to_string()));
+}
+
+#[test]
+fn p197_text_returned_from_mixed_tuple_field() {
+    code!(
+        "struct P { v: (integer, integer, text) }
+fn third() -> text {
+    p = P { v: (1, 2, \"hello\") };
+    p.v.2
+}"
+    )
+    .expr("third()")
+    .result(Value::Text("hello".to_string()));
+}

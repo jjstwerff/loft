@@ -3,6 +3,25 @@
 
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
 
+/// P194 helper — extract the host reference and base position from
+/// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
+/// `(host_ref, first_element_position)` where `first_element_position`
+/// equals `host_field_pos + element_offset[0]`.  For nested-tuple
+/// reads, recurses into the inner `Value::Tuple`.
+fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
+    match v {
+        Value::Call(_, args) if args.len() >= 2 => {
+            if let Value::Int(p) = &args[1] {
+                Some((args[0].clone(), *p))
+            } else {
+                None
+            }
+        }
+        Value::Tuple(inner) if !inner.is_empty() => leaf_tuple_lhs(&inner[0]),
+        _ => None,
+    }
+}
+
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
@@ -1011,9 +1030,42 @@ use a separate collection or add after the loop"
             }
         }
         // T1.2: LHS tuple destructuring — (a, b) = expr
+        // P194: tuple-typed field reassignment — `p.v = (...)` where
+        // v is a tuple-typed field.  `get_val::Type::Tuple` returns
+        // `Value::Tuple([reads])` for a tuple field read; the reads
+        // are `OpGet*(host_ref, base_pos + element_offset[i])`.  When
+        // the LHS shape is "tuple of reads (not all Var)" AND f_type
+        // is `Type::Tuple`, route to `emit_tuple_set_ops` instead of
+        // the destructuring branch.
         if let Value::Tuple(vars) = code
             && self.lexer.has_token("=")
         {
+            if let Type::Tuple(elems) = &f_type
+                && !vars.is_empty()
+                && !vars.iter().all(|v| matches!(v, Value::Var(_)))
+                && let Some((host_ref, first_pos)) = leaf_tuple_lhs(&vars[0])
+            {
+                let elems_vec = elems.clone();
+                let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+                let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elems_vec.len(),
+                )
+                .unwrap_or_else(|| {
+                    crate::data::element_offsets(&elems_vec)
+                        .into_iter()
+                        .map(|x| x as u16)
+                        .collect()
+                });
+                let host_field_pos = (first_pos as u16).saturating_sub(offsets[0]);
+                let mut rhs = Value::Null;
+                let _rhs_type = self.expression(&mut rhs);
+                let ops = self.emit_tuple_set_ops(&host_ref, host_field_pos, &elems_vec, rhs);
+                *code = crate::data::v_block(ops, Type::Void, "tuple_field_set_via_assign");
+                return Type::Void;
+            }
             let var_nrs: Vec<u16> = vars
                 .iter()
                 .filter_map(|v| {

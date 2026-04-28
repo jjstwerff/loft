@@ -1864,7 +1864,7 @@ impl Parser {
     ///   `Value::TupleGet`.  Nested tuple elements in this branch
     ///   require codegen support for `TupleGet` on `Type::Tuple`
     ///   (see `state/codegen.rs::Value::TupleGet` stack-tuple arm).
-    fn emit_tuple_set_ops(
+    pub(crate) fn emit_tuple_set_ops(
         &mut self,
         ref_code: &Value,
         base_pos: u16,

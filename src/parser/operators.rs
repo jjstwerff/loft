@@ -480,10 +480,35 @@ impl Parser {
                             );
                             t = Type::Unknown(0);
                         } else {
+                            // P197: propagate parent tuple's deps into the
+                            // element type so a returned text/reference
+                            // carries the host's lifetime through.  Without
+                            // this, `fn f() -> text { ...; a.v.0 }` returns
+                            // a `Str` whose ptr points into a freed host.
+                            let parent_deps = t.depend();
                             t = elems[idx].clone();
+                            for on in parent_deps {
+                                t = t.depending(on);
+                            }
                             // T1.4: emit TupleGet IR for codegen.
                             if let Value::Var(var_nr) = code {
                                 *code = Value::TupleGet(*var_nr, idx as u16);
+                            } else if let Value::Tuple(elems_v) = code {
+                                // P197: code is already a literal tuple of
+                                // per-element reads (e.g. produced by
+                                // `get_val::Type::Tuple` for a tuple struct
+                                // field).  Materialising the whole tuple
+                                // into a `(String, String)` work var causes
+                                // a native-codegen borrow lifetime error
+                                // because the owned-`String` tuple temp
+                                // dies before the returned `&str` is
+                                // consumed.  Short-circuit: take the
+                                // already-built element read directly.
+                                if idx < elems_v.len() {
+                                    *code = elems_v[idx].clone();
+                                } else {
+                                    *code = Value::Null;
+                                }
                             } else {
                                 // Temporary tuple — store in work var first.
                                 let tmp_tp = Type::Tuple(elems.clone());
