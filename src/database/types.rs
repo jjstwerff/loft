@@ -264,16 +264,60 @@ impl Stores {
                 }
             }
         }
+        // Build per-group descriptors (member field indices, atomic
+        // size, alignment, member-internal offsets) so the layout
+        // routine can place each LinkedFieldGroup as one block.
+        // Non-group fields go through the standard packer.
+        //
+        // The group's pre-registered `size` / `alignment` come from
+        // tuple_def or `index` and are computed at parse time using
+        // STACK widths (Type::Integer is 8B regardless of `forced_size`).
+        // For STORAGE layout we re-compute from `sizes[]` — the actual
+        // database widths (`byte = 1B`, `int4 = 4B`, etc.) — so the
+        // atomic block reflects the bytes the Store will hold.  Stack
+        // widths stay on the LinkedFieldGroup for codegen / stack-side
+        // tuple-element access.
+        let groups_descriptor: Vec<(Vec<u16>, u16, u8, Vec<u16>)> = self
+            .types[t_nr]
+            .field_groups
+            .iter()
+            .map(|g| {
+                let member_sa: Vec<(u16, u8)> = g
+                    .field_indices
+                    .iter()
+                    .map(|&i| sizes[i as usize])
+                    .collect();
+                let offsets =
+                    crate::data::LinkedFieldGroup::group_member_offsets(&member_sa);
+                let storage_alignment = crate::data::LinkedFieldGroup::group_alignment(
+                    &member_sa.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
+                );
+                let storage_size =
+                    crate::data::LinkedFieldGroup::group_size(&member_sa);
+                (g.field_indices.clone(), storage_size, storage_alignment, offsets)
+            })
+            .collect();
+
         if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &mut self.types[t_nr].parts {
             let mut size = 0;
             let mut alignment = 0;
             if !fields.is_empty() {
-                let pos = calc::calculate_positions(
-                    &sizes,
-                    fields[0].name == "enum",
-                    &mut size,
-                    &mut alignment,
-                );
+                let pos = if groups_descriptor.is_empty() {
+                    calc::calculate_positions(
+                        &sizes,
+                        fields[0].name == "enum",
+                        &mut size,
+                        &mut alignment,
+                    )
+                } else {
+                    calc::calculate_positions_with_groups(
+                        &sizes,
+                        &groups_descriptor,
+                        fields[0].name == "enum",
+                        &mut size,
+                        &mut alignment,
+                    )
+                };
                 for (field_nr, pos) in pos.iter().enumerate() {
                     fields[field_nr].position = *pos;
                 }
@@ -1023,6 +1067,39 @@ impl Stores {
         } else {
             u16::MAX
         };
+        // Register the bookkeeping triple as a linked field group on
+        // the content type — `[left, left+1, left+2] = [#left_N,
+        // #right_N, #color_N]` for index instance N.  Used by codegen
+        // / runtime to walk index bookkeeping without string-prefix
+        // matching on field names.
+        //
+        // Alignment is 4 (max of int4 align 4, int4 align 4, bool align 1).
+        // Size is 9 bytes (4 + 4 + 1; no internal padding — bool is last
+        // and 1-byte aligned).
+        if left != u16::MAX {
+            let int4_size = self.types[int4 as usize].size;
+            let int4_align = self.types[int4 as usize].align;
+            let bool_size = self.types[bool_c as usize].size;
+            let bool_align = self.types[bool_c as usize].align;
+            let members = [
+                (int4_size, int4_align),
+                (int4_size, int4_align),
+                (bool_size, bool_align),
+            ];
+            let alignment = crate::data::LinkedFieldGroup::group_alignment(
+                &members.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
+            );
+            let size = crate::data::LinkedFieldGroup::group_size(&members);
+            self.types[content as usize]
+                .field_groups
+                .push(crate::data::LinkedFieldGroup {
+                    kind: crate::data::LinkedFieldKind::Index,
+                    instance: nr,
+                    field_indices: vec![left, left + 1, left + 2],
+                    alignment,
+                    size,
+                });
+        }
         let num = self.types.len() as u16;
         self.types
             .push(Type::new(&name, Parts::Index(content, key_nrs, left), 4));
@@ -1564,6 +1641,13 @@ pub struct Type {
     pub(super) linked: bool,
     pub(super) size: u16,
     pub(super) align: u8,
+    /// Linked-field groups appended to this type's `Parts::Struct` /
+    /// `Parts::EnumValue` field list.  Used **exclusively** for index
+    /// bookkeeping triples (`#left_N` / `#right_N` / `#color_N`) per
+    /// `index<T[key]>` instance.  Empty for plain user structs.
+    /// Tuple element groups live on the parser-side
+    /// `Definition::field_groups` instead.
+    pub field_groups: Vec<crate::data::LinkedFieldGroup>,
 }
 
 impl Type {
@@ -1577,6 +1661,7 @@ impl Type {
             linked: false,
             size,
             align: size as u8,
+            field_groups: Vec::new(),
         }
     }
 
@@ -1590,6 +1675,7 @@ impl Type {
             linked: false,
             size: 4,
             align: 4,
+            field_groups: Vec::new(),
         }
     }
 
@@ -1606,6 +1692,20 @@ impl Type {
             | Parts::Spacial(c, _) => c == tp,
             _ => false,
         }
+    }
+
+    /// Iterate every index-bookkeeping group on this type.  Each yields
+    /// `(instance_nr, [left_idx, right_idx, color_idx])` — the field
+    /// indices of the bookkeeping triple appended for one
+    /// `index<T[key]>` registration.  Replaces ad-hoc
+    /// `f.name.starts_with("#left_")` scans on `Parts::Struct` /
+    /// `Parts::EnumValue` field lists.
+    pub fn index_groups(
+        &self,
+    ) -> impl Iterator<Item = &crate::data::LinkedFieldGroup> {
+        self.field_groups
+            .iter()
+            .filter(|g| matches!(g.kind, crate::data::LinkedFieldKind::Index))
     }
 }
 
@@ -1917,5 +2017,667 @@ mod layout_tests {
             issues.is_empty(),
             "expected no issues for Manual struct, got: {issues:?}"
         );
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // Linked-field-group layout tests
+    //
+    // Verify that the `LinkedFieldGroup` infrastructure registered by
+    // `Stores::index` keeps the bookkeeping triple
+    // (`#left_N` / `#right_N` / `#color_N`) coherent through
+    // `finish_type`'s alignment-aware packing — the 3 fields stay
+    // associated as a group, and each field lands at an offset that
+    // respects its declared alignment (4-byte int4 fields on a 4-byte
+    // boundary, 1-byte bool on any boundary).
+    //
+    // These cover the index pattern.  Tuple linked-field-group tests
+    // live in `src/data.rs::linked_field_tests` since tuples are a
+    // parser-side concept (`Definition::field_groups`).
+    // ───────────────────────────────────────────────────────────────
+
+    use crate::data::LinkedFieldKind;
+
+    /// Build a struct with one user field of a given content type and
+    /// finish it.  Returns the type id and the field's content id.
+    fn struct_with_single_field(s: &mut Stores, name: &str, field_content: u16) -> u16 {
+        let tp = s.structure(name, 0);
+        s.field(tp, "value", field_content);
+        tp
+    }
+
+    /// Read a field by name; panics if absent or the type isn't a Struct.
+    fn field_by_name<'a>(s: &'a Stores, tp: u16, name: &str) -> &'a Field {
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+            &s.types[tp as usize].parts
+        {
+            fields
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("field '{name}' not found on type '{}'", s.types[tp as usize].name))
+        } else {
+            panic!("type '{}' is not a Struct/EnumValue", s.types[tp as usize].name)
+        }
+    }
+
+    #[test]
+    fn index_group_registered_with_three_field_indices() {
+        // One index → exactly one Index-kind LinkedFieldGroup with
+        // three field indices [left, right, color].
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemA", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let groups: Vec<_> = s.types[tp as usize].index_groups().collect();
+        assert_eq!(groups.len(), 1, "expected exactly one Index group, got {groups:?}");
+        assert_eq!(groups[0].kind, LinkedFieldKind::Index);
+        assert_eq!(groups[0].field_indices.len(), 3, "Index triple must have 3 fields");
+        assert_eq!(groups[0].instance, 1, "first index gets instance=1");
+    }
+
+    #[test]
+    fn index_group_field_names_are_left_right_color_in_order() {
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemB", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize].index_groups().next().expect("group");
+        let names: Vec<&str> = if let Parts::Struct(fields) =
+            &s.types[tp as usize].parts
+        {
+            group
+                .field_indices
+                .iter()
+                .map(|&i| fields[i as usize].name.as_str())
+                .collect()
+        } else {
+            panic!("not a struct")
+        };
+        assert_eq!(names, vec!["#left_1", "#right_1", "#color_1"]);
+    }
+
+    #[test]
+    fn index_group_int_fields_are_4byte_aligned() {
+        // Bookkeeping #left and #right are 4-byte ints (P191).  After
+        // finish, their positions must be 4-byte aligned and they must
+        // be exactly 4 bytes apart so `tree::add`'s hardcoded
+        // `RB_LEFT=0` / `RB_RIGHT=4` arithmetic works.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemC", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let left = field_by_name(&s, tp, "#left_1");
+        let right = field_by_name(&s, tp, "#right_1");
+        let color = field_by_name(&s, tp, "#color_1");
+
+        assert_eq!(left.position % 4, 0, "#left_1 not 4-byte aligned (pos={})", left.position);
+        assert_eq!(right.position, left.position + 4, "#right_1 must be at left+4");
+        // #color is 1 byte — alignment 1, so any byte boundary is fine.
+        // It must be at left+8 per tree::add's RB_COLOR=8 expectation.
+        assert_eq!(color.position, left.position + 8, "#color_1 must be at left+8");
+    }
+
+    #[test]
+    fn index_group_offsets_with_8byte_user_field() {
+        // `value: integer` is 8 bytes / 8-byte aligned.  After packing,
+        // bookkeeping (4+4+1) must still be contiguous and aligned.
+        // Calculate_positions packs largest-first, so integer at 0,
+        // then the two 4-byte ints, then the byte.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemD", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let left = field_by_name(&s, tp, "#left_1");
+        let right = field_by_name(&s, tp, "#right_1");
+        let color = field_by_name(&s, tp, "#color_1");
+
+        // 4-byte alignment for the two int fields, contiguous +4 +8 spacing.
+        assert_eq!(left.position % 4, 0);
+        assert_eq!(right.position, left.position + 4);
+        assert_eq!(color.position, left.position + 8);
+    }
+
+    #[test]
+    fn multiple_indexes_register_distinct_groups() {
+        // Two indexes on the same struct → two Index groups with
+        // instance=1 and instance=2.  Each group's three fields must
+        // be its own #left_N / #right_N / #color_N triple.
+        let mut s = Stores::new();
+        let txt_c = s.name("text");
+        let int_c = s.name("integer");
+        let tp = s.structure("ItemE", 0);
+        s.field(tp, "name", txt_c);
+        s.field(tp, "value", int_c);
+        let _idx_name = s.index(tp, &[("name".to_string(), true)]);
+        let _idx_value = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let groups: Vec<_> = s.types[tp as usize].index_groups().collect();
+        assert_eq!(groups.len(), 2, "expected two Index groups");
+        assert_eq!(groups[0].instance, 1);
+        assert_eq!(groups[1].instance, 2);
+
+        // Each group's 3 field indices point to that instance's triple.
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            for group in &groups {
+                let triple_names: Vec<&str> = group
+                    .field_indices
+                    .iter()
+                    .map(|&i| fields[i as usize].name.as_str())
+                    .collect();
+                let suffix = format!("_{}", group.instance);
+                assert!(triple_names[0].ends_with(&suffix));
+                assert!(triple_names[1].ends_with(&suffix));
+                assert!(triple_names[2].ends_with(&suffix));
+                assert!(triple_names[0].starts_with("#left_"));
+                assert!(triple_names[1].starts_with("#right_"));
+                assert!(triple_names[2].starts_with("#color_"));
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_index_groups_atomic_placement_keeps_each_triple_contiguous() {
+        // With group-aware packing
+        // (`calculate_positions_with_groups`), each index triple is
+        // placed as ONE atomic block — `#left_N`, `#right_N`,
+        // `#color_N` stay contiguous regardless of other fields'
+        // sizes, and tree::add's `right = left+4`, `color = left+8`
+        // invariants both hold for every group instance.
+        let mut s = Stores::new();
+        let txt_c = s.name("text");
+        let int_c = s.name("integer");
+        let tp = s.structure("ItemF", 0);
+        s.field(tp, "name", txt_c);
+        s.field(tp, "value", int_c);
+        let _ = s.index(tp, &[("name".to_string(), true)]);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let l1 = field_by_name(&s, tp, "#left_1").position;
+        let r1 = field_by_name(&s, tp, "#right_1").position;
+        let c1 = field_by_name(&s, tp, "#color_1").position;
+        let l2 = field_by_name(&s, tp, "#left_2").position;
+        let r2 = field_by_name(&s, tp, "#right_2").position;
+        let c2 = field_by_name(&s, tp, "#color_2").position;
+
+        // Each triple's left+4=right and left+8=color invariants hold.
+        assert_eq!(l1 % 4, 0, "#left_1 4-byte aligned");
+        assert_eq!(r1, l1 + 4, "#right_1 = left_1 + 4");
+        assert_eq!(c1, l1 + 8, "#color_1 = left_1 + 8 (atomic group)");
+        assert_eq!(l2 % 4, 0, "#left_2 4-byte aligned");
+        assert_eq!(r2, l2 + 4, "#right_2 = left_2 + 4");
+        assert_eq!(c2, l2 + 8, "#color_2 = left_2 + 8 (atomic group)");
+
+        // Triples don't overlap as ranges.
+        let triple1 = l1..(c1 + 1);
+        let triple2 = l2..(c2 + 1);
+        assert!(
+            triple1.end <= triple2.start || triple2.end <= triple1.start,
+            "triples must not overlap: {triple1:?} vs {triple2:?}",
+        );
+    }
+
+    #[test]
+    fn index_group_with_byte_user_field_keeps_color_at_left_plus_8() {
+        // **Atomicity verified**: even with a 1-byte user field
+        // (which used to disrupt largest-first packing and pull the
+        // bool #color_N to the trailing 1-byte fill region), the
+        // group-aware packer reserves the entire 9-byte triple as
+        // ONE atomic block at a 4-byte-aligned position.
+        // tree::add's `color = left + 8` invariant holds.
+        let mut s = Stores::new();
+        let byte_c = s.byte(0, false);
+        let tp = s.structure("ItemG", 0);
+        s.field(tp, "flag", byte_c);
+        let _idx = s.index(tp, &[("flag".to_string(), true)]);
+        s.finish();
+
+        let left = field_by_name(&s, tp, "#left_1");
+        let right = field_by_name(&s, tp, "#right_1");
+        let color = field_by_name(&s, tp, "#color_1");
+
+        assert_eq!(left.position % 4, 0, "#left_1 4-byte aligned");
+        assert_eq!(right.position, left.position + 4, "#right_1 follows #left_1 by 4");
+        assert_eq!(
+            color.position,
+            left.position + 8,
+            "#color_1 must be at left+8 — atomicity ensures the bool stays \
+             with its triple even when user struct has 1-byte fields",
+        );
+    }
+
+    #[test]
+    fn index_group_field_indices_match_actual_field_positions() {
+        // The LinkedFieldGroup's `field_indices` are indices into the
+        // type's `Parts::Struct(fields)`.  This test verifies that
+        // those indices, when used to look up fields, return EXACTLY
+        // the bookkeeping triple.  Catches any off-by-one in the
+        // group registration.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("ItemH", 0);
+        s.field(tp, "value", int_c);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        // Resolve the int4 / bool DB type ids before borrowing `s.types`
+        // immutably for the group lookup (`s.int` / `s.name` need &mut).
+        let int4 = s.int(0, false);
+        let bool_c = s.name("boolean");
+
+        let indices = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .field_indices
+            .clone();
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            // The three indexed fields must be #left, #right, #color in order.
+            assert_eq!(fields[indices[0] as usize].name, "#left_1");
+            assert_eq!(fields[indices[1] as usize].name, "#right_1");
+            assert_eq!(fields[indices[2] as usize].name, "#color_1");
+            // And those same indices must point to fields with the right widths.
+            // #left/#right are 4-byte int4, #color is 1-byte bool.
+            assert_eq!(fields[indices[0] as usize].content, int4);
+            assert_eq!(fields[indices[1] as usize].content, int4);
+            assert_eq!(fields[indices[2] as usize].content, bool_c);
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // Group-alignment verification
+    //
+    // The `LinkedFieldGroup` carries `alignment` (the MAX alignment
+    // of its members) and `size` (atomic placement size).  These are
+    // what the layout routine SHOULD honour when placing the group
+    // as a single unit — the index triple must land on a 4-byte
+    // boundary so the int4 members are correctly aligned, and a
+    // hypothetical tuple `(byte, integer)` would need an 8-byte
+    // boundary so the integer member lands on its natural alignment.
+    //
+    // These tests pin the alignment metadata on registered groups
+    // and verify against the actual member sizes.
+    // ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn group_alignment_helper_returns_max_member_alignment() {
+        use crate::data::LinkedFieldGroup;
+        // Index triple: int4 (align 4), int4 (align 4), bool (align 1)
+        assert_eq!(LinkedFieldGroup::group_alignment(&[4, 4, 1]), 4);
+        // Tuple (byte, integer): byte (align 1), integer (align 8)
+        assert_eq!(LinkedFieldGroup::group_alignment(&[1, 8]), 8);
+        // All bytes: alignment 1
+        assert_eq!(LinkedFieldGroup::group_alignment(&[1, 1, 1]), 1);
+        // Single member: that's the alignment
+        assert_eq!(LinkedFieldGroup::group_alignment(&[8]), 8);
+        // Empty: defaults to 1 (no members → no constraint)
+        assert_eq!(LinkedFieldGroup::group_alignment(&[]), 1);
+    }
+
+    #[test]
+    fn group_size_helper_packs_members_at_natural_alignment() {
+        use crate::data::LinkedFieldGroup;
+        // Index triple [(4,4), (4,4), (1,1)]: 4 + 4 + 1 = 9, no padding
+        assert_eq!(LinkedFieldGroup::group_size(&[(4, 4), (4, 4), (1, 1)]), 9);
+        // Tuple (byte, integer): byte at 0, padding 1..7, integer at 8 → total 16
+        assert_eq!(LinkedFieldGroup::group_size(&[(1, 1), (8, 8)]), 16);
+        // Tuple (integer, byte): integer at 0, byte at 8 → total 9 (no padding,
+        // byte after integer needs no align bump).
+        assert_eq!(LinkedFieldGroup::group_size(&[(8, 8), (1, 1)]), 9);
+        // Tuple (byte, single): byte at 0, padding 1..3, single at 4 → total 8
+        assert_eq!(LinkedFieldGroup::group_size(&[(1, 1), (4, 4)]), 8);
+    }
+
+    #[test]
+    fn index_group_carries_correct_alignment_metadata() {
+        // After registering an index, the group's `alignment` field
+        // must be 4 (max of int4=4, int4=4, bool=1).
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemJ", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize].index_groups().next().expect("group");
+        assert_eq!(
+            group.alignment, 4,
+            "index group alignment must be 4 (max of int4, int4, bool)"
+        );
+        assert_eq!(
+            group.size, 9,
+            "index group atomic size must be 9 bytes (4 + 4 + 1, no internal padding)"
+        );
+    }
+
+    #[test]
+    fn index_group_alignment_drives_first_field_position() {
+        // Verify that the first field of the group (after `finish`)
+        // lands on a position divisible by `group.alignment`.
+        // This is the LAYOUT INVARIANT the routine must honour:
+        // **the group's alignment is the max member alignment**.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemK", int_c);
+        let _idx = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let indices = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .field_indices
+            .clone();
+        let group = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .clone();
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            let first_pos = fields[indices[0] as usize].position;
+            assert_eq!(
+                first_pos as u8 % group.alignment,
+                0,
+                "group's first field at position {} must be aligned to {}",
+                first_pos,
+                group.alignment,
+            );
+        }
+    }
+
+    #[test]
+    fn index_group_with_byte_user_field_alignment_metadata_unchanged() {
+        // Mixed-alignment user fields don't affect the GROUP's
+        // declared alignment — it's still 4 because the int4 members
+        // need 4-byte boundaries.  The layout routine MUST honour
+        // this even when other small-aligned fields are present.
+        let mut s = Stores::new();
+        let byte_c = s.byte(0, false);
+        let tp = s.structure("ItemL", 0);
+        s.field(tp, "flag", byte_c);
+        let _idx = s.index(tp, &[("flag".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize].index_groups().next().expect("group");
+        // Group's declared alignment is 4 regardless of user field size.
+        assert_eq!(group.alignment, 4);
+        // First member (#left_1) lands on a 4-byte boundary.
+        let l_idx = group.field_indices[0];
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            assert_eq!(
+                fields[l_idx as usize].position as u8 % 4,
+                0,
+                "#left_1 must be 4-byte aligned even when user struct has 1-byte fields",
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_index_groups_each_aligned_independently() {
+        // Each registered group keeps its own alignment metadata,
+        // and each group's first member must land on its declared
+        // alignment boundary.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let txt_c = s.name("text");
+        let tp = s.structure("ItemM", 0);
+        s.field(tp, "name", txt_c);
+        s.field(tp, "value", int_c);
+        let _ = s.index(tp, &[("name".to_string(), true)]);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let groups: Vec<_> = s
+            .types[tp as usize]
+            .index_groups()
+            .cloned()
+            .collect();
+        assert_eq!(groups.len(), 2);
+        for group in &groups {
+            assert_eq!(group.alignment, 4, "every index group has alignment 4");
+            assert_eq!(group.size, 9, "every index group has size 9");
+            if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+                let l_idx = group.field_indices[0];
+                let pos = fields[l_idx as usize].position;
+                assert_eq!(
+                    pos as u8 % group.alignment,
+                    0,
+                    "group instance {} #left at position {} not aligned to {}",
+                    group.instance,
+                    pos,
+                    group.alignment,
+                );
+            }
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // Safe member access — the new infrastructure must let consumers
+    // walk every member of a registered group via
+    // `member_field_index(i)` → host fields → `fields[idx].position`,
+    // returning a valid offset for every member after `finish`.  No
+    // string-prefix matching, no ad-hoc index arithmetic.
+    // ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn safe_member_access_via_member_field_index_returns_all_fields() {
+        // Walk every member of an index group via the public API,
+        // verify each yields a real field with a valid position.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemSafe1", int_c);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .clone();
+
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            // Every group member must yield a valid field.
+            for member_idx in 0..group.arity() {
+                let field_idx = group
+                    .member_field_index(member_idx)
+                    .expect("member index in range");
+                let field = &fields[field_idx as usize];
+                assert_ne!(
+                    field.position, u16::MAX,
+                    "member {member_idx} (field '{}') has no position assigned",
+                    field.name,
+                );
+                assert!(
+                    field.name.starts_with('#'),
+                    "member {member_idx} should be bookkeeping, got '{}'",
+                    field.name,
+                );
+            }
+            // Out-of-range member returns None — no panic.
+            assert!(group.member_field_index(group.arity()).is_none());
+            assert!(group.member_field_index(usize::MAX).is_none());
+        }
+    }
+
+    #[test]
+    fn safe_access_member_positions_respect_first_field_alignment() {
+        // The first member's position must be aligned to the group's
+        // alignment.  Subsequent members are at consecutive ascending
+        // positions per `calculate_positions`'s assignment.  Test
+        // verifies the GROUP's claimed alignment is honoured for the
+        // anchor point.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemSafe2", int_c);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .clone();
+
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            let first_idx = group.member_field_index(0).unwrap();
+            let first_pos = fields[first_idx as usize].position;
+            assert_eq!(
+                first_pos as u8 % group.alignment,
+                0,
+                "first member at position {first_pos} not aligned to group.alignment={}",
+                group.alignment,
+            );
+        }
+    }
+
+    #[test]
+    fn safe_access_yields_distinct_non_overlapping_positions() {
+        // Every member's position must be DISTINCT from every other
+        // member's, AND no two members can share bytes in the
+        // host struct.  This guards against off-by-one in
+        // `field_indices` registration.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = struct_with_single_field(&mut s, "ItemSafe3", int_c);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let group = s.types[tp as usize]
+            .index_groups()
+            .next()
+            .expect("group")
+            .clone();
+
+        // Resolve each member's (position, content_size) for byte-range comparison.
+        let int4 = s.int(0, false);
+        let int4_size = s.types[int4 as usize].size;
+        let bool_c = s.name("boolean");
+        let bool_size = s.types[bool_c as usize].size;
+
+        let ranges: Vec<(u16, u16)> = if let Parts::Struct(fields) =
+            &s.types[tp as usize].parts
+        {
+            (0..group.arity())
+                .map(|i| {
+                    let idx = group.member_field_index(i).unwrap();
+                    let pos = fields[idx as usize].position;
+                    let sz = if fields[idx as usize].content == bool_c {
+                        bool_size
+                    } else {
+                        int4_size
+                    };
+                    (pos, pos + sz)
+                })
+                .collect()
+        } else {
+            panic!("not a struct")
+        };
+
+        // No range overlaps any other.
+        for i in 0..ranges.len() {
+            for j in (i + 1)..ranges.len() {
+                let (a, b) = ranges[i];
+                let (c, d) = ranges[j];
+                assert!(
+                    b <= c || d <= a,
+                    "members {i}={:?} and {j}={:?} overlap",
+                    ranges[i],
+                    ranges[j],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn safe_access_through_multiple_index_groups() {
+        // With two indexes, every member of every group must be
+        // independently accessible and yield a valid distinct
+        // position.  6 distinct positions total (3 per group × 2
+        // groups), all accessible without name-string parsing.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let txt_c = s.name("text");
+        let tp = s.structure("ItemSafe4", 0);
+        s.field(tp, "name", txt_c);
+        s.field(tp, "value", int_c);
+        let _ = s.index(tp, &[("name".to_string(), true)]);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        let groups: Vec<_> = s
+            .types[tp as usize]
+            .index_groups()
+            .cloned()
+            .collect();
+        assert_eq!(groups.len(), 2);
+
+        let mut all_positions: Vec<u16> = Vec::new();
+        if let Parts::Struct(fields) = &s.types[tp as usize].parts {
+            for group in &groups {
+                for member_idx in 0..group.arity() {
+                    let idx = group
+                        .member_field_index(member_idx)
+                        .expect("member in range");
+                    let field = &fields[idx as usize];
+                    assert_ne!(field.position, u16::MAX);
+                    // Verify the field's name carries the group's instance
+                    // suffix — sanity check that field_indices points where
+                    // we think.
+                    assert!(
+                        field
+                            .name
+                            .ends_with(&format!("_{}", group.instance)),
+                        "field '{}' should end with '_{}'",
+                        field.name,
+                        group.instance,
+                    );
+                    all_positions.push(field.position);
+                }
+            }
+        }
+        // 2 groups × 3 members = 6 positions, all distinct.
+        all_positions.sort();
+        let original_len = all_positions.len();
+        all_positions.dedup();
+        assert_eq!(
+            all_positions.len(),
+            original_len,
+            "all 6 member positions must be distinct, got duplicates",
+        );
+    }
+
+    #[test]
+    fn index_groups_iterator_excludes_non_index_groups() {
+        // `index_groups()` filter must ignore any future Tuple-kind
+        // entries on Type::field_groups.  Today no Tuple groups land
+        // there (tuples live on Definition::field_groups), but this
+        // test guards the filter against accidental contamination.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("ItemI", 0);
+        s.field(tp, "value", int_c);
+        let _ = s.index(tp, &[("value".to_string(), true)]);
+        s.finish();
+
+        // Inject a fake Tuple group to confirm the filter excludes it.
+        s.types[tp as usize].field_groups.push(crate::data::LinkedFieldGroup {
+            kind: crate::data::LinkedFieldKind::Tuple,
+            instance: 0,
+            field_indices: vec![0],
+            alignment: 1,
+            size: 0,
+        });
+        let total = s.types[tp as usize].field_groups.len();
+        let index_only: Vec<_> = s.types[tp as usize].index_groups().collect();
+        assert_eq!(total, 2, "should have one Index + one Tuple group");
+        assert_eq!(index_only.len(), 1, "index_groups() must filter out Tuple");
+        assert_eq!(index_only[0].kind, LinkedFieldKind::Index);
     }
 }

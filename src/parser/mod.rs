@@ -666,6 +666,30 @@ impl Parser {
         if let Type::Rewritten(inner) = is_type {
             return self.convert(code, inner, should);
         }
+        if let Type::Rewritten(inner) = should {
+            return self.convert(code, is_type, inner);
+        }
+        // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
+        // Without this, a value with a `Rewritten(Reference)` element
+        // (e.g. `(Inner { … }, 11)` from inline struct construction)
+        // fails to match a field declared as `(Inner, integer)` even
+        // though the underlying types are compatible.  We don't
+        // mutate `code` here — element conversions are by-shape only.
+        if let (Type::Tuple(src_elems), Type::Tuple(dst_elems)) = (is_type, should)
+            && src_elems.len() == dst_elems.len()
+        {
+            let mut all_compatible = true;
+            for (s, d) in src_elems.iter().zip(dst_elems.iter()) {
+                let mut placeholder = Value::Null;
+                if !self.convert(&mut placeholder, s, d) {
+                    all_compatible = false;
+                    break;
+                }
+            }
+            if all_compatible {
+                return true;
+            }
+        }
         if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
             for a in &self.data.def(*enum_tp).attributes {
                 if a.name == self.data.def(*ref_tp).name {
@@ -1731,6 +1755,51 @@ impl Parser {
                 let info = self.type_info(tp);
                 self.cl("OpGetField", &[code, p, info])
             }
+            Type::Function(_, _, _) => {
+                // Storage holds the 4-byte i32 d_nr; the stack-side
+                // fn-ref slot is 20 bytes (8B i64 d_nr + 12B null
+                // closure DbRef).  Read d_nr via OpGetInt4 (pushes
+                // 8B), then push a 12B null sentinel for the closure
+                // half.  Mirrors `gen_fn_ref_value`'s "if value
+                // generated < 16 bytes, fill" pattern but emits the
+                // sequence inline as a Block so callers see a single
+                // Type::Function value.
+                let read_dnr = self.cl("OpGetInt4", &[code, p]);
+                let null_clos = self.cl("OpNullRefSentinel", &[]);
+                crate::data::v_block(
+                    vec![read_dnr, null_clos],
+                    tp.clone(),
+                    "fn_ref_field_read",
+                )
+            }
+            Type::Tuple(elems) => {
+                // Plan-06 phase 4d: tuple struct field read.  Each
+                // element is read from `pos + element_offsets[i]`
+                // using the same OpGet* opcodes that ordinary struct
+                // fields use; the assembled stack tuple matches the
+                // shape `Type::Tuple(...)` consumers expect.
+                let elems_vec = elems.clone();
+                let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+                let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elems_vec.len(),
+                )
+                .unwrap_or_else(|| {
+                    crate::data::element_offsets(&elems_vec)
+                        .into_iter()
+                        .map(|x| x as u16)
+                        .collect()
+                });
+                let mut tuple_elems = Vec::with_capacity(elems_vec.len());
+                for (i, et) in elems_vec.iter().enumerate() {
+                    let elem_pos = pos + u32::from(offsets[i]);
+                    let elem_val = self.get_val(et, false, elem_pos, code.clone(), u32::MAX);
+                    tuple_elems.push(elem_val);
+                }
+                Value::Tuple(tuple_elems)
+            }
             _ => {
                 diagnostic!(
                     self.lexer,
@@ -1752,6 +1821,166 @@ impl Parser {
         val_code: Value,
     ) -> Value {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
+    }
+
+    /// Plan-06 phase 4d: emit the per-element OpSet* sequence for a
+    /// tuple struct field's value.  Recurses for nested Tuple element
+    /// types so `((1, 2), (3, 4))` written into a `((int, int), (int,
+    /// int))` field flattens to four `OpSetInt` calls at offsets
+    /// `[0, 8, 16, 24]`.
+    ///
+    /// `base_pos` is the byte offset within the host record where the
+    /// tuple's first element begins.  `elems` lists the tuple's
+    /// element types in declaration order.  `val_code` is the IR for
+    /// the tuple value.
+    ///
+    /// Two flavours of `val_code`:
+    /// - `Value::Tuple([…])` literal — walked element-wise without a
+    ///   temp variable, allowing direct recursion for nested tuples.
+    /// - Anything else (variable, function call, etc.) — stashed in a
+    ///   work-ref tuple temp first, then read element-by-element via
+    ///   `Value::TupleGet`.  Nested tuple elements in this branch
+    ///   require codegen support for `TupleGet` on `Type::Tuple`
+    ///   (see `state/codegen.rs::Value::TupleGet` stack-tuple arm).
+    fn emit_tuple_set_ops(
+        &mut self,
+        ref_code: &Value,
+        base_pos: u16,
+        elems: &[Type],
+        val_code: Value,
+    ) -> Vec<Value> {
+        let elems_vec = elems.to_vec();
+        let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+        let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+            &self.data,
+            &self.database,
+            tuple_d_nr,
+            elems_vec.len(),
+        )
+        .unwrap_or_else(|| {
+            crate::data::element_offsets(&elems_vec)
+                .into_iter()
+                .map(|x| x as u16)
+                .collect()
+        });
+        if let Value::Tuple(values) = val_code {
+            // Literal tuple value — recurse element-wise so nested
+            // tuple elements flatten into per-leaf OpSet* calls.
+            let mut ops = Vec::new();
+            for (i, (elem_tp, value_i)) in elems_vec.iter().zip(values).enumerate() {
+                let elem_pos = base_pos + offsets[i];
+                ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, value_i));
+            }
+            return ops;
+        }
+        // Non-literal source: stash to a work-ref Tuple local, then
+        // read each element via `Value::TupleGet`.
+        let tup_tp = Type::Tuple(elems_vec.clone());
+        let tmp = self.vars.work_refs(&tup_tp, &mut self.lexer);
+        if !self.first_pass {
+            self.change_var_type(tmp, &tup_tp);
+        }
+        let mut ops = vec![v_set(tmp, val_code)];
+        for (i, elem_tp) in elems_vec.iter().enumerate() {
+            let elem_pos = base_pos + offsets[i];
+            let elem_val = Value::TupleGet(tmp, i as u16);
+            ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, elem_val));
+        }
+        ops
+    }
+
+    /// Emit the OpSet* (or recursive flatten) for a single tuple
+    /// element at a fixed byte offset within the host record.
+    /// Returns a vec because nested-tuple elements expand to multiple
+    /// per-leaf set ops.
+    fn emit_set_one_element(
+        &mut self,
+        ref_code: &Value,
+        pos: u16,
+        elem_tp: &Type,
+        value: Value,
+    ) -> Vec<Value> {
+        let pos_v = Value::Int(i32::from(pos));
+        let single = match elem_tp {
+            Type::Integer(_) => self.cl("OpSetInt", &[ref_code.clone(), pos_v, value]),
+            Type::Function(_, _, _) => {
+                // P196: storage holds the 4-byte i32 d_nr only.  Reduce
+                // `Value::FnRef` to its bare `Value::Int(d_nr)` so the
+                // OpSetInt4 template body sees an i64 the interpreter
+                // pops in 8 bytes; for fn-ref-shaped sources (Var,
+                // TupleGet, function call), interpreter `TupleGet`
+                // already pushes only the d_nr's 8 bytes via OpVarInt,
+                // and `output_call` projects `.0` natively (see the
+                // val_is_fn_ref handling in src/generation/calls.rs).
+                let d_nr_only = match value {
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr as i32),
+                    other => other,
+                };
+                self.cl("OpSetInt4", &[ref_code.clone(), pos_v, d_nr_only])
+            }
+            Type::Float => self.cl("OpSetFloat", &[ref_code.clone(), pos_v, value]),
+            Type::Single => self.cl("OpSetSingle", &[ref_code.clone(), pos_v, value]),
+            Type::Character => self.cl("OpSetCharacter", &[ref_code.clone(), pos_v, value]),
+            Type::Boolean => {
+                let v = v_if(value, Value::Int(1), Value::Int(0));
+                self.cl("OpSetByte", &[ref_code.clone(), pos_v, Value::Int(0), v])
+            }
+            Type::Text(_) => self.cl("OpSetText", &[ref_code.clone(), pos_v, value]),
+            Type::Reference(inner_d_nr, _) | Type::Enum(inner_d_nr, true, _) => {
+                let type_nr = if self.first_pass {
+                    Value::Int(i32::from(u16::MAX))
+                } else {
+                    Value::Int(i32::from(self.data.def(*inner_d_nr).known_type))
+                };
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[ref_code.clone(), pos_v.clone(), type_nr.clone()],
+                );
+                self.cl("OpCopyRecord", &[value, field_ref, type_nr])
+            }
+            Type::Vector(content, _) => {
+                let vec_tp = self.vector_of(content);
+                let elem_db_tp = self.database.content(vec_tp);
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[
+                        ref_code.clone(),
+                        pos_v.clone(),
+                        Value::Int(i32::from(vec_tp)),
+                    ],
+                );
+                self.cl(
+                    "OpAppendVector",
+                    &[field_ref, value, Value::Int(i32::from(elem_db_tp))],
+                )
+            }
+            Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Sorted(_, _, _) => {
+                self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value])
+            }
+            // Plan-06 phase 4d: nested tuple element — recurse into
+            // `emit_tuple_set_ops` with the inner tuple's offsets so
+            // each leaf primitive lands at `outer_pos +
+            // outer_offsets[i] + inner_offsets[j]`.  The flattened
+            // ops are returned as a single Vec.
+            Type::Tuple(inner_elems) => {
+                return self.emit_tuple_set_ops(ref_code, pos, inner_elems, value);
+            }
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple struct field cannot contain element of type {}",
+                        elem_tp.name(&self.data)
+                    );
+                }
+                Value::Null
+            }
+        };
+        vec![single]
     }
 
     fn set_field_no_check(
@@ -1861,6 +2090,47 @@ impl Parser {
                 // `OpSetInt` writes 8 bytes (i64), which overflows into the
                 // next field.  Use `OpSetInt4` to write only 4 bytes.
                 self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
+            }
+            Type::Function(_, _, _) => {
+                // Storage holds the 4-byte i32 d_nr only — closures
+                // (the 12-byte trailing half of a 20-byte stack
+                // fn-ref slot) are NOT stored here.  Reduce
+                // `Value::FnRef` to its bare `Value::Int(d_nr)` so
+                // the literal lambda case bypasses any tuple shape;
+                // for non-literal sources (Var of fn-ref, TupleGet
+                // of a fn-ref tuple element, function-call return)
+                // the interpreter's `TupleGet`/`Var` codegen pushes
+                // only the d_nr's 8 bytes via `OpVarInt`, and the
+                // native template substitution in
+                // `src/generation/calls.rs` projects `.0` from the
+                // `(u32, DbRef)` fn-ref tuple before the i32 cast.
+                let d_nr_only = match val_code {
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr as i32),
+                    other => other,
+                };
+                self.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
+            }
+            Type::Tuple(ref elems) => {
+                // Plan-06 phase 4d: tuple struct field assignment.
+                // Storage layout matches the synthetic `__tuple<…>`
+                // struct's element positions (registered via
+                // `tuple_def`) so each element write goes through
+                // the same `OpSetInt`/`OpSetFloat`/etc. opcodes used
+                // for ordinary struct fields.  Recurses for nested
+                // Tuple element types — see `emit_tuple_set_ops`.
+                let elems_vec = elems.clone();
+                let host_field_pos = if let Value::Int(p) = pos_val {
+                    p as u16
+                } else {
+                    0
+                };
+                let ops = self.emit_tuple_set_ops(
+                    &ref_code,
+                    host_field_pos,
+                    &elems_vec,
+                    val_code,
+                );
+                v_block(ops, Type::Void, "tuple_field_set")
             }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, _) => {

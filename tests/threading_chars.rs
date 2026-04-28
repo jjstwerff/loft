@@ -527,7 +527,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vec-of-fns-input: phase 4d.A landed wide-input dispatch (input_kind_for_first_arg returns Primitive { size: 20 } for fn-ref first args) but fn-ref vector storage is 4 bytes (just the d_nr), not 20.  The wide-input read would copy 20 bytes from a 4-byte slot, picking up garbage from the next row.  Closing this needs either (a) per-row synthesis of the 12-byte null closure DbRef when the input is a fn-ref vector, or (b) phase 9 storage support for fn-ref-with-closure vector elements.  Punted to a phase 4d.A.2 sub-step."]
+#[ignore = "par-vec-of-fns-input: phase 4d.A.2 — 2026-04-28 partial fix.  Parser + storage routing + OpSetInt4 emit + elem_size=4 for par dispatch all landed (no more parser hang, no more 8-byte stride writes corrupting adjacent slots).  Test now SIGSEGVs in worker execution: codegen's compile-time stack tracker disagrees with the worker entry's runtime stack layout (apply's body assumes ConstInt pushes 4 bytes but it pushes 8; tracker says stack_pos=24 at CallRef, runtime is 36).  Fixing this needs reconciling the codegen tracker for fn-ref args with the worker entry path in `execute_at_raw_primitive_input_wide`, plus fixing native codegen's undefined `t65` reference and the worker closure's `(u32, DbRef)` type mismatch.  See /home/jurjen/.claude/plans/serialized-churning-journal.md for the full cascade."]
 fn par_vec_of_fns_input_t4() {
     // Workers receive a fn-ref and call it on a fixed input.
     // Whether vector<fn> is even constructable today is part of
@@ -730,7 +730,6 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-tuple-input: P189c (per-attribute writes for tuple-element literals) closed the (int, int) case but text elements within tuples need separate handling — runtime returns 0 instead of the expected sum-of-lengths.  Filed as P189d: investigate whether set_field's Type::Text arm needs a vector-element write path, or whether tuple-element text reads need DbRef-aware unboxing similar to P189b."]
 fn par_tuple_input_int_text() {
     // Worker reads a text element from a tuple input.
     code!(

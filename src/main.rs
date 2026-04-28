@@ -1707,6 +1707,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+            tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };
@@ -1802,6 +1803,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+            tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: true,
             };
@@ -1997,6 +1999,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+            tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };

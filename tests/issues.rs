@@ -949,6 +949,7 @@ fn n1_native_pipeline_trivial_program() {
         yield_collect: false,
         fn_ref_context: false,
         i32_literal_context: false,
+            tuple_text_to_string: false,
         call_stack_prefix: None,
         wasm_browser: false,
     };
@@ -1902,6 +1903,228 @@ fn test() {
     r = map(v, triple);
     assert(r[0] == 3);
     assert(r[1] == 6);
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Plan-06 phase 4d: Fn-ref and tuple as struct fields ─────────────────────
+
+// Fn-ref as a struct field: store the d_nr in 4 bytes, read back as a
+// 20-byte stack fn-ref slot with null closure, then call through it.
+// Storage and stack widths differ (matching `vector<fn-ref>`); the
+// closure half is intentionally null because tuple/struct fields don't
+// store closures.
+#[test]
+fn p4d_fn_ref_as_struct_field() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer }
+fn dbl(x: integer) -> integer { x + x }
+fn triple(x: integer) -> integer { x * 3 }
+fn test() {
+    h1 = Holder { f: dbl };
+    h2 = Holder { f: triple };
+    assert(h1.f(10) == 20, \"h1.f(10)={h1.f(10)}\");
+    assert(h2.f(10) == 30, \"h2.f(10)={h2.f(10)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple as a struct field: elements are inlined into the host struct's
+// bytes via the synthetic `__tuple<…>` struct's positions; per-element
+// reads/writes use the same OpInt variants as ordinary struct fields.
+#[test]
+fn p4d_tuple_as_struct_field() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn test() {
+    p = Pair { v: (3, 4) };
+    assert(p.v.0 == 3, \"p.v.0={p.v.0}\");
+    assert(p.v.1 == 4, \"p.v.1={p.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Mixed-element tuple field with text + numeric atom: heap text pointer
+// and primitive ints share the inlined tuple block, each at the offset
+// the synthetic struct's layout assigns.
+#[test]
+fn p4d_tuple_field_mixed_with_text() {
+    code!(
+        "struct Mixed {
+    name: text,
+    coords: (integer, integer),
+    scale: float
+}
+fn test() {
+    m = Mixed { name: \"origin\", coords: (10, 20), scale: 1.5 };
+    assert(m.coords.0 == 10, \"x={m.coords.0}\");
+    assert(m.coords.1 == 20, \"y={m.coords.1}\");
+    assert(m.scale == 1.5, \"scale={m.scale}\");
+    assert(m.name == \"origin\", \"name={m.name}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with text element only: write+read of interned strings
+// inside the host record's store.  Verifies the native-codegen `String`
+// vs `&str` plumbing via the `tuple_text_to_string` flag and the
+// pre-eval block-text deref wrap.
+#[test]
+fn p4d_tuple_field_text_pair() {
+    code!(
+        "struct A { v: (text, text) }
+fn test() {
+    a = A { v: (\"hello\", \"world\") };
+    assert(a.v.0 == \"hello\", \"0={a.v.0}\");
+    assert(a.v.1 == \"world\", \"1={a.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with vector element: deep-copy via OpAppendVector into a
+// vector record allocated in the host's store, plus a primitive
+// follower so the synthetic struct's atomic layout has both heap and
+// inline elements.
+#[test]
+fn p4d_tuple_field_with_vector() {
+    code!(
+        "struct WithVec { v: (vector<integer>, integer) }
+fn test() {
+    w = WithVec { v: ([1, 2, 3], 42) };
+    assert(w.v.0[0] == 1, \"vec[0]={w.v.0[0]}\");
+    assert(w.v.0[1] == 2, \"vec[1]={w.v.0[1]}\");
+    assert(w.v.0[2] == 3, \"vec[2]={w.v.0[2]}\");
+    assert(w.v.1 == 42, \"second={w.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with a struct reference element: inlined struct bytes
+// inside the host record (same-store) via OpCopyRecord.  Validates the
+// `Rewritten(Reference)`-aware `convert` path so `(Inner { … }, 11)`
+// matches `(Inner, integer)`.
+#[test]
+fn p4d_tuple_field_with_reference() {
+    code!(
+        "struct Inner { v: integer }
+struct Outer { pair: (Inner, integer) }
+fn test() {
+    o = Outer { pair: (Inner { v: 7 }, 11) };
+    inner = o.pair.0;
+    assert(inner.v == 7, \"inner.v={inner.v}\");
+    assert(o.pair.1 == 11, \"second={o.pair.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple struct field: inner tuples inline their bytes inside
+// the outer tuple's bytes inside the host record.  All access paths
+// (set, get, null-init) recurse through nested `Type::Tuple` elements
+// so the layout is fully recursive.
+#[test]
+fn p4d_tuple_field_nested_homogeneous() {
+    code!(
+        "struct Nested { v: ((integer, integer), (integer, integer)) }
+fn test() {
+    n = Nested { v: ((1, 2), (3, 4)) };
+    inner1 = n.v.0;
+    inner2 = n.v.1;
+    assert(inner1.0 == 1, \"0.0={inner1.0}\");
+    assert(inner1.1 == 2, \"0.1={inner1.1}\");
+    assert(inner2.0 == 3, \"1.0={inner2.0}\");
+    assert(inner2.1 == 4, \"1.1={inner2.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple with mixed-type inner elements (text + integer): each
+// leaf primitive's offset is computed from `outer_offset +
+// inner_offset`, with text elements writing interned pointers in the
+// host's store while integers stay inline.
+#[test]
+fn p4d_tuple_field_nested_mixed() {
+    code!(
+        "struct Pair { v: ((integer, text), (text, integer)) }
+fn test() {
+    p = Pair { v: ((1, \"a\"), (\"b\", 2)) };
+    i1 = p.v.0;
+    i2 = p.v.1;
+    assert(i1.0 == 1, \"i1.0\");
+    assert(i1.1 == \"a\", \"i1.1={i1.1}\");
+    assert(i2.0 == \"b\", \"i2.0={i2.0}\");
+    assert(i2.1 == 2, \"i2.1\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple with asymmetric arities (3-of-2 elements vs 2-of-2):
+// covers element-offset adjustment when sub-tuples have different
+// sizes side-by-side.
+#[test]
+fn p4d_tuple_field_nested_asymmetric() {
+    code!(
+        "struct Triple { v: ((integer, integer, integer), (integer, integer)) }
+fn test() {
+    t = Triple { v: ((1, 2, 3), (10, 20)) };
+    a = t.v.0;
+    b = t.v.1;
+    assert(a.0 == 1 && a.1 == 2 && a.2 == 3, \"a\");
+    assert(b.0 == 10 && b.1 == 20, \"b\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init for a struct with a fn-ref field.  Previously
+// the native code emitted `(()) as i32` because `to_default(Type::
+// Function)` returned `Value::Null`; the fn-ref arm now returns
+// `Value::FnRef(0, u16::MAX, …)` which the downstream `set_field_check
+// ::Function` arm reduces to a `d_nr=0` 4-byte storage write.
+#[test]
+fn p4d_fn_ref_field_default_init() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer, n: integer }
+fn test() {
+    h = Holder { n: 7 };
+    assert(h.n == 7, \"n={h.n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init `Holder {}` with no fields supplied.  The
+// fn-ref field defaults via the same null-fn-ref path; the integer
+// field defaults to 0 via the existing `Value::Int(0)` arm.
+#[test]
+fn p4d_fn_ref_field_bare_default() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer }
+fn test() { h = Holder {}; }"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init for a tuple struct field where elements are a
+// mix of heap-pointed (text) and primitive (integer).  Recursive
+// `to_default(Type::Tuple)` produces per-element defaults: text `\"\"`
+// (interned empty string in the host's store) and integer `0`.
+#[test]
+fn p4d_tuple_field_default_init() {
+    code!(
+        "struct Pair { v: (text, integer) }
+fn test() {
+    p = Pair {};
+    assert(p.v.0 == \"\", \"v.0='{p.v.0}'\");
+    assert(p.v.1 == 0, \"v.1={p.v.1}\");
 }"
     )
     .result(Value::Null);
@@ -8616,6 +8839,7 @@ fn p144_ref_param_forward_native() {
             yield_collect: false,
             fn_ref_context: false,
             i32_literal_context: false,
+            tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -8944,12 +9168,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:362:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:362:24) \
+         struct or enum (defined at default{s}01_code.loft:365:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -9004,6 +9228,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
             yield_collect: false,
             fn_ref_context: false,
             i32_literal_context: false,
+            tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -10404,6 +10629,50 @@ fn p189b_vector_tuple_int_text_index_access() {
     .result(Value::Null);
 }
 
+/// P189b — for-loop iteration over `vector<(T1, T2, …)>`.
+///
+/// Element binding (`for p in pairs`) used to fail with
+/// `Field access not supported on type tuple([…])` because the
+/// loop var was typed as the bare tuple.  The parser now retypes
+/// it as `Reference(__tuple<…>)` so per-element loads (`p.0`,
+/// `p.1`) route through the struct-style field-access path,
+/// matching the index-access fix in `p189b_vector_tuple_index_access`.
+#[test]
+fn p189b_vector_tuple_for_loop_int_int() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    sum_a = 0;
+    sum_b = 0;
+    for p in pairs {
+        sum_a += p.0;
+        sum_b += p.1;
+    }
+    assert(sum_a == 6, \"sum_a={sum_a}, expected 6\");
+    assert(sum_b == 60, \"sum_b={sum_b}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p189b_vector_tuple_for_loop_int_text() {
+    code!(
+        "fn test() {
+    labels: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    sum_id = 0;
+    sum_len = 0;
+    for q in labels {
+        sum_id += q.0;
+        sum_len += len(q.1);
+    }
+    assert(sum_id == 6, \"sum_id={sum_id}, expected 6\");
+    assert(sum_len == 11, \"sum_len={sum_len}, expected 11\");
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P193 — eager init for `local: keyed_collection<T> = []`.
 ///
 /// Without the fix, the empty `[]` literal parses to
@@ -10576,4 +10845,74 @@ fn test() {
 }"
     )
     .result(Value::Null);
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V1 — vector<fn-ref> index access.
+///
+/// Localises the bug behind `par_vec_of_fns_input_t4`'s infinite loop:
+/// is vector<fn-ref> storage broken (root cause A/B), or is the par
+/// dispatcher broken (root cause C)?
+///
+/// If this test fails: vector storage is broken — par is downstream.
+/// If this test passes: storage works; check V2 (for-loop iteration)
+/// and V3 (par with single element) next.
+#[test]
+#[ignore = "p4dA2 — parse fails with 'Expect token ;' at the vector<fn(...)> declaration when the body uses index access (`f = fs[0]`) instead of `for f in fs par(...)`.  Keeping ignored while diagnosing."]
+fn p4d_a2_vector_fn_ref_index_access() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    f = fs[0];
+    apply(f)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V2 — non-par for-loop iteration.
+///
+/// Keeps the canary's `for f in fs` shape but drops `par(...)` so we
+/// can see if iteration alone hangs or if par-specific dispatch is the
+/// culprit.  If this hangs too: the bug is in for-loop iteration codegen
+/// for vector<fn-ref>.  If this returns 20: the bug is par-specific.
+#[test]
+#[ignore = "p4dA2 — parse fails identically to V1 (`Expect token ; at line 4:18` — the `(` in `fn(integer)`).  Suggests the parser only accepts vector<fn(...)> declaration syntax in specific contexts (canary's `for f in fs par(...)` clause).  Keeping ignored while investigating the parser path."]
+fn p4d_a2_vector_fn_ref_for_loop() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    total = 0;
+    for f in fs { total += apply(f); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V3 — par with single element.
+///
+/// If V1/V2 fail but V3 works (or hangs): the parse path is gated on
+/// `par(...)` syntax.  V3 hanging at runtime would cleanly localise
+/// the bug to the par dispatcher (matching the canary).
+#[test]
+#[ignore = "p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path."]
+fn p4d_a2_par_vector_fn_ref_single() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    total = 0;
+    for f in fs par(r = apply(f), 1) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
 }

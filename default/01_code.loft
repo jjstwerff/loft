@@ -309,12 +309,14 @@ fn OpMathFunc2Single(fn_id: const i8, v1: single, v2: single) -> single;
 pub fn atan2(both: single, v2: single) -> single {
   OpMathFunc2Single(0, both, v2)
 }
+#pure
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
 pub fn log(both: single, v2: single) -> single {
   OpMathFunc2Single(1, both, v2)
 }
+#pure
 
 fn OpPowSingle(v1: single, v2: single) -> single;
 #rust"@v1.powf(@v2)"
@@ -323,6 +325,7 @@ fn OpPowSingle(v1: single, v2: single) -> single;
 pub fn pow(both: single, v2: single) -> single {
   OpPowSingle(both, v2)
 }
+#pure
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_001f32"

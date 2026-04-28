@@ -547,8 +547,21 @@ impl Parser {
                             );
                             t = Type::Unknown(0);
                         } else {
-                            let offsets = crate::data::element_offsets(&elems);
-                            let elem_offset = offsets[idx] as u32;
+                            // Stored-tuple field offset goes through the
+                            // synthetic struct's post-finish layout — same
+                            // offsets `OpGetInt` uses for an ordinary
+                            // struct field.
+                            let elem_offset = if let Some(v) =
+                                crate::data::stored_tuple_offsets_for_def(
+                                    &self.data,
+                                    &self.database,
+                                    d_nr,
+                                    elems.len(),
+                                ) {
+                                u32::from(v[idx])
+                            } else {
+                                crate::data::element_offsets(&elems)[idx] as u32
+                            };
                             let elem_tp = elems[idx].clone();
                             *code = self.get_val(
                                 &elem_tp,

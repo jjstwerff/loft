@@ -1550,6 +1550,15 @@ impl Parser {
                     _ => self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()),
                 };
                 ls.push(op);
+            } else if matches!(in_t, Type::Function(_, _, _)) {
+                // Plan-06 phase 4d.A.2 — fn-ref vector elements store
+                // the 4-byte i32 d_nr.  Emit OpSetInt4 (4-byte write)
+                // not OpSetInt (8-byte) so adjacent element slots
+                // aren't corrupted by overflow.  The Value `p` here
+                // is `Value::Int(d_nr as i32)` (from `parse_fn_ref`),
+                // so the int4 write picks up the correct value.
+                let pos = Value::Int(0);
+                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]));
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
@@ -1675,6 +1684,13 @@ impl Parser {
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
             Type::Text(_) => self.database.name("text"),
+            // Plan-06 phase 4d.A.2 — fn-ref in a vector stores as
+            // 4-byte i32 d_nr.  Use the same DB type as `i32`
+            // (signed 32-bit, registered via `database.int(0, false)`)
+            // so vector storage uses the flat narrow-int path.  The
+            // semantic difference (d_nr vs. integer) is recovered at
+            // read-back time via fn-ref unbox.
+            Type::Function(_, _, _) => self.database.int(0, false),
             Type::Reference(r, _) | Type::Enum(r, _, _) => self.data.def(*r).known_type,
             Type::Hash(tp, key, _) => {
                 let mut name = "hash<".to_string() + &self.data.def(*tp).name + "[";

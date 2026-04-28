@@ -383,6 +383,23 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         Type::Text(_) => Value::Text(String::new()),
+        // Plan-06 phase 4d (P193): null fn-ref defaults are needed
+        // when a struct with a fn-ref field is default-initialised.
+        // `Value::FnRef(0, u16::MAX, …)` produces 8B `OpConstInt(0)`
+        // + 12B null DbRef in the interpreter, and `(0_u32,
+        // null_DbRef)` natively — both shapes the downstream
+        // `set_field_check::Type::Function` arm reduces to a 4-byte
+        // d_nr=0 storage write.
+        Type::Function(_, _, _) => {
+            Value::FnRef(0, u16::MAX, Box::new(tp.clone()))
+        }
+        // Plan-06 phase 4d (P193): tuple struct fields default to
+        // per-element defaults so `Pair {}` with `v: (text,
+        // integer)` lands as `("", 0)`.  Recurses through nested
+        // tuples and other compound element types.
+        Type::Tuple(elems) => Value::Tuple(
+            elems.iter().map(|e| to_default(e, data)).collect(),
+        ),
         _ => Value::Null,
     }
 }
@@ -768,8 +785,48 @@ impl Type {
 
 // ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
 
+/// Natural-alignment of a single element type, in bytes.
+///
+/// Used by `element_offsets` to pad tuple-element offsets so each
+/// element lands on its natural-alignment boundary — a tuple
+/// `(byte, integer)` has `_0` at offset 0 and `_1` at offset 8 (not 1).
+/// Mirrors the alignment table in `LinkedFieldGroup::group_alignment`'s
+/// caller (`Data::tuple_def`) and the database `align` field set by
+/// `database::types`.
+#[must_use]
+pub fn element_align(t: &Type) -> u8 {
+    match t {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Integer(_) | Type::Float => 8,
+        Type::Text(_) => 4,
+        Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::RefVar(_)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _)
+        | Type::Enum(_, true, _) => 4,
+        Type::Tuple(elems) => element_offsets_alignment_max(elems),
+        _ => 1,
+    }
+}
+
+/// Internal: max alignment across a tuple's elements.  Recursive
+/// because nested tuples contribute their own max alignment.
+fn element_offsets_alignment_max(types: &[Type]) -> u8 {
+    types.iter().map(element_align).max().unwrap_or(1)
+}
+
 /// Stack width in bytes of a single element type.
 /// Uses the same sizing as `variables::size(tp, &Context::Argument)`.
+///
+/// For tuples this returns the **atomic group size** —
+/// alignment-padded so each element lands on its natural-alignment
+/// boundary.  Matches `LinkedFieldGroup::group_size`'s packing so
+/// the runtime read path (`element_offsets`) and the storage layout
+/// (`calculate_positions_with_groups`) agree on every byte offset.
 #[must_use]
 pub fn element_size(t: &Type) -> usize {
     match t {
@@ -785,24 +842,174 @@ pub fn element_size(t: &Type) -> usize {
         | Type::Spacial(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
-            element_offsets(elems).last().map_or(0, |&off| off)
-                + elems.last().map_or(0, element_size)
+            // Atomic-group size: each element padded to its natural-
+            // alignment boundary inside the tuple block.  Identical
+            // to `LinkedFieldGroup::group_size` so storage layout
+            // (via `calculate_positions_with_groups`) and runtime
+            // reads (via `element_offsets`) line up byte-for-byte.
+            let mut pos: usize = 0;
+            for t in elems {
+                let align = element_align(t).max(1) as usize;
+                let rem = pos % align;
+                if rem != 0 {
+                    pos += align - rem;
+                }
+                pos += element_size(t);
+            }
+            pos
         }
         _ => 0,
     }
 }
 
 /// Byte offset of each element in a tuple-like layout.
-/// Element *i* starts at `offsets[i]`; total size is `offsets[last] + element_size(last)`.
+/// Element *i* starts at `offsets[i]`; total size is `element_size(&Type::Tuple(types))`.
+///
+/// **Alignment-aware**: each element is placed at the next position
+/// that satisfies its natural alignment.  For `(byte, integer)`,
+/// returns `[0, 8]` (not `[0, 1]`) — `_1` (integer, align 8) needs
+/// an 8-byte boundary, so 7 bytes of padding follow `_0`.
+///
+/// This matches `LinkedFieldGroup::group_member_offsets` exactly,
+/// so storage layout (synthetic `__tuple<…>` struct via
+/// `calculate_positions_with_groups`) and runtime reads (via
+/// codegen / `read_tuple_at_wide`) compute the same offsets.
 #[must_use]
 pub fn element_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
     let mut pos: usize = 0;
     for t in types {
+        let align = element_align(t).max(1) as usize;
+        let rem = pos % align;
+        if rem != 0 {
+            pos += align - rem;
+        }
         offsets.push(pos);
         pos += element_size(t);
     }
     offsets
+}
+
+/// Resolve per-element byte offsets for a STORED tuple via the synthetic
+/// `__tuple<…>` struct's post-finish field positions.
+///
+/// Returns `Some(offsets)` when:
+/// - `tuple_def` has registered the synthetic struct, AND
+/// - `Stores::finish_type` has assigned `position` to every field
+///   (i.e. layout has been finalised).
+///
+/// Returns `None` in any other situation (struct not yet registered,
+/// not yet finished, or wrong arity) so callers can fall back to
+/// `element_offsets` for early-parse paths.
+///
+/// **Why this exists**: storage reads / writes for tuple elements MUST
+/// use the same field offsets that ordinary struct fields use via
+/// `OpGetInt` / `OpSetInt`.  Routing through the synthetic struct's
+/// finished layout (rather than recomputing via `element_offsets`)
+/// means any divergence between the two paths is detected immediately
+/// — and keeps a single source of truth for stored-tuple field
+/// offsets.
+#[must_use]
+pub fn stored_tuple_offsets(
+    data: &Data,
+    database: &crate::database::Stores,
+    elems: &[Type],
+) -> Option<Vec<u16>> {
+    let inner_names: Vec<String> = elems.iter().map(|t| t.name(data)).collect();
+    let name = format!("__tuple<{}>", inner_names.join(","));
+    let def_nr = data.def_nr(&name);
+    if def_nr == u32::MAX {
+        return None;
+    }
+    stored_tuple_offsets_for_def(data, database, def_nr, elems.len())
+}
+
+/// Same as [`stored_tuple_offsets`] but with the synthetic struct's
+/// `def_nr` already resolved.  Use when the caller already has the
+/// def_nr (e.g. parser sites that called `tuple_def` directly).
+#[must_use]
+pub fn stored_tuple_offsets_for_def(
+    data: &Data,
+    database: &crate::database::Stores,
+    def_nr: u32,
+    expected_arity: usize,
+) -> Option<Vec<u16>> {
+    if def_nr == u32::MAX {
+        return None;
+    }
+    let known_type = data.def(def_nr).known_type;
+    if (known_type as usize) >= database.types.len() {
+        return None;
+    }
+    let parts = &database.types[known_type as usize].parts;
+    let fields = match parts {
+        crate::database::Parts::Struct(f) | crate::database::Parts::EnumValue(_, f) => f,
+        _ => return None,
+    };
+    if fields.len() != expected_arity {
+        return None;
+    }
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        if f.position == u16::MAX {
+            return None;
+        }
+        out.push(f.position);
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tuple_stack_layout_tests {
+    //! Stack-level tuple layout tests.  `element_size` and
+    //! `element_offsets` operate at stack widths — every
+    //! `Type::Integer` reports 8 bytes regardless of `forced_size`,
+    //! `Type::Text` reports `size_of::<Str>()` (16 bytes), etc.
+    //! Used by codegen for STACK tuples (`Value::TupleGet` on
+    //! `Type::Tuple` variables) and the par worker's tuple-arg
+    //! inflation in `read_tuple_at_wide`.
+    //!
+    //! **Storage** (`Store` heap) tuple element access does NOT use
+    //! these helpers — it goes through the synthetic `__tuple<…>`
+    //! struct's post-finish field positions via
+    //! `state::codegen::stored_tuple_field_offset`.
+    use super::{element_align, element_offsets, element_size, IntegerSpec, Type};
+
+    fn integer() -> Type {
+        Type::Integer(IntegerSpec {
+            min: i32::MIN + 1,
+            max: i32::MAX as u32,
+            not_null: false,
+            forced_size: None,
+        })
+    }
+
+    fn boolean() -> Type {
+        Type::Boolean
+    }
+
+    #[test]
+    fn stack_offsets_two_integers() {
+        // (int, int): both 8B aligned 8.  Stack layout: [0, 8].
+        let elems = vec![integer(), integer()];
+        assert_eq!(element_offsets(&elems), vec![0, 8]);
+        assert_eq!(element_size(&Type::Tuple(elems)), 16);
+    }
+
+    #[test]
+    fn stack_offsets_three_bools() {
+        // (bool, bool, bool): all 1B align 1.  Tightly packed.
+        let elems = vec![boolean(), boolean(), boolean()];
+        assert_eq!(element_offsets(&elems), vec![0, 1, 2]);
+        assert_eq!(element_size(&Type::Tuple(elems)), 3);
+    }
+
+    #[test]
+    fn stack_alignment_max_member() {
+        // Max alignment among elements drives the tuple's alignment.
+        let elems = vec![boolean(), integer()];
+        assert_eq!(element_align(&Type::Tuple(elems)), 8);
+    }
 }
 
 /// `(offset, index)` pairs for elements that need cleanup on scope exit
@@ -1034,6 +1241,127 @@ impl Display for DefType {
     }
 }
 
+/// A group of fields on a struct/type that belong together as a single
+/// logical unit.  Used **exclusively** for two patterns — tuple
+/// elements and index bookkeeping triples.  Do not extend for other
+/// uses without explicit user direction.
+///
+/// `Tuple` — synthetic `__tuple<T1,T2,…>` struct's element fields
+/// `_0`, `_1`, ….  One group per tuple-shape struct; `field_indices`
+/// lists every attribute in element order.  Registered by
+/// [`Data::tuple_def`].
+///
+/// `Index` — bookkeeping triple appended to a content struct when
+/// `index<T[key]>` is registered.  One group per index instance on the
+/// struct (multiple indexes → multiple groups); `field_indices`
+/// lists exactly `[left, right, color]` in that order.  Registered by
+/// [`Stores::index`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum LinkedFieldKind {
+    Tuple,
+    Index,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkedFieldGroup {
+    pub kind: LinkedFieldKind,
+    /// 0 for Tuple (only one tuple group per synthetic struct).
+    /// 1-based index instance counter for Index (matches the `_N`
+    /// suffix on `#left_N` / `#right_N` / `#color_N`).
+    pub instance: u16,
+    /// Indices into the host struct's field/attribute list.
+    /// For Tuple: element order, length = arity.
+    /// For Index: exactly `[left, right, color]`, length = 3.
+    pub field_indices: Vec<u16>,
+    /// Alignment the GROUP must be placed at — the MAX of every
+    /// member field's alignment.  An index triple
+    /// `[int4 (align 4), int4 (align 4), bool (align 1)]` has group
+    /// alignment 4.  A tuple `(integer (align 8), byte (align 1))` has
+    /// group alignment 8.  Pass this to the layout routine as the
+    /// alignment requirement when reserving the group's contiguous
+    /// block — the routine must honour it so the int/integer members
+    /// land on their natural-alignment boundaries.
+    pub alignment: u8,
+    /// Total bytes the group occupies when laid out atomically — the
+    /// sum of every member's size, **plus** any internal padding
+    /// needed to align larger members after smaller ones in element
+    /// order.  An index triple is `4 + 4 + 1 = 9` (no internal padding,
+    /// 1-byte bool last).  A tuple `(byte, integer)` requires 7 bytes
+    /// of internal padding between them: `1 + 7 + 8 = 16`.
+    pub size: u16,
+}
+
+impl LinkedFieldGroup {
+    /// Compute group alignment as the max of every member's
+    /// alignment.  `member_aligns` lists each member's natural
+    /// alignment in element order — e.g. for an index triple
+    /// `[4, 4, 1]`, returns 4.
+    #[must_use]
+    pub fn group_alignment(member_aligns: &[u8]) -> u8 {
+        member_aligns.iter().copied().max().unwrap_or(1)
+    }
+
+    /// Compute the group's total atomic size: each member at its
+    /// natural-alignment offset within the group, ending at the
+    /// natural-alignment-padded total.  `member_sizes_aligns` lists
+    /// `(size, alignment)` per member in element order.
+    ///
+    /// For an index triple `[(4,4), (4,4), (1,1)]` returns 9.
+    /// For a tuple `[(byte=1,1), (integer=8,8)]` returns 16 (the
+    /// 1-byte byte then 7 bytes padding then 8-byte integer).
+    #[must_use]
+    pub fn group_size(member_sizes_aligns: &[(u16, u8)]) -> u16 {
+        let mut pos: u16 = 0;
+        for &(size, align) in member_sizes_aligns {
+            // Pad up to the member's natural alignment.
+            let align_u16 = u16::from(align.max(1));
+            let rem = pos % align_u16;
+            if rem != 0 {
+                pos += align_u16 - rem;
+            }
+            pos += size;
+        }
+        pos
+    }
+
+    /// Number of fields in this group.  For Tuple = arity, for Index
+    /// = 3 (always `[left, right, color]`).
+    #[must_use]
+    pub fn arity(&self) -> usize {
+        self.field_indices.len()
+    }
+
+    /// Index into the host struct's field/attribute list of the
+    /// `member_idx`-th group member.  Returns `None` if `member_idx`
+    /// is out of range.  Safe entry point — replaces ad-hoc
+    /// `group.field_indices[i]` with bounds-checked access.
+    #[must_use]
+    pub fn member_field_index(&self, member_idx: usize) -> Option<u16> {
+        self.field_indices.get(member_idx).copied()
+    }
+
+    /// Per-member offsets inside the group, in element order.  Used
+    /// by the layout routine (post-group-atomic placement) to assign
+    /// each member's position relative to the group's anchor.
+    /// Mirrors `group_size`'s internal packing — first member at 0,
+    /// each subsequent member at the next natural-alignment offset.
+    #[must_use]
+    pub fn group_member_offsets(member_sizes_aligns: &[(u16, u8)]) -> Vec<u16> {
+        let mut offsets = Vec::with_capacity(member_sizes_aligns.len());
+        let mut pos: u16 = 0;
+        for &(size, align) in member_sizes_aligns {
+            let align_u16 = u16::from(align.max(1));
+            let rem = pos % align_u16;
+            if rem != 0 {
+                pos += align_u16 - rem;
+            }
+            offsets.push(pos);
+            pos += size;
+        }
+        offsets
+    }
+}
+
 /// Game definition, the data cannot be changed, there can be instances with differences
 #[derive(Clone)]
 pub struct Definition {
@@ -1093,6 +1421,12 @@ pub struct Definition {
     /// `is_par_safe` analyser treats unknown as ParentWrite-impure
     /// for safety.
     pub purity: Purity,
+    /// Linked-field groups on this definition's attributes.
+    /// Used **exclusively** for tuple elements (one group covering all
+    /// `_0`, `_1`, …) and index bookkeeping triples (one group per
+    /// index instance, covering `#left_N` / `#right_N` / `#color_N`).
+    /// Empty for ordinary user-defined structs.
+    pub field_groups: Vec<LinkedFieldGroup>,
 }
 
 impl Definition {
@@ -1106,6 +1440,17 @@ impl Definition {
                 .next()
                 .unwrap_or_default()
                 .is_uppercase()
+    }
+
+    /// Tuple-element field group on this synthetic `__tuple<…>` struct,
+    /// or `None` for non-tuple defs.  Reuses the `LinkedFieldGroup`
+    /// infrastructure rather than parsing the `__tuple<` name prefix
+    /// or scanning attributes named `_0`, `_1`, ….
+    #[must_use]
+    pub fn tuple_group(&self) -> Option<&LinkedFieldGroup> {
+        self.field_groups
+            .iter()
+            .find(|g| matches!(g.kind, LinkedFieldKind::Tuple))
     }
 
     #[must_use]
@@ -1440,6 +1785,7 @@ impl Data {
             const_ref: None,
             forced_size: None,
             purity: Purity::Unknown,
+            field_groups: Vec::new(),
         };
         self.definitions.push(new_def);
         rec
@@ -1849,12 +2195,54 @@ impl Data {
         // same tuple shape resolve to the same def.
         self.def_names.entry((name.clone(), 0)).or_insert(d);
         self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        let mut indices: Vec<u16> = Vec::with_capacity(types.len());
+        let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
         for (i, t) in types.iter().enumerate() {
             let aname = format!("_{i}");
-            self.add_attribute(lexer, d, &aname, t.clone());
+            let attr_idx = self.add_attribute(lexer, d, &aname, t.clone());
+            indices.push(attr_idx as u16);
+            // For tuple element-size we use `data::element_size` (the
+            // vector-storage width).  Natural alignment of an integer-
+            // width field equals its size.  Text is 4 bytes via
+            // interned heap pointer.  References are 12 bytes (DbRef);
+            // alignment is 4.  Functions are 4 bytes (i32 d_nr); the
+            // stack-slot inflation (to 20B) happens at read-back, not
+            // here — the GROUP's storage view is what matters.
+            let sz = element_size(t) as u16;
+            let align = match t {
+                Type::Boolean | Type::Enum(_, false, _) => 1,
+                Type::Single | Type::Character | Type::Function(_, _, _) => 4,
+                Type::Integer(_) | Type::Float => 8,
+                Type::Text(_) => 4,                          // heap pointer
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::RefVar(_)
+                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
+                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _) => 4,               // DbRef alignment
+                Type::Tuple(_) => 8,                         // conservative max
+                _ => 1,
+            };
+            sizes_aligns.push((sz, align));
         }
+        let alignment = LinkedFieldGroup::group_alignment(
+            &sizes_aligns.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
+        );
+        let size = LinkedFieldGroup::group_size(&sizes_aligns);
+        // Register the tuple element field group — single Tuple-kind
+        // group covering all `_0`, `_1`, … attributes in element order.
+        // Used by codegen / runtime to identify tuple structs without
+        // string-prefix matching on attribute names.  Alignment + size
+        // are pre-computed so the layout routine can honour the
+        // group's atomic placement.
+        self.definitions[d as usize].field_groups.push(LinkedFieldGroup {
+            kind: LinkedFieldKind::Tuple,
+            instance: 0,
+            field_indices: indices,
+            alignment,
+            size,
+        });
         d
     }
+
 
     pub fn check_vector(&mut self, d_nr: u32, vec_tp: u16, pos: &Position) -> u32 {
         let vec_name = format!("vector<{}>", self.def(d_nr).name);
@@ -2297,6 +2685,12 @@ impl Data {
                 let name = format!("__tuple<{}>", inner_names.join(","));
                 self.def_nr(&name)
             }
+            // Plan-06 phase 4d.A.2 — fn-ref vector elements use 4-byte
+            // i32 d_nr storage.  Route to `i32`'s def_nr (registered as
+            // a type alias for `integer size(4)` in `default/01_code.loft`)
+            // so the vector storage path treats fn-ref vectors
+            // identically to `vector<i32>`.
+            Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
     }
@@ -2333,6 +2727,10 @@ impl Data {
                 let name = format!("__tuple<{}>", inner_names.join(","));
                 self.def_nr(&name)
             }
+            // Plan-06 phase 4d.A.2 — fn-ref element types route to
+            // `i32` (4-byte int alias) so vector storage is flat.
+            // Same lookup as `type_def_nr`'s Function arm.
+            Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
     }

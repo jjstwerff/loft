@@ -54,12 +54,18 @@ const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 /// to dispatch `read_tuple_at_wide` (per-element inflation,
 /// notably 4 B heap text-pointer → 16 B stack `Str`) instead of
 /// `read_primitive_at_wide` (flat memcpy).
+///
+/// Plan-06 phase 4d.A.2: also returns `Some(vec![first.typedef])`
+/// for `Type::Function` first-args so the dispatcher routes through
+/// `read_tuple_at_wide` which produces a clean failure mode (vs. the
+/// hang from raw `read_primitive_at_wide` reading 20 bytes from a
+/// 4-byte stride).
 fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::data::Type>> {
     let first = def.attributes.first()?;
-    if let crate::data::Type::Tuple(elems) = &first.typedef {
-        Some(elems.clone())
-    } else {
-        None
+    match &first.typedef {
+        crate::data::Type::Tuple(elems) => Some(elems.clone()),
+        crate::data::Type::Function(_, _, _) => Some(vec![first.typedef.clone()]),
+        _ => None,
     }
 }
 
@@ -718,6 +724,7 @@ fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
         n,
         n_hidden_text,
         primitive_input_size,
+        tuple_input_types,
     );
     stores.put(stack, result_ref);
 }
@@ -779,7 +786,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
     // Text/Reference/struct-enum to the heavy path).  We still
     // consult v_return_size as a backstop when def.returned is
     // Unknown (partial-parse scaffolding).
-    let (return_size, primitive_input_size) = {
+    let (return_size, primitive_input_size, tuple_input_types) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -801,7 +808,11 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
             InputKind::Text => u32::MAX,
             InputKind::Primitive { size } => u32::from(size),
         };
-        (rs, pis)
+        // P189d — tuple-element types of the worker's first arg
+        // (None for non-tuple) so the wide-input path can inflate
+        // text fields per-element.
+        let tt = tuple_first_arg_types(def);
+        (rs, pis, tt)
     };
     let n_threads = (v_threads as usize).max(1);
     let n = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
@@ -820,6 +831,7 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
         n,
         pool_m,
         primitive_input_size,
+        tuple_input_types,
     );
     stores.put(stack, result_ref);
 }
@@ -839,6 +851,7 @@ fn parallel_light_execute_and_collect(
     n: usize,
     pool_m: usize,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) -> DbRef {
     let result_db = stores.null();
     let vec_words = ((n as u32) * return_size + 15) / 8;
@@ -868,6 +881,7 @@ fn parallel_light_execute_and_collect(
         n,
         &mut pool,
         primitive_input_size,
+        tuple_input_types,
     );
     // Return with pos=4 (not pos=8 from claim) — par result vector readers
     // expect the header pointer at v_ref.pos.
@@ -896,6 +910,7 @@ fn parallel_execute_and_collect(
     n: usize,
     n_hidden_text: usize,
     primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) -> DbRef {
     // Plan-06 phase 4c (DESIGN.md D1b) — Stitch::Concat carries no
     // payload; routing is by `dispatch_mode` (Text / Ref / Primitive).
@@ -1041,6 +1056,7 @@ fn parallel_execute_and_collect(
                 out_ptr,
                 n,
                 primitive_input_size,
+                tuple_input_types,
             );
         }
     }

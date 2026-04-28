@@ -215,6 +215,14 @@ pub struct Output<'a> {
     /// entry to every recursive `output_code_inner` that isn't
     /// explicitly inside such a slot.
     pub i32_literal_context: bool,
+    /// When true, `Value::Text` literals inside a `Value::Tuple` emit
+    /// with a trailing `.to_string()` so the element fits a
+    /// `String`-typed tuple slot.  Set by `set_var` (and similar
+    /// destination-aware paths) when assigning a `Value::Tuple` to a
+    /// `Type::Tuple(...)` variable that has at least one `Type::Text`
+    /// element.  Cleared after the assignment so argument-context
+    /// tuples (which need `&str`) keep the default emit.
+    pub tuple_text_to_string: bool,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
@@ -332,7 +340,19 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
         // N8a.1: a tuple null is the zero-default for each element type.
         Type::Tuple(elems) => {
-            let parts: Vec<String> = elems.iter().map(default_native_value).collect();
+            // Tuple variables hold Variable-context element types
+            // (`String` for `Text`, etc.), so the per-element default
+            // must match.  Map `Type::Text` to `String::new()` here
+            // — the bare `default_native_value(Text)` would return
+            // `Str::new(...)` which is the Argument-context literal
+            // and won't fit a `String`-typed tuple slot.
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| match e {
+                    Type::Text(_) => "String::new()".to_string(),
+                    other => default_native_value(other),
+                })
+                .collect();
             format!("({})", parts.join(", "))
         }
         _ => "0".into(), // Integer, Character, Enum(u8), etc.
@@ -495,6 +515,8 @@ extern crate loft;"
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
         writeln!(w, "use loft::vector;")?;
+        writeln!(w, "use loft::hash;")?;
+        writeln!(w, "use loft::tree;")?;
         writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
         // The `external::` namespace is used by stdlib #rust templates for rand/random ops.
@@ -1129,6 +1151,18 @@ extern crate loft;"
                             .then(|| self.data.def(n).known_type)
                             .filter(|t| *t != u16::MAX)
                     }
+                    // Plan-06 phase 4d: tuple struct fields inline the
+                    // synthetic `__tuple<…>` struct's bytes — emit its
+                    // type-creation call before the parent's `db.field`
+                    // so the forward reference (`db.field(t_parent, "v",
+                    // t_synthetic_tuple)`) sees the synthetic binding
+                    // already declared.
+                    Type::Tuple(_) => {
+                        let n = self.data.type_def_nr(&a.typedef);
+                        (n != u32::MAX)
+                            .then(|| self.data.def(n).known_type)
+                            .filter(|t| *t != u16::MAX)
+                    }
                     _ => None,
                 };
                 if let Some(dep_tp) = dep_tp
@@ -1457,6 +1491,19 @@ extern crate loft;"
                 field_name,
                 "index",
                 &format!("db.index({c_ref}, &[{keys_str}])"),
+            )?;
+            return Ok(());
+        }
+        if matches!(typedef, Type::Function(_, _, _)) {
+            // Storage holds the 4-byte i32 d_nr; closure half is not
+            // stored.  Mirrors the typedef.rs Function arm so native
+            // and interpreter agree on layout.
+            emit_db_field(
+                w,
+                s_var,
+                field_name,
+                "int",
+                "db.int(0, false)",
             )?;
             return Ok(());
         }

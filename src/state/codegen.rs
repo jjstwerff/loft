@@ -14,11 +14,39 @@
 
 use super::State;
 use crate::data::{Block, Context, Data, I32, IntegerSpec, Type, Value};
+use crate::database::Stores;
 use crate::stack::Stack;
 #[cfg(debug_assertions)]
 use crate::variables::Function;
 use crate::variables::size;
 use std::collections::HashSet;
+
+/// Stored-tuple element offset — the byte offset of element `idx`
+/// inside the synthetic `__tuple<…>` struct as laid out by the
+/// storage routine.  Looks up the struct's post-finish field
+/// position so stored-tuple reads use the SAME field offset that
+/// `OpSetInt` / `OpGetInt` would use for an ordinary struct field.
+///
+/// Falls back to the alignment-aware `data::element_offsets`
+/// calculation when the synthetic struct hasn't been registered
+/// yet (e.g. very early parse stages before `tuple_def` runs).
+/// In practice the caller path always reaches this AFTER
+/// `tuple_def` has fired, so the fallback is defensive only.
+fn stored_tuple_field_offset(
+    data: &Data,
+    database: &Stores,
+    elems: &[Type],
+    idx: usize,
+) -> u16 {
+    if let Some(offsets) = crate::data::stored_tuple_offsets(data, database, elems) {
+        return offsets[idx];
+    }
+    // Defensive fallback: stack-width offsets (atomic-aware after the
+    // 2026-04-28 element_offsets update).  Reaches this branch only
+    // when the synthetic struct hasn't been registered or finish()
+    // hasn't run — rare paths during early parse / partial state.
+    crate::data::element_offsets(elems)[idx] as u16
+}
 
 /// Text-returning natives that accept a destination buffer instead of allocating one.
 fn is_text_dest_native(name: &str) -> bool {
@@ -290,14 +318,32 @@ impl State {
             }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
-                // T1.5: RefVar(Tuple) — read element through the DbRef using OpGetInt/etc.
+                // T1.5: RefVar(Tuple) — read element through the DbRef
+                // using the SAME OpGetInt / OpGetFloat / OpGet… opcodes
+                // that ordinary struct-field access uses.  The field
+                // offset comes from the synthetic `__tuple<…>` struct's
+                // post-finish field position (computed by
+                // `calculate_positions_with_groups` for the registered
+                // LinkedFieldGroup) — NOT from a tuple-specific path.
+                // This guarantees stored-tuple element access is
+                // byte-coherent with the layout the storage routine
+                // reserved.
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
                     let idx = *elem_idx as usize;
                     let elem_tp = elems[idx].clone();
-                    let offsets = crate::data::element_offsets(elems);
-                    let elem_offset = offsets[idx] as u16;
+                    // Look up the synthetic struct's field position via
+                    // the LinkedFieldGroup, falling back to the legacy
+                    // `element_offsets` calculation for shapes whose
+                    // synthetic struct hasn't been registered (defensive —
+                    // tuple_def is normally called eagerly during parse).
+                    let elem_offset = stored_tuple_field_offset(
+                        stack.data,
+                        &self.database,
+                        elems,
+                        idx,
+                    );
                     let var_pos = stack.position - stack.function.stack(*var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
@@ -328,6 +374,17 @@ impl State {
                 let elem_abs_pos = tuple_var_pos + elem_offset;
                 let var_pos = stack.position - elem_abs_pos;
                 let code_pos = self.code_pos;
+                if let Type::Tuple(inner_elems) = &elem_tp {
+                    // Plan-06 phase 4d: nested tuple element — push
+                    // each inner leaf primitive recursively from the
+                    // outer tuple variable's slot.  `elem_abs_pos` is
+                    // the inner tuple's base stack offset (computed
+                    // from the outer var's slot + outer offset).  The
+                    // helper walks inner offsets and emits one OpVar*
+                    // per leaf.
+                    self.emit_tuple_var_push_recursive(stack, inner_elems, elem_abs_pos);
+                    return self.insert_types(elem_tp.clone(), code_pos, stack);
+                }
                 match &elem_tp {
                     Type::Integer(_) | Type::Function(_, _, _) => {
                         stack.add_op("OpVarInt", self);
@@ -341,6 +398,18 @@ impl State {
                     Type::Reference(c, _) | Type::Enum(c, true, _) => {
                         self.types
                             .insert(self.code_pos, stack.data.def(*c).known_type);
+                        stack.add_op("OpVarRef", self);
+                    }
+                    Type::Vector(_, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Iterator(_, _) => {
+                        // Collection-typed stack element: 12-byte DbRef
+                        // pointing at the collection record in the
+                        // host's store.  Same opcode as the Reference
+                        // arm above.
                         stack.add_op("OpVarRef", self);
                     }
                     _ => panic!("TupleGet: unsupported element type {elem_tp:?}"),
@@ -361,14 +430,24 @@ impl State {
             }
             Value::TuplePut(var_nr, elem_idx, value) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
-                // T1.5: RefVar(Tuple) — write element through the DbRef using OpSetInt/etc.
+                // T1.5: RefVar(Tuple) — write element through the DbRef using
+                // the SAME OpSetInt / OpSetFloat / OpSet… opcodes that
+                // ordinary struct-field assignment uses.  Field offset comes
+                // from the synthetic `__tuple<…>` struct's post-finish field
+                // position (computed by `calculate_positions_with_groups`
+                // for the registered LinkedFieldGroup) — NOT from a tuple-
+                // specific path.  Mirrors the TupleGet RefVar branch above.
                 if let Type::RefVar(ref inner) = tuple_tp
                     && let Type::Tuple(ref elems) = **inner
                 {
                     let idx = *elem_idx as usize;
                     let elem_tp = elems[idx].clone();
-                    let offsets = crate::data::element_offsets(elems);
-                    let elem_offset = offsets[idx] as u16;
+                    let elem_offset = stored_tuple_field_offset(
+                        stack.data,
+                        &self.database,
+                        elems,
+                        idx,
+                    );
                     let var_pos = stack.position - stack.function.stack(*var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -806,9 +885,103 @@ impl State {
         let Type::Tuple(elems) = stack.function.tp(v).clone() else {
             return;
         };
-        let offsets = crate::data::element_offsets(&elems);
         let tuple_var_base = stack.function.stack(v);
+        self.emit_tuple_null_init(stack, &elems, tuple_var_base);
+    }
+
+    /// Recursive helper for `TupleGet` on a `Type::Tuple` element.
+    /// The outer tuple variable is already at a known stack base; this
+    /// pushes the inner tuple's leaves from the outer variable's slot
+    /// at the inner offsets.  Recurses for nested-nested tuples.
+    fn emit_tuple_var_push_recursive(
+        &mut self,
+        stack: &mut Stack,
+        elems: &[Type],
+        base: u16,
+    ) {
+        let offsets = crate::data::element_offsets(elems);
         for (i, elem) in elems.iter().enumerate() {
+            let elem_abs = base + offsets[i] as u16;
+            if let Type::Tuple(inner_elems) = elem {
+                self.emit_tuple_var_push_recursive(stack, inner_elems, elem_abs);
+                continue;
+            }
+            let var_pos = stack.position - elem_abs;
+            match elem {
+                Type::Integer(_) | Type::Function(_, _, _) => {
+                    stack.add_op("OpVarInt", self);
+                }
+                Type::Boolean => stack.add_op("OpVarBool", self),
+                Type::Float => stack.add_op("OpVarFloat", self),
+                Type::Single => stack.add_op("OpVarSingle", self),
+                Type::Character => stack.add_op("OpVarCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpVarEnum", self),
+                Type::Text(_) => stack.add_op("OpArgText", self),
+                Type::Reference(c, _) | Type::Enum(c, true, _) => {
+                    self.types
+                        .insert(self.code_pos, stack.data.def(*c).known_type);
+                    stack.add_op("OpVarRef", self);
+                }
+                Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Iterator(_, _) => {
+                    stack.add_op("OpVarRef", self);
+                }
+                other => panic!("Tuple push: unsupported element type {other:?}"),
+            }
+            self.code_add(var_pos);
+        }
+    }
+
+    /// Recursive helper for `set_var` on a `Type::Tuple` destination.
+    /// The tuple's leaves are already on the eval stack in declaration
+    /// order; this walks them in REVERSE so each `OpPut*` pops the
+    /// most-recently-pushed leaf and writes it to the corresponding
+    /// slot offset within the variable.  For nested `Type::Tuple`
+    /// elements, recurses with the inner offsets added to `base`.
+    fn emit_tuple_var_pop_put(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
+        let offsets = crate::data::element_offsets(elems);
+        for i in (0..elems.len()).rev() {
+            let elem_abs = base + offsets[i] as u16;
+            if let Type::Tuple(inner_elems) = &elems[i] {
+                self.emit_tuple_var_pop_put(stack, inner_elems, elem_abs);
+                continue;
+            }
+            let pos = stack.position - elem_abs;
+            match &elems[i] {
+                Type::Integer(_) | Type::Function(_, _, _) => {
+                    stack.add_op("OpPutInt", self);
+                }
+                Type::Boolean => stack.add_op("OpPutBool", self),
+                Type::Float => stack.add_op("OpPutFloat", self),
+                Type::Single => stack.add_op("OpPutSingle", self),
+                Type::Character => stack.add_op("OpPutCharacter", self),
+                Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
+                Type::Text(_) => stack.add_op("OpPutText", self),
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
+                    stack.add_op("OpPutRef", self);
+                }
+                other => panic!("Tuple set: unsupported element type {other:?}"),
+            }
+            self.code_add(pos);
+        }
+    }
+
+    /// Recursive helper for tuple null-init.  Walks the element list
+    /// and pushes/OpPut's a zero value at each leaf primitive's
+    /// absolute stack slot.  For nested `Type::Tuple` elements,
+    /// recurses with the inner offsets added to `base`.
+    fn emit_tuple_null_init(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
+        let offsets = crate::data::element_offsets(elems);
+        for (i, elem) in elems.iter().enumerate() {
+            let elem_abs = base + offsets[i] as u16;
+            if let Type::Tuple(inner_elems) = elem {
+                self.emit_tuple_null_init(stack, inner_elems, elem_abs);
+                continue;
+            }
             match elem {
                 Type::Integer(_) | Type::Function(_, _, _) => {
                     stack.add_op("OpConstInt", self);
@@ -835,9 +1008,8 @@ impl State {
                 Type::Text(_) => {
                     stack.add_op("OpConvTextFromNull", self);
                 }
-                other => panic!("gen_set_first_tuple_null: unsupported element type {other:?}"),
+                other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
             }
-            let elem_abs = tuple_var_base + offsets[i] as u16;
             let pos = stack.position - elem_abs;
             match elem {
                 Type::Integer(_) | Type::Function(_, _, _) => stack.add_op("OpPutInt", self),
@@ -2516,32 +2688,12 @@ impl State {
             Type::Tuple(elems) => {
                 // T1.4: store each element from the stack into the variable.
                 // Elements are on the stack in order; emit OpPut* for each in
-                // reverse order (last element is at top of stack).
+                // reverse order (last element is at top of stack).  For
+                // nested `Type::Tuple` elements, recurses to emit per-leaf
+                // OpPut* calls at the correct sub-offsets.
                 let elems = elems.clone();
-                let offsets = crate::data::element_offsets(&elems);
                 let tuple_var_base = stack.function.stack(var);
-                for i in (0..elems.len()).rev() {
-                    let elem_abs = tuple_var_base + offsets[i] as u16;
-                    // After popping previous elements, adjust position.
-                    let pos = stack.position - elem_abs;
-                    match &elems[i] {
-                        Type::Integer(_) | Type::Function(_, _, _) => {
-                            stack.add_op("OpPutInt", self);
-                        }
-                        Type::Boolean => stack.add_op("OpPutBool", self),
-                        Type::Float => stack.add_op("OpPutFloat", self),
-                        Type::Single => stack.add_op("OpPutSingle", self),
-                        Type::Character => stack.add_op("OpPutCharacter", self),
-                        Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
-                        Type::Text(_) => stack.add_op("OpPutText", self),
-                        Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _) => {
-                            stack.add_op("OpPutRef", self);
-                        }
-                        _ => panic!("Tuple set: unsupported element type {:?}", elems[i]),
-                    }
-                    self.code_add(pos);
-                    // Note: add_op already adjusts stack.position for the popped element.
-                }
+                self.emit_tuple_var_pop_put(stack, &elems, tuple_var_base);
                 return;
             }
             _ => panic!(

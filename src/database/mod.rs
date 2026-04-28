@@ -489,7 +489,7 @@ mod worker_output_slot_tests {
 
     #[test]
     fn add_output_slot_returns_next_index() {
-        let mut s = Stores::new();
+        let s = Stores::new();
         let initial = s.allocations.len();
         let mut ws = WorkerStores::new(s);
         let slot = ws.add_output_slot(64);

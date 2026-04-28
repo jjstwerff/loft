@@ -1196,6 +1196,16 @@ impl Parser {
                 );
                 return types.into_iter().next();
             }
+            // Plan-06 phase 4d: register the synthetic `__tuple<…>`
+            // struct as soon as the tuple type appears in a type
+            // position (struct-field declaration, parameter, return
+            // type, …).  Without this, `fill_database` later sees
+            // `Type::Tuple` with `type_elm == u32::MAX` and silently
+            // skips registering the host struct's tuple field —
+            // leaving `database.position("v")` as `u16::MAX` when
+            // codegen needs the host field offset.  Mirrors the
+            // `sub_type` tuple arm below.  Idempotent.
+            self.data.tuple_def(&mut self.lexer, &types);
             Some(Type::Tuple(types))
         } else if self.lexer.has_token("fn") {
             Some(self.parse_fn_type(on_d))
@@ -1238,6 +1248,47 @@ impl Parser {
                         Level::Error,
                         "{type_name}<(...)> not supported — tuple element types only \
                          allowed on vector / iterator"
+                    );
+                    self.lexer.has_closing_angle();
+                    Type::Unknown(0)
+                }
+            });
+        }
+        // Plan-06 phase 4d.A.2 — recognise `fn` as a type-keyword inside
+        // `vector<...>` and `iterator<...>`.  Before this, the parser
+        // saw `vector<fn(integer) -> integer>`, sub_type's
+        // identifier-only check rejected `fn`, the lexer reverted
+        // past `<`, and the caller's annotation parser
+        // (`parse_assign:1009`) entered a tight retry loop on the
+        // unconsumed `<` — `loft --dump file.loft` hung at 100% CPU.
+        //
+        // Storage uses 4-byte i32 d_nr — `data::type_def_nr` and
+        // `type_elm` route Type::Function to `i32`'s def_nr, and
+        // `parser/vectors::get_type` returns `database.int(0, false)`
+        // so vector elements are written as raw 4-byte d_nrs (the same
+        // path `vector<i32>` uses).  At read-back time, the par
+        // dispatcher's `read_tuple_at_wide` (with a single-element
+        // `[Type::Function]` shape) inflates each row's 4 bytes into
+        // the worker's 20-byte fn-ref slot ([8B i64 d_nr][12B null
+        // closure DbRef]).
+        if self.lexer.peek_token("fn") {
+            self.lexer.token("fn");
+            let tp = self.parse_fn_type(on_d);
+            return Some(match type_name {
+                "vector" => {
+                    self.lexer.closing_angle();
+                    Type::Vector(Box::new(tp), Vec::new())
+                }
+                "iterator" => {
+                    self.lexer.closing_angle();
+                    Type::Iterator(Box::new(tp), Box::new(Type::Null))
+                }
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "{type_name}<fn(...)> not supported — fn-ref element types \
+                         only allowed on vector / iterator"
                     );
                     self.lexer.has_closing_angle();
                     Type::Unknown(0)
@@ -1784,21 +1835,15 @@ impl Parser {
                     }
                 }
             } else if let Some(tp) = self.parse_type_full(d_nr, false) {
-                // T1.11a: tuple-typed struct fields are not allowed because tuples are
-                // stack-only values that cannot be stored in heap-allocated records.
-                if matches!(tp, Type::Tuple(_)) {
-                    if !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "struct field cannot have a tuple type — tuples are stack-only values"
-                        );
-                    }
-                    defined = true; // suppress the generic "needs type" fallback error
-                } else {
-                    defined = true;
-                    a_type = tp;
-                }
+                // Plan-06 phase 4d: tuple-typed struct fields are now
+                // accepted.  Storage layout uses the synthetic
+                // `__tuple<…>` struct's positions (registered via
+                // `tuple_def`); set/get codegen routes element access
+                // through the same OpInt variants used for ordinary
+                // struct fields.  See `parser/mod.rs::set_field_check`
+                // and `get_val` for the per-element write/read paths.
+                defined = true;
+                a_type = tp;
                 break;
             } else {
                 break;

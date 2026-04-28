@@ -151,6 +151,33 @@ where
     })
 }
 
+/// Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.
+///
+/// Each `parallel_workers` call returns a `Vec<(start, batch)>` where every
+/// batch's `i`-th element belongs at row `start + i` of the result.  This
+/// helper writes the merge sequentially into a vector pre-filled with
+/// `default` and returns it.
+///
+/// Used by `run_parallel_raw`, `run_parallel_text`, `run_parallel_int`, and
+/// the codegen-runtime `run_native_workers_*` triple — five sites that
+/// previously inlined the same 5-line loop.
+///
+/// `R: Clone` because `vec![default; n_rows]` clones the seed once per row.
+/// For owning types (`String`, `Vec<…>`) the default is typically empty.
+pub(crate) fn merge_batches<R: Clone>(
+    batches: Vec<(usize, Vec<R>)>,
+    n_rows: usize,
+    default: R,
+) -> Vec<R> {
+    let mut results = vec![default; n_rows];
+    for (start, batch) in batches {
+        for (offset, val) in batch.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
+    }
+    results
+}
+
 /// Lazily-initialised global rayon pool.  Threading-feature only.
 /// Uses `num_cpus`'s default thread count (rayon's default).
 #[cfg(feature = "threading")]
@@ -365,22 +392,17 @@ impl StoreRebase {
 /// # Panics
 /// Panics if a worker thread panics.
 /// Each thread writes a non-overlapping slice — no channel, no reordering.
-#[allow(clippy::too_many_arguments)]
-// Threading path moves `program` into `Arc::new(program)`; non-threading path
-// only borrows it, hence the feature-gated allow.  The raw `out_ptr` is written
-// to from inside `unsafe { }` blocks in both paths; making the public function
-// `unsafe` would cascade across every `par(...)` call site and the QUALITY 6a
-// native-codegen path, so the allow narrows to the non-threading build where
-// clippy can trace the bare deref inline.  `dead_code` for the same reason as
-// `needless_pass_by_value`: only the threading callers live in main.rs's
-// binary crate view; under `--no-default-features` those callers are cfg'd out.
+#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+// The raw `out_ptr` is written to from inside `unsafe { }` blocks in both
+// the threading and non-threading paths; making the public function
+// `unsafe` would cascade across every `par(...)` call site and the
+// QUALITY 6a native-codegen path, so we keep the safe signature and
+// suppress the lint here.  `needless_pass_by_value` and `dead_code` only
+// fire in the non-threading build where `program` is borrowed and the
+// threading callers are cfg'd out.
 #[cfg_attr(
     not(feature = "threading"),
-    allow(
-        clippy::needless_pass_by_value,
-        clippy::not_unsafe_ptr_arg_deref,
-        dead_code
-    )
+    allow(clippy::needless_pass_by_value, dead_code)
 )]
 pub fn run_parallel_direct(
     stores: &Stores,
@@ -457,13 +479,18 @@ pub fn run_parallel_direct(
                 //   else                 → DbRef input
                 let dst = unsafe { slot_ptr.add(local_idx * ret_sz) };
                 if ret_sz > 8 {
-                    state.execute_at_raw_to(
-                        fn_pos,
-                        &row_ref,
-                        &extras,
-                        ret_sz as u32,
-                        dst,
-                    );
+                    // SAFETY: dst was computed from slot_ptr just
+                    // above; the slot was claimed for at least
+                    // bytes_needed = row_count * ret_sz bytes.
+                    unsafe {
+                        state.execute_at_raw_to(
+                            fn_pos,
+                            &row_ref,
+                            &extras,
+                            ret_sz as u32,
+                            dst,
+                        );
+                    }
                 } else {
                     let val = if prim_in == u32::MAX {
                         let s = read_text_at(&state.database, &row_ref);
@@ -615,13 +642,7 @@ pub fn run_parallel_raw(
         }
         (start, batch)
     });
-    let mut results = vec![0u64; n_rows];
-    for (start, batch) in batches {
-        for (offset, val) in batch.into_iter().enumerate() {
-            results[start + offset] = val;
-        }
-    }
-    results
+    merge_batches(batches, n_rows, 0u64)
 }
 
 /// Parallel text returns: workers copy `Str` to owned `String` before state drops.
@@ -665,13 +686,7 @@ pub fn run_parallel_text(
         }
         (start, batch)
     });
-    let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-    for (start, batch) in batches {
-        for (offset, val) in batch.into_iter().enumerate() {
-            results[start + offset] = val;
-        }
-    }
-    results
+    merge_batches(batches, n_rows, String::new())
 }
 
 /// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
@@ -764,13 +779,7 @@ pub fn run_parallel_int(
         }
         (start, batch)
     });
-    let mut results = vec![i64::MIN; n_rows];
-    for (start, batch) in batches {
-        for (offset, val) in batch.into_iter().enumerate() {
-            results[start + offset] = val;
-        }
-    }
-    results
+    merge_batches(batches, n_rows, i64::MIN)
 }
 
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
@@ -972,10 +981,12 @@ pub fn run_parallel_light(
 fn read_text_at(stores: &crate::database::Stores, row_ref: &DbRef) -> crate::keys::Str {
     let store = &stores.allocations[row_ref.store_nr as usize];
     let base = store.base_ptr();
-    // 4-byte u32 text-pointer at row.pos.
+    // 4-byte u32 text-pointer at row.pos.  Unaligned read because `p`
+    // comes from a `*mut u8` (row stride is 8 bytes but the pos offset
+    // can land on any byte boundary inside a row).
     let text_rec = unsafe {
         let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
-        *p.cast::<u32>()
+        p.cast::<u32>().read_unaligned()
     };
     let s = store.get_str(text_rec);
     crate::keys::Str::new(s)
@@ -994,10 +1005,12 @@ fn read_primitive_at(
     let base = store.base_ptr();
     unsafe {
         let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        // Unaligned reads — same rationale as `read_text_at`: row stride
+        // is 8 bytes but `pos` can land on any byte boundary inside a row.
         match size {
             1 => u64::from(*p),
-            4 => u64::from(*p.cast::<u32>()),
-            _ => *p.cast::<u64>(),
+            4 => u64::from(p.cast::<u32>().read_unaligned()),
+            _ => p.cast::<u64>().read_unaligned(),
         }
     }
 }
@@ -1048,7 +1061,6 @@ pub(crate) fn read_primitive_at_wide(
 /// `elem_types` is the list of tuple element types (from the synthetic
 /// `__tuple<…>` struct's attributes).  Bytes outside the populated
 /// regions stay zero.
-#[allow(dead_code)] // not threading: only the sequential branch uses it
 pub(crate) fn read_tuple_at_wide(
     stores: &crate::database::Stores,
     row_ref: &DbRef,
@@ -1073,7 +1085,7 @@ pub(crate) fn read_tuple_at_wide(
             if matches!(t, crate::data::Type::Text(_)) {
                 // Inflate the 4-byte heap text-pointer into a 16-byte
                 // Str for the worker's argument slot.
-                let text_rec = *src.cast::<u32>();
+                let text_rec = src.cast::<u32>().read_unaligned();
                 let s = store.get_str(text_rec);
                 let str_val = crate::keys::Str::new(s);
                 std::ptr::copy_nonoverlapping(

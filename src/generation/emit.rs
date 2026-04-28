@@ -23,6 +23,14 @@ impl Output<'_> {
             Value::Text(txt) => {
                 // Use debug format to produce a properly escaped Rust string literal.
                 write!(w, "{txt:?}")?;
+                if self.tuple_text_to_string {
+                    // Inside a `(String, String, …)` variable assignment:
+                    // wrap the `&str` literal so it fits a `String`-typed
+                    // tuple slot.  Argument-context tuples (function calls
+                    // taking `(&str, &str)`) clear this flag, so they keep
+                    // the borrowed-string form.
+                    write!(w, ".to_string()")?;
+                }
             }
             Value::Long(v) => write!(w, "{v}_i64")?,
             Value::Int(v) => {
@@ -201,7 +209,24 @@ impl Output<'_> {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
+                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
                     self.output_code_inner(w, e)?;
+                    // Wrap text-returning element with `.to_string()` so it
+                    // fits a `String`-typed tuple slot.  The outer
+                    // `tuple_text_to_string` flag is set by `set_var` when
+                    // the destination tuple has at least one Text element.
+                    // Argument-context tuples (function calls taking
+                    // `(&str, …)`) clear this flag, so they keep the
+                    // borrowed-string form.  Skip when the value is
+                    // already a `Value::Text` literal — its own emit
+                    // arm appends `.to_string()` directly via the same
+                    // flag, and we'd otherwise double-wrap.
+                    if elem_is_text
+                        && self.tuple_text_to_string
+                        && !matches!(e, Value::Text(_))
+                    {
+                        write!(w, ".to_string()")?;
+                    }
                 }
                 write!(w, ")")?;
             }
@@ -211,7 +236,25 @@ impl Output<'_> {
                 // when the parameter was declared as `var_pair`.
                 let variables = &self.data.def(self.def_nr).variables;
                 let name = sanitize(variables.name(*var));
-                write!(w, "var_{name}.{idx}")?;
+                // For text-typed tuple elements of a Variable-context
+                // tuple, the field is `String`; consumers expecting
+                // `&str` need a borrow prefix.  Mirrors the plain text
+                // local case at line ~132 (`&var_name`).  Skip for
+                // arguments — the variable's tuple element types in
+                // Argument context emit as `&str` already.
+                let elem_is_text = match variables.tp(*var) {
+                    Type::Tuple(elems) => elems
+                        .get(*idx as usize)
+                        .map(|e| matches!(e, Type::Text(_)))
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                let is_arg = variables.is_argument(*var);
+                if elem_is_text && !is_arg {
+                    write!(w, "&var_{name}.{idx}")?;
+                } else {
+                    write!(w, "var_{name}.{idx}")?;
+                }
             }
             Value::TuplePut(var, idx, val) => {
                 // N8a.2: emit the actual element assignment instead of the `= ...` stub.
@@ -568,6 +611,23 @@ impl Output<'_> {
         bl: &Block,
         wrap_text: bool,
     ) -> std::io::Result<()> {
+        // Plan-06 phase 4d: fn-ref field read emits the (u32, DbRef)
+        // native tuple form directly.  The block carries two ops —
+        // `OpGetInt4(ref, fld)` (returns i64) and `OpNullRefSentinel()`
+        // (returns DbRef) — which the interpreter pushes sequentially
+        // onto the eval stack to form the 20-byte fn-ref slot.  Native
+        // can't use a generic Rust block here because the last
+        // expression's type would be `DbRef`, not `(u32, DbRef)`; and
+        // the `i64` from OpGetInt4 needs an explicit `as u32` cast to
+        // match the fn-ref tuple's first slot.
+        if bl.name == "fn_ref_field_read" && bl.operators.len() == 2 {
+            write!(w, "((")?;
+            self.output_code_inner(w, &bl.operators[0])?;
+            write!(w, ") as u32, ")?;
+            self.output_code_inner(w, &bl.operators[1])?;
+            write!(w, ")")?;
+            return Ok(());
+        }
         writeln!(
             w,
             "{{ //{}_{}: {}",

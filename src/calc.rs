@@ -88,3 +88,160 @@ pub fn calculate_positions(
     }
     result
 }
+
+/// Group-aware variant of [`calculate_positions`].  Treats every
+/// linked-field group as a SINGLE atomic unit during packing — the
+/// layout routine reserves the group's `total_size` bytes at a
+/// `group_alignment`-aligned position, then expands each member to
+/// its in-group offset.  Non-group fields use the same gap-tracker
+/// as `calculate_positions`.
+///
+/// **Why**: the index bookkeeping triple `[#left_N, #right_N,
+/// #color_N]` and tuple element fields `[_0, _1, …, _N]` must stay
+/// CONTIGUOUS so consumers (`tree::add` for index, tuple-as-arg
+/// inflation for tuples) can use simple offset arithmetic.  Without
+/// group-awareness, `calculate_positions` packs fields individually
+/// (largest-first by alignment) and a 1-byte `bool` member of an
+/// index group can be pulled to the trailing 1-byte fill region of
+/// the host struct — breaking `tree::add`'s `color = left + 8`
+/// expectation.
+///
+/// **Args**:
+/// - `fields[i] = (size, alignment)` per host field, in original
+///   declaration order (matches what `calculate_positions` accepts).
+/// - `groups[g] = (member_field_indices, group_total_size,
+///   group_alignment, member_in_group_offsets)` — one entry per
+///   linked-field group.  `member_field_indices[k]` is the index
+///   into `fields` of the k-th member; `member_in_group_offsets[k]`
+///   is its byte offset within the atomic group block.
+/// - `sub` / `size` / `alignment` — same role as `calculate_positions`.
+///
+/// **Returns**: positions for every field in `fields`, with group
+/// members at `group_anchor + member_in_group_offsets[k]`.
+///
+/// Panics if a field index appears in two different groups (groups
+/// must be disjoint) or if a member offset extends past the
+/// declared `group_total_size`.
+pub fn calculate_positions_with_groups(
+    fields: &[(u16, u8)],
+    groups: &[(Vec<u16>, u16, u8, Vec<u16>)],
+    sub: bool,
+    size: &mut u16,
+    alignment: &mut u8,
+) -> Vec<u16> {
+    // Validate group disjointness + offset bounds; panic-on-bug
+    // since this is a layout invariant the caller is responsible
+    // for upholding.
+    let mut field_to_group: BTreeMap<u16, usize> = BTreeMap::new();
+    for (g_nr, (members, total_size, _g_align, offsets)) in groups.iter().enumerate() {
+        assert_eq!(
+            members.len(),
+            offsets.len(),
+            "group {g_nr}: member count {} != offsets count {}",
+            members.len(),
+            offsets.len(),
+        );
+        for (k, &m_idx) in members.iter().enumerate() {
+            assert!(
+                offsets[k] + fields[m_idx as usize].0 <= *total_size,
+                "group {g_nr} member {k} (size {}) at offset {} exceeds total_size {}",
+                fields[m_idx as usize].0,
+                offsets[k],
+                total_size,
+            );
+            assert!(
+                field_to_group.insert(m_idx, g_nr).is_none(),
+                "field {m_idx} appears in multiple groups",
+            );
+        }
+    }
+
+    // Build the virtual field list: each non-group field stays as-is,
+    // each group becomes ONE virtual field at the position of its
+    // first member in the original order.  Skip subsequent members
+    // (they're handled by the group's offset expansion).
+    //
+    // Padding rule: `calculate_positions` advances `pos += field_size`
+    // and assumes ABI-style fields where size is a multiple of
+    // alignment.  A group with size that's not a multiple of its
+    // alignment (e.g. index triple {int4, int4, bool1} → size 9,
+    // alignment 4) breaks that invariant — leaving `pos` misaligned
+    // for the next field in the same alignment iteration.
+    //
+    // We pad the group's virtual size up to a multiple of its
+    // alignment ONLY when there is a subsequent virtual field with
+    // alignment ≥ the group's alignment.  Trailing groups (and groups
+    // followed only by smaller-alignment fields, which are placed in
+    // later iterations and don't need the same alignment) skip
+    // padding so the struct's total size doesn't bloat unnecessarily.
+    //
+    // First pass: build the unpadded virtual list and remember per-
+    // entry alignment so the second pass can decide whether to pad.
+    let mut virtual_fields: Vec<(u16, u8)> = Vec::with_capacity(fields.len());
+    let mut virtual_origin: Vec<VirtualOrigin> = Vec::with_capacity(fields.len());
+    let mut group_seen: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    for (f_idx, &(f_size, f_align)) in fields.iter().enumerate() {
+        if let Some(&g_nr) = field_to_group.get(&(f_idx as u16)) {
+            if group_seen.insert(g_nr) {
+                let (_, total_size, g_align, _) = &groups[g_nr];
+                virtual_fields.push((*total_size, *g_align));
+                virtual_origin.push(VirtualOrigin::Group(g_nr));
+            }
+            // Skip non-first members (already covered by virtual entry).
+        } else {
+            virtual_fields.push((f_size, f_align));
+            virtual_origin.push(VirtualOrigin::Single(f_idx));
+        }
+    }
+    // Second pass: pad groups that have a later same-or-greater
+    // alignment field.  Without padding, that follow-on field would
+    // be placed at a misaligned `pos` since `pos += field_size`
+    // doesn't realign on its own.
+    for v_idx in 0..virtual_fields.len() {
+        if !matches!(virtual_origin[v_idx], VirtualOrigin::Group(_)) {
+            continue;
+        }
+        let (cur_size, cur_align) = virtual_fields[v_idx];
+        let cur_align_u16 = u16::from(cur_align.max(1));
+        let rem = cur_size % cur_align_u16;
+        if rem == 0 {
+            continue; // already aligned, no padding needed
+        }
+        let needs_padding = virtual_fields[v_idx + 1..]
+            .iter()
+            .any(|&(_, a)| a >= cur_align);
+        if needs_padding {
+            virtual_fields[v_idx].0 = cur_size + (cur_align_u16 - rem);
+        }
+    }
+
+    // Run the standard packer on the virtual list.
+    let virtual_positions =
+        calculate_positions(&virtual_fields, sub, size, alignment);
+
+    // Expand virtual positions back to per-field positions.
+    let mut positions = vec![0u16; fields.len()];
+    for (v_idx, &v_pos) in virtual_positions.iter().enumerate() {
+        match &virtual_origin[v_idx] {
+            VirtualOrigin::Single(f_idx) => {
+                positions[*f_idx] = v_pos;
+            }
+            VirtualOrigin::Group(g_nr) => {
+                let (members, _, _, offsets) = &groups[*g_nr];
+                for (k, &m_idx) in members.iter().enumerate() {
+                    positions[m_idx as usize] = v_pos + offsets[k];
+                }
+            }
+        }
+    }
+    positions
+}
+
+enum VirtualOrigin {
+    /// Standalone field — virtual position is its position.
+    Single(usize),
+    /// Group anchor — virtual position is the group's start; expand
+    /// to per-member positions via the group's offsets.
+    Group(usize),
+}

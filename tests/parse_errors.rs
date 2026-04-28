@@ -722,13 +722,13 @@ fn par_worker_returns_generator() {
 
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────
 
-/// T1.11a: a tuple type in a struct field position must be rejected at compile
-/// time because tuples are stack-only values that cannot be heap-allocated.
-#[test]
-fn tuple_in_struct_field_rejected() {
-    code!("struct Foo { pair: (integer, integer) }\nfn test() {}")
-        .error("struct field cannot have a tuple type — tuples are stack-only values at tuple_in_struct_field_rejected:1:40");
-}
+// T1.11a (Plan-06 phase 4d): the original rejection of tuple-typed struct
+// fields ("tuples are stack-only values that cannot be heap-allocated")
+// has been LIFTED.  Tuple fields now lay out their elements inline using
+// the synthetic `__tuple<…>` struct's positions, mirroring how index
+// bookkeeping triples are placed atomically.  See
+// `parser/mod.rs::set_field_check`/`get_val` (Type::Tuple arms) and the
+// `/tmp/tup_field*.loft` smoke tests for the working behaviour.
 
 /// T1.11b: compound assignment on a tuple LHS must produce a clear diagnostic
 /// instead of a generic internal error.
@@ -881,7 +881,7 @@ fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:362:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -891,7 +891,7 @@ fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:362:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
     ));
 }
@@ -901,7 +901,7 @@ fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:362:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -911,7 +911,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:362:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
     ));
 }

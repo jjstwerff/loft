@@ -302,6 +302,294 @@ walker registrations.
 hash and index `+=` (each asserts both `len` and the
 iteration sum).
 
+### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, clean diagnostic emitted
+
+A 2026-04-27 spike landed two contained changes that flip the
+canary's failure mode from "infinite-loop in parser, requires
+`pkill`" to "fast clean diagnostic, 0.02 s test failure".
+
+**Root cause (parser hang)**: `src/parser/definitions.rs::sub_type`
+had no `fn` keyword arm.  When the parser saw
+`vector<fn(integer) -> integer>`, sub_type's identifier-only check
+rejected `fn`, the lexer reverted past `<`, and the caller's
+annotation parser (`expressions.rs::parse_assign:1009`) entered a
+tight retry loop on the unconsumed `<`.  The loft binary's `--dump`
+flag and `cargo test` both hung at 100% CPU during pass 1 of the
+2-pass parser.
+
+**Fix #1 — parser sub_type**: new `fn` arm in `sub_type` that
+consumes the `fn(...) -> ...` declaration via `parse_fn_type`,
+then emits a clean diagnostic and returns `Type::Unknown(0)` until
+full storage support lands.  The parser advances cleanly instead
+of looping.
+
+**Fix #2 — vector literal new_record**: `parser/vectors.rs::new_record`
+checks for `Type::Function` element type at entry and emits a
+clean diagnostic with a workaround suggestion ("wrap the fn-ref in
+a struct") instead of hitting the cryptic
+`assert_ne!(ed_nr, u32::MAX)` assertion downstream.
+
+**Tests pass**: `threading_chars` 31/0/8, `threading` 16/0/0,
+`issues` 522/0/4 (the +3 ignored are diagnostic regression guards
+documenting V1/V2/V3 reduced cases).  `cargo clippy` clean.
+
+**Canary remains `#[ignore]`d** — full closure of the canary needs
+real storage support for `vector<fn-ref>`, which is its own
+plan-06 phase 4d.A.2 work (M effort, 2-3 days).  See
+`/home/jurjen/.claude/plans/serialized-churning-journal.md` for
+the full design (Steps A–E).
+
+### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, runtime cascade exposed
+
+A 2026-04-27 spike landed three contained changes that flip the
+canary's failure mode from "infinite-loop in parser, requires
+`pkill`" to "fast SIGSEGV in runtime, 0.02 s test failure".
+
+**Root cause (parser hang)**: `src/parser/definitions.rs::sub_type`
+had no `fn` keyword arm.  When the parser saw
+`vector<fn(integer) -> integer>`, sub_type's identifier-only check
+rejected `fn`, the lexer reverted past `<`, and the caller's
+annotation parser (`expressions.rs::parse_assign:1009`) entered a
+tight retry loop on the unconsumed `<`.  The loft binary's `--dump`
+flag and `cargo test` both hung at 100% CPU during pass 1 of the
+2-pass parser.
+
+**Fix**: new `fn` arm in sub_type that calls `parse_fn_type` and
+registers a synthetic `__fn_ref` global struct via the new
+`Data::fn_ref_def` helper.  Mirrors the tuple_def pattern (P189):
+one global struct shared across all fn-ref shapes, since all
+fn-refs have the same vector-storage shape (4-byte i32 d_nr).
+`type_def_nr` and `type_elm` get matching `Type::Function` arms
+returning the `__fn_ref` def's number.
+
+**Generated-code diagnosis**: with parsing fixed, the test
+framework wrote `tests/generated/threading_chars_par_vec_of_fns_input_t4.rs`
+for the first time.  Reading it reveals 3 remaining bugs:
+
+1. **`n_apply` empty match** — native codegen specialises
+   `OpCallRef` to `match var_f.0 { ... }` over statically-known
+   d_nrs.  For `apply(f)` where `f` flows from a generic vector,
+   no analysis populates the arms — only `_ => unreachable!()`
+   remains.
+2. **Vector literal as struct-records** — my `__fn_ref` synthetic
+   struct routed `[dbl, triple, quad]` through the
+   `OpNewRecord/OpCopyRecord/OpFinishRecord` STRUCT-element
+   vector path.  Each fn-ref becomes a heap record with a `d_nr`
+   field; vector stride is the record size, not 4.  The
+   interpreter SIGSEGVs reading back struct-DbRefs into a worker
+   slot expecting flat 4-byte d_nr bytes.
+3. **Par dispatch closure type-mismatch** —
+   `|stores, elm: DbRef| { n_apply(stores, elm) as i64 }` but
+   `n_apply` takes `(u32, DbRef)`.  Dispatcher needs a
+   `Type::Function` worker-input arm that reads the 4-byte d_nr
+   and constructs the tuple.
+
+**Remaining work to fully close 4d.A.2** (effort: M, 2-3 days):
+
+- Re-design `__fn_ref` as a primitive 4-byte alias (drop struct).
+- Vector element-write flat-byte arm in `parse_append_vector`.
+- Vector read-back unbox in `parser/fields.rs` (P189b-style).
+- Par dispatcher worker-closure `(u32, DbRef)` wrap in
+  `src/generation/dispatch.rs:792-870`.
+- Native codegen — populate match arms or fallback to interpreter.
+
+Tracked in `/home/jurjen/.claude/plans/serialized-churning-journal.md`.
+
+The canary remains `#[ignore]`d but with an updated message naming
+the new failure mode (SIGSEGV instead of hang).
+
+### Plan-06 phase 4d.A.2 — investigation: vec-of-fn-refs is bigger than estimated
+
+A 2026-04-27 spike attempted to close `par_vec_of_fns_input_t4`
+by un-ignoring the canary and observing the failure.  Result:
+**the worker infinite-loops** rather than failing cleanly.
+
+The README's planned fix ("per-row synthesis of the 12-byte
+null closure DbRef") turns out to only address half the gap:
+
+- In-vector storage: 4 bytes per row (just the d_nr stored as i32 —
+  `data::element_size(Type::Function) = 4`).
+- Worker arg slot: 20 bytes — 8B i64 d_nr + 12B closure DbRef
+  (`variables::size(.., Context::Argument) = 20`).
+
+The current wide-input dispatcher (`read_primitive_at_wide`)
+reads `element_size = 4` bytes into a 64-byte zero-initialised
+buffer, then `execute_at_raw_primitive_input_wide` slices to
+`prim_in = 20` bytes.  Slot bytes 4-7 are zero (high 32 bits of
+i64 d_nr — fine for any practical d_nr) and bytes 8-19 are zero
+(null closure DbRef).
+
+The resulting fn-ref **runs** but `apply(f) → f(10)` loops
+indefinitely, suggesting the call-dispatch path (likely
+`OpCallRef`) doesn't tolerate a null closure DbRef in this
+context — possibly because it interprets `store_nr=0, rec=0`
+as a back-pointer to itself, or because the worker's stack
+state after `OpCallRef` is wrong without a real closure.
+
+Closing 4d.A.2 needs:
+
+1. A `read_fn_ref_at_wide` helper that explicitly handles the
+   i32→i64 d_nr widening (rather than relying on flat memcpy
+   into a zeroed buffer).
+2. A runtime fix to the `OpCallRef`-on-null-closure path so
+   workers don't loop when the closure DbRef is null.
+3. A new wide-input plumbing channel similar to
+   `tuple_input_types: Option<Vec<Type>>` from P189d — likely
+   generalised to `WideInputLayout::{Tuple, FnRef, Plain}`.
+
+Effort revised: **S–M** (was S).  Test-side guard added: the
+canary's `#[ignore]` message now warns "DO NOT un-ignore
+without fixing — the test infinite-loops and needs `pkill` to
+terminate."
+
+### Plan-06 phase 3b.1 — extract shared `merge_batches` helper
+
+Five sites across `src/parallel.rs` and `src/codegen_runtime.rs`
+inlined the same 5-line loop after every `parallel_workers`
+call: pre-fill a `Vec<R>` with a default value, then walk each
+`(start, batch)` pair and write each element into
+`results[start + offset]`.
+
+Extracted to `parallel::merge_batches<R: Clone>(batches, n_rows,
+default) -> Vec<R>` and applied at:
+
+- `parallel::run_parallel_raw` (Vec<u64>, default `0u64`)
+- `parallel::run_parallel_text` (Vec<String>, default `String::new()`)
+- `parallel::run_parallel_int` (Vec<i64>, default `i64::MIN` — null sentinel)
+- `codegen_runtime::run_native_workers_primitive` (Vec<i64>, `0i64`)
+- `codegen_runtime::run_native_workers_text` (Vec<String>, `String::new()`)
+
+Net retire ~25 lines.  The helper accepts the default as a
+parameter rather than `R: Default` so the int variant can keep
+its `i64::MIN` null sentinel and the text variant can document
+the empty-String seed explicitly.
+
+### Plan-06 phase 3b.1 — extract shared par result store helpers
+
+Three native par fns (`n_parallel_for_native`,
+`n_parallel_for_text_native`, `n_parallel_for_ref_native`)
+shared two identical 7- and 10-line boilerplate blocks for
+allocating + finalising the result store.
+
+Extracted to two helpers in `src/codegen_runtime.rs`:
+
+- `alloc_par_result(stores, n, elem_size) -> (DbRef, u32, u32)`
+  — allocates the result store, claims the vector body
+  (`n * elem_size` bytes) and the 1-word header record, returns
+  (result_db, vec_rec, header_rec).
+- `finalize_par_result(stores, result_db, n, vec_rec, header_rec) -> DbRef`
+  — writes the vector length into `vec_rec[4]`, points the
+  header record at the vector, returns the canonical
+  `DbRef { …, pos: 4 }` every par caller expects.
+
+Each native par variant now opens with one helper call and
+closes with another instead of inlining the boilerplate.  Net
+removal: ~30 lines.  No API change — all 30 generated test
+fixtures in `tests/generated/threading_chars_par_*.rs` still
+match.  Sets up phase 3b.2 (true unification with a `Stitch`
+trait).
+
+### Plan-06 phase 1 — clippy gate restored on threading build
+
+`cargo clippy --release --all-targets` was failing on the
+default (threading) build with two `not_unsafe_ptr_arg_deref`
+errors:
+
+- `state::execute_at_raw_to(dst: *mut u8)` (added by
+  plan-06 phase 1 G4 / 4d.A in commit 6973b182) was a public
+  function that called `ptr::copy_nonoverlapping` without an
+  `unsafe` signature.  Now `pub unsafe fn` with a `# Safety`
+  doc-comment block; the single caller in
+  `parallel.rs::run_parallel_direct` wraps the call in
+  `unsafe { … }` with a SAFETY comment naming the slot
+  pre-allocation invariant.
+- `parallel::run_parallel_direct(out_ptr: *mut u8)` (added by
+  4b90d89a) had a `cfg_attr(not(feature = "threading"), allow(
+  not_unsafe_ptr_arg_deref))` that suppressed the lint only on
+  the WASM-style build.  The attached comment explained the
+  reasoning ("making the public function `unsafe` would cascade
+  across every par(...) call site and the QUALITY 6a native-
+  codegen path") — applied to both builds, so the allow now
+  hoists out of the `cfg_attr` and the `cfg_attr` keeps only the
+  feature-specific `needless_pass_by_value` + `dead_code`.
+
+`make ci`'s clippy step is green again on the default build.
+
+### P189b / P189d — `vector<(T1, T2, …)>` access closed end-to-end
+
+Two follow-ups to P189 / P189c that closed the remaining
+read-side gaps for tuple-element vectors.
+
+**P189b — index-access + for-loop iteration unbox.**
+
+`pairs[0]` returns a `DbRef` into vector storage; the existing
+`OpTupleGet(slot, byte_offset)` reads from a *local slot*, so it
+decoded the DbRef bytes (`store_nr | (rec << 32)`) as if they
+were the tuple's first element.  For-loop iteration hit a
+matching shape mismatch and reported "Field access not supported
+on type tuple([…])".
+
+Fix: when the tuple value lives in vector storage, the parser
+unboxes via the synthetic `__tuple<…>` struct.
+
+- `parser/fields.rs::unbox_tuple_from_dbref` — for `p = pairs[i]`,
+  emits per-element loads (`OpGetInt`, `OpGetText`, …) against
+  the DbRef and packs the results into a `Value::Tuple` so the
+  assignment target receives the inline-on-stack representation.
+- `parser/control.rs` for-loop iteration — re-types the loop
+  variable as `Reference(__tuple<…>)`, so `p.0` / `p.1` route
+  through `parse_part`'s new `__tuple<` arm, which calls
+  `get_val(elem, …, offset, …)` (struct-field-style access)
+  instead of the stack-tuple `OpTupleGet`.
+- `parser/collections.rs::for_iter` — keeps the iterator's
+  block-result type aligned with the loop variable's `RefVar(Tuple)`,
+  so the next-expression yields the 12-byte DbRef the body expects.
+
+**P189d — text-element worker arg inflation.**
+
+After P189c made `(int, int)` tuple-input workers wide-input
+correct, `(int, text)` workers still saw `len(p.1) == 0`.  The
+in-vector tuple stores text as a 4-byte interned-pointer; the
+worker's argument slot expects the full 16-byte `Str` (8B ptr +
+8B len).  `read_primitive_at_wide`'s flat memcpy left the upper
+12 bytes of the `Str` slot zero.
+
+Fix: per-element reader.
+
+- `parallel.rs::read_tuple_at_wide(stores, row_ref, elem_types)`
+  — walks the tuple element types, copies primitives by memcpy
+  and inflates `Text` fields by reading the heap pointer and
+  reconstructing a `Str` via `store.get_str(...)`.
+- `native.rs::tuple_first_arg_types(def)` — extracts
+  `Some(elems)` when the worker's first argument is a tuple,
+  else `None`.  Threaded through both `n_parallel_for` (heavy
+  path) and `n_parallel_for_light`, then through
+  `parallel_execute_and_collect` /
+  `parallel_light_execute_and_collect` to the underlying
+  `run_parallel_direct` / `run_parallel_light` calls.
+- `parallel.rs::run_parallel_direct` and `run_parallel_light` —
+  new `tuple_input_types: Option<Vec<Type>>` parameter.  When
+  `Some`, the wide-input branch routes through
+  `read_tuple_at_wide` instead of `read_primitive_at_wide`; both
+  the threaded and sequential branches.  The parameter is
+  Arc-wrapped per-call so worker threads share a cheap clone.
+
+**Native codegen header.**
+
+`generation/mod.rs` now emits `use loft::hash;` and
+`use loft::tree;` alongside the existing `loft::ops` /
+`loft::vector` imports.  P192's `OpLengthHash` (`hash::count`)
+and `OpLengthIndex` (`tree::count`) `#rust` templates referenced
+the bare module names — without the imports, any program that
+reaches `len(h)` / `len(ix)` failed native compilation with
+`error[E0433]: cannot find module or crate "hash"`.
+
+**Tests:** `par_tuple_input_int_text` un-`#[ignore]`d;
+`p189b_vector_tuple_for_loop_int_int` and
+`p189b_vector_tuple_for_loop_int_text` added to `tests/issues.rs`
+(the existing index-access tests already cover P189b's first
+half).
+
 ### P193 — eager init for `local: keyed_collection<T> = []`
 
 `gen_set_first_keyed_null` (P188's local-var alloc) fired

@@ -243,6 +243,18 @@ impl Output<'_> {
                 if is_fn_ref_var && !wrap_fn_ref {
                     self.fn_ref_context = true;
                 }
+                // When assigning to a `(String, …)` tuple variable, the
+                // element values that emit as `&str` literals need a
+                // `.to_string()` wrap so the tuple's runtime type
+                // matches its declared `(String, …)` shape.  Without
+                // this the Rust compiler rejects `("a", "b")` against
+                // `(String, String)`.  See `Value::Text` in emit.rs.
+                let prev_tuple_text = self.tuple_text_to_string;
+                if let Type::Tuple(elems) = variables.tp(var)
+                    && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                {
+                    self.tuple_text_to_string = true;
+                }
                 // When assigning to a String variable from a text-local source,
                 // output_code_inner emits `&var_name` (borrow to &str), and
                 // appending `.to_string()` yields `&String` not `String`.
@@ -261,6 +273,7 @@ impl Output<'_> {
                     self.output_code_inner(w, to)?;
                 }
                 self.fn_ref_context = prev_ctx;
+                self.tuple_text_to_string = prev_tuple_text;
                 if needs_to_string && !text_local_clone {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {

@@ -1582,6 +1582,44 @@ pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
 /// Runs workers in parallel via the shared `parallel::parallel_workers`
 /// template (rayon work-stealing pool, plan-06 phase 1.5), mirroring the
 /// interp path's `run_parallel_direct` in `src/parallel.rs` (post-phase-3c).
+/// Plan-06 phase 3b.1 — shared prologue for the native par result store.
+///
+/// Allocates a result store (`stores.null()`), reserves the vector body
+/// (`n * elem_size` bytes) plus its 1-word header record, and returns the
+/// triple (result_db, vec_rec, header_rec) the three native par variants
+/// all need.  Replaces ~7 lines of identical boilerplate at the top of
+/// each `n_parallel_for_*_native`.
+fn alloc_par_result(stores: &mut Stores, n: usize, elem_size: u32) -> (DbRef, u32, u32) {
+    let result_db = stores.null();
+    let vec_words = ((n as u32) * elem_size + 15) / 8;
+    let vec_cr = stores.claim(&result_db, vec_words.max(1));
+    let header_cr = stores.claim(&result_db, 1);
+    (result_db, vec_cr.rec, header_cr.rec)
+}
+
+/// Plan-06 phase 3b.1 — shared epilogue for the native par result store.
+///
+/// Writes the vector length into `vec_rec[4]`, points the header record's
+/// pos=4 slot at `vec_rec`, and returns the canonical `DbRef { …, pos: 4 }`
+/// every par caller expects.  Replaces ~10 lines of identical boilerplate
+/// at the bottom of each `n_parallel_for_*_native`.
+fn finalize_par_result(
+    stores: &mut Stores,
+    result_db: DbRef,
+    n: usize,
+    vec_rec: u32,
+    header_rec: u32,
+) -> DbRef {
+    let store = stores.store_mut(&result_db);
+    store.set_u32_raw(vec_rec, 4, n as u32);
+    store.set_u32_raw(header_rec, 4, vec_rec);
+    DbRef {
+        store_nr: result_db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    }
+}
+
 pub fn n_parallel_for_native<F>(
     stores: &mut Stores,
     input: DbRef,
@@ -1595,12 +1633,7 @@ where
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let return_sz = return_size.clamp(1, 8) as u32;
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * return_sz + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
+    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, return_sz);
 
     let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
 
@@ -1620,16 +1653,7 @@ where
         }
         fld += return_sz;
     }
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
+    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
 }
 
 /// Parallel worker dispatcher for native primitive-return par.
@@ -1665,13 +1689,7 @@ where
         }
         (start, local)
     });
-    let mut results = vec![0i64; n];
-    for (start, local) in batches {
-        for (offset, val) in local.into_iter().enumerate() {
-            results[start + offset] = val;
-        }
-    }
-    results
+    crate::parallel::merge_batches(batches, n, 0i64)
 }
 
 /// Text-returning variant of `n_parallel_for_native`.  The worker closure returns
@@ -1694,12 +1712,7 @@ where
     F: Fn(&mut Stores, DbRef) -> String + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * 4 + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
+    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, 4);
 
     let strings = run_native_workers_text(stores, &input, elem_size, threads, n, &worker);
 
@@ -1708,16 +1721,7 @@ where
         let s_pos = store.set_str(s);
         store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
     }
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
+    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
 }
 
 /// Parallel worker dispatcher for native text-return par.
@@ -1753,13 +1757,7 @@ where
         }
         (start, local)
     });
-    let mut results: Vec<String> = (0..n).map(|_| String::new()).collect();
-    for (start, local) in batches {
-        for (offset, val) in local.into_iter().enumerate() {
-            results[start + offset] = val;
-        }
-    }
-    results
+    crate::parallel::merge_batches(batches, n, String::new())
 }
 
 /// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure
@@ -1793,12 +1791,7 @@ where
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let sz = struct_size as u32;
     let kt = known_type as u16;
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * sz + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
+    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, sz);
 
     let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
 
@@ -1819,16 +1812,7 @@ where
         }
     }
 
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
+    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
 }
 
 /// Parallel worker dispatcher for native struct/reference-return par.

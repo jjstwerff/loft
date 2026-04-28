@@ -511,10 +511,26 @@ impl Parser {
         if !self.first_pass {
             self.change_var_type(tmp, &ref_tp);
         }
-        let offsets = crate::data::element_offsets(&elems_vec);
+        // Stored tuples MUST use the synthetic `__tuple<…>` struct's
+        // post-finish field positions (the same offsets used by
+        // `OpGetInt` for ordinary struct fields).  Falls back to the
+        // alignment-aware `element_offsets` only on early-parse paths
+        // before `finish_type` has run.
+        let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+            &self.data,
+            &self.database,
+            tuple_d_nr,
+            elems_vec.len(),
+        )
+        .unwrap_or_else(|| {
+            crate::data::element_offsets(&elems_vec)
+                .into_iter()
+                .map(|x| x as u16)
+                .collect()
+        });
         let mut tuple_elems = Vec::new();
         for (i, et) in elems_vec.iter().enumerate() {
-            let off = offsets[i] as u32;
+            let off = u32::from(offsets[i]);
             tuple_elems.push(self.get_val(et, false, off, Value::Var(tmp), u32::MAX));
         }
         v_block(

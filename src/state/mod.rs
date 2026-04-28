@@ -2029,10 +2029,17 @@ impl State {
     /// fn-ref returns (20 bytes), large-tuple returns, and other
     /// inline returns that exceed the u64 width.
     ///
-    /// SAFETY: caller must ensure `dst` points to at least
-    /// `return_size` writable bytes.  The function does no bounds
-    /// checking on the destination buffer.
-    pub fn execute_at_raw_to(
+    /// # Panics
+    /// Panics if `return_size` exceeds the worker's current stack
+    /// depth at the moment of return — that would mean the worker
+    /// fn left less data on the stack than its declared return
+    /// width, which is a codegen bug rather than a runtime input.
+    ///
+    /// # Safety
+    /// Caller must ensure `dst` points to at least `return_size`
+    /// writable bytes.  The function does no bounds checking on
+    /// the destination buffer.
+    pub unsafe fn execute_at_raw_to(
         &mut self,
         fn_pos: u32,
         arg: &DbRef,

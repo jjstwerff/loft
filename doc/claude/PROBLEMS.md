@@ -30,127 +30,125 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 189b | `vector<(T1, T2, …)>` element field access via DbRef returns garbage.  `pairs[0]` returns a 16-byte `DbRef` to the heap record holding the tuple bytes; `.0` / `.1` parses to `OpTupleGet` which reads 8 bytes from the local slot directly — but the slot holds the DbRef, not the inline tuple.  Result: reading `pairs[0].0` returns `(store_nr \| (rec << 32))` masquerading as `i64` (saw `21474836482` instead of `1` for `(1, 10)`).  Iterating with `for p in pairs { … }` reports `Field access not supported on type tuple([…])` instead of unboxing.  P189 (literal construction + `len()`) is fixed — this is the access-side follow-up. | Low | **Workaround:** wrap the tuple in a `struct` (`struct Pair { a: integer, b: integer }`) and use `vector<Pair>`.  Struct field access via DbRef is correct. |
-| 189d | `vector<(T1, text)>` element write returns 0 length for the text element.  P189c closed the per-attribute write path for primitive tuple elements (`(int, int)` works), but text elements within a vector-of-tuple read back as empty / zero-length.  Surfaced via `par_tuple_input_int_text` — workers see `len(p.1) == 0` instead of the expected `3, 3, 5`.  Likely root cause: `set_field`'s `Type::Text` arm in `src/parser/mod.rs:1716` writes via `OpSetText` which interns the string into the field's local store, but a vector-element write needs a different routing because the "field" is a tuple element inside a vector record (different store / different position computation). | Low | **Workaround:** wrap the tuple in a `struct` containing a text field — works correctly via the standard struct path. |
+| 194 | Tuple-field reassignment `p.v = (1, 2)` parses as tuple destructuring (LHS `p.v` not recognised as a tuple-typed field expression).  Initial construction `Pair { v: (1, 2) }` works; only `p.v = (...)` is rejected. | Medium | Reassign element-by-element via existing field updates, or rebuild the host struct (`p = Pair { v: (1, 2) }`). |
+| 195 | Chained literal field indexing `n.v.0.0` mis-parses — the lexer reads `0.0` as a single float literal.  Affects any nested-tuple access where two consecutive integer indices appear without an intervening identifier. | Low | Stash the inner element first: `inner = n.v.0; inner.0`. |
+| 196 | Native codegen for `(fn(int) -> int, int)` (or any tuple containing a fn-ref) fails with `(u32, DbRef).0 as i32` — the fn-ref tuple element's runtime shape doesn't fit the OpSet/OpGet narrowing path used for primitive ints.  Interpreter mode works; only native compilation breaks. | Medium | Use a struct field for fn-ref instead of tucking it in a tuple: `struct H { f: fn(...) -> ..., n: int }`. |
 
 ## Interpreter Robustness
 
-### 189b. Tuple-as-vector-element field access reads garbage
+### 194. Tuple-field reassignment parses as destructuring
 
-**Symptom:** `vector<(T1, T2, …)>` literal construction works after
-P189's `tuple_def` fix, but reading the tuple back via index access
-or for-loop iteration returns wrong bytes:
+**Symptom:** updating a tuple struct field after construction fails
+to parse:
 
 ```loft
+struct Pair { v: (integer, integer) }
 fn test() {
-  pairs: vector<(integer, integer)> = [(1, 10), (2, 20)];
-  p = pairs[0];
-  println("p.0 = {p.0}");   // prints 21474836482 (garbage), expected 1
-  println("p.1 = {p.1}");   // prints 12884901896 (garbage), expected 10
+  p = Pair { v: (3, 4) };        // OK
+  p.v = (100, 200);              // ← "Tuple destructuring requires
+                                 //   plain variable names"
 }
 ```
 
-For-loop iteration produces a different error:
+**Where:** the parser's tuple-LHS handler (in `parser/expressions.rs`,
+the `(a, b) = expr` destructuring path) fires whenever the left-hand
+side is a parenthesised list, regardless of whether the LHS is
+`(name, name)` (destructuring) or `(field_path, field_path)`
+(impossible) or — the case here — a single field whose RHS is a
+tuple literal.  The disambiguation key (LHS *value* is a `Value::Var`
+of tuple type vs. a parenthesised name list) isn't checked.
 
-```
-Error: Field access not supported on type tuple([integer(...), integer(...)])
-```
+**Fix path:** when the LHS parses as a single field-access expression
+and the RHS parses as a tuple literal, route through `set_field_check`
+with the `Type::Tuple` arm (which already exists and handles writes).
+Concretely: in the assignment parser, check if `lhs` is a
+`Value::Call(OpGetField, …)` or `Value::TupleGet(...)` of tuple type
+before falling into the destructuring branch.
 
-**Where:** local-tuple access uses `OpTupleGet(slot, byte_offset)`
-which reads `size_of::<element>()` bytes directly from the local
-slot — assumes inline-on-stack representation.  Vector-element
-tuples are stored as 16-byte heap records and `pairs[0]` returns a
-12-byte `DbRef`.  When the parser emits `OpTupleGet` for `p.0` where
-`p: (integer, integer)` was assigned from a vector index access, it
-reads the DbRef bytes (`store_nr` + `rec` + `pos` packed) as if they
-were tuple elements.  Same root cause for the for-loop case: the
-iteration's element-binding emits a stack-tuple read that doesn't
-exist for heap-tuple shape.
-
-**Fix path:** the parser needs to track whether a tuple-typed value
-is in **inline** (stack) or **boxed** (heap-via-DbRef) form, and
-emit different access opcodes.  Vector-element reads (and
-struct-field tuple reads) hand back a DbRef; the access path needs
-to unbox via per-element `OpGetInt(dbref, field_offset)` /
-`OpGetText(dbref, field_offset)` etc.  Equivalent to how struct
-field access already works on a heap struct — tuple is the
-anonymous-struct case.  Tracked in plan-06 phase 9b (or as a
-follow-up to T1.8a tuple-return-convention).
-
-**Severity:** Low — the workaround (use a named `struct`) is
-idiomatic loft and gives correct access via the existing struct
-field-resolution path.
-
-### 189d. `vector<(T1, text)>` text element reads as zero-length
-
-**Symptom:** after P189c closed the `(int, int)` case, vector-of-
-tuple elements containing `text` come back empty:
+**Test:** add a test once fixed:
 
 ```loft
-fn label_len(p: const (integer, text)) -> integer { len(p.1) }
-fn run() -> integer {
-  pairs: vector<(integer, text)> = [(1, "one"), (2, "two"), (3, "three")];
-  sum = 0;
-  for p in pairs par(r = label_len(p), 4) { sum += r; }
-  sum
+struct Pair { v: (integer, integer) }
+fn test() {
+  p = Pair { v: (3, 4) };
+  p.v = (100, 200);
+  assert(p.v.0 == 100);
 }
 ```
 
-Expected sum: `3 + 3 + 5 = 11`.  Got `0`.
+### 195. Chained literal indexing — lexer reads `0.0` as float
 
-**Root cause — text has different in-vector vs on-stack
-representation.** Text in a struct field (in-database / in-vector
-storage) is a **4-byte text-pointer** that interns into the
-field's local store.  Text in a stack tuple slot (variables::size
-in Argument context) is a **16-byte `Str` struct** (8-byte
-length + 8-byte pointer-to-bytes).  For non-tuple struct fields
-this is bridged transparently — `OpGetText` at field-access time
-inflates the 4-byte pointer to the full `Str`.  For tuples-as-
-vector-elements, the worker's tuple-element access goes through
-`OpTupleGet(slot=0, offset=8)` which reads raw bytes from the
-slot — but the slot was filled by P189c's wide-input dispatch
-which `memcpy`s `element_size` bytes from the row record.  The
-12 bytes (8 int + 4 text-pointer) of the in-vector tuple don't
-fit the worker's expected 24 bytes (8 int + 16 Str).
+**Symptom:** `n.v.0.0` (read element 0 of inner tuple of element 0)
+fails to parse:
 
-**Specifically:**
-- `tuple_def`'s synthetic `__tuple<integer,text>` struct has
-  fields `_0: integer` (8B) and `_1: text` (4B in struct layout).
-  Database struct size = 12B.
-- Worker's `p: (integer, text)` parameter expects slot 0 to be
-  24 bytes (`variables::size` for tuple = 8 + `size_of::<Str>()`
-  = 8 + 16 = 24).
-- `read_primitive_at_wide` reads `element_size` bytes from the
-  row record.  If element_size = 12 (the database stride), the
-  worker reads 12 bytes into a 24-byte slot — text bytes 13-24
-  are zeros, and the worker's text-Str access reads
-  length-and-pointer of zero (empty string).
-- If element_size = 24 (var_size), the read overflows the 12-byte
-  row record into the next row.
+```loft
+struct Nested { v: ((integer, integer), (integer, integer)) }
+fn test() {
+  n = Nested { v: ((1, 2), (3, 4)) };
+  a = n.v.0.0;                    // ← parse error: float `0.0`
+                                  //   followed by stray `.` ?
+}
+```
 
-**Fix path:** the per-row read for tuple elements containing text
-needs to (a) read the in-vector representation (4-byte text-pointer
-at the field offset), (b) inflate to the 16-byte `Str` for the
-worker's slot.  Either:
-- A new `read_tuple_at_wide(types, row_ref, struct_def_nr)` that
-  walks the tuple's elements per-type and assembles the worker
-  slot bytes (inflating text fields).  More complex than
-  `read_primitive_at_wide`'s plain memcpy.
-- OR force tuples-as-vector-elements to use the stack
-  representation throughout (24 bytes for `(int, text)`) — but
-  that wastes vector storage and conflicts with the tuple_def
-  struct layout.
-- OR teach the worker to access tuple-of-text differently when
-  the source is a vector — emit `OpGetText` against the field
-  offset (struct-style) instead of `OpTupleGet`.
+**Where:** `src/lexer.rs` greedy-reads `<digit>.<digit>` as a single
+floating-point number token.  The post-field path doesn't unread the
+fractional part when the previous token was a `.` separator.
 
-Interacts with P189b (tuple field access via DbRef) — solving
-P189b might subsume P189d, since both are about teaching the
-parser/codegen to recognize "this tuple lives in heap storage,
-unbox via per-field opcodes" instead of the stack-tuple opcodes.
+**Fix path:** in the lexer's number-reading routine, when the previous
+non-trivia token was `.` (or, more conservatively, when a tuple-index
+context is pending), treat `<digit>` followed by `.` as a single-digit
+integer rather than the start of a float.  The cleanest mechanism is
+an "integer-only" lexing mode the parser opts into when it knows it's
+expecting a tuple index.
 
-**Severity:** Low — workaround (use a named struct with a
-text field) works today.
+**Workaround:** stash the inner element first:
+
+```loft
+inner = n.v.0;
+a = inner.0;     // OK
+```
+
+**Test:** add a test once fixed.
+
+### 196. Tuple-of-fn-ref native codegen — `(u32, DbRef).0 as i32`
+
+**Symptom:** native compilation fails with `non-primitive cast` when
+a tuple struct field contains a fn-ref element:
+
+```loft
+struct C { pair: (fn(integer) -> integer, integer) }
+fn dbl(x: integer) -> integer { x + x }
+fn test() {
+  c = C { pair: (dbl, 21) };       // interpreter: OK
+                                   // native: rustc rejects
+                                   //   (var_tmp.0) as i32
+}
+```
+
+**Where:** my `set_field_check::Type::Tuple` arm dispatches the
+fn-ref element to `OpSetInt4(ref, pos, TupleGet(tmp, i))`.  At native
+emit, `TupleGet(tmp, i)` for a fn-ref element resolves to
+`var_tmp.0` whose Rust type is `(u32, DbRef)` (the native fn-ref
+representation).  `OpSetInt4`'s `#rust` body wraps the value with
+`as i32`, which rustc rejects on a tuple type.
+
+**Fix path:** in `set_field_check::Type::Tuple`, when the element is
+`Type::Function`, extract the fn-ref's `d_nr` (`var_tmp.i.0 as u32`,
+then `as i32` is fine on `u32`) before passing to `OpSetInt4`.  The
+top-level `Type::Function` set arm already handles `Value::FnRef` ↔
+`Value::Int(d_nr)` reduction; extend that to also unwrap a Var-of-
+fn-ref when the LHS is a fn-ref tuple element.  Alternatively, emit
+a small helper like `OpGetFnRefDnr(var, idx)` returning `i32`.
+
+**Workaround:** lift the fn-ref out of the tuple into its own
+struct field:
+
+```loft
+struct C { f: fn(integer) -> integer, n: integer }
+```
+
+**Test:** `tests/issues.rs::p4d_fn_ref_as_struct_field` covers the
+top-level case.  Add `p4d_tuple_field_with_fn_ref` once fixed.
 
 ## Web Services
 

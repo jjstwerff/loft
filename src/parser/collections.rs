@@ -1452,6 +1452,16 @@ use #count instead"
                 && let Some(n) = spec.vector_narrow_width()
             {
                 i32::from(n)
+            } else if matches!(&elem_tp, Type::Function(_, _, _)) {
+                // Plan-06 phase 4d.A.2 — fn-ref vector storage is
+                // 4-byte i32 d_nr (matches `data::element_size(Type::Function)`).
+                // The known_type / db_size lookup below would return
+                // var_size(.., Argument) = 20 (the wide stack-slot
+                // width for fn-refs), which is wrong for vector
+                // stride.  Hard-code 4 here so par steps through the
+                // vector in 4-byte increments matching `OpSetInt4`'s
+                // narrow writes.
+                4
             } else {
                 let known = self.data.def(elm_td).known_type;
                 let db_size = i32::from(self.database.size(known));

@@ -467,6 +467,16 @@ impl Output<'_> {
                     // Text-returning user fn calls produce `Str`; callees
                     // expect `&str`.  Deref at the binding site.
                     format!("&*({substituted})")
+                } else if matches!(tp, Type::Text(_))
+                    && matches!(arg, Value::Block(b) if matches!(b.result, Type::Text(_)))
+                {
+                    // Plan-06 phase 4d: tuple-element read blocks
+                    // (e.g. `tuple_tmp_X` produced by my get_val
+                    // Type::Tuple arm) end in `var_tmp.0` of type
+                    // `String`.  Callees expect `&str`, so deref at
+                    // the binding site so format helpers, equality,
+                    // etc. accept the value without an explicit `&`.
+                    format!("&*({substituted})")
                 } else {
                     substituted.clone()
                 }
