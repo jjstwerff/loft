@@ -67,7 +67,6 @@ fn parse(code: &str) -> Parser {
     p
 }
 
-#[ignore = "plan-07 phase 1 — wrap activation pending wider unspan() audit (sorted/index/hash iteration paths)"]
 #[test]
 fn binary_div_wraps_in_span() {
     // `1 / z` — the `/` is at line 3, col 13 (0-based?).  We assert a
@@ -99,7 +98,6 @@ fn main() {
     );
 }
 
-#[ignore = "plan-07 phase 1 — wrap activation pending wider unspan() audit (sorted/index/hash iteration paths)"]
 #[test]
 fn binary_mod_wraps_in_span() {
     let p = parse(
@@ -144,7 +142,9 @@ fn main() {
 fn has_span_on_line(val: &Value, line: u32) -> bool {
     match val {
         Value::Span(b) => b.0.line == line || has_span_on_line(&b.1, line),
-        Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(|v| has_span_on_line(v, line)),
+        Value::Block(bl) | Value::Loop(bl) => {
+            bl.operators.iter().any(|v| has_span_on_line(v, line))
+        }
         Value::Insert(vs) | Value::Tuple(vs) | Value::Parallel(vs) => {
             vs.iter().any(|v| has_span_on_line(v, line))
         }

@@ -6,8 +6,49 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Phase 1 — Spans on IR
 
 Status: in-progress (1.A landed 2026-04-28 in `b3b2da2`; 1.B foundation
-in `4904669`; per-site wraps blocked on a `Value::unspan()` helper —
-see "Lessons learned 2026-04-28" below)
+in `4904669`; 1.B.0 partial in `c63a169`; **1.B.1 (binary `/` `%`
+wrap) landed 2026-04-29** — root cause was four walkers missing a
+`Value::Span` arm, not a wide audit gap; details in "Resolution
+2026-04-29" below)
+
+## Resolution 2026-04-29 — four walker arms, not a wide audit
+
+The 12-site `unspan()` audit from 1.B.0 was a red herring.  The
+state-corruption bug ("sorted descending key produces ascending
+order, then segfault") came from **four walkers in the second pass
+that pattern-match `Value` exhaustively but treated `Span` as a
+no-recurse leaf**:
+
+| Walker | File | Symptom |
+|---|---|---|
+| `compute_intervals` | `src/variables/intervals.rs:199` | `last_use` for vars wrapped inside a `Span` was never updated → assign_slots aliased the slot, runtime read freed memory.  This produced the canvas demo's `3751172305368004 * 3751172305368004` overflow and the bounded-generic test's huge garbage values. |
+| `Convert::scan_inner` | `src/scopes.rs:459` | `var_mapping` rewrites of `Var` references inside Span never ran → second-pass loops referenced the *previous* loop's `e` (slot 128 vs new slot 152).  This was the original "sorted descending → ascending" failure. |
+| `substitute_type_in_value` | `src/parser/mod.rs:1418` | Generic specialisation re-resolves `Call` targets but skipped Span-wrapped calls → `t_5Score_halve` called the abstract stub `t_1T_OpDiv` instead of the concrete `t_5Score_OpDiv` (bounded-generic interface tests). |
+| `place_large_and_recurse` / `walk_node` / `walk_frame_bases` | `src/variables/slots.rs`, `src/variables/slots_v2.rs`, `src/variables/validate.rs` | Defensive Span passthrough — current `/` `%` wraps don't put Set/Block under a Span, but adding the arm matches the discipline of every other walker and prevents future wraps from regressing. |
+
+Each walker gets a one-line `Value::Span(b) => recurse(&b.1, ...)`
+arm.  The `Value::unspan()` helper from 1.B.0 stays — it's the
+right tool for sites that pattern-match `Call` shape (operator
+optimisation, lock-call rewrite) rather than walk recursively.
+
+Delivered:
+- All 47 wrap-suite tests + 119 expressions tests + 539 issues
+  tests + 3 spans_on_ir tests + 2 error_messages tests green.
+- `binary_div_wraps_in_span` and `binary_mod_wraps_in_span`
+  un-ignored.
+- Canvas demo (`lib/graphics/examples/10-2d-canvas.loft`) saves
+  PNG cleanly.
+- Bounded-generic operators (interface `op /` / `op %`) compile and
+  run correctly.
+
+## Lessons learned 2026-04-28 — superseded by 2026-04-29
+
+The 12-site `unspan()` audit (still useful for site-shape pattern
+matches; see `src/parser/operators.rs:208` and
+`src/parser/collections.rs:296` for examples) was based on the
+false hypothesis that *all* second-pass consumers needed unspan().
+The actual gap was four IR walkers missing a Span arm — see
+"Resolution 2026-04-29" above.  Original notes preserved:
 
 ## Lessons learned 2026-04-28 — `Value::unspan()` is a prerequisite
 

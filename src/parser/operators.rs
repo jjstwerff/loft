@@ -1024,17 +1024,19 @@ impl Parser {
                 &[code.clone(), second_code],
                 &[ctp.clone(), second_type],
             );
-            // Plan-07 phase 1, step 1.B.1 — the binary `/` `%` wrap
-            // remains DISABLED until the unspan() audit covers the
-            // sorted/index/hash iteration paths.  An earlier attempt
-            // (in this same commit's draft) tripped a state-corruption
-            // bug in `tests/scripts/12-collections.loft` even with the
-            // 12 listed unspan() routes in place — the failure occurs
-            // only after a sorted descending-key iteration completes,
-            // suggesting the audit list is incomplete.  See
-            // 01-spans-on-ir.md "Lessons learned 2026-04-28" for the
-            // remaining audit work.
-            let _ = op_pos;
+            // Plan-07 phase 1, step 1.B.1 — wrap binary `/` `%` in a
+            // Value::Span so runtime errors (div-by-zero, narrow
+            // overflow) can be reported with the operator's source
+            // position.  Active second pass only; second-pass and
+            // codegen consumers either route Call destructures through
+            // `unspan()` (operators.rs:208, collections.rs:296, etc.)
+            // or carry a `Value::Span(b)` walker arm (scopes.rs,
+            // variables/{intervals,slots,slots_v2,validate}.rs,
+            // parser/mod.rs::substitute_type_in_value).
+            if !self.first_pass && (operator == "/" || operator == "%") {
+                let inner = std::mem::replace(code, Value::Null);
+                *code = Value::with_span(op_pos.clone(), inner);
+            }
         }
         None
     }

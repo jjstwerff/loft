@@ -456,6 +456,10 @@ impl Scopes {
                 Box::new(self.scan(inner, function, data)),
             ),
             Value::Yield(inner) => Value::Yield(Box::new(self.scan(inner, function, data))),
+            Value::Span(b) => {
+                let scanned = self.scan(&b.1, function, data);
+                Value::with_span(b.0.clone(), scanned)
+            }
             _ => val.clone(),
         }
     }

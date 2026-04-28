@@ -1510,6 +1510,11 @@ impl Parser {
                     *extra, tv_nr, concrete, data,
                 )),
             ),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
