@@ -316,6 +316,9 @@ impl State {
                 self.gen_parallel(arms, stack);
                 Type::Void
             }
+            // Plan-07 phase 1 — Span is transparent in codegen; the pc→span
+            // table population lands in step 1.D.
+            Value::Span(b) => self.generate_inner(&b.1, stack, top),
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef

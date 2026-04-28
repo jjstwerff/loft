@@ -289,6 +289,19 @@ pub enum Value {
     Null,
     /// Line number inside the source file
     Line(u32),
+    /// Source span wrapper (plan-07 phase 1, decision A).
+    /// Wraps a single fault-prone IR node with its source `Position`.
+    /// Walkers should treat this as a transparent passthrough that
+    /// updates the walker's `current_span` so diagnostics raised
+    /// while recursing into `inner` carry the correct file:line:col.
+    /// Codegen mirrors the entry pc into `Definition.source_spans`
+    /// so phase 3's pc→span lookup can run.
+    ///
+    /// Both `Position` and the inner `Value` are heap-boxed together
+    /// to keep `size_of::<Value>()` at 32 bytes — `Position` carries a
+    /// `String` and would otherwise grow the enum by 8 bytes,
+    /// affecting every `Vec<Value>` allocation in the IR.
+    Span(Box<(Position, Value)>),
     Int(i32),
     /// Enum value and database type
     Enum(u8, u16),
@@ -3132,6 +3145,8 @@ impl Data {
                 }
                 write!(write, "}}")
             }
+            // Plan-07 phase 1 — Span is transparent in pretty-print.
+            Value::Span(b) => self.show_code(write, vars, &b.1, indent, start),
         }
     }
 
@@ -3227,6 +3242,27 @@ fn value_sizes() {
     assert_eq!(size_of::<(u8, u16, Box<Value>)>(), 16); // Set
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>, Box<Value>)>(), 32); // If
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>)>(), 24); // Iter
+    assert_eq!(size_of::<(u8, Box<(Position, Value)>)>(), 16); // Span (plan-07 phase 1)
+}
+
+#[test]
+fn span_clone_and_eq_roundtrip() {
+    // Plan-07 phase 1, step 1.1 acceptance: construct a Span, clone it,
+    // debug-format it, assert round-trip equality.  Span is a transparent
+    // wrapper, so the cloned tree must compare equal to the original.
+    let pos = Position {
+        file: "x.loft".to_string(),
+        line: 17,
+        pos: 4,
+    };
+    let v = Value::Span(Box::new((pos.clone(), Value::Int(7))));
+    let v2 = v.clone();
+    assert_eq!(v, v2, "clone must be Eq");
+    let dbg = format!("{v:?}");
+    assert!(
+        dbg.contains("x.loft") && dbg.contains("17") && dbg.contains("Int(7)"),
+        "debug shows file, line, and inner: {dbg}"
+    );
 }
 
 #[cfg(test)]

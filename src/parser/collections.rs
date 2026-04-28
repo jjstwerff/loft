@@ -2558,5 +2558,8 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
             replace_var_in_ir(b, target, replacement);
             replace_var_in_ir(c, target, replacement);
         }
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => replace_var_in_ir(&mut b.1, target, replacement),
     }
 }

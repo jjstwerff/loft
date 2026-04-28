@@ -307,6 +307,8 @@ impl Output<'_> {
                 // Native codegen for parallel {} is not yet supported.
                 write!(w, "/* parallel {{}} — not supported in native codegen */")?;
             }
+            // Plan-07 phase 1 — Span is transparent in native emit.
+            Value::Span(b) => self.output_code_inner(w, &b.1)?,
         }
         Ok(())
     }

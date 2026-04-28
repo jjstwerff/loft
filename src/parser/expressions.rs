@@ -62,6 +62,9 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
             elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
         }
         Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => inline_ref_set_in(&b.1, r, depth + 1),
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -128,6 +131,9 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
                 substitute_value(v, from, to);
             }
         }
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => substitute_value(&mut b.1, from, to),
         // Leaf variants.
         Value::Null
         | Value::Int(_)
