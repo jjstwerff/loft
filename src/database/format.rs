@@ -569,6 +569,21 @@ impl ShowDb<'_> {
                         write!(s, "{v}").unwrap();
                     }
                 }
+                // Plan-06 phase 4d.C step 2: format a stored DbRef
+                // pointer as the three u32 components.  Closures don't
+                // round-trip through textual format anyway; this just
+                // gives a recognisable shape for debug output.
+                Parts::DbRef => {
+                    let store = self.store();
+                    let store_nr = store.get_u32_raw(self.rec, self.pos) as u16;
+                    let rec = store.get_u32_raw(self.rec, self.pos + 4);
+                    let pos = store.get_u32_raw(self.rec, self.pos + 8);
+                    if store_nr == u16::MAX && rec == 0 {
+                        s.push_str("null");
+                    } else {
+                        write!(s, "DbRef({store_nr},{rec},{pos})").unwrap();
+                    }
+                }
                 Parts::Base => {
                     panic!(
                         "Not matching parts:{:?} type:{} name:{}",
@@ -980,6 +995,16 @@ impl DumpDb<'_> {
                     s.push_str("null");
                 } else {
                     write!(s, "{v}").unwrap();
+                }
+            }
+            Parts::DbRef => {
+                let store_nr = self.store().get_u32_raw(self.rec, self.pos);
+                let rec = self.store().get_u32_raw(self.rec, self.pos + 4);
+                let pos = self.store().get_u32_raw(self.rec, self.pos + 8);
+                if rec == 0 {
+                    s.push_str("null");
+                } else {
+                    write!(s, "DbRef({store_nr},{rec},{pos})").unwrap();
                 }
             }
             Parts::Base => {

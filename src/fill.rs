@@ -9,7 +9,7 @@ use crate::state::State;
 use crate::tree;
 use crate::vector;
 
-pub const OPERATORS: &[fn(&mut State); 243] = &[
+pub const OPERATORS: &[fn(&mut State); 245] = &[
     goto,
     goto_word,
     goto_false,
@@ -165,6 +165,8 @@ pub const OPERATORS: &[fn(&mut State); 243] = &[
     ne_ref,
     get_ref,
     set_ref,
+    set_db_ref,
+    get_db_ref,
     get_field,
     get_int,
     get_character,
@@ -1238,6 +1240,36 @@ fn set_ref(s: &mut State) {
             .store_mut(&db)
             .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val.rec);
     }
+}
+
+fn set_db_ref(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_val = *s.get_stack::<DbRef>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let r = v_val;
+        let off = db.pos + u32::from(v_fld);
+        let store = s.database.store_mut(&db);
+        store.set_u32_raw(db.rec, off, u32::from(r.store_nr));
+        store.set_u32_raw(db.rec, off + 4, r.rec);
+        store.set_u32_raw(db.rec, off + 8, r.pos);
+    }
+}
+
+fn get_db_ref(s: &mut State) {
+    let v_fld = *s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        let store = s.database.store(&db);
+        let off = db.pos + u32::from(v_fld);
+        let store_nr = store.get_u32_raw(db.rec, off) as u16;
+        let rec = store.get_u32_raw(db.rec, off + 4);
+        let pos = store.get_u32_raw(db.rec, off + 8);
+        DbRef { store_nr, rec, pos }
+    };
+    s.put_stack(new_value);
 }
 
 fn get_field(s: &mut State) {

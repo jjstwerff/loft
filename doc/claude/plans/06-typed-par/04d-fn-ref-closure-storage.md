@@ -247,6 +247,26 @@ digits to low hundreds of fn-ref fields per record max).
 | Capturing lambda in tuple field | new: `p4d_tuple_field_lambda_with_capture` | silently truncates | passing |
 | Cross-store closure copy (struct in store A, lambda captured from store B) | new: `p4d_fn_ref_field_cross_store_closure` | **fails / UB** | passing |
 
+## Status (2026-04-28)
+
+- **Step 1 — Synthetic `__fn_ref` struct registration**: ✅ shipped.
+  `src/data.rs::Data::fn_ref_def` registers a global struct with
+  `_d_nr` (i32 size 4) + placeholder `_closure` attribute; `type_def_nr`
+  + `type_elm` route `Type::Function` to it.
+- **Step 2 — `Parts::DbRef` 12-byte raw DbRef storage shape + new
+  opcodes**: ✅ shipped.
+  - `Parts::DbRef` variant added in `src/database/mod.rs`; arms wired
+    through `database/io.rs`, `database/structures.rs`,
+    `database/format.rs`, `database/search.rs` (panic for non-collection
+    operations, debug-format renders as `DbRef(s,r,p)` or `null`).
+  - `Stores::dbref()` registers a 12-byte primitive type with
+    `Parts::DbRef`.
+  - `OpSetDbRef(v1, fld, val)` and `OpGetDbRef(v1, fld) -> reference`
+    declared in `default/01_code.loft`; OPERATORS array grown 243 → 245;
+    interpreter dispatch in `src/fill.rs` wired (`set_db_ref` /
+    `get_db_ref` write/read 3 × u32 raw words).
+- Steps 3–10: still pending.
+
 ## Effort
 
 | Step | Files | Effort |

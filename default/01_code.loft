@@ -756,6 +756,14 @@ fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
 #rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
 #rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val.rec);}}"
+// Plan-06 phase 4d.C step 2 — full 12-byte DbRef store/load.  Used by
+// the closure half of `Type::Function = (u32, DbRef)` slots when stored
+// in vector elements / struct fields.  Layout: u32 store_nr | u32 rec |
+// u32 pos.  Null is encoded as rec == 0 (other words irrelevant).
+fn OpSetDbRef(v1: reference, fld: const u16, val: reference);
+#rust"{{let db = @v1; let r = @val; let off = db.pos + u32::from(@fld); let store = stores.store_mut(&db); store.set_u32_raw(db.rec, off, u32::from(r.store_nr)); store.set_u32_raw(db.rec, off + 4, r.rec); store.set_u32_raw(db.rec, off + 8, r.pos);}}"
+fn OpGetDbRef(v1: reference, fld: const u16) -> reference;
+#rust"{{let db = @v1; let store = stores.store(&db); let off = db.pos + u32::from(@fld); let store_nr = store.get_u32_raw(db.rec, off) as u16; let rec = store.get_u32_raw(db.rec, off + 4); let pos = store.get_u32_raw(db.rec, off + 8); DbRef {{ store_nr, rec, pos }}}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];

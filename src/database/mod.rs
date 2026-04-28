@@ -116,6 +116,13 @@ pub enum Parts {
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Spacial(u16, Vec<u16>),            // A spacial index with the listed coordinate fields as a key
+    // Plan-06 phase 4d.C step 2: 12-byte stored DbRef pointer (store_nr
+    // u16 padded to u32 + rec u32 + pos u32).  Distinct from `Vector`
+    // / `Hash` / etc. which all store a 4-byte rec pointer; this
+    // variant preserves the FULL DbRef so the closure half of a
+    // fn-ref struct field can round-trip through storage.
+    // No element type — DbRef bytes are opaque at this layer.
+    DbRef,
 }
 
 impl PartialEq for Content {

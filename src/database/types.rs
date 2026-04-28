@@ -1229,6 +1229,21 @@ impl Stores {
         }
     }
 
+    /// Plan-06 phase 4d.C step 2 — register the 12-byte raw `DbRef` storage
+    /// shape (store_nr u32 + rec u32 + pos u32). Used for the closure half of
+    /// `Type::Function = (u32, DbRef)` slots stored in vectors / fields.
+    pub fn dbref(&mut self) -> u16 {
+        let name = "dbref".to_string();
+        if let Some(nr) = self.names.get(&name) {
+            *nr
+        } else {
+            let num = self.types.len() as u16;
+            self.types.push(Type::new(&name, Parts::DbRef, 12));
+            self.names.insert(name, num);
+            num
+        }
+    }
+
     pub fn enumerate(&mut self, name: &str) -> u16 {
         let num = self.types.len() as u16;
         self.types
