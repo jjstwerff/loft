@@ -65,7 +65,7 @@ impl Parser {
         // a next()-based advance. Detect: the call target returns Iterator.
         if let Type::Iterator(inner, _) = is_type
             && !self.first_pass
-            && let Value::Call(d_nr, _) = code
+            && let Value::Call(d_nr, _) = code.unspan()
             && matches!(self.data.def(*d_nr).returned, Type::Iterator(_, _))
         {
             let gen_var = self.create_unique("__gen", is_type);
@@ -293,7 +293,7 @@ impl Parser {
                 );
                 return Some(Value::Null);
             }
-            if let Value::Call(get_nr, get_args) = to
+            if let Value::Call(get_nr, get_args) = to.unspan()
                 && self.data.def(*get_nr).name == "OpGetRecord"
                 && let Some(Value::Int(db_tp_val)) = get_args.get(1)
                 && (*db_tp_val as usize) < self.database.types.len()
@@ -339,7 +339,7 @@ impl Parser {
                 | Type::Index(_, _, _)
                 | Type::Spacial(_, _, _)
         ) {
-            if let Value::Var(nr) = to {
+            if let Value::Var(nr) = to.unspan() {
                 if !self.first_pass && self.vars.is_const_param(*nr) {
                     diagnostic!(
                         self.lexer,
@@ -363,7 +363,7 @@ impl Parser {
         if let Type::RefVar(tp) = f_type
             && matches!(**tp, Type::Vector(_, _) | Type::Sorted(_, _, _))
         {
-            if let Value::Var(nr) = to {
+            if let Value::Var(nr) = to.unspan() {
                 if self.vars.uses(*nr) > 0 {
                     return val.clone();
                 }
@@ -372,8 +372,8 @@ impl Parser {
             }
         }
         if *f_type == Type::Boolean
-            && let Value::Call(_, a) = &to
-            && let Value::Call(_, args) = &a[0]
+            && let Value::Call(_, a) = to.unspan()
+            && let Value::Call(_, args) = a[0].unspan()
         {
             let conv = Value::If(
                 Box::new(val.clone()),
@@ -386,11 +386,11 @@ impl Parser {
             );
         }
         let code = self.compute_op_code(op, to, val, f_type);
-        if let Value::Call(d_nr, args) = &to {
+        if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name.clone();
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
-        } else if let Value::Var(nr) = to {
+        } else if let Value::Var(nr) = to.unspan() {
             if !self.first_pass && self.vars.is_const_param(*nr) {
                 diagnostic!(
                     self.lexer,
@@ -1085,7 +1085,7 @@ use #count instead"
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
             let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
                 && !self.first_pass
-                && matches!(&expr, Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
+                && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
             let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);

@@ -51,6 +51,42 @@ After 1.B.0 and 1.B.1, the rest of the wraps (1.11-1.18) follow
 the original plan but each wrap commit must include a "pattern-match
 audit" line in its description listing every site updated.
 
+### Update 2026-04-28 (second attempt) — audit list is wider than 12 sites
+
+A second activation attempt landed `Value::unspan()` and routed all 12
+sites listed above through it.  All previously-failing wrap-suite tests
+(`collections`, `loft_suite`, `stress`, `vectors`) STILL failed with
+the same div/mod wrap active — but with a NEW failure shape:
+
+> `tests/scripts/12-collections.loft:182` —
+> `assert(rs_fwd == 321, "sorted forward desc order: {rs_fwd}")`
+> printed `123`, not `321`
+
+The descending-key sort was producing ascending order.  And after that,
+the next sub-test crashed at
+`src/database/allocation.rs:287` with an out-of-bounds access.
+
+This is NOT a div/mod wrap bug — the failure surface is unrelated to
+`%`.  It surfaces when a `for ... if ... %` loop runs over a `sorted`
+collection with a descending key (`sorted<T[-key]>`).  Hypothesis: the
+sorted-iteration codegen reads the if-condition's IR shape at a site
+not yet in the audit list, so the wrap leaks state corruption into
+the iterator's internal cursor.
+
+**Therefore** the audit list grows in step 1.B.0:
+
+- Step 1.B.0 must enumerate every `match val { … Value::Call(...) … }`,
+  `if let Value::Call(...) = val`, `matches!(val, Value::Call(...))`,
+  AND every `Value::Var`, `Value::Set`, `Value::If`, `Value::Iter`,
+  `Value::Loop`, and `Value::Block` pattern that appears in the
+  second-pass and codegen layers.
+- A more conservative audit script: `rg -t rust -n
+  'match.*Value::|if let Value::|matches!\(.*Value::' src/`,
+  filtered to second-pass call paths.
+- Each pattern that's expected to receive an unwrapped value gets
+  `unspan()`/`unspan_mut()`.  An exhaustive audit ensures the list
+  is complete BEFORE 1.B.1 re-enables the wrap.
+
 ### Why not Option B (side-table) instead
 
 Option B's pros are exactly avoiding this pattern-match update:

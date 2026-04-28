@@ -547,7 +547,7 @@ use a separate collection or add after the loop"
         if self.first_pass {
             return false;
         }
-        let Value::Call(lock_nr, lock_args) = to else {
+        let Value::Call(lock_nr, lock_args) = to.unspan() else {
             return false;
         };
         if self.data.def(*lock_nr).name != "n_get_store_lock" {
@@ -963,9 +963,9 @@ use a separate collection or add after the loop"
         // emit field constraint check after assignment to a constrained field.
         if !self.first_pass
             && let Type::Reference(struct_dnr, _) = &parent_tp
-            && let Value::Call(_, to_args) = to
+            && let Value::Call(_, to_args) = to.unspan()
             && to_args.len() >= 2
-            && let Value::Int(field_offset) = &to_args[1]
+            && let Value::Int(field_offset) = to_args[1].unspan()
         {
             let sd = *struct_dnr;
             let off = *field_offset;
@@ -1328,10 +1328,11 @@ use a separate collection or add after the loop"
     }
 
     pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type) {
-        if let Value::Call(_, vars) = to
+        if let Value::Call(_, vars) = to.unspan()
             && vars.len() > 1
-            && let Value::Int(pos) = vars[1]
+            && let Value::Int(pos) = vars[1].unspan()
         {
+            let pos = *pos;
             let d_nr = self.data.type_def_nr(parent_tp);
             if d_nr != u32::MAX {
                 let known = self.data.def(d_nr).known_type;

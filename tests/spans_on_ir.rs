@@ -67,7 +67,7 @@ fn parse(code: &str) -> Parser {
     p
 }
 
-#[ignore = "plan-07 phase 1 — wrap activates after Value::unspan() helper + pattern-match updates land"]
+#[ignore = "plan-07 phase 1 — wrap activation pending wider unspan() audit (sorted/index/hash iteration paths)"]
 #[test]
 fn binary_div_wraps_in_span() {
     // `1 / z` — the `/` is at line 3, col 13 (0-based?).  We assert a
@@ -99,7 +99,7 @@ fn main() {
     );
 }
 
-#[ignore = "plan-07 phase 1 — wrap activates after Value::unspan() helper + pattern-match updates land"]
+#[ignore = "plan-07 phase 1 — wrap activation pending wider unspan() audit (sorted/index/hash iteration paths)"]
 #[test]
 fn binary_mod_wraps_in_span() {
     let p = parse(

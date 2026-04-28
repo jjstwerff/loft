@@ -408,6 +408,39 @@ impl Value {
             None
         }
     }
+
+    /// Plan-07 phase 1, step 1.B.0 — see through any number of nested
+    /// `Value::Span` wrappers and return the inner non-Span node.
+    ///
+    /// Every second-pass site that pattern-matches a specific Value
+    /// variant (`if let Value::Call(...) = code`, etc.) must call
+    /// `code.unspan()` first.  Without this, the per-site wraps in
+    /// 1.B.1+ silently break optimisations that rely on the unwrapped
+    /// shape.  See the plan doc for the audit list.
+    ///
+    /// `Span` may nest in principle (e.g. a nested struct field
+    /// access wrapped at multiple parser layers); the recursion
+    /// flattens any depth.  In practice depth is 1.
+    #[must_use]
+    pub fn unspan(&self) -> &Value {
+        if let Value::Span(b) = self {
+            b.1.unspan()
+        } else {
+            self
+        }
+    }
+
+    /// Mutable counterpart of `unspan()` — returns `&mut` to the inner
+    /// non-Span node, for sites that need to rewrite the wrapped value
+    /// in place (e.g. compound-assignment LHS rewrites).
+    #[must_use]
+    pub fn unspan_mut(&mut self) -> &mut Value {
+        if let Value::Span(b) = self {
+            b.1.unspan_mut()
+        } else {
+            self
+        }
+    }
 }
 
 #[must_use]
@@ -3291,6 +3324,32 @@ fn span_clone_and_eq_roundtrip() {
         dbg.contains("x.loft") && dbg.contains("17") && dbg.contains("Int(7)"),
         "debug shows file, line, and inner: {dbg}"
     );
+}
+
+#[test]
+fn span_unspan_strips_wrapper() {
+    // Plan-07 phase 1, step 1.B.0 acceptance: `unspan()` returns the
+    // inner non-Span node, recursing through any number of wraps.
+    let pos = Position {
+        file: "y.loft".to_string(),
+        line: 3,
+        pos: 7,
+    };
+    let inner = Value::Int(42);
+    // Single wrap.
+    let wrapped = Value::Span(Box::new((pos.clone(), inner.clone())));
+    assert_eq!(wrapped.unspan(), &inner);
+    // Doubly wrapped.
+    let double = Value::Span(Box::new((pos.clone(), wrapped.clone())));
+    assert_eq!(double.unspan(), &inner);
+    // Non-Span passes through unchanged.
+    assert_eq!(inner.unspan(), &inner);
+    // Mutable variant.
+    let mut wrapped_mut = Value::Span(Box::new((pos, Value::Int(99))));
+    if let Value::Int(n) = wrapped_mut.unspan_mut() {
+        *n = 100;
+    }
+    assert_eq!(wrapped_mut.unspan(), &Value::Int(100));
 }
 
 #[cfg(test)]

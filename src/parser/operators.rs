@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, OPERATORS, Parser, Type, Value, diagnostic_format, rename, v_block, v_if, v_set,
+    Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block, v_if,
+    v_set,
 };
 
 /// Check if a Value tree contains a reference to the given variable.
@@ -36,7 +37,7 @@ impl Parser {
                 self.vars.name(var_nr)
             );
         }
-        if let Value::Call(_, parms) = to.clone() {
+        if let Value::Call(_, parms) = to.unspan().clone() {
             if op == "=" {
                 let mut p = parms.clone();
                 p.push(code.clone());
@@ -65,7 +66,7 @@ impl Parser {
                 // removing the self-append and skipping the clear.  Without this,
                 // the clear destroys h's content before the append reads it.
                 let self_append = ls.first().is_some_and(|first| {
-                    if let Value::Call(_, args) = first {
+                    if let Value::Call(_, args) = first.unspan() {
                         args.len() >= 2
                             && args[0] == Value::Var(var_nr)
                             && args[1] == Value::Var(var_nr)
@@ -204,7 +205,7 @@ impl Parser {
         if self.first_pass {
             return false;
         }
-        match val {
+        match val.unspan() {
             Value::Call(fn_nr, _) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
@@ -352,6 +353,12 @@ impl Parser {
             if matches!(current_type, Type::Void) {
                 return current_type;
             }
+            // Plan-07 phase 1, step 1.B.1 — capture the operator's source
+            // position *before* `has_token` consumes it.  `op_pos` is then
+            // threaded into `handle_operator` so the resulting Value::Span
+            // points at the operator token (e.g. the `/`), not at whatever
+            // the lexer drifted to while parsing the RHS.
+            let op_pos = self.lexer.pos().clone();
             let mut operator = "";
             for op in OPERATORS[precedence] {
                 if self.lexer.has_token(op) {
@@ -443,6 +450,7 @@ impl Parser {
                 precedence,
                 &mut current_type,
                 operator,
+                &op_pos,
             ) {
                 return value;
             }
@@ -738,7 +746,7 @@ impl Parser {
     /// variant isn't registered (defensive — should always be, via
     /// `default/01_code.loft`).
     fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
-        let Value::Call(def_nr, _) = code else {
+        let Value::Call(def_nr, _) = code.unspan_mut() else {
             return;
         };
         // `original_name()` on an operator returns the stripped form
@@ -889,6 +897,7 @@ impl Parser {
         precedence: usize,
         ctp: &mut Type,
         operator: &str,
+        op_pos: &Position,
     ) -> Option<Type> {
         if operator == "??" {
             self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
@@ -1015,6 +1024,17 @@ impl Parser {
                 &[code.clone(), second_code],
                 &[ctp.clone(), second_type],
             );
+            // Plan-07 phase 1, step 1.B.1 — the binary `/` `%` wrap
+            // remains DISABLED until the unspan() audit covers the
+            // sorted/index/hash iteration paths.  An earlier attempt
+            // (in this same commit's draft) tripped a state-corruption
+            // bug in `tests/scripts/12-collections.loft` even with the
+            // 12 listed unspan() routes in place — the failure occurs
+            // only after a sorted descending-key iteration completes,
+            // suggesting the audit list is incomplete.  See
+            // 01-spans-on-ir.md "Lessons learned 2026-04-28" for the
+            // remaining audit work.
+            let _ = op_pos;
         }
         None
     }
