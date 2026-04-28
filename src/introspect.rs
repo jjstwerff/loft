@@ -56,6 +56,10 @@ pub struct Options {
     /// before the change, then run with `--diff <baseline>` after.
     /// Exits 0 if identical, 1 if diff.  Requires `diff` on PATH.
     pub diff_against: Option<String>,
+    /// `--show-types --trace` companion: per-expression type tape
+    /// recorded by the parser.  Emitted after each variable table.
+    /// Lines are tab-separated `<fn>\t<line>:<col>\t<type>`.
+    pub trace_lines: Vec<String>,
     /// Restrict every section to functions whose name matches one of
     /// these strings (substring match, like `LOFT_LOG=fn:<name>`).
     /// Empty = include all user functions (filtered further by
@@ -83,6 +87,7 @@ impl Options {
             slots_out: None,
             types_out: None,
             diff_against: None,
+            trace_lines: Vec::new(),
             fn_filter: Vec::new(),
             all_fns: false,
             lib_dirs: Vec::new(),
@@ -416,6 +421,30 @@ fn emit_types(
                 w,
                 "  {idx:<4} {arg_flag:<4} {var_name:<24} {type_str}"
             )?;
+        }
+        // Per-expression trace from the parser, if any was recorded.
+        // Each line is `<fn_name>\t<line>:<col>\t<type>` where
+        // fn_name is the raw user name (`first`), not the
+        // `n_`-prefixed def name (`n_first`).
+        let user_name = def.name.strip_prefix("n_").unwrap_or(&def.name);
+        let fn_trace: Vec<&String> = opts
+            .trace_lines
+            .iter()
+            .filter(|l| {
+                l.split('\t')
+                    .next()
+                    .is_some_and(|n| n == user_name)
+            })
+            .collect();
+        if !fn_trace.is_empty() {
+            writeln!(w)?;
+            writeln!(w, "  trace (per-expression types):")?;
+            for line in fn_trace {
+                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                if let [_fn, pos, ty] = parts.as_slice() {
+                    writeln!(w, "    {pos:<10} {ty}")?;
+                }
+            }
         }
         writeln!(w)?;
     }

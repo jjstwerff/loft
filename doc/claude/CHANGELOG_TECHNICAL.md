@@ -9,6 +9,50 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### `--show-types --trace` per-expression type tape
+
+Adds a per-expression tape to the `--show-types` introspection
+section.  Where the existing variable-level table catches dep loss
+in *stored* values (the function's args, locals, return type), the
+trace catches dep loss in *intermediate* sub-expressions of a
+chained access.  Specifically, for a nested expression like
+`a.v.0`, the tape shows the type at each step:
+
+```
+4:7        ref(A)["a"]              <- a
+4:9        (text["a"], text["a"])   <- a.v
+5:2        text["a"]                <- a.v.0
+```
+
+If P197 had been a regression today, line 4:9 would have rendered
+`(text, text)` (no host dep) and the bug would have been visible
+without reading any code.
+
+Mechanism:
+- `Parser::trace_types: bool` flag enables recording.
+- `Parser::trace_types_lines: Vec<String>` accumulates entries
+  formatted `<fn>\t<line>:<col>\t<type>`.
+- `parse_part` calls `record_type_trace(&t)` after the initial
+  `parse_single` and after each chaining step.
+- Only fires on the second pass (first-pass types are placeholders
+  that would emit thousands of meaningless lines).
+- `main.rs` enables the flag for the user's file (not for the
+  `default/*` stdlib parsed by `parse_dir`).
+- `emit_types` in `introspect.rs` reads `opts.trace_lines`,
+  filters to the current function (matching the user-typed name,
+  i.e. without the `n_` prefix), and renders one section per fn.
+
+Tangential fix discovered while testing on dev profile:
+`emit_tuple_set_ops` had a `base_pos + offsets[i]` u16 overflow
+when `base_pos` was the `database.position` u16::MAX sentinel
+during first-pass placeholder resolution.  Release silently
+wrapped; dev profile (with overflow checks) panics.  Switched
+both arithmetic sites to `saturating_add` — first-pass IR is
+regenerated in pass 2, so a saturated placeholder is safe.
+
+Tests: `introspect_show_types_trace_renders_per_expression` in
+`tests/exit_codes.rs`.
+
 ### Native-codegen source map + introspection `--diff`
 
 Two developer-velocity wins, both targeting the long tail of

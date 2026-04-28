@@ -638,6 +638,54 @@ fn introspect_diff_against_baseline() {
     let _ = std::fs::remove_file(&baseline_path);
 }
 
+/// `--show-types --trace` emits a per-expression type tape that
+/// makes dep-propagation flow visible at every chaining step
+/// (`.field`, `.tuple_idx`, `[idx]`, `(args)`).  Designed so a
+/// future P197-class bug shows up as a missing `[host]` suffix
+/// on an intermediate type, not just the eventual return.
+#[test]
+fn introspect_show_types_trace_renders_per_expression() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_trace_demo.loft");
+    let script = "struct A { v: (text, text) }\n\
+                  fn first() -> text {\n  \
+                      a = A { v: (\"hello\", \"world\") };\n  \
+                      a.v.0\n\
+                  }\n\
+                  fn main() { println(\"{first()}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--trace")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    assert!(
+        stdout.contains("trace (per-expression types):"),
+        "expected trace section header; got {stdout}"
+    );
+    // The per-step tape shows the tuple's element types each carry
+    // the host's dep AFTER the `.v` step — this is the line that
+    // would have read `(text, text)` (no `[a]`) before the P197 fix.
+    assert!(
+        stdout.contains("(text[\"a\"], text[\"a\"])"),
+        "expected `a.v` step to render `(text[\"a\"], text[\"a\"])` \
+         (each tuple element carries dep on host `a`); got {stdout}"
+    );
+    // And the final `.0` extraction preserves the dep.
+    assert!(
+        stdout.contains("text[\"a\"]"),
+        "expected final `.0` step to render `text[\"a\"]`; got {stdout}"
+    );
+}
+
 /// Plan-08 phase 01 — `--introspect --show-types` emits a per-fn
 /// type table where `Type::show()` includes dependency suffixes
 /// (e.g. `text["a"]`).  Designed to surface dep-tracking bugs at a

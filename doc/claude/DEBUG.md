@@ -301,6 +301,37 @@ plain `text` (no `[host]` suffix), the dep was lost in
 `get_val::Type::Tuple`, `field()`'s `t.depending(*nr)`, or
 `Type::depending`'s recursion.
 
+#### `--trace` — per-expression tape
+
+Add `--trace` to surface the type at *every* chaining step, not
+just the final variable.  Critical for nested expressions where
+one intermediate step might lose a dep:
+
+```
+$ loft --introspect --show-types --trace foo.loft
+
+fn n_first -> text["a"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  a                        ref(A)
+
+  trace (per-expression types):
+    4:7        ref(A)["a"]
+    4:9        (text["a"], text["a"])  ← `.v` step
+    5:2        text["a"]                ← `.0` step
+```
+
+The two-step tape makes the dep flow visible: `a` → `a.v` →
+`a.v.0`, with each step carrying `["a"]`.  Before the P197 fix,
+the `.v` step would have rendered `(text, text)` (no `["a"]`)
+and the regression would have been obvious without reading any
+code.
+
+Implemented as a `Parser::trace_types` flag; `parse_part` calls
+`record_type_trace(&t)` after each `.field`/`.tuple_idx`/`[idx]`/
+`(args)` chaining step.  Position is the lexer's char-offset
+within the line (so `5:2` means line 5, byte 2 of the source).
+
 ### `--diff <baseline>`: did my parser tweak change anything?
 
 Capture once, edit, re-run with `--diff`.  Mirrors `diff -u`'s

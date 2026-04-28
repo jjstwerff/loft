@@ -179,6 +179,16 @@ pub struct Parser {
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
     pub(crate) is_capture_bindings: Vec<Value>,
+    /// `--show-types --trace`: when `true`, `parse_part` appends one
+    /// trace line per resolved sub-expression (after each `.field`,
+    /// `.tuple_idx`, `[idx]` step).  Surfaces dep-tracking flow that
+    /// the per-variable view misses — e.g. P197 was a missing dep on
+    /// the `.0` step of a tuple field read.
+    pub trace_types: bool,
+    /// Accumulated trace entries; drained by the introspection CLI.
+    /// Each entry is a tab-separated record:
+    /// `<fn_name>\t<line>:<col>\t<step_kind>\t<type_with_deps>`.
+    pub trace_types_lines: Vec<String>,
 }
 
 // Operators ordered on their precedence
@@ -343,6 +353,8 @@ impl Parser {
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
+            trace_types: false,
+            trace_types_lines: Vec::new(),
         }
     }
 
@@ -1890,7 +1902,14 @@ impl Parser {
             // tuple elements flatten into per-leaf OpSet* calls.
             let mut ops = Vec::new();
             for (i, (elem_tp, value_i)) in elems_vec.iter().zip(values).enumerate() {
-                let elem_pos = base_pos + offsets[i];
+                // First-pass `base_pos` can be the `database.position`
+                // u16::MAX sentinel for not-yet-resolved fields.  The
+                // raw `+` panics under dev-profile overflow checks
+                // (caught by `make iter`); release silently wraps.
+                // The IR built during pass 1 is regenerated in pass 2,
+                // so a saturating placeholder is safe and keeps the
+                // arithmetic well-defined across both profiles.
+                let elem_pos = base_pos.saturating_add(offsets[i]);
                 ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, value_i));
             }
             return ops;
@@ -1904,7 +1923,7 @@ impl Parser {
         }
         let mut ops = vec![v_set(tmp, val_code)];
         for (i, elem_tp) in elems_vec.iter().enumerate() {
-            let elem_pos = base_pos + offsets[i];
+            let elem_pos = base_pos.saturating_add(offsets[i]);
             let elem_val = Value::TupleGet(tmp, i as u16);
             ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, elem_val));
         }
@@ -2238,6 +2257,24 @@ impl Parser {
             ],
         );
         Value::Insert(vec![set_op, assert_call])
+    }
+
+    /// Append a `--show-types --trace` entry for the type at the
+    /// current parse position.  No-op unless `trace_types` is set
+    /// AND we are on the second pass (first-pass types are
+    /// placeholders and would emit thousands of meaningless lines).
+    pub(crate) fn record_type_trace(&mut self, t: &Type) {
+        if !self.trace_types || self.first_pass {
+            return;
+        }
+        let pos = self.lexer.pos();
+        let fn_name = self.vars.name.clone();
+        if fn_name.is_empty() {
+            return;
+        }
+        let type_str = t.show(&self.data, &self.vars);
+        self.trace_types_lines
+            .push(format!("{fn_name}\t{}:{}\t{type_str}", pos.line, pos.pos));
     }
 
     fn cl(&mut self, op: &str, list: &[Value]) -> Value {

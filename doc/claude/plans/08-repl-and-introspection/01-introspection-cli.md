@@ -102,6 +102,22 @@ function that returns `text` without the host dep — exactly the
 shape that produced P197 (a `text` element returned from a tuple
 struct field, lifetime not extended through the host record).
 
+#### `--trace`: per-expression tape
+
+```
+$ loft --introspect --show-types --trace foo.loft
+```
+
+Adds a "trace (per-expression types):" block under each function's
+variable table, listing one line per chaining step (`.field`,
+`.tuple_idx`, `[idx]`, `(args)`) with its post-step type.
+Critical for nested expressions where the bug is in an
+intermediate step, not the final variable's type.
+
+Implemented as a `Parser::trace_types` flag; `parse_part` calls
+`record_type_trace(&t)` after each step.  Only fires on the
+second pass (first-pass types are placeholders).
+
 ### Function filter
 
 ```

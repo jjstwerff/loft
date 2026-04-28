@@ -457,6 +457,9 @@ impl Parser {
         parent_tp: &mut Type,
     ) -> Type {
         let mut t = self.parse_single(var_tp, code, parent_tp);
+        // --show-types --trace: log the type after the initial
+        // `parse_single` (variable, literal, parenthesised expr).
+        self.record_type_trace(&t);
         while self.lexer.peek_token(".")
             || self.lexer.peek_token("[")
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
@@ -687,6 +690,13 @@ impl Parser {
                     t = *ret_type;
                 }
             }
+            // --show-types --trace: log the resulting type after
+            // each chaining step (`.field`, `.tuple_idx`, `[idx]`,
+            // `(args)`).  Combined with the post-`parse_single`
+            // log at the top, this produces a per-step "tape" of
+            // how the type evolves through a chained expression
+            // like `a.v.0` — the shape that hid the P197 dep loss.
+            self.record_type_trace(&t);
         }
         t
     }

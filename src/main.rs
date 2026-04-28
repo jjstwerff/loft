@@ -1170,6 +1170,7 @@ fn main() {
     let mut introspect_slots_out: Option<String> = None;
     let mut introspect_types_out: Option<String> = None;
     let mut introspect_diff_against: Option<String> = None;
+    let mut introspect_trace = false;
     let mut introspect_fn_filter: Vec<String> = Vec::new();
     let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
@@ -1281,6 +1282,8 @@ fn main() {
         } else if a == "--diff" {
             introspect_diff_against = argv.get(i).cloned();
             i += 1;
+        } else if a == "--trace" {
+            introspect_trace = true;
         } else if a == "--fn" {
             if let Some(name) = argv.get(i) {
                 introspect_fn_filter.push(name.clone());
@@ -1665,6 +1668,12 @@ fn main() {
     p.lib_dirs = lib_dirs;
     p.parse_dir(&(dir + "default"), true, false).unwrap();
     let start_def = p.data.definitions();
+    // `--show-types --trace`: enable per-expression type recording
+    // BEFORE parsing the user file (parse_dir on default/* already
+    // ran without tracing — those are stdlib internals).
+    if introspect_mode && introspect_trace {
+        p.trace_types = true;
+    }
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
         // Cache source files for source-line display.
@@ -2316,6 +2325,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     // Plan-08 phase 01: --introspect short-circuits everything.
     // Bypass execution; emit bytecode + Rust + slots and exit.
     if introspect_mode {
+        let trace_lines = std::mem::take(&mut p.trace_types_lines);
         let opts = crate::introspect::Options {
             sections: introspect_sections.clone(),
             bytecode_out: introspect_bytecode_out.clone(),
@@ -2323,6 +2333,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             slots_out: introspect_slots_out.clone(),
             types_out: introspect_types_out.clone(),
             diff_against: introspect_diff_against.clone(),
+            trace_lines,
             fn_filter: introspect_fn_filter.clone(),
             all_fns: introspect_all_fns,
             lib_dirs: Vec::new(),
