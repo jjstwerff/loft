@@ -535,6 +535,109 @@ fn p166_content_on_text_file_no_warning() {
     );
 }
 
+/// DX-source-map — the native-codegen emitter writes
+/// `// loft:<file>:<line>` comments above each function header and
+/// each statement so rustc errors on the generated Rust code map
+/// back to the originating loft source.
+#[test]
+fn native_emit_includes_loft_source_map() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_source_map_demo.loft");
+    let script = "fn add(a: integer, b: integer) -> integer { a + b }\n\
+                  fn main() { x = add(1, 2); println(\"{x}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-rust")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    let path_str = script_path.display().to_string();
+    // Function-header comment maps to the .loft source line.
+    assert!(
+        stdout.contains(&format!("// loft:{path_str}:1\nfn n_add(")),
+        "expected source-map header above n_add; got {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("// loft:{path_str}:2\nfn n_main(")),
+        "expected source-map header above n_main; got {stdout}"
+    );
+}
+
+/// DX-diff — `--introspect --diff <baseline>` exits 0 when the
+/// baseline matches and 1 when it differs (mirroring `diff -u`'s
+/// exit code).  Lets devs answer "did my parser tweak change
+/// anything?" with a single command.
+#[test]
+fn introspect_diff_against_baseline() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_diff_demo.loft");
+    let baseline_path = dir.join("loft_diff_baseline.txt");
+    let script = "fn main() { println(\"hello\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    // Capture baseline.
+    let baseline_out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("baseline capture failed");
+    std::fs::write(&baseline_path, &baseline_out.stdout).expect("write baseline");
+
+    // Identical inputs → exit 0.
+    let same = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--diff")
+        .arg(&baseline_path)
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("diff (identical) failed");
+    assert_eq!(
+        same.status.code(),
+        Some(0),
+        "identical inputs should exit 0; stderr={:?}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+
+    // Mutate the script with a STRUCTURAL change so the types table
+    // differs (string-literal changes alone don't show up in
+    // `--show-types`).
+    std::fs::write(
+        &script_path,
+        "fn add(a: integer) -> integer { a + 1 }\nfn main() { println(\"hello\") }\n",
+    )
+    .expect("rewrite temp script");
+
+    let differs = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--diff")
+        .arg(&baseline_path)
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("diff (differs) failed");
+    assert_eq!(
+        differs.status.code(),
+        Some(1),
+        "differing inputs should exit 1; stdout={:?}",
+        String::from_utf8_lossy(&differs.stdout)
+    );
+
+    let _ = std::fs::remove_file(&script_path);
+    let _ = std::fs::remove_file(&baseline_path);
+}
+
 /// Plan-08 phase 01 — `--introspect --show-types` emits a per-fn
 /// type table where `Type::show()` includes dependency suffixes
 /// (e.g. `text["a"]`).  Designed to surface dep-tracking bugs at a

@@ -1169,6 +1169,7 @@ fn main() {
     let mut introspect_rust_out: Option<String> = None;
     let mut introspect_slots_out: Option<String> = None;
     let mut introspect_types_out: Option<String> = None;
+    let mut introspect_diff_against: Option<String> = None;
     let mut introspect_fn_filter: Vec<String> = Vec::new();
     let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
@@ -1276,6 +1277,9 @@ fn main() {
             i += 1;
         } else if a == "--types-out" {
             introspect_types_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--diff" {
+            introspect_diff_against = argv.get(i).cloned();
             i += 1;
         } else if a == "--fn" {
             if let Some(name) = argv.get(i) {
@@ -2318,6 +2322,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             rust_out: introspect_rust_out.clone(),
             slots_out: introspect_slots_out.clone(),
             types_out: introspect_types_out.clone(),
+            diff_against: introspect_diff_against.clone(),
             fn_filter: introspect_fn_filter.clone(),
             all_fns: introspect_all_fns,
             lib_dirs: Vec::new(),

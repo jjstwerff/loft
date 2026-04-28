@@ -194,6 +194,86 @@ LOFT_IR=distance LOFT_LOG=full loft myprog.loft 2>trace.txt
 
 ---
 
+## Introspection CLI (`--introspect`)
+
+`loft --introspect <file>` packages the dump primitives behind one
+flag, dumping bytecode + generated Rust + slot tables + per-fn type
+tables to stdout (or per-section files).  No env vars, no test
+harness.  Use it when you want to inspect compile-time state without
+running the program.
+
+### Sections
+
+| Flag | Output | When to use |
+|------|--------|-------------|
+| `--show-bytecode` | Bytecode disassembly per fn | Codegen bugs, "is the right opcode emitted?" |
+| `--show-rust` | Generated Rust (`--native-emit` shape) | Native-codegen bugs, rustc errors |
+| `--show-slots` | Stack-slot table per fn (name, type, scope, slot, live interval) | Slot conflicts, lifetime bugs |
+| `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
+
+Combine flags freely; they emit in fixed order.  No flags = all
+four sections.  `--all-fns` includes the default/* stdlib.  `--fn
+<name>` filters to one function.
+
+### `--show-types` for dep-tracking bugs
+
+The `--show-types` section renders each variable's full type via
+`Type::show()`, including the dependency suffix (`text["a"]` =
+text borrowed from `a`).  Designed to surface dep-propagation
+bugs at a glance — exactly the shape that hid P197 (a `text`
+element from a tuple struct field that should have carried the
+host as a dep but didn't).
+
+```
+fn n_first -> text["a"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0         a                        ref(A)
+  1    arg  s                        &text
+```
+
+Compare the function's return-type deps against what you expect.
+If a returned `text` should track a host but the table shows
+plain `text` (no `[host]` suffix), the dep was lost in
+`get_val::Type::Tuple`, `field()`'s `t.depending(*nr)`, or
+`Type::depending`'s recursion.
+
+### `--diff <baseline>`: did my parser tweak change anything?
+
+Capture once, edit, re-run with `--diff`.  Mirrors `diff -u`'s
+exit codes (0 identical, 1 differs).
+
+```bash
+loft --introspect --show-bytecode myprog.loft > before.bc
+# edit the parser
+loft --introspect --show-bytecode --diff before.bc myprog.loft
+```
+
+Per-section `--*-out` redirects still write to their files;
+`--diff` only covers stdout-bound sections.
+
+### Native-codegen source map
+
+The `--show-rust` (and any `--native` compilation) emits
+`// loft:<file>:<line>` comments above each function header and
+each statement.  `rustc` errors on `/tmp/loft_native.rs:1450` map
+back to a .loft line by reading the nearest preceding comment.
+
+```rust
+// loft:/tmp/myprog.loft:7
+fn n_first(stores: &mut Stores, mut var_a: DbRef) -> Str {
+  ...
+  // loft:/tmp/myprog.loft:8
+  return Str::new(...)
+}
+```
+
+When rustc reports a borrow-check error or type mismatch, scroll
+upward in the generated file from the error line to the nearest
+`// loft:` comment — that's the source line under suspicion.
+
+---
+
 ## Debugging a Parse Error or Wrong IR
 
 1. Add `LOFT_LOG=static` and run the failing test.

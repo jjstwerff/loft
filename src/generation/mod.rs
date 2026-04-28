@@ -1613,6 +1613,13 @@ extern crate loft;"
             writeln!(w, "}}\n")?;
             return Ok(());
         }
+        // DX-source-map: emit a `// loft:<file>:<line>` comment
+        // above each function so rustc errors at the function header
+        // (e.g. wrong arg type, missing trait impl) map directly to
+        // the .loft definition site.
+        if !def.position.file.is_empty() {
+            writeln!(w, "// loft:{}:{}", def.position.file, def.position.line)?;
+        }
         write!(w, "fn {}(stores: &mut Stores", def.name)?;
         for a in &def.attributes {
             let tp = rust_type(&a.typedef, &Context::Argument);

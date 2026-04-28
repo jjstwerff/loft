@@ -62,6 +62,21 @@ $ loft --introspect --show-types    myprogram.loft   # per-fn type+deps
 When more than one is set, the output sections appear in fixed
 order: `bytecode`, `rust`, `slots`, `types`.
 
+### `--diff <baseline>`: compare against a previous capture
+
+```
+$ loft --introspect --show-types foo.loft > baseline.txt
+# edit code
+$ loft --introspect --show-types --diff baseline.txt foo.loft
+```
+
+Captures the requested sections to a buffer and runs `diff -u
+baseline tmp` against the user-provided baseline file.  Exits 0
+when identical, 1 when different (mirrors `diff`'s exit codes).
+Per-section `*_out` redirections still write to their files; the
+diff only covers stdout-bound sections.  Requires `diff` on
+`PATH`.
+
 ### `--show-types`: per-function type + dependency table
 
 Output shape:

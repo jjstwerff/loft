@@ -9,6 +9,26 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### Native-codegen source map + introspection `--diff`
+
+Two developer-velocity wins, both targeting the long tail of
+debugging time:
+
+- **`// loft:<file>:<line>` comments in generated Rust.** Every
+  function header and every statement boundary in `output_native`
+  output now carries a comment mapping back to the originating
+  loft source.  Lets `rustc` errors on `/tmp/loft_native.rs` be
+  traced to the .loft line in seconds rather than by manually
+  reading the generated code.  Cost: ~10 LOC; comments are
+  cheap (one per source line).
+- **`--introspect --diff <baseline>`.** Captures the requested
+  sections to a buffer and runs `diff -u baseline tmp`.  Exits 0
+  identical, 1 differs.  Lets devs answer "did this parser tweak
+  change anything?" with one command.
+
+Tests: `native_emit_includes_loft_source_map`,
+`introspect_diff_against_baseline` in `tests/exit_codes.rs`.
+
 ### P194 — tuple-typed struct field reassignment
 
 `p.v = (1, 2)` (where `v` is a tuple-typed struct field) used to

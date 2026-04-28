@@ -50,6 +50,12 @@ pub struct Options {
     pub rust_out: Option<String>,
     pub slots_out: Option<String>,
     pub types_out: Option<String>,
+    /// When set, capture all (non-redirected) section output to a
+    /// buffer and `diff -u` it against this baseline file.  Useful
+    /// for "did my parser tweak change anything?" — capture once
+    /// before the change, then run with `--diff <baseline>` after.
+    /// Exits 0 if identical, 1 if diff.  Requires `diff` on PATH.
+    pub diff_against: Option<String>,
     /// Restrict every section to functions whose name matches one of
     /// these strings (substring match, like `LOFT_LOG=fn:<name>`).
     /// Empty = include all user functions (filtered further by
@@ -76,6 +82,7 @@ impl Options {
             rust_out: None,
             slots_out: None,
             types_out: None,
+            diff_against: None,
             fn_filter: Vec::new(),
             all_fns: false,
             lib_dirs: Vec::new(),
@@ -149,8 +156,14 @@ pub fn run(filename: &str, opts: &Options) -> std::io::Result<()> {
 /// scopes::check + compile::byte_code by the time the introspect
 /// branch is reached.
 ///
+/// When `opts.diff_against` is set, sections without an explicit
+/// `*_out` file go into an in-memory buffer that is then `diff -u`'d
+/// against the baseline.  Sections with an explicit `*_out` still
+/// write to their files (the diff only covers stdout-bound output).
+///
 /// # Errors
-/// Propagates I/O errors from any section's writer.
+/// Propagates I/O errors from any section's writer.  Also returns an
+/// error if `--diff` is requested but `diff` is missing from PATH.
 pub fn emit_all(
     data: &mut Data,
     state: &mut State,
@@ -158,48 +171,112 @@ pub fn emit_all(
     opts: &Options,
 ) -> std::io::Result<()> {
     let stdout = std::io::stdout();
+    // When diffing, accumulate all stdout-bound output into one
+    // buffer so we can `diff -u baseline buffer` afterwards.
+    // Per-section `*_out` paths are honoured independently.
+    let diff_mode = opts.diff_against.is_some();
+    let mut buffer: Vec<u8> = Vec::new();
     if opts.includes(Section::Bytecode) {
-        let mut writer: Box<dyn Write> = make_writer(opts.bytecode_out.as_deref(), &stdout)?;
-        if opts.bytecode_out.is_none() {
+        if let Some(path) = opts.bytecode_out.as_deref() {
+            let mut writer = BufWriter::new(File::create(path)?);
+            emit_bytecode(&mut writer, state, data, opts)?;
+        } else if diff_mode {
+            writeln!(buffer, "=== bytecode ===")?;
+            emit_bytecode(&mut buffer, state, data, opts)?;
+        } else {
+            let mut writer = stdout.lock();
             writeln!(writer, "=== bytecode ===")?;
+            emit_bytecode(&mut writer, state, data, opts)?;
         }
-        emit_bytecode(&mut writer, state, data, opts)?;
     }
     if opts.includes(Section::Rust) {
-        let mut writer: Box<dyn Write> = make_writer(opts.rust_out.as_deref(), &stdout)?;
-        if opts.rust_out.is_none() {
+        if let Some(path) = opts.rust_out.as_deref() {
+            let mut writer = BufWriter::new(File::create(path)?);
+            emit_rust(&mut writer, data, &state.database, end_def)?;
+        } else if diff_mode {
+            writeln!(buffer)?;
+            writeln!(buffer, "=== rust ===")?;
+            emit_rust(&mut buffer, data, &state.database, end_def)?;
+        } else {
+            let mut writer = stdout.lock();
             writeln!(writer)?;
             writeln!(writer, "=== rust ===")?;
+            emit_rust(&mut writer, data, &state.database, end_def)?;
         }
-        emit_rust(&mut writer, data, &state.database, end_def)?;
     }
     if opts.includes(Section::Slots) {
-        let mut writer: Box<dyn Write> = make_writer(opts.slots_out.as_deref(), &stdout)?;
-        if opts.slots_out.is_none() {
+        if let Some(path) = opts.slots_out.as_deref() {
+            let mut writer = BufWriter::new(File::create(path)?);
+            emit_slots(&mut writer, data, end_def, opts)?;
+        } else if diff_mode {
+            writeln!(buffer)?;
+            writeln!(buffer, "=== slots ===")?;
+            emit_slots(&mut buffer, data, end_def, opts)?;
+        } else {
+            let mut writer = stdout.lock();
             writeln!(writer)?;
             writeln!(writer, "=== slots ===")?;
+            emit_slots(&mut writer, data, end_def, opts)?;
         }
-        emit_slots(&mut writer, data, end_def, opts)?;
     }
     if opts.includes(Section::Types) {
-        let mut writer: Box<dyn Write> = make_writer(opts.types_out.as_deref(), &stdout)?;
-        if opts.types_out.is_none() {
+        if let Some(path) = opts.types_out.as_deref() {
+            let mut writer = BufWriter::new(File::create(path)?);
+            emit_types(&mut writer, data, end_def, opts)?;
+        } else if diff_mode {
+            writeln!(buffer)?;
+            writeln!(buffer, "=== types ===")?;
+            emit_types(&mut buffer, data, end_def, opts)?;
+        } else {
+            let mut writer = stdout.lock();
             writeln!(writer)?;
             writeln!(writer, "=== types ===")?;
+            emit_types(&mut writer, data, end_def, opts)?;
         }
-        emit_types(&mut writer, data, end_def, opts)?;
+    }
+    if let Some(baseline) = &opts.diff_against {
+        run_diff_against_baseline(baseline, &buffer)?;
     }
     Ok(())
 }
 
-fn make_writer(
-    path: Option<&str>,
-    stdout: &std::io::Stdout,
-) -> std::io::Result<Box<dyn Write>> {
-    if let Some(p) = path {
-        Ok(Box::new(BufWriter::new(File::create(p)?)))
-    } else {
-        Ok(Box::new(stdout.lock()))
+/// Write `buffer` (the captured stdout-bound introspection output)
+/// to a temp file, then exec `diff -u <baseline> <tmp>` so the user
+/// sees a familiar unified-diff output.  Exits the process with
+/// `diff`'s status — 0 for "no difference", 1 for "differs", 2 for
+/// "trouble".  Requires `diff` on PATH; falls back to a "use system
+/// diff yourself" message if unavailable.
+fn run_diff_against_baseline(baseline: &str, buffer: &[u8]) -> std::io::Result<()> {
+    if !std::path::Path::new(baseline).exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("baseline file '{baseline}' not found"),
+        ));
+    }
+    let tmp = std::env::temp_dir().join(format!(
+        "loft_introspect_diff_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, buffer)?;
+    let status = std::process::Command::new("diff")
+        .arg("-u")
+        .arg(baseline)
+        .arg(&tmp)
+        .status();
+    let _ = std::fs::remove_file(&tmp);
+    match status {
+        Ok(s) => {
+            // 0 = identical, 1 = differs.  Both are valid outcomes;
+            // mirror diff's exit code.
+            std::process::exit(s.code().unwrap_or(2));
+        }
+        Err(_) => {
+            eprintln!(
+                "loft: --diff requires `diff` on PATH; \
+                 fall back to redirecting --introspect output and diffing manually."
+            );
+            std::process::exit(2);
+        }
     }
 }
 

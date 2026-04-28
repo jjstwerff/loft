@@ -53,7 +53,16 @@ impl Output<'_> {
             Value::Float(v) => write!(w, "{v}_f64")?,
             Value::Single(v) => write!(w, "{v}_f32")?,
             Value::Null => write!(w, "()")?,
-            Value::Line(_) => {}
+            // P198 / DX-source-map: emit a `// loft:<file>:<line>`
+            // comment so rustc errors on generated Rust code can be
+            // traced back to the originating loft source line.  The
+            // comment is on its own line, ahead of the next emitted
+            // statement.  File is implicit (per-function) so the
+            // comment uses the current def's source path.
+            Value::Line(line) => {
+                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                writeln!(w, "// loft:{file}:{line}")?;
+            }
             Value::Break(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break")?;
@@ -699,7 +708,14 @@ impl Output<'_> {
         let return_value_is_return = has_trailing_void
             && return_idx.is_some_and(|i| matches!(operators[i], Value::Return(_)));
         for (vnr, v) in operators.iter().enumerate() {
-            if matches!(v, Value::Line(_)) {
+            // DX-source-map: surface line comments at the
+            // statement-list level so rustc errors map back to .loft
+            // source.  Without this, only Value::Line nodes inside an
+            // expression context get rendered (rare in practice).
+            if let Value::Line(line) = v {
+                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                self.indent(w)?;
+                writeln!(w, "// loft:{file}:{line}")?;
                 continue;
             }
             // Ref-return tail-call capture: `return __native_tail_ret;` in
