@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Cannot continue outside a loop at <cases>/14_scope_continue_outside_loop.loft:2:12
+  |
+   2 |   continue;
+     |            ^
+==== stderr ====

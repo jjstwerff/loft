@@ -1,0 +1,7 @@
+==== exit: 101 ====
+==== stdout ====
+==== stderr ====
+
+thread 'main' (<pid>) panicked at src/native.rs:285:5:
+boom (<cases>/25_runtime_panic_builtin.loft:2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

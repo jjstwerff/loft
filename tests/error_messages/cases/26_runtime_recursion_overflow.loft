@@ -1,0 +1,6 @@
+fn bomb() {
+  bomb();
+}
+fn main() {
+  bomb();
+}

@@ -1,0 +1,31 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Unknown field text.lengt at <cases>/08_type_method_unknown.loft:3:15
+  |
+   3 |   n = t.lengt();
+     |               ^
+Error: Unknown variable 'n' — did you mean 't'? at <cases>/08_type_method_unknown.loft:4:13
+  |
+   4 |   print("{n}");
+     |             ^
+Error: Incorrect expression in string was Unknown(0) at <cases>/08_type_method_unknown.loft:4:13
+  |
+   4 |   print("{n}");
+     |             ^
+Error: Expect token ) at <cases>/08_type_method_unknown.loft:4:13
+  |
+   4 |   print("{n}");
+     |             ^
+Error: void should be text on call to print at <cases>/08_type_method_unknown.loft:4:12
+  |
+   4 |   print("{n}");
+     |            ^
+Fatal: Nested string literal not correctly terminated at <cases>/08_type_method_unknown.loft:4:16
+  |
+   4 |   print("{n}");
+     |                ^
+Error: Variable 'n' has unknown type — possible typo or missing definition at <cases>/08_type_method_unknown.loft:4:16
+  |
+   4 |   print("{n}");
+     |                ^
+==== stderr ====

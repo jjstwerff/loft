@@ -1,0 +1,5 @@
+fn main() {
+  z = 0;
+  result = 1 % z;
+  print("result={result}");
+}

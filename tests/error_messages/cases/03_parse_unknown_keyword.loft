@@ -1,0 +1,3 @@
+funcion main() {
+  print("never reached");
+}

@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: 'Box' does not satisfy interface 'Drawable': missing draw at <cases>/35_interface_method_unimpl.loft:7:30
+  |
+   7 |   print("{show(Box { w: 10 })}");
+     |                              ^
+==== stderr ====

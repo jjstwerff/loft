@@ -1,0 +1,5 @@
+fn add(a: integer, b: integer) -> integer { a + b }
+fn main() {
+  x = add(1, "two");
+  print("{x}");
+}

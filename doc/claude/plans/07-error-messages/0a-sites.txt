@@ -1,0 +1,815 @@
+src/keys.rs:262:        _ => panic!("Undefined compare {k:?} vs {}", key.type_nr),
+src/store.rs:103:        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+src/store.rs:129:        let l = Layout::from_size_align(size as usize * 8, 8).expect("Problem");
+src/store.rs:152:        panic!(
+src/store.rs:159:        let mut file = MmapStorage::open(path).expect("Opening file");
+src/store.rs:297:                panic!(
+src/store.rs:430:            f.resize(size as usize * 8).expect("Resize");
+src/store.rs:437:        let l = Layout::from_size_align(old_bytes, 8).expect("Problem");
+src/store.rs:477:        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+src/store.rs:501:        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
+src/store.rs:897:            .unwrap_or_else(|_| panic!("Store offset overflow: rec={rec} fld={fld}"))
+src/store.rs:928:            off.as_mut().expect("Reference")
+src/store.rs:960:            off.as_mut().expect("Reference")
+src/tree.rs:573:        panic!("Not balanced {depth} != {} on {}", *max_blacks, rec.rec);
+src/test_runner.rs:803:                            .expect("native codegen write");
+src/test_runner.rs:1002:                                panic!("{e}");
+src/lexer.rs:320:                                Level::Fatal,
+src/lexer.rs:390:                                    Level::Error,
+src/lexer.rs:397:                            self.err(Level::Error, "Unexpected end of input after '\\'");
+src/lexer.rs:421:                        Level::Fatal,
+src/lexer.rs:520:                            self.err(Level::Error, "Expected only one character in constant");
+src/lexer.rs:524:                        self.err(Level::Error, "Expected a character in constant");
+src/lexer.rs:542:        self.err(Level::Fatal, "Character not correctly terminated");
+src/lexer.rs:555:                    self.err(Level::Error, "Unknown escape sequence");
+src/lexer.rs:603:        self.err(Level::Fatal, "String not correctly terminated");
+src/lexer.rs:645:            Level::Fatal,
+src/lexer.rs:760:                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+src/lexer.rs:771:                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+src/lexer.rs:827:                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+src/lexer.rs:837:                        self.err(Level::Fatal, "Backtick string not correctly terminated");
+src/lexer.rs:907:                    self.err(Level::Error, "Problem parsing float");
+src/lexer.rs:915:                self.err(Level::Error, "Problem parsing float");
+src/lexer.rs:930:                self.err(Level::Error, "Problem parsing float");
+src/lexer.rs:941:                    self.err(Level::Error, "Problem parsing single float");
+src/lexer.rs:947:                self.err(Level::Error, "Problem parsing float");
+src/lexer.rs:954:                self.err(Level::Error, "Problem parsing hex number");
+src/lexer.rs:962:                self.err(Level::Error, "Problem parsing binary number");
+src/lexer.rs:970:                self.err(Level::Error, "Problem parsing octal number");
+src/lexer.rs:977:            self.err(Level::Error, "Problem parsing number");
+src/lexer.rs:994:                Level::Error,
+src/lexer.rs:1030:                .add(Level::Fatal, &format!("Unknown file:{filename}"));
+src/lexer.rs:1056:        diagnostic!(self, level, "{error}");
+src/lexer.rs:1135:            diagnostic!(self, Level::Error, "Expect token {token}");
+src/lexer.rs:1214:            diagnostic!(self, Level::Error, "Expect token >");
+src/lexer.rs:1372:                    panic!("Cannot parse {s}");
+src/lexer.rs:1456:            panic!("Expected a number")
+src/lexer.rs:1462:            panic!("Expected an identifier")
+src/lexer.rs:1473:            panic!("Expected a float")
+src/vector.rs:14:        .unwrap_or_else(|_| panic!("Vector position overflow: index={index} size={size}"))
+src/vector.rs:22:        .unwrap_or_else(|_| panic!("Vector capacity overflow: count={count} size={size}"))
+src/json.rs:261:    let name = std::str::from_utf8(&bytes[start..j]).expect("ASCII identifier slice");
+src/json.rs:485:            _ => unreachable!("parse_string always returns Parsed::Str"),
+src/json.rs:498:            .expect("ASCII identifier slice")
+src/json.rs:561:            panic!("expected array");
+src/json.rs:567:            panic!("expected array");
+src/json.rs:577:            panic!("expected object");
+src/json.rs:590:            panic!("expected object");
+src/json.rs:594:            panic!("expected array");
+src/json.rs:598:            panic!("expected inner object");
+src/json.rs:704:            panic!("expected object");
+src/json.rs:716:            panic!("expected object");
+src/json.rs:747:            panic!("expected object");
+src/json.rs:763:            panic!("expected object");
+src/json.rs:793:            panic!("expected array");
+src/json.rs:807:            panic!("expected object");
+src/state/debug.rs:1136:                            panic!(
+src/state/debug.rs:1142:                        panic!("Database {s_nr} not correctly freed");
+src/state/codegen.rs:296:                panic!("Should have rewritten {val:?}");
+src/state/codegen.rs:358:                        _ => panic!("RefTupleGet: unsupported element type {elem_tp:?}"),
+src/state/codegen.rs:365:                    panic!("TupleGet on non-tuple variable");
+src/state/codegen.rs:415:                    _ => panic!("TupleGet: unsupported element type {elem_tp:?}"),
+src/state/codegen.rs:461:                        _ => panic!("RefTuplePut: unsupported element type {elem_tp:?}"),
+src/state/codegen.rs:468:                    panic!("TuplePut on non-tuple variable");
+src/state/codegen.rs:493:                    _ => panic!("TuplePut: unsupported element type {elem_tp:?}"),
+src/state/codegen.rs:933:                other => panic!("Tuple push: unsupported element type {other:?}"),
+src/state/codegen.rs:967:                other => panic!("Tuple set: unsupported element type {other:?}"),
+src/state/codegen.rs:1011:                other => panic!("emit_tuple_null_init: unsupported element type {other:?}"),
+src/state/codegen.rs:1023:                _ => unreachable!(),
+src/state/codegen.rs:1142:            _ => unreachable!("gen_set_first_keyed_null on non-keyed type"),
+src/state/codegen.rs:1519:                            other => panic!(
+src/state/codegen.rs:1527:                other => panic!(
+src/state/codegen.rs:2238:            panic!("generate_call_ref: variable is not Type::Function");
+src/state/codegen.rs:2372:                        _ => panic!("Tuple var: unsupported element type {elem_tp:?}"),
+src/state/codegen.rs:2379:            _ => panic!(
+src/state/codegen.rs:2399:                _ => panic!("Unknown referenced variable type: {tp}"),
+src/state/codegen.rs:2642:                _ => panic!("Unknown reference variable type"),
+src/state/codegen.rs:2699:            _ => panic!(
+src/state/text.rs:42:        panic!("OpConstLongText is obsolete — use OpConstStoreText");
+src/state/mod.rs:653:            .expect("coroutine_frame_mut: empty slot")
+src/state/mod.rs:811:                panic!("re-entrant advance on coroutine {idx}");
+src/state/mod.rs:1006:            .expect("OpYield outside active coroutine");
+src/state/mod.rs:1123:            .expect("OpCoroutineReturn outside active coroutine");
+src/state/mod.rs:1203:            *off.as_mut().expect("code") = value;
+src/state/mod.rs:1224:            self.code_pos += u32::try_from(size_of::<T>()).expect("Problem");
+src/state/mod.rs:1225:            *off.as_mut().expect("code") = value;
+src/state/mod.rs:1261:            off.as_ref().expect("code")
+src/state/mod.rs:1300:                    panic!(
+src/state/mod.rs:1458:                    panic!(
+src/state/mod.rs:1605:                panic!("{msg}");
+src/wasm.rs:682:            if p.diagnostics.level() >= Level::Error {
+src/wasm.rs:699:        if p.diagnostics.level() >= Level::Error {
+src/wasm.rs:703:        if p.diagnostics.level() >= Level::Error {
+src/wasm.rs:904:        if lvl == Level::Error || lvl == Level::Fatal {
+src/wasm.rs:922:    if lvl == Level::Error || lvl == Level::Fatal {
+src/wasm.rs:927:    if lvl == Level::Error || lvl == Level::Fatal {
+src/parser/vectors.rs:34:                diagnostic!(
+src/parser/vectors.rs:36:                    Level::Error,
+src/parser/vectors.rs:217:                    diagnostic!(
+src/parser/vectors.rs:219:                        Level::Error,
+src/parser/vectors.rs:242:                diagnostic!(
+src/parser/vectors.rs:244:                    Level::Error,
+src/parser/vectors.rs:308:                diagnostic!(self.lexer, Level::Error, "Expect function name after fn");
+src/parser/vectors.rs:325:                    diagnostic!(
+src/parser/vectors.rs:327:                        Level::Error,
+src/parser/vectors.rs:331:                    diagnostic!(self.lexer, Level::Error, "Unknown function '{name}'");
+src/parser/vectors.rs:337:            diagnostic!(self.lexer, Level::Error, "'{name}' is not a function");
+src/parser/vectors.rs:499:                    diagnostic!(
+src/parser/vectors.rs:501:                        Level::Error,
+src/parser/vectors.rs:540:                    diagnostic!(
+src/parser/vectors.rs:542:                        Level::Error,
+src/parser/vectors.rs:580:            diagnostic!(
+src/parser/vectors.rs:582:                Level::Error,
+src/parser/vectors.rs:800:            diagnostic!(self.lexer, Level::Error, "Expect variable after for");
+src/parser/vectors.rs:839:            diagnostic!(
+src/parser/vectors.rs:841:                Level::Error,
+src/parser/vectors.rs:1275:            diagnostic!(
+src/parser/vectors.rs:1277:                Level::Error,
+src/parser/vectors.rs:1296:            diagnostic!(
+src/parser/vectors.rs:1298:                Level::Error,
+src/parser/vectors.rs:1331:                diagnostic!(
+src/parser/vectors.rs:1333:                    Level::Error,
+src/parser/builtins.rs:57:                diagnostic!(
+src/parser/builtins.rs:59:                    Level::Error,
+src/parser/builtins.rs:67:                diagnostic!(self.lexer, Level::Error, "Expect method name after '.'");
+src/parser/builtins.rs:79:                    diagnostic!(
+src/parser/builtins.rs:81:                        Level::Error,
+src/parser/builtins.rs:101:                diagnostic!(
+src/parser/builtins.rs:103:                    Level::Error,
+src/parser/builtins.rs:110:            diagnostic!(
+src/parser/builtins.rs:112:                Level::Error,
+src/parser/builtins.rs:125:                diagnostic!(
+src/parser/builtins.rs:127:                    Level::Error,
+src/parser/builtins.rs:175:            diagnostic!(
+src/parser/builtins.rs:177:                Level::Error,
+src/parser/builtins.rs:183:                diagnostic!(self.lexer, Level::Error, "Unknown function '{first_id}'");
+src/parser/builtins.rs:188:            diagnostic!(self.lexer, Level::Error, "'{first_id}' is not a function");
+src/parser/builtins.rs:206:                diagnostic!(
+src/parser/builtins.rs:208:                    Level::Error,
+src/parser/builtins.rs:222:                diagnostic!(
+src/parser/builtins.rs:224:                    Level::Error,
+src/parser/builtins.rs:242:                diagnostic!(
+src/parser/builtins.rs:244:                    Level::Error,
+src/parser/builtins.rs:263:                diagnostic!(
+src/parser/builtins.rs:265:                    Level::Error,
+src/parser/builtins.rs:290:            diagnostic!(
+src/parser/builtins.rs:292:                Level::Error,
+src/parser/builtins.rs:300:            diagnostic!(
+src/parser/builtins.rs:302:                Level::Error,
+src/parser/builtins.rs:310:            diagnostic!(
+src/parser/builtins.rs:312:                Level::Error,
+src/parser/builtins.rs:324:                diagnostic!(
+src/parser/builtins.rs:326:                    Level::Error,
+src/parser/builtins.rs:338:            diagnostic!(
+src/parser/builtins.rs:340:                Level::Error,
+src/parser/builtins.rs:381:            diagnostic!(
+src/parser/builtins.rs:383:                Level::Error,
+src/native.rs:261:    panic!("{msg} ({file}:{v_line})");
+src/native.rs:285:    panic!("{msg} ({file}:{v_line})");
+src/native.rs:608:            .expect("parallel_for called outside State::execute()");
+src/native.rs:665:            .expect("parallel_for: missing context");
+src/native.rs:756:            .expect("parallel_for_light called outside State::execute()");
+src/native.rs:793:            .expect("parallel_for_light: missing context");
+src/native.rs:1561:                        8u32 + u32::try_from(i).expect("non-negative length") * jv_size;
+src/native.rs:1585:                        8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/native.rs:1943:        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/native.rs:1999:        8u32 + u32::try_from(index).expect("non-negative index checked above") * jv_size;
+src/native.rs:2258:        let elm_off = 8u32 + u32::try_from(i).expect("non-negative") * jf_size;
+src/native.rs:2444:        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative") * jv_size;
+src/native.rs:2671:        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/native.rs:2716:        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/native.rs:2771:        let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/native.rs:2920:                let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jv_size;
+src/native.rs:2960:                let elm_offset = 8u32 + u32::try_from(i).expect("non-negative length") * jf_size;
+src/state/io.rs:119:                _ => unreachable!(),
+src/state/io.rs:292:                    _ => unreachable!(),
+src/state/io.rs:830:            _ => panic!("Not implemented on {on}"),
+src/state/io.rs:850:                _ => panic!("Unknown key type"),
+src/state/io.rs:946:                _ => panic!("Not implemented"),
+src/state/io.rs:1072:            _ => panic!("Not implemented on {on}"),
+src/parser/collections.rs:58:            diagnostic!(self.lexer, Level::Error, "Malformed iterator expression");
+src/parser/collections.rs:264:                    diagnostic!(
+src/parser/collections.rs:266:                        Level::Error,
+src/parser/collections.rs:288:                diagnostic!(
+src/parser/collections.rs:290:                    Level::Error,
+src/parser/collections.rs:344:                    diagnostic!(
+src/parser/collections.rs:346:                        Level::Error,
+src/parser/collections.rs:395:                diagnostic!(
+src/parser/collections.rs:397:                    Level::Error,
+src/parser/collections.rs:408:                diagnostic!(
+src/parser/collections.rs:410:                    Level::Error,
+src/parser/collections.rs:462:                diagnostic!(
+src/parser/collections.rs:464:                    Level::Error,
+src/parser/collections.rs:480:                diagnostic!(
+src/parser/collections.rs:482:                    Level::Error,
+src/parser/collections.rs:495:                    diagnostic!(
+src/parser/collections.rs:497:                        Level::Error,
+src/parser/collections.rs:511:                diagnostic!(
+src/parser/collections.rs:513:                    Level::Error,
+src/parser/collections.rs:521:                diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
+src/parser/collections.rs:527:                diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
+src/parser/collections.rs:539:                diagnostic!(
+src/parser/collections.rs:541:                    Level::Error,
+src/parser/collections.rs:558:                    diagnostic!(
+src/parser/collections.rs:560:                        Level::Error,
+src/parser/collections.rs:599:                diagnostic!(
+src/parser/collections.rs:601:                    Level::Error,
+src/parser/collections.rs:611:            diagnostic!(
+src/parser/collections.rs:613:                Level::Error,
+src/parser/collections.rs:701:                diagnostic!(
+src/parser/collections.rs:703:                    Level::Error,
+src/parser/collections.rs:708:                diagnostic!(
+src/parser/collections.rs:710:                    Level::Error,
+src/parser/collections.rs:802:                    diagnostic!(
+src/parser/collections.rs:804:                        Level::Error,
+src/parser/collections.rs:912:            diagnostic!(
+src/parser/collections.rs:914:                Level::Error,
+src/parser/collections.rs:934:                diagnostic!(
+src/parser/collections.rs:936:                    Level::Error,
+src/parser/collections.rs:948:                diagnostic!(
+src/parser/collections.rs:950:                    Level::Error,
+src/parser/collections.rs:1103:                diagnostic!(
+src/parser/collections.rs:1105:                    Level::Error,
+src/parser/collections.rs:1158:            diagnostic!(self.lexer, Level::Error, "Expect variable after for");
+src/parser/collections.rs:1301:                diagnostic!(
+src/parser/collections.rs:1303:                    Level::Error,
+src/parser/collections.rs:1316:                diagnostic!(
+src/parser/collections.rs:1318:                    Level::Error,
+src/parser/collections.rs:1328:                diagnostic!(
+src/parser/collections.rs:1330:                    Level::Error,
+src/parser/collections.rs:1372:        // Emits Level::Error: writes from a worker to parent state
+src/parser/collections.rs:1380:                diagnostic!(
+src/parser/collections.rs:1382:                    Level::Error,
+src/parser/collections.rs:1430:                diagnostic!(
+src/parser/collections.rs:1432:                    Level::Error,
+src/parser/collections.rs:1769:            diagnostic!(
+src/parser/collections.rs:1771:                Level::Error,
+src/parser/collections.rs:1779:            diagnostic!(
+src/parser/collections.rs:1781:                Level::Error,
+src/parser/collections.rs:1789:            diagnostic!(
+src/parser/collections.rs:1791:                Level::Error,
+src/parser/collections.rs:1797:            diagnostic!(
+src/parser/collections.rs:1799:                Level::Error,
+src/parser/collections.rs:1892:            diagnostic!(
+src/parser/collections.rs:1894:                Level::Error,
+src/parser/collections.rs:1902:            diagnostic!(
+src/parser/collections.rs:1904:                Level::Error,
+src/parser/collections.rs:1912:            diagnostic!(
+src/parser/collections.rs:1914:                Level::Error,
+src/parser/collections.rs:1920:            diagnostic!(
+src/parser/collections.rs:1922:                Level::Error,
+src/parser/collections.rs:1928:            diagnostic!(
+src/parser/collections.rs:1930:                Level::Error,
+src/parser/collections.rs:2187:            diagnostic!(
+src/parser/collections.rs:2189:                Level::Error,
+src/parser/collections.rs:2196:                diagnostic!(
+src/parser/collections.rs:2198:                    Level::Error,
+src/parser/collections.rs:2207:            diagnostic!(self.lexer, Level::Error, "sort requires a vector argument");
+src/parser/collections.rs:2219:            diagnostic!(
+src/parser/collections.rs:2221:                Level::Error,
+src/parser/collections.rs:2229:            diagnostic!(
+src/parser/collections.rs:2231:                Level::Error,
+src/parser/collections.rs:2267:            diagnostic!(
+src/parser/collections.rs:2269:                Level::Error,
+src/parser/collections.rs:2277:            diagnostic!(
+src/parser/collections.rs:2279:                Level::Error,
+src/parser/collections.rs:2297:                diagnostic!(
+src/parser/collections.rs:2299:                    Level::Error,
+src/parser/collections.rs:2309:                diagnostic!(
+src/parser/collections.rs:2311:                    Level::Error,
+src/parser/collections.rs:2319:                diagnostic!(
+src/parser/collections.rs:2321:                    Level::Error,
+src/parser/collections.rs:2326:                diagnostic!(
+src/parser/collections.rs:2328:                    Level::Error,
+src/parser/collections.rs:2333:            diagnostic!(
+src/parser/collections.rs:2335:                Level::Error,
+src/const_eval.rs:175:            panic!("expected Float");
+src/parser/definitions.rs:205:                diagnostic!(self.lexer, Level::Error, "Expect name in type definition");
+src/parser/definitions.rs:209:                diagnostic!(
+src/parser/definitions.rs:211:                    Level::Error,
+src/parser/definitions.rs:253:                        diagnostic!(self.lexer, Level::Error, "Expect attribute");
+src/parser/definitions.rs:257:                        diagnostic!(
+src/parser/definitions.rs:259:                            Level::Error,
+src/parser/definitions.rs:297:                    .diagnostic(Level::Error, "Too many enumerate values");
+src/parser/definitions.rs:334:            diagnostic!(self.lexer, Level::Error, "Expect name in type definition");
+src/parser/definitions.rs:338:            diagnostic!(
+src/parser/definitions.rs:340:                Level::Error,
+src/parser/definitions.rs:359:            diagnostic!(
+src/parser/definitions.rs:361:                Level::Error,
+src/parser/definitions.rs:391:            diagnostic!(self.lexer, Level::Error, "Expect name in type definition");
+src/parser/definitions.rs:395:            diagnostic!(
+src/parser/definitions.rs:397:                Level::Error,
+src/parser/definitions.rs:410:                diagnostic!(
+src/parser/definitions.rs:412:                    Level::Error,
+src/parser/definitions.rs:431:                diagnostic!(self.lexer, Level::Error, "Expected a type after =");
+src/parser/definitions.rs:469:                diagnostic!(
+src/parser/definitions.rs:471:                    Level::Error,
+src/parser/definitions.rs:489:                    diagnostic!(
+src/parser/definitions.rs:491:                        Level::Error,
+src/parser/definitions.rs:519:        diagnostic!(
+src/parser/definitions.rs:521:            Level::Error,
+src/parser/definitions.rs:537:            diagnostic!(
+src/parser/definitions.rs:539:                Level::Error,
+src/parser/definitions.rs:551:                    diagnostic!(
+src/parser/definitions.rs:553:                        Level::Error,
+src/parser/definitions.rs:566:                            diagnostic!(
+src/parser/definitions.rs:568:                                Level::Error,
+src/parser/definitions.rs:578:                diagnostic!(
+src/parser/definitions.rs:580:                    Level::Error,
+src/parser/definitions.rs:608:                diagnostic!(
+src/parser/definitions.rs:610:                    Level::Error,
+src/parser/definitions.rs:618:            diagnostic!(
+src/parser/definitions.rs:620:                Level::Error,
+src/parser/definitions.rs:647:                    diagnostic!(
+src/parser/definitions.rs:649:                        Level::Error,
+src/parser/definitions.rs:654:                    diagnostic!(
+src/parser/definitions.rs:656:                        Level::Error,
+src/parser/definitions.rs:853:                    diagnostic!(self.lexer, Level::Error, "Expect native symbol string");
+src/parser/definitions.rs:859:                    diagnostic!(self.lexer, Level::Error, "Expect rust string");
+src/parser/definitions.rs:865:                    diagnostic!(self.lexer, Level::Error, "Expect rust init string");
+src/parser/definitions.rs:871:                    diagnostic!(self.lexer, Level::Error, "Expect rust next string");
+src/parser/definitions.rs:885:                    diagnostic!(
+src/parser/definitions.rs:887:                        Level::Error,
+src/parser/definitions.rs:901:                        diagnostic!(
+src/parser/definitions.rs:903:                            Level::Error,
+src/parser/definitions.rs:912:                    diagnostic!(self.lexer, Level::Error, "Expect ')' after #impure category");
+src/parser/definitions.rs:932:                diagnostic!(self.lexer, Level::Error, "Expect attribute");
+src/parser/definitions.rs:936:                diagnostic!(
+src/parser/definitions.rs:938:                    Level::Error,
+src/parser/definitions.rs:944:                    diagnostic!(
+src/parser/definitions.rs:946:                        Level::Error,
+src/parser/definitions.rs:968:                    diagnostic!(self.lexer, Level::Error, "Expecting a type");
+src/parser/definitions.rs:1022:                diagnostic!(
+src/parser/definitions.rs:1024:                    Level::Error,
+src/parser/definitions.rs:1082:                diagnostic!(self.lexer, Level::Error, "Expect type from {type_name}");
+src/parser/definitions.rs:1192:                diagnostic!(
+src/parser/definitions.rs:1194:                    Level::Error,
+src/parser/definitions.rs:1246:                    diagnostic!(
+src/parser/definitions.rs:1248:                        Level::Error,
+src/parser/definitions.rs:1287:                    diagnostic!(
+src/parser/definitions.rs:1289:                        Level::Error,
+src/parser/definitions.rs:1316:                    diagnostic!(
+src/parser/definitions.rs:1318:                        Level::Error,
+src/parser/definitions.rs:1371:                        diagnostic!(
+src/parser/definitions.rs:1373:                            Level::Error,
+src/parser/definitions.rs:1393:                                    diagnostic!(
+src/parser/definitions.rs:1395:                                        Level::Error,
+src/parser/definitions.rs:1400:                                diagnostic!(self.lexer, Level::Error, "Expect an iterator type");
+src/parser/definitions.rs:1407:                        diagnostic!(
+src/parser/definitions.rs:1409:                            Level::Error,
+src/parser/definitions.rs:1431:                        diagnostic!(self.lexer, Level::Error, "Unknown field name '{id}'");
+src/parser/definitions.rs:1434:                    diagnostic!(self.lexer, Level::Error, "Expected a field name");
+src/parser/definitions.rs:1449:                diagnostic!(
+src/parser/definitions.rs:1451:                    Level::Error,
+src/parser/definitions.rs:1498:            diagnostic!(self.lexer, Level::Error, "Expect attribute");
+src/parser/definitions.rs:1516:                diagnostic!(
+src/parser/definitions.rs:1518:                    Level::Error,
+src/parser/definitions.rs:1532:                diagnostic!(
+src/parser/definitions.rs:1534:                    Level::Error,
+src/parser/definitions.rs:1548:                diagnostic!(self.lexer, Level::Error, "Expect attribute");
+src/parser/definitions.rs:1553:                diagnostic!(
+src/parser/definitions.rs:1555:                    Level::Error,
+src/parser/definitions.rs:1596:            diagnostic!(self.lexer, Level::Error, "Expect interface name");
+src/parser/definitions.rs:1600:            diagnostic!(
+src/parser/definitions.rs:1602:                Level::Error,
+src/parser/definitions.rs:1614:            diagnostic!(self.lexer, Level::Error, "Cannot redefine interface '{id}'");
+src/parser/definitions.rs:1644:                        diagnostic!(
+src/parser/definitions.rs:1646:                            Level::Error,
+src/parser/definitions.rs:1656:                        diagnostic!(self.lexer, Level::Error, "Expected 'fn' in interface body");
+src/parser/definitions.rs:1663:                        diagnostic!(
+src/parser/definitions.rs:1665:                            Level::Error,
+src/parser/definitions.rs:1722:                        diagnostic!(
+src/parser/definitions.rs:1724:                            Level::Error,
+src/parser/definitions.rs:1749:                    diagnostic!(self.lexer, Level::Error, "circular init dependency: {path}");
+src/parser/definitions.rs:1853:            diagnostic!(
+src/parser/definitions.rs:1855:                Level::Error,
+src/parser/definitions.rs:1940:            diagnostic!(
+src/parser/definitions.rs:1942:                Level::Error,
+src/scopes.rs:206:                panic!(
+src/parser/control.rs:160:                    diagnostic!(
+src/parser/control.rs:162:                        Level::Error,
+src/parser/control.rs:191:                    diagnostic!(self.lexer, Level::Warning, "Unreachable code after {kind}");
+src/parser/control.rs:296:                        specific!(
+src/parser/control.rs:299:                            Level::Error,
+src/parser/control.rs:357:                        diagnostic!(
+src/parser/control.rs:461:                    diagnostic!(
+src/parser/control.rs:463:                        Level::Error,
+src/parser/control.rs:525:                    diagnostic!(
+src/parser/control.rs:527:                        Level::Error,
+src/parser/control.rs:571:                    diagnostic!(
+src/parser/control.rs:573:                        Level::Error,
+src/parser/control.rs:585:                        diagnostic!(self.lexer, Level::Error, "expect variant name after '::'");
+src/parser/control.rs:626:                    diagnostic!(
+src/parser/control.rs:628:                        Level::Error,
+src/parser/control.rs:655:                    diagnostic!(
+src/parser/control.rs:657:                        Level::Error,
+src/parser/control.rs:718:                        diagnostic!(self.lexer, Level::Error, "expect variant name after '|'");
+src/parser/control.rs:726:                            diagnostic!(self.lexer, Level::Error, "expect variant name after '::'");
+src/parser/control.rs:751:                    diagnostic!(
+src/parser/control.rs:753:                        Level::Error,
+src/parser/control.rs:833:                        diagnostic!(
+src/parser/control.rs:879:                diagnostic!(
+src/parser/control.rs:881:                    Level::Error,
+src/parser/control.rs:936:                self.lexer.pos_diagnostic(Level::Error, &match_pos, &msg);
+src/parser/control.rs:1019:            diagnostic!(
+src/parser/control.rs:1021:                Level::Error,
+src/parser/control.rs:1066:                        diagnostic!(
+src/parser/control.rs:1068:                            Level::Error,
+src/parser/control.rs:1125:                diagnostic!(
+src/parser/control.rs:1127:                    Level::Error,
+src/parser/control.rs:1178:                        diagnostic!(
+src/parser/control.rs:1180:                            Level::Error,
+src/parser/control.rs:1202:                diagnostic!(
+src/parser/control.rs:1204:                    Level::Error,
+src/parser/control.rs:1236:                    diagnostic!(
+src/parser/control.rs:1238:                        Level::Error,
+src/parser/control.rs:1268:                            diagnostic!(
+src/parser/control.rs:1270:                                Level::Error,
+src/parser/control.rs:1334:            diagnostic!(
+src/parser/control.rs:1336:                Level::Error,
+src/parser/control.rs:1388:                diagnostic!(
+src/parser/control.rs:1390:                    Level::Error,
+src/parser/control.rs:1509:                    diagnostic!(
+src/parser/control.rs:1511:                        Level::Error,
+src/parser/control.rs:1607:                        diagnostic!(
+src/parser/control.rs:1609:                            Level::Error,
+src/parser/control.rs:1699:                diagnostic!(
+src/parser/control.rs:1701:                    Level::Error,
+src/parser/control.rs:1779:            unreachable!("parse_tuple_match called with non-tuple subject")
+src/parser/control.rs:1808:                    diagnostic!(
+src/parser/control.rs:1810:                        Level::Error,
+src/parser/control.rs:1818:                        diagnostic!(
+src/parser/control.rs:1820:                            Level::Error,
+src/parser/control.rs:1869:                    diagnostic!(
+src/parser/control.rs:1871:                        Level::Error,
+src/parser/control.rs:1882:                diagnostic!(
+src/parser/control.rs:1884:                    Level::Error,
+src/parser/control.rs:1894:                    diagnostic!(
+src/parser/control.rs:1896:                        Level::Error,
+src/parser/control.rs:2117:                    diagnostic!(
+src/parser/control.rs:2119:                        Level::Error,
+src/parser/control.rs:2142:                diagnostic!(
+src/parser/control.rs:2144:                    Level::Error,
+src/parser/control.rs:2208:                    diagnostic!(
+src/parser/control.rs:2210:                        Level::Error,
+src/parser/control.rs:2244:                            diagnostic!(
+src/parser/control.rs:2246:                                Level::Error,
+src/parser/control.rs:2326:                diagnostic!(
+src/parser/control.rs:2328:                    Level::Error,
+src/parser/control.rs:2461:                    diagnostic!(
+src/parser/control.rs:2463:                        Level::Error,
+src/parser/control.rs:2484:                diagnostic!(
+src/parser/control.rs:2486:                    Level::Error,
+src/parser/control.rs:2500:                        specific!(
+src/parser/control.rs:2503:                            Level::Error,
+src/parser/control.rs:2571:            diagnostic!(self.lexer, Level::Error, "Expect expression after return");
+src/parser/control.rs:2828:                diagnostic!(
+src/parser/control.rs:2830:                    Level::Error,
+src/parser/control.rs:2973:                diagnostic!(
+src/parser/control.rs:2975:                    Level::Error,
+src/parser/control.rs:3063:            diagnostic!(
+src/parser/control.rs:3065:                Level::Error,
+src/parser/control.rs:3073:            diagnostic!(
+src/parser/control.rs:3075:                Level::Error,
+src/parser/control.rs:3084:            diagnostic!(
+src/parser/control.rs:3086:                Level::Error,
+src/parser/control.rs:3092:            diagnostic!(
+src/parser/control.rs:3094:                Level::Error,
+src/parser/control.rs:3103:            diagnostic!(
+src/parser/control.rs:3105:                Level::Error,
+src/parser/control.rs:3216:            diagnostic!(
+src/parser/control.rs:3218:                Level::Error,
+src/parser/control.rs:3311:            diagnostic!(self.lexer, Level::Warning, "Empty parallel block");
+src/parser/mod.rs:384:        if lvl != Level::Error && lvl != Level::Fatal {
+src/parser/mod.rs:478:            self.lexer.pos_diagnostic(Level::Error, &pos, &msg);
+src/parser/mod.rs:526:        if lvl != Level::Error && lvl != Level::Fatal {
+src/parser/mod.rs:599:            diagnostic!(self.lexer, Level::Error, "Could not write: {to}");
+src/parser/mod.rs:618:        if lvl == Level::Error || lvl == Level::Fatal {
+src/parser/mod.rs:979:            specific!(
+src/parser/mod.rs:982:                Level::Error,
+src/parser/mod.rs:1098:                diagnostic!(
+src/parser/mod.rs:1100:                    Level::Error,
+src/parser/mod.rs:1104:                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+src/parser/mod.rs:1110:                diagnostic!(
+src/parser/mod.rs:1112:                    Level::Error,
+src/parser/mod.rs:1125:                        diagnostic!(
+src/parser/mod.rs:1127:                            Level::Error,
+src/parser/mod.rs:1131:                        diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+src/parser/mod.rs:1135:                    diagnostic!(
+src/parser/mod.rs:1137:                        Level::Error,
+src/parser/mod.rs:1192:            diagnostic!(
+src/parser/mod.rs:1194:                Level::Error,
+src/parser/mod.rs:1207:            diagnostic!(
+src/parser/mod.rs:1209:                Level::Error,
+src/parser/mod.rs:1305:                        Level::Error,
+src/parser/mod.rs:1311:                    self.lexer.pos_diagnostic(Level::Error, &peek_pos, &msg);
+src/parser/mod.rs:1622:                    diagnostic!(self.lexer, Level::Error, "Unknown parameter '{name}'");
+src/parser/mod.rs:1628:                    diagnostic!(
+src/parser/mod.rs:1630:                        Level::Error,
+src/parser/mod.rs:1638:                    diagnostic!(
+src/parser/mod.rs:1640:                        Level::Error,
+src/parser/mod.rs:1838:                diagnostic!(
+src/parser/mod.rs:1840:                    Level::Error,
+src/parser/mod.rs:2014:                    diagnostic!(
+src/parser/mod.rs:2016:                        Level::Error,
+src/parser/mod.rs:2212:                    diagnostic!(
+src/parser/mod.rs:2214:                        Level::Error,
+src/parser/mod.rs:2283:            diagnostic!(
+src/parser/mod.rs:2285:                Level::Error,
+src/parser/mod.rs:2361:            specific!(
+src/parser/mod.rs:2364:                Level::Error,
+src/parser/mod.rs:2368:            specific!(
+src/parser/mod.rs:2371:                Level::Error,
+src/parser/mod.rs:2377:            specific!(
+src/parser/mod.rs:2380:                Level::Error,
+src/parser/mod.rs:2401:                    diagnostic!(
+src/parser/mod.rs:2403:                        Level::Error,
+src/parser/mod.rs:2413:            diagnostic!(
+src/parser/mod.rs:2415:                Level::Error,
+src/parser/mod.rs:2421:                diagnostic!(
+src/parser/mod.rs:2423:                    Level::Error,
+src/parser/mod.rs:2455:                diagnostic!(
+src/parser/mod.rs:2457:                    Level::Error,
+src/parser/mod.rs:2501:                diagnostic!(
+src/parser/mod.rs:2503:                    Level::Error,
+src/parser/mod.rs:2660:                        diagnostic!(
+src/parser/mod.rs:2662:                            Level::Error,
+src/parser/mod.rs:2778:                            diagnostic!(
+src/parser/mod.rs:2780:                                Level::Error,
+src/parser/mod.rs:2802:                        diagnostic!(
+src/parser/mod.rs:2804:                            Level::Error,
+src/parser/mod.rs:2830:                    diagnostic!(
+src/parser/mod.rs:2832:                        Level::Error,
+src/parser/mod.rs:2871:            if self.lexer.diagnostics().level() == Level::Fatal
+src/parser/mod.rs:2889:        if res.has != LexItem::None && self.lexer.diagnostics().level() != Level::Fatal {
+src/parser/mod.rs:2891:                diagnostic!(
+src/parser/mod.rs:2893:                    Level::Error,
+src/parser/mod.rs:2904:                diagnostic!(self.lexer, Level::Error, "Syntax error: unexpected {token}");
+src/parser/mod.rs:2934:            Level::Error | Level::Fatal
+src/parser/mod.rs:2938:                diagnostic!(self.lexer, Level::Error, "type layout: {}", issue);
+src/parser/mod.rs:2943:        if lvl == Level::Error || lvl == Level::Fatal {
+src/parser/mod.rs:2980:                            diagnostic!(
+src/parser/mod.rs:2982:                                Level::Error,
+src/parser/mod.rs:3292:                    diagnostic!(
+src/parser/mod.rs:3294:                        Level::Fatal,
+src/parser/mod.rs:3526:                    diagnostic!(
+src/parser/mod.rs:3533:                    diagnostic!(
+src/parser/mod.rs:3535:                        Level::Error,
+src/parser/mod.rs:3559:                diagnostic!(
+src/parser/mod.rs:3576:                    diagnostic!(
+src/parser/mod.rs:3578:                        Level::Error,
+src/typedef.rs:126:                lexer.pos_diagnostic(Level::Error, &data.def(d).position, &msg);
+src/typedef.rs:160:                    Level::Error,
+src/typedef.rs:182:                    Level::Error,
+src/parser/fields.rs:13:                diagnostic!(self.lexer, Level::Error, "Field of unknown variable");
+src/parser/fields.rs:34:            diagnostic!(self.lexer, Level::Error, "Expect a field name");
+src/parser/fields.rs:41:                diagnostic!(
+src/parser/fields.rs:43:                    Level::Error,
+src/parser/fields.rs:47:                diagnostic!(
+src/parser/fields.rs:49:                    Level::Error,
+src/parser/fields.rs:113:                    diagnostic!(
+src/parser/fields.rs:115:                        Level::Error,
+src/parser/fields.rs:131:                        diagnostic!(
+src/parser/fields.rs:133:                            Level::Error,
+src/parser/fields.rs:138:                        diagnostic!(
+src/parser/fields.rs:140:                            Level::Error,
+src/parser/fields.rs:145:                        diagnostic!(
+src/parser/fields.rs:147:                            Level::Error,
+src/parser/fields.rs:164:                diagnostic!(
+src/parser/fields.rs:166:                    Level::Error,
+src/parser/fields.rs:272:            _ => unreachable!(),
+src/parser/fields.rs:317:                diagnostic!(self.lexer, Level::Error, "Invalid index in remove");
+src/parser/fields.rs:408:            diagnostic!(
+src/parser/fields.rs:410:                Level::Error,
+src/parser/fields.rs:471:            diagnostic!(self.lexer, Level::Error, "Invalid iterator expression");
+src/parser/fields.rs:475:            diagnostic!(
+src/parser/fields.rs:477:                Level::Error,
+src/parser/fields.rs:565:            diagnostic!(self.lexer, Level::Error, "Invalid index on string");
+src/parser/fields.rs:578:                    diagnostic!(self.lexer, Level::Error, "Invalid index on string",);
+src/parser/fields.rs:602:                diagnostic!(self.lexer, Level::Error, "Invalid index key");
+src/parser/fields.rs:619:                    diagnostic!(self.lexer, Level::Error, "Too many key values on index");
+src/parser/fields.rs:625:                    diagnostic!(self.lexer, Level::Error, "Invalid index key");
+src/parser/fields.rs:653:                    diagnostic!(self.lexer, Level::Error, "Invalid index key");
+src/parser/fields.rs:661:                        diagnostic!(self.lexer, Level::Error, "Too many key values on index");
+src/parser/fields.rs:667:                        diagnostic!(self.lexer, Level::Error, "Invalid index key");
+src/parser/fields.rs:745:                diagnostic!(self.lexer, Level::Error, "Too few key fields");
+src/parser/fields.rs:786:                diagnostic!(
+src/parser/fields.rs:788:                    Level::Error,
+src/parser/operators.rs:31:            diagnostic!(
+src/parser/operators.rs:33:                Level::Error,
+src/parser/operators.rs:113:                diagnostic!(
+src/parser/operators.rs:115:                    Level::Error,
+src/parser/operators.rs:182:            diagnostic!(
+src/parser/operators.rs:184:                Level::Error,
+src/parser/operators.rs:308:                        diagnostic!(self.lexer, Level::Error, "set_file_size is not defined");
+src/parser/operators.rs:317:                    diagnostic!(
+src/parser/operators.rs:319:                        Level::Error,
+src/parser/operators.rs:369:                        diagnostic!(self.lexer, Level::Error, "expect variant name after 'is'");
+src/parser/operators.rs:414:                diagnostic!(
+src/parser/operators.rs:416:                    Level::Error,
+src/parser/operators.rs:468:                diagnostic!(self.lexer, Level::Error, "Unknown variable");
+src/parser/operators.rs:478:                            diagnostic!(
+src/parser/operators.rs:480:                                Level::Error,
+src/parser/operators.rs:536:                        diagnostic!(
+src/parser/operators.rs:538:                            Level::Error,
+src/parser/operators.rs:570:                            diagnostic!(
+src/parser/operators.rs:572:                                Level::Error,
+src/parser/operators.rs:711:                diagnostic!(
+src/parser/operators.rs:713:                    Level::Error,
+src/parser/operators.rs:725:            diagnostic!(
+src/parser/operators.rs:727:                Level::Error,
+src/parser/operators.rs:780:            diagnostic!(
+src/parser/operators.rs:899:                    diagnostic!(self.lexer, Level::Error, "Expect type");
+src/parser/operators.rs:903:                    diagnostic!(
+src/parser/operators.rs:905:                        Level::Error,
+src/parser/operators.rs:924:            diagnostic!(self.lexer, Level::Error, "Expect type after as");
+src/parser/operators.rs:952:                    diagnostic!(
+src/parser/operators.rs:959:                    diagnostic!(
+src/parser/operators.rs:1001:                diagnostic!(
+src/documentation.rs:38:            let file_handle = File::open(file.clone()).expect("failed to open file");
+src/documentation.rs:103:        writeln!(result, "<p>{}</p>", para_buf.trim()).expect("");
+src/documentation.rs:110:    let file = File::open(&topic.file).expect("failed to open file");
+src/documentation.rs:125:                writeln!(result, "</ul>").expect("");
+src/documentation.rs:141:                write!(result, "<ul>").expect("");
+src/documentation.rs:144:            writeln!(result, "<li>{n}</li>").expect("");
+src/documentation.rs:148:                writeln!(result, "</ul>").expect("");
+src/documentation.rs:155:                writeln!(result, "</ul>").expect("");
+src/documentation.rs:165:        writeln!(result, "</ul>").expect("");
+src/documentation.rs:1202:            writeln!(body, "<pre><code>{}</code></pre>", html_escape(sig)).expect("");
+src/documentation.rs:1300:    writeln!(index_body, "<p><strong>{pkg_name}</strong> v{version}</p>").expect("");
+src/documentation.rs:1308:            .expect("");
+src/documentation.rs:1316:            writeln!(index_body, "<li><a href=\"api-{id}.html\">{name}</a></li>").expect("");
+src/parser/objects.rs:26:                diagnostic!(self.lexer, Level::Error, "Expecting identifier after ::");
+src/parser/objects.rs:42:                        diagnostic!(
+src/parser/objects.rs:44:                            Level::Error,
+src/parser/objects.rs:53:                diagnostic!(
+src/parser/objects.rs:55:                    Level::Error,
+src/parser/objects.rs:235:                    diagnostic!(
+src/parser/objects.rs:237:                        Level::Error,
+src/parser/objects.rs:250:                diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+src/parser/objects.rs:280:                diagnostic!(self.lexer, Level::Error, "Format.NotExists not found");
+src/parser/objects.rs:313:                        diagnostic!(
+src/parser/objects.rs:315:                            Level::Error,
+src/parser/objects.rs:385:                diagnostic!(self.lexer, Level::Error, "Unknown # operation on File");
+src/parser/objects.rs:442:            diagnostic!(
+src/parser/objects.rs:444:                Level::Error,
+src/parser/objects.rs:483:                diagnostic!(
+src/parser/objects.rs:644:                    diagnostic!(
+src/parser/objects.rs:646:                        Level::Error,
+src/parser/objects.rs:652:                    diagnostic!(self.lexer, Level::Error, "Unknown variable '{}'", name);
+src/parser/objects.rs:782:                diagnostic!(
+src/parser/objects.rs:784:                    Level::Error,
+src/parser/objects.rs:843:                diagnostic!(self.lexer, Level::Error, "Formatter error");
+src/parser/objects.rs:891:                diagnostic!(self.lexer, Level::Error, "Unexpected formatting type: {id}");
+src/parser/objects.rs:933:                diagnostic!(
+src/parser/objects.rs:935:                    Level::Error,
+src/parser/objects.rs:983:        diagnostic!(self.lexer, Level::Error, "Expect variable after for");
+src/parser/objects.rs:1144:                    diagnostic!(
+src/parser/objects.rs:1146:                        Level::Error,
+src/parser/objects.rs:1178:                diagnostic!(
+src/parser/objects.rs:1180:                    Level::Error,
+src/parser/objects.rs:1185:                diagnostic!(
+src/parser/objects.rs:1187:                    Level::Error,
+src/parser/objects.rs:1492:                diagnostic!(
+src/parser/objects.rs:1494:                    Level::Error,
+src/parser/expressions.rs:234:                        diagnostic!(
+src/parser/expressions.rs:236:                            Level::Error,
+src/parser/expressions.rs:287:                diagnostic!(self.lexer, Level::Error, "Cannot continue outside a loop");
+src/parser/expressions.rs:293:                diagnostic!(self.lexer, Level::Error, "Cannot break outside a loop");
+src/parser/expressions.rs:307:                    diagnostic!(
+src/parser/expressions.rs:309:                        Level::Error,
+src/parser/expressions.rs:318:                    diagnostic!(
+src/parser/expressions.rs:320:                        Level::Error,
+src/parser/expressions.rs:342:                diagnostic!(
+src/parser/expressions.rs:344:                    Level::Error,
+src/parser/expressions.rs:359:                diagnostic!(
+src/parser/expressions.rs:361:                    Level::Error,
+src/parser/expressions.rs:401:                    diagnostic!(
+src/parser/expressions.rs:403:                        Level::Error,
+src/parser/expressions.rs:435:                    diagnostic!(
+src/parser/expressions.rs:437:                        Level::Error,
+src/parser/expressions.rs:455:            diagnostic!(self.lexer, Level::Error, "Expected condition after 'while'");
+src/parser/expressions.rs:522:            diagnostic!(
+src/parser/expressions.rs:524:                Level::Error,
+src/parser/expressions.rs:530:            diagnostic!(
+src/parser/expressions.rs:532:                Level::Error,
+src/parser/expressions.rs:551:            diagnostic!(
+src/parser/expressions.rs:553:                Level::Error,
+src/parser/expressions.rs:562:            diagnostic!(
+src/parser/expressions.rs:564:                Level::Error,
+src/parser/expressions.rs:927:            diagnostic!(
+src/parser/expressions.rs:929:                Level::Error,
+src/parser/expressions.rs:946:            diagnostic!(
+src/parser/expressions.rs:948:                Level::Error,
+src/parser/expressions.rs:1080:                diagnostic!(
+src/parser/expressions.rs:1082:                    Level::Error,
+src/parser/expressions.rs:1090:                    diagnostic!(
+src/parser/expressions.rs:1092:                        Level::Error,
+src/parser/expressions.rs:1116:                diagnostic!(
+src/parser/expressions.rs:1118:                    Level::Error,
+src/parser/expressions.rs:1145:                diagnostic!(
+src/parser/expressions.rs:1147:                    Level::Error,
+src/parser/expressions.rs:1210:            diagnostic!(
+src/parser/expressions.rs:1212:                Level::Error,
+src/parser/expressions.rs:1338:                            diagnostic!(
+src/parser/expressions.rs:1340:                                Level::Error,
+src/parser/expressions.rs:1365:            unreachable!()
+src/ops.rs:39:        let r = $checked.unwrap_or_else(|| panic!("long overflow: {} {} {}", $v1, $op, $v2));
+src/ops.rs:687:        _ => panic!("Unknown radix"),
+src/ops.rs:752:        _ => panic!("Unknown radix"),
+src/main.rs:1700:        if p.diagnostics.level() >= Level::Error {
+src/logger.rs:232:                let entry = self.rate_map.get_mut(&key).expect("just inserted");
+src/parallel.rs:190:            .expect("rayon pool init failed")
+src/introspect.rs:136:        .expect("parse default/ stdlib");
+src/introspect.rs:146:        if p.diagnostics.level() >= Level::Error {
+src/database/mod.rs:767:            panic!(
+src/database/structures.rs:52:            _ => panic!(
+src/database/structures.rs:144:            Parts::Spacial(_, _) => panic!("Not implemented"),
+src/database/structures.rs:672:                panic!(
+src/database/allocation.rs:800:                panic!("copy_claims_index_body called with non-index type {tp} (parts: {other:?})")
+src/database/allocation.rs:902:            Parts::Spacial(_, _) => panic!("Not implemented"),
+src/database/allocation.rs:1022:            Parts::Spacial(_, _) => panic!("Not implemented"),
+src/database/io.rs:216:                | Parts::Spacial(_, _) => panic!(
+src/database/io.rs:224:                Parts::DbRef => panic!(
+src/database/io.rs:229:                Parts::Base => unreachable!(
+src/database/io.rs:394:                | Parts::Spacial(_, _) => panic!(
+src/database/io.rs:400:                Parts::DbRef => panic!(
+src/database/io.rs:405:                Parts::Base => unreachable!(
+src/generation/emit.rs:413:            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
+src/database/search.rs:30:        _ => panic!("Undefined compare {a:?} vs {b:?}"),
+src/database/search.rs:94:                        panic!(
+src/database/search.rs:234:            | Parts::Spacial(_, _) => panic!(
+src/database/search.rs:424:            | Parts::Spacial(_, _) => panic!(
+src/database/search.rs:490:            | Parts::Spacial(_, _) => panic!(
+src/formatter.rs:692:            _ => unreachable!(),
+src/generation/mod.rs:316:        _ => panic!("Incorrect type {tp:?}"),
+src/generation/mod.rs:1611:                "  if !test {{ panic!(\"{{}}:{{}} {{}}\", file, line, msg); }}"
+src/database/format.rs:588:                    panic!(
+src/database/format.rs:597:            panic!("Undefined known type {}", self.known_type)
+src/generation/text.rs:54:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:116:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:135:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:146:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:183:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:214:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:236:        panic!("Could not parse {vals:?}");
+src/generation/text.rs:259:        panic!("Could not parse {vals:?}");
+src/generation/pre_eval.rs:144:                unreachable!("set_pos pointed at a Set");
+src/database/types.rs:137:            panic!(
+src/database/types.rs:1306:            panic!(
+src/database/types.rs:2071:                .unwrap_or_else(|| panic!("field '{name}' not found on type '{}'", s.types[tp as usize].name))
+src/database/types.rs:2073:            panic!("type '{}' is not a Struct/EnumValue", s.types[tp as usize].name)
+src/database/types.rs:2102:        let group = s.types[tp as usize].index_groups().next().expect("group");
+src/database/types.rs:2112:            panic!("not a struct")
+src/database/types.rs:2294:            .expect("group")
+src/database/types.rs:2364:        let group = s.types[tp as usize].index_groups().next().expect("group");
+src/database/types.rs:2390:            .expect("group")
+src/database/types.rs:2396:            .expect("group")
+src/database/types.rs:2423:        let group = s.types[tp as usize].index_groups().next().expect("group");
+src/database/types.rs:2497:            .expect("group")
+src/database/types.rs:2505:                    .expect("member index in range");
+src/database/types.rs:2540:            .expect("group")
+src/database/types.rs:2570:            .expect("group")
+src/database/types.rs:2595:            panic!("not a struct")
+src/database/types.rs:2642:                        .expect("member in range");
+src/extensions.rs:424:    let sig_table = guard.as_ref().expect("NATIVE_SIGS not initialized");
+src/extensions.rs:427:        None => panic!("no signature for lib_idx {lib_idx}"),
+src/extensions.rs:431:        panic!("native symbol '{sym}' not loaded");
+src/extensions.rs:631:                _ => unreachable!(),
+src/extensions.rs:639:                _ => unreachable!(),
+src/extensions.rs:647:                _ => unreachable!(),
+src/extensions.rs:655:                _ => unreachable!(),
+src/extensions.rs:667:                _ => unreachable!(),
+src/extensions.rs:675:                _ => unreachable!(),
+src/extensions.rs:1363:            panic!(
+src/generation/dispatch.rs:347:                                _ => unreachable!(),
+src/generation/dispatch.rs:372:                                _ => unreachable!(),
+src/fill.rs:1709:    panic!("{}", v_message.str());
+src/compile.rs:205:                panic!("native function not loaded — call extensions::load_all() first");
+src/data.rs:1739:                    diagnostic!(
+src/data.rs:1741:                        Level::Error,
+src/data.rs:1746:                    diagnostic!(
+src/data.rs:1748:                        Level::Error,
+src/data.rs:1939:            panic!(
+src/data.rs:2008:                diagnostic!(
+src/data.rs:2010:                    Level::Error,
+src/data.rs:2026:            diagnostic!(
+src/data.rs:2028:                Level::Error,
+src/data.rs:2036:            diagnostic!(
+src/data.rs:2038:                Level::Error,
+src/data.rs:2058:                diagnostic!(lexer, Level::Error, "Cannot redefine field {fn_name}",);
+src/data.rs:2406:            panic!("Unknown definition {name}");
+src/data.rs:2951:            _ => panic!("Incorrect type {}", tp.name(self)),
+src/data.rs:3035:            Value::Iter(_, _, _, _) => panic!("Rewrite!"),
+src/variables/mod.rs:701:            diagnostic!(
+src/variables/mod.rs:954:                diagnostic!(
+src/variables/mod.rs:956:                    Level::Error,
+src/variables/mod.rs:980:            diagnostic!(
+src/variables/mod.rs:982:                Level::Error,
+src/variables/mod.rs:1074:                diagnostic!(
+src/variables/validate.rs:520:        panic!(
+src/variables/validate.rs:533:        panic!(
+src/variables/validate.rs:544:        panic!(
+src/variables/validate.rs:566:        panic!(
+src/variables/validate.rs:581:        panic!(
+src/variables/validate.rs:673:    panic!(

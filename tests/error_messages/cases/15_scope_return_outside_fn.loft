@@ -1,0 +1,4 @@
+return 5;
+fn main() {
+  print("hi");
+}

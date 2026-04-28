@@ -1,0 +1,7 @@
+==== exit: 101 ====
+==== stdout ====
+==== stderr ====
+
+thread 'main' (<pid>) panicked at src/state/mod.rs:269:9:
+Recursion depth limit exceeded (500) — possible infinite recursion
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

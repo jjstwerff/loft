@@ -5,7 +5,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 0 — Survey and baseline
 
-Status: open
+Status: done — landed 2026-04-28
+
+Artefacts:
+- [`0a-sites.md`](0a-sites.md) — categorised inventory of 815 error
+  sites across 52 source files, plus the phase-1 worklist (the
+  ~22 panic-style sites in scope analysis / store / database that
+  lack a `Position` today).
+- [`0a-sites.txt`](0a-sites.txt) — raw `rg` output behind that.
+- `tests/error_messages/cases/*.loft` — 40 short bad-program
+  cases, one per failure mode in the matrix below.
+- `tests/error_messages/baseline/*.expect` — captured stdout +
+  stderr + exit-code goldens.  `tests/error_messages.rs` runs
+  byte-for-byte; `UPDATE_GOLDEN=1` re-captures.
+- [`0d-bench.txt`](0d-bench.txt) — `make bench` baseline (11
+  benches × 5 columns).  Phase 1 asserts ±5 % drift.
+- [`0e-rubric.md`](0e-rubric.md) — span / clarity / suggestion /
+  closing-phase per case.  **13 cases silently produce wrong
+  output today**; phase 4 closes 8, phase 6 closes the other 5.
+  6 cases are already excellent and become anchors.
 
 ## Goal
 

@@ -1,0 +1,7 @@
+==== exit: 0 ====
+==== stdout ====
+Warning: Variable unused_local is never read at <cases>/12_type_unused_var.loft:2:17
+  |
+   2 |   unused_local = 42;
+     |                 ^
+hi==== stderr ====

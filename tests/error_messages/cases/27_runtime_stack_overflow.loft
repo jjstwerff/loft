@@ -1,0 +1,6 @@
+fn deep(n: integer) -> integer {
+  if n == 0 { 0 } else { deep(n - 1) + 1 }
+}
+fn main() {
+  print("{deep(100000)}");
+}

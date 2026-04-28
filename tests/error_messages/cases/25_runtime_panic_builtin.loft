@@ -1,0 +1,4 @@
+fn main() {
+  panic("boom");
+  print("never");
+}

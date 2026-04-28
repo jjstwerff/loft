@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Expect token ) at <cases>/01_parse_unclosed_paren.loft:2:14
+  |
+   2 |   x = (1 + 2;
+     |              ^
+==== stderr ====

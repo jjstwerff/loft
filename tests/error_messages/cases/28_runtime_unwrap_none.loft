@@ -1,0 +1,5 @@
+fn main() {
+  z = 0;
+  x = 1 / z;
+  assert(x, "expected non-null but got null sentinel");
+}

@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Library 'nonexistent_module' not found — searched lib/, lib_dirs, and sibling packages at <cases>/38_import_unknown_file.loft:1:27
+  |
+   1 | use nonexistent_module::*;
+     |                           ^
+==== stderr ====

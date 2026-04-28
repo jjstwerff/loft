@@ -1,0 +1,15 @@
+==== exit: 1 ====
+==== stdout ====
+Fatal: String not correctly terminated at <cases>/04_parse_unterminated_string.loft:2:14
+  |
+   2 |   s = "hello;
+     |              ^
+Error: Expect token ; at <cases>/04_parse_unterminated_string.loft:2:14
+  |
+   2 |   s = "hello;
+     |              ^
+Error: Expect token } at <cases>/04_parse_unterminated_string.loft:2:14
+  |
+   2 |   s = "hello;
+     |              ^
+==== stderr ====

@@ -1,0 +1,7 @@
+fn main() {
+  x = 5;
+  match x {
+    "hello" => print("text arm"),
+    _ => print("other"),
+  }
+}

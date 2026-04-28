@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Expect token ; at <cases>/09_type_unknown_struct.loft:2:14
+  |
+   2 |   p = Plyer { name: "Bob" };
+     |              ^
+==== stderr ====
