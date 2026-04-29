@@ -613,13 +613,8 @@ impl Parser {
                                 crate::data::element_offsets(&elems)[idx] as u32
                             };
                             let elem_tp = elems[idx].clone();
-                            *code = self.get_val(
-                                &elem_tp,
-                                false,
-                                elem_offset,
-                                code.clone(),
-                                u32::MAX,
-                            );
+                            *code =
+                                self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
                             t = elem_tp;
                         }
                     }
@@ -1067,9 +1062,7 @@ impl Parser {
             // carries a `Value::Span(b)` arm (scopes.rs, intervals.rs,
             // slots.rs, slots_v2.rs, validate.rs, codegen.rs,
             // parser/mod.rs::substitute_type_in_value, generation/*).
-            if !self.first_pass
-                && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>")
-            {
+            if !self.first_pass && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>") {
                 let inner = std::mem::replace(code, Value::Null);
                 *code = Value::with_span(op_pos.clone(), inner);
             }

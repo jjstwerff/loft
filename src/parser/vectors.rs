@@ -1436,19 +1436,35 @@ impl Parser {
             match &lhs_tp {
                 Type::Sorted(td, key, _) => {
                     let c = self.data.def(*td).known_type;
-                    if c == u16::MAX { None } else { Some(self.database.sorted(c, key)) }
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.sorted(c, key))
+                    }
                 }
                 Type::Hash(td, key, _) => {
                     let c = self.data.def(*td).known_type;
-                    if c == u16::MAX { None } else { Some(self.database.hash(c, key)) }
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.hash(c, key))
+                    }
                 }
                 Type::Index(td, key, _) => {
                     let c = self.data.def(*td).known_type;
-                    if c == u16::MAX { None } else { Some(self.database.index(c, key)) }
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.index(c, key))
+                    }
                 }
                 Type::Spacial(td, key, _) => {
                     let c = self.data.def(*td).known_type;
-                    if c == u16::MAX { None } else { Some(self.database.spacial(c, key)) }
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.spacial(c, key))
+                    }
                 }
                 _ => None,
             }

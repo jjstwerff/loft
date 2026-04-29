@@ -1508,10 +1508,7 @@ impl State {
     /// `at file:line:col` alongside the bytecode-level context.
     #[must_use]
     pub fn source_loc_for(&self, pc: u32) -> Option<&Position> {
-        self.source_spans
-            .range(..=pc)
-            .next_back()
-            .map(|(_, p)| p)
+        self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
     }
 
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
@@ -2135,9 +2132,7 @@ impl State {
         let store = self.database.store(&self.stack_cur);
         unsafe {
             let src = store.base_ptr().offset(
-                self.stack_cur.rec as isize * 8
-                    + self.stack_cur.pos as isize
-                    + src_offset as isize,
+                self.stack_cur.rec as isize * 8 + self.stack_cur.pos as isize + src_offset as isize,
             );
             std::ptr::copy_nonoverlapping(src, dst, return_size as usize);
         }

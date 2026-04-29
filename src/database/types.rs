@@ -277,24 +277,23 @@ impl Stores {
         // atomic block reflects the bytes the Store will hold.  Stack
         // widths stay on the LinkedFieldGroup for codegen / stack-side
         // tuple-element access.
-        let groups_descriptor: Vec<(Vec<u16>, u16, u8, Vec<u16>)> = self
-            .types[t_nr]
+        let groups_descriptor: Vec<(Vec<u16>, u16, u8, Vec<u16>)> = self.types[t_nr]
             .field_groups
             .iter()
             .map(|g| {
-                let member_sa: Vec<(u16, u8)> = g
-                    .field_indices
-                    .iter()
-                    .map(|&i| sizes[i as usize])
-                    .collect();
-                let offsets =
-                    crate::data::LinkedFieldGroup::group_member_offsets(&member_sa);
+                let member_sa: Vec<(u16, u8)> =
+                    g.field_indices.iter().map(|&i| sizes[i as usize]).collect();
+                let offsets = crate::data::LinkedFieldGroup::group_member_offsets(&member_sa);
                 let storage_alignment = crate::data::LinkedFieldGroup::group_alignment(
                     &member_sa.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
                 );
-                let storage_size =
-                    crate::data::LinkedFieldGroup::group_size(&member_sa);
-                (g.field_indices.clone(), storage_size, storage_alignment, offsets)
+                let storage_size = crate::data::LinkedFieldGroup::group_size(&member_sa);
+                (
+                    g.field_indices.clone(),
+                    storage_size,
+                    storage_alignment,
+                    offsets,
+                )
             })
             .collect();
 
@@ -481,9 +480,7 @@ impl Stores {
             );
             // Compute the byte offset where tree::add expects to find
             // RB_LEFT — this is `database.fields(tp)`'s return value.
-            if let Parts::Struct(fs) | Parts::EnumValue(_, fs) =
-                &self.types[c as usize].parts
-            {
+            if let Parts::Struct(fs) | Parts::EnumValue(_, fs) = &self.types[c as usize].parts {
                 if (left_field_nr as usize) < fs.len() {
                     let left = &fs[left_field_nr as usize];
                     let _ = writeln!(
@@ -869,10 +866,7 @@ impl Stores {
             let cname = &self.types[f.content as usize].name;
             // Show gap if this field's start > prev_end (when both
             // positions are real, not the u16::MAX "not laid out" sentinel).
-            if prev_end >= 0
-                && pos != u16::MAX
-                && (pos as i32) > prev_end
-            {
+            if prev_end >= 0 && pos != u16::MAX && (pos as i32) > prev_end {
                 let _ = writeln!(
                     out,
                     "{pad}     ── gap [{}..{}) ({} bytes) ──",
@@ -1487,7 +1481,9 @@ impl Stores {
                 // Untyped enum (1-byte disc) is owned-free; struct-enum
                 // (variants with payload) is owned because it carries
                 // sub-data.
-                variants.iter().any(|(v_tp, _)| self.has_owned_sub_fields(*v_tp))
+                variants
+                    .iter()
+                    .any(|(v_tp, _)| self.has_owned_sub_fields(*v_tp))
             }
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 fields.iter().any(|f| self.is_field_owned(f.content))
@@ -1715,9 +1711,7 @@ impl Type {
     /// `index<T[key]>` registration.  Replaces ad-hoc
     /// `f.name.starts_with("#left_")` scans on `Parts::Struct` /
     /// `Parts::EnumValue` field lists.
-    pub fn index_groups(
-        &self,
-    ) -> impl Iterator<Item = &crate::data::LinkedFieldGroup> {
+    pub fn index_groups(&self) -> impl Iterator<Item = &crate::data::LinkedFieldGroup> {
         self.field_groups
             .iter()
             .filter(|g| matches!(g.kind, crate::data::LinkedFieldKind::Index))
@@ -1826,8 +1820,7 @@ mod layout_tests {
         s.field(tp, "b", int_c);
         s.finish();
         // Force overlap: rewrite both fields to position 0.
-        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &mut s.types[tp as usize].parts
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &mut s.types[tp as usize].parts
         {
             fields[0].position = 0;
             fields[1].position = 0;
@@ -1854,7 +1847,9 @@ mod layout_tests {
         s.types[tp as usize].size = 4; // integer is 8 bytes, field at @0
         let issues = s.validate_layout("Tiny");
         assert!(
-            issues.iter().any(|i| i.contains("extends beyond type size")),
+            issues
+                .iter()
+                .any(|i| i.contains("extends beyond type size")),
             "expected beyond-size issue, got: {issues:?}"
         );
     }
@@ -1868,8 +1863,7 @@ mod layout_tests {
         s.finish();
         // Force the field's position back to u16::MAX (simulates a
         // late-mutation that skipped finish_type).
-        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &mut s.types[tp as usize].parts
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &mut s.types[tp as usize].parts
         {
             fields[0].position = u16::MAX;
         }
@@ -1946,7 +1940,10 @@ mod layout_tests {
         assert!(line.contains("size="), "expected size= in: {line}");
         assert!(line.contains("align="), "expected align= in: {line}");
         assert!(line.contains("name:text@"), "expected name field: {line}");
-        assert!(line.contains("value:integer@"), "expected value field: {line}");
+        assert!(
+            line.contains("value:integer@"),
+            "expected value field: {line}"
+        );
         // The byte-range form is `@start..end`.
         assert!(line.contains(".."), "expected ..end in field range: {line}");
     }
@@ -2062,15 +2059,18 @@ mod layout_tests {
 
     /// Read a field by name; panics if absent or the type isn't a Struct.
     fn field_by_name<'a>(s: &'a Stores, tp: u16, name: &str) -> &'a Field {
-        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
-            &s.types[tp as usize].parts
-        {
-            fields
-                .iter()
-                .find(|f| f.name == name)
-                .unwrap_or_else(|| panic!("field '{name}' not found on type '{}'", s.types[tp as usize].name))
+        if let Parts::Struct(fields) | Parts::EnumValue(_, fields) = &s.types[tp as usize].parts {
+            fields.iter().find(|f| f.name == name).unwrap_or_else(|| {
+                panic!(
+                    "field '{name}' not found on type '{}'",
+                    s.types[tp as usize].name
+                )
+            })
         } else {
-            panic!("type '{}' is not a Struct/EnumValue", s.types[tp as usize].name)
+            panic!(
+                "type '{}' is not a Struct/EnumValue",
+                s.types[tp as usize].name
+            )
         }
     }
 
@@ -2085,9 +2085,17 @@ mod layout_tests {
         s.finish();
 
         let groups: Vec<_> = s.types[tp as usize].index_groups().collect();
-        assert_eq!(groups.len(), 1, "expected exactly one Index group, got {groups:?}");
+        assert_eq!(
+            groups.len(),
+            1,
+            "expected exactly one Index group, got {groups:?}"
+        );
         assert_eq!(groups[0].kind, LinkedFieldKind::Index);
-        assert_eq!(groups[0].field_indices.len(), 3, "Index triple must have 3 fields");
+        assert_eq!(
+            groups[0].field_indices.len(),
+            3,
+            "Index triple must have 3 fields"
+        );
         assert_eq!(groups[0].instance, 1, "first index gets instance=1");
     }
 
@@ -2100,9 +2108,7 @@ mod layout_tests {
         s.finish();
 
         let group = s.types[tp as usize].index_groups().next().expect("group");
-        let names: Vec<&str> = if let Parts::Struct(fields) =
-            &s.types[tp as usize].parts
-        {
+        let names: Vec<&str> = if let Parts::Struct(fields) = &s.types[tp as usize].parts {
             group
                 .field_indices
                 .iter()
@@ -2130,11 +2136,24 @@ mod layout_tests {
         let right = field_by_name(&s, tp, "#right_1");
         let color = field_by_name(&s, tp, "#color_1");
 
-        assert_eq!(left.position % 4, 0, "#left_1 not 4-byte aligned (pos={})", left.position);
-        assert_eq!(right.position, left.position + 4, "#right_1 must be at left+4");
+        assert_eq!(
+            left.position % 4,
+            0,
+            "#left_1 not 4-byte aligned (pos={})",
+            left.position
+        );
+        assert_eq!(
+            right.position,
+            left.position + 4,
+            "#right_1 must be at left+4"
+        );
         // #color is 1 byte — alignment 1, so any byte boundary is fine.
         // It must be at left+8 per tree::add's RB_COLOR=8 expectation.
-        assert_eq!(color.position, left.position + 8, "#color_1 must be at left+8");
+        assert_eq!(
+            color.position,
+            left.position + 8,
+            "#color_1 must be at left+8"
+        );
     }
 
     #[test]
@@ -2260,7 +2279,11 @@ mod layout_tests {
         let color = field_by_name(&s, tp, "#color_1");
 
         assert_eq!(left.position % 4, 0, "#left_1 4-byte aligned");
-        assert_eq!(right.position, left.position + 4, "#right_1 follows #left_1 by 4");
+        assert_eq!(
+            right.position,
+            left.position + 4,
+            "#right_1 follows #left_1 by 4"
+        );
         assert_eq!(
             color.position,
             left.position + 8,
@@ -2449,11 +2472,7 @@ mod layout_tests {
         let _ = s.index(tp, &[("value".to_string(), true)]);
         s.finish();
 
-        let groups: Vec<_> = s
-            .types[tp as usize]
-            .index_groups()
-            .cloned()
-            .collect();
+        let groups: Vec<_> = s.types[tp as usize].index_groups().cloned().collect();
         assert_eq!(groups.len(), 2);
         for group in &groups {
             assert_eq!(group.alignment, 4, "every index group has alignment 4");
@@ -2505,7 +2524,8 @@ mod layout_tests {
                     .expect("member index in range");
                 let field = &fields[field_idx as usize];
                 assert_ne!(
-                    field.position, u16::MAX,
+                    field.position,
+                    u16::MAX,
                     "member {member_idx} (field '{}') has no position assigned",
                     field.name,
                 );
@@ -2576,9 +2596,7 @@ mod layout_tests {
         let bool_c = s.name("boolean");
         let bool_size = s.types[bool_c as usize].size;
 
-        let ranges: Vec<(u16, u16)> = if let Parts::Struct(fields) =
-            &s.types[tp as usize].parts
-        {
+        let ranges: Vec<(u16, u16)> = if let Parts::Struct(fields) = &s.types[tp as usize].parts {
             (0..group.arity())
                 .map(|i| {
                     let idx = group.member_field_index(i).unwrap();
@@ -2626,11 +2644,7 @@ mod layout_tests {
         let _ = s.index(tp, &[("value".to_string(), true)]);
         s.finish();
 
-        let groups: Vec<_> = s
-            .types[tp as usize]
-            .index_groups()
-            .cloned()
-            .collect();
+        let groups: Vec<_> = s.types[tp as usize].index_groups().cloned().collect();
         assert_eq!(groups.len(), 2);
 
         let mut all_positions: Vec<u16> = Vec::new();
@@ -2646,9 +2660,7 @@ mod layout_tests {
                     // suffix — sanity check that field_indices points where
                     // we think.
                     assert!(
-                        field
-                            .name
-                            .ends_with(&format!("_{}", group.instance)),
+                        field.name.ends_with(&format!("_{}", group.instance)),
                         "field '{}' should end with '_{}'",
                         field.name,
                         group.instance,
@@ -2682,13 +2694,15 @@ mod layout_tests {
         s.finish();
 
         // Inject a fake Tuple group to confirm the filter excludes it.
-        s.types[tp as usize].field_groups.push(crate::data::LinkedFieldGroup {
-            kind: crate::data::LinkedFieldKind::Tuple,
-            instance: 0,
-            field_indices: vec![0],
-            alignment: 1,
-            size: 0,
-        });
+        s.types[tp as usize]
+            .field_groups
+            .push(crate::data::LinkedFieldGroup {
+                kind: crate::data::LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: vec![0],
+                alignment: 1,
+                size: 0,
+            });
         let total = s.types[tp as usize].field_groups.len();
         let index_only: Vec<_> = s.types[tp as usize].index_groups().collect();
         assert_eq!(total, 2, "should have one Index + one Tuple group");

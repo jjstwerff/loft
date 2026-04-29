@@ -230,10 +230,7 @@ impl Output<'_> {
                     // already a `Value::Text` literal — its own emit
                     // arm appends `.to_string()` directly via the same
                     // flag, and we'd otherwise double-wrap.
-                    if elem_is_text
-                        && self.tuple_text_to_string
-                        && !matches!(e, Value::Text(_))
-                    {
+                    if elem_is_text && self.tuple_text_to_string && !matches!(e, Value::Text(_)) {
                         write!(w, ".to_string()")?;
                     }
                 }
@@ -314,7 +311,10 @@ impl Output<'_> {
             // file at least compiles when it accidentally appears in
             // a reachable definition.
             Value::ParFor(_) => {
-                write!(w, "/* par_for(...) — native codegen lands in spine step 3b */")?;
+                write!(
+                    w,
+                    "/* par_for(...) — native codegen lands in spine step 3b */"
+                )?;
             }
         }
         Ok(())

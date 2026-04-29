@@ -5,9 +5,7 @@ use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "threading")]
-use crate::parallel::{
-    WorkerProgram, run_parallel_direct, run_parallel_ref, run_parallel_text,
-};
+use crate::parallel::{WorkerProgram, run_parallel_direct, run_parallel_ref, run_parallel_text};
 use crate::platform::sep;
 use crate::state::{Call, State};
 #[cfg(feature = "threading")]
@@ -795,8 +793,10 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_for_light: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let derived =
-            u32::from(crate::variables::size(&def.returned, &crate::data::Context::Argument));
+        let derived = u32::from(crate::variables::size(
+            &def.returned,
+            &crate::data::Context::Argument,
+        ));
         let rs = if (1..=8).contains(&derived) {
             derived
         } else {
@@ -906,8 +906,10 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
             .expect("parallel_discard: missing context");
         let data = unsafe { &*ctx.data };
         let def = data.def(v_func as u32);
-        let derived =
-            u32::from(crate::variables::size(&def.returned, &crate::data::Context::Argument));
+        let derived = u32::from(crate::variables::size(
+            &def.returned,
+            &crate::data::Context::Argument,
+        ));
         if (1..=8).contains(&derived) {
             derived
         } else {
@@ -1103,10 +1105,11 @@ fn parallel_execute_and_collect(
                     } else if is_struct_enum {
                         // Struct-enum disc byte is at offset 0 of the
                         // value record (per loft's enum layout).
-                        let disc = worker_stores
-                            .store(&src_ref)
-                            .get_byte(src_ref.rec, src_ref.pos, 0)
-                            as u8;
+                        let disc =
+                            worker_stores
+                                .store(&src_ref)
+                                .get_byte(src_ref.rec, src_ref.pos, 0)
+                                as u8;
                         !stores.variant_has_owned_sub_fields(known_type, disc)
                     } else {
                         false

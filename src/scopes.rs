@@ -1792,8 +1792,7 @@ mod par_safety_tests {
     fn fn_calling_parent_write_stdlib_is_not_par_safe() {
         let mut d = Data::new();
         let stdlib = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[stdlib as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[stdlib as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let user = d.add_def("user", &pos(), DefType::Function);
         d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
         assert!(!is_par_safe(&d, user));
@@ -1859,8 +1858,7 @@ mod par_safety_tests {
         let pure_fn = d.add_def("min", &pos(), DefType::Function);
         d.definitions[pure_fn as usize].purity = Purity::Pure;
         let bad_fn = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad_fn as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad_fn as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let user = d.add_def("user", &pos(), DefType::Function);
         d.definitions[user as usize].code = Value::Block(Box::new(Block {
             name: "test",
@@ -1908,11 +1906,7 @@ pub fn par_unsafe_reason(data: &Data, d_nr: u32) -> Option<String> {
 }
 
 #[allow(dead_code)]
-fn walk_par_unsafe_reason(
-    data: &Data,
-    d_nr: u32,
-    visited: &mut HashSet<u32>,
-) -> Option<String> {
+fn walk_par_unsafe_reason(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> Option<String> {
     if !visited.insert(d_nr) {
         // Cycle — same optimistic short-circuit as is_par_safe.
         return None;
@@ -1945,9 +1939,9 @@ fn walk_par_unsafe_reason_value(
             }
             None
         }
-        Value::CallRef(_, _args) => Some(
-            "runtime fn-ref call (callee unknown at compile time)".to_string(),
-        ),
+        Value::CallRef(_, _args) => {
+            Some("runtime fn-ref call (callee unknown at compile time)".to_string())
+        }
         Value::Block(b) => {
             for v in &b.operators {
                 if let Some(r) = walk_par_unsafe_reason_value(v, data, visited) {
@@ -1993,10 +1987,9 @@ fn call_reason(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> Option<S
         | Purity::Impure(ImpureCategory::Prng)
         | Purity::Impure(ImpureCategory::Io)
         | Purity::Impure(ImpureCategory::ParCall) => None,
-        Purity::Impure(ImpureCategory::ParentWrite) => Some(format!(
-            "call to parent-write stdlib fn '{}'",
-            def.name
-        )),
+        Purity::Impure(ImpureCategory::ParentWrite) => {
+            Some(format!("call to parent-write stdlib fn '{}'", def.name))
+        }
         Purity::Unknown => {
             if matches!(def.code, Value::Null) {
                 Some(format!("call to unannotated native fn '{}'", def.name))
@@ -2038,8 +2031,7 @@ mod par_diag_tests {
     fn parent_write_call_reports_offending_fn_name() {
         let mut d = Data::new();
         let stdlib = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[stdlib as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[stdlib as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let user = d.add_def("user", &pos(), DefType::Function);
         d.definitions[user as usize].code = Value::Call(stdlib, vec![]);
         let r = par_unsafe_reason(&d, user).unwrap();
@@ -2082,9 +2074,7 @@ mod par_diag_tests {
         d.definitions[outer as usize].code = Value::Call(inner, vec![]);
         let r = par_unsafe_reason(&d, outer).unwrap();
         assert!(
-            r.contains("recursive descent")
-                && r.contains("inner")
-                && r.contains("vector_add"),
+            r.contains("recursive descent") && r.contains("inner") && r.contains("vector_add"),
             "expected chain explanation through inner→vector_add; got: {r}"
         );
     }
@@ -2095,11 +2085,9 @@ mod par_diag_tests {
         let pure_fn = d.add_def("min", &pos(), DefType::Function);
         d.definitions[pure_fn as usize].purity = Purity::Pure;
         let bad_first = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad_first as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad_first as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let bad_second = d.add_def("hash_set", &pos(), DefType::Function);
-        d.definitions[bad_second as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad_second as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let user = d.add_def("user", &pos(), DefType::Function);
         d.definitions[user as usize].code = Value::Block(Box::new(Block {
             name: "test",
@@ -2183,11 +2171,7 @@ pub fn analyse_par_safety_fixpoint(data: &Data) -> HashMap<u32, bool> {
 /// uses the Purity annotation.  No cache placeholder needed —
 /// the fixed-point loop owns convergence.
 #[allow(dead_code)]
-fn walk_classified(
-    value: &Value,
-    data: &Data,
-    classification: &HashMap<u32, bool>,
-) -> bool {
+fn walk_classified(value: &Value, data: &Data, classification: &HashMap<u32, bool>) -> bool {
     match value {
         Value::Call(callee, args) => {
             let safe = call_classified(*callee, data, classification);
@@ -2217,11 +2201,7 @@ fn walk_classified(
 }
 
 #[allow(dead_code)]
-fn call_classified(
-    callee: u32,
-    data: &Data,
-    classification: &HashMap<u32, bool>,
-) -> bool {
+fn call_classified(callee: u32, data: &Data, classification: &HashMap<u32, bool>) -> bool {
     if callee == u32::MAX || (callee as usize) >= data.definitions.len() {
         return false;
     }
@@ -2270,7 +2250,8 @@ mod par_fixpoint_tests {
         let is_even = d.add_def("is_even", &pos(), DefType::Function);
         let is_odd = d.add_def("is_odd", &pos(), DefType::Function);
         // is_even calls is_odd + min (pure)
-        d.definitions[is_even as usize].code = Value::Call(is_odd, vec![Value::Call(pure_fn, vec![])]);
+        d.definitions[is_even as usize].code =
+            Value::Call(is_odd, vec![Value::Call(pure_fn, vec![])]);
         // is_odd calls is_even
         d.definitions[is_odd as usize].code = Value::Call(is_even, vec![]);
         let result = analyse_par_safety_fixpoint(&d);
@@ -2364,10 +2345,7 @@ pub fn worker_calls_parent_write(data: &Data, worker_d_nr: u32) -> Option<String
 ///
 /// `Purity::Impure(ParCall)` stdlib fns (parallel_for / _light)
 /// are also safe — D8 R2 and D2.1.1 cover recursive Arc promotion.
-pub fn worker_calls_parent_write_deep(
-    data: &Data,
-    worker_d_nr: u32,
-) -> Option<String> {
+pub fn worker_calls_parent_write_deep(data: &Data, worker_d_nr: u32) -> Option<String> {
     if worker_d_nr == u32::MAX || (worker_d_nr as usize) >= data.definitions.len() {
         return None;
     }
@@ -2475,9 +2453,7 @@ fn first_arg_is_local_var(args: &[Value], current_fn: u32, data: &Data) -> bool 
     // Workers writing to these hidden destinations are populating
     // their own per-worker output buffer, NOT parent state.
     let name = def.variables.name(*v);
-    def.attributes
-        .iter()
-        .any(|a| a.hidden && a.name == name)
+    def.attributes.iter().any(|a| a.hidden && a.name == name)
 }
 
 #[allow(dead_code)]
@@ -2528,10 +2504,7 @@ fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
             // Check this call's purity.
             if (*callee as usize) < data.definitions.len() {
                 let cdef = &data.definitions[*callee as usize];
-                if matches!(
-                    cdef.purity,
-                    Purity::Impure(ImpureCategory::ParentWrite)
-                ) {
+                if matches!(cdef.purity, Purity::Impure(ImpureCategory::ParentWrite)) {
                     return Some(cdef.name.clone());
                 }
             }
@@ -2603,8 +2576,7 @@ mod par_shallow_tests {
     fn direct_parent_write_call_detected() {
         let mut d = Data::new();
         let bad = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let worker = d.add_def("worker", &pos(), DefType::Function);
         d.definitions[worker as usize].code = Value::Call(bad, vec![]);
         assert_eq!(
@@ -2644,8 +2616,7 @@ mod par_shallow_tests {
         // is comprehensive enough not to false-positive.
         let mut d = Data::new();
         let bad = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let inner = d.add_def("inner", &pos(), DefType::Function);
         d.definitions[inner as usize].code = Value::Call(bad, vec![]);
         let worker = d.add_def("worker", &pos(), DefType::Function);
@@ -2659,13 +2630,11 @@ mod par_shallow_tests {
         // a parent-write site.
         let mut d = Data::new();
         let bad = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let safe = d.add_def("min", &pos(), DefType::Function);
         d.definitions[safe as usize].purity = Purity::Pure;
         let worker = d.add_def("worker", &pos(), DefType::Function);
-        d.definitions[worker as usize].code =
-            Value::Call(safe, vec![Value::Call(bad, vec![])]);
+        d.definitions[worker as usize].code = Value::Call(safe, vec![Value::Call(bad, vec![])]);
         assert_eq!(
             worker_calls_parent_write(&d, worker),
             Some("vector_add".to_string())
@@ -2693,8 +2662,7 @@ mod par_deep_tests {
         // returns the chain.
         let mut d = Data::new();
         let bad = d.add_def("vector_add", &pos(), DefType::Function);
-        d.definitions[bad as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let helper = d.add_def("helper", &pos(), DefType::Function);
         d.definitions[helper as usize].code = Value::Call(bad, vec![]);
         let worker = d.add_def("worker", &pos(), DefType::Function);
@@ -2749,11 +2717,9 @@ mod par_deep_tests {
         // Var(0) defaults to argument=false (local).
         let mut d = Data::new();
         let bad = d.add_def("OpAppendVector", &pos(), DefType::Function);
-        d.definitions[bad as usize].purity =
-            Purity::Impure(ImpureCategory::ParentWrite);
+        d.definitions[bad as usize].purity = Purity::Impure(ImpureCategory::ParentWrite);
         let worker = d.add_def("worker", &pos(), DefType::Function);
-        d.definitions[worker as usize].code =
-            Value::Call(bad, vec![Value::Var(0)]);
+        d.definitions[worker as usize].code = Value::Call(bad, vec![Value::Var(0)]);
         assert!(worker_calls_parent_write_deep(&d, worker).is_none());
     }
 

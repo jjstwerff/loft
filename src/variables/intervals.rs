@@ -209,9 +209,30 @@ pub fn compute_intervals(
             // and r_var are bound by the worker; on the main-thread side
             // (body), they may appear as Var reads which the recursion picks
             // up naturally.
-            compute_intervals(&b.input, function, free_text_nr, free_ref_nr, seq, depth + 1);
-            compute_intervals(&b.worker, function, free_text_nr, free_ref_nr, seq, depth + 1);
-            compute_intervals(&b.threads, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(
+                &b.input,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                seq,
+                depth + 1,
+            );
+            compute_intervals(
+                &b.worker,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                seq,
+                depth + 1,
+            );
+            compute_intervals(
+                &b.threads,
+                function,
+                free_text_nr,
+                free_ref_nr,
+                seq,
+                depth + 1,
+            );
             compute_intervals(&b.body, function, free_text_nr, free_ref_nr, seq, depth + 1);
         }
         _ => {

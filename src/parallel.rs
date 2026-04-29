@@ -431,8 +431,7 @@ impl StoreRebase {
             "StoreRebase::translate cross-worker DbRef: \
              store_nr={} not in rebase map and not parent-shared \
              (parent_store_count={})",
-            db.store_nr,
-            self.parent_store_count
+            db.store_nr, self.parent_store_count
         );
         eprintln!(
             "loft: StoreRebase cross-worker DbRef store_nr={} (parent_store_count={}); passing through unchanged",
@@ -624,13 +623,7 @@ pub fn run_parallel_direct(
                     // above; the slot was claimed for at least
                     // bytes_needed = row_count * ret_sz bytes.
                     unsafe {
-                        state.execute_at_raw_to(
-                            fn_pos,
-                            &row_ref,
-                            &extras,
-                            ret_sz as u32,
-                            dst,
-                        );
+                        state.execute_at_raw_to(fn_pos, &row_ref, &extras, ret_sz as u32, dst);
                     }
                 } else {
                     let val = if prim_in == u32::MAX {
@@ -666,11 +659,7 @@ pub fn run_parallel_direct(
                         state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
                     };
                     unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            (&raw const val).cast::<u8>(),
-                            dst,
-                            ret_sz,
-                        );
+                        std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
                     }
                 }
             }
@@ -826,8 +815,7 @@ pub fn run_parallel_text(
         let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
         let slot = ws.add_output_slot(array_words);
         let mut state = prog.new_state(ws);
-        let array_rec =
-            state.database.allocations[slot.store_nr as usize].claim(array_words);
+        let array_rec = state.database.allocations[slot.store_nr as usize].claim(array_words);
         for (local_idx, row_idx) in (start..end).enumerate() {
             let row_ref = vector::get_vector(
                 &input_t,
@@ -1179,12 +1167,7 @@ pub fn run_parallel_light(
                         //                that width
                         let val = if prim_in == u32::MAX {
                             let s = read_text_at(&state.database, &row_ref);
-                            state.execute_at_raw_text_input(
-                                fn_pos,
-                                s,
-                                &extras,
-                                ret_sz as u32,
-                            )
+                            state.execute_at_raw_text_input(fn_pos, s, &extras, ret_sz as u32)
                         } else if prim_in > 8 {
                             // P189c — wide-input path for tuple /
                             // fn-ref / 9..=64 byte first-arg slots.
@@ -1195,11 +1178,7 @@ pub fn run_parallel_light(
                             let buf = if let Some(ref types) = tuple_types {
                                 read_tuple_at_wide(&state.database, &row_ref, types)
                             } else {
-                                read_primitive_at_wide(
-                                    &state.database,
-                                    &row_ref,
-                                    element_size,
-                                )
+                                read_primitive_at_wide(&state.database, &row_ref, element_size)
                             };
                             state.execute_at_raw_primitive_input_wide(
                                 fn_pos,
@@ -1208,11 +1187,7 @@ pub fn run_parallel_light(
                                 ret_sz as u32,
                             )
                         } else if prim_in > 0 {
-                            let v = read_primitive_at(
-                                &state.database,
-                                &row_ref,
-                                element_size,
-                            );
+                            let v = read_primitive_at(&state.database, &row_ref, element_size);
                             state.execute_at_raw_primitive_input(
                                 fn_pos,
                                 v,
@@ -1315,11 +1290,7 @@ fn read_text_at(stores: &crate::database::Stores, row_ref: &DbRef) -> crate::key
 /// `DbRef`.  Returns the value zero-extended into a `u64` for
 /// uniform passing to `execute_at_raw_primitive_input`.
 #[allow(dead_code)] // not threading: only the sequential branch uses it
-fn read_primitive_at(
-    stores: &crate::database::Stores,
-    row_ref: &DbRef,
-    size: u32,
-) -> u64 {
+fn read_primitive_at(stores: &crate::database::Stores, row_ref: &DbRef, size: u32) -> u64 {
     let store = &stores.allocations[row_ref.store_nr as usize];
     let base = store.base_ptr();
     unsafe {
@@ -1348,7 +1319,10 @@ pub(crate) fn read_primitive_at_wide(
     row_ref: &DbRef,
     size: u32,
 ) -> [u8; 64] {
-    debug_assert!(size as usize <= 64, "wide read size {size} exceeds 64-byte cap");
+    debug_assert!(
+        size as usize <= 64,
+        "wide read size {size} exceeds 64-byte cap"
+    );
     let mut buf = [0u8; 64];
     let store = &stores.allocations[row_ref.store_nr as usize];
     let base = store.base_ptr();
@@ -1393,14 +1367,14 @@ pub(crate) fn read_tuple_at_wide(
     for (i, t) in elem_types.iter().enumerate() {
         let in_off = in_vec_offsets[i];
         let in_sz = crate::data::element_size(t);
-        let arg_sz =
-            crate::variables::size(t, &crate::data::Context::Argument) as usize;
+        let arg_sz = crate::variables::size(t, &crate::data::Context::Argument) as usize;
         debug_assert!(
             arg_offset + arg_sz <= 64,
             "read_tuple_at_wide: tuple slot exceeds 64-byte cap"
         );
         unsafe {
-            let src = base.offset(row_ref.rec as isize * 8 + (row_ref.pos as usize + in_off) as isize);
+            let src =
+                base.offset(row_ref.rec as isize * 8 + (row_ref.pos as usize + in_off) as isize);
             if matches!(t, crate::data::Type::Text(_)) {
                 // Inflate the 4-byte heap text-pointer into a 16-byte
                 // Str for the worker's argument slot.
@@ -1416,11 +1390,7 @@ pub(crate) fn read_tuple_at_wide(
                 // Plain memcpy — in-vector and worker-slot widths
                 // match for primitives, references, and fn-refs.
                 let copy_n = in_sz.min(arg_sz);
-                std::ptr::copy_nonoverlapping(
-                    src,
-                    buf.as_mut_ptr().add(arg_offset),
-                    copy_n,
-                );
+                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr().add(arg_offset), copy_n);
             }
         }
         arg_offset += arg_sz;

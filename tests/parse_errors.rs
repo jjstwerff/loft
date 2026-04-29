@@ -46,7 +46,9 @@ fn p07_suggest_unknown_function() {
         "fn double(x: integer) -> integer { x + x }
 fn test() { doublet(5); }"
     )
-    .error("Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:24");
+    .error(
+        "Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:24",
+    );
 }
 
 /// Type-name typo (Levenshtein 1) appends `did you mean` suffix.
@@ -59,9 +61,7 @@ fn p07_suggest_undefined_type() {
 fn build() -> Conter { Counter { n: 0 } }
 fn test() {}"
     )
-    .error(
-        "Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23",
-    );
+    .error("Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23");
 }
 
 // Field-suggestion paths (struct-literal + field-access) and the

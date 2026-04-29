@@ -880,8 +880,7 @@ impl Parser {
                 // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
                 // declares "no observable side effects, no
                 // parent-store writes".  Always par-safe.
-                self.data.definitions[self.context as usize].purity =
-                    crate::data::Purity::Pure;
+                self.data.definitions[self.context as usize].purity = crate::data::Purity::Pure;
             } else if id == Some("impure".to_string()) {
                 // Plan-06 phase 5a (DESIGN.md D8.1):
                 // `#impure(category)` classifies the side effect.
@@ -915,7 +914,11 @@ impl Parser {
                     }
                 };
                 if !self.lexer.has_token(")") {
-                    diagnostic!(self.lexer, Level::Error, "Expect ')' after #impure category");
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect ')' after #impure category"
+                    );
                     self.lexer.revert(link);
                     break;
                 }

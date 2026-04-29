@@ -44,11 +44,7 @@ impl Parser {
                     "Unknown type {shown} — did you mean '{s}'?"
                 );
             } else {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "Unknown type {shown}"
-                );
+                diagnostic!(self.lexer, Level::Error, "Unknown type {shown}");
             }
             return Type::Unknown(0);
         }

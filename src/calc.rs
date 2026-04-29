@@ -179,8 +179,7 @@ pub fn calculate_positions_with_groups(
     // entry alignment so the second pass can decide whether to pad.
     let mut virtual_fields: Vec<(u16, u8)> = Vec::with_capacity(fields.len());
     let mut virtual_origin: Vec<VirtualOrigin> = Vec::with_capacity(fields.len());
-    let mut group_seen: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
+    let mut group_seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (f_idx, &(f_size, f_align)) in fields.iter().enumerate() {
         if let Some(&g_nr) = field_to_group.get(&(f_idx as u16)) {
             if group_seen.insert(g_nr) {
@@ -217,8 +216,7 @@ pub fn calculate_positions_with_groups(
     }
 
     // Run the standard packer on the virtual list.
-    let virtual_positions =
-        calculate_positions(&virtual_fields, sub, size, alignment);
+    let virtual_positions = calculate_positions(&virtual_fields, sub, size, alignment);
 
     // Expand virtual positions back to per-field positions.
     let mut positions = vec![0u16; fields.len()];

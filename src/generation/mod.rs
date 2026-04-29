@@ -1499,13 +1499,7 @@ extern crate loft;"
             // Storage holds the 4-byte i32 d_nr; closure half is not
             // stored.  Mirrors the typedef.rs Function arm so native
             // and interpreter agree on layout.
-            emit_db_field(
-                w,
-                s_var,
-                field_name,
-                "int",
-                "db.int(0, false)",
-            )?;
+            emit_db_field(w, s_var, field_name, "int", "db.int(0, false)")?;
             return Ok(());
         }
         if known_type != u16::MAX {

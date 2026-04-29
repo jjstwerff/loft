@@ -507,16 +507,12 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         // null_DbRef)` natively — both shapes the downstream
         // `set_field_check::Type::Function` arm reduces to a 4-byte
         // d_nr=0 storage write.
-        Type::Function(_, _, _) => {
-            Value::FnRef(0, u16::MAX, Box::new(tp.clone()))
-        }
+        Type::Function(_, _, _) => Value::FnRef(0, u16::MAX, Box::new(tp.clone())),
         // Plan-06 phase 4d (P193): tuple struct fields default to
         // per-element defaults so `Pair {}` with `v: (text,
         // integer)` lands as `("", 0)`.  Recurses through nested
         // tuples and other compound element types.
-        Type::Tuple(elems) => Value::Tuple(
-            elems.iter().map(|e| to_default(e, data)).collect(),
-        ),
+        Type::Tuple(elems) => Value::Tuple(elems.iter().map(|e| to_default(e, data)).collect()),
         _ => Value::Null,
     }
 }
@@ -1117,7 +1113,7 @@ mod tuple_stack_layout_tests {
     //! these helpers — it goes through the synthetic `__tuple<…>`
     //! struct's post-finish field positions via
     //! `state::codegen::stored_tuple_field_offset`.
-    use super::{element_align, element_offsets, element_size, IntegerSpec, Type};
+    use super::{IntegerSpec, Type, element_align, element_offsets, element_size};
 
     fn integer() -> Type {
         Type::Integer(IntegerSpec {
@@ -2357,12 +2353,16 @@ impl Data {
                 Type::Boolean | Type::Enum(_, false, _) => 1,
                 Type::Single | Type::Character | Type::Function(_, _, _) => 4,
                 Type::Integer(_) | Type::Float => 8,
-                Type::Text(_) => 4,                          // heap pointer
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::RefVar(_)
-                | Type::Sorted(_, _, _) | Type::Index(_, _, _)
-                | Type::Hash(_, _, _) | Type::Spacial(_, _, _)
-                | Type::Enum(_, true, _) => 4,               // DbRef alignment
-                Type::Tuple(_) => 8,                         // conservative max
+                Type::Text(_) => 4, // heap pointer
+                Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::RefVar(_)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _) => 4, // DbRef alignment
+                Type::Tuple(_) => 8, // conservative max
                 _ => 1,
             };
             sizes_aligns.push((sz, align));
@@ -2377,13 +2377,15 @@ impl Data {
         // string-prefix matching on attribute names.  Alignment + size
         // are pre-computed so the layout routine can honour the
         // group's atomic placement.
-        self.definitions[d as usize].field_groups.push(LinkedFieldGroup {
-            kind: LinkedFieldKind::Tuple,
-            instance: 0,
-            field_indices: indices,
-            alignment,
-            size,
-        });
+        self.definitions[d as usize]
+            .field_groups
+            .push(LinkedFieldGroup {
+                kind: LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: indices,
+                alignment,
+                size,
+            });
         d
     }
 
@@ -2452,15 +2454,9 @@ impl Data {
         // placeholder that fill_database will overwrite once the
         // real DbRef Parts variant lands).  The data-side definition
         // is the load-bearing piece; the runtime layout is deferred.
-        self.add_attribute(
-            lexer,
-            d,
-            "_closure",
-            Type::Reference(d, Vec::new()),
-        );
+        self.add_attribute(lexer, d, "_closure", Type::Reference(d, Vec::new()));
         d
     }
-
 
     pub fn check_vector(&mut self, d_nr: u32, vec_tp: u16, pos: &Position) -> u32 {
         let vec_name = format!("vector<{}>", self.def(d_nr).name);
@@ -3432,7 +3428,11 @@ mod caller_graph_tests {
     /// excluded from user_fn_d_nrs.
     fn build_test_data() -> Data {
         let mut d = Data::new();
-        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
         // fn0: calls fn1 with no args
         let d0 = d.add_def("fn0", &pos, DefType::Function);
         // fn1: calls fn2 twice
@@ -3494,7 +3494,11 @@ mod caller_graph_tests {
     #[test]
     fn callers_of_walks_block_and_call_args_recursively() {
         let mut d = Data::new();
-        let pos = Position { file: String::new(), line: 0, pos: 0 };
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
         let d_inner = d.add_def("inner", &pos, DefType::Function);
         let d_outer = d.add_def("outer", &pos, DefType::Function);
         // outer's body wraps inner's call inside an If condition.

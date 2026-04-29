@@ -40,7 +40,7 @@ pub enum Section {
 
 /// Options for `loft --introspect`.
 #[allow(dead_code)] // lib_dirs / install_dir reserved for the standalone `run()` entry,
-                    // unused by main.rs's emit_all path.
+// unused by main.rs's emit_all path.
 pub struct Options {
     /// Sections the user asked for.  Empty = all three.
     pub sections: Vec<Section>,
@@ -258,10 +258,7 @@ fn run_diff_against_baseline(baseline: &str, buffer: &[u8]) -> std::io::Result<(
             format!("baseline file '{baseline}' not found"),
         ));
     }
-    let tmp = std::env::temp_dir().join(format!(
-        "loft_introspect_diff_{}.txt",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("loft_introspect_diff_{}.txt", std::process::id()));
     std::fs::write(&tmp, buffer)?;
     let status = std::process::Command::new("diff")
         .arg("-u")
@@ -328,12 +325,7 @@ fn emit_rust(
     out.output_native(w, 0, end_def)
 }
 
-fn emit_slots(
-    w: &mut dyn Write,
-    data: &Data,
-    end_def: u32,
-    opts: &Options,
-) -> std::io::Result<()> {
+fn emit_slots(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> std::io::Result<()> {
     for d_nr in 0..end_def {
         let def = data.def(d_nr);
         if def.def_type != DefType::Function {
@@ -375,12 +367,7 @@ fn emit_slots(
 /// etc.).  Designed to surface dep-propagation bugs at a glance —
 /// e.g. P197 showed `s: text` (no deps) for a tuple-element text
 /// read that should have inherited the host's `[a]` dependency.
-fn emit_types(
-    w: &mut dyn Write,
-    data: &Data,
-    end_def: u32,
-    opts: &Options,
-) -> std::io::Result<()> {
+fn emit_types(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> std::io::Result<()> {
     for d_nr in 0..end_def {
         let def = data.def(d_nr);
         if def.def_type != DefType::Function {
@@ -407,7 +394,11 @@ fn emit_types(
         }
         let ret_str = def.returned.show(data, &def.variables);
         writeln!(w, "fn {} -> {ret_str}:", def.name)?;
-        writeln!(w, "  {:<4} {:<4} {:<24} {}", "#", "arg", "name", "type [deps]")?;
+        writeln!(
+            w,
+            "  {:<4} {:<4} {:<24} {}",
+            "#", "arg", "name", "type [deps]"
+        )?;
         writeln!(w, "  {}", "-".repeat(70))?;
         for idx in 0..def.variables.count() {
             let arg_flag = if def.variables.is_argument(idx) {
@@ -417,10 +408,7 @@ fn emit_types(
             };
             let var_name = def.variables.name(idx).to_string();
             let type_str = def.variables.tp(idx).show(data, &def.variables);
-            writeln!(
-                w,
-                "  {idx:<4} {arg_flag:<4} {var_name:<24} {type_str}"
-            )?;
+            writeln!(w, "  {idx:<4} {arg_flag:<4} {var_name:<24} {type_str}")?;
         }
         // Per-expression trace from the parser, if any was recorded.
         // Each line is `<fn_name>\t<line>:<col>\t<type>` where
@@ -430,11 +418,7 @@ fn emit_types(
         let fn_trace: Vec<&String> = opts
             .trace_lines
             .iter()
-            .filter(|l| {
-                l.split('\t')
-                    .next()
-                    .is_some_and(|n| n == user_name)
-            })
+            .filter(|l| l.split('\t').next().is_some_and(|n| n == user_name))
             .collect();
         if !fn_trace.is_empty() {
             writeln!(w)?;

@@ -2597,9 +2597,7 @@ impl Parser {
         // failure inside `n_panic` / `n_assert` carries the call site
         // position into `state.source_spans`.  Mirrors the wrap in
         // `parse_call` for the regular fn-call dispatch path.
-        if !self.first_pass
-            && matches!(val, Value::Call(_, _) | Value::CallRef(_, _))
-        {
+        if !self.first_pass && matches!(val, Value::Call(_, _) | Value::CallRef(_, _)) {
             let inner = std::mem::replace(val, Value::Null);
             *val = Value::with_span(call_pos, inner);
         }
@@ -2896,9 +2894,7 @@ impl Parser {
         // (panic, divide-by-zero in callee, etc.) can be reported with
         // the call site's source location.  Skip on first pass and skip
         // when dispatch left val unchanged (e.g. early-return paths).
-        if !self.first_pass
-            && matches!(val, Value::Call(_, _) | Value::CallRef(_, _))
-        {
+        if !self.first_pass && matches!(val, Value::Call(_, _) | Value::CallRef(_, _)) {
             let inner = std::mem::replace(val, Value::Null);
             *val = Value::with_span(call_pos, inner);
         }

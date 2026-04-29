@@ -176,11 +176,8 @@ impl Parser {
                     } else {
                         *vtp.clone()
                     };
-                    let next = v_block(
-                        vec![v_set(iter_var, step), ref_expr],
-                        block_tp,
-                        "iter next",
-                    );
+                    let next =
+                        v_block(vec![v_set(iter_var, step), ref_expr], block_tp, "iter next");
                     self.vars
                         .set_loop(0, self.data.def(vec_tp).known_type, code);
                     if reverse {
@@ -1379,8 +1376,7 @@ use #count instead"
         // the full reachability chain so the user can see exactly
         // which helper introduces the offending call.
         if !self.first_pass && fn_d_nr != u32::MAX {
-            if let Some(chain) =
-                crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
+            if let Some(chain) = crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
             {
                 diagnostic!(
                     self.lexer,
@@ -1428,10 +1424,7 @@ use #count instead"
             // slots; main thread copies bytes back via the
             // execute_at_raw_to path in run_parallel_direct.
             let is_fn_ref = matches!(&ret_type, Type::Function(_, _, _));
-            if !self.first_pass
-                && fn_d_nr != u32::MAX
-                && (sz == 0 || (sz > 8 && !is_fn_ref))
-            {
+            if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || (sz > 8 && !is_fn_ref)) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -1611,11 +1604,7 @@ use #count instead"
             || matches!(&block, Value::Block(bl) if bl.operators.is_empty())
             || matches!(&block, Value::Insert(ops) if ops.is_empty());
         let discard_d_nr = self.data.def_nr("n_parallel_discard");
-        if !self.first_pass
-            && body_is_empty
-            && discard_d_nr != u32::MAX
-            && extra_args.is_empty()
-        {
+        if !self.first_pass && body_is_empty && discard_d_nr != u32::MAX && extra_args.is_empty() {
             // Build a Discard call with the same arg layout as
             // n_parallel_for (so the native fn pops in the same order).
             // The body and per-element accessor (b/a inline aliases)

@@ -1679,12 +1679,8 @@ where
     let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
         let mut local: Vec<i64> = Vec::with_capacity(end - start);
         for row_idx in start..end {
-            let elm = vector::get_vector(
-                &input_t,
-                elem_size as u32,
-                row_idx as i64,
-                &ws.allocations,
-            );
+            let elm =
+                vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
             local.push(worker(&mut ws.stores, elm));
         }
         (start, local)
@@ -1859,12 +1855,8 @@ where
     crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
         let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(end - start);
         for row_idx in start..end {
-            let elm = vector::get_vector(
-                &input_t,
-                elem_size as u32,
-                row_idx as i64,
-                &ws.allocations,
-            );
+            let elm =
+                vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
             let r = worker(&mut ws.stores, elm);
             batch.push((row_idx, r));
         }

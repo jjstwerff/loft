@@ -32,12 +32,7 @@ use std::collections::HashSet;
 /// yet (e.g. very early parse stages before `tuple_def` runs).
 /// In practice the caller path always reaches this AFTER
 /// `tuple_def` has fired, so the fallback is defensive only.
-fn stored_tuple_field_offset(
-    data: &Data,
-    database: &Stores,
-    elems: &[Type],
-    idx: usize,
-) -> u16 {
+fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx: usize) -> u16 {
     if let Some(offsets) = crate::data::stored_tuple_offsets(data, database, elems) {
         return offsets[idx];
     }
@@ -330,7 +325,9 @@ impl State {
             // to `n_parallel_discard` (or equivalent for other Stitch
             // policies), reaching this arm at runtime is a codegen bug.
             Value::ParFor(_) => {
-                panic!("Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths");
+                panic!(
+                    "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
+                );
             }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
@@ -354,12 +351,8 @@ impl State {
                     // `element_offsets` calculation for shapes whose
                     // synthetic struct hasn't been registered (defensive —
                     // tuple_def is normally called eagerly during parse).
-                    let elem_offset = stored_tuple_field_offset(
-                        stack.data,
-                        &self.database,
-                        elems,
-                        idx,
-                    );
+                    let elem_offset =
+                        stored_tuple_field_offset(stack.data, &self.database, elems, idx);
                     let var_pos = stack.position - stack.function.stack(*var_nr);
                     let code_pos = self.code_pos;
                     stack.add_op("OpVarRef", self);
@@ -458,12 +451,8 @@ impl State {
                 {
                     let idx = *elem_idx as usize;
                     let elem_tp = elems[idx].clone();
-                    let elem_offset = stored_tuple_field_offset(
-                        stack.data,
-                        &self.database,
-                        elems,
-                        idx,
-                    );
+                    let elem_offset =
+                        stored_tuple_field_offset(stack.data, &self.database, elems, idx);
                     let var_pos = stack.position - stack.function.stack(*var_nr);
                     stack.add_op("OpVarRef", self);
                     self.code_add(var_pos);
@@ -909,12 +898,7 @@ impl State {
     /// The outer tuple variable is already at a known stack base; this
     /// pushes the inner tuple's leaves from the outer variable's slot
     /// at the inner offsets.  Recurses for nested-nested tuples.
-    fn emit_tuple_var_push_recursive(
-        &mut self,
-        stack: &mut Stack,
-        elems: &[Type],
-        base: u16,
-    ) {
+    fn emit_tuple_var_push_recursive(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
         let offsets = crate::data::element_offsets(elems);
         for (i, elem) in elems.iter().enumerate() {
             let elem_abs = base + offsets[i] as u16;
