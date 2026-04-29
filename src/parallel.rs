@@ -357,6 +357,15 @@ pub struct StoreRebase {
     /// < parent_store_count) or at a worker-local store that wasn't
     /// adopted (which would be a codegen bug).
     pub map: std::collections::HashMap<u16, u16>,
+    /// Number of parent-side stores at the moment this rebase was
+    /// constructed (before any worker output was adopted).  Set via
+    /// `with_parent_count`; used by `translate` to apply the
+    /// 3-category rule from DESIGN.md D11c:
+    ///   - `db.store_nr` in `map` → worker-own, translate
+    ///   - `db.store_nr < parent_store_count` → parent-shared, pass through
+    ///   - otherwise → cross-worker (codegen bug); panic in debug,
+    ///     log + pass through in release
+    pub parent_store_count: u16,
 }
 
 #[allow(dead_code)]
@@ -367,23 +376,155 @@ impl StoreRebase {
         Self::default()
     }
 
+    /// Construct an empty rebase map with the parent-side store count
+    /// captured at the moment of construction.  Adoption monotonically
+    /// increases the parent's store count, so any pre-existing parent
+    /// store has a `store_nr < parent_store_count` — which is how
+    /// `translate` separates parent-shared refs from worker-own ones.
+    #[must_use]
+    pub fn with_parent_count(parent_store_count: u16) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            parent_store_count,
+        }
+    }
+
     /// Record a worker-local → parent-side translation.
     pub fn add(&mut self, worker_local: u16, parent_nr: u16) {
         self.map.insert(worker_local, parent_nr);
     }
 
     /// Translate a DbRef from the worker's local namespace to the
-    /// parent's namespace.  If `db.store_nr` is not in the map, the
-    /// DbRef is returned unchanged (parent-shared / pass-through).
+    /// parent's namespace.  Implements the 3-category rule from
+    /// DESIGN.md D11c:
+    ///
+    /// | `db.store_nr` shape | Category | Action |
+    /// |---|---|---|
+    /// | In `map` | Worker-own | Translate to parent-side `store_nr` |
+    /// | `< parent_store_count` | Parent-shared | Pass through |
+    /// | Otherwise | Cross-worker | Debug-panic; release-pass-through |
+    ///
+    /// The cross-worker case is a codegen bug — workers should never
+    /// hand out DbRefs into a sibling worker's stores.  Phase 5's
+    /// auto-light analyser tightens this further; until then we keep
+    /// the release path defensive (pass through unchanged).
     #[must_use]
     pub fn translate(&self, db: &DbRef) -> DbRef {
-        match self.map.get(&db.store_nr) {
-            Some(&parent_nr) => DbRef {
+        if let Some(&parent_nr) = self.map.get(&db.store_nr) {
+            return DbRef {
                 store_nr: parent_nr,
                 rec: db.rec,
                 pos: db.pos,
-            },
-            None => *db,
+            };
+        }
+        if db.store_nr < self.parent_store_count {
+            // Parent-shared (input store, stdlib const, parent-allocated
+            // read-only).  Pass through.
+            return *db;
+        }
+        // Cross-worker: codegen bug.  Debug builds panic so the bug
+        // surfaces immediately; release builds log + pass through so a
+        // released runtime degrades gracefully on a corner the test
+        // suite missed.
+        debug_assert!(
+            false,
+            "StoreRebase::translate cross-worker DbRef: \
+             store_nr={} not in rebase map and not parent-shared \
+             (parent_store_count={})",
+            db.store_nr,
+            self.parent_store_count
+        );
+        eprintln!(
+            "loft: StoreRebase cross-worker DbRef store_nr={} (parent_store_count={}); passing through unchanged",
+            db.store_nr, self.parent_store_count
+        );
+        *db
+    }
+}
+
+/// Plan-06 phase 2 — type-driven recursive walk that translates every
+/// DbRef field inside a record so the worker's store-local references
+/// become valid in the parent's namespace after store adoption.
+///
+/// `record_ref` is a parent-side DbRef pointing at a record (typically
+/// in an adopted worker output store) that needs its DbRef-shaped
+/// fields translated.  `record_type` describes the layout used to
+/// locate those fields: a `Type::Reference(struct_d, _)` looks up the
+/// struct's attribute types from `data`, a `Type::Tuple(elems)` reads
+/// `elems` directly.  Any other shape has no DbRef fields and the walk
+/// returns immediately.
+///
+/// Cycles are broken via `visited` (keyed by `(store_nr, rec, pos)`).
+///
+/// Currently unused at runtime — phase 2b's reference-path switch is
+/// the first consumer.  Lives here so it can be unit-tested in
+/// isolation against synthetic Stores before the larger phase-2b
+/// surgery wires it into `run_parallel_ref`.
+#[allow(dead_code)]
+pub fn rebase_walk_record(
+    stores: &mut Stores,
+    record_ref: &DbRef,
+    record_type: &crate::data::Type,
+    data: &crate::data::Data,
+    map: &StoreRebase,
+    visited: &mut std::collections::HashSet<(u16, u32, u32)>,
+) {
+    use crate::data::{Type, owned_elements};
+    let key = (record_ref.store_nr, record_ref.rec, record_ref.pos);
+    if !visited.insert(key) {
+        return;
+    }
+    let elem_types: Vec<Type> = match record_type {
+        Type::Reference(struct_d, _) | Type::Enum(struct_d, true, _) => data
+            .def(*struct_d)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect(),
+        Type::Tuple(elems) => elems.clone(),
+        _ => return,
+    };
+    let owned: Vec<(usize, usize)> = owned_elements(&elem_types);
+    for (offset, idx) in owned {
+        let field_pos = record_ref.pos + offset as u32;
+        let field_tp = &elem_types[idx];
+        match field_tp {
+            // Text fields use `Str { ptr, len }` — the pointer is a
+            // raw heap address, not a store-relative slot.  Adoption
+            // doesn't move bytes, so the pointer stays valid; no
+            // translation needed.
+            Type::Text(_) => {}
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                let store = &mut stores.allocations[record_ref.store_nr as usize];
+                let cur: DbRef = *store.addr::<DbRef>(record_ref.rec, field_pos);
+                let translated = map.translate(&cur);
+                if translated != cur {
+                    *store.addr_mut::<DbRef>(record_ref.rec, field_pos) = translated;
+                }
+                // Recurse into the pointed-at record using the field's
+                // declared type so the next layer's `owned_elements`
+                // call sees the right shape.
+                if translated.store_nr != u16::MAX
+                    && (translated.store_nr as usize) < stores.allocations.len()
+                {
+                    rebase_walk_record(stores, &translated, field_tp, data, map, visited);
+                }
+            }
+            _ => {
+                // owned_elements only returns owned types; this arm is
+                // defensive.  Hitting it would indicate `owned_elements`
+                // and the match above are out of sync.
+                debug_assert!(
+                    false,
+                    "rebase_walk_record: unexpected owned-element type {field_tp:?}"
+                );
+            }
         }
     }
 }

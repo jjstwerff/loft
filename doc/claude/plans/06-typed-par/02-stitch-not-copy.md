@@ -5,7 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 2 — Main-thread stitch via store rebase
 
-**Status: open**
+**Status: 2a complete** (`StoreRebase` + `rebase_walk_record` + 9 unit
+tests landed `<this commit>`).  Sub-phases 2b (reference-path switch),
+2c (text path), 2d (primitive path), 2e (retire `copy_claims`) remain.
 
 ## Goal
 
