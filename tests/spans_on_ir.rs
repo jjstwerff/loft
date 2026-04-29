@@ -173,3 +173,39 @@ fn _silence_unused() {
     let p = parse("fn main(){}");
     let _ = any_span_at(&p, 0, 0);
 }
+
+/// Plan-07 phase 1 step 1.20 — `state.source_spans` should be
+/// populated during codegen.  Compile a program with a wrapped
+/// expression and assert at least one entry exists with a position
+/// from the user's source.
+#[test]
+fn source_spans_populated_at_codegen() {
+    use loft::compile::byte_code;
+    use loft::scopes;
+    use loft::state::State;
+    let mut p = parse(
+        r#"
+fn main() {
+  z = 0;
+  result = 1 / z;
+  print("{result}\n");
+}
+"#,
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database.clone());
+    byte_code(&mut state, &mut p.data);
+    // The `/` operator wraps in step 1.B.1 — codegen should record at
+    // least one source span pointing back at the user's file.  We can't
+    // touch the BTreeMap directly (it's pub(crate)), but `source_loc_for`
+    // walks back from any reachable pc.  Try every pc up to the bytecode
+    // length; expect at least one reverse lookup to land in `spans_test`.
+    let upper = state.code_pos;
+    let found = (0..upper)
+        .filter_map(|pc| state.source_loc_for(pc))
+        .any(|pos| pos.file == "spans_test");
+    assert!(
+        found,
+        "expected at least one source-span entry pointing at the user file"
+    );
+}

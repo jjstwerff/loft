@@ -44,6 +44,15 @@ thread_local! {
     /// Last opcode dispatched on this thread.  (pc, op_name_ptr, op_name_len).
     /// Updated by [`set_context`] from the interpreter's inner loop.
     static LAST_CTX: Cell<Ctx> = const { Cell::new(Ctx::EMPTY) };
+
+    /// Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+    /// snapshot for the running interpreter.  `State::execute_argv`
+    /// publishes a clone here on entry so the panic hook (a process-wide
+    /// non-allocating-restricted callback) can resolve the offending
+    /// pc to `file:line:col` when a Rust panic fires inside a loft
+    /// runtime fault (panic builtin, arithmetic overflow, future
+    /// div-by-zero kinds).  `None` outside the execute window.
+    static SOURCE_SPANS: std::cell::RefCell<Option<std::sync::Arc<std::collections::BTreeMap<u32, crate::lexer::Position>>>> = const { std::cell::RefCell::new(None) };
 }
 
 // On non-Unix platforms the signal-handler consumer is compiled
@@ -110,6 +119,31 @@ pub fn last_context() -> (u32, u8, u32) {
     LAST_CTX.with(|c| {
         let ctx = c.get();
         (ctx.pc, ctx.op_code, ctx.fn_d_nr)
+    })
+}
+
+/// Plan-07 phase 1 step 1.20 / phase 3 — publish a snapshot of the
+/// current `State::source_spans` so the panic hook can look up
+/// `at file:line:col` for the offending pc.  Pass `None` to clear.
+pub fn set_source_spans(
+    spans: Option<std::sync::Arc<std::collections::BTreeMap<u32, crate::lexer::Position>>>,
+) {
+    SOURCE_SPANS.with(|s| {
+        *s.borrow_mut() = spans;
+    });
+}
+
+/// Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
+/// for `pc` in the current thread's published source-span snapshot.
+/// Returns the most recent `Position` recorded at or before `pc`, or
+/// `None` if no snapshot is active or no entry precedes `pc`.
+#[must_use]
+pub fn source_loc_for_pc(pc: u32) -> Option<crate::lexer::Position> {
+    SOURCE_SPANS.with(|s| {
+        let borrow = s.borrow();
+        borrow
+            .as_ref()
+            .and_then(|m| m.range(..=pc).next_back().map(|(_, p)| p.clone()))
     })
 }
 

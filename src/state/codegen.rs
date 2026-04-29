@@ -316,9 +316,14 @@ impl State {
                 self.gen_parallel(arms, stack);
                 Type::Void
             }
-            // Plan-07 phase 1 — Span is transparent in codegen; the pc→span
-            // table population lands in step 1.D.
-            Value::Span(b) => self.generate_inner(&b.1, stack, top),
+            // Plan-07 phase 1 step 1.20 — record the entry pc → source
+            // position before generating the wrapped inner.  Phase 3's
+            // runtime-error printer reads `state.source_spans` to surface
+            // `at file:line:col` for div-by-zero, OOB, null deref, panic.
+            Value::Span(b) => {
+                self.source_spans.insert(self.code_pos, b.0.clone());
+                self.generate_inner(&b.1, stack, top)
+            }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef

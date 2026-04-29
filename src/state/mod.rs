@@ -13,6 +13,7 @@ pub use crate::database::Call;
 use crate::database::{ParallelCtx, Stores, WorkerStores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
+use crate::lexer::Position;
 use crate::log_config::LogConfig;
 use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -110,6 +111,16 @@ pub struct State {
     pub library_names: HashMap<String, u16>,
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: BTreeMap<u32, u32>,
+    /// Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+    /// populated by codegen on every `Value::Span` it walks.  Runtime
+    /// fault printers (div-by-zero, OOB, null deref, panic call) look up
+    /// the offending pc here to print `at file:line:col` alongside the
+    /// existing op-name + bytecode-pos context.  Sparse — only fault-prone
+    /// IR constructs (the wrapped ones in steps 1.B.1, 1.11, 1.12, 1.13)
+    /// produce entries.  Lookup is `range(..=pc).next_back()` so an
+    /// unwrapped pc inherits the nearest preceding span (mirrors the
+    /// `line_numbers` map's behaviour).
+    pub(crate) source_spans: BTreeMap<u32, Position>,
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
@@ -190,6 +201,7 @@ impl State {
             library_names: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
@@ -1488,6 +1500,20 @@ impl State {
         self.execute_argv(name, data, &[]);
     }
 
+    /// Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
+    /// for a bytecode `pc`.  Returns the most recent `Position` recorded
+    /// at or before `pc` (sparse map; mid-instruction lookups inherit
+    /// the surrounding Span).  Used by runtime fault printers (panic
+    /// builtin, future div-by-zero / OOB / null-deref kinds) to surface
+    /// `at file:line:col` alongside the bytecode-level context.
+    #[must_use]
+    pub fn source_loc_for(&self, pc: u32) -> Option<&Position> {
+        self.source_spans
+            .range(..=pc)
+            .next_back()
+            .map(|(_, p)| p)
+    }
+
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
     ///
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`
@@ -1521,6 +1547,11 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;
+        // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
+        // to the panic hook so a Rust panic inside any opcode dispatch
+        // (e.g. arithmetic overflow in `checked_long!`, the `panic`
+        // builtin) can print `at file:line:col` for the offending pc.
+        crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
         // Fix #88: push a synthetic CallFrame for the entry function so it
         // appears in stack_trace() output.
         self.call_stack.push(CallFrame {
@@ -1732,6 +1763,7 @@ impl State {
             types: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
