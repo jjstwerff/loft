@@ -1037,10 +1037,24 @@ pub fn run_parallel_discard(
 /// **order preserved** regardless of how the rayon pool dispatched
 /// workers.
 ///
-/// `return_size` controls how `execute_at_raw` reads the worker's
-/// return off the stack: 1, 4, or 8 bytes.  For text or DbRef returns,
-/// the caller must use a different runtime (Concat / future
-/// Queue<text> + Queue<ref> when streaming-mode encoding is settled).
+/// `return_size` controls how `execute_at_raw_*` reads the worker's
+/// return off the stack: 1, 4, or 8 bytes.  Narrow returns are
+/// zero-extended into the u64 slot.  Text and reference returns are
+/// not supported here — they need the Concat path (step 8c/8d will
+/// extend Queue once the encoding is settled).
+///
+/// `primitive_input_size` selects the input dispatch shape, mirroring
+/// `run_parallel_direct`:
+/// - `0`: DbRef input (worker reads slot 0 as a 12-byte `DbRef`).
+/// - `u32::MAX`: text input (slot 0 is a 16-byte `Str`).
+/// - `1..=8`: primitive input (worker reads slot 0 as a 1/4/8-byte
+///   inline value — bool / i32 / i64 / single / character / enum-no-
+///   payload).
+/// - `9..=64`: wide-inline input (tuple, fn-ref, or any inline-typed
+///   first-arg slot exceeding 8 bytes).  When the worker's first arg
+///   is a tuple, `tuple_input_types` contains the per-element types
+///   so the dispatcher can inflate text fields from a 4-byte heap
+///   pointer to a 16-byte `Str` argument slot.
 ///
 /// `extra_args` are extra context args that follow the row arg in the
 /// worker's parameter list (matches `execute_at_raw`'s convention used
@@ -1053,7 +1067,7 @@ pub fn run_parallel_discard(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
-#[allow(dead_code)] // step 5 is the first call-site consumer; tested via tests/threading.rs
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_queue(
     stores: &Stores,
@@ -1064,6 +1078,8 @@ pub fn run_parallel_queue(
     n_threads: usize,
     extra_args: &[u64],
     return_size: u32,
+    primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) -> Vec<u64> {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
@@ -1072,7 +1088,12 @@ pub fn run_parallel_queue(
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
+    let prim_in = primitive_input_size;
+    // Wrap tuple types in an Arc so each worker thread shares the same
+    // Vec instead of cloning it (mirrors `run_parallel_direct`).
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
     let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
         let mut state = prog.new_state(ws);
         let mut batch = Vec::with_capacity(end - start);
         for row_idx in start..end {
@@ -1082,7 +1103,34 @@ pub fn run_parallel_queue(
                 row_idx as i64,
                 &state.database.allocations,
             );
-            batch.push(state.execute_at_raw(fn_pos, &row_ref, &extras, return_size));
+            // Mirrors `run_parallel_direct`'s primitive-/text-/wide-
+            // /DbRef-input dispatch ladder so the Queue path covers
+            // the same input shapes.  Step 8b' wired in the primitive
+            // and tuple/wide arms so fused for-par over
+            // `vector<integer>` / `vector<u8>` / `vector<(int, int)>`
+            // can route through Queue too.
+            let val = if prim_in == u32::MAX {
+                let s = read_text_at(&state.database, &row_ref);
+                state.execute_at_raw_text_input(fn_pos, s, &extras, return_size)
+            } else if prim_in > 8 {
+                let buf = if let Some(ref types) = tuple_types_arc {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
+                state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..prim_in as usize],
+                    &extras,
+                    return_size,
+                )
+            } else if prim_in > 0 {
+                let v = read_primitive_at(&state.database, &row_ref, element_size);
+                state.execute_at_raw_primitive_input(fn_pos, v, prim_in, &extras, return_size)
+            } else {
+                state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
+            };
+            batch.push(val);
         }
         (start, batch)
     });

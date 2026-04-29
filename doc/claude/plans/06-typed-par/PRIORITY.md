@@ -307,35 +307,56 @@ prior par-suite tests must stay green at every sub-step's tip.
   `n_parallel_buf_drop()`.  No heap result vector allocated; the
   buffer lives in `Stores::par_buffer_stack` (8a's infrastructure).
 
-  **Gate (narrow on purpose):**
-  - `is_primitive_return` (no Text / Reference / Enum-payload /
-    Function / Vector / Unknown).
-  - `Type::Integer(_)` with full 8-byte width (narrow widths leak
-    high-bit garbage through the i64 buf_get; per-size variants
-    land in 8b').
-  - Worker's first arg is heap-typed (`Type::Reference(_, _)` or
-    `Type::Enum(_, true, _)`).  `run_parallel_queue` only handles
-    the DbRef-input path; primitive / text / tuple / fn-ref inputs
-    keep using the legacy materialised path until 8b' extends Queue
-    to those input kinds.  Crucially: **gate on the worker's
-    declared first-arg type, NOT on `elem_tp`** — `for_type`
-    synthesises a Reference for tuple inputs, so `elem_tp` would
-    misclassify them.
-  - `n_parallel_queue` / `_buf_get` / `_buf_drop` registered (so a
-    stripped stdlib still parses).
-  - `fn_d_nr` resolved (partial-parse failures fall back to legacy).
+- **8b' (DONE 2026-04-29)** — extend the Queue runtime to mirror
+  `run_parallel_direct`'s input-kind dispatch ladder, then drop the
+  parser's `dbref_input` gate.  After this commit every primitive
+  `vector<T>` input (DbRef / text / primitive-1/4/8 / wide-inline
+  tuple / fn-ref) routes through Queue when the worker returns a
+  full 8-byte integer.
 
-  **Trade-off:** workers eligible for the light path (`light_m` is
-  `Some(_)`) skip its per-thread pool optimisation when routed
-  through Queue.  A later sub-step combines light + queue once
-  the architectural shape stabilises.
+  **Changes:**
+  - `run_parallel_queue` (`src/parallel.rs`) gains
+    `primitive_input_size: u32` and `tuple_input_types:
+    Option<Vec<Type>>` parameters.  The per-row dispatch now
+    branches:
+    - `primitive_input_size == u32::MAX` → text input
+      (`execute_at_raw_text_input`)
+    - `> 8` → wide-inline (tuple / fn-ref via
+      `execute_at_raw_primitive_input_wide`)
+    - `1..=8` → primitive (`execute_at_raw_primitive_input`)
+    - `0` → DbRef (existing path, `execute_at_raw`)
+  - `n_parallel_queue` (`src/native.rs`) computes
+    `primitive_input_size` from `input_kind_for_first_arg(def)` and
+    `tuple_input_types` from `tuple_first_arg_types(def)`, mirroring
+    `n_parallel_for`.
+  - `tests/threading.rs::par_queue_*` tests updated to pass
+    `0, None` for the two new params (DbRef-input dispatch, matching
+    the existing test workers).
+  - Parser gate (`build_parallel_for_ir`) drops the worker-first-arg
+    check.  Comment narrative updated to point at 8c (text-return)
+    and 8d (ref-return) plus the per-size buf_get variant for narrow
+    integer returns as remaining gating axes.
 
-  **Test corpus impact:** all 31 `tests/threading_chars.rs` and
-  30 `tests/threading.rs` tests stay green.  Tests now exercising
-  the queue path: any `vector<Struct>` input + integer-return
-  worker (e.g. `par_struct_to_int_t4`, `par_two_field_struct_sum`,
-  `par_three_field_struct_sum`).  Loft script suite
-  (`tests/scripts/22-threading.loft`) green.
+  **Test corpus impact:** all 31 `tests/threading_chars.rs` + 30
+  `tests/threading.rs` tests stay green.  Newly routed through
+  Queue (regression-tested):
+  - `par_int_to_int_t4_primitive_input` (vector\<integer\> input)
+  - `par_i32_input_t4` (vector\<i32\> input — narrow primitive)
+  - `par_u8_input_t4` (vector\<u8\> input — 1-byte primitive)
+  - `par_text_input_t4` (vector\<text\> input)
+  - `par_enum_input_t4` (vector\<Color\> — enum-no-payload)
+  - `par_tuple_input_int_int`, `par_tuple_input_int_text`
+    (tuple inputs, including text-field inflation via
+    `read_tuple_at_wide`)
+  - `par_struct_to_int_t4` and friends (DbRef inputs, retained
+    from 8b's coverage)
+
+  **Still on the legacy path** (gated by ret_size_8 + integer
+  return): every text-return, ref-return, vector-return,
+  fn-ref-return, struct-enum-payload-return path; every non-integer
+  primitive return (boolean, single, character, enum-no-payload,
+  tuple); narrow integer returns (u8, i32, etc.).  These wait for
+  8c / 8d / per-size buf_get variants.
 
 - **8c** — extend Queue dispatch to text returns.  `run_parallel_queue`
   currently returns `Vec<u64>` of u64 bits per row; text returns
@@ -467,8 +488,8 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 [8 retire Concat runtime]       — S, -250 LOC, biggest single drop
    8a par buffer infra           — DONE 2026-04-29
    8b parser primitive rewrite   — DONE 2026-04-29 (DbRef-input + i64 return)
-   8b' extend to primitive/text/tuple inputs + narrow returns ← NEXT
-   8c text return Queue path
+   8b' extend Queue dispatch ladder — DONE 2026-04-29 (all input kinds)
+   8c text return Queue path     ← NEXT
    8d ref/fn-ref/vector Queue
    8e Concat deletion
        ↓

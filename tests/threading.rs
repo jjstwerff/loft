@@ -1012,7 +1012,20 @@ fn worker_double(r: const Num) -> integer { r.v * 2 }
 
     let program = worker_program(&state);
     // 4 threads over 30 elements; per-row result is i64 (8 bytes).
-    let results = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 4, &[], 8);
+    // 8b': pass `0, None` for primitive_input_size + tuple_input_types
+    // → DbRef-input dispatch (matches the existing test's worker shape).
+    let results = run_parallel_queue(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        4,
+        &[],
+        8,
+        0,
+        None,
+    );
     assert_eq!(results.len(), 30, "expected one result per input row");
     for (i, &r) in results.iter().enumerate() {
         let expected = (i as i64) * 2;
@@ -1037,7 +1050,18 @@ fn worker_id(r: const Num) -> integer { r.v }
     let fn_pos = data.def(d_nr).code_position;
 
     let program = worker_program(&state);
-    let results = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+    let results = run_parallel_queue(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        8,
+        0,
+        None,
+    );
     assert!(results.is_empty());
 }
 
@@ -1062,7 +1086,18 @@ fn worker_id(r: const Num) -> integer { r.v }
     let d_nr = data.def_nr("n_worker_id");
     let fn_pos = data.def(d_nr).code_position;
     let program = worker_program(&state);
-    let _ = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+    let _ = run_parallel_queue(
+        &state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        8,
+        0,
+        None,
+    );
 
     let after = state.database.allocations.len();
     assert_eq!(
@@ -1088,9 +1123,31 @@ fn worker_triple(r: const Num) -> integer { r.v * 3 }
     let fn_pos = data.def(d_nr).code_position;
 
     let prog1 = worker_program(&state);
-    let r1 = run_parallel_queue(&state.database, prog1, fn_pos, &input, 8, 1, &[], 8);
+    let r1 = run_parallel_queue(
+        &state.database,
+        prog1,
+        fn_pos,
+        &input,
+        8,
+        1,
+        &[],
+        8,
+        0,
+        None,
+    );
     let prog4 = worker_program(&state);
-    let r4 = run_parallel_queue(&state.database, prog4, fn_pos, &input, 8, 4, &[], 8);
+    let r4 = run_parallel_queue(
+        &state.database,
+        prog4,
+        fn_pos,
+        &input,
+        8,
+        4,
+        &[],
+        8,
+        0,
+        None,
+    );
 
     assert_eq!(r1, r4, "single-thread and 4-thread results must match");
     for (i, &r) in r1.iter().enumerate() {

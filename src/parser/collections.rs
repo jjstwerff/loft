@@ -1672,64 +1672,46 @@ use #count instead"
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
 
-        // Plan-06 PRIORITY.md spine step 8b — primitive integer
+        // Plan-06 PRIORITY.md spine step 8 — primitive 8-byte integer
         // returns dispatch through the streaming Queue path (8a's
         // `n_parallel_queue` + `n_parallel_buf_get`/`_drop`) instead
-        // of allocating a heap result vector.  Gating today is
-        // narrow:
+        // of allocating a heap result vector.
+        //
+        // After 8b' (this commit) `run_parallel_queue` mirrors
+        // `run_parallel_direct`'s input-kind dispatch (DbRef, text,
+        // primitive, wide-inline / tuple / fn-ref), so the parser
+        // gate no longer needs to filter by input kind — every
+        // `is_primitive_return` worker now routes correctly.
+        //
+        // Gating today:
         //   - `is_primitive_return` (no Text/Reference/Enum-payload/
-        //     Function/Vector/Unknown — handled by 8c/8d)
-        //   - `Type::Integer(_)` with full 8-byte width (narrow
-        //     widths leak garbage through `n_parallel_buf_get`'s
-        //     i64 read; per-size variants land in 8b')
-        //   - `elem_tp` is `Type::Reference(_, _)` (DbRef input).
-        //     `run_parallel_queue` only dispatches the DbRef-input
-        //     path; primitive / text / tuple inputs need the
-        //     dispatch shape `run_parallel_direct` carries
-        //     (`primitive_input_size`, `tuple_input_types`).  8b'
-        //     extends Queue to those input kinds; until then they
-        //     keep using the legacy materialised path.
+        //     Function/Vector/Unknown — handled by 8c/8d).
+        //   - `Type::Integer(_)` with full 8-byte width.  Narrow
+        //     integer widths (u8, i32, etc.) and other primitive
+        //     return types (bool, single, character, enum-no-
+        //     payload, tuple) need per-size buf_get variants to
+        //     mask the high bits and land cleanly into the body's
+        //     b_var slot.  Deferred to a future per-size sub-step.
         //   - `fn_d_nr` resolved (partial-parse failures fall
-        //     through to the legacy path)
+        //     through to the legacy path).
         //   - `n_parallel_queue` / `_buf_get` / `_buf_drop`
         //     registered (defensively, so a stripped stdlib still
-        //     parses)
+        //     parses).
         //
-        // Trade-off: integer workers eligible for the light path
-        // skip its per-thread pool optimisation and use
-        // `parallel_workers` directly.  A later sub-step combines
-        // light + queue once the architecture is stable.
+        // Trade-off: workers eligible for the light path
+        // (`light_m.is_some()`) skip its per-thread pool optimisation
+        // when routed through Queue.  A later sub-step combines
+        // light + queue once the architecture stabilises.
         let queue_d_nr = self.data.def_nr("n_parallel_queue");
         let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
         let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
-        // ret_size_8: worker returns full 8-byte i64.  Narrow integers
-        // (u8, i32, etc.) leak high-bit garbage through `n_parallel_buf_get`'s
-        // u64 read, so they wait for 8b'.
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(spec.clone()),
             &Context::Argument,
         )) == 8);
-        // dbref_input: worker's first param is heap-typed (Reference,
-        // struct-enum-payload).  `run_parallel_queue` only dispatches
-        // the DbRef-input path; primitive / text / tuple / fn-ref
-        // inputs need the dispatch shape `run_parallel_direct` carries
-        // (`primitive_input_size`, `tuple_input_types`).  Note: we
-        // gate on the *worker's declared* first arg type (via
-        // `fn_d_nr`'s def), NOT on `elem_tp` (which `for_type`
-        // synthesises as Reference for tuple inputs — see
-        // control.rs::for_type).
-        let dbref_input = if fn_d_nr == u32::MAX {
-            false
-        } else {
-            let def = self.data.def(fn_d_nr);
-            def.attributes.first().is_some_and(|attr| {
-                matches!(attr.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
-            })
-        };
         let route_through_queue = is_primitive_return
             && fn_d_nr != u32::MAX
             && ret_size_8
-            && dbref_input
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;

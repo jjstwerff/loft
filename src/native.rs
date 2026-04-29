@@ -994,7 +994,13 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
 
     let element_size = v_element_size as u32;
     let n_threads = (v_threads as usize).max(1);
-    let return_size = {
+    // Plan-06 spine step 8b' — derive return_size, primitive_input_size,
+    // and tuple_input_types from the worker fn's def, matching the
+    // dispatch shape `n_parallel_for` computes for the legacy path.
+    // Without these, primitive / text / tuple-input workers would
+    // dispatch through the DbRef-input arm and read garbage from
+    // slot 0.
+    let (return_size, primitive_input_size, tuple_input_types) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -1005,11 +1011,18 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
             &def.returned,
             &crate::data::Context::Argument,
         ));
-        if (1..=8).contains(&derived) {
+        let rs = if (1..=8).contains(&derived) {
             derived
         } else {
             (v_return_size.clamp(1, 8)) as u32
-        }
+        };
+        let pis = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
+        let tuple_types = tuple_first_arg_types(def);
+        (rs, pis, tuple_types)
     };
 
     let buf = crate::parallel::run_parallel_queue(
@@ -1021,6 +1034,8 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
         n_threads,
         &extra_args,
         return_size,
+        primitive_input_size,
+        tuple_input_types,
     );
     let n_rows = buf.len() as i64;
     stores.par_buffer_stack.push(buf);
