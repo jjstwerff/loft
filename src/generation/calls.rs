@@ -50,7 +50,7 @@ impl Output<'_> {
             // OpCreateStack wrapping an addressable expression
             // (e.g. v[i] as & param).  Emit a temporary + &mut so the
             // callee can write through the DbRef into the store.
-            } else if let Value::Call(d_nr, args) = v
+            } else if let Value::Call(d_nr, args) = v.unspan()
                 && self.data.def(*d_nr).name == "OpCreateStack"
                 && args.len() == 1
                 && !matches!(&args[0], Value::Var(_))
@@ -218,7 +218,7 @@ impl Output<'_> {
                 // For character-typed parameters, a call returning character yields `i32`
                 // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
                 if matches!(a.typedef, Type::Character)
-                    && let Value::Call(d, _) = &vals[a_nr]
+                    && let Value::Call(d, _) = vals[a_nr].unspan()
                     && matches!(self.data.def(*d).returned, Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
@@ -228,7 +228,7 @@ impl Output<'_> {
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))
-                    && let Value::Call(d, _) = &vals[a_nr]
+                    && let Value::Call(d, _) = vals[a_nr].unspan()
                     && matches!(self.data.def(*d).returned, Type::Text(_))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
@@ -238,7 +238,7 @@ impl Output<'_> {
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
                 if matches!(a.typedef, Type::Integer(_)) {
-                    let val_is_char = match &vals[a_nr] {
+                    let val_is_char = match vals[a_nr].unspan() {
                         Value::Var(n) => {
                             matches!(self.data.def(self.def_nr).variables.tp(*n), Type::Character)
                         }

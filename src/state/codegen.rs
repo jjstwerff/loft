@@ -1242,7 +1242,7 @@ impl State {
                 // so __ref_N stays valid for the next call.
                 if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
                     && !stack.function.is_argument(v)
-                    && let Value::Call(fn_nr, _) = value
+                    && let Value::Call(fn_nr, _) = value.unspan()
                     && stack.data.def(*fn_nr).name.starts_with("n_")
                     && stack.data.def(*fn_nr).code != Value::Null
                     && stack.data.def(*fn_nr).attributes.iter().any(|a| {
@@ -1307,7 +1307,7 @@ impl State {
                     // uses of that arg SIGSEGV in OpGetVector.  The first-assignment
                     // path brackets the call with locks on ref-typed args;
                     // the reassignment path needs the same treatment.
-                    let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value {
+                    let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
                         let attrs = stack.data.def(*fn_nr).attributes.clone();
                         args.iter()
                             .enumerate()
@@ -1394,7 +1394,7 @@ impl State {
         {
             self.gen_set_first_ref_null(stack, v);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-            && let Value::Call(op_nr, _) = value
+            && let Value::Call(op_nr, _) = value.unspan()
             && stack.data.def(*op_nr).name == "OpCopyRecord"
         {
             // The first assignment of a Reference variable being copied from another:
@@ -1415,7 +1415,7 @@ impl State {
             // is Type::Reference, deep-copy the record to avoid aliasing.
             self.gen_set_first_ref_tuple_copy(stack, v, value, d_nr);
         } else if let Type::Reference(d_nr, _) = stack.function.tp(v).clone()
-            && let Value::Call(fn_nr, _) = value
+            && let Value::Call(fn_nr, _) = value.unspan()
             && stack.data.def(*fn_nr).name.starts_with("n_")
             && stack.data.def(*fn_nr).code != Value::Null
         {
@@ -1554,7 +1554,7 @@ impl State {
         // O-B2: if the source is a call to a function with no Reference parameters,
         // the returned store is always fresh — adopt it directly instead of deep copying.
         // This eliminates both the copy overhead and the store leak.
-        if let Value::Call(_, args) = value
+        if let Value::Call(_, args) = value.unspan()
             && !args.is_empty()
             && let Value::Call(inner_nr, _) = &args[0]
             && matches!(
@@ -1734,7 +1734,7 @@ impl State {
 
         // Collect ref-typed args of the call to bracket with lock/unlock
         // so OpCopyRecord's `0x8000` source-free skips them.
-        let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value {
+        let ref_args: Vec<u16> = if let Value::Call(fn_nr, args) = value.unspan() {
             let attrs = stack.data.def(*fn_nr).attributes.clone();
             args.iter()
                 .enumerate()
@@ -1774,7 +1774,7 @@ impl State {
         // to consult it here.
         #[cfg(not(feature = "wasm"))]
         let tp_with_free = {
-            let is_borrowed_view = if let Value::Call(fn_nr, _) = value {
+            let is_borrowed_view = if let Value::Call(fn_nr, _) = value.unspan() {
                 !stack.data.def(*fn_nr).returned.depend().is_empty()
             } else {
                 false
@@ -2649,7 +2649,7 @@ impl State {
         }
         // destination-passing — avoid scratch buffer for text-returning natives.
         if matches!(stack.function.tp(var), Type::Text(_))
-            && let Value::Call(op, args) = value
+            && let Value::Call(op, args) = value.unspan()
         {
             let name = stack.data.def(*op).name.clone();
             if is_text_dest_native(&name) {

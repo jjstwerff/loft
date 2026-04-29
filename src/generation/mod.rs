@@ -61,6 +61,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
         // N8b.1: walk into yield expressions so helper functions are included in the
         // reachable set and emitted before the coroutine state-machine struct.
         Value::Yield(inner) => collect_calls(inner, data, calls),
+        Value::Span(b) => collect_calls(&b.1, data, calls),
         _ => {}
     }
 }

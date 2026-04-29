@@ -16,7 +16,7 @@ pub(super) fn count_format_ops(ops: &[Value], start: usize, data: &Data) -> usiz
         .iter()
         .filter(|v| !matches!(v, Value::Line(_)))
         .take_while(|v| {
-            if let Value::Call(d, _) = v {
+            if let Value::Call(d, _) = v.unspan() {
                 let name = &data.def(*d).name;
                 name.starts_with("OpFormat") || name.starts_with("OpAppend")
             } else {
@@ -161,11 +161,11 @@ impl Output<'_> {
             // All text-returning calls produce either `Str` or `String` (never `&str`).
             // Wrap with `&*` so `format_text` (which expects `&str`) always gets the right type.
             // `&*Str` and `&*String` both deref to `&str` via their `Deref<Target=str>` impls.
-            let val_str = if let Value::Call(d, _) = val
+            let val_str = if let Value::Call(d, _) = val.unspan()
                 && matches!(self.data.def(*d).returned, Type::Text(_))
             {
                 format!("&*({val_expr})")
-            } else if let Value::CallRef(v_nr, _) = val
+            } else if let Value::CallRef(v_nr, _) = val.unspan()
                 && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables.tp(*v_nr)
                 && matches!(**ret, Type::Text(_))
             {

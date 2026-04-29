@@ -809,7 +809,7 @@ impl Output<'_> {
                 // the block must return the mutable reference.  Emit `&mut var_<name>`
                 // directly rather than delegating to output_call which writes nothing.
                 if is_return_expr
-                    && let Value::Call(d_nr, args) = v
+                    && let Value::Call(d_nr, args) = v.unspan()
                     && self.data.def(*d_nr).name == "OpCreateStack"
                     && let [Value::Var(nr)] = args.as_slice()
                 {

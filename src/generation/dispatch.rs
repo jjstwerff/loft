@@ -150,7 +150,7 @@ impl Output<'_> {
         }
         // Hoist call arguments that mutate stores into temporaries to prevent
         // double-mutable-borrow of `stores` in the call expression.
-        if let Value::Call(call_dnr, args) = to
+        if let Value::Call(call_dnr, args) = to.unspan()
             && args.iter().any(|a| contains_op_database(a, self.data))
         {
             let def_fn = self.data.def(*call_dnr);
@@ -290,7 +290,7 @@ impl Output<'_> {
                     // (a function returning u16 or an iterator block returning as u16) produces
                     // the narrow type.  Post-2c: widen to i64 to match the default Integer.
                     write!(w, " as i64")?;
-                } else if let Value::Call(d_nr, _) = to {
+                } else if let Value::Call(d_nr, _) = to.unspan() {
                     // When the variable type and the called function's return type differ
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),
                     // add a cast so Rust accepts the assignment.

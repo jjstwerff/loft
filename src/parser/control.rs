@@ -2878,7 +2878,19 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos)
+        let ret = self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos);
+        // Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
+        // at the `(` token position so runtime errors inside the call
+        // (panic, divide-by-zero in callee, etc.) can be reported with
+        // the call site's source location.  Skip on first pass and skip
+        // when dispatch left val unchanged (e.g. early-return paths).
+        if !self.first_pass
+            && matches!(val, Value::Call(_, _) | Value::CallRef(_, _))
+        {
+            let inner = std::mem::replace(val, Value::Null);
+            *val = Value::with_span(call_pos, inner);
+        }
+        ret
     }
 
     /// Dispatch a parsed call to the appropriate handler: diagnostics, special

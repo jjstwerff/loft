@@ -1705,6 +1705,7 @@ fn walk_par_safe_value(value: &Value, data: &Data, visited: &mut HashSet<u32>) -
             .iter()
             .all(|v| walk_par_safe_value(v, data, visited)),
         Value::Set(_, rhs) => walk_par_safe_value(rhs, data, visited),
+        Value::Span(b) => walk_par_safe_value(&b.1, data, visited),
         // Leaves — primitive literals, var reads, etc.  Safe.
         _ => true,
     }
@@ -1960,6 +1961,7 @@ fn walk_par_unsafe_reason_value(
             None
         }
         Value::Set(_, rhs) => walk_par_unsafe_reason_value(rhs, data, visited),
+        Value::Span(b) => walk_par_unsafe_reason_value(&b.1, data, visited),
         _ => None,
     }
 }
@@ -2194,6 +2196,7 @@ fn walk_classified(
             .iter()
             .all(|v| walk_classified(v, data, classification)),
         Value::Set(_, rhs) => walk_classified(rhs, data, classification),
+        Value::Span(b) => walk_classified(&b.1, data, classification),
         _ => true,
     }
 }
@@ -2421,6 +2424,7 @@ fn walk_deep_parent_write(
             None
         }
         Value::Set(_, rhs) => walk_deep_parent_write(rhs, data, current_fn, visited),
+        Value::Span(b) => walk_deep_parent_write(&b.1, data, current_fn, visited),
         _ => None,
     }
 }
@@ -2561,6 +2565,7 @@ fn walk_shallow_parent_write(value: &Value, data: &Data) -> Option<String> {
             None
         }
         Value::Set(_, rhs) => walk_shallow_parent_write(rhs, data),
+        Value::Span(b) => walk_shallow_parent_write(&b.1, data),
         _ => None,
     }
 }
