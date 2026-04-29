@@ -324,6 +324,14 @@ impl State {
                 self.source_spans.insert(self.code_pos, b.0.clone());
                 self.generate_inner(&b.1, stack, top)
             }
+            // Plan-06 spine step 3 — codegen for ParFor lands in step 3b.
+            // The variant lands here only as a structural placeholder so
+            // walker arms compile.  Until step 3b emits the OpStaticCall
+            // to `n_parallel_discard` (or equivalent for other Stitch
+            // policies), reaching this arm at runtime is a codegen bug.
+            Value::ParFor(_) => {
+                panic!("Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths");
+            }
             Value::TupleGet(var_nr, elem_idx) => {
                 let tuple_tp = stack.function.tp(*var_nr).clone();
                 // T1.5: RefVar(Tuple) — read element through the DbRef

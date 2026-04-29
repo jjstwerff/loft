@@ -204,6 +204,16 @@ pub fn compute_intervals(
             // appears dead at birth and assign_slots aliases its slot.
             compute_intervals(&b.1, function, free_text_nr, free_ref_nr, seq, depth + 1);
         }
+        Value::ParFor(b) => {
+            // Plan-06 spine step 3 — recurse into each child Value.  x_var
+            // and r_var are bound by the worker; on the main-thread side
+            // (body), they may appear as Var reads which the recursion picks
+            // up naturally.
+            compute_intervals(&b.input, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(&b.worker, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(&b.threads, function, free_text_nr, free_ref_nr, seq, depth + 1);
+            compute_intervals(&b.body, function, free_text_nr, free_ref_nr, seq, depth + 1);
+        }
         _ => {
             *seq += 1;
         }

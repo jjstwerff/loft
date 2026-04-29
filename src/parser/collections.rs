@@ -2566,5 +2566,12 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
         // Plan-07 phase 1 — Span is transparent; recurse into the
         // wrapped node.
         Value::Span(b) => replace_var_in_ir(&mut b.1, target, replacement),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            replace_var_in_ir(&mut b.input, target, replacement);
+            replace_var_in_ir(&mut b.worker, target, replacement);
+            replace_var_in_ir(&mut b.threads, target, replacement);
+            replace_var_in_ir(&mut b.body, target, replacement);
+        }
     }
 }

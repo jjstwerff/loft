@@ -460,6 +460,21 @@ impl Scopes {
                 let scanned = self.scan(&b.1, function, data);
                 Value::with_span(b.0.clone(), scanned)
             }
+            Value::ParFor(b) => {
+                // Plan-06 spine step 3 — recurse into each child Value.
+                // No new scope is opened by ParFor itself: the worker fn
+                // runs in a worker State (separate scope), and `body`
+                // runs in the enclosing scope on the main thread.
+                Value::ParFor(Box::new(crate::data::ParForBody {
+                    input: self.scan(&b.input, function, data),
+                    x_var: b.x_var,
+                    r_var: b.r_var,
+                    worker: self.scan(&b.worker, function, data),
+                    threads: self.scan(&b.threads, function, data),
+                    body: self.scan(&b.body, function, data),
+                    stitch_id: b.stitch_id,
+                }))
+            }
             _ => val.clone(),
         }
     }

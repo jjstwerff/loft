@@ -364,6 +364,49 @@ pub enum Value {
     FnRef(i32, u16, Box<Type>),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
+    /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
+    /// (DESIGN.md D7).  Captures the streaming-only par construct
+    /// `for x in input par(r=worker(x), threads) { body }` without
+    /// materialising a result vector.  Heap-boxed because the
+    /// variant carries 5 child `Value`s plus 3 small fields and
+    /// would otherwise grow `size_of::<Value>()` past the 32-byte
+    /// budget that every `Vec<Value>` allocation pays for.
+    ///
+    /// Field layout (mirrors the design doc's struct):
+    ///   * `input`  — expression of type `vector<T>`
+    ///   * `x_var`  — variable bound to each input element
+    ///   * `r_var`  — bound to worker result; `u16::MAX` when the
+    ///                stitch policy is Discard (no result name)
+    ///   * `worker` — call expression evaluated by workers per row
+    ///   * `threads` — expression of type integer
+    ///   * `body`   — sequential block on the main thread
+    ///   * `stitch_id` — `Stitch` policy: 0=Concat, 1=Discard,
+    ///                   2=Reduce, 3=Queue.  Numeric here so
+    ///                   `data.rs` does not need to import the typed
+    ///                   `Stitch` enum from `parallel.rs` (avoids a
+    ///                   cross-module dependency); codegen converts
+    ///                   to the typed enum via the same id mapping.
+    ///                   Reduce/Queue policy payloads (fold_fn,
+    ///                   capacity) come from companion fields added
+    ///                   when their runtimes land in spine steps 4+9.
+    ///
+    /// Currently dead code — spine step 3a (this commit) lands the
+    /// variant + walker arms only.  Steps 3b (codegen) and 3c
+    /// (parser detection) follow.
+    ParFor(Box<ParForBody>),
+}
+
+/// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
+/// Heap-boxed so the variant fits the 32-byte budget.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ParForBody {
+    pub input: Value,
+    pub x_var: u16,
+    pub r_var: u16,
+    pub worker: Value,
+    pub threads: Value,
+    pub body: Value,
+    pub stitch_id: u8,
 }
 
 #[allow(dead_code)]
@@ -3208,6 +3251,30 @@ impl Data {
             }
             // Plan-07 phase 1 — Span is transparent in pretty-print.
             Value::Span(b) => self.show_code(write, vars, &b.1, indent, start),
+            Value::ParFor(b) => {
+                let stitch_name = match b.stitch_id {
+                    0 => "concat",
+                    1 => "discard",
+                    2 => "reduce",
+                    3 => "queue",
+                    _ => "?",
+                };
+                write!(write, "par_for[{stitch_name}](x={}, r=", b.x_var)?;
+                if b.r_var == u16::MAX {
+                    write!(write, "_")?;
+                } else {
+                    write!(write, "{}", b.r_var)?;
+                }
+                write!(write, ", input=")?;
+                self.show_code(write, vars, &b.input, 0, false)?;
+                write!(write, ", worker=")?;
+                self.show_code(write, vars, &b.worker, 0, false)?;
+                write!(write, ", threads=")?;
+                self.show_code(write, vars, &b.threads, 0, false)?;
+                writeln!(write, ", body=")?;
+                self.show_code(write, vars, &b.body, indent + 1, true)?;
+                write!(write, ")")
+            }
         }
     }
 

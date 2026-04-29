@@ -99,6 +99,28 @@ lowers to `Value::ParFor`.
 (parse_for fused detection), `src/state/codegen.rs` (gen_par_for),
 new tests in `tests/threading.rs::par_fused_for_*`.
 
+**Sub-phasing:**
+
+- **3a (DONE 2026-04-29)** — `Value::ParFor(Box<ParForBody>)` variant
+  added to `src/data.rs` with the field shape from DESIGN.md D7
+  (input, x_var, r_var, worker, threads, body, stitch_id).  Walker
+  arms added in 7 sites (data/show_code, generation/emit, parser/
+  collections::replace_var_in_ir, parser/expressions::inline_ref_set_in
+  + substitute_value, state/codegen::generate_inner [panic
+  placeholder], scopes/scan_inner, variables/intervals + slots).
+  Codegen panics if reached — no parser produces ParFor yet.  2
+  unit tests in tests/parallel_rebase.rs (parfor_variant_constructs_and_clones,
+  parfor_walks_through_replace_var_in_ir).
+- **3b (open)** — codegen for `ParFor { stitch_id: 1 }` (Discard).
+  Emit `OpStaticCall` to a new native fn `n_parallel_discard` that
+  wraps `run_parallel_discard` from spine step 2.  Wire the native
+  fn into `default/01_code.loft` + `src/native.rs`.
+- **3c (open)** — parser detection.  At the end of
+  `parse_parallel_for_loop`, if body is empty (or never references
+  `b_var` / `elem_var_nr`), emit `Value::ParFor` instead of the
+  materialised `Call(n_parallel_for, …)` IR.  Tests in
+  `tests/threading.rs::par_fused_for_discard_*`.
+
 ### Step 4 — Stitch::Queue runtime (order-preserving stream)
 
 **Effort: M** · **Net Δ lines: +150** · **Branches collapsed: 0** (new code)
@@ -272,7 +294,10 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
        ↓
 [2 Stitch::Discard runtime]     — S, +75 LOC — DONE 2026-04-29
        ↓
-[3 fused for-par + ParFor IR]   — M, +200 LOC ← NEXT
+[3 fused for-par + ParFor IR]   — M, +200 LOC
+   3a IR + walker arms          — DONE 2026-04-29
+   3b codegen for Discard       — ← NEXT
+   3c parser detection
        ↓
 [4 Stitch::Queue runtime]       — M, +150 LOC
        ↓

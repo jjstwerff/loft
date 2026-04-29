@@ -67,6 +67,13 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         // Plan-07 phase 1 — Span is transparent; recurse into the
         // wrapped node.
         Value::Span(b) => inline_ref_set_in(&b.1, r, depth + 1),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            inline_ref_set_in(&b.input, r, depth + 1)
+                || inline_ref_set_in(&b.worker, r, depth + 1)
+                || inline_ref_set_in(&b.threads, r, depth + 1)
+                || inline_ref_set_in(&b.body, r, depth + 1)
+        }
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -136,6 +143,13 @@ pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
         // Plan-07 phase 1 — Span is transparent; recurse into the
         // wrapped node.
         Value::Span(b) => substitute_value(&mut b.1, from, to),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            substitute_value(&mut b.input, from, to);
+            substitute_value(&mut b.worker, from, to);
+            substitute_value(&mut b.threads, from, to);
+            substitute_value(&mut b.body, from, to);
+        }
         // Leaf variants.
         Value::Null
         | Value::Int(_)

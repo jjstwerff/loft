@@ -399,6 +399,15 @@ fn place_large_and_recurse(
         Value::Span(b) => {
             place_large_and_recurse(function, &mut b.1, scope, tos, depth + 1);
         }
+        Value::ParFor(b) => {
+            // Plan-06 spine step 3 — walk every child Value so any Set
+            // nodes inside the input expression / worker / threads /
+            // body get slot-assigned.
+            place_large_and_recurse(function, &mut b.input, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.worker, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.threads, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.body, scope, tos, depth + 1);
+        }
         _ => {}
     }
 }

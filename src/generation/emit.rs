@@ -309,6 +309,13 @@ impl Output<'_> {
             }
             // Plan-07 phase 1 — Span is transparent in native emit.
             Value::Span(b) => self.output_code_inner(w, &b.1)?,
+            // Plan-06 spine step 3 — ParFor native codegen lands in
+            // step 3b.  Until then, emit a placeholder comment so the
+            // file at least compiles when it accidentally appears in
+            // a reachable definition.
+            Value::ParFor(_) => {
+                write!(w, "/* par_for(...) — native codegen lands in spine step 3b */")?;
+            }
         }
         Ok(())
     }
