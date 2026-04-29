@@ -9,7 +9,9 @@ use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if,
 /// equals `host_field_pos + element_offset[0]`.  For nested-tuple
 /// reads, recurses into the inner `Value::Tuple`.
 fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
-    match v {
+    // Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+    // hide the field-read shape of the tuple-LHS.
+    match v.unspan() {
         Value::Call(_, args) if args.len() >= 2 => {
             if let Value::Int(p) = &args[1] {
                 Some((args[0].clone(), *p))
@@ -773,7 +775,11 @@ use a separate collection or add after the loop"
                 // `s.v = s.v` is a no-op; don't
                 // emit a clear (which would wipe the field) + append (which
                 // would then see an empty source).
-                if *code == *to {
+                // Plan-07 phase 1: compare via unspan() so the same
+                // expression wrapped at two different source positions
+                // (LHS `s.v` at one column, RHS `s.v` at another) still
+                // compares equal.
+                if *code.unspan() == *to.unspan() {
                     *code = Value::Insert(Vec::new());
                     return Type::Void;
                 }
@@ -1043,7 +1049,7 @@ use a separate collection or add after the loop"
         // the LHS shape is "tuple of reads (not all Var)" AND f_type
         // is `Type::Tuple`, route to `emit_tuple_set_ops` instead of
         // the destructuring branch.
-        if let Value::Tuple(vars) = code
+        if let Value::Tuple(vars) = code.unspan()
             && self.lexer.has_token("=")
         {
             if let Type::Tuple(elems) = &f_type
@@ -1128,7 +1134,9 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         // T1.4-fix-a: tuple element assignment t.0 = expr.
-        if let Value::TupleGet(var_nr, idx) = code {
+        // Plan-07 phase 1: unspan() so the wrap on `.` (step 1.12)
+        // does not hide the TupleGet shape.
+        if let Value::TupleGet(var_nr, idx) = code.unspan() {
             let var_nr = *var_nr;
             let idx = *idx;
             if self.lexer.has_token("=") {

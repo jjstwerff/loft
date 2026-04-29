@@ -387,9 +387,15 @@ impl Function {
         if matches!(val, Value::Null) {
             return false;
         }
+        // Plan-07 phase 1: compare via unspan() so the iterated-collection
+        // expression `db.items` (parsed once for the for-loop) and the
+        // mutating expression `db.items` (parsed again at the `+=` site)
+        // — each potentially wrapped at a different source position —
+        // still compare equal.
+        let unspanned = val.unspan();
         let mut c = self.current_loop;
         while c != u16::MAX {
-            if *self.loops[c as usize].value == *val {
+            if *self.loops[c as usize].value.unspan() == *unspanned {
                 return true;
             }
             c = self.loops[c as usize].inside;

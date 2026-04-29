@@ -2752,6 +2752,11 @@ impl Parser {
                     .map(|x| Self::substitute_param_refs(x, args))
                     .collect(),
             ),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::substitute_param_refs(inner, args);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
@@ -3470,7 +3475,10 @@ impl Parser {
     /// DbRef into existing mutable storage, so they are safe to pass as
     /// `&` parameters.
     fn is_addressable(val: &Value, data: &Data) -> bool {
-        match val {
+        // Plan-07 phase 1: unspan() so wraps on `[` / `.` (steps 1.11
+        // / 1.12) don't hide an addressable shape from the `&` arg
+        // check.
+        match val.unspan() {
             Value::Var(_) => true,
             Value::Call(d_nr, args) => {
                 let name = &data.def(*d_nr).name;
@@ -3687,6 +3695,7 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
             collect_vars_in(b, result);
             collect_vars_in(c, result);
         }
+        Value::Span(b) => collect_vars_in(&b.1, result),
         _ => {}
     }
 }
@@ -3794,6 +3803,7 @@ fn find_written_vars(
             find_written_vars(next, data, written, callee_cache);
             find_written_vars(extra, data, written, callee_cache);
         }
+        Value::Span(b) => find_written_vars(&b.1, data, written, callee_cache),
         _ => {}
     }
 }
@@ -3880,6 +3890,7 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
             find_field_written_vars(next, data, written);
             find_field_written_vars(extra, data, written);
         }
+        Value::Span(b) => find_field_written_vars(&b.1, data, written),
         _ => {}
     }
 }

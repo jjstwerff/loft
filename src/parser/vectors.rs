@@ -1351,15 +1351,17 @@ impl Parser {
     }
 
     pub(crate) fn is_field(&self, val: &Value) -> bool {
-        if let Value::Call(o, _) = *val {
-            o == self.data.def_nr("OpGetField")
+        // Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+        // hide the field-access shape from compound-assignment dispatch.
+        if let Value::Call(o, _) = val.unspan() {
+            *o == self.data.def_nr("OpGetField")
         } else {
             false
         }
     }
 
     pub(crate) fn new_record_field_op(&mut self, val: &Value, parent_tp: &Type, op: &str) -> Value {
-        if let Value::Call(_, ps) = val {
+        if let Value::Call(_, ps) = val.unspan() {
             let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type;
             let field_nr = if let Value::Int(pos) = ps[1] {
                 self.database.field_nr(parent, pos)

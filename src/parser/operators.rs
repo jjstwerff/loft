@@ -13,6 +13,7 @@ fn code_references_var(code: &Value, var_nr: u16) -> bool {
         Value::Call(_, args) => args.iter().any(|a| code_references_var(a, var_nr)),
         Value::Set(_, inner) => code_references_var(inner, var_nr),
         Value::Insert(ls) => ls.iter().any(|v| code_references_var(v, var_nr)),
+        Value::Span(b) => code_references_var(&b.1, var_nr),
         _ => false,
     }
 }
@@ -472,10 +473,19 @@ impl Parser {
             || self.lexer.peek_token("[")
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
         {
+            // Plan-07 phase 1, steps 1.11 + 1.12 — capture the chaining
+            // token's source position before `has_token` consumes it.
+            // Wrapped when the iteration consumes a fault-prone access
+            // (`.` field/method or `[` index — both can deref null or
+            // out-of-bounds at runtime).  The `(` chained-call branch
+            // is wrapped under step 1.13.
+            let chain_pos = self.lexer.pos().clone();
+            let mut wrap_chain = false;
             if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable");
             }
             if self.lexer.has_token(".") {
+                wrap_chain = true;
                 *parent_tp = t.clone();
                 // T1.2: tuple element access — t.0, t.1, etc.
                 if let Type::Tuple(ref elems) = t {
@@ -502,9 +512,13 @@ impl Parser {
                                 t = t.depending(on);
                             }
                             // T1.4: emit TupleGet IR for codegen.
-                            if let Value::Var(var_nr) = code {
-                                *code = Value::TupleGet(*var_nr, idx as u16);
-                            } else if let Value::Tuple(elems_v) = code {
+                            // Plan-07 phase 1: unspan() so wraps on `.`
+                            // (step 1.12) don't hide the underlying Var
+                            // or Tuple shape of the parent expression.
+                            let unspanned = code.unspan().clone();
+                            if let Value::Var(var_nr) = unspanned {
+                                *code = Value::TupleGet(var_nr, idx as u16);
+                            } else if let Value::Tuple(elems_v) = unspanned {
                                 // P197: code is already a literal tuple of
                                 // per-element reads (e.g. produced by
                                 // `get_val::Type::Tuple` for a tuple struct
@@ -638,6 +652,7 @@ impl Parser {
                     t = Type::Reference(d_nr, vec![w]);
                 }
             } else if self.lexer.has_token("[") {
+                wrap_chain = true;
                 t = self.parse_index(code, &t);
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
@@ -697,6 +712,21 @@ impl Parser {
                     }
                     t = *ret_type;
                 }
+            }
+            // Plan-07 phase 1, steps 1.11 + 1.12 — wrap the chained
+            // expression in a Span at the access-token position so
+            // runtime null-deref / out-of-bounds errors can be
+            // reported with the source location of the offending `.`
+            // or `[` token.  Skip when the result is an `Iter` (range
+            // subscript like `v[0..5]` produces an iterator that
+            // parse_for / iterator() must pattern-match without
+            // a Span wrapper) — the access token doesn't fault for
+            // a range-subscript shape, only the eventual element
+            // reads do, and those go through the normal `[idx]`
+            // path inside the rewritten loop.
+            if wrap_chain && !self.first_pass && !matches!(code, Value::Iter(_, _, _, _)) {
+                let inner = std::mem::replace(code, Value::Null);
+                *code = Value::with_span(chain_pos, inner);
             }
             // --show-types --trace: log the resulting type after
             // each chaining step (`.field`, `.tuple_idx`, `[idx]`,

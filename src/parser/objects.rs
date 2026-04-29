@@ -1385,6 +1385,11 @@ impl Parser {
                 Value::Return(Box::new(Self::replace_record_ref(*inner, record)))
             }
             Value::Drop(inner) => Value::Drop(Box::new(Self::replace_record_ref(*inner, record))),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::replace_record_ref(inner, record);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
