@@ -1,6 +1,7 @@
 ==== exit: 101 ====
 ==== stdout ====
 ==== stderr ====
+  at <workspace>/default/05_coroutine.loft:18:27
 
 thread 'main' (<pid>) panicked at src/state/mod.rs:281:9:
 Recursion depth limit exceeded (500) — possible infinite recursion

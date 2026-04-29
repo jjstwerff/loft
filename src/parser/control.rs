@@ -2591,7 +2591,19 @@ impl Parser {
             }
             self.lexer.token(")");
         }
-        self.parse_call_diagnostic(val, name, &list, &types, &call_pos)
+        let ret = self.parse_call_diagnostic(val, name, &list, &types, &call_pos);
+        // Plan-07 phase 1, step 1.13 — wrap intrinsic-keyword calls
+        // (`assert(...)`, `panic(...)`) at the `(` token so runtime
+        // failure inside `n_panic` / `n_assert` carries the call site
+        // position into `state.source_spans`.  Mirrors the wrap in
+        // `parse_call` for the regular fn-call dispatch path.
+        if !self.first_pass
+            && matches!(val, Value::Call(_, _) | Value::CallRef(_, _))
+        {
+            let inner = std::mem::replace(val, Value::Null);
+            *val = Value::with_span(call_pos, inner);
+        }
+        ret
     }
 
     /// Extract the assert condition expression from the source line.

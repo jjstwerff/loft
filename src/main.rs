@@ -1135,6 +1135,22 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     crate::crash_report::install("loft");
+    // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
+    // that surfaces the loft source position of the offending pc
+    // before the default panic message.  Reads the per-thread snapshot
+    // published by `State::execute_argv` via `crash_report`.  Falls
+    // through to the default hook if no source-span snapshot is
+    // active or no entry precedes the offending pc.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let (pc, _op, _fn_d_nr) = crate::crash_report::last_context();
+        if pc != u32::MAX
+            && let Some(pos) = crate::crash_report::source_loc_for_pc(pc)
+        {
+            eprintln!("  at {}:{}:{}", pos.file, pos.line, pos.pos);
+        }
+        prev_hook(info);
+    }));
     let argv: Vec<String> = env::args_os()
         .skip(1)
         .map(|a| a.to_str().unwrap_or("").to_string())

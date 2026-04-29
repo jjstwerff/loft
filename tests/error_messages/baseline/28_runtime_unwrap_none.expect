@@ -1,6 +1,7 @@
 ==== exit: 101 ====
 ==== stdout ====
 ==== stderr ====
+  at <cases>/28_runtime_unwrap_none.loft:4:11
 
 thread 'main' (<pid>) panicked at src/native.rs:261:5:
 expected non-null but got null sentinel (<cases>/28_runtime_unwrap_none.loft:4)

@@ -119,13 +119,15 @@ fn main() {
 
 #[test]
 fn non_fault_prone_binary_does_not_wrap() {
-    // `+` is not fault-prone in this 1.B sub-step (no overflow gate
-    // here; phase 4 may add one later).  Confirm we did NOT wrap it
-    // — over-wrapping would inflate IR size and trip the bench gate.
+    // `==` is not fault-prone (boolean comparison can't overflow);
+    // confirm we did NOT wrap it — the wrap is reserved for arithmetic
+    // ops that can panic via `checked_long!`.  After 1.B.1's iter-4
+    // expansion to `+ - * / % << >>`, comparison and boolean ops are
+    // the remaining unwrapped operators.
     let p = parse(
         r#"
 fn main() {
-  result = 1 + 2;
+  result = 1 == 2;
 }
 "#,
     );
@@ -134,7 +136,7 @@ fn main() {
             .definitions
             .iter()
             .any(|d| has_span_on_line(&d.code, 3)),
-        "did NOT expect Value::Span on line 3 (`+` is not fault-prone yet)"
+        "did NOT expect Value::Span on line 3 (`==` is not fault-prone)"
     );
 }
 
