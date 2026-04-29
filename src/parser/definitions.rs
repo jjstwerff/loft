@@ -809,6 +809,12 @@ impl Parser {
             self.last_closure_work_var = u16::MAX;
             if !self.first_pass {
                 self.check_ref_mutations(&arguments);
+                // Plan-06 PRIORITY.md spine step 5 — analyse each
+                // `let r = parallel_for(...)` site for materialising
+                // uses of r and emit a deprecation warning pointing
+                // users at the streaming form (fused for-par) or
+                // explicit `par_to_vec(...)` (planned phase 11).
+                self.check_par_result_singlepass();
             }
         }
         if !self.first_pass {

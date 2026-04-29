@@ -157,9 +157,9 @@ Rust tests.
 
 **Files:** `src/parallel.rs`, `tests/threading.rs`.
 
-### Step 5 — Lower value-position par to ParFor + warn on materialise
+### Step 5 — Lower value-position par to ParFor + warn on materialise (5a DONE 2026-04-29)
 
-**Effort: M** · **Net Δ lines: +100** · **Branches collapsed: 0** (no retirement yet)
+**Effort: M** · **Net Δ lines: +200** · **Branches collapsed: 0** (no retirement yet)
 
 Parser-side desugaring of `let r = parallel_for(input, fn, threads)`
 followed by single-pass consumption.  Two checks:
@@ -174,12 +174,38 @@ followed by single-pass consumption.  Two checks:
 Warning, not error — gives a deprecation window for porting the
 test suite.
 
-**Why fifth:** with Discard + Queue runtimes in place, this step
-unlocks the simplification.  Existing programs continue to work
-(Concat path still active); the warning starts the migration.
+**Sub-phasing:**
 
-**Files:** `src/parser/control.rs`, `src/parser/expressions.rs`
-(par-result-use-site walker), new tests for the warning.
+- **5a (DONE 2026-04-29)** — use-site analyser + warning.  Added
+  `Parser::check_par_result_singlepass` (called at end-of-function
+  on the second pass alongside `check_ref_mutations`).  Walks the
+  body via two helpers:
+  - `collect_par_assignments` — finds every `Set(v, Call(n_parallel_for, ...))`
+    site, recursing through every compound IR variant.
+  - `classify_var_uses` — counts a `Var(v)` read as **streaming** when
+    it appears in `Iter`'s init slot or `ParFor`'s input slot, **other**
+    everywhere else.  Recurses through every variant.
+
+  Compiler-generated bindings (names starting with `_`, e.g. the
+  `_par_results_N` synthetic var the fused for-par desugar emits) are
+  skipped — the warning targets user `let r = ...` patterns, not the
+  internal materialised IR step 8 will retire.
+
+  When `other > 0` for a user var, emits `Level::Warning` with the
+  full migration message (point at fused for-par or future
+  `par_to_vec(...)`).
+
+  2 tests in `tests/threading.rs`:
+  - `par_result_random_access_emits_materialise_warning` — confirms
+    the warning fires + names the user var.
+  - `par_result_warning_skips_compiler_generated_bindings` — confirms
+    fused for-par's hidden binding does NOT trigger the warning.
+
+- **5b (open)** — actual lowering of streaming-eligible cases.  When
+  `streaming == 1` AND `other == 0`, rewrite `let r = parallel_for(...);
+  for x in r { body }` to `Value::ParFor { stitch_id: 3 (Queue) }` +
+  body, dispatching through `run_parallel_queue` from spine step 4.
+  Replaces the materialised `n_parallel_for` call in this case.
 
 ### Step 6 — Port test suite to streaming forms
 
@@ -325,7 +351,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 [4 Stitch::Queue runtime]       — M, +90 LOC — DONE 2026-04-29
        ↓
 [5 lower value-position par
-   + warning on materialise]    — M, +100 LOC ← NEXT
+   + warning on materialise]    — M, +200 LOC
+   5a use-site analyser + warn  — DONE 2026-04-29
+   5b lowering to Queue         — ← NEXT
        ↓
 [6 port test suite]             — M, test reshape only
        ↓

@@ -3495,6 +3495,213 @@ impl Parser {
         }
     }
 
+    /// Plan-06 PRIORITY.md spine step 5 — par-result use-site analyser.
+    ///
+    /// After the function body is fully parsed, find each
+    /// `let r = parallel_for(...)` (or fused `for x in input par(r=...,
+    /// N) { body }` whose result-vector flows into the body), and walk
+    /// the body for uses of `r`.  Each use is classified:
+    ///
+    /// - **Streaming-eligible**: the result is iterated once via `for x
+    ///   in r { … }` — lowers to `Stitch::Queue` in spine step 5b.
+    /// - **Materialising**: random access (`r[i]`), length-of-filter,
+    ///   multi-pass, alias (`r2 = r`), passed as `vector<S>` arg, stored
+    ///   in `vector<S>` field, returned from `-> vector<S>` fn.  These
+    ///   require the materialised vector (today's path) and will fail
+    ///   compilation in spine step 7 unless rewritten via the explicit
+    ///   `par_to_vec(...)` helper (planned phase 11).
+    ///
+    /// This step (5a) emits `Level::Warning` on materialising uses to
+    /// warn users + give a deprecation window before step 7 promotes
+    /// to `Level::Error`.
+    fn check_par_result_singlepass(&mut self) {
+        let par_for_d_nr = self.data.def_nr("n_parallel_for");
+        if par_for_d_nr == u32::MAX || self.context == u32::MAX {
+            return;
+        }
+        let body = self.data.def(self.context).code.clone();
+        // Find each (var, par_call_pos) where `Set(var, Call(n_parallel_for, ...))`.
+        let mut par_results: Vec<u16> = Vec::new();
+        Self::collect_par_assignments(&body, par_for_d_nr, &mut par_results);
+        for v in par_results {
+            // Walk the body counting uses of v.  Each use lands in a
+            // category — `streaming` (Iter init position) or `other`
+            // (everything else, treated as materialising for the warn
+            // policy).
+            let mut streaming = 0usize;
+            let mut other = 0usize;
+            Self::classify_var_uses(&body, v, &mut streaming, &mut other);
+            // The `Set(v, par_call)` itself counts as a use.  Subtract
+            // exactly one read (the par-call's appearance in arg-position
+            // of the assignment is an artifact of how Set is encoded —
+            // some encodings do, some don't; conservative: don't double
+            // count by subtracting the assignment read).
+            //
+            // Heuristic: if `other > 0` AND the only `streaming` use is
+            // 0, the result is purely materialising — warn.  If
+            // `streaming` >= 1 and `other` >= 1, mixed-use — warn (one
+            // read can't be both streamed and materialised).
+            if other > 0 {
+                let var_name = self.vars.name(v).to_string();
+                // Skip compiler-generated bindings: the fused for-par
+                // desugar in `parse_parallel_for_loop` emits a hidden
+                // `_par_results_N` var that's bound to a parallel_for
+                // call and then indexed per iteration.  That's the
+                // existing materialised path we WILL retire (step 8),
+                // but warning on the compiler's own desugaring spams
+                // every fused for-par site with output the user can't
+                // act on.  Names starting with `_` are unique-counter
+                // generated; user-typed bindings never start with `_`.
+                if var_name.starts_with('_') {
+                    continue;
+                }
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "par result '{var_name}' is used in a materialising context \
+                     (random access, multi-pass, or stored as vector<S>) — \
+                     phase 10 of plan-06 will require single-pass consumption.  \
+                     Either rewrite to a fused `for x in input par(r=fn(x), N) {{ body }}` \
+                     loop, or call `par_to_vec(input, fn, N)` (planned phase 11) \
+                     for an explicit materialised vector.  \
+                     {streaming} streaming use(s), {other} materialising use(s) detected."
+                );
+            }
+        }
+    }
+
+    /// Plan-06 spine step 5 — find each `Set(v, Call(par_for_d_nr, ...))`
+    /// occurrence in the IR tree and push `v` into `result`.  Recurses
+    /// through every compound variant (Block / Loop / If / Insert /
+    /// Iter / Span / ParFor) so a par assignment buried inside an `if`
+    /// branch or a sub-block is still found.
+    fn collect_par_assignments(val: &Value, par_for_d_nr: u32, result: &mut Vec<u16>) {
+        match val {
+            Value::Set(v, inner) => {
+                if let Value::Call(d, _) = inner.as_ref().unspan()
+                    && *d == par_for_d_nr
+                {
+                    result.push(*v);
+                }
+                Self::collect_par_assignments(inner, par_for_d_nr, result);
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &bl.operators {
+                    Self::collect_par_assignments(op, par_for_d_nr, result);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    Self::collect_par_assignments(op, par_for_d_nr, result);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::collect_par_assignments(c, par_for_d_nr, result);
+                Self::collect_par_assignments(t, par_for_d_nr, result);
+                Self::collect_par_assignments(e, par_for_d_nr, result);
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::collect_par_assignments(a, par_for_d_nr, result);
+                Self::collect_par_assignments(b, par_for_d_nr, result);
+                Self::collect_par_assignments(c, par_for_d_nr, result);
+            }
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::collect_par_assignments(a, par_for_d_nr, result);
+                }
+            }
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
+                Self::collect_par_assignments(v, par_for_d_nr, result);
+            }
+            Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => {
+                Self::collect_par_assignments(v, par_for_d_nr, result);
+            }
+            Value::Span(b) => Self::collect_par_assignments(&b.1, par_for_d_nr, result),
+            Value::ParFor(b) => {
+                Self::collect_par_assignments(&b.input, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.worker, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.threads, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.body, par_for_d_nr, result);
+            }
+            _ => {}
+        }
+    }
+
+    /// Plan-06 spine step 5 — classify each `Value::Var(v)` read in the
+    /// IR tree.  A read inside the `init` arm of a `Value::Iter` (the
+    /// collection being iterated) counts as **streaming**; every other
+    /// read counts as **other** (materialising).
+    ///
+    /// Counts are accumulated into the caller's mutable refs.  The
+    /// `Set(v, …)` site that introduced `v` is intentionally NOT a
+    /// read (Set's first field is a write target, not a read).
+    fn classify_var_uses(val: &Value, v: u16, streaming: &mut usize, other: &mut usize) {
+        match val {
+            Value::Var(u) if *u == v => {
+                *other += 1;
+            }
+            Value::Var(_) => {}
+            Value::Iter(_, init, next, extra) => {
+                // Iter's init is the iterable expression.  A bare
+                // `Var(v)` in init means `for x in v { … }` — count
+                // as streaming and don't recurse into the var read.
+                if let Value::Var(u) = init.as_ref()
+                    && *u == v
+                {
+                    *streaming += 1;
+                } else {
+                    Self::classify_var_uses(init, v, streaming, other);
+                }
+                Self::classify_var_uses(next, v, streaming, other);
+                Self::classify_var_uses(extra, v, streaming, other);
+            }
+            Value::Set(_, inner) => Self::classify_var_uses(inner, v, streaming, other),
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::classify_var_uses(a, v, streaming, other);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &bl.operators {
+                    Self::classify_var_uses(op, v, streaming, other);
+                }
+            }
+            Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+                for op in ops {
+                    Self::classify_var_uses(op, v, streaming, other);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::classify_var_uses(c, v, streaming, other);
+                Self::classify_var_uses(t, v, streaming, other);
+                Self::classify_var_uses(e, v, streaming, other);
+            }
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                Self::classify_var_uses(inner, v, streaming, other);
+            }
+            Value::BreakWith(_, inner) | Value::TuplePut(_, _, inner) => {
+                Self::classify_var_uses(inner, v, streaming, other);
+            }
+            Value::Span(b) => Self::classify_var_uses(&b.1, v, streaming, other),
+            Value::ParFor(b) => {
+                // The input position is streaming-equivalent (par
+                // dispatcher iterates).  worker/threads/body are
+                // ordinary expression contexts.
+                if let Value::Var(u) = &b.input
+                    && *u == v
+                {
+                    *streaming += 1;
+                } else {
+                    Self::classify_var_uses(&b.input, v, streaming, other);
+                }
+                Self::classify_var_uses(&b.worker, v, streaming, other);
+                Self::classify_var_uses(&b.threads, v, streaming, other);
+                Self::classify_var_uses(&b.body, v, streaming, other);
+            }
+            _ => {}
+        }
+    }
+
     /// After parsing a function body, check that each `&` (`RefVar`) argument is actually
     /// mutated somewhere in the body. If not, emit a compile error suggesting to drop the `&`.
     /// Also check for redundant `const` annotations on primitive parameters that are never
