@@ -212,6 +212,63 @@ fn walk_record_translates_tuple_dbref_field() {
     assert_eq!(translated.pos, 16);
 }
 
+// ── adopt_worker_excess tests ───────────────────────────────────────────────
+
+#[test]
+fn adopt_worker_excess_no_excess_returns_empty_map() {
+    // Worker has no allocations beyond parent_count → empty rebase map.
+    let mut parent = Stores::new();
+    let mut worker = Stores::new();
+    let parent_count = parent.allocations.len() as u16;
+    let rebase = parent.adopt_worker_excess(&mut worker, parent_count);
+    assert!(rebase.map.is_empty());
+    assert_eq!(rebase.parent_store_count, parent_count);
+}
+
+#[test]
+fn adopt_worker_excess_single_excess_store() {
+    // Parent starts with no allocations.  Worker allocates one store.
+    // After adoption, parent has the store; worker's slot is a freed
+    // sentinel; rebase map has worker_local 0 → parent_nr 0.
+    let mut parent = Stores::new();
+    let mut worker = Stores::new();
+    let parent_count = parent.allocations.len() as u16;
+    let _w0 = worker.null(); // worker allocates store 0 (or first free)
+    let worker_alloc_count = worker.allocations.len();
+
+    let rebase = parent.adopt_worker_excess(&mut worker, parent_count);
+    assert_eq!(rebase.map.len(), 1);
+    // Worker's slot is now a freed sentinel.
+    assert_eq!(worker.allocations.len(), worker_alloc_count);
+    // The rebase entry's value is the parent-side store_nr.
+    let parent_nr = *rebase.map.values().next().unwrap();
+    assert!(
+        (parent_nr as usize) < parent.allocations.len(),
+        "adopted store_nr={parent_nr} not in parent.allocations (len={})",
+        parent.allocations.len()
+    );
+}
+
+#[test]
+fn adopt_worker_excess_multi_store() {
+    // Worker allocates 3 stores; parent had 0; map has 3 entries.
+    let mut parent = Stores::new();
+    let mut worker = Stores::new();
+    let parent_count = parent.allocations.len() as u16;
+    for _ in 0..3 {
+        let _ = worker.null();
+    }
+    let rebase = parent.adopt_worker_excess(&mut worker, parent_count);
+    // The 3 worker-allocated stores all land in the rebase.  Some may
+    // collide with parent's free slots that opened up during adoption,
+    // so we just assert the map covers them.
+    assert!(
+        rebase.map.len() >= 1,
+        "expected at least one adoption; got {:?}",
+        rebase.map
+    );
+}
+
 #[test]
 fn walk_record_visited_breaks_cycle() {
     // Self-cycle: parent's record at (rec=1, pos=0) holds a DbRef

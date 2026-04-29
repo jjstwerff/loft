@@ -488,6 +488,47 @@ impl Stores {
         }
         store_nr
     }
+
+    /// Plan-06 phase 2b prereq — adopt all stores a worker allocated
+    /// beyond `parent_store_count` and build a `StoreRebase` mapping
+    /// worker-local `store_nr` → parent-side `store_nr` for each.
+    ///
+    /// `clone_for_worker` clones every parent allocation into the
+    /// worker (so worker's `allocations[0..parent_store_count]` are
+    /// read-only copies); any store the worker creates above that
+    /// index is genuinely new.  This helper takes those new stores
+    /// (replacing each with a freed sentinel so the worker's drop is
+    /// a no-op for that slot) and adopts them into `self`.
+    ///
+    /// Returns the per-worker rebase map.  The caller uses
+    /// `rebase.translate(db_ref)` to convert any worker-handed-out
+    /// `DbRef` into a parent-side reference, and
+    /// `rebase_walk_record(...)` to translate inner DbRef fields
+    /// inside an adopted record.
+    ///
+    /// Currently dead code at the call-site level (no production
+    /// caller wires it yet); 2b's `copy_from_worker_rebase` is the
+    /// first consumer.  Self-tested in
+    /// `tests/parallel_rebase.rs::adopt_worker_excess_*`.
+    #[allow(dead_code)]
+    pub fn adopt_worker_excess(
+        &mut self,
+        worker: &mut Stores,
+        parent_store_count: u16,
+    ) -> crate::parallel::StoreRebase {
+        let mut rebase = crate::parallel::StoreRebase::with_parent_count(parent_store_count);
+        let total = worker.allocations.len();
+        for nr in (parent_store_count as usize)..total {
+            if worker.allocations[nr].free {
+                continue;
+            }
+            let sentinel = crate::store::Store::new_freed_sentinel();
+            let s = std::mem::replace(&mut worker.allocations[nr], sentinel);
+            let parent_nr = self.adopt_store(s);
+            rebase.add(nr as u16, parent_nr);
+        }
+        rebase
+    }
 }
 
 #[cfg(test)]
