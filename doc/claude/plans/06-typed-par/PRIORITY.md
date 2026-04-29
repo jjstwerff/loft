@@ -212,24 +212,35 @@ has a clear destination.  Until then, streaming-eligible patterns
 keep working through the existing materialised path; the analyser's
 silent treatment means no false-positive warnings.
 
-### Step 6 — Port test suite to streaming forms
+### Step 6 — Audit test suite for materialise sites (DONE 2026-04-29)
 
-**Effort: M** · **Net Δ lines: -100, +200** (test code reshape)
+**Effort: XS** · **Net Δ lines: 0** (audit-only)
 
-Audit every test in `tests/threading.rs`, `tests/threading_chars.rs`,
-`bench/11_par/`, every `.loft` script that calls `parallel_for`.
-For each:
+Audited the test corpus + bench + libs for sites that would hit
+spine step 5a's materialise / unused warnings.  Findings:
 
-- If the test consumes the result single-pass → already works
-  under step 5's auto-lowering; no change.
-- If the test materialises (random access, etc.) → either rewrite
-  to streaming form (preferred — matches user-facing direction),
-  or annotate as `par_to_vec`-required for the future phase 11.
+| Source | Par sites | Materialising? |
+|---|---|---|
+| `tests/scripts/22-threading.loft` | 9 fused `for x in items par(r=fn(x), N) { … }` | No — fused form, compiler-generated `_par_results_N` skipped by analyser |
+| `bench/11_par/bench.loft` | 2 fused for-par loops | No — same reason |
+| `tests/threading.rs` | 24 Rust-side dispatches via `run_parallel_*` | N/A — bypass parser, never produce the IR shape the warning checks |
+| `tests/threading_chars.rs` | 31 fused for-par tests | No |
+| `lib/`, `default/` | 0 par calls (only signature decls) | N/A |
 
-**Why sixth:** must port before promoting the warning to error.
-Keeps step 7 from breaking the build.
+Sites my own step 5 tests added:
+- `par_result_random_access_emits_materialise_warning` — synthesises
+  the materialising pattern intentionally, asserts the warning fires.
+- `par_result_unused_emits_unused_warning` — synthesises unused
+  pattern intentionally, asserts unused warning fires.
 
-**Files:** test files only.
+Verification: `cargo test 2>&1 | grep "materialising context\|never read"`
+returns zero hits across the full 897-test suite (excluding the two
+intentional warning assertions which test the warning shape, not
+emit it during normal execution).
+
+**Conclusion:** the test suite is already streaming-only.  No
+porting work needed.  Step 6 collapses to a documented audit; step
+7 (warning → error) is safe to land without breakage.
 
 ### Step 7 — Promote warning to error
 
@@ -369,9 +380,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    (5b lowering folded into step 8 — runtime-arch change bundles
     with Concat retirement)
        ↓
-[6 port test suite]             — M, test reshape only ← NEXT
+[6 audit test suite]            — XS, no changes — DONE 2026-04-29
        ↓
-[7 warning → error]             — XS, 1 line
+[7 warning → error]             — XS, 1 line ← NEXT
        ↓
 [8 retire Concat runtime]       — S, -250 LOC, biggest single drop
        ↓
