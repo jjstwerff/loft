@@ -1133,3 +1133,62 @@ fn worker_id(r: const Num) -> integer { r.v }
          table (before={before}, after={after})"
     );
 }
+
+// ── Plan-06 spine step 8a — par_buffer_stack semantics ────────────────────
+
+/// Step 8a — `Stores::par_buffer_stack` is a stack of `Vec<u64>`.
+/// Round-trip: push a buffer, observe it via `.last()`, pop, verify
+/// empty.  Locks in the contract `n_parallel_buf_get` /
+/// `n_parallel_buf_drop` rely on.
+#[test]
+fn par_buffer_stack_push_pop_round_trip() {
+    let mut stores = loft::database::Stores::new();
+    assert!(stores.par_buffer_stack.is_empty(), "fresh stores: empty");
+    stores.par_buffer_stack.push(vec![1, 2, 3]);
+    assert_eq!(stores.par_buffer_stack.len(), 1);
+    assert_eq!(stores.par_buffer_stack.last().unwrap(), &vec![1u64, 2, 3]);
+    let popped = stores.par_buffer_stack.pop();
+    assert_eq!(popped, Some(vec![1u64, 2, 3]));
+    assert!(stores.par_buffer_stack.is_empty());
+}
+
+/// Step 8a — nested fused for-par pushes its own buffer on top.
+/// Inner pop must reveal the outer buffer underneath, unchanged.
+/// This is the load-bearing invariant for nested par(): step 8b's
+/// IR rewrite emits a `n_parallel_buf_drop` per fused-for body, and
+/// the nesting must work without leaks.
+#[test]
+fn par_buffer_stack_nesting() {
+    let mut stores = loft::database::Stores::new();
+    stores.par_buffer_stack.push(vec![10, 20]);
+    stores.par_buffer_stack.push(vec![100, 200, 300]);
+    assert_eq!(stores.par_buffer_stack.len(), 2);
+    assert_eq!(
+        stores.par_buffer_stack.last().unwrap(),
+        &vec![100u64, 200, 300]
+    );
+    stores.par_buffer_stack.pop();
+    assert_eq!(
+        stores.par_buffer_stack.last().unwrap(),
+        &vec![10u64, 20],
+        "outer buffer must survive inner pop"
+    );
+}
+
+/// Step 8a — `Stores::clone()` is the type-schema clone used to seed
+/// fresh interpreter sessions; it must reset `par_buffer_stack` to
+/// empty.  A leaked buffer here would persist across sessions and
+/// break the nesting invariant.
+#[test]
+fn par_buffer_stack_initially_empty_in_clone() {
+    let mut stores = loft::database::Stores::new();
+    stores.par_buffer_stack.push(vec![1]);
+    stores.par_buffer_stack.push(vec![2, 3]);
+    let cloned = stores.clone();
+    assert!(
+        cloned.par_buffer_stack.is_empty(),
+        "Stores::clone must reset par_buffer_stack — it's runtime state, \
+         not type schema (cloned len = {})",
+        cloned.par_buffer_stack.len()
+    );
+}

@@ -191,6 +191,19 @@ pub struct Stores {
     /// Set by `State::execute()` to allow native functions to access the
     /// interpreter's bytecode, library, and compiled data during execution.
     pub parallel_ctx: Option<Box<ParallelCtx>>,
+    /// Plan-06 PRIORITY.md spine step 8a — stack of per-call result
+    /// buffers populated by `n_parallel_queue` and consumed by
+    /// `n_parallel_buf_get` / drained by `n_parallel_buf_drop`.  Each
+    /// `Vec<u64>` holds one row's u64-encoded worker return value per
+    /// element (in input order).  A stack — not a single buffer — is
+    /// needed for nested fused for-par: an inner `par()` inside an
+    /// outer par body pushes its own buffer; the outer keeps its
+    /// buffer underneath.
+    ///
+    /// Step 8b is the first parser-side consumer; until then, the
+    /// only writer is the `n_parallel_queue` native fn (exercised by
+    /// Rust unit tests in `tests/threading.rs`).
+    pub par_buffer_stack: Vec<Vec<u64>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -274,6 +287,7 @@ impl Clone for Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
@@ -699,6 +713,7 @@ impl Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),

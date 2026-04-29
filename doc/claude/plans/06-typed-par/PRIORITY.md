@@ -271,32 +271,68 @@ accidental level downgrade is caught immediately.
 
 **Effort: S–M** · **Net Δ lines: -250, +50** · **Branches collapsed: 6**
 
-Two coupled changes:
+Sub-phased like step 3.  Each sub-step is a single-session unit; all
+prior par-suite tests must stay green at every sub-step's tip.
 
-1. **5b lowering (folded in here)** — rewrite the fused for-par
-   parser-side IR builder so the non-empty-body case dispatches
-   through `run_parallel_queue` (step 4) directly, with the body
-   bytecode inlined per-result.  Replaces the `_par_results_N`
-   materialisation + `OpGetVector(_par_results, ...)` indexing
-   shape that exists today.  This is the runtime-arch change that
-   makes `Stitch::Concat` retire-able.
+- **8a (DONE 2026-04-29)** — par-buffer infrastructure + native fns.
+  Added:
+  - `Stores::par_buffer_stack: Vec<Vec<u64>>` — stack of per-call
+    result buffers; nesting-safe (`last()` reads the inner-most
+    active buffer).  `Clone` resets to empty (runtime state, not
+    type schema).  Constructors in `database/mod.rs` (×2) and
+    `database/allocation.rs` (×2 worker-clone sites).
+  - `n_parallel_queue` native fn — same arg layout as
+    `n_parallel_for`, calls `run_parallel_queue` (step 4),
+    pushes the resulting `Vec<u64>` onto `par_buffer_stack`,
+    returns the row count.
+  - `n_parallel_buf_get(idx) -> integer` — reads
+    `stores.par_buffer_stack.last()[idx]` as i64.
+  - `n_parallel_buf_drop()` — pops `par_buffer_stack`.
+  - Codegen extras-push / extras-subtract entries for the new
+    `n_parallel_queue` (matches the n_parallel_for / _light /
+    _discard pattern).
+  - Default `01_code.loft` decls for the three new native fns.
+  - Three Rust unit tests in `tests/threading.rs::par_buffer_*`
+    locking in push/pop, nesting, and clone-reset semantics.
 
-2. **Concat retirement** — once 5b's rewrite is in, delete:
-   - `parallel_execute_and_collect` (~170 lines in `src/native.rs`).
-   - The Stitch::Concat arm in dispatch.
-   - `run_parallel_ref`'s batch-return shape; replace with Queue path.
-   - `run_parallel_text`'s string-vector-return shape; replace with Queue path.
-   - The `result_db = stores.null()` allocation at the par dispatcher's top.
+  **Status:** infrastructure live; no parser consumer yet, so no
+  observable behaviour change.  All 30 threading + 31
+  threading_chars tests stay green.
 
-`copy_from_worker[_unowned]` helpers stay in `src/database/allocation.rs`
-(they have non-par callers if any; phase 11's `par_to_vec` will
-re-import them).
+- **8b (NEXT)** — parser-side IR rewrite for primitive-return fused
+  for-par.  Replace the `Set(par_results, n_parallel_for(...))` +
+  `OpGetVector(par_results, idx)` materialised shape with
+  `Set(par_len, n_parallel_queue(...))` + `n_parallel_buf_get(idx)`
+  + post-loop `n_parallel_buf_drop()`.  Heap-typed returns (text,
+  ref, fn-ref, vector) keep using the legacy path until 8c/8d.
+  After 8b, primitive-return par sites no longer allocate a heap
+  result vector.
+
+- **8c** — extend Queue dispatch to text returns.  `run_parallel_queue`
+  currently returns `Vec<u64>` of u64 bits per row; text returns
+  need string buffers.  Either (i) add a parallel `run_parallel_queue_text`
+  returning `Vec<String>` and a `par_text_buffer_stack` parallel field,
+  or (ii) generalise the existing buffer to hold per-row variants
+  (`enum ParBufElem { U64(u64), Text(String) }`).  Option (i) keeps
+  the per-row read path tight (no enum match per element).
+
+- **8d** — extend Queue dispatch to ref / fn-ref / vector returns
+  via the `WorkerStores::take_all_owned` rebase machinery already
+  shipped in phase 2a/2b prep.
+
+- **8e** — actual Concat retirement: delete
+  `parallel_execute_and_collect` (~170 lines), the `Stitch::Concat`
+  arm in `parallel.rs`, the `result_db = stores.null()` allocation
+  at the dispatcher top.  All paths now route through Queue.
 
 **Why eighth:** first big complexity drop.  After this, par's runtime
 shape is **3 stitch variants in one dispatcher** instead of 6+
 runtime variants × 3 dispatch arms.
 
-**Files:** `src/native.rs`, `src/parallel.rs`, `src/codegen_runtime.rs`.
+**Files:** `src/native.rs`, `src/parallel.rs`, `src/codegen_runtime.rs`,
+`src/database/mod.rs`, `src/database/allocation.rs`,
+`src/state/codegen.rs`, `src/parser/collections.rs` (8b),
+`default/01_code.loft`.
 
 ### Step 9 — Stitch::Reduce runtime + par_fold surface
 
@@ -399,7 +435,12 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
        ↓
 [7 warning → error]             — XS, 2 words — DONE 2026-04-29
        ↓
-[8 retire Concat runtime]       — S, -250 LOC, biggest single drop ← NEXT
+[8 retire Concat runtime]       — S, -250 LOC, biggest single drop
+   8a par buffer infra           — DONE 2026-04-29
+   8b parser primitive rewrite   ← NEXT
+   8c text return Queue path
+   8d ref/fn-ref/vector Queue
+   8e Concat deletion
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC
        ↓

@@ -1948,6 +1948,7 @@ impl State {
         if stack.data.def(op).name == "n_parallel_for"
             || stack.data.def(op).name == "n_parallel_for_light"
             || stack.data.def(op).name == "n_parallel_discard"
+            || stack.data.def(op).name == "n_parallel_queue"
         {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {
@@ -2114,6 +2115,7 @@ impl State {
             if stack.data.def(op).name == "n_parallel_for"
                 || stack.data.def(op).name == "n_parallel_for_light"
                 || stack.data.def(op).name == "n_parallel_discard"
+                || stack.data.def(op).name == "n_parallel_queue"
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {

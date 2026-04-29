@@ -1073,6 +1073,23 @@ fn parallel_for_light(input: reference, element_size: integer, return_size: inte
 // user code — this is an IR-only entry the codegen produces.
 fn parallel_discard(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer);
 #impure(par_call)
+// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
+// Internal: workers run, each row's u64-encoded return value is pushed
+// onto an internal per-call buffer (`stores.par_buffer_stack`).  The
+// row count is returned for use as a loop bound.  Step 8b's parser
+// rewrite is the first user; until then this is exercised only by
+// Rust unit tests.  Same arg layout as parallel_for; integer return.
+// Not callable from user code — this is an IR-only entry the codegen
+// produces.
+fn parallel_queue(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+#impure(par_call)
+// Step 8a — read one row's u64 result from the active queue buffer.
+// `idx` is the input row index.  Returns the worker's return value
+// re-interpreted as i64 (high bits are zero for narrow primitives).
+fn parallel_buf_get(idx: integer) -> integer;
+// Step 8a — pop the active queue buffer.  Called after the for-par
+// body loop finishes.
+fn parallel_buf_drop();
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);

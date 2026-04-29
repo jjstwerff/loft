@@ -159,6 +159,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_for_light", n_parallel_for_light),
     #[cfg(feature = "threading")]
     ("n_parallel_discard", n_parallel_discard),
+    #[cfg(feature = "threading")]
+    ("n_parallel_queue", n_parallel_queue),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get", n_parallel_buf_get),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_drop", n_parallel_buf_drop),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -931,6 +937,126 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
     // so callers expecting a return on the stack would be wrong to
     // invoke this; the codegen path that emits the call sites this
     // fn knows it returns void and does not pop a result.
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
+/// Pops the same arg layout as `n_parallel_for` (input, element_size,
+/// return_size, threads, func, extras..., n_extra), dispatches the
+/// worker fn per row via `run_parallel_queue` (step 4), and pushes
+/// the resulting `Vec<u64>` onto `stores.par_buffer_stack`.  The
+/// row count is pushed onto the operand stack so the caller can use
+/// it as a loop bound.
+///
+/// Step 8b is the first parser-side consumer; until then the only
+/// caller is the Rust unit test in `tests/threading.rs`.
+fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout / pop order as n_parallel_for.
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_queue: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+    let return_size = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue: missing context");
+        let data = unsafe { &*ctx.data };
+        let def = data.def(v_func as u32);
+        let derived = u32::from(crate::variables::size(
+            &def.returned,
+            &crate::data::Context::Argument,
+        ));
+        if (1..=8).contains(&derived) {
+            derived
+        } else {
+            (v_return_size.clamp(1, 8)) as u32
+        }
+    };
+
+    let buf = crate::parallel::run_parallel_queue(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+        return_size,
+    );
+    let n_rows = buf.len() as i64;
+    stores.par_buffer_stack.push(buf);
+    stores.put(stack, n_rows);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8a — read one element from the active par buffer.
+///
+/// Pops `idx` (i64), reads `stores.par_buffer_stack.last()[idx]`, and
+/// pushes the i64 value onto the operand stack.  The caller is
+/// responsible for masking to the worker's actual return width when
+/// less than 8 bytes — for narrow primitives the high bits are zero
+/// (workers store via `to_le_bytes` into a u64 slot).
+///
+/// Panics if `par_buffer_stack` is empty (no active queue) or if
+/// `idx` is out of range — both indicate a parser-side bug.
+fn n_parallel_buf_get(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack);
+    let buf = stores
+        .par_buffer_stack
+        .last()
+        .expect("parallel_buf_get: par_buffer_stack is empty");
+    let val = buf[idx as usize] as i64;
+    stores.put(stack, val);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8a — pop the active par buffer.  Called after
+/// the body loop completes.  Panics if the stack is already empty
+/// (parser-side bug).  Void return.
+fn n_parallel_buf_drop(stores: &mut Stores, _stack: &mut DbRef) {
+    stores
+        .par_buffer_stack
+        .pop()
+        .expect("parallel_buf_drop: par_buffer_stack is already empty");
 }
 
 #[cfg(feature = "threading")]
