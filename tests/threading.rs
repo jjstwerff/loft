@@ -16,7 +16,7 @@ extern crate loft;
 use loft::compile::byte_code;
 use loft::database::Stores;
 use loft::keys::DbRef;
-use loft::parallel::{WorkerProgram, run_parallel_int, run_parallel_text};
+use loft::parallel::{WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_text};
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
@@ -751,5 +751,83 @@ fn main() {
     assert!(
         combined.contains("bad_worker"),
         "warning should name worker fn 'bad_worker'; got: {combined}"
+    );
+}
+
+// ── Plan-06 spine step 2 — Stitch::Discard regression tests ────────────────
+
+/// Discard runs the worker for every row and returns nothing.  Smoke-test:
+/// a non-trivial input, a worker that touches its arg (so we exercise the
+/// dispatch path), 4 threads, no panic.
+#[test]
+fn par_discard_runs_without_panic() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..50).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    // Returns ().  All we assert is "no panic" — Discard's contract is
+    // that the worker runs N times and the result is dropped.  Worker's
+    // return-size is 8 (i64); the runtime discards it.
+    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 4, &[], 8);
+}
+
+/// Discard on an empty input is a no-op — no workers spawned, no panic.
+#[test]
+fn par_discard_empty_input() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let input = build_int_vector(&mut state.database, &[]);
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+}
+
+/// Discard's parent state must remain untouched.  Workers run, results are
+/// dropped — there's no user-visible side effect on the parent's stores
+/// (workers can write to log/host_io but that's via host bridges, not
+/// shared parent state).
+///
+/// Verifies the `parent_store_count` invariant: the parent's allocations
+/// table has the same count before and after the par call.  This is
+/// step-8's load-bearing invariant — Concat's retirement assumes Discard
+/// does not adopt or otherwise grow the parent's store table.
+#[test]
+fn par_discard_does_not_grow_parent_stores() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..10).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let before = state.database.allocations.len();
+
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+    run_parallel_discard(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+
+    let after = state.database.allocations.len();
+    assert_eq!(
+        before, after,
+        "Discard must not adopt worker stores into the parent's allocations \
+         table (before={before}, after={after})"
     );
 }

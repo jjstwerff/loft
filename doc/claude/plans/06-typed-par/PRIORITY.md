@@ -61,19 +61,26 @@ the spine effectively starts at step 2 (Stitch::Discard).
 re-tagged to point at the final-resting-phase (4 / 7 / 11) instead
 of "phase 1 leftover".
 
-### Step 2 — Stitch::Discard runtime
+### Step 2 — Stitch::Discard runtime (DONE 2026-04-29)
 
-**Effort: S** · **Net Δ lines: +50** · **Branches collapsed: 0** (new code)
+**Effort: S** · **Net Δ lines: +75** · **Branches collapsed: 0** (new code)
 
-Add the Discard runtime — workers run, results are dropped (worker
-output stores deallocate at thread join).  Simplest of the three
-streaming policies.  No order preservation, no merge, no allocation.
+Added `run_parallel_discard(stores, program, fn_pos, input,
+element_size, n_threads, extra_args, return_size)` to
+`src/parallel.rs` — workers run, return value `let _`-bound on each
+row, no allocation, no order preservation, no merge.  Worker fn runs
+for its side effects (host_io / log_*).
 
-**Why second:** smallest Stitch policy; lands fast and unblocks the
-fused for-par body-shape detection that uses it.
+3 regression tests in `tests/threading.rs::par_discard_*`:
+- `par_discard_runs_without_panic` (50 elements, 4 threads)
+- `par_discard_empty_input` (no-op short-circuit)
+- `par_discard_does_not_grow_parent_stores` (locks in the invariant
+  step 8's Concat retirement depends on)
 
-**Files:** `src/parallel.rs::run_parallel_discard`, dispatch wiring
-in `src/codegen_runtime.rs`.
+Marked `#[allow(dead_code)]` — step 3 is the first call-site
+consumer.
+
+**Files:** `src/parallel.rs`, `tests/threading.rs`.
 
 ### Step 3 — Fused for-par with Discard detection
 
@@ -232,6 +239,7 @@ Update `CHANGELOG.md` + `CHANGELOG_TECHNICAL.md`.
 |---|---|---|---|---|---|
 | Today | 6 | 3 | 3 | 2 (`par`/`par_light`) | baseline |
 | Step 1 (audit done) | 6 | 3 | 3 | 2 | 0 (doc-only) |
+| Step 2 (Discard runtime live) | 6 + 1 | 3 | 3 | 2 | +75 |
 | Step 4 (Queue+Discard live) | 6 + 2 | 3 | 3 | 2 | +400 |
 | Step 7 (warning → error) | 6 + 2 | 3 | 3 | 2 | +500 |
 | Step 8 (Concat retired) | 2 (Queue+Discard) | 1 | 1 | 1 | +250 |
@@ -262,9 +270,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 ```
 [1 audit + reality-check]       — XS, doc-only — DONE 2026-04-29
        ↓
-[2 Stitch::Discard runtime]     — S, +50 LOC ← NEXT
+[2 Stitch::Discard runtime]     — S, +75 LOC — DONE 2026-04-29
        ↓
-[3 fused for-par + ParFor IR]   — M, +200 LOC
+[3 fused for-par + ParFor IR]   — M, +200 LOC ← NEXT
        ↓
 [4 Stitch::Queue runtime]       — M, +150 LOC
        ↓

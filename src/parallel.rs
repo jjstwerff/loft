@@ -946,6 +946,79 @@ pub fn run_parallel_int(
     merge_batches(batches, n_rows, i64::MIN)
 }
 
+// ── Plan-06 PRIORITY.md spine step 2 — Stitch::Discard runtime ──────────────
+//
+// Discard is the simplest of the three streaming Stitch policies: workers run,
+// results are dropped on the floor, worker output stores deallocate at thread
+// join.  No order preservation, no per-element allocation, no merge pass.
+//
+// Used by phase 7's fused for-par when the body never references `r`, and by
+// `par_for_each` (future surface).  Compiles to `Value::ParFor { stitch:
+// Discard }` — see `doc/claude/plans/06-typed-par/PRIORITY.md` step 3.
+//
+// Currently dead code at the call-site level — step 3 (fused for-par + ParFor
+// IR) is the first consumer.  Self-tested in `tests/threading.rs::par_discard_*`.
+
+/// Plan-06 spine step 2 — `Stitch::Discard` worker runtime.
+///
+/// Iterates `input` rows in parallel across `n_threads`, dispatching the
+/// worker fn at `fn_pos` per row and **dropping** the return value.  The
+/// worker is run for its side effects (e.g. `log_info`, host_io) — workers
+/// must be par-safe (D8 rule, enforced by phase 5b').
+///
+/// The worker's return type is irrelevant: dispatch goes through
+/// `execute_at_raw` with the caller-supplied `return_size`, and the result
+/// is `let _`-bound.  `return_size = 0` is also valid (void worker — caller
+/// passes 0 and the post-return stack drain is a no-op).
+///
+/// `extra_args` are extra context args that follow the row arg in the
+/// worker's parameter list (matches the `execute_at_raw` convention used by
+/// `run_parallel_direct` / `run_parallel_int`).
+///
+/// # Panics
+///
+/// Panics if a worker thread panics.  No worker output is collected, so a
+/// non-panicking worker that produces an invalid value (e.g. `i64::MIN`
+/// sentinel) is silently absorbed — the caller is expected to enforce
+/// par-safety + side-effect-correctness via phase 5's analyser before
+/// reaching this dispatcher.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
+#[allow(dead_code)] // step 3 is the first consumer; tested via tests/threading.rs
+pub fn run_parallel_discard(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+) {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return;
+    }
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    let _: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // Discard the worker's return — Stitch::Discard contract.
+            let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+        }
+    });
+}
+
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
 
 /// Lightweight parallel dispatch — borrows main stores read-only instead
