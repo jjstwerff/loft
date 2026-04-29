@@ -636,7 +636,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-vector-return: G6 partial — parser now accepts vector<T> return (routed through ref path) and the extra-arg check skips `hidden: true` attributes from ref_return promotion.  Remaining blocker: vector-returning workers like `out: vector<integer> = []; ...; out` get the local var promoted to a hidden caller destination arg, but the par dispatcher passes 0 extras → the worker writes into the parent's locked store at thread join.  Fix needs the par dispatcher to allocate per-worker destinations in worker output stores and pass them as the hidden arg.  Planned for plan-06 phase 7 (par_fold) where this hidden-arg machinery lives."]
+#[ignore = "par-vector-return: deferred from phase 1 to plan-06 PRIORITY.md spine step 3 / 9 (fused for-par + Stitch::Reduce).  G6 partial — parser now accepts vector<T> return (routed through ref path) and the extra-arg check skips `hidden: true` attributes from ref_return promotion.  Remaining blocker: vector-returning workers like `out: vector<integer> = []; ...; out` get the local var promoted to a hidden caller destination arg, but the par dispatcher passes 0 extras → the worker writes into the parent's locked store at thread join.  Fix needs the par dispatcher to allocate per-worker destinations in worker output stores and pass them as the hidden arg.  After spine step 10 (no materialised vector), vector-return becomes streaming and this canary closes naturally."]
 fn par_struct_to_vector_t4() {
     // Worker constructs and returns a vector per element.  Today
     // the runtime can't represent this.  After phase 1, the per-
@@ -683,7 +683,7 @@ fn run() -> integer {
 }
 
 #[test]
-#[ignore = "par-fn-return: G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct.  Stack snapshot at Return time shows d_nr correctly at stack[4..11] (i64 523) but the closure DbRef sentinel appears at stack[20..23] (0xFFFF) instead of stack[12..23] — i.e. the InitRefSentinel(var[24]) wrote 4 bytes higher than expected.  The codegen's stack_pos accounting for n_pick uses a different convention than execute_at_raw_to's setup; reconciling needs deep codegen-side work.  Punted to plan-06 phase 4 (typed surface)."]
+#[ignore = "par-fn-return: deferred from phase 1 to plan-06 phase 4 (typed surface) or phase 11 (par_to_vec opt-in).  G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct.  Stack snapshot at Return time shows d_nr correctly at stack[4..11] (i64 523) but the closure DbRef sentinel appears at stack[20..23] (0xFFFF) instead of stack[12..23] — i.e. the InitRefSentinel(var[24]) wrote 4 bytes higher than expected.  The codegen's stack_pos accounting for n_pick uses a different convention than execute_at_raw_to's setup; reconciling needs deep codegen-side work.  Not on the PRIORITY.md spine — fn-ref-return is a return-shape support, not an invariant blocker."]
 fn par_struct_to_fn_t4() {
     // Worker selects and returns a fn-ref based on its input.
     code!(

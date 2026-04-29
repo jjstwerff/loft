@@ -37,21 +37,29 @@ Each step is sized as a **single session's work**.  Net complexity
 impact is given as a count of branches collapsed, lines retired, or
 new code added (negative = good).  Run `make ci` after each step.
 
-### Step 1 — Lock down per-worker output store invariants
+### Step 1 — Audit phase-1 invariants; reality-check the canaries (DONE 2026-04-29)
 
-**Effort: S** · **Net Δ lines: 0** · **Branches collapsed: 0**
+**Effort: XS** · **Net Δ lines: doc-only** · **Branches collapsed: 0**
 
-Phase 1 already delivered per-worker output stores in most paths.
-This step finishes the residual cases (4 phase-1 canaries:
-text-output, fn-ref return finish, keyed-collection-input dispatch,
-vector-return Stitch).  No new architecture; just close the canaries.
+Audit of `tests/threading_chars.rs` against the README's "4 phase-1
+canaries remain" claim:
 
-**Why first:** every Stitch policy below assumes workers write to
-per-worker output stores.  With those holes closed, the streaming
-runtimes have a stable foundation.
+| Canary | Status | Notes |
+|---|---|---|
+| text-output | ✅ closed | No `#[ignore]` for text-output remains in the file. |
+| keyed-collection-input dispatch | ✅ closed | Closed in phase 4d.B (`materialise_keyed_for_par`). |
+| fn-ref return finish | ⏸ deferred | `par-fn-return` (line 686) — closure DbRef sentinel offset bug; stack-pos tracker mismatch in codegen.  Deep codegen work, belongs to phase 4 (typed surface) or phase 11 (par_to_vec). |
+| vector-return Stitch | ⏸ deferred | `par-vector-return` (line 639) — vector-returning workers need hidden-arg per-worker destination machinery; lands as part of phase 7's fused for-par work, not as a phase-1 invariant fix. |
 
-**Files:** `src/parallel.rs`, `src/codegen_runtime.rs`,
-`tests/threading_chars.rs`.
+**Conclusion:** the per-worker output store foundation is already in
+place for production paths.  The two deferred canaries belong to
+later phases by design — they're return-shape support, not
+invariant lockdown.  Step 1 collapses to a documentation update;
+the spine effectively starts at step 2 (Stitch::Discard).
+
+**Files updated:** this doc; README phase 1 entry; canary comments
+re-tagged to point at the final-resting-phase (4 / 7 / 11) instead
+of "phase 1 leftover".
 
 ### Step 2 — Stitch::Discard runtime
 
@@ -223,6 +231,7 @@ Update `CHANGELOG.md` + `CHANGELOG_TECHNICAL.md`.
 | After step | Runtime variants | Native fns | Dispatch arms | User surfaces | Net LOC |
 |---|---|---|---|---|---|
 | Today | 6 | 3 | 3 | 2 (`par`/`par_light`) | baseline |
+| Step 1 (audit done) | 6 | 3 | 3 | 2 | 0 (doc-only) |
 | Step 4 (Queue+Discard live) | 6 + 2 | 3 | 3 | 2 | +400 |
 | Step 7 (warning → error) | 6 + 2 | 3 | 3 | 2 | +500 |
 | Step 8 (Concat retired) | 2 (Queue+Discard) | 1 | 1 | 1 | +250 |
@@ -251,9 +260,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 ## Critical path summary (for quick scan)
 
 ```
-[1 finish output stores]        — S effort, no surprises
+[1 audit + reality-check]       — XS, doc-only — DONE 2026-04-29
        ↓
-[2 Stitch::Discard runtime]     — S, +50 LOC
+[2 Stitch::Discard runtime]     — S, +50 LOC ← NEXT
        ↓
 [3 fused for-par + ParFor IR]   — M, +200 LOC
        ↓
@@ -273,10 +282,10 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 [10 cleanup pass]               — XS, -900 LOC, finishes simplification
 ```
 
-Total: ~10 sessions if each lands cleanly.  Net code retired:
-~500 LOC (gross +800 added, -1300 retired).  Branches collapsed:
-6 runtime variants → 3, 3 native fns → 1, 3 dispatch arms → 1,
-`par`/`par_light` → `par`.
+Total: ~9 sessions remaining (step 1 closed as doc-update).  Net
+code retired: ~500 LOC (gross +800 added, -1300 retired).  Branches
+collapsed: 6 runtime variants → 3, 3 native fns → 1, 3 dispatch
+arms → 1, `par`/`par_light` → `par`.
 
 The spine has **no out-of-order dependencies** — each step's
 prerequisites are either the previous step or already-landed work.
