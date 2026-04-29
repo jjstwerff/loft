@@ -1596,6 +1596,49 @@ use #count instead"
             return;
         }
 
+        // Plan-06 PRIORITY.md spine step 3 (Discard detection) — when the
+        // body never references the worker's result name (`b_var`) and
+        // never references the loop variable (`elem_var`), the user
+        // doesn't need a materialised result vector.  Lower to a direct
+        // call into `n_parallel_discard` (spine step 2 / 3b) which runs
+        // workers, drops results, allocates no result vector.
+        //
+        // Tighter conditions surface in steps 4 (Queue) and 9 (Reduce);
+        // until then, only the empty-body case routes here.  Body shapes
+        // like `{ log("done"); }` (uses neither r nor x) also qualify
+        // but are gated behind a per-Var walk in a later step.
+        let body_is_empty = matches!(&block, Value::Null)
+            || matches!(&block, Value::Block(bl) if bl.operators.is_empty())
+            || matches!(&block, Value::Insert(ops) if ops.is_empty());
+        let discard_d_nr = self.data.def_nr("n_parallel_discard");
+        if !self.first_pass
+            && body_is_empty
+            && discard_d_nr != u32::MAX
+            && extra_args.is_empty()
+        {
+            // Build a Discard call with the same arg layout as
+            // n_parallel_for (so the native fn pops in the same order).
+            // The body and per-element accessor (b/a inline aliases)
+            // are not needed — workers run, results dropped.
+            let n_extra_v = Value::Int(0);
+            let pf_args = vec![
+                vec_expr.clone(),
+                Value::Int(elem_size),
+                Value::Int(return_size),
+                threads_expr,
+                Value::Int(fn_d_nr as i32),
+                n_extra_v,
+            ];
+            *code = v_block(
+                vec![fill, Value::Call(discard_d_nr, pf_args)],
+                Type::Void,
+                "par_discard",
+            );
+            // Loop-counter accounting from the empty body.
+            let _ = count;
+            return;
+        }
+
         // A14.5/A14.6: auto-select light path for eligible workers.
         // Heap-typed returns (Reference, struct-enum, Text, Unknown) need the
         // heavy path's deep-copy machinery — the light path's `execute_at_raw`

@@ -1064,6 +1064,15 @@ fn parallel_for(input: reference, element_size: integer, return_size: integer, t
 // allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
 fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
 #impure(par_call)
+// Plan-06 PRIORITY.md spine step 3 — `Stitch::Discard` runtime entry.
+// Internal: workers run, results dropped, no result vector allocated.
+// The compiler emits a call to this fn when a fused for-par body never
+// references the result (`for x in input par(_=fn(x), N) { }` or
+// `for x in input par(r=fn(x), N) { /* no use of r */ }`).
+// Same arg layout as parallel_for; void return.  Not callable from
+// user code — this is an IR-only entry the codegen produces.
+fn parallel_discard(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer);
+#impure(par_call)
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);

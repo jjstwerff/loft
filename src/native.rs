@@ -159,6 +159,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_for", n_parallel_for),
     #[cfg(feature = "threading")]
     ("n_parallel_for_light", n_parallel_for_light),
+    #[cfg(feature = "threading")]
+    ("n_parallel_discard", n_parallel_discard),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -834,6 +836,99 @@ fn n_parallel_for_light(stores: &mut Stores, stack: &mut DbRef) {
         tuple_input_types,
     );
     stores.put(stack, result_ref);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 PRIORITY.md spine step 3 — `Stitch::Discard` runtime entry.
+/// Pops the same arg layout as `n_parallel_for` (input, element_size,
+/// return_size, threads, func, extras..., n_extra), dispatches the
+/// worker fn per row via `run_parallel_discard` (step 2), drops every
+/// result.  No result vector allocated; nothing pushed back onto the
+/// stack — void return.
+///
+/// Used when a fused for-par body never references the worker result
+/// (`for x in input par(_=fn(x), N) { }` or
+/// `for x in input par(r=fn(x), N) { /* no use of r */ }`).  Phase
+/// 10 (drop materialised vector) extends this contract: any par call
+/// whose result is consumed single-pass without random access lowers
+/// here.
+fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout / pop order as n_parallel_for.
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_discard called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_discard: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+    // return_size is needed by execute_at_raw to drain the worker's
+    // return value off the stack.  Discard accepts any return shape;
+    // clamp to the same 1..=8 backstop the light path uses.
+    let return_size = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_discard: missing context");
+        let data = unsafe { &*ctx.data };
+        let def = data.def(v_func as u32);
+        let derived =
+            u32::from(crate::variables::size(&def.returned, &crate::data::Context::Argument));
+        if (1..=8).contains(&derived) {
+            derived
+        } else {
+            (v_return_size.clamp(1, 8)) as u32
+        }
+    };
+
+    crate::parallel::run_parallel_discard(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+        return_size,
+    );
+    // Void return — nothing to push.  Note: post-2c integers are 8B,
+    // so callers expecting a return on the stack would be wrong to
+    // invoke this; the codegen path that emits the call sites this
+    // fn knows it returns void and does not pop a result.
 }
 
 #[cfg(feature = "threading")]

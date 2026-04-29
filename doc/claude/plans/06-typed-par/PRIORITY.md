@@ -102,24 +102,27 @@ new tests in `tests/threading.rs::par_fused_for_*`.
 **Sub-phasing:**
 
 - **3a (DONE 2026-04-29)** — `Value::ParFor(Box<ParForBody>)` variant
-  added to `src/data.rs` with the field shape from DESIGN.md D7
-  (input, x_var, r_var, worker, threads, body, stitch_id).  Walker
-  arms added in 7 sites (data/show_code, generation/emit, parser/
-  collections::replace_var_in_ir, parser/expressions::inline_ref_set_in
-  + substitute_value, state/codegen::generate_inner [panic
-  placeholder], scopes/scan_inner, variables/intervals + slots).
-  Codegen panics if reached — no parser produces ParFor yet.  2
-  unit tests in tests/parallel_rebase.rs (parfor_variant_constructs_and_clones,
-  parfor_walks_through_replace_var_in_ir).
-- **3b (open)** — codegen for `ParFor { stitch_id: 1 }` (Discard).
-  Emit `OpStaticCall` to a new native fn `n_parallel_discard` that
-  wraps `run_parallel_discard` from spine step 2.  Wire the native
-  fn into `default/01_code.loft` + `src/native.rs`.
-- **3c (open)** — parser detection.  At the end of
-  `parse_parallel_for_loop`, if body is empty (or never references
-  `b_var` / `elem_var_nr`), emit `Value::ParFor` instead of the
-  materialised `Call(n_parallel_for, …)` IR.  Tests in
-  `tests/threading.rs::par_fused_for_discard_*`.
+  added to `src/data.rs` with the field shape from DESIGN.md D7.
+  Walker arms in 9 sites; codegen panics if reached.  2 unit tests.
+- **3b (DONE 2026-04-29)** — `n_parallel_discard` native fn added
+  to `default/01_code.loft` + `src/native.rs`, wraps
+  `run_parallel_discard` from step 2.  Codegen extended to push
+  extras + subtract on cleanup for the new fn name.
+- **3c (DONE 2026-04-29)** — parser detection of empty-body
+  fused-for-par in `parse_parallel_for_loop`: when `block` is empty
+  AND `extra_args` is empty, lower directly to
+  `Value::Call(n_parallel_discard, args)` instead of building the
+  materialised IR.  Bypasses the result-vector allocation, the
+  result-element accessor rewrites, and the for-loop wrapper.
+  Lowering at parse time (not via `Value::ParFor` codegen) is the
+  cleanest minimum — the IR variant from 3a stays for steps 4+
+  where scope-analysis-policy interactions matter.  Test:
+  `par_fused_empty_body_runs_through_discard` in tests/threading.rs.
+
+  **Tighter detection conditions are deferred:** today only the
+  empty-body case routes here.  Bodies that reference only the
+  loop variable (not `r`) — e.g. `{ log("done") }` — will lower in
+  step 5 (value-position par lowering with use-site walk).
 
 ### Step 4 — Stitch::Queue runtime (order-preserving stream)
 
@@ -294,12 +297,12 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
        ↓
 [2 Stitch::Discard runtime]     — S, +75 LOC — DONE 2026-04-29
        ↓
-[3 fused for-par + ParFor IR]   — M, +200 LOC
-   3a IR + walker arms          — DONE 2026-04-29
-   3b codegen for Discard       — ← NEXT
-   3c parser detection
+[3 fused for-par + ParFor IR]   — M, +200 LOC — DONE 2026-04-29
+   3a IR + walker arms          — DONE
+   3b codegen for Discard       — DONE
+   3c parser detection          — DONE
        ↓
-[4 Stitch::Queue runtime]       — M, +150 LOC
+[4 Stitch::Queue runtime]       — M, +150 LOC ← NEXT
        ↓
 [5 lower value-position par
    + warning on materialise]    — M, +100 LOC

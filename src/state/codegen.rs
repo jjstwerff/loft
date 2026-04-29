@@ -1959,9 +1959,11 @@ impl State {
             }
         }
         // push extra Call args beyond the declared parameter count.
-        // Only for n_parallel_for — forwards extra context args + n_extra count.
+        // Only for n_parallel_for / n_parallel_for_light / n_parallel_discard —
+        // each forwards extra context args + n_extra count.
         if stack.data.def(op).name == "n_parallel_for"
             || stack.data.def(op).name == "n_parallel_for_light"
+            || stack.data.def(op).name == "n_parallel_discard"
         {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {
@@ -2127,6 +2129,7 @@ impl State {
             // also subtract the extra args pushed beyond declared params.
             if stack.data.def(op).name == "n_parallel_for"
                 || stack.data.def(op).name == "n_parallel_for_light"
+                || stack.data.def(op).name == "n_parallel_discard"
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {

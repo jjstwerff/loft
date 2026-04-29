@@ -797,6 +797,50 @@ fn worker_id(r: const Num) -> integer { r.v }
     run_parallel_discard(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
 }
 
+/// Spine step 3c — fused for-par with empty body lowers to
+/// `n_parallel_discard` instead of allocating a result vector.
+/// Compiles + runs end-to-end; locks in the parser-side desugar
+/// + n_parallel_discard native dispatch + run_parallel_discard
+/// runtime.
+#[test]
+fn par_fused_empty_body_runs_through_discard() {
+    use loft::compile::byte_code;
+    use loft::scopes;
+    use loft::state::State;
+    let mut p = loft::parser::Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse_str(
+        r#"
+struct Num { v: integer }
+
+fn worker(r: const Num) -> integer {
+  r.v + 1
+}
+
+fn main() {
+  items: vector<Num> = [
+    Num { v: 1 },
+    Num { v: 2 },
+    Num { v: 3 },
+  ];
+  for x in items par(_unused = worker(x), 2) {
+  }
+}
+"#,
+        "par_fused_discard",
+        false,
+    );
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute("main", &p.data);
+}
+
 /// Discard's parent state must remain untouched.  Workers run, results are
 /// dropped — there's no user-visible side effect on the parent's stores
 /// (workers can write to log/host_io but that's via host bridges, not
