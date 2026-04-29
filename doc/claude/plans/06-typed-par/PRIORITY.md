@@ -242,15 +242,30 @@ emit it during normal execution).
 porting work needed.  Step 6 collapses to a documented audit; step
 7 (warning → error) is safe to land without breakage.
 
-### Step 7 — Promote warning to error
+### Step 7 — Promote warning to error (DONE 2026-04-29)
 
-**Effort: XS** · **Net Δ lines: 1 word** · **Branches collapsed: 0** (gates retirement)
+**Effort: XS** · **Net Δ lines: 2 words** · **Branches collapsed: 0** (gates retirement)
 
-Flip `Level::Warning` to `Level::Error` in step 5's check.
-Materialising par results now fails to compile.  Test suite from
-step 6 stays green.
+Flipped `Level::Warning` to `Level::Error` at both diagnostic sites
+in `Parser::check_par_result_singlepass` (`src/parser/mod.rs`).  After
+step 6's audit confirmed zero corpus sites trigger the materialise /
+unused diagnostics, the deprecation window closed cleanly:
+materialising par results (`r[i]`, multi-pass, store as `vector<S>`,
+etc.) now fail to compile rather than warn.
 
-**Files:** `src/parser/control.rs` one line.
+Test renames + assertion tightening: each test now also checks for
+the literal `Error:` prefix in the diagnostic line so a future
+accidental level downgrade is caught immediately.
+
+- `par_result_random_access_emits_materialise_warning`
+  → `par_result_random_access_emits_materialise_error`
+- `par_result_unused_emits_unused_warning`
+  → `par_result_unused_emits_unused_error`
+- `par_result_warning_skips_compiler_generated_bindings`
+  → `par_result_diagnostic_skips_compiler_generated_bindings`
+
+**Files:** `src/parser/mod.rs` (2 sites + doc-comment),
+`tests/threading.rs` (test renames + Level::Error asserts).
 
 ### Step 8 — Retire Stitch::Concat runtime + parallel_execute_and_collect (absorbs 5b)
 
@@ -382,9 +397,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
        ↓
 [6 audit test suite]            — XS, no changes — DONE 2026-04-29
        ↓
-[7 warning → error]             — XS, 1 line ← NEXT
+[7 warning → error]             — XS, 2 words — DONE 2026-04-29
        ↓
-[8 retire Concat runtime]       — S, -250 LOC, biggest single drop
+[8 retire Concat runtime]       — S, -250 LOC, biggest single drop ← NEXT
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC
        ↓

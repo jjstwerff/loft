@@ -1810,11 +1810,7 @@ impl Parser {
                 // Type::Function value.
                 let read_dnr = self.cl("OpGetInt4", &[code, p]);
                 let null_clos = self.cl("OpNullRefSentinel", &[]);
-                crate::data::v_block(
-                    vec![read_dnr, null_clos],
-                    tp.clone(),
-                    "fn_ref_field_read",
-                )
+                crate::data::v_block(vec![read_dnr, null_clos], tp.clone(), "fn_ref_field_read")
             }
             Type::Tuple(elems) => {
                 // Plan-06 phase 4d: tuple struct field read.  Each
@@ -2008,9 +2004,7 @@ impl Parser {
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Spacial(_, _, _)
-            | Type::Sorted(_, _, _) => {
-                self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value])
-            }
+            | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
             // each leaf primitive lands at `outer_pos +
@@ -2175,12 +2169,7 @@ impl Parser {
                 } else {
                     0
                 };
-                let ops = self.emit_tuple_set_ops(
-                    &ref_code,
-                    host_field_pos,
-                    &elems_vec,
-                    val_code,
-                );
+                let ops = self.emit_tuple_set_ops(&ref_code, host_field_pos, &elems_vec, val_code);
                 v_block(ops, Type::Void, "tuple_field_set")
             }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
@@ -3511,9 +3500,14 @@ impl Parser {
     ///   compilation in spine step 7 unless rewritten via the explicit
     ///   `par_to_vec(...)` helper (planned phase 11).
     ///
-    /// This step (5a) emits `Level::Warning` on materialising uses to
-    /// warn users + give a deprecation window before step 7 promotes
-    /// to `Level::Error`.
+    /// Spine step 7 (DONE 2026-04-29): emits `Level::Error` on
+    /// materialising uses.  The deprecation window from step 5
+    /// (warning) closed once the audit in step 6 confirmed zero
+    /// corpus sites trigger it.  Materialising par results now fail
+    /// to compile.  Streaming-eligible patterns (single
+    /// `for x in r {}` use) stay silent and keep working through the
+    /// existing materialised path until step 8 lands the streaming
+    /// rewrite.
     fn check_par_result_singlepass(&mut self) {
         let par_for_d_nr = self.data.def_nr("n_parallel_for");
         if par_for_d_nr == u32::MAX || self.context == u32::MAX {
@@ -3561,7 +3555,7 @@ impl Parser {
                 // allocated for nothing.
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Error,
                     "par result '{var_name}' is never read — the materialised \
                      result vector is allocated but unused.  Use a fused `for x \
                      in input par(_=fn(x), N) {{}}` loop with discard policy \
@@ -3571,7 +3565,7 @@ impl Parser {
             } else if other > 0 {
                 diagnostic!(
                     self.lexer,
-                    Level::Warning,
+                    Level::Error,
                     "par result '{var_name}' is used in a materialising context \
                      (random access, multi-pass, or stored as vector<S>) — \
                      phase 10 of plan-06 will require single-pass consumption.  \

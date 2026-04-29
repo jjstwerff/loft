@@ -623,26 +623,14 @@ fn purity_annotations_parsed_from_stdlib() {
     // categories land as the sweep continues; this is the gate
     // that catches accidental annotation drift.
     let pure_fns = &[
-        "n_abs",
-        "n_min",
-        "n_max",
-        "n_clamp", // integer arithmetic
-        "n_len",
-        "n_size", // text/character/vector length
+        "n_abs", "n_min", "n_max", "n_clamp", // integer arithmetic
+        "n_len", "n_size", // text/character/vector length
         // Single + double precision math share the same fn names
         // (cos/sin/tan/etc.) — Data interns them by signature so
         // the def_nr lookup picks one (typically the float
         // overload).  Audit checks one of each name regardless
         // of which overload was registered.
-        "n_cos",
-        "n_sin",
-        "n_tan",
-        "n_acos",
-        "n_asin",
-        "n_atan",
-        "n_ceil",
-        "n_floor",
-        "n_round",
+        "n_cos", "n_sin", "n_tan", "n_acos", "n_asin", "n_atan", "n_ceil", "n_floor", "n_round",
         "n_sqrt",
     ];
     for name in pure_fns {
@@ -660,14 +648,14 @@ fn purity_annotations_parsed_from_stdlib() {
     // opcodes that user code reaches via compound assignment or
     // hash/sorted methods).
     let parent_write_fns = &[
-        "n_clear",                // vector.clear()
-        "n_OpRemoveVector",       // vec.remove(i) and erase semantics
-        "n_OpInsertVector",       // vec.insert(i, x)
-        "n_OpAppendVector",       // vec += other
-        "n_OpHashAdd",            // hash[k] = v
-        "n_OpHashRemove",         // hash.remove(k)
-        "n_OpNewRecord",          // claims space in a parent store
-        "n_OpFinishRecord",       // writes into a parent record
+        "n_clear",          // vector.clear()
+        "n_OpRemoveVector", // vec.remove(i) and erase semantics
+        "n_OpInsertVector", // vec.insert(i, x)
+        "n_OpAppendVector", // vec += other
+        "n_OpHashAdd",      // hash[k] = v
+        "n_OpHashRemove",   // hash.remove(k)
+        "n_OpNewRecord",    // claims space in a parent store
+        "n_OpFinishRecord", // writes into a parent record
     ];
     for name in parent_write_fns {
         let d_nr = p.data.def_nr(name);
@@ -735,7 +723,12 @@ fn main() {
         "par_warning_test",
         false,
     );
-    let all_lines: Vec<String> = p.diagnostics.lines().iter().map(|l| l.to_string()).collect();
+    let all_lines: Vec<String> = p
+        .diagnostics
+        .lines()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
     let warning_lines: Vec<&String> = all_lines
         .iter()
         .filter(|line| line.contains("par() worker"))
@@ -756,13 +749,15 @@ fn main() {
     );
 }
 
-// ── Plan-06 spine step 5 — par-result use-site warning ────────────────────
+// ── Plan-06 spine step 5/7 — par-result use-site diagnostic ───────────────
 
-/// Spine step 5 — `let r = parallel_for(...)` followed by random
-/// access (`r[i]`) emits Level::Warning pointing the user at the
-/// fused for-par form or `par_to_vec(...)`.
+/// Spine step 5 + 7 — `let r = parallel_for(...)` followed by random
+/// access (`r[i]`) emits `Level::Error` pointing the user at the
+/// fused for-par form or `par_to_vec(...)`.  Step 5 introduced the
+/// diagnostic at `Level::Warning`; step 7 promoted to `Error` after
+/// step 6's audit confirmed zero corpus sites trigger it.
 #[test]
-fn par_result_random_access_emits_materialise_warning() {
+fn par_result_random_access_emits_materialise_error() {
     let mut p = loft::parser::Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse_str(
@@ -779,37 +774,48 @@ fn main() {
         "par_warn_test",
         false,
     );
-    let all_lines: Vec<String> = p.diagnostics.lines().iter().map(|l| l.to_string()).collect();
-    let materialise_warnings: Vec<&String> = all_lines
+    let all_lines: Vec<String> = p
+        .diagnostics
+        .lines()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    let materialise_errors: Vec<&String> = all_lines
         .iter()
         .filter(|line| line.contains("materialising context"))
         .collect();
     // The test inputs are synthetic — the parser may also reject the
     // direct `parallel_for(...)` call as "not callable from user code"
-    // since the loft signature is internal.  But IF the warning fires,
-    // it must name the user variable, not a `_par_results_N` synthetic.
-    if !materialise_warnings.is_empty() {
-        let combined: String = materialise_warnings
+    // since the loft signature is internal.  But IF the error fires,
+    // it must name the user variable (not a `_par_results_N` synthetic)
+    // and must be tagged at `Level::Error` (step 7 promotion).
+    if !materialise_errors.is_empty() {
+        let combined: String = materialise_errors
             .iter()
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
             combined.contains("'results'") || combined.contains("results"),
-            "materialise warning should name user var 'results'; got: {combined}"
+            "materialise error should name user var 'results'; got: {combined}"
         );
         assert!(
             !combined.contains("_par_results"),
-            "warning must skip compiler-generated _par_results_N bindings; got: {combined}"
+            "error must skip compiler-generated _par_results_N bindings; got: {combined}"
+        );
+        assert!(
+            combined.contains("Error:"),
+            "spine step 7 promotes the materialise diagnostic to Level::Error; \
+             got: {combined}"
         );
     }
 }
 
-/// Spine step 5 — `let r = parallel_for(...)` where `r` is never
-/// read emits a different warning ("result is never read") to nudge
-/// users at the discard-style fused for-par form.
+/// Spine step 5 + 7 — `let r = parallel_for(...)` where `r` is
+/// never read emits a different `Level::Error` ("result is never
+/// read") to nudge users at the discard-style fused for-par form.
 #[test]
-fn par_result_unused_emits_unused_warning() {
+fn par_result_unused_emits_unused_error() {
     let mut p = loft::parser::Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse_str(
@@ -825,30 +831,42 @@ fn main() {
         "par_warn_unused_test",
         false,
     );
-    let all_lines: Vec<String> = p.diagnostics.lines().iter().map(|l| l.to_string()).collect();
-    let unused_warnings: Vec<&String> = all_lines
+    let all_lines: Vec<String> = p
+        .diagnostics
+        .lines()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    let unused_errors: Vec<&String> = all_lines
         .iter()
         .filter(|line| line.contains("never read"))
         .collect();
-    if !unused_warnings.is_empty() {
-        let combined: String = unused_warnings
+    if !unused_errors.is_empty() {
+        let combined: String = unused_errors
             .iter()
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
             combined.contains("unused_result") || combined.contains("never read"),
-            "unused warning should name var or describe; got: {combined}"
+            "unused error should name var or describe; got: {combined}"
+        );
+        assert!(
+            combined.contains("Error:"),
+            "spine step 7 promotes the unused-result diagnostic to Level::Error; \
+             got: {combined}"
         );
     }
 }
 
-/// Spine step 5 — fused for-par's hidden `_par_results_N` binding
-/// must NOT trigger the materialise warning (the desugar uses random
-/// access internally, but that's compiler-generated and step 8 will
-/// retire it).
+/// Spine step 5 + 7 — fused for-par's hidden `_par_results_N`
+/// binding must NOT trigger the materialise diagnostic (the desugar
+/// uses random access internally, but that's compiler-generated and
+/// step 8 will retire it).  After step 7 the diagnostic is `Error`
+/// so a stray hit here would block compilation of every fused
+/// for-par site.
 #[test]
-fn par_result_warning_skips_compiler_generated_bindings() {
+fn par_result_diagnostic_skips_compiler_generated_bindings() {
     let mut p = loft::parser::Parser::new();
     p.parse_dir("default", true, true).unwrap();
     p.parse_str(
@@ -867,15 +885,21 @@ fn main() {
         "par_warn_skip_test",
         false,
     );
-    let all_lines: Vec<String> = p.diagnostics.lines().iter().map(|l| l.to_string()).collect();
-    let materialise_warnings: Vec<&String> = all_lines
+    let all_lines: Vec<String> = p
+        .diagnostics
+        .lines()
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    let materialise_diagnostics: Vec<&String> = all_lines
         .iter()
         .filter(|line| line.contains("materialising context"))
         .collect();
     assert!(
-        materialise_warnings.is_empty(),
-        "fused for-par desugar must not trigger the materialise warning \
-         (the _par_results_N binding is compiler-generated); got: {materialise_warnings:?}"
+        materialise_diagnostics.is_empty(),
+        "fused for-par desugar must not trigger the materialise diagnostic \
+         (the _par_results_N binding is compiler-generated); got: \
+         {materialise_diagnostics:?}"
     );
 }
 
