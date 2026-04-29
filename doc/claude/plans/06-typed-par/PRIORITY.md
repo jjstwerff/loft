@@ -299,14 +299,43 @@ prior par-suite tests must stay green at every sub-step's tip.
   observable behaviour change.  All 30 threading + 31
   threading_chars tests stay green.
 
-- **8b (NEXT)** — parser-side IR rewrite for primitive-return fused
-  for-par.  Replace the `Set(par_results, n_parallel_for(...))` +
-  `OpGetVector(par_results, idx)` materialised shape with
-  `Set(par_len, n_parallel_queue(...))` + `n_parallel_buf_get(idx)`
-  + post-loop `n_parallel_buf_drop()`.  Heap-typed returns (text,
-  ref, fn-ref, vector) keep using the legacy path until 8c/8d.
-  After 8b, primitive-return par sites no longer allocate a heap
-  result vector.
+- **8b (DONE 2026-04-29)** — parser-side IR rewrite for fused
+  for-par with **DbRef-input + 8-byte integer-return** workers.
+  `build_parallel_for_ir` branches on `route_through_queue`: when
+  the gate matches, emit `Set(par_len, n_parallel_queue(...))` +
+  `n_parallel_buf_get(idx)` body access + post-loop
+  `n_parallel_buf_drop()`.  No heap result vector allocated; the
+  buffer lives in `Stores::par_buffer_stack` (8a's infrastructure).
+
+  **Gate (narrow on purpose):**
+  - `is_primitive_return` (no Text / Reference / Enum-payload /
+    Function / Vector / Unknown).
+  - `Type::Integer(_)` with full 8-byte width (narrow widths leak
+    high-bit garbage through the i64 buf_get; per-size variants
+    land in 8b').
+  - Worker's first arg is heap-typed (`Type::Reference(_, _)` or
+    `Type::Enum(_, true, _)`).  `run_parallel_queue` only handles
+    the DbRef-input path; primitive / text / tuple / fn-ref inputs
+    keep using the legacy materialised path until 8b' extends Queue
+    to those input kinds.  Crucially: **gate on the worker's
+    declared first-arg type, NOT on `elem_tp`** — `for_type`
+    synthesises a Reference for tuple inputs, so `elem_tp` would
+    misclassify them.
+  - `n_parallel_queue` / `_buf_get` / `_buf_drop` registered (so a
+    stripped stdlib still parses).
+  - `fn_d_nr` resolved (partial-parse failures fall back to legacy).
+
+  **Trade-off:** workers eligible for the light path (`light_m` is
+  `Some(_)`) skip its per-thread pool optimisation when routed
+  through Queue.  A later sub-step combines light + queue once
+  the architectural shape stabilises.
+
+  **Test corpus impact:** all 31 `tests/threading_chars.rs` and
+  30 `tests/threading.rs` tests stay green.  Tests now exercising
+  the queue path: any `vector<Struct>` input + integer-return
+  worker (e.g. `par_struct_to_int_t4`, `par_two_field_struct_sum`,
+  `par_three_field_struct_sum`).  Loft script suite
+  (`tests/scripts/22-threading.loft`) green.
 
 - **8c** — extend Queue dispatch to text returns.  `run_parallel_queue`
   currently returns `Vec<u64>` of u64 bits per row; text returns
@@ -437,7 +466,8 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
        ↓
 [8 retire Concat runtime]       — S, -250 LOC, biggest single drop
    8a par buffer infra           — DONE 2026-04-29
-   8b parser primitive rewrite   ← NEXT
+   8b parser primitive rewrite   — DONE 2026-04-29 (DbRef-input + i64 return)
+   8b' extend to primitive/text/tuple inputs + narrow returns ← NEXT
    8c text return Queue path
    8d ref/fn-ref/vector Queue
    8e Concat deletion

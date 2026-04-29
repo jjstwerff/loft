@@ -1671,10 +1671,68 @@ use #count instead"
         let _ = light_m;
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
-        let pf_call = Value::Call(actual_par_d_nr, pf_args);
 
-        // len(input_vec) — compute once before the loop.
-        let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
+        // Plan-06 PRIORITY.md spine step 8b — primitive integer
+        // returns dispatch through the streaming Queue path (8a's
+        // `n_parallel_queue` + `n_parallel_buf_get`/`_drop`) instead
+        // of allocating a heap result vector.  Gating today is
+        // narrow:
+        //   - `is_primitive_return` (no Text/Reference/Enum-payload/
+        //     Function/Vector/Unknown — handled by 8c/8d)
+        //   - `Type::Integer(_)` with full 8-byte width (narrow
+        //     widths leak garbage through `n_parallel_buf_get`'s
+        //     i64 read; per-size variants land in 8b')
+        //   - `elem_tp` is `Type::Reference(_, _)` (DbRef input).
+        //     `run_parallel_queue` only dispatches the DbRef-input
+        //     path; primitive / text / tuple inputs need the
+        //     dispatch shape `run_parallel_direct` carries
+        //     (`primitive_input_size`, `tuple_input_types`).  8b'
+        //     extends Queue to those input kinds; until then they
+        //     keep using the legacy materialised path.
+        //   - `fn_d_nr` resolved (partial-parse failures fall
+        //     through to the legacy path)
+        //   - `n_parallel_queue` / `_buf_get` / `_buf_drop`
+        //     registered (defensively, so a stripped stdlib still
+        //     parses)
+        //
+        // Trade-off: integer workers eligible for the light path
+        // skip its per-thread pool optimisation and use
+        // `parallel_workers` directly.  A later sub-step combines
+        // light + queue once the architecture is stable.
+        let queue_d_nr = self.data.def_nr("n_parallel_queue");
+        let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
+        let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        // ret_size_8: worker returns full 8-byte i64.  Narrow integers
+        // (u8, i32, etc.) leak high-bit garbage through `n_parallel_buf_get`'s
+        // u64 read, so they wait for 8b'.
+        let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
+            &Type::Integer(spec.clone()),
+            &Context::Argument,
+        )) == 8);
+        // dbref_input: worker's first param is heap-typed (Reference,
+        // struct-enum-payload).  `run_parallel_queue` only dispatches
+        // the DbRef-input path; primitive / text / tuple / fn-ref
+        // inputs need the dispatch shape `run_parallel_direct` carries
+        // (`primitive_input_size`, `tuple_input_types`).  Note: we
+        // gate on the *worker's declared* first arg type (via
+        // `fn_d_nr`'s def), NOT on `elem_tp` (which `for_type`
+        // synthesises as Reference for tuple inputs — see
+        // control.rs::for_type).
+        let dbref_input = if fn_d_nr == u32::MAX {
+            false
+        } else {
+            let def = self.data.def(fn_d_nr);
+            def.attributes.first().is_some_and(|attr| {
+                matches!(attr.typedef, Type::Reference(_, _) | Type::Enum(_, true, _))
+            })
+        };
+        let route_through_queue = is_primitive_return
+            && fn_d_nr != u32::MAX
+            && ret_size_8
+            && dbref_input
+            && queue_d_nr != u32::MAX
+            && buf_get_d_nr != u32::MAX
+            && buf_drop_d_nr != u32::MAX;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1683,39 +1741,46 @@ use #count instead"
             Value::Null,
         );
 
-        // Use OpGetVector + get_field to extract the element from the result
-        // vector. This works for all return types (int, long, float, bool, text)
-        // without per-type getter functions.
-        let result_elem_size = match return_size {
-            0 => 4, // text: 4-byte string pointer per element
-            -1 => {
-                // reference: inline struct size from the database
-                let ret_td = self.data.type_def_nr(ret_type);
-                let known = self.data.def(ret_td).known_type;
-                i32::from(self.database.size(known))
-            }
-            other => other,
-        };
-        let get_vec = self.cl(
-            "OpGetVector",
-            &[
-                Value::Var(results_var),
-                Value::Int(result_elem_size),
-                Value::Var(idx_var),
-            ],
-        );
-        let get_call = if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
-            // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
-            // skip the type-based field access to avoid crashing on Unknown type.
-            get_vec
+        // Build the body's `b` accessor.  For the queue path it's
+        // `n_parallel_buf_get(idx)`; for the materialised path it's
+        // `OpGetVector + get_field` indexing the heap result vector.
+        let get_call = if route_through_queue {
+            Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
         } else {
-            let vec_tp = self.data.type_def_nr(ret_type);
-            if vec_tp == u32::MAX {
-                // Unsupported return type (e.g. iterator<T> in first pass before S23
-                // diagnostic fires): fall back to raw vector access to prevent crash.
+            // Use OpGetVector + get_field to extract the element from the result
+            // vector. This works for all return types (int, long, float, bool, text)
+            // without per-type getter functions.
+            let result_elem_size = match return_size {
+                0 => 4, // text: 4-byte string pointer per element
+                -1 => {
+                    // reference: inline struct size from the database
+                    let ret_td = self.data.type_def_nr(ret_type);
+                    let known = self.data.def(ret_td).known_type;
+                    i32::from(self.database.size(known))
+                }
+                other => other,
+            };
+            let get_vec = self.cl(
+                "OpGetVector",
+                &[
+                    Value::Var(results_var),
+                    Value::Int(result_elem_size),
+                    Value::Var(idx_var),
+                ],
+            );
+            if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
+                // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
+                // skip the type-based field access to avoid crashing on Unknown type.
                 get_vec
             } else {
-                self.get_field(vec_tp, usize::MAX, get_vec)
+                let vec_tp = self.data.type_def_nr(ret_type);
+                if vec_tp == u32::MAX {
+                    // Unsupported return type (e.g. iterator<T> in first pass before S23
+                    // diagnostic fires): fall back to raw vector access to prevent crash.
+                    get_vec
+                } else {
+                    self.get_field(vec_tp, usize::MAX, get_vec)
+                }
             }
         };
         // Plan-04 B.3 follow-up v2 (b3-par-inline.md): rewrite every
@@ -1773,11 +1838,37 @@ use #count instead"
         if fill != Value::Null {
             for_steps.push(fill);
         }
-        for_steps.push(v_set(len_var, len_call));
-        for_steps.push(v_set(results_var, pf_call));
-        for_steps.push(v_set(idx_var, Value::Int(0)));
-        for_steps.push(v_loop(lp, "Parallel for loop"));
-        *code = v_block(for_steps, Type::Void, "Parallel for block");
+        if route_through_queue {
+            // Queue path: `n_parallel_queue` returns the row count
+            // directly, doubling as `par_len` and saving the
+            // `OpLengthVector(input)` call.  The result heap vector
+            // (`results_var`) is never allocated; per-iteration reads
+            // come from `stores.par_buffer_stack` via
+            // `n_parallel_buf_get`.  After the loop, pop the buffer
+            // with `n_parallel_buf_drop()` so the next par-call
+            // doesn't see a stale buffer underneath.
+            let queue_call = Value::Call(queue_d_nr, pf_args);
+            for_steps.push(v_set(len_var, queue_call));
+            for_steps.push(v_set(idx_var, Value::Int(0)));
+            for_steps.push(v_loop(lp, "Parallel for loop (queue)"));
+            for_steps.push(Value::Call(buf_drop_d_nr, Vec::new()));
+            *code = v_block(for_steps, Type::Void, "Parallel for block (queue)");
+        } else {
+            // Materialised path (text / ref / fn-ref / vector / non-
+            // integer primitives).  Allocates a heap result vector
+            // and indexes it via `OpGetVector`.  Step 8c/8d/8b' will
+            // route the remaining cases through Queue; step 8e then
+            // retires `parallel_execute_and_collect` and the
+            // `Stitch::Concat` arm.
+            let pf_call = Value::Call(actual_par_d_nr, pf_args);
+            // len(input_vec) — compute once before the loop.
+            let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
+            for_steps.push(v_set(len_var, len_call));
+            for_steps.push(v_set(results_var, pf_call));
+            for_steps.push(v_set(idx_var, Value::Int(0)));
+            for_steps.push(v_loop(lp, "Parallel for loop"));
+            *code = v_block(for_steps, Type::Void, "Parallel for block");
+        }
     }
 
     // Consume the remaining `par(...)` tokens and then the body block so the
