@@ -124,20 +124,38 @@ new tests in `tests/threading.rs::par_fused_for_*`.
   loop variable (not `r`) — e.g. `{ log("done") }` — will lower in
   step 5 (value-position par lowering with use-site walk).
 
-### Step 4 — Stitch::Queue runtime (order-preserving stream)
+### Step 4 — Stitch::Queue runtime (DONE 2026-04-29)
 
-**Effort: M** · **Net Δ lines: +150** · **Branches collapsed: 0** (new code)
+**Effort: M** · **Net Δ lines: +90** · **Branches collapsed: 0** (new code)
 
-The order-preserving stream policy.  Main thread drains worker 0's
-output store fully, then worker 1's, then worker 2's…  Each result
-feeds directly into the consumer body (passed as a closure to the
-runtime).  Bounded backpressure: workers block when their output
-store fills.
+Added `run_parallel_queue(stores, program, fn_pos, input,
+element_size, n_threads, extra_args, return_size) -> Vec<u64>` to
+`src/parallel.rs`.  Order-preserving: result `i` of the returned
+Vec is the worker's output for input row `i`, regardless of how
+rayon dispatched workers.  Returns raw u64 bits per row; caller
+interprets per `return_size` (1 / 4 / 8).
 
-**Why fourth:** Queue is the policy almost every existing par call
-will lower to.  Once it lands, step 5 can flip the switch.
+The MVP collects every batch before returning — true streaming
+(workers running while main consumes via bounded queue +
+backpressure) is a follow-up once codegen wiring stabilises.  This
+shape matches `run_parallel_int` but with the configurable
+`return_size` and `extra_args` payload that step 5's value-position
+lowering will use.
 
-**Files:** `src/parallel.rs::run_parallel_queue`, dispatch wiring.
+4 regression tests in `tests/threading.rs::par_queue_*`:
+- `par_queue_returns_results_in_input_order` — 30 elements, 4
+  threads, every slot matches `worker(input[i])`.
+- `par_queue_empty_input` — no-op short-circuit.
+- `par_queue_does_not_grow_parent_stores` — invariant lock-in for
+  step 8's Concat retirement.
+- `par_queue_single_thread_matches_multi` — order invariant holds
+  across thread counts.
+
+Marked `#[allow(dead_code)]` — step 5 is the first call-site
+consumer.  Until step 5 wires it, the runtime is exercised only by
+Rust tests.
+
+**Files:** `src/parallel.rs`, `tests/threading.rs`.
 
 ### Step 5 — Lower value-position par to ParFor + warn on materialise
 
@@ -265,7 +283,9 @@ Update `CHANGELOG.md` + `CHANGELOG_TECHNICAL.md`.
 | Today | 6 | 3 | 3 | 2 (`par`/`par_light`) | baseline |
 | Step 1 (audit done) | 6 | 3 | 3 | 2 | 0 (doc-only) |
 | Step 2 (Discard runtime live) | 6 + 1 | 3 | 3 | 2 | +75 |
-| Step 4 (Queue+Discard live) | 6 + 2 | 3 | 3 | 2 | +400 |
+| Step 3 (ParFor IR + n_parallel_discard) | 6 + 1 | 4 | 3 | 2 | +470 |
+| Step 4 (Queue runtime) | 6 + 2 | 4 | 3 | 2 | +560 |
+| Step 5 (value-position lowering) | 6 + 2 | 4 | 3 | 2 | +660 |
 | Step 7 (warning → error) | 6 + 2 | 3 | 3 | 2 | +500 |
 | Step 8 (Concat retired) | 2 (Queue+Discard) | 1 | 1 | 1 | +250 |
 | Step 9 (Reduce live) | 3 | 1 | 1 | 1 | +400 |
@@ -302,10 +322,10 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    3b codegen for Discard       — DONE
    3c parser detection          — DONE
        ↓
-[4 Stitch::Queue runtime]       — M, +150 LOC ← NEXT
+[4 Stitch::Queue runtime]       — M, +90 LOC — DONE 2026-04-29
        ↓
 [5 lower value-position par
-   + warning on materialise]    — M, +100 LOC
+   + warning on materialise]    — M, +100 LOC ← NEXT
        ↓
 [6 port test suite]             — M, test reshape only
        ↓

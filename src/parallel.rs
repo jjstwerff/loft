@@ -1019,6 +1019,88 @@ pub fn run_parallel_discard(
     });
 }
 
+// ── Plan-06 PRIORITY.md spine step 4 — Stitch::Queue runtime ────────────────
+//
+// Queue is the order-preserving streaming Stitch policy.  Workers run
+// in parallel; their results are collected per-worker in input order
+// and merged in start-index order for sequential consumption by the
+// main thread's body.
+//
+// Used by phase 7's fused for-par when the body references the worker
+// result, and by phase 10's value-position lowering (`let r =
+// parallel_for(input, fn, threads); for x in r { … }`).  The key
+// invariant: a result for row N appears in slot N of the merged Vec —
+// `run_parallel_queue` is order-preserving, identical to today's
+// `run_parallel_int` but with a configurable `return_size` and
+// `extra_args` payload.
+//
+// This commit lands the Rust runtime + tests; codegen wiring lands
+// in spine step 5 (value-position par lowering).  True streaming
+// (workers running while the main thread consumes) is a follow-up
+// once the API shape stabilises — for the MVP the runtime collects
+// every batch before returning.
+
+/// Plan-06 spine step 4 — `Stitch::Queue` worker runtime.
+///
+/// Iterates `input` rows in parallel across `n_threads`, dispatching the
+/// worker fn at `fn_pos` per row and collecting each return value as a
+/// `u64`.  The returned `Vec<u64>` has `len(input)` entries, with
+/// element `i` holding the worker's result for input row `i` —
+/// **order preserved** regardless of how the rayon pool dispatched
+/// workers.
+///
+/// `return_size` controls how `execute_at_raw` reads the worker's
+/// return off the stack: 1, 4, or 8 bytes.  For text or DbRef returns,
+/// the caller must use a different runtime (Concat / future
+/// Queue<text> + Queue<ref> when streaming-mode encoding is settled).
+///
+/// `extra_args` are extra context args that follow the row arg in the
+/// worker's parameter list (matches `execute_at_raw`'s convention used
+/// by `run_parallel_direct` / `run_parallel_int` /
+/// `run_parallel_discard`).
+///
+/// # Panics
+/// Panics if a worker thread panics.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
+#[allow(dead_code)] // step 5 is the first call-site consumer; tested via tests/threading.rs
+#[must_use]
+pub fn run_parallel_queue(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+) -> Vec<u64> {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            batch.push(state.execute_at_raw(fn_pos, &row_ref, &extras, return_size));
+        }
+        (start, batch)
+    });
+    merge_batches(batches, n_rows, 0u64)
+}
+
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
 
 /// Lightweight parallel dispatch — borrows main stores read-only instead

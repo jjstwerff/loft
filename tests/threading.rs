@@ -16,7 +16,9 @@ extern crate loft;
 use loft::compile::byte_code;
 use loft::database::Stores;
 use loft::keys::DbRef;
-use loft::parallel::{WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_text};
+use loft::parallel::{
+    WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_queue, run_parallel_text,
+};
 use loft::parser::Parser;
 use loft::scopes;
 use loft::state::State;
@@ -839,6 +841,115 @@ fn main() {
     let mut state = State::new(p.database);
     byte_code(&mut state, &mut p.data);
     state.execute("main", &p.data);
+}
+
+// ── Plan-06 spine step 4 — Stitch::Queue regression tests ──────────────────
+
+/// Queue's order-preservation invariant: every result lands in slot
+/// `i` of the returned Vec where `i` is the input row index, regardless
+/// of how rayon dispatched workers.  Tests the per-worker batch + merge
+/// pipeline that step 5's value-position lowering will rely on.
+#[test]
+fn par_queue_returns_results_in_input_order() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_double(r: const Num) -> integer { r.v * 2 }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..30).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_worker_double");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    // 4 threads over 30 elements; per-row result is i64 (8 bytes).
+    let results = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 4, &[], 8);
+    assert_eq!(results.len(), 30, "expected one result per input row");
+    for (i, &r) in results.iter().enumerate() {
+        let expected = (i as i64) * 2;
+        assert_eq!(
+            r as i64, expected,
+            "row {i}: worker returned {r}, expected {expected}"
+        );
+    }
+}
+
+/// Empty input → empty result Vec, no workers spawned.
+#[test]
+fn par_queue_empty_input() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let input = build_int_vector(&mut state.database, &[]);
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let program = worker_program(&state);
+    let results = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+    assert!(results.is_empty());
+}
+
+/// Same load-bearing invariant as Discard — Queue must not adopt
+/// or otherwise grow the parent's allocations table.  Step 8's
+/// Concat retirement assumes Queue is allocation-free on the
+/// parent side (the result Vec lives in main-thread Rust heap, not
+/// in `Stores`).
+#[test]
+fn par_queue_does_not_grow_parent_stores() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_id(r: const Num) -> integer { r.v }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..10).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let before = state.database.allocations.len();
+
+    let d_nr = data.def_nr("n_worker_id");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+    let _ = run_parallel_queue(&state.database, program, fn_pos, &input, 8, 2, &[], 8);
+
+    let after = state.database.allocations.len();
+    assert_eq!(
+        before, after,
+        "Queue must not adopt worker stores into the parent's allocations \
+         table (before={before}, after={after})"
+    );
+}
+
+/// Single-thread Queue should produce the same order as multi-thread.
+#[test]
+fn par_queue_single_thread_matches_multi() {
+    let code = r#"
+struct Num { v: integer }
+fn worker_triple(r: const Num) -> integer { r.v * 3 }
+"#;
+    let (mut state, data) = compile(code);
+
+    let values: Vec<i32> = (0..20).map(|i| i + 100).collect();
+    let input = build_int_vector(&mut state.database, &values);
+
+    let d_nr = data.def_nr("n_worker_triple");
+    let fn_pos = data.def(d_nr).code_position;
+
+    let prog1 = worker_program(&state);
+    let r1 = run_parallel_queue(&state.database, prog1, fn_pos, &input, 8, 1, &[], 8);
+    let prog4 = worker_program(&state);
+    let r4 = run_parallel_queue(&state.database, prog4, fn_pos, &input, 8, 4, &[], 8);
+
+    assert_eq!(r1, r4, "single-thread and 4-thread results must match");
+    for (i, &r) in r1.iter().enumerate() {
+        let expected = ((i as i64) + 100) * 3;
+        assert_eq!(r as i64, expected, "row {i}: got {r}, expected {expected}");
+    }
 }
 
 /// Discard's parent state must remain untouched.  Workers run, results are
