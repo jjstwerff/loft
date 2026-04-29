@@ -1511,9 +1511,62 @@ use #count instead"
         let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
         let par_for_d_nr = self.data.def_nr("n_parallel_for");
 
-        // Create result-reference variable.
-        let results_var = self.create_unique("par_results", &results_ref_type);
-        self.vars.defined(results_var);
+        // Plan-06 PRIORITY.md spine step 8c — compute the queue gate
+        // up front so we can avoid declaring a `par_results` slot for
+        // the streaming queue path.  In 8b/c that slot was created
+        // and `defined()` unconditionally; on the queue path nothing
+        // ever wrote to it, so scope-analysis + `generate_block`'s
+        // eval-stack residue check emitted a phantom `OpFreeStack(8)`
+        // at the par-block tail.  The discard underflowed below the
+        // function frame, corrupted `Return discard`'s wraparound,
+        // and SIGSEGV'd on the resulting bogus `code_pos`.  Skipping
+        // the slot keeps the codegen tracker honest.
+        //
+        // The buf_get / buf_drop d_nrs are looked up once here; the
+        // dispatch site below clones from these.
+        let queue_d_nr = self.data.def_nr("n_parallel_queue");
+        let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
+        let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
+        let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
+        let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
+        let early_is_primitive_return = !matches!(
+            ret_type,
+            Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Function(_, _, _)
+                | Type::Vector(_, _)
+                | Type::Unknown(_)
+        );
+        let early_ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
+            &Type::Integer(spec.clone()),
+            &Context::Argument,
+        )) == 8);
+        let early_route_int_queue = early_is_primitive_return
+            && fn_d_nr != u32::MAX
+            && early_ret_size_8
+            && queue_d_nr != u32::MAX
+            && buf_get_d_nr != u32::MAX
+            && buf_drop_d_nr != u32::MAX;
+        let early_route_text_queue = matches!(ret_type, Type::Text(_))
+            && fn_d_nr != u32::MAX
+            && queue_text_d_nr != u32::MAX
+            && buf_get_text_d_nr != u32::MAX
+            && buf_drop_text_d_nr != u32::MAX;
+        let early_route_through_queue = early_route_int_queue || early_route_text_queue;
+
+        // Create result-reference variable — only on the materialised
+        // path.  The queue path stores results in
+        // `Stores::par_buffer_stack` / `_text_buffer_stack` and never
+        // touches a heap result vector.
+        let results_var = if early_route_through_queue {
+            None
+        } else {
+            let v = self.create_unique("par_results", &results_ref_type);
+            self.vars.defined(v);
+            Some(v)
+        };
 
         // Create index variable (b#index).
         let idx_var = self.create_var(&format!("{result_name}#index"), &I32);
@@ -1705,16 +1758,30 @@ use #count instead"
         let queue_d_nr = self.data.def_nr("n_parallel_queue");
         let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
         let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
+        let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
+        let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(spec.clone()),
             &Context::Argument,
         )) == 8);
-        let route_through_queue = is_primitive_return
+        // 8b: integer-i64 returns route through `n_parallel_queue` +
+        // `par_buffer_stack`.  8c: text returns route through
+        // `n_parallel_queue_text` + `par_text_buffer_stack` (sibling
+        // stack — keeps the per-row read path tight by avoiding an
+        // enum match per element).
+        let route_int_queue = is_primitive_return
             && fn_d_nr != u32::MAX
             && ret_size_8
             && queue_d_nr != u32::MAX
             && buf_get_d_nr != u32::MAX
             && buf_drop_d_nr != u32::MAX;
+        let route_text_queue = matches!(ret_type, Type::Text(_))
+            && fn_d_nr != u32::MAX
+            && queue_text_d_nr != u32::MAX
+            && buf_get_text_d_nr != u32::MAX
+            && buf_drop_text_d_nr != u32::MAX;
+        let route_through_queue = route_int_queue || route_text_queue;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1724,10 +1791,13 @@ use #count instead"
         );
 
         // Build the body's `b` accessor.  For the queue path it's
-        // `n_parallel_buf_get(idx)`; for the materialised path it's
-        // `OpGetVector + get_field` indexing the heap result vector.
-        let get_call = if route_through_queue {
+        // `n_parallel_buf_get[_text](idx)`; for the materialised path
+        // it's `OpGetVector + get_field` indexing the heap result
+        // vector.
+        let get_call = if route_int_queue {
             Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+        } else if route_text_queue {
+            Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
         } else {
             // Use OpGetVector + get_field to extract the element from the result
             // vector. This works for all return types (int, long, float, bool, text)
@@ -1745,7 +1815,9 @@ use #count instead"
             let get_vec = self.cl(
                 "OpGetVector",
                 &[
-                    Value::Var(results_var),
+                    Value::Var(results_var.expect(
+                        "materialised path requires results_var; queue gate let it slip through",
+                    )),
                     Value::Int(result_elem_size),
                     Value::Var(idx_var),
                 ],
@@ -1821,20 +1893,35 @@ use #count instead"
             for_steps.push(fill);
         }
         if route_through_queue {
-            // Queue path: `n_parallel_queue` returns the row count
-            // directly, doubling as `par_len` and saving the
+            // Queue path: `n_parallel_queue[_text]` returns the row
+            // count directly, doubling as `par_len` and saving the
             // `OpLengthVector(input)` call.  The result heap vector
             // (`results_var`) is never allocated; per-iteration reads
-            // come from `stores.par_buffer_stack` via
-            // `n_parallel_buf_get`.  After the loop, pop the buffer
-            // with `n_parallel_buf_drop()` so the next par-call
-            // doesn't see a stale buffer underneath.
-            let queue_call = Value::Call(queue_d_nr, pf_args);
+            // come from `stores.par_buffer_stack` (int) or
+            // `par_text_buffer_stack` (text).  After the loop, pop
+            // the buffer with `n_parallel_buf_drop[_text]()` so the
+            // next par-call doesn't see a stale buffer underneath.
+            let (call_d_nr, drop_d_nr, label_loop, label_block) = if route_text_queue {
+                (
+                    queue_text_d_nr,
+                    buf_drop_text_d_nr,
+                    "Parallel for loop (queue text)",
+                    "Parallel for block (queue text)",
+                )
+            } else {
+                (
+                    queue_d_nr,
+                    buf_drop_d_nr,
+                    "Parallel for loop (queue)",
+                    "Parallel for block (queue)",
+                )
+            };
+            let queue_call = Value::Call(call_d_nr, pf_args);
             for_steps.push(v_set(len_var, queue_call));
             for_steps.push(v_set(idx_var, Value::Int(0)));
-            for_steps.push(v_loop(lp, "Parallel for loop (queue)"));
-            for_steps.push(Value::Call(buf_drop_d_nr, Vec::new()));
-            *code = v_block(for_steps, Type::Void, "Parallel for block (queue)");
+            for_steps.push(v_loop(lp, label_loop));
+            for_steps.push(Value::Call(drop_d_nr, Vec::new()));
+            *code = v_block(for_steps, Type::Void, label_block);
         } else {
             // Materialised path (text / ref / fn-ref / vector / non-
             // integer primitives).  Allocates a heap result vector
@@ -1846,7 +1933,12 @@ use #count instead"
             // len(input_vec) — compute once before the loop.
             let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
             for_steps.push(v_set(len_var, len_call));
-            for_steps.push(v_set(results_var, pf_call));
+            for_steps.push(v_set(
+                results_var.expect(
+                    "materialised path requires results_var; queue gate let it slip through",
+                ),
+                pf_call,
+            ));
             for_steps.push(v_set(idx_var, Value::Int(0)));
             for_steps.push(v_loop(lp, "Parallel for loop"));
             *code = v_block(for_steps, Type::Void, "Parallel for block");

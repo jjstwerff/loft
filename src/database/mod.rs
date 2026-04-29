@@ -204,6 +204,15 @@ pub struct Stores {
     /// only writer is the `n_parallel_queue` native fn (exercised by
     /// Rust unit tests in `tests/threading.rs`).
     pub par_buffer_stack: Vec<Vec<u64>>,
+    /// Plan-06 PRIORITY.md spine step 8c — sibling stack for text-
+    /// returning par workers.  `n_parallel_queue_text` populates;
+    /// `n_parallel_buf_get_text` reads (cloning into `scratch` for
+    /// the standard text-return convention); `n_parallel_buf_drop_text`
+    /// pops.  A separate stack from `par_buffer_stack` because text
+    /// results are owned `String`s, not u64-encoded primitives —
+    /// keeping the per-row read path tight (no enum match per
+    /// element) is worth the duplication.
+    pub par_text_buffer_stack: Vec<Vec<String>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -288,6 +297,7 @@ impl Clone for Stores {
             last_json_errors: Vec::new(),
             parallel_ctx: None,
             par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
@@ -714,6 +724,7 @@ impl Stores {
             last_json_errors: Vec::new(),
             parallel_ctx: None,
             par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),

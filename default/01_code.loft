@@ -1076,11 +1076,13 @@ fn parallel_discard(input: reference, element_size: integer, return_size: intege
 // Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
 // Internal: workers run, each row's u64-encoded return value is pushed
 // onto an internal per-call buffer (`stores.par_buffer_stack`).  The
-// row count is returned for use as a loop bound.  Step 8b's parser
-// rewrite is the first user; until then this is exercised only by
-// Rust unit tests.  Same arg layout as parallel_for; integer return.
-// Not callable from user code — this is an IR-only entry the codegen
-// produces.
+// row count is returned as `integer` (i64) — `Type::Integer` slots are
+// 8 bytes on the operand stack regardless of narrow spec, matching
+// `_par_len_N`'s declared `I32` width via the codegen's
+// `OpPutInt` (8B) for any Integer slot.  Step 8b's parser rewrite is
+// the first user; until then this is exercised only by Rust unit
+// tests.  Same arg layout as parallel_for.  Not callable from user
+// code — IR-only entry the codegen produces.
 fn parallel_queue(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
 #impure(par_call)
 // Step 8a — read one row's u64 result from the active queue buffer.
@@ -1090,6 +1092,21 @@ fn parallel_buf_get(idx: integer) -> integer;
 // Step 8a — pop the active queue buffer.  Called after the for-par
 // body loop finishes.
 fn parallel_buf_drop();
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 8c — text-return Queue runtime entry.
+// Same arg layout as parallel_for; workers return owned Strings
+// collected via run_parallel_text.  Result Vec<String> is pushed onto
+// stores.par_text_buffer_stack; the row count is returned as
+// `integer` (i64) — see parallel_queue's note about `_par_len_N`'s
+// 8-byte slot width.  Not callable from user code — IR-only entry
+// the fused for-par desugar emits.
+fn parallel_queue_text(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Step 8c — read one text from the active text-queue buffer.  Clones
+// the String into stores.scratch following the standard text-return
+// convention.
+fn parallel_buf_get_text(idx: integer) -> text;
+// Step 8c — pop the active text-queue buffer.
+fn parallel_buf_drop_text();
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);

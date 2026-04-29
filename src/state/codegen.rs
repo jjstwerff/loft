@@ -1949,6 +1949,7 @@ impl State {
             || stack.data.def(op).name == "n_parallel_for_light"
             || stack.data.def(op).name == "n_parallel_discard"
             || stack.data.def(op).name == "n_parallel_queue"
+            || stack.data.def(op).name == "n_parallel_queue_text"
         {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {
@@ -2116,6 +2117,7 @@ impl State {
                 || stack.data.def(op).name == "n_parallel_for_light"
                 || stack.data.def(op).name == "n_parallel_discard"
                 || stack.data.def(op).name == "n_parallel_queue"
+                || stack.data.def(op).name == "n_parallel_queue_text"
             {
                 let n_declared = stack.data.def(op).attributes.len();
                 for extra in parameters.iter().skip(n_declared) {
@@ -2662,7 +2664,42 @@ impl State {
                 }
             }
         }
+        // Plan-06 spine 8c hardening: catch IR shapes where `value`'s
+        // stack-push width disagrees with `var`'s slot width before we
+        // emit a put-op that silently corrupts adjacent slots.  User-
+        // level code is screened by the parser's type checker; this
+        // catches hand-built IR (par desugar, lambdas, tuple internals)
+        // that bypass the front-end checks.  Surfaced after a
+        // `parallel_queue_text` returning `integer` (8 B) was
+        // assigned to an `i32` slot, overflowed into the next
+        // variable, and produced a SIGSEGV on function return.
+        //
+        // Skip Tuple / Function — multi-element tuples push elements
+        // separately and the put dispatch handles per-leaf widths
+        // (`emit_tuple_var_pop_put`); fn-ref slot is 20 B but stdlib
+        // OpPutFnRef pops 16 B Str then the tracker compensates by
+        // -4 below.
+        #[cfg(debug_assertions)]
+        let stack_before = stack.position;
         self.generate(value, stack, false);
+        #[cfg(debug_assertions)]
+        {
+            let var_tp = stack.function.tp(var).clone();
+            if !matches!(var_tp, Type::Tuple(_) | Type::Function(_, _, _)) {
+                let pushed = stack.position.saturating_sub(stack_before);
+                let slot = size(&var_tp, &Context::Variable);
+                if pushed != slot && pushed != 0 {
+                    panic!(
+                        "[set_var] width mismatch assigning to '{}' ({}): \
+                         value pushed {pushed} bytes, slot is {slot} bytes. \
+                         The trailing put-op would silently corrupt adjacent \
+                         slots.  IR: {value:?}",
+                        stack.function.name(var),
+                        var_tp.name(stack.data),
+                    );
+                }
+            }
+        }
         let var_pos = stack.position - stack.function.stack(var);
         match stack.function.tp(var) {
             Type::Integer(_) => stack.add_op("OpPutInt", self),

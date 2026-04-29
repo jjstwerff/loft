@@ -358,13 +358,60 @@ prior par-suite tests must stay green at every sub-step's tip.
   tuple); narrow integer returns (u8, i32, etc.).  These wait for
   8c / 8d / per-size buf_get variants.
 
-- **8c** — extend Queue dispatch to text returns.  `run_parallel_queue`
-  currently returns `Vec<u64>` of u64 bits per row; text returns
-  need string buffers.  Either (i) add a parallel `run_parallel_queue_text`
-  returning `Vec<String>` and a `par_text_buffer_stack` parallel field,
-  or (ii) generalise the existing buffer to hold per-row variants
-  (`enum ParBufElem { U64(u64), Text(String) }`).  Option (i) keeps
-  the per-row read path tight (no enum match per element).
+- **8c (DONE 2026-04-29)** — extend Queue dispatch to text returns.
+  Used option (i) from the design — separate `Vec<Vec<String>>` stack
+  alongside the int-buffer's `Vec<Vec<u64>>` — to keep the per-row
+  read path tight (no enum match per element).
+
+  **Added:**
+  - `Stores::par_text_buffer_stack: Vec<Vec<String>>` (4 init sites
+    in `database/mod.rs` + `database/allocation.rs`).
+  - `n_parallel_queue_text` native fn — same arg layout as
+    `n_parallel_for`; calls `run_parallel_text` (already
+    existed for the Concat path); pushes `Vec<String>` onto
+    `par_text_buffer_stack`; returns row count as `integer` (i64).
+    `Type::Integer` slots are 8 bytes regardless of narrow spec
+    (`variables::size`), so `_par_len_N`'s `I32` typing matches
+    `OpPutInt`'s 8-byte width.  Computes `n_hidden_text` from the
+    worker's `__work_*` attribute count, mirroring `n_parallel_for`.
+  - `n_parallel_buf_get_text(idx) -> text` — reads the active
+    buffer, clones the String into `stores.scratch`, returns a
+    `Str` slot pointing at the new entry.  Follows the standard
+    text-return convention used by every other text-producing
+    native fn (`t_4text_replace`, `t_4text_to_lowercase`, etc.).
+  - `n_parallel_buf_drop_text()` — pops `par_text_buffer_stack`.
+  - Codegen extras handling for `n_parallel_queue_text` in **both**
+    sites (`state/codegen.rs` lines 1948 push-extras AND lines 2116
+    subtract-extras).  *The missing second site was the SIGSEGV
+    root cause:* parser pushed 6 args (5 declared + 1 n_extra
+    count), the StaticCall codegen subtracted only 5 (44 bytes)
+    instead of 6 (52 bytes), so the codegen tracker drifted +8B.
+    `generate_block`'s end-of-block residue check then emitted
+    `OpFreeStack(0, 8)` for the par-block tail, which discarded 8
+    actual bytes from the runtime stack — bytes that weren't there
+    — and the resulting 4-byte underflow propagated through the
+    function's `Return discard=80` into u32 wraparound, faulting
+    on the bogus `code_pos`.
+  - `default/01_code.loft` decls for the three new natives.
+  - Parser `route_text_queue` gate in `build_parallel_for_ir` for
+    `Type::Text` returns; the `route_int_queue` gate stays.  When
+    the queue path activates, `results_var` is `None` (skip
+    `create_unique` + `defined`) so scope analysis doesn't
+    allocate a phantom slot for the unused result vector.
+
+  **Goldens:** `25_runtime_panic_builtin` and `28_runtime_unwrap_none`
+  regenerated for the 3-line shift in `src/native.rs` from the new
+  dispatch table entries.
+
+  **Codegen hardening (debug-only assertion):**
+  `set_var` (`state/codegen.rs`) gained a debug assertion that
+  catches `Set(var, value)` width mismatches before emitting an
+  `OpPut*` that would silently corrupt adjacent slots.  Surfaced
+  during step 8c development when an `i32` return signature
+  briefly let a 4-byte push land into an 8-byte slot.  The
+  assertion permits Tuple / Function variants (per-leaf put-op
+  emit handled separately) and the legitimate `value pushed 0
+  bytes` first-set short-circuit.
 
 - **8d** — extend Queue dispatch to ref / fn-ref / vector returns
   via the `WorkerStores::take_all_owned` rebase machinery already
@@ -489,8 +536,8 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    8a par buffer infra           — DONE 2026-04-29
    8b parser primitive rewrite   — DONE 2026-04-29 (DbRef-input + i64 return)
    8b' extend Queue dispatch ladder — DONE 2026-04-29 (all input kinds)
-   8c text return Queue path     ← NEXT
-   8d ref/fn-ref/vector Queue
+   8c text return Queue path     — DONE 2026-04-29
+   8d ref/fn-ref/vector Queue    ← NEXT
    8e Concat deletion
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC

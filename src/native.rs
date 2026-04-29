@@ -165,6 +165,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_get", n_parallel_buf_get),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop", n_parallel_buf_drop),
+    #[cfg(feature = "threading")]
+    ("n_parallel_queue_text", n_parallel_queue_text),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_text", n_parallel_buf_get_text),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_drop_text", n_parallel_buf_drop_text),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -1072,6 +1078,124 @@ fn n_parallel_buf_drop(stores: &mut Stores, _stack: &mut DbRef) {
         .par_buffer_stack
         .pop()
         .expect("parallel_buf_drop: par_buffer_stack is already empty");
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8c — text-return Queue runtime entry.  Same
+/// arg layout as `n_parallel_queue`, but workers return owned
+/// `String`s collected via `run_parallel_text` (which routes through
+/// the per-worker output Store slot machinery — same path text
+/// returns always use inside loft).  The resulting `Vec<String>` is
+/// pushed onto `stores.par_text_buffer_stack`; the row count is
+/// pushed onto the operand stack so the caller can use it as a
+/// loop bound.
+///
+/// Step 8c's parser rewrite extends the gate to text returns so
+/// fused for-par over text-returning workers no longer allocates a
+/// heap text-vector.  Reads use `n_parallel_buf_get_text` (clones
+/// into scratch following the standard text-return convention).
+fn n_parallel_queue_text(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout / pop order as n_parallel_for.
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let _v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program, n_hidden_text) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue_text called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_queue_text: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let n_hidden = data
+            .def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| a.name.starts_with("__"))
+            .count();
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+            n_hidden,
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+    let n_rows = vector::length_vector(&v_input, &stores.allocations) as usize;
+
+    let buf = run_parallel_text(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+        n_rows,
+        n_hidden_text,
+    );
+    let count = buf.len() as i64;
+    stores.par_text_buffer_stack.push(buf);
+    stores.put(stack, count);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8c — read one element from the active par
+/// text buffer.  Pops `idx` (i64), clones `par_text_buffer_stack
+/// .last()[idx]` into `stores.scratch`, and pushes a `Str` slot
+/// pointing at the new scratch entry.  Mirrors the convention every
+/// text-returning native fn uses (see `t_4text_replace`,
+/// `t_4text_to_lowercase`, etc.).
+///
+/// Panics if `par_text_buffer_stack` is empty (no active queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+fn n_parallel_buf_get_text(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack);
+    let s_owned = {
+        let buf = stores
+            .par_text_buffer_stack
+            .last()
+            .expect("parallel_buf_get_text: par_text_buffer_stack is empty");
+        buf[idx as usize].clone()
+    };
+    stores.scratch.push(s_owned);
+    let s = Str::new(stores.scratch.last().unwrap());
+    stores.put(stack, s);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8c — pop the active par text buffer.  Called
+/// after the body loop completes.  Panics if the stack is already
+/// empty (parser-side bug).  Void return.
+fn n_parallel_buf_drop_text(stores: &mut Stores, _stack: &mut DbRef) {
+    stores
+        .par_text_buffer_stack
+        .pop()
+        .expect("parallel_buf_drop_text: par_text_buffer_stack is already empty");
 }
 
 #[cfg(feature = "threading")]
