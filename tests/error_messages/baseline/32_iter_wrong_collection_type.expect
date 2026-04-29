@@ -1,6 +1,6 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Unknown iterator type integer at <cases>/32_iter_wrong_collection_type.loft:2:15
+Error: cannot iterate over integer; expected vector, sorted, index, hash, text, or range at <cases>/32_iter_wrong_collection_type.loft:2:15
   |
    2 |   for x in 5 {
      |               ^

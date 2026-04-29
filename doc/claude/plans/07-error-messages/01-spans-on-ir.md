@@ -5,11 +5,31 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 1 — Spans on IR
 
-Status: in-progress (1.A landed 2026-04-28 in `b3b2da2`; 1.B foundation
-in `4904669`; 1.B.0 partial in `c63a169`; **1.B.1 (binary `/` `%`
-wrap) landed 2026-04-29** — root cause was four walkers missing a
-`Value::Span` arm, not a wide audit gap; details in "Resolution
-2026-04-29" below)
+Status: in-progress (mostly done; 5 mechanical wraps remain).
+Wrap landings on `roadmap-lsp-eclipse`:
+
+| Step | Commit | Coverage |
+|---|---|---|
+| 1.A — `Value::Span` variant | `b3b2da2` | enum + walker passthroughs |
+| 1.B foundation — `with_span` / `unspan` | `4904669` | helpers |
+| 1.B.0 — 12-site `unspan()` audit | `c63a169` | initial audit |
+| 1.B.1 — binary `/` `%` wrap | `f6a3227` | wrap activated; 4 walker arms fixed |
+| 1.11 + 1.12 — `[` and `.` wraps | `4c571aa` | vector index + field access |
+| 1.13 — Call / CallRef wrap | `147a422` | every user fn-call site |
+| 1.20 — pc → source-position table | `4324cc9` | codegen populates `source_spans` |
+| Phase 3 hook + extended `+ - * << >>` | `a17eb55` | runtime panic prints `at file:line:col` |
+| Phase 6 starter — type-mismatch messages | `09acf02` + `<this commit>` | "expected E, got G" + "cannot iterate over T" |
+
+Remaining wraps (each small, mechanical, walker discipline already in
+place — surface ≤1 new pattern-match site per wrap): 1.14 Set, 1.15
+Iter, 1.16 Return, 1.17 struct lit, 1.18 narrow cast.
+
+The phase-3 hook (commit `a17eb55`) is the first user-visible payoff:
+running a loft program that panics at runtime now prints
+`  at file:line:col` before the panic message, sourced from the
+codegen-populated `state.source_spans`.  Verified end-to-end on
+arithmetic overflow (`big * big`), the `panic(...)` builtin, and
+`assert(...)` failure.
 
 ## Resolution 2026-04-29 — four walker arms, not a wide audit
 

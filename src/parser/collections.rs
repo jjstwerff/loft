@@ -261,10 +261,15 @@ impl Parser {
                     if self.first_pass {
                         return Value::Null;
                     }
+                    // Plan-07 phase 6 (partial) — name the offending type
+                    // and the iterables loft accepts, so the user knows
+                    // what to substitute.  Old wording "Unknown iterator
+                    // type T" left users guessing whether T was the issue
+                    // or the syntax.
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Unknown iterator type {}",
+                        "cannot iterate over {}; expected vector, sorted, index, hash, text, or range",
                         is_type.name(&self.data)
                     );
                 }
