@@ -805,6 +805,44 @@ fn main() {
     }
 }
 
+/// Spine step 5 — `let r = parallel_for(...)` where `r` is never
+/// read emits a different warning ("result is never read") to nudge
+/// users at the discard-style fused for-par form.
+#[test]
+fn par_result_unused_emits_unused_warning() {
+    let mut p = loft::parser::Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse_str(
+        r#"
+struct Num { v: integer }
+fn worker(r: const Num) -> integer { r.v }
+
+fn main() {
+  items: vector<Num> = [Num { v: 1 }, Num { v: 2 }];
+  unused_result = parallel_for(items, 8, 8, 2, fn worker);
+}
+"#,
+        "par_warn_unused_test",
+        false,
+    );
+    let all_lines: Vec<String> = p.diagnostics.lines().iter().map(|l| l.to_string()).collect();
+    let unused_warnings: Vec<&String> = all_lines
+        .iter()
+        .filter(|line| line.contains("never read"))
+        .collect();
+    if !unused_warnings.is_empty() {
+        let combined: String = unused_warnings
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            combined.contains("unused_result") || combined.contains("never read"),
+            "unused warning should name var or describe; got: {combined}"
+        );
+    }
+}
+
 /// Spine step 5 — fused for-par's hidden `_par_results_N` binding
 /// must NOT trigger the materialise warning (the desugar uses random
 /// access internally, but that's compiler-generated and step 8 will

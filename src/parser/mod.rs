@@ -3541,20 +3541,34 @@ impl Parser {
             // 0, the result is purely materialising — warn.  If
             // `streaming` >= 1 and `other` >= 1, mixed-use — warn (one
             // read can't be both streamed and materialised).
-            if other > 0 {
-                let var_name = self.vars.name(v).to_string();
-                // Skip compiler-generated bindings: the fused for-par
-                // desugar in `parse_parallel_for_loop` emits a hidden
-                // `_par_results_N` var that's bound to a parallel_for
-                // call and then indexed per iteration.  That's the
-                // existing materialised path we WILL retire (step 8),
-                // but warning on the compiler's own desugaring spams
-                // every fused for-par site with output the user can't
-                // act on.  Names starting with `_` are unique-counter
-                // generated; user-typed bindings never start with `_`.
-                if var_name.starts_with('_') {
-                    continue;
-                }
+            let var_name = self.vars.name(v).to_string();
+            // Skip compiler-generated bindings: the fused for-par
+            // desugar in `parse_parallel_for_loop` emits a hidden
+            // `_par_results_N` var that's bound to a parallel_for
+            // call and then indexed per iteration.  That's the
+            // existing materialised path we WILL retire (step 8),
+            // but warning on the compiler's own desugaring spams
+            // every fused for-par site with output the user can't
+            // act on.  Names starting with `_` are unique-counter
+            // generated; user-typed bindings never start with `_`.
+            if var_name.starts_with('_') {
+                continue;
+            }
+            if streaming == 0 && other == 0 {
+                // Result is bound but never read — par dispatched for
+                // worker side effects only.  Suggest the explicit
+                // form so the materialised result vector isn't
+                // allocated for nothing.
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "par result '{var_name}' is never read — the materialised \
+                     result vector is allocated but unused.  Use a fused `for x \
+                     in input par(_=fn(x), N) {{}}` loop with discard policy \
+                     (plan-06 spine step 3c) instead, or remove the assignment \
+                     if the worker has no observable side effects."
+                );
+            } else if other > 0 {
                 diagnostic!(
                     self.lexer,
                     Level::Warning,
@@ -3567,6 +3581,14 @@ impl Parser {
                      {streaming} streaming use(s), {other} materialising use(s) detected."
                 );
             }
+            // streaming == 1 && other == 0 — single-pass eligible.
+            // Step 5b's lowering would rewrite to a fused for-par
+            // dispatching through `run_parallel_queue` (no result
+            // vector).  Deferred — bundles with step 8 (Concat
+            // retirement) where the runtime question becomes
+            // concrete and the rewrite has a clear destination IR.
+            // For now this case is silent: existing code keeps
+            // working through the materialised path.
         }
     }
 

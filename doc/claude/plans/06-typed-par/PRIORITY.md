@@ -157,55 +157,60 @@ Rust tests.
 
 **Files:** `src/parallel.rs`, `tests/threading.rs`.
 
-### Step 5 — Lower value-position par to ParFor + warn on materialise (5a DONE 2026-04-29)
+### Step 5 — Lower value-position par to ParFor + warn on materialise (DONE 2026-04-29)
 
-**Effort: M** · **Net Δ lines: +200** · **Branches collapsed: 0** (no retirement yet)
+**Effort: M** · **Net Δ lines: +260** · **Branches collapsed: 0** (no retirement yet)
 
-Parser-side desugaring of `let r = parallel_for(input, fn, threads)`
-followed by single-pass consumption.  Two checks:
+Parser-side use-site analyser for `let r = parallel_for(input, fn,
+threads)` patterns.  Two outcomes:
 
-1. Walk the result variable's downstream uses.  If single-pass
-   (one `for r in result` loop, one fold, one `par_for_each`),
-   lower to `Value::ParFor` with the appropriate Stitch policy.
-2. If any use is materialising (`r[i]`, multi-pass, store in field,
-   etc.), emit `Level::Warning` with a "did you mean
-   `par_to_vec(...)` for the explicit materialised form" hint.
+1. **Materialising use** (`r[i]`, multi-pass, store in field, etc.) →
+   `Level::Warning` with a "use a fused for-par or `par_to_vec(...)`"
+   hint.
+2. **Unused result** (`r` bound but never read) → different
+   `Level::Warning` pointing users at the discard fused form.
+3. **Streaming-eligible** (single `for x in r {}` use) → silent
+   today; will rewrite to `Stitch::Queue` dispatch in step 8.
 
-Warning, not error — gives a deprecation window for porting the
-test suite.
+Warning, not error — gives a deprecation window before step 7
+promotes to error and step 8 retires the materialised runtime.
 
-**Sub-phasing:**
+**Implementation (5a — DONE):**
+- `Parser::check_par_result_singlepass` called at end-of-function
+  on the second pass alongside `check_ref_mutations`.
+- `collect_par_assignments` walks the body finding every
+  `Set(v, Call(n_parallel_for, ...))` site.  Recurses through every
+  compound IR variant (Block / Loop / If / Insert / Iter / Span /
+  ParFor / Call / CallRef / Return / Drop / Yield / BreakWith /
+  TuplePut).
+- `classify_var_uses` counts each `Var(v)` read.  A read in `Iter`'s
+  init slot OR `ParFor`'s input slot counts as **streaming**;
+  everything else counts as **other** (materialising).
+- Compiler-generated bindings (`_par_results_N` from fused for-par's
+  desugar) are skipped via the `_` prefix check.
+- Diagnostics:
+  - `streaming == 0 && other == 0` (unused) → "result is never read,
+    use fused discard form".
+  - `other > 0` → "result used in materialising context, see
+    par_to_vec".
+  - `streaming == 1 && other == 0` → silent (lowering deferred to 8).
 
-- **5a (DONE 2026-04-29)** — use-site analyser + warning.  Added
-  `Parser::check_par_result_singlepass` (called at end-of-function
-  on the second pass alongside `check_ref_mutations`).  Walks the
-  body via two helpers:
-  - `collect_par_assignments` — finds every `Set(v, Call(n_parallel_for, ...))`
-    site, recursing through every compound IR variant.
-  - `classify_var_uses` — counts a `Var(v)` read as **streaming** when
-    it appears in `Iter`'s init slot or `ParFor`'s input slot, **other**
-    everywhere else.  Recurses through every variant.
+3 tests in `tests/threading.rs`:
+- `par_result_random_access_emits_materialise_warning`
+- `par_result_unused_emits_unused_warning`
+- `par_result_warning_skips_compiler_generated_bindings`
 
-  Compiler-generated bindings (names starting with `_`, e.g. the
-  `_par_results_N` synthetic var the fused for-par desugar emits) are
-  skipped — the warning targets user `let r = ...` patterns, not the
-  internal materialised IR step 8 will retire.
+**5b folded into step 8.**  The streaming-rewrite (`let r =
+parallel_for(...); for x in r { body }` → fused `Stitch::Queue`
+dispatch) requires either:
+- A new opcode that runs the body's bytecode per worker result, or
+- Inlining body bytecode into the streaming dispatcher.
 
-  When `other > 0` for a user var, emits `Level::Warning` with the
-  full migration message (point at fused for-par or future
-  `par_to_vec(...)`).
-
-  2 tests in `tests/threading.rs`:
-  - `par_result_random_access_emits_materialise_warning` — confirms
-    the warning fires + names the user var.
-  - `par_result_warning_skips_compiler_generated_bindings` — confirms
-    fused for-par's hidden binding does NOT trigger the warning.
-
-- **5b (open)** — actual lowering of streaming-eligible cases.  When
-  `streaming == 1` AND `other == 0`, rewrite `let r = parallel_for(...);
-  for x in r { body }` to `Value::ParFor { stitch_id: 3 (Queue) }` +
-  body, dispatching through `run_parallel_queue` from spine step 4.
-  Replaces the materialised `n_parallel_for` call in this case.
+Both are runtime-architecture changes that bundle naturally with
+step 8's Concat retirement — at that point the runtime question
+has a clear destination.  Until then, streaming-eligible patterns
+keep working through the existing materialised path; the analyser's
+silent treatment means no false-positive warnings.
 
 ### Step 6 — Port test suite to streaming forms
 
@@ -236,17 +241,26 @@ step 6 stays green.
 
 **Files:** `src/parser/control.rs` one line.
 
-### Step 8 — Retire Stitch::Concat runtime + parallel_execute_and_collect
+### Step 8 — Retire Stitch::Concat runtime + parallel_execute_and_collect (absorbs 5b)
 
-**Effort: S** · **Net Δ lines: -250, +20** · **Branches collapsed: 6**
+**Effort: S–M** · **Net Δ lines: -250, +50** · **Branches collapsed: 6**
 
-Delete:
+Two coupled changes:
 
-- `parallel_execute_and_collect` (~170 lines in `src/native.rs`).
-- The Stitch::Concat arm in dispatch.
-- `run_parallel_ref`'s batch-return shape; replace with Queue path.
-- `run_parallel_text`'s string-vector-return shape; replace with Queue path.
-- The `result_db = stores.null()` allocation at the par dispatcher's top.
+1. **5b lowering (folded in here)** — rewrite the fused for-par
+   parser-side IR builder so the non-empty-body case dispatches
+   through `run_parallel_queue` (step 4) directly, with the body
+   bytecode inlined per-result.  Replaces the `_par_results_N`
+   materialisation + `OpGetVector(_par_results, ...)` indexing
+   shape that exists today.  This is the runtime-arch change that
+   makes `Stitch::Concat` retire-able.
+
+2. **Concat retirement** — once 5b's rewrite is in, delete:
+   - `parallel_execute_and_collect` (~170 lines in `src/native.rs`).
+   - The Stitch::Concat arm in dispatch.
+   - `run_parallel_ref`'s batch-return shape; replace with Queue path.
+   - `run_parallel_text`'s string-vector-return shape; replace with Queue path.
+   - The `result_db = stores.null()` allocation at the par dispatcher's top.
 
 `copy_from_worker[_unowned]` helpers stay in `src/database/allocation.rs`
 (they have non-par callers if any; phase 11's `par_to_vec` will
@@ -311,7 +325,7 @@ Update `CHANGELOG.md` + `CHANGELOG_TECHNICAL.md`.
 | Step 2 (Discard runtime live) | 6 + 1 | 3 | 3 | 2 | +75 |
 | Step 3 (ParFor IR + n_parallel_discard) | 6 + 1 | 4 | 3 | 2 | +470 |
 | Step 4 (Queue runtime) | 6 + 2 | 4 | 3 | 2 | +560 |
-| Step 5 (value-position lowering) | 6 + 2 | 4 | 3 | 2 | +660 |
+| Step 5 (value-position warning) | 6 + 2 | 4 | 3 | 2 | +710 |
 | Step 7 (warning → error) | 6 + 2 | 3 | 3 | 2 | +500 |
 | Step 8 (Concat retired) | 2 (Queue+Discard) | 1 | 1 | 1 | +250 |
 | Step 9 (Reduce live) | 3 | 1 | 1 | 1 | +400 |
@@ -351,11 +365,11 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
 [4 Stitch::Queue runtime]       — M, +90 LOC — DONE 2026-04-29
        ↓
 [5 lower value-position par
-   + warning on materialise]    — M, +200 LOC
-   5a use-site analyser + warn  — DONE 2026-04-29
-   5b lowering to Queue         — ← NEXT
+   + warning on materialise]    — M, +260 LOC — DONE 2026-04-29
+   (5b lowering folded into step 8 — runtime-arch change bundles
+    with Concat retirement)
        ↓
-[6 port test suite]             — M, test reshape only
+[6 port test suite]             — M, test reshape only ← NEXT
        ↓
 [7 warning → error]             — XS, 1 line
        ↓
