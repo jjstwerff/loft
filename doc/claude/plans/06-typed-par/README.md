@@ -113,6 +113,14 @@ output stores into one result store" regardless of element type.
 Each phase preserves every currently-green test.  Each phase is a
 single PR with its own `make ci` run.
 
+> **For the next session: read [PRIORITY.md](PRIORITY.md) first.**
+> The phase numbers below are the original topic ordering (added as
+> issues surfaced).  PRIORITY.md reorders them as a 10-step spine
+> ranked by complexity reduction per unit effort.  Items not on the
+> spine (phases 4 sub-phases, 5 fixed-point, 8, 9, 11, and most of 2)
+> are explicitly deferred until the spine lands.  The table below
+> remains the per-topic detail; PRIORITY.md is the order to work in.
+
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
 | 0 | [00-baseline-and-bench.md](00-baseline-and-bench.md) | **done** | S | Characterisation suite (0a — `tests/threading_chars.rs` 16 positives + 17 canaries), realistic perf bench (0b — `bench/11_par/` with python + rust + loft-wasm columns), baseline recorded in THREADING.md (0c), D11 type-coverage tracker pre-populated (0d).  Surface gaps G1 / G2 / G3 surfaced and tracked. |
