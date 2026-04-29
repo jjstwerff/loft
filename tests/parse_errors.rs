@@ -10,14 +10,14 @@ mod testing;
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
-        .error("boolean should be integer on call to def at wrong_parameter:1:40")
+        .error("expected integer, got boolean on call to def at wrong_parameter:1:40")
         .warning("Parameter i is never read at wrong_parameter:1:21");
 }
 
 #[test]
 fn wrong_boolean() {
     code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
-        .error("boolean should be EType on call to def at wrong_boolean:2:38")
+        .error("expected EType, got boolean on call to def at wrong_boolean:2:38")
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
@@ -84,7 +84,7 @@ fn use_before_define() {
 #[test]
 fn wrong_text() {
     code!("fn rout(a: integer) -> integer {if a > 4 {return \"a\"} 2}\nfn test() {}")
-        .error("text should be integer on return at wrong_text:1:53");
+        .error("expected integer, got text on return at wrong_text:1:53");
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn wrong_plus() {
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
-        .error("text should be integer on else at wrong_if:2:1");
+        .error("expected integer, got text on else at wrong_if:2:1");
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn wrong_assign() {
 #[test]
 fn mixed_enums() {
     code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(V1) }")
-        .error("E1 should be E2 on call to a at mixed_enums:4:19");
+        .error("expected E2, got E1 on call to a at mixed_enums:4:19");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn wrong_cast() {
 #[test]
 fn field_type() {
     code!("struct Rec { v: u8 }\nfn test() { r = Rec { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
-        .error("Cannot write integer(0, 255) on field Rec.v:text at field_type:2:31");
+        .error("Cannot assign text to field Rec.v of type integer(0, 255) at field_type:2:31");
 }
 
 #[test]

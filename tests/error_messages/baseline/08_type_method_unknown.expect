@@ -16,7 +16,7 @@ Error: Expect token ) at <cases>/08_type_method_unknown.loft:4:13
   |
    4 |   print("{n}");
      |             ^
-Error: void should be text on call to print at <cases>/08_type_method_unknown.loft:4:12
+Error: expected text, got void on call to print at <cases>/08_type_method_unknown.loft:4:12
   |
    4 |   print("{n}");
      |            ^

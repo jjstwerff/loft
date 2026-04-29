@@ -8537,7 +8537,7 @@ fn p140_vector_range_slice_reports_type_mismatch() {
 }"
     )
     .expr("run()")
-    .error("iterator(integer(-2147483647, 2147483647, false), null) should be vector<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+    .error("expected vector<integer>, got iterator(integer(-2147483647, 2147483647, false), null) on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
 }
 
 // INC#2 — vector has comprehensions; sorted/index do not.  Documented

@@ -976,13 +976,18 @@ impl Parser {
     fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type) {
         if !self.first_pass && !self.can_convert(test_type, should) {
             let res = self.lexer.peek();
+            // Plan-07 phase 6 (partial) — "expected E, got G on context"
+            // reads the same direction as English ("we expected this,
+            // we got that"); the old shape "G should be E on context"
+            // forced a mental flip and confused users new to the
+            // language.
             specific!(
                 &mut self.lexer,
                 &res,
                 Level::Error,
-                "{} should be {} on {context}",
-                test_type.name(&self.data),
-                should.name(&self.data)
+                "expected {}, got {} on {context}",
+                should.name(&self.data),
+                test_type.name(&self.data)
             );
         }
     }

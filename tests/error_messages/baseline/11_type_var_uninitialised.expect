@@ -12,7 +12,7 @@ Error: Expect token ) at <cases>/11_type_var_uninitialised.loft:2:13
   |
    2 |   print("{x}");
      |             ^
-Error: void should be text on call to print at <cases>/11_type_var_uninitialised.loft:2:12
+Error: expected text, got void on call to print at <cases>/11_type_var_uninitialised.loft:2:12
   |
    2 |   print("{x}");
      |            ^

@@ -1494,13 +1494,18 @@ impl Parser {
             }
         } else {
             if !self.convert(value, exp_tp, &td) {
+                // Plan-07 phase 6 (partial) — name the value side first
+                // ("cannot assign <got> to <expected>"), the field-type
+                // side last.  Old shape "Cannot write {field_type} on
+                // field {S}.{f}:{value_type}" used a colon that read
+                // as "field declared as <value_type>" — backwards.
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Cannot write {} on field {}.{field}:{}",
-                    td.show(&self.data, &self.vars),
+                    "Cannot assign {} to field {}.{field} of type {}",
+                    exp_tp.show(&self.data, &self.vars),
                     self.data.def(td_nr).name,
-                    exp_tp.show(&self.data, &self.vars)
+                    td.show(&self.data, &self.vars)
                 );
             }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));

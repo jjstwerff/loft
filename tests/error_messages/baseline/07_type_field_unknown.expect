@@ -12,7 +12,7 @@ Error: Expect token ) at <cases>/07_type_field_unknown.loft:4:18
   |
    4 |   print("{p.naem}");
      |                  ^
-Error: void should be text on call to print at <cases>/07_type_field_unknown.loft:4:17
+Error: expected text, got void on call to print at <cases>/07_type_field_unknown.loft:4:17
   |
    4 |   print("{p.naem}");
      |                 ^
