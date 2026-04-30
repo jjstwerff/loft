@@ -361,8 +361,19 @@ Narrow-prim Queue (A3).  Don't bundle.
 
 ### A3 — Extend Queue dispatch for narrow-primitive returns
 
-**Status:** OPEN
+**Status:** IN-FLIGHT (2026-05-01 — infrastructure landed; parser gate pending)
 **Effort:** L (~1.5 sessions)
+
+**In-flight notes:**
+
+- A3.1 (par_narrow_buffer_stack field) — DONE: `Stores.par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>` added at all 4 init sites (`database/mod.rs::Stores::new`, `Clone`, both `database/allocation.rs::WorkerStores::new` paths).
+- A3.2 (3 narrow Queue native fns) — DONE: `n_parallel_queue_narrow` / `_buf_get_narrow` / `_buf_drop_narrow` registered + `default/01_code.loft` decls + 3 round-trip Rust tests in `tests/threading.rs`.
+- A3.4 (codegen extras) — partial: extras-push (state/codegen.rs:1948) + extras-subtract (state/codegen.rs:2117) entries added for `n_parallel_queue_narrow`.
+- A3.3 (parser route_narrow_queue gate) — PENDING.  Investigation surfaced a typed-substitution issue: when `Var(b_var: u8)` is replaced inline by `Call(buf_get_narrow, idx, size, signed) -> integer`, the body's narrow-typed expressions (Float arithmetic, Boolean test, Character comparison) lose their typed semantics.  Two paths forward:
+  1. Per-narrow-type getters (`_get_bool` / `_get_single` / `_get_character`) that return the right type — clean but multiplies the surface.
+  2. Single i64-returning getter wrapped at substitution time with the appropriate `OpConv*FromInt` op (`OpConvBoolFromInt` / `OpConvCharacterFromInt` exist; bit-cast for Single/Float NOT in IR today — would need `OpBitcastSingleFromInt` / `OpBitcastFloatFromInt`).
+
+  Narrow Integer (forced_size 1/2/4) is the simplest case: substitution should work directly because narrow Integer values fit naturally in i64 representation (the body's `r as integer` pattern accepts the i64 result as-is).  Suggest landing narrow Integer first as the next session's PR; Boolean / Single / Character / Float / Enum-no-payload follow with the IR-cast support story sorted.
 **Acceptance test:** the existing `par_struct_to_bool_t4`,
 `par_struct_to_byte_t4`, `par_struct_to_single_t4`,
 `par_struct_to_character_t4`, `par_struct_to_float_t4` re-route
@@ -1567,7 +1578,7 @@ that advances a step.
 |---|---|---|---|
 | A1  | DONE 2026-04-30 | S | b9ad7af + 7153390 |
 | A2  | DONE 2026-04-30 | M | 217b3ac |
-| A3  | OPEN | L  | — |
+| A3  | IN-FLIGHT (infra landed; parser gate pending) | L  | — |
 | A4  | OPEN | S  | — |
 | A5  | OPEN | M  | — |
 | A6.a | OPEN | M | — |

@@ -159,6 +159,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_get_ref", n_parallel_buf_get_ref),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_ref", n_parallel_buf_drop_ref),
+    #[cfg(feature = "threading")]
+    ("n_parallel_queue_narrow", n_parallel_queue_narrow),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_narrow", n_parallel_buf_get_narrow),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_drop_narrow", n_parallel_buf_drop_narrow),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -1182,6 +1188,167 @@ fn n_parallel_buf_drop_ref(stores: &mut Stores, _stack: &mut DbRef) {
         };
         stores.free_named(&synthetic, "par_buf_drop_ref");
     }
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3 — narrow-primitive Queue runtime entry.  Same
+/// arg layout as `n_parallel_queue`; workers return a 1, 2, or 4-byte
+/// value.  Internally reuses `run_parallel_queue`'s `Vec<u64>`
+/// scratch buffer, then packs each row to its declared `return_size`
+/// stride and pushes `(bytes, stride)` onto
+/// `par_narrow_buffer_stack`.  The packed buffer saves memory on
+/// large narrow-return workloads (~7× for 1-byte returns).
+///
+/// Reads use `n_parallel_buf_get_narrow(idx, return_size, signed)`.
+fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue_narrow called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_queue_narrow: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+    let stride = match v_return_size {
+        1 | 2 | 4 => v_return_size as u8,
+        other => panic!("parallel_queue_narrow: invalid return_size {other} (expected 1/2/4)"),
+    };
+    let return_size = u32::from(stride);
+
+    let (primitive_input_size, tuple_input_types) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue_narrow: missing context");
+        let data = unsafe { &*ctx.data };
+        let def = data.def(v_func as u32);
+        let pis = match input_kind_for_first_arg(def) {
+            InputKind::Ref => 0u32,
+            InputKind::Text => u32::MAX,
+            InputKind::Primitive { size } => u32::from(size),
+        };
+        (pis, tuple_first_arg_types(def))
+    };
+
+    let buf64 = crate::parallel::run_parallel_queue(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+        return_size,
+        primitive_input_size,
+        tuple_input_types,
+    );
+    // Pack each u64 row down to `stride` little-endian bytes.  The
+    // worker writes its narrow return into the low `stride` bytes of
+    // the u64 slot already (zero/sign-extended via `to_le_bytes` in
+    // `execute_at_raw_*`), so taking the low bytes preserves the
+    // value bit-for-bit.
+    let mut bytes = Vec::with_capacity(buf64.len() * stride as usize);
+    for u in &buf64 {
+        let row_bytes = u.to_le_bytes();
+        bytes.extend_from_slice(&row_bytes[..stride as usize]);
+    }
+    let n_rows = buf64.len() as i64;
+    stores.par_narrow_buffer_stack.push((bytes, stride));
+    stores.put(stack, n_rows);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3 — read one narrow row from the active narrow
+/// buffer.  Pops `(idx, return_size, signed)` (i64s; `signed` is
+/// 0/1).  Reads `return_size` little-endian bytes at offset
+/// `idx * return_size` from `par_narrow_buffer_stack.last().0`,
+/// sign-extending if `signed != 0`, and pushes the result as i64.
+///
+/// `return_size` is checked against the stored stride — a mismatch
+/// is a parser-side bug.
+fn n_parallel_buf_get_narrow(stores: &mut Stores, stack: &mut DbRef) {
+    let signed = *stores.get::<i64>(stack) != 0;
+    let return_size = *stores.get::<i64>(stack) as usize;
+    let idx = *stores.get::<i64>(stack) as usize;
+
+    let val: i64 = {
+        let entry = stores
+            .par_narrow_buffer_stack
+            .last()
+            .expect("parallel_buf_get_narrow: par_narrow_buffer_stack is empty");
+        let stride = entry.1 as usize;
+        debug_assert_eq!(
+            stride, return_size,
+            "parallel_buf_get_narrow: stride/return_size mismatch (stride={stride}, arg={return_size})"
+        );
+        let off = idx * stride;
+        let bytes = &entry.0;
+        match (stride, signed) {
+            (1, false) => i64::from(bytes[off]),
+            (1, true) => i64::from(bytes[off] as i8),
+            (2, false) => i64::from(u16::from_le_bytes([bytes[off], bytes[off + 1]])),
+            (2, true) => i64::from(i16::from_le_bytes([bytes[off], bytes[off + 1]])),
+            (4, false) => i64::from(u32::from_le_bytes([
+                bytes[off],
+                bytes[off + 1],
+                bytes[off + 2],
+                bytes[off + 3],
+            ])),
+            (4, true) => i64::from(i32::from_le_bytes([
+                bytes[off],
+                bytes[off + 1],
+                bytes[off + 2],
+                bytes[off + 3],
+            ])),
+            _ => panic!("parallel_buf_get_narrow: invalid stride {stride}"),
+        }
+    };
+    stores.put(stack, val);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A3 — pop the active narrow-queue buffer.  Called
+/// after the body loop completes.  Panics if the stack is already
+/// empty (parser-side bug).  Void return.
+fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
+    stores
+        .par_narrow_buffer_stack
+        .pop()
+        .expect("parallel_buf_drop_narrow: par_narrow_buffer_stack is already empty");
 }
 
 #[cfg(feature = "threading")]

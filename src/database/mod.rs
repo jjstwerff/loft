@@ -228,6 +228,16 @@ pub struct Stores {
     /// list) — keeping the per-row read path tight (no enum match
     /// per element) is worth the duplication.
     pub par_ref_buffer_stack: Vec<(Vec<DbRef>, Vec<u16>)>,
+    /// Plan-06 ARC.md A3 — sibling stack for narrow-primitive
+    /// (1, 2, or 4-byte) returning par workers.  `n_parallel_queue_narrow`
+    /// populates a flat `Vec<u8>` of `n_rows * stride` bytes (little
+    /// endian, packed); `n_parallel_buf_get_narrow` reads one row,
+    /// sign-extending if signed.  `n_parallel_buf_drop_narrow` pops.
+    /// 8-byte ints + Float keep using `par_buffer_stack` (their bit
+    /// pattern fits in `u64`).
+    ///
+    /// Each entry is `(bytes, stride)`: stride is 1, 2, or 4.
+    pub par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -352,6 +362,7 @@ impl Clone for Stores {
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
@@ -808,6 +819,7 @@ impl Stores {
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),

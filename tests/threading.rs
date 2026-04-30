@@ -1623,3 +1623,60 @@ fn par_ref_buffer_stack_initially_empty_in_clone() {
         cloned.par_ref_buffer_stack.len()
     );
 }
+
+// ── Plan-06 ARC.md A3 — par_narrow_buffer_stack semantics ────────────────
+
+/// ARC.md A3 — `Stores::par_narrow_buffer_stack` is a stack of
+/// `(bytes, stride)` for narrow-primitive (1/2/4-byte) returning par
+/// workers.  Round-trip: push, observe via `last()`, pop, verify
+/// empty.  Locks in the contract `n_parallel_buf_get_narrow` /
+/// `n_parallel_buf_drop_narrow` rely on.
+#[test]
+fn par_narrow_buffer_stack_push_pop_round_trip() {
+    let mut stores = loft::database::Stores::new();
+    assert!(stores.par_narrow_buffer_stack.is_empty(), "fresh: empty");
+    let bytes = vec![0xFFu8, 0x00, 0x7F, 0x80]; // four signed-i8 rows: -1, 0, 127, -128
+    stores.par_narrow_buffer_stack.push((bytes.clone(), 1));
+    assert_eq!(stores.par_narrow_buffer_stack.len(), 1);
+    let entry = stores.par_narrow_buffer_stack.last().unwrap();
+    assert_eq!(entry.0, bytes);
+    assert_eq!(entry.1, 1);
+    let popped = stores.par_narrow_buffer_stack.pop();
+    assert_eq!(popped, Some((bytes, 1)));
+    assert!(stores.par_narrow_buffer_stack.is_empty());
+}
+
+/// ARC.md A3 — nested narrow par(): inner pop reveals outer buffer
+/// underneath, unchanged.  Same load-bearing invariant as 8a's
+/// `par_buffer_stack_nesting`.
+#[test]
+fn par_narrow_buffer_stack_nesting() {
+    let mut stores = loft::database::Stores::new();
+    let outer = vec![1u8, 2];
+    let inner = vec![10u8, 20, 30, 40];
+    stores.par_narrow_buffer_stack.push((outer.clone(), 1));
+    stores.par_narrow_buffer_stack.push((inner.clone(), 1));
+    assert_eq!(stores.par_narrow_buffer_stack.len(), 2);
+    assert_eq!(stores.par_narrow_buffer_stack.last().unwrap().0, inner);
+    stores.par_narrow_buffer_stack.pop();
+    assert_eq!(
+        stores.par_narrow_buffer_stack.last().unwrap().0,
+        outer,
+        "outer buffer must survive inner pop"
+    );
+}
+
+/// ARC.md A3 — `Stores::clone()` resets `par_narrow_buffer_stack` to
+/// empty; runtime state, not type schema.
+#[test]
+fn par_narrow_buffer_stack_initially_empty_in_clone() {
+    let mut stores = loft::database::Stores::new();
+    stores.par_narrow_buffer_stack.push((vec![1u8, 2, 3, 4], 1));
+    let cloned = stores.clone();
+    assert!(
+        cloned.par_narrow_buffer_stack.is_empty(),
+        "Stores::clone must reset par_narrow_buffer_stack — runtime state, \
+         not type schema (cloned len = {})",
+        cloned.par_narrow_buffer_stack.len()
+    );
+}

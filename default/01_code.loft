@@ -1122,6 +1122,20 @@ fn parallel_buf_get_ref(idx: integer) -> reference;
 // Step 8d.1 — pop the active par-ref buffer; free every adopted
 // store.
 fn parallel_buf_drop_ref();
+#impure(par_call)
+// Plan-06 ARC.md A3 — narrow-primitive Queue runtime entry.  Same
+// arg layout as parallel_for; workers return a 1, 2, or 4-byte value
+// (Boolean, Enum-no-payload, Single, Character, narrow Integer).
+// Result is packed into a Vec<u8> with stride = return_size and
+// pushed onto stores.par_narrow_buffer_stack; the row count is
+// returned for use as a loop bound.  Not callable from user code —
+// IR-only entry the fused for-par desugar emits.
+fn parallel_queue_narrow(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Plan-06 ARC.md A3 — read one narrow row.  return_size is the
+// per-row stride (1, 2, or 4); signed selects sign-extension.
+fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: boolean) -> integer;
+// Plan-06 ARC.md A3 — pop the active narrow-queue buffer.
+fn parallel_buf_drop_narrow();
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);
