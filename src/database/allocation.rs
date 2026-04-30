@@ -24,7 +24,22 @@ impl Stores {
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         // S29: find the lowest free slot using the free_bits bitmap.
         // If a freed slot exists below max, reuse it; otherwise grow max.
-        let slot = self.find_free_slot();
+        // Plan-06 spine 8d.2: workers spawned by `run_parallel_queue_ref`
+        // set `disable_slot_reuse = true` so each new store lands at
+        // `self.max` (above parent_store_count) — `adopt_worker_excess`
+        // requires that to catch all worker-created stores.
+        let slot = if self.disable_slot_reuse {
+            // 8d.2: push at the end of allocations so worker writes
+            // never reuse a cloned slot.  `self.max` would be wrong
+            // here — parent's slot-reuse history can leave
+            // `self.max < self.allocations.len()` (free + re-alloc
+            // doesn't bump max), and using `max` would overwrite a
+            // cloned slot that's still below `parent_store_count`
+            // and so invisible to `adopt_worker_excess`.
+            self.allocations.len() as u16
+        } else {
+            self.find_free_slot()
+        };
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
@@ -545,6 +560,7 @@ impl Stores {
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
@@ -619,6 +635,7 @@ impl Stores {
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

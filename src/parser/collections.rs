@@ -1530,6 +1530,9 @@ use #count instead"
         let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
         let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
         let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
+        let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
+        let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
+        let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
         let early_is_primitive_return = !matches!(
             ret_type,
             Type::Text(_)
@@ -1554,7 +1557,13 @@ use #count instead"
             && queue_text_d_nr != u32::MAX
             && buf_get_text_d_nr != u32::MAX
             && buf_drop_text_d_nr != u32::MAX;
-        let early_route_through_queue = early_route_int_queue || early_route_text_queue;
+        let early_route_ref_queue = matches!(ret_type, Type::Reference(_, _))
+            && fn_d_nr != u32::MAX
+            && queue_ref_d_nr != u32::MAX
+            && buf_get_ref_d_nr != u32::MAX
+            && buf_drop_ref_d_nr != u32::MAX;
+        let early_route_through_queue =
+            early_route_int_queue || early_route_text_queue || early_route_ref_queue;
 
         // Create result-reference variable — only on the materialised
         // path.  The queue path stores results in
@@ -1761,15 +1770,29 @@ use #count instead"
         let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
         let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
         let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
+        let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
+        let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
+        let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(spec.clone()),
             &Context::Argument,
         )) == 8);
         // 8b: integer-i64 returns route through `n_parallel_queue` +
-        // `par_buffer_stack`.  8c: text returns route through
-        // `n_parallel_queue_text` + `par_text_buffer_stack` (sibling
-        // stack — keeps the per-row read path tight by avoiding an
-        // enum match per element).
+        // `par_buffer_stack`.
+        // 8c: text returns route through `n_parallel_queue_text` +
+        // `par_text_buffer_stack` (sibling stack — keeps the per-row
+        // read path tight by avoiding an enum match per element).
+        // 8d.2: reference / struct-enum-payload returns route through
+        // `n_parallel_queue_ref` + `par_ref_buffer_stack` — workers
+        // return DbRefs into their own output stores, the dispatcher
+        // adopts those stores into the parent and rebases the DbRefs
+        // via `Stores::adopt_worker_excess` + `rebase_walk_record`.
+        // Vector returns stay on the legacy materialised path for
+        // now — they're treated as a Reference but the
+        // `parallel_execute_and_collect` branch picks the heap-vector
+        // ownership invariants and matches its element-stride
+        // accounting differently; 8d.3 generalises Queue dispatch
+        // to vector returns.
         let route_int_queue = is_primitive_return
             && fn_d_nr != u32::MAX
             && ret_size_8
@@ -1781,7 +1804,12 @@ use #count instead"
             && queue_text_d_nr != u32::MAX
             && buf_get_text_d_nr != u32::MAX
             && buf_drop_text_d_nr != u32::MAX;
-        let route_through_queue = route_int_queue || route_text_queue;
+        let route_ref_queue = matches!(ret_type, Type::Reference(_, _))
+            && fn_d_nr != u32::MAX
+            && queue_ref_d_nr != u32::MAX
+            && buf_get_ref_d_nr != u32::MAX
+            && buf_drop_ref_d_nr != u32::MAX;
+        let route_through_queue = route_int_queue || route_text_queue || route_ref_queue;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1790,14 +1818,19 @@ use #count instead"
             Value::Null,
         );
 
-        // Build the body's `b` accessor.  For the queue path it's
-        // `n_parallel_buf_get[_text](idx)`; for the materialised path
-        // it's `OpGetVector + get_field` indexing the heap result
-        // vector.
+        // Build the body's `b` accessor.  For the queue paths it's
+        // `n_parallel_buf_get[_text/_ref](idx)`; for the materialised
+        // path it's `OpGetVector + get_field` indexing the heap
+        // result vector.
         let get_call = if route_int_queue {
             Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
         } else if route_text_queue {
             Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
+        } else if route_ref_queue {
+            // 8d.2: returns a rebased DbRef (12 bytes) — body field
+            // accesses route through the standard OpGetField path,
+            // same as Var(struct_var).foo.
+            Value::Call(buf_get_ref_d_nr, vec![Value::Var(idx_var)])
         } else {
             // Use OpGetVector + get_field to extract the element from the result
             // vector. This works for all return types (int, long, float, bool, text)
@@ -1897,16 +1930,26 @@ use #count instead"
             // count directly, doubling as `par_len` and saving the
             // `OpLengthVector(input)` call.  The result heap vector
             // (`results_var`) is never allocated; per-iteration reads
-            // come from `stores.par_buffer_stack` (int) or
-            // `par_text_buffer_stack` (text).  After the loop, pop
-            // the buffer with `n_parallel_buf_drop[_text]()` so the
-            // next par-call doesn't see a stale buffer underneath.
+            // come from `stores.par_buffer_stack` (int),
+            // `par_text_buffer_stack` (text), or
+            // `par_ref_buffer_stack` (ref).  After the loop, pop
+            // the buffer with `n_parallel_buf_drop[_text/_ref]()` so
+            // the next par-call doesn't see a stale buffer
+            // underneath; the ref drop also frees adopted worker
+            // stores.
             let (call_d_nr, drop_d_nr, label_loop, label_block) = if route_text_queue {
                 (
                     queue_text_d_nr,
                     buf_drop_text_d_nr,
                     "Parallel for loop (queue text)",
                     "Parallel for block (queue text)",
+                )
+            } else if route_ref_queue {
+                (
+                    queue_ref_d_nr,
+                    buf_drop_ref_d_nr,
+                    "Parallel for loop (queue ref)",
+                    "Parallel for block (queue ref)",
                 )
             } else {
                 (

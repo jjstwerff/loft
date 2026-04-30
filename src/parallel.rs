@@ -931,20 +931,58 @@ pub fn run_parallel_queue_ref(
         return (Vec::new(), Vec::new());
     }
     let parent_store_count = stores.allocations.len() as u16;
-    // run_parallel_ref takes `&Stores` — reborrow immutably for the
-    // duration of the call.  After it returns, `batches` owns its
-    // worker data (Stores moved by value) and we can mutate `stores`
-    // again.
-    let batches = run_parallel_ref(
-        &*stores,
-        program,
-        fn_pos,
-        input,
-        element_size,
-        n_threads,
-        extra_args,
-        n_rows,
-    );
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    // 8d.2: inline `parallel_workers` (instead of delegating to
+    // `run_parallel_ref`) so we can disable the S29 free-slot reuse
+    // optimisation per worker.  `clone_for_worker` populates the
+    // worker's `free_bits` with parent's freed slots; without
+    // clearing it, the worker's `OpNewRecord` may reuse a freed
+    // parent slot — and `adopt_worker_excess(parent_store_count)`
+    // only adopts stores at indices ≥ `parent_store_count`, so a
+    // record written into a clone-of-freed-parent-slot is silently
+    // lost.  Clearing `free_bits` forces every new worker store to
+    // land at index ≥ `parent_store_count`, which adoption catches
+    // in full — preserving the streaming "no copy" benefit while
+    // fixing the lost-write bug.  The S29 optimisation stays in
+    // place for every other dispatch path (run_parallel_direct /
+    // _text / _int / _discard / the legacy run_parallel_ref) where
+    // adoption isn't part of the contract.
+    // 8d.2: inline `parallel_workers` (instead of delegating to
+    // `run_parallel_ref`) so we can disable the S29 free-slot reuse
+    // optimisation per worker.  `clone_for_worker` populates the
+    // worker's `free_bits` with parent's freed slots; without
+    // disabling reuse, the worker's `OpNewRecord` may reuse a freed
+    // parent slot or its own internal free slot — and
+    // `adopt_worker_excess(parent_store_count)` only adopts stores
+    // at indices ≥ `parent_store_count`, so a record written into a
+    // clone-of-parent-slot is silently lost.  Setting
+    // `disable_slot_reuse = true` forces every new worker store to
+    // land at `allocations.len()` (above parent_store_count, since
+    // clone_for_worker preserves parent's allocations vector
+    // start-of-clone), which adoption catches in full.  Preserves
+    // the streaming "no copy" benefit while fixing the lost-write
+    // bug.  S29 stays in place for every other dispatch path
+    // (run_parallel_direct / _text / _int / _discard / the legacy
+    // run_parallel_ref consumed by `parallel_execute_and_collect`)
+    // where adoption isn't part of the contract.
+    let batches = parallel_workers(&*stores, n_threads, n_rows, |start, end, mut ws| {
+        ws.stores.free_bits.clear();
+        ws.stores.disable_slot_reuse = true;
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            batch.push((row_idx, state.execute_at_ref(fn_pos, &row_ref, &extras)));
+        }
+        (batch, state.database)
+    });
     let null_db = DbRef {
         store_nr: u16::MAX,
         rec: 0,

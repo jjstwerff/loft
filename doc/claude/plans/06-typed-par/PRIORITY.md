@@ -483,11 +483,60 @@ prior par-suite tests must stay green at every sub-step's tip.
     Queue).  All 30 + 31 threading tests still green.  Goldens
     regenerated for the 3-line shift in `src/native.rs`.
 
-  - **8d.2** — parser-side `route_ref_queue` gate in
-    `build_parallel_for_ir`; route Type::Reference / Enum-payload /
-    Vector returns through Queue.
+  - **8d.2 (DONE 2026-04-30)** — parser-side `route_ref_queue` gate
+    in `build_parallel_for_ir`; routes plain `Type::Reference`
+    returns through Queue.  Two bugs surfaced + fixed during
+    enablement:
 
-  - **8d.3** — fn-ref returns (20-byte slot — needs the wide-return
+    1. **Codegen extras-subtract list missed
+       `n_parallel_queue_ref`.**  `state/codegen.rs:2117` had it in
+       the push-extras list (line 1953) but not the cleanup-subtract
+       list (line 2120) — same shape as the 8c regression.  Fixed
+       by adding `n_parallel_queue_ref` to the second list.
+
+    2. **Workers were reusing parent's freed slots, losing adopted
+       data.**  `clone_for_worker` propagates parent's `free_bits`
+       (S29 optimisation) so workers can reuse parent's freed
+       slots; their writes go into the worker's CLONE of the freed
+       slot.  `adopt_worker_excess(parent_store_count)` only adopts
+       stores at indices ≥ `parent_store_count`, so the cloned-and-
+       filled "free parent slot" is left behind.  Subsequent
+       sequential par calls (`fn a() { for x in items par(...) }
+       fn b() { for x in items par(...) }`) had `b`'s workers
+       reusing `a`'s adopted-then-freed slots, with `buf_get_ref`
+       reads landing on parent's still-freed slot containing
+       stale data.
+
+       **Fix**: added `pub disable_slot_reuse: bool` field to
+       `Stores` (`src/database/mod.rs`).  When set,
+       `database_named` skips `find_free_slot` and pushes at
+       `allocations.len()` — every new store lands above
+       `parent_store_count` (since `clone_for_worker` preserves
+       parent's allocations vector start-of-clone), where adoption
+       catches it in full.  Set on workers spawned by
+       `run_parallel_queue_ref`; left `false` everywhere else so
+       S29 stays in place for non-adoption dispatch paths.  Note
+       `self.max` would be wrong here — parent's slot-reuse
+       history can leave `self.max < self.allocations.len()`, and
+       using `max` would overwrite a cloned slot still below
+       `parent_store_count` and so invisible to adoption.
+
+    `Type::Enum(_, true, _)` (struct-enum-payload) and
+    `Type::Vector(_, _)` returns stay excluded from the gate.
+    Enum-payload's `par_struct_to_struct_enum_t4` test passes
+    through the legacy materialised path; routing it through Queue
+    is a separate verify-and-extend step.
+
+  - **8d.3** — extend `route_ref_queue` to `Type::Enum(_, true, _)`
+    + `Type::Vector(_, _)` (struct-enum-payload + vector returns).
+    The `disable_slot_reuse` fix landed in 8d.2 likely handles
+    these too — re-test by widening the gate and observing.  If
+    cross-worker `DbRef` rebase fails (`rebase_walk_record`'s
+    per-worker map can't resolve refs into another worker's
+    store), accumulate all workers' rebase maps before the
+    record walk.
+
+  - **8d.4** — fn-ref returns (20-byte slot — needs the wide-return
     path used by `execute_at_raw_to`).
 
 - **8e** — actual Concat retirement: delete
@@ -612,8 +661,9 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    8c text return Queue path     — DONE 2026-04-29
    8d.0 run_parallel_queue_ref   — DONE 2026-04-30 (adopt + rebase)
    8d.1 par_ref_buffer_stack + natives — DONE 2026-04-30
-   8d.2 parser ref-queue gate    ← NEXT
-   8d.3 fn-ref returns
+   8d.2 parser ref-queue gate    — DONE 2026-04-30 (plain Type::Reference)
+   8d.3 ref-queue: enum-payload + vector ← NEXT
+   8d.4 fn-ref returns
    8e Concat deletion
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC

@@ -247,6 +247,22 @@ pub struct Stores {
     /// allocator leaves.  Enabled by `LOFT_LOG=poison_free` via
     /// `execute_log_impl` (or anywhere else that wires it).
     pub poison_free: bool,
+    /// Plan-06 spine 8d.2: when true, `database_named`'s slot allocator
+    /// skips `find_free_slot` and always pushes a new store at the end
+    /// of `allocations`.  Set on workers spawned by
+    /// `run_parallel_queue_ref` so each worker-created Result record
+    /// lands at an index ≥ `parent_store_count`, where
+    /// `adopt_worker_excess` can move it into the parent's namespace.
+    /// Without this flag, workers reuse their own freed slots (S29) —
+    /// each `transform()` call's local Result store gets freed at fn
+    /// return and the next call picks the same slot, so the per-row
+    /// `DbRef`s collected in the batch end up aliasing the LAST call's
+    /// data.  Other dispatch paths (run_parallel_direct / _text / _int
+    /// / _discard / the legacy run_parallel_ref consumed by
+    /// `parallel_execute_and_collect`) leave this `false` because they
+    /// don't rely on adoption — `copy_from_worker` reads through the
+    /// graft swap regardless of slot reuse.
+    pub disable_slot_reuse: bool,
     /// When true, assert() reports results (pass/fail) to `assert_results`
     /// instead of panicking on failure.  Used by the WASM playground.
     pub report_asserts: bool,
@@ -319,6 +335,7 @@ impl Clone for Stores {
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
@@ -747,6 +764,7 @@ impl Stores {
             source_dir: String::new(),
             frame_yield: false,
             poison_free: false,
+            disable_slot_reuse: false,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
