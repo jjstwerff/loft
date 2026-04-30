@@ -9,6 +9,40 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### P195: chained tuple-index lex (`n.v.0.0`)
+
+Fixes the lexer's greedy `<digit>.<digit>` → float read when the
+previous emitted token was `.` (field access).  Before: `n.v.0.0`
+lexed as `n`, `.`, `v`, `.`, `Float(0.0)` — the parser then saw a
+type mismatch on assignment and a stray `.` it could not place.
+After: lexes as 7 tokens — `n`, `.`, `v`, `.`, `Integer(0)`, `.`,
+`Integer(0)` — which is the correct chained tuple-index access.
+
+Mechanism (`src/lexer.rs::number`):
+
+- At entry, capture `prev_was_field_dot = self.peek.has ==
+  Token(".")`.  `self.peek` holds the previously-emitted token at
+  this point (the parser flow uses `cont()` which sets `peek =
+  next()`-result; inside `number()`, `peek` is still the
+  before-the-current-number token).
+- After consuming a `.` and confirming it is **not** the start of a
+  `..` range token, peek the next char in `iter`.  If
+  `prev_was_field_dot && next.is_ascii_digit()`, push `Token(".")`
+  onto `memory` (so the next `cont()` returns it) and return
+  `Integer(val)` immediately — the trailing digit is then re-lexed
+  as a fresh number on the call after that.
+- The `..` range branch is unchanged: `0..5` still lexes as range,
+  not tuple index.  Stand-alone floats like `0.0`, `1.5e3`, and
+  expression-position floats like `x = 0.0` are unaffected because
+  their preceding token is not `.`.
+
+Test: `src/lexer.rs::test::p195_chained_tuple_index_does_not_glue_into_float`
+exercises 5 cases — chained tuple index, stand-alone float,
+expression-position float, mixed expression, range — using a new
+`cont_array` test helper that drives the lexer through the same
+`cont()` API the parser uses (the existing `array()` helper bypasses
+`cont()` and would not catch context-aware lexing).
+
 ### `--show-types --trace` per-expression type tape
 
 Adds a per-expression tape to the `--show-types` introspection

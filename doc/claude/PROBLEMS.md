@@ -30,7 +30,6 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 195 | Chained literal field indexing `n.v.0.0` mis-parses — the lexer reads `0.0` as a single float literal.  Affects any nested-tuple access where two consecutive integer indices appear without an intervening identifier. | Low | Stash the inner element first: `inner = n.v.0; inner.0`. |
 | 196 | Native codegen for `(fn(int) -> int, int)` (or any tuple containing a fn-ref) fails with `(u32, DbRef).0 as i32` — the fn-ref tuple element's runtime shape doesn't fit the OpSet/OpGet narrowing path used for primitive ints.  Interpreter mode works; only native compilation breaks.  Closes via [ARC.md A6.c](plans/06-typed-par/ARC.md) (4d.C closure-storage redesign). | Medium | Use a struct field for fn-ref instead of tucking it in a tuple: `struct H { f: fn(...) -> ..., n: int }`. |
 | 198 | `tests/scripts/95-alias-copy.loft` leaks Database 3 (allocated by `OpInitRef` at pc≈4788) — `p146_script_95_alias_copy_leak` regression test panics on `roadmap-lsp-eclipse`.  Passes on main; the regression sits in commits between `main` (`05b53b2`) and `roadmap-lsp-eclipse` HEAD.  Most likely culprits: plan-04/05 slot allocator refit, plan-06 par-safety series, or the plan-07 Span IR walker arms missing the alias-copy free path.  Investigated as part of [ARC.md A1](plans/06-typed-par/ARC.md). | High | None at the loft language level — the test catches a runtime invariant. Investigate scopes.rs `scan_set` aliased-return free-emission against the new IR variants (`Value::Span`, `Value::ParFor`) added on this branch. |
 | 199 | Native codegen for `n_assert(stores, n_add_pair(stores, var_p) == 30, …)` emits two simultaneous `&mut stores` borrows (E0499).  Reproducer: `tests/scripts/50-tuples.loft` line 21; `cargo test --release --test native native_tuple_script`.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch.  Blocks native-mode tuple par; see [ARC.md A7 risk register](plans/06-typed-par/ARC.md). | Medium | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list. |
@@ -38,40 +37,6 @@ existing entry, not re-open it as a bug.
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 
 ## Interpreter Robustness
-
-### 195. Chained literal indexing — lexer reads `0.0` as float
-
-**Symptom:** `n.v.0.0` (read element 0 of inner tuple of element 0)
-fails to parse:
-
-```loft
-struct Nested { v: ((integer, integer), (integer, integer)) }
-fn test() {
-  n = Nested { v: ((1, 2), (3, 4)) };
-  a = n.v.0.0;                    // ← parse error: float `0.0`
-                                  //   followed by stray `.` ?
-}
-```
-
-**Where:** `src/lexer.rs` greedy-reads `<digit>.<digit>` as a single
-floating-point number token.  The post-field path doesn't unread the
-fractional part when the previous token was a `.` separator.
-
-**Fix path:** in the lexer's number-reading routine, when the previous
-non-trivia token was `.` (or, more conservatively, when a tuple-index
-context is pending), treat `<digit>` followed by `.` as a single-digit
-integer rather than the start of a float.  The cleanest mechanism is
-an "integer-only" lexing mode the parser opts into when it knows it's
-expecting a tuple index.
-
-**Workaround:** stash the inner element first:
-
-```loft
-inner = n.v.0;
-a = inner.0;     // OK
-```
-
-**Test:** add a test once fixed.
 
 ### 196. Tuple-of-fn-ref native codegen — `(u32, DbRef).0 as i32`
 
