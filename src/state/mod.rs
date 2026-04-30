@@ -2204,7 +2204,21 @@ impl State {
     /// Execute a worker function that returns a struct reference (`DbRef`).
     /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
     /// record lives in `self.database` (the worker's cloned stores).
-    pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+    ///
+    /// `hidden_dests` is the slice of pre-allocated destination `DbRef`s
+    /// for the worker's hidden caller-supplied destination params (added
+    /// by `ref_return` for `Type::Vector` / `Type::Reference` /
+    /// `Type::Enum(_, true, _)` returns).  Each destination is pushed
+    /// as 12 bytes after the input arg and before regular extras —
+    /// matching the parameter order the codegen assumes.  Pass `&[]`
+    /// when the worker has no hidden args.
+    pub fn execute_at_ref(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        hidden_dests: &[DbRef],
+        extra_args: &[u64],
+    ) -> DbRef {
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
             self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
@@ -2227,6 +2241,14 @@ impl State {
         });
         self.stack_pos = 4;
         self.put_stack(*arg);
+        for &dest in hidden_dests {
+            // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
+            // (NOT 8-byte i64 like extras).  The codegen for the
+            // worker's body computes the next param's offset assuming
+            // 12-byte hidden DbRefs; pushing 8 bytes here would
+            // misalign every subsequent slot read in the worker.
+            self.put_stack(dest);
+        }
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }

@@ -78,12 +78,11 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 (`25_runtime_panic_builtin`, `28_runtime_unwrap_none`) need regen.
 `n_parallel_for` now delegates to `n_parallel_for_light`.
 
-### 7 ignored canaries (2026-05-01: `par_struct_to_keyed_collection_t4` closed by A6.d)
+### 6 ignored canaries (2026-05-01: A6.d + A6.a both closed)
 
 | Test | Line | Blocker | Plan link |
 |---|---|---|---|
 | `par_vec_of_fns_input_t4` | 530 | fn-ref vector storage; codegen stack tracker disagrees with `execute_at_raw_primitive_input_wide` | 4d.A.2 cascade ([04d-followups.md](04d-followups.md)) |
-| `par_struct_to_vector_t4` | 639 | vector return — needs hidden-arg per-worker destination | 4e ([04-typed-input-output.md:459](04-typed-input-output.md)) |
 | `par_struct_to_fn_t4` | 686 | fn-ref return; closure DbRef sentinel offset bug | 4e (same root cause as G6 via different shape) |
 | `par_tuple_return_int_int` | 749 | tuple return; var_size=16 > 8 byte cap | T1.8a + phase 9c ([09-tuple-support.md](09-tuple-support.md)) |
 | `par_tuple_return_int_text` | 767 | tuple return | T1.8a + phase 9c |
@@ -672,9 +671,30 @@ destination, 4d.C closure storage).
 A6 is split into 4 sub-PRs because each canary has an independent
 fix path.  Each sub-PR closes exactly one canary.
 
-#### A6.a — `par_struct_to_vector_t4` (vector return)
+#### A6.a — `par_struct_to_vector_t4` (vector return) — **DONE 2026-05-01**
 
-**Design:** Implement phase 4e (`ref_return()` hidden-arg
+**Closure notes:**
+
+- `execute_at_ref` (`src/state/mod.rs`) gained a `hidden_dests: &[DbRef]`
+  parameter.  Each destination is pushed as 12 bytes after the input
+  arg and before regular extras — matching the parameter order the
+  codegen assumes for `ref_return`-promoted hidden args.
+- `run_parallel_queue_ref` (`src/parallel.rs`) gained an
+  `n_hidden_dests: usize` parameter.  For each row, allocates that
+  many backing stores via `state.database.database(100)` (NOT
+  `null()`, which returns a u32::MAX-sized sentinel store with no
+  usable storage — the worker's `out += [i]` writes silently fail
+  on it).  Each destination's store is dispenser-allocated, so
+  adoption + rebase + revive_record_chain pull it back into parent
+  alongside the result DbRef.
+- `n_parallel_queue_ref` (`src/native.rs`) computes `n_hidden_dests`
+  from `def.attributes.iter().filter(|a| a.hidden && !a.name.starts_with("__")).count()`
+  before the mutable borrow of `stores`.
+- Two `tests/threading.rs` direct call sites updated for the new
+  arity.  Canary `par_struct_to_vector_t4` un-`#[ignore]`'d and
+  passing.  Ignored canary count: 7 → 6.
+
+**Design (original):** Implement phase 4e (`ref_return()` hidden-arg
 destination machinery, designed in
 [04-typed-input-output.md:459](04-typed-input-output.md)).
 
@@ -1594,7 +1614,7 @@ that advances a step.
 | A3  | IN-FLIGHT (infra landed; parser gate pending) | L  | — |
 | A4  | OPEN | S  | — |
 | A5  | OPEN | M  | — |
-| A6.a | OPEN | M | — |
+| A6.a | DONE 2026-05-01 | M | (this branch) |
 | A6.b | OPEN | M | — |
 | A6.c | OPEN | M | — |
 | A6.d | DONE 2026-05-01 | S | (this branch) |

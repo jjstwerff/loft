@@ -1259,6 +1259,7 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         n as usize,
         &ret_type,
         &data,
+        0,
     );
     let allocations_after = state.database.allocations.len();
 
@@ -1470,6 +1471,7 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         0,
         &ret_type,
         &data,
+        0,
     );
     let allocations_after = state.database.allocations.len();
 

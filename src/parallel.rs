@@ -685,6 +685,7 @@ pub fn run_parallel_queue_ref(
     n_rows: usize,
     ret_type: &crate::data::Type,
     data: &crate::data::Data,
+    n_hidden_dests: usize,
 ) -> (Vec<DbRef>, Vec<u16>) {
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
@@ -738,7 +739,31 @@ pub fn run_parallel_queue_ref(
                         row_idx as i64,
                         &state.database.allocations,
                     );
-                    batch.push((row_idx, state.execute_at_ref(fn_pos, &row_ref, extras_ref)));
+                    // ARC.md A6.a — when the worker fn has hidden
+                    // caller-supplied destination params (added by
+                    // `ref_return` for Vector / Reference / Enum-payload
+                    // returns), allocate a fresh storage slot per
+                    // hidden arg in the worker's output store and pass
+                    // it as a 12-byte param after the input element.
+                    // The worker writes its result into the destination;
+                    // its DbRef survives in the worker's allocations
+                    // table and gets adopted + rebased back to parent
+                    // alongside the rest.
+                    // ARC.md A6.a — pre-allocate a real backing store
+                    // (NOT `state.database.null()`) for each hidden
+                    // destination.  `null()` returns a u32::MAX-sized
+                    // sentinel store: subsequent record claims silently
+                    // fail, so `out += [i]` writes go nowhere and the
+                    // returned vector is empty.  A 100-word real store
+                    // is enough seed; the standard claim path grows it
+                    // as the worker appends.
+                    let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
+                        .map(|_| state.database.database(100))
+                        .collect();
+                    batch.push((
+                        row_idx,
+                        state.execute_at_ref(fn_pos, &row_ref, &hidden_dests, extras_ref),
+                    ));
                 }
                 (batch, state.database)
             })

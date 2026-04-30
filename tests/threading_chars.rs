@@ -635,8 +635,18 @@ fn run() -> integer {
     .result(Value::Int(36));
 }
 
+// par-vector-return: closed by ARC.md A6.a — `run_parallel_queue_ref`
+// now detects `hidden = true` attributes (added by `ref_return` for
+// Vector / Reference / Enum-payload returns) and pre-allocates a
+// 100-word backing store per hidden arg per row in the worker's
+// output store namespace.  `execute_at_ref` gained a
+// `hidden_dests: &[DbRef]` slice that gets pushed as 12 bytes per
+// destination after the input arg and before regular extras —
+// matching the parameter layout the codegen assumes.  Each
+// destination's store is dispenser-allocated, so adoption +
+// rebase + revive_record_chain pull it back into parent
+// alongside the result DbRef.
 #[test]
-#[ignore = "par-vector-return: deferred from phase 1 to plan-06 PRIORITY.md spine step 3 / 9 (fused for-par + Stitch::Reduce).  G6 partial — parser now accepts vector<T> return (routed through ref path) and the extra-arg check skips `hidden: true` attributes from ref_return promotion.  Remaining blocker: vector-returning workers like `out: vector<integer> = []; ...; out` get the local var promoted to a hidden caller destination arg, but the par dispatcher passes 0 extras → the worker writes into the parent's locked store at thread join.  Fix needs the par dispatcher to allocate per-worker destinations in worker output stores and pass them as the hidden arg.  After spine step 10 (no materialised vector), vector-return becomes streaming and this canary closes naturally."]
 fn par_struct_to_vector_t4() {
     // Worker constructs and returns a vector per element.  Today
     // the runtime can't represent this.  After phase 1, the per-

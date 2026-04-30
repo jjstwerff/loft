@@ -1092,7 +1092,7 @@ fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
     // before we hand the closure-bound WorkerProgram off; both are
     // borrowed from `stores.parallel_ctx` which we cannot keep across
     // the run_parallel_queue_ref mutable borrow of `stores`.
-    let (fn_pos, program, ret_type, data_ptr) = {
+    let (fn_pos, program, ret_type, data_ptr, n_hidden_dests) = {
         let ctx = stores
             .parallel_ctx
             .as_ref()
@@ -1107,6 +1107,21 @@ fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
         let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
         let library = unsafe { Arc::clone(&*ctx.library) };
         let ret_type = data.def(d_nr).returned.clone();
+        // ARC.md A6.a — count hidden caller-supplied destination
+        // params.  `ref_return` (parser/control.rs) adds an
+        // attribute with `hidden = true` for every Vector / Reference /
+        // Enum-payload return-typed local at the source-level fn body.
+        // The dispatcher must allocate a fresh DbRef per hidden arg
+        // per row in the worker output store so the worker writes
+        // into worker-local storage; without this, the worker
+        // dereferences uninitialized stack at the hidden-arg offset
+        // and writes into the parent's locked store (SIGSEGV).
+        let n_hidden_dests = data
+            .def(d_nr)
+            .attributes
+            .iter()
+            .filter(|a| a.hidden && !a.name.starts_with("__"))
+            .count();
         (
             fn_pos,
             WorkerProgram {
@@ -1119,6 +1134,7 @@ fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
             },
             ret_type,
             ctx.data,
+            n_hidden_dests,
         )
     };
 
@@ -1141,6 +1157,7 @@ fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
         n_rows,
         &ret_type,
         data,
+        n_hidden_dests,
     );
     let count = refs.len() as i64;
     stores.par_ref_buffer_stack.push((refs, adopted));
