@@ -157,6 +157,18 @@ unexpected failures; bench 11 ±5 %.
   THREADING.md absolute baseline was a different host; native
   column blocked by P199 (re-opens under A7).  Recorded in
   THREADING.md § "ARC.md A1 host-relative check".
+- Clippy debt swept (commit `afc9f70`): branch had accumulated 40
+  pre-existing clippy errors from spine commits 87c2ce8 onwards
+  (Discard/Queue/Purity/ParFor work).  All cleared via clippy
+  autofix + targeted `#[allow]` on legitimate too-many-args /
+  similar-names / single-char patterns, and re-flowed doc list
+  continuation indents.  No semantic changes.
+- `cargo nextest run --profile ci`: passes everywhere except
+  `loft::html_wasm::moros_editor_html_smoke` — confirmed
+  pre-existing P199 manifestation (`OpCopyRecord(stores,
+  n_build_chunk(stores, …), …)` E0499).  Same shape closes under
+  A7's hoist-inner-`&mut stores` fix.  Documented at PROBLEMS.md
+  P199 § "A1 status".
 
 #### Why first
 
@@ -818,7 +830,7 @@ for _t in pairs par(r = work(_t.0, _t.1), 4) { use(r) }
 | Risk | Mitigation |
 |---|---|
 | T1.8a slips beyond plan-06's window | A7 punts; ARC.md closes without A7; D11b placeholder remains. |
-| P199 (native E0499 double-borrow on tuple) lands as a blocker for native tuple compilation | Document in PROBLEMS.md P199 follow-up; A7 covers interpreter mode first; native-mode tuple par becomes A7.1. |
+| P199 (native E0499 double-borrow on tuple) lands as a blocker for native tuple compilation | Document in PROBLEMS.md P199 follow-up; A7 covers interpreter mode first; native-mode tuple par becomes A7.1.  Note: A1 confirmed P199 also fires in `tests/html_wasm.rs::moros_editor_html_smoke` (`OpCopyRecord(stores, n_build_chunk(stores, …), …)`) and in `bench/11_par/bench.loft` native column (`format_float(&mut s, t_5float_round(stores, …), …)`) — A7's hoist-inner-`&mut stores` fix closes all three simultaneously. |
 
 #### Out of scope
 

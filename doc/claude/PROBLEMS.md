@@ -211,6 +211,18 @@ this fixed before tuple par compiles natively.  A7 covers
 interpreter mode first; native-mode tuple par becomes a follow-up
 (A7 risk register).
 
+**A1 status (2026-04-30):** the same E0499 fingerprint also fires
+in `tests/html_wasm.rs::moros_editor_html_smoke` —
+`OpCopyRecord(stores, n_build_chunk(stores, …), …)` at
+`/tmp/loft_html.rs:634`.  Failing on `roadmap-lsp-eclipse` even
+with a fresh `wasm32-unknown-unknown` rlib; `main` (post-rebuild)
+passes the test cleanly.  Same shape — nested `&mut stores`
+consumer in a single argument list — so the fix in A7 (hoist inner
+`&mut stores` calls into temporaries) closes both `native_tuple_*`
+and `moros_editor_html_smoke` simultaneously.  Also blocks
+`bench/11_par/bench.loft`'s native column (per THREADING.md
+A1-host-relative-check note).
+
 ### 200. Native codegen E0308 — `f += <integer>` width mismatch on binary file
 
 **Symptom:** `cargo test --release --test native native_binary_script`
