@@ -5,6 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Plan-06 — fast-track order by complexity reduction
 
+> **SUPERSEDED by [ARC.md](ARC.md) (2026-04-30).**  Spine steps 1–7
+> shipped through this doc; step 8 is partially landed.  Remaining
+> work is tracked in ARC.md as steps A1–A11 with hard scope locks
+> and named acceptance tests.  This doc is retained as the
+> historical record of how steps 1–7 were sequenced.
+
 The original plan-06 phases are numbered by topic, not by impact.
 This doc reorders them as a **single sequential spine** — each step
 chosen to retire the most complexity per unit effort.  Anything not

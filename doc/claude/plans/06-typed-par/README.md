@@ -113,13 +113,13 @@ output stores into one result store" regardless of element type.
 Each phase preserves every currently-green test.  Each phase is a
 single PR with its own `make ci` run.
 
-> **For the next session: read [PRIORITY.md](PRIORITY.md) first.**
-> The phase numbers below are the original topic ordering (added as
-> issues surfaced).  PRIORITY.md reorders them as a 10-step spine
-> ranked by complexity reduction per unit effort.  Items not on the
-> spine (phases 4 sub-phases, 5 fixed-point, 8, 9, 11, and most of 2)
-> are explicitly deferred until the spine lands.  The table below
-> remains the per-topic detail; PRIORITY.md is the order to work in.
+> **For the next session: read [ARC.md](ARC.md) first.**
+> ARC.md is the live development arc (A1–A11) that supersedes the
+> earlier two-layer "spine vs. phases" structure.  PRIORITY.md
+> remains as historical artifact (spine steps 1–7 are committed
+> there); the phase table below stays as per-topic detail but is no
+> longer the work order.  ARC.md has the scope-locked,
+> single-PR-per-step plan with named acceptance tests.
 
 | Phase | File | Status | Effort | Summary |
 |---|---|---|---|---|
@@ -136,6 +136,25 @@ single PR with its own `make ci` run.
 | 9 | [09-tuple-support.md](09-tuple-support.md) | open | M | Tuple inputs and returns for `par`: `vector<(T, U)>` input, `(T, U)` return, fused `for (a, b) in pairs par(...) { … }` destructure.  Phase 9 has T1.8a (function tuple-return convention) as a **standalone prerequisite milestone** — it ships independently of plan-06 and benefits any `-> (A, B)` function in loft, not just par.  Phases 9b–9e are gated on T1.8a; if T1.8a slips, plan-06 ships without tuple-par support and D11b's "✅ when tuples land" placeholder remains.  When all sub-phases land, closes the placeholder and gives plan-06 full type coverage on the tuple axis. |
 | 10 | [10-no-output-vector.md](10-no-output-vector.md) | open | MH | **Strategic shift — drop the materialised result vector entirely.**  `par(...)` becomes stream-only: every result is consumed exactly once (Stitch::Discard / Reduce / Queue).  Constructions that need random access, multi-pass, or storage in `vector<S>` fields are rejected at compile time with a "did you mean" hint.  Retires `Stitch::Concat` runtime + `parallel_execute_and_collect` + the `result_db` allocation (~25 MB saved on 100K-element 256-byte struct workloads).  Phase 7's fused for-par becomes the canonical surface; the value-position `let r = parallel_for(...)` shape stays valid for **single-pass** uses only.  Depends on phases 7 (Discard/Queue runtimes) and 5 (IR walk infrastructure for the per-result use-site analysis). |
 | 11 | (out of scope, sketched in 10) | open | S | **`par_to_vec(input, fn, threads) -> vector<S>` opt-in materialiser.**  Re-adds the explicit vector helper for users who genuinely need it (sort, persistence, multi-pass, storage in `vector<S>` field).  Internally uses phase 2's `StoreRebase` + `rebase_walk_record` + `adopt_worker_excess` — so the rebase machinery shipped in 2a + 2b-prep gets a real consumer.  The materialisation cost becomes visible at the call site instead of being the implicit default. |
+
+## Phase → ARC step mapping
+
+Each open phase now closes through one or more ARC steps.  Read
+[ARC.md](ARC.md) for the design and acceptance test of each.
+
+| Phase | Closes via ARC step(s) |
+|---|---|
+| 0 / 1 / 1.5 | Already done; no ARC step needed |
+| 2 | Library code retained for `par_to_vec` (out of scope for ARC; see ARC § "What this arc explicitly does NOT cover") |
+| 3 (3e Reduce + 3b.2 trait) | A5 (Reduce runtime), A8 (trait dispatch) |
+| 4 (4d.A.2 fn-ref vec, 4d.C closure storage, 4e hidden-arg dest) | A6.a (4e for vector return), A6.b (4e for fn-ref return), A6.c (4d.A.2 + 4d.C) |
+| 5 (5e fixed-point, 5c Arc-wrap) | A9 (5e); 5c out of scope, file as PERFORMANCE.md item |
+| 6 (cleanup) | A4 + A11 |
+| 7 (fused for-par + par_fold) | Already shipped via spine 3 + 8b/8c/8d; A5 adds par_fold sugar |
+| 8 (browser workers) | A10 (3 sub-PRs) |
+| 9 (tuple support) | A7 (gated on T1.8a, external) |
+| 10 (no-output-vector) | Already in effect via spine step 7 (warning → error); ARC has no separate step |
+| 11 (par_to_vec opt-in) | Out of scope for ARC; separate arc when a user needs it |
 
 ## Ground rules
 
