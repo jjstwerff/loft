@@ -1403,7 +1403,13 @@ use #count instead"
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
         } else if matches!(
             &ret_type,
-            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
         ) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
@@ -1415,6 +1421,11 @@ use #count instead"
             // the worker constructs the vector in its own output
             // store and the main thread deep-copies it via the same
             // copy_from_worker mechanism.
+            // Plan-06 ARC.md A6.d: keyed collections (Sorted / Hash /
+            // Index / Spacial) are stored as DbRefs to their backing
+            // records and route through the same ref path; the rebase
+            // walk in `data::owned_elements` already enumerates their
+            // internal owned-DbRef fields.
             -1
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
@@ -1565,7 +1576,13 @@ use #count instead"
         // so cross-worker collision is eliminated.
         let early_route_ref_queue = matches!(
             ret_type,
-            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
@@ -1813,9 +1830,17 @@ use #count instead"
             && buf_get_text_d_nr != u32::MAX
             && buf_drop_text_d_nr != u32::MAX;
         // Late-gate matches early-gate (see comment above).
+        // ARC.md A6.d: keyed-collection returns share the ref path
+        // (DbRef to backing record + type-driven rebase walk).
         let route_ref_queue = matches!(
             ret_type,
-            Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX

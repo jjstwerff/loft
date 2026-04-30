@@ -78,13 +78,12 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 (`25_runtime_panic_builtin`, `28_runtime_unwrap_none`) need regen.
 `n_parallel_for` now delegates to `n_parallel_for_light`.
 
-### 8 ignored canaries
+### 7 ignored canaries (2026-05-01: `par_struct_to_keyed_collection_t4` closed by A6.d)
 
 | Test | Line | Blocker | Plan link |
 |---|---|---|---|
 | `par_vec_of_fns_input_t4` | 530 | fn-ref vector storage; codegen stack tracker disagrees with `execute_at_raw_primitive_input_wide` | 4d.A.2 cascade ([04d-followups.md](04d-followups.md)) |
 | `par_struct_to_vector_t4` | 639 | vector return — needs hidden-arg per-worker destination | 4e ([04-typed-input-output.md:459](04-typed-input-output.md)) |
-| `par_struct_to_keyed_collection_t4` | 663 | keyed-collection return type; engine rejects | phase 4 typed surface |
 | `par_struct_to_fn_t4` | 686 | fn-ref return; closure DbRef sentinel offset bug | 4e (same root cause as G6 via different shape) |
 | `par_tuple_return_int_int` | 749 | tuple return; var_size=16 > 8 byte cap | T1.8a + phase 9c ([09-tuple-support.md](09-tuple-support.md)) |
 | `par_tuple_return_int_text` | 767 | tuple return | T1.8a + phase 9c |
@@ -761,10 +760,24 @@ bugs 1 and 3.  Bug 2 (codegen tracker) is the residual deep work.
 
 **Closes:** `par_vec_of_fns_input_t4` (line 530).
 
-#### A6.d — `par_struct_to_keyed_collection_t4` (keyed-collection return)
+#### A6.d — `par_struct_to_keyed_collection_t4` (keyed-collection return) — **DONE 2026-05-01**
 
-**Design:** Worker fn returns a keyed collection (sorted / hash /
-index / spacial).  Today's engine rejects with "Parallel worker
+**Closure notes:**
+
+- Three sites in `src/parser/collections.rs` extended to accept
+  `Type::Sorted` / `Hash` / `Index` / `Spacial`: (1) the
+  `return_size = -1` ref-mode matcher at line ~1404, (2)
+  `early_route_ref_queue` at line ~1566, (3) `route_ref_queue` at
+  line ~1816.
+- The runtime `run_parallel_queue_ref` + `Stores::adopt_worker_excess`
+  + `rebase_walk_record` path required no changes — `data::owned_elements`
+  already enumerates each keyed type's internal owned-DbRef fields, so
+  the rebase walk is type-correct.
+- Canary `par_struct_to_keyed_collection_t4` un-`#[ignore]`'d and
+  passing.  Ignored canary count: 8 → 7.
+
+**Original design:** Worker fn returns a keyed collection (sorted /
+hash / index / spacial).  Today's engine rejects with "Parallel worker
 return type ... is not supported".
 
 Keyed collections are `Reference<KeyedT>` under the hood.  After
@@ -1584,7 +1597,7 @@ that advances a step.
 | A6.a | OPEN | M | — |
 | A6.b | OPEN | M | — |
 | A6.c | OPEN | M | — |
-| A6.d | OPEN | S | — |
+| A6.d | DONE 2026-05-01 | S | (this branch) |
 | A7  | BLOCKED on T1.8a | M | — |
 | A8  | OPEN | M  | — |
 | A9  | OPEN | M  | — |

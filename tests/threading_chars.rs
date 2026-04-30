@@ -659,8 +659,14 @@ fn run() -> integer {
     .result(Value::Int(5));
 }
 
+// par-keyed-collection-return: closed by ARC.md A6.d — extended the
+// parser's ref-mode matcher (return_size = -1 sentinel) plus
+// early/late `route_ref_queue` gates to accept Type::Sorted / Hash /
+// Index / Spacial, sharing the existing DbRef-return Queue path.
+// `data::owned_elements` already enumerates each keyed type's
+// internal owned-DbRef fields so the rebase walk is correct without
+// further machinery.
 #[test]
-#[ignore = "par-keyed-collection-return: P188 fix (local-var sorted/hash/index/spacial init) lands sorted-build-and-return outside par.  The remaining blocker is par engine support for keyed-collection return types: parallel_execute_and_collect rejects worker fns whose return type is sorted/hash/index/spacial with 'Parallel worker return type ... is not supported'.  Punted to plan-06 phase 4 (typed surface)."]
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }
