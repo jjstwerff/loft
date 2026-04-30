@@ -1566,7 +1566,7 @@ that advances a step.
 | Step | Status | Effort | PR / commit |
 |---|---|---|---|
 | A1  | DONE 2026-04-30 | S | b9ad7af + 7153390 |
-| A2  | DONE 2026-04-30 | M | (this commit) |
+| A2  | DONE 2026-04-30 | M | 217b3ac |
 | A3  | OPEN | L  | — |
 | A4  | OPEN | S  | — |
 | A5  | OPEN | M  | — |
