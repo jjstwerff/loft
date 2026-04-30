@@ -1969,6 +1969,36 @@ fn test() {
     .result(Value::Null);
 }
 
+// P196: tuple struct field whose element is a fn-ref.  Storage holds the
+// 4-byte i32 d_nr only (matching plain `Holder { f: dbl }`), but the
+// native runtime representation of a fn-ref is the 16-byte `(u32, DbRef)`
+// tuple.  When the source value is a `Value::TupleGet` of a fn-ref tuple
+// element, the native codegen used to substitute `var_tmp.0` directly
+// into `OpSetInt4`'s template — emitting `(var_tmp.0) as i32` which
+// rustc rejects (`non-primitive cast: (u32, DbRef) as i32`, E0605) plus
+// the matching E0308 on the null-check half.  The fix in
+// `output_call_template` projects `.0` from the fn-ref tuple before the
+// cast.  Interpreter behaviour was already correct (TupleGet of a
+// fn-ref element pushes only the d_nr's 8 bytes); this test guards the
+// end-to-end behaviour through the literal-tuple path.
+#[test]
+fn p4d_tuple_field_with_fn_ref() {
+    code!(
+        "struct Pair { v: (fn(integer) -> integer, integer) }
+fn p_dbl(x: integer) -> integer { x + x }
+fn p_triple(x: integer) -> integer { x * 3 }
+fn test() {
+    p1 = Pair { v: (p_dbl, 21) };
+    p2 = Pair { v: (p_triple, 14) };
+    pf1 = p1.v.0;
+    pf2 = p2.v.0;
+    assert(pf1(p1.v.1) == 42, \"p1.v.0(p1.v.1)={pf1(p1.v.1)}\");
+    assert(pf2(p2.v.1) == 42, \"p2.v.0(p2.v.1)={pf2(p2.v.1)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // Tuple field with text element only: write+read of interned strings
 // inside the host record's store.  Verifies the native-codegen `String`
 // vs `&str` plumbing via the `tuple_text_to_string` flag and the

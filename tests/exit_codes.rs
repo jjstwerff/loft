@@ -570,6 +570,52 @@ fn native_emit_includes_loft_source_map() {
     );
 }
 
+/// P196: tuple struct field whose element is a fn-ref must project
+/// `.0` from the runtime `(u32, DbRef)` tuple before the OpSetInt4
+/// `as i32` cast.  Regression guard: a Var-of-fn-ref-tuple source
+/// (which can't be folded to `Value::Int(d_nr)` at parse time)
+/// must emit `(i64::from((var.0).0))` — i.e. project u32 d_nr from
+/// the tuple-element's `(u32, DbRef)` shape and widen for the
+/// template's null-check.  Without the fix the codegen substitutes
+/// `var.0 as i32` directly, which rustc rejects with E0605 (non-
+/// primitive cast on tuple type) and E0308 on the matching null
+/// check `var.0 == i64::MIN`.
+#[test]
+fn p196_native_codegen_projects_fn_ref_d_nr() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_p196_codegen.loft");
+    let script = "struct Pair { v: (fn(integer) -> integer, integer) }\n\
+                  fn p_dbl(x: integer) -> integer { x + x }\n\
+                  fn build(f: fn(integer) -> integer, n: integer) -> (fn(integer) -> integer, integer) { (f, n) }\n\
+                  fn main() { pp = build(p_dbl, 21); p = Pair { v: pp }; }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-rust")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    // Fix invariant: every set_i32_raw emitted for the fn-ref tuple
+    // element widens via `i64::from(...)` of the projected `.0` —
+    // not a bare `var.0 as i32` (which rustc rejects on tuple type).
+    assert!(
+        stdout.contains("i64::from((var___ref_1.0).0)"),
+        "expected fn-ref d_nr projection `i64::from((var___ref_1.0).0)`; got:\n{stdout}"
+    );
+    // And the buggy bare `var___ref_1.0 == i64::MIN` shape must be gone —
+    // it would compare a `(u32, DbRef)` tuple to an i64.
+    assert!(
+        !stdout.contains("(var___ref_1.0) == i64::MIN"),
+        "fn-ref tuple field should not be compared to i64::MIN as a bare tuple; got:\n{stdout}"
+    );
+}
+
 /// DX-diff — `--introspect --diff <baseline>` exits 0 when the
 /// baseline matches and 1 when it differs (mirroring `diff -u`'s
 /// exit code).  Lets devs answer "did my parser tweak change

@@ -9,6 +9,49 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### P196: tuple-of-fn-ref native codegen — `(u32, DbRef) as i32`
+
+Fixes E0605 (`non-primitive cast`) + E0308 in native codegen when a
+struct field of type `(fn(...) -> ..., int)` is assigned from a Var
+or function-call source rather than a literal `(name, n)` tuple.
+
+The bug: `set_field_check::Type::Tuple` non-literal path stashes the
+RHS into a work-ref local, then for each element `i` emits
+`OpSet*(ref, pos, TupleGet(tmp, i))`.  For a fn-ref element, native
+codegen substitutes the template body's `@val` with `var_tmp.0` —
+which has Rust type `(u32, DbRef)` (the fn-ref runtime
+representation).  `OpSetInt4`'s template wraps `@val` with both
+`@val == i64::MIN` (E0308 — comparing tuple to i64) and `@val as
+i32` (E0605 — non-primitive cast on tuple type).
+
+Fix in `src/generation/calls.rs::output_call_template`: when the
+template parameter is `Type::Integer` and the IR value is a
+`Value::TupleGet(var, idx)` whose tuple element type is
+`Type::Function`, wrap the substituted expression with
+`(i64::from(({with}).0))` — projecting the `u32` d_nr from the
+fn-ref tuple's first element and widening to i64.  The template's
+null-check (`== i64::MIN`) becomes tautologically false (a u32
+can't equal i64::MIN) but compiles cleanly, and the `as i32` cast
+narrows from i64.
+
+The literal-tuple path was unaffected — `set_field_check::Type::Function`
+already reduces `Value::FnRef(d_nr, _, _)` to `Value::Int(d_nr)`,
+sidestepping the tuple shape entirely.
+
+Tests:
+
+- `tests/issues.rs::p4d_tuple_field_with_fn_ref` covers the literal
+  case end-to-end through the interpreter (same shape as
+  `p4d_fn_ref_as_struct_field`, but with the fn-ref nested inside a
+  tuple field).
+- `tests/exit_codes.rs::p196_native_codegen_projects_fn_ref_d_nr`
+  pins the codegen-text invariant: a script with a non-literal
+  fn-ref tuple source must emit `i64::from((var___ref_1.0).0)` and
+  must NOT contain the buggy `(var___ref_1.0) == i64::MIN` shape.
+
+PROBLEMS.md P196 entry retired.  ARC.md A6.c no longer gates on
+P196 — closes independently of the 4d.C closure-storage redesign.
+
 ### P195: chained tuple-index lex (`n.v.0.0`)
 
 Fixes the lexer's greedy `<digit>.<digit>` → float read when the

@@ -913,9 +913,7 @@ impl Lexer {
                     Lexer::none()
                 };
             }
-            if prev_was_field_dot
-                && self.iter.peek().is_some_and(char::is_ascii_digit)
-            {
+            if prev_was_field_dot && self.iter.peek().is_some_and(char::is_ascii_digit) {
                 // Emit the leading integer now, queue the `.` so the next
                 // `cont()` returns it as a separator.  The next digit is
                 // re-lexed as a fresh number on the call after that.

@@ -250,6 +250,30 @@ impl Output<'_> {
                     if val_is_char {
                         with += " as u32 as i32";
                     }
+                    // P196: tuple element of fn-ref type lands as
+                    // `(u32, DbRef)` in native — but the template
+                    // expects an i64-shaped value (it does `@val ==
+                    // i64::MIN` and `@val as i32`).  Project `.0` to
+                    // get the `u32` d_nr and widen to i64 so the null
+                    // check + narrow cast both compile.  The
+                    // d_nr u32 can never equal i64::MIN, so the null
+                    // branch is a tautological no-op — unavoidable
+                    // until a fn-ref-aware OpSet variant exists.
+                    let val_is_fn_ref_tuple_elem = match vals[a_nr].unspan() {
+                        Value::TupleGet(var, idx) => {
+                            match self.data.def(self.def_nr).variables.tp(*var) {
+                                Type::Tuple(elems) => matches!(
+                                    elems.get(*idx as usize),
+                                    Some(Type::Function(_, _, _))
+                                ),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if val_is_fn_ref_tuple_elem {
+                        with = format!("(i64::from(({with}).0))");
+                    }
                 }
                 // Templates use u32::from(@name) for field offsets; that was written for u16
                 // parameters (fill.rs).  Native codegen emits i32 literals, so substitute the

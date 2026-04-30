@@ -30,58 +30,12 @@ existing entry, not re-open it as a bug.
 
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
-| 196 | Native codegen for `(fn(int) -> int, int)` (or any tuple containing a fn-ref) fails with `(u32, DbRef).0 as i32` — the fn-ref tuple element's runtime shape doesn't fit the OpSet/OpGet narrowing path used for primitive ints.  Interpreter mode works; only native compilation breaks.  Closes via [ARC.md A6.c](plans/06-typed-par/ARC.md) (4d.C closure-storage redesign). | Medium | Use a struct field for fn-ref instead of tucking it in a tuple: `struct H { f: fn(...) -> ..., n: int }`. |
 | 198 | `tests/scripts/95-alias-copy.loft` leaks Database 3 (allocated by `OpInitRef` at pc≈4788) — `p146_script_95_alias_copy_leak` regression test panics on `roadmap-lsp-eclipse`.  Passes on main; the regression sits in commits between `main` (`05b53b2`) and `roadmap-lsp-eclipse` HEAD.  Most likely culprits: plan-04/05 slot allocator refit, plan-06 par-safety series, or the plan-07 Span IR walker arms missing the alias-copy free path.  Investigated as part of [ARC.md A1](plans/06-typed-par/ARC.md). | High | None at the loft language level — the test catches a runtime invariant. Investigate scopes.rs `scan_set` aliased-return free-emission against the new IR variants (`Value::Span`, `Value::ParFor`) added on this branch. |
 | 199 | Native codegen for `n_assert(stores, n_add_pair(stores, var_p) == 30, …)` emits two simultaneous `&mut stores` borrows (E0499).  Reproducer: `tests/scripts/50-tuples.loft` line 21; `cargo test --release --test native native_tuple_script`.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch.  Blocks native-mode tuple par; see [ARC.md A7 risk register](plans/06-typed-par/ARC.md). | Medium | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list. |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 
 ## Interpreter Robustness
-
-### 196. Tuple-of-fn-ref native codegen — `(u32, DbRef).0 as i32`
-
-**Symptom:** native compilation fails with `non-primitive cast` when
-a tuple struct field contains a fn-ref element:
-
-```loft
-struct C { pair: (fn(integer) -> integer, integer) }
-fn dbl(x: integer) -> integer { x + x }
-fn test() {
-  c = C { pair: (dbl, 21) };       // interpreter: OK
-                                   // native: rustc rejects
-                                   //   (var_tmp.0) as i32
-}
-```
-
-**Where:** my `set_field_check::Type::Tuple` arm dispatches the
-fn-ref element to `OpSetInt4(ref, pos, TupleGet(tmp, i))`.  At native
-emit, `TupleGet(tmp, i)` for a fn-ref element resolves to
-`var_tmp.0` whose Rust type is `(u32, DbRef)` (the native fn-ref
-representation).  `OpSetInt4`'s `#rust` body wraps the value with
-`as i32`, which rustc rejects on a tuple type.
-
-**Fix path:** in `set_field_check::Type::Tuple`, when the element is
-`Type::Function`, extract the fn-ref's `d_nr` (`var_tmp.i.0 as u32`,
-then `as i32` is fine on `u32`) before passing to `OpSetInt4`.  The
-top-level `Type::Function` set arm already handles `Value::FnRef` ↔
-`Value::Int(d_nr)` reduction; extend that to also unwrap a Var-of-
-fn-ref when the LHS is a fn-ref tuple element.  Alternatively, emit
-a small helper like `OpGetFnRefDnr(var, idx)` returning `i32`.
-
-**Workaround:** lift the fn-ref out of the tuple into its own
-struct field:
-
-```loft
-struct C { f: fn(integer) -> integer, n: integer }
-```
-
-**Test:** `tests/issues.rs::p4d_fn_ref_as_struct_field` covers the
-top-level case.  Add `p4d_tuple_field_with_fn_ref` once fixed.
-
-**Tracked in plan-06:** closes in [ARC.md A6.c](plans/06-typed-par/ARC.md)
-once the 4d.C closure-storage redesign lands (the 16-byte (d_nr,
-closure DbRef) layout makes the storage rep match the native
-`(u32, DbRef)` byte-for-byte, eliminating the cast mismatch).
 
 ### 198. Alias-copy leak regression — `p146_script_95_alias_copy_leak`
 

@@ -109,7 +109,7 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 
 | P-ID | Title | Relevant arc step |
 |---|---|---|
-| **P196** | Tuple-of-fn-ref native codegen `(u32, DbRef).0 as i32` | A6.c — closes when fn-ref storage redesign (4d.C) lands |
+| **P196** | ~~Tuple-of-fn-ref native codegen `(u32, DbRef).0 as i32`~~ | **CLOSED 2026-04-30** — fixed in `output_call_template` (project `.0` from fn-ref tuple → widen to i64 for the OpSetInt4 template), no longer requires 4d.C closure-storage redesign; A6.c can now proceed independently |
 | **P198** | `tests/scripts/95-alias-copy.loft` leaks Database 3 — regression on `roadmap-lsp-eclipse` | A1 — investigate before commit; possible plan-06 par-safety culprit |
 | **P199** | Native codegen E0499 double `&mut stores` borrow on `n_assert(..., n_add_pair(...), ...)` | A7 (gated on T1.8a tuple-return convention) |
 | **P200** | Native codegen E0308 width mismatch on `f += <integer>` against binary file | Out of scope for ARC; tracked separately |
@@ -700,7 +700,8 @@ prerequisite if the destination must hold a 16-byte (d_nr +
 closure DbRef) layout.  If 4d.C ships first, A6.b becomes mechanical.
 
 **Closes:** `par_struct_to_fn_t4` (line 686); G4 in
-`01-output-store.md`; closes P196 if 4d.C is in tree.
+`01-output-store.md`.  P196 was closed independently on 2026-04-30
+via `output_call_template` projection (no longer requires 4d.C).
 
 #### A6.c — `par_vec_of_fns_input_t4` (fn-ref vector input)
 
