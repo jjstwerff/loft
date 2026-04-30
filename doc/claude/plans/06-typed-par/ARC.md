@@ -129,10 +129,34 @@ L = large (1.5–2 sessions), XL = 2+ sessions.
 
 ### A1 — Land the uncommitted step-8e cuts cleanly
 
-**Status:** OPEN
-**Effort:** S (~0.25 session)
+**Status:** DONE 2026-04-30 (commits `b9ad7af` + `7153390` + the
+ARC/THREADING update commit that follows this section).
+**Effort:** S (~0.25 session) — actual: ~0.5 session.
 **Acceptance test:** `make ci` clean; `find_problems.sh` shows zero
 unexpected failures; bench 11 ±5 %.
+
+**Closure notes:**
+
+- Code deletes (commit `b9ad7af`): `parallel_execute_and_collect`
+  (~170 LOC), `run_parallel_direct` (~190 LOC), `run_parallel_ref`
+  (~40 LOC); `n_parallel_for` collapsed to delegate to
+  `n_parallel_for_light`; 4 cfg-gated symbols verified clean under
+  `cargo build --no-default-features`.
+- Goldens regen (commit `7153390`):
+  `25_runtime_panic_builtin.expect` and `28_runtime_unwrap_none.expect`
+  re-blessed via `UPDATE_GOLDEN=1`; diffs are pure pc shifts
+  (`303→285`, `279→261`).
+- P198 alias-copy-leak (commit `7153390`): test still fails at the
+  new pc=4842 (was 4788 pre-A1).  Confirmed not A1-caused — the
+  retired code paths are unreachable from non-par scripts.  Note
+  appended to PROBLEMS.md P198; remains a candidate for an
+  A2-prerequisite spot fix in `scopes.rs::scan_set` Span/ParFor
+  passthrough.
+- Bench-11 ±5%: passed against host-relative `main` baseline
+  (interp +3 % median: 98ms main → 101ms branch).  The 44ms
+  THREADING.md absolute baseline was a different host; native
+  column blocked by P199 (re-opens under A7).  Recorded in
+  THREADING.md § "ARC.md A1 host-relative check".
 
 #### Why first
 
@@ -1502,7 +1526,7 @@ that advances a step.
 
 | Step | Status | Effort | PR / commit |
 |---|---|---|---|
-| A1  | OPEN | S  | — |
+| A1  | DONE 2026-04-30 | S | b9ad7af + 7153390 |
 | A2  | OPEN | M  | — |
 | A3  | OPEN | L  | — |
 | A4  | OPEN | S  | — |

@@ -268,6 +268,26 @@ Plan-06 phase 1's bench gate: loft-interp within ±5 % of 44 ms;
 loft-native ≤ ~5 ms (further closure work ahead).
 Subsequent phases assert ±5 % regression on both columns.
 
+### ARC.md A1 host-relative check (2026-04-30)
+
+A1 retired the heavy `parallel_execute_and_collect` and its
+`run_parallel_direct` / `_ref` helpers (commit `b9ad7af`).  The
+phase-0 absolute timings above were recorded on a different host;
+on the development workstation used for A1, both `main` and
+`roadmap-lsp-eclipse` HEAD (post-A1) measure in the same regime:
+
+| Column | main (5-sample median) | branch post-A1 (5-sample median) | Δ |
+|---|---|---|---|
+| loft-interp | ~98ms | ~101ms | +3 % (within noise; ±5 % gate PASS) |
+| loft-native | n/a (P199 — `n_parallel_for_native` codegen E0499) | n/a (same) | — |
+
+The loft-native column cannot be measured today: native compilation
+of `bench/11_par/bench.loft` hits the P199 double-borrow on
+`format_float(&mut s, t_5float_round(stores, …), …)`, which exists
+identically on `main`.  ARC step A7 closes P199.  Once A7 lands the
+native column re-enables and gates with ±5 % against a fresh
+host-relative baseline.
+
 ## See also
 - [INTERNALS.md](INTERNALS.md) — `src/parallel.rs`, `src/state/`, store cloning for workers
 - [STDLIB.md](STDLIB.md) — `par(...)` parallel for-loop user-facing API
