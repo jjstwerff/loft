@@ -263,29 +263,28 @@ pub struct Stores {
     /// don't rely on adoption — `copy_from_worker` reads through the
     /// graft swap regardless of slot reuse.
     pub disable_slot_reuse: bool,
-    /// Plan-06 spine 8d.3 — per-thread reserved parent-slot range for
-    /// `run_parallel_queue_ref` workers.  When `worker_slot_offset !=
-    /// 0` AND `disable_slot_reuse == true`, `database_named` allocates
-    /// at `worker_slot_offset + worker_slot_local_count` and bumps the
-    /// counter.  This places worker-created stores at globally-unique
-    /// parent indices (each thread has a non-overlapping range), so
-    /// no per-thread rebase is needed and `rebase_walk_record` becomes
-    /// a no-op for queue_ref dispatch.  The dispatcher reserves the
-    /// ranges via `Stores::reserve_worker_slots` before workers run,
-    /// then `mem::swap`s the worker's reserved-range slots back into
-    /// parent at thread join.
-    pub worker_slot_offset: u16,
-    /// 8d.3 — upper bound for the worker's reserved range.  Asserts
-    /// trip if the worker tries to allocate beyond the cap (default
-    /// 16 slots per thread).  Workers that legitimately need more
-    /// hit the assertion; the cap is per-call, so callers can raise
-    /// it for known-heavy workloads.
-    pub worker_slot_limit: u16,
-    /// 8d.3 — per-worker counter incremented on each new allocation
-    /// within the reserved range.  Reset to 0 on every fresh worker
-    /// (clone_for_worker initialises it; the dispatcher sets the
-    /// offset/limit before the worker fn runs).
-    pub worker_slot_local_count: u16,
+    /// Plan-06 ARC.md A2 — shared atomic dispenser of parent-namespace
+    /// slot indices for `run_parallel_queue_ref` workers.  When
+    /// `disable_slot_reuse == true` AND this is `Some`, every
+    /// `database_named` call in worker context dispenses a unique index
+    /// from the shared atomic counter, extends the worker's own
+    /// `allocations` vec to that index, and records the index in
+    /// `worker_allocated_indices`.  After thread join the dispatcher
+    /// grows parent's `allocations` to fit and swaps each recorded
+    /// slot back into parent at the recorded index.
+    ///
+    /// Replaces the 8d.3 fixed-range design (`worker_slot_offset` /
+    /// `worker_slot_limit` + 16-slot cap) which panicked on workers
+    /// that allocated more than `SLOTS_PER_THREAD` stores.  Per-thread
+    /// indices remain disjoint because the atomic dispenses globally
+    /// unique values; growth is unbounded.
+    pub worker_slot_dispenser: Option<Arc<std::sync::atomic::AtomicU16>>,
+    /// ARC.md A2 — per-worker list of parent-namespace indices the
+    /// worker allocated via the shared dispenser.  The dispatcher
+    /// iterates this Vec to swap each worker-owned slot back into
+    /// parent at the recorded index after thread join (replacing
+    /// 8d.3's `[off, off+SLOTS_PER_THREAD)` linear scan).
+    pub worker_allocated_indices: Vec<u16>,
     /// When true, assert() reports results (pass/fail) to `assert_results`
     /// instead of panicking on failure.  Used by the WASM playground.
     pub report_asserts: bool,
@@ -359,9 +358,8 @@ impl Clone for Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
-            worker_slot_offset: 0,
-            worker_slot_limit: 0,
-            worker_slot_local_count: 0,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
@@ -613,79 +611,29 @@ impl Stores {
         rebase
     }
 
-    /// Plan-06 spine 8d.3 — reserve `n_threads * slots_per_thread`
-    /// parent allocations for `run_parallel_queue_ref`'s worker
-    /// threads.  Each thread T_i gets the range
-    /// `[base + i * slots_per_thread, base + (i+1) * slots_per_thread)`
-    /// where `base = self.allocations.len()` at call entry.  Returns
-    /// `Vec<u16>` of length `n_threads`, with `result[i] =
-    /// base + i * slots_per_thread` (the worker's
-    /// `worker_slot_offset`).
+    /// ARC.md A2 — create a shared atomic dispenser for
+    /// `run_parallel_queue_ref` workers.  The first dispensed index is
+    /// `self.allocations.len() + 1` — the `+1` skips over the index
+    /// each worker's stack store occupies in its own clone (every
+    /// worker's `prog.new_state(ws)` push-at-ends a 1000-byte stack
+    /// store at `parent_len`, so dispensing `parent_len` would try to
+    /// reinitialise that stack as a user-data slot).
     ///
-    /// Reserved slots are pushed as fresh free `Store::new(100)`s and
-    /// added to `free_bits`, so unused reservations get reclaimed by
-    /// `release_worker_slots` after the dispatch.  Workers that
-    /// allocate within their range bump `slot.free = false` via
-    /// `database_named`'s normal init path.
-    pub fn reserve_worker_slots(&mut self, n_threads: usize, slots_per_thread: u16) -> Vec<u16> {
-        let base = self.allocations.len() as u16;
-        let total = n_threads * slots_per_thread as usize;
-        let mut offsets = Vec::with_capacity(n_threads);
-        for i in 0..n_threads {
-            offsets.push(base + (i as u16) * slots_per_thread);
-        }
-        for _ in 0..total {
-            self.allocations.push(crate::store::Store::new(100));
-            // Newly-pushed stores are `free=true` by default;
-            // record them in free_bits so `release_worker_slots`
-            // can find unused ones.
-            let slot = self.allocations.len() as u16 - 1;
-            let wi = slot as usize / 64;
-            let bi = slot as usize % 64;
-            while self.free_bits.len() <= wi {
-                self.free_bits.push(0);
-            }
-            self.free_bits[wi] |= 1u64 << bi;
-            if slot >= self.max {
-                self.max = slot + 1;
-            }
-        }
-        offsets
-    }
-
-    /// Plan-06 spine 8d.3 — return `n_threads * slots_per_thread`
-    /// reservation: free any slot in the per-thread ranges that the
-    /// worker did NOT use (still `free=true` after the worker
-    /// returned).  Workers that allocated and then freed a slot
-    /// mid-call (via FreeRef on a temporary) also land here as
-    /// free; that's fine — the slot returns to the parent's free
-    /// pool.
+    /// Workers extend their own `allocations` clone to fit each
+    /// dispensed index (filling skipped indices with empty
+    /// `Store::new(100)` placeholders) and record the index in
+    /// `worker_allocated_indices`; cross-worker collisions are
+    /// impossible because the atomic dispenses globally-unique values.
     ///
-    /// Workers that FILLED a reserved slot (slot.free = false) are
-    /// left untouched — those are the result records the caller
-    /// references via `par_ref_buffer_stack`.
-    pub fn release_worker_slots(&mut self, offsets: &[u16], slots_per_thread: u16) {
-        for &offset in offsets {
-            for i in 0..slots_per_thread {
-                let slot = offset + i;
-                if (slot as usize) >= self.allocations.len() {
-                    break;
-                }
-                if self.allocations[slot as usize].free {
-                    // Already free — ensure free_bits matches.
-                    let wi = slot as usize / 64;
-                    let bi = slot as usize % 64;
-                    while self.free_bits.len() <= wi {
-                        self.free_bits.push(0);
-                    }
-                    self.free_bits[wi] |= 1u64 << bi;
-                }
-                // else: worker filled this slot with a result record;
-                // leave it active for `par_ref_buffer_stack` reads.
-                // `n_parallel_buf_drop_ref` later frees the active
-                // ones via `Stores::free_named`.
-            }
-        }
+    /// Replaces 8d.3's `reserve_worker_slots` / `release_worker_slots`
+    /// pair (which pre-pushed `n_threads * SLOTS_PER_THREAD` fresh
+    /// stores into parent and reclaimed the unused tail post-dispatch).
+    /// The new design grows parent only after threads join, so we
+    /// pay for exactly the slots workers actually allocated.
+    pub fn make_worker_slot_dispenser(&self) -> Arc<std::sync::atomic::AtomicU16> {
+        Arc::new(std::sync::atomic::AtomicU16::new(
+            (self.allocations.len() as u16).saturating_add(1),
+        ))
     }
 }
 
@@ -866,9 +814,8 @@ impl Stores {
             frame_yield: false,
             poison_free: false,
             disable_slot_reuse: false,
-            worker_slot_offset: 0,
-            worker_slot_limit: 0,
-            worker_slot_local_count: 0,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

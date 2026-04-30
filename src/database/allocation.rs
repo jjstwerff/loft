@@ -24,43 +24,58 @@ impl Stores {
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         // S29: find the lowest free slot using the free_bits bitmap.
         // If a freed slot exists below max, reuse it; otherwise grow max.
-        // Plan-06 spine 8d.3: workers spawned by `run_parallel_queue_ref`
-        // set `disable_slot_reuse = true` and a per-thread reserved
-        // range (`worker_slot_offset..worker_slot_limit`) so each
-        // worker's stores land at globally-unique parent indices.
-        // No per-batch rebase needed.  `worker_slot_limit > 0` is
-        // the active-range gate (offset can legitimately be 0 in
-        // pathological setups; limit cannot, since
-        // `reserve_worker_slots` always pushes at least 1 slot per
-        // thread).
-        let slot = if self.disable_slot_reuse && self.worker_slot_limit > 0 {
-            // 8d.3: per-thread reserved range.  Allocate at
-            // `worker_slot_offset + worker_slot_local_count`,
-            // bumping the counter.  The slot exists in
-            // `allocations` already (reserved as `free=true` by
-            // `reserve_worker_slots`), so the path falls through
-            // `unlock + init` below.  Cross-thread indices don't
-            // collide because each thread's range is disjoint.
-            let s = self
-                .worker_slot_offset
-                .saturating_add(self.worker_slot_local_count);
-            assert!(
-                s < self.worker_slot_limit,
-                "worker exhausted reserved slot range \
-                 [{}, {}) at local_count={} — raise slots_per_thread \
-                 in run_parallel_queue_ref",
-                self.worker_slot_offset,
-                self.worker_slot_limit,
-                self.worker_slot_local_count
-            );
-            self.worker_slot_local_count += 1;
-            s
+        //
+        // ARC.md A2: workers spawned by `run_parallel_queue_ref` set
+        // `disable_slot_reuse = true` and carry a shared
+        // `worker_slot_dispenser` (an `Arc<AtomicU16>`).  Every named
+        // alloc consumes the next index from the dispenser, extends
+        // the worker's clone's `allocations` to fit, and records the
+        // index in `worker_allocated_indices`.  Cross-thread
+        // collisions are impossible because the atomic dispenses
+        // globally-unique indices; growth is unbounded (replaces
+        // 8d.3's fixed 16-slot per-thread cap).
+        // ARC.md A2.3 — invariant: if a dispenser is attached, every
+        // named allocation MUST route through it.  The dispenser
+        // becomes the single source of truth for the worker's
+        // parent-namespace indices; bypassing it (e.g. by clearing
+        // `disable_slot_reuse` mid-call) would let the worker push
+        // into its own clone at an index that collides with another
+        // worker's dispensed slot, silently corrupting the swap-back
+        // at thread join.
+        //
+        // Always-on (not gated by `debug_assertions`) because the
+        // loft library compiles with `debug-assertions = false` in
+        // the test profile (per `[profile.dev.package.loft]`), so a
+        // `debug_assert!` here would be silently a no-op in `cargo
+        // test`.  This is a slow-path check (one-shot per fresh
+        // store allocation), so the perf cost is negligible.
+        assert!(
+            self.worker_slot_dispenser.is_none() || self.disable_slot_reuse,
+            "database_named: worker has a dispenser but disable_slot_reuse \
+             was cleared — every dispenser-attached allocation must go \
+             through the offset-aware path"
+        );
+        let slot = if let Some(dispenser) = self.worker_slot_dispenser.clone()
+            && self.disable_slot_reuse
+        {
+            let idx = dispenser.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.worker_allocated_indices.push(idx);
+            // Worker's clone may not have a slot at `idx` yet —
+            // extend `allocations` (with empty Store::new(100)
+            // placeholders for any skipped indices owned by other
+            // threads).  Skipped indices stay `free=true` in this
+            // worker's clone; only the just-allocated `idx` will be
+            // reinitialised below.
+            while self.allocations.len() <= idx as usize {
+                self.allocations.push(Store::new(100));
+            }
+            idx
         } else if self.disable_slot_reuse {
             // 8d.2: push at the end of allocations so worker writes
-            // never reuse a cloned slot.  Used when no per-thread
-            // range is reserved (single-thread queue dispatch or
-            // legacy paths that opt into disable_slot_reuse without
-            // setting an offset).
+            // never reuse a cloned slot.  Used when no dispenser is
+            // attached (single-thread queue dispatch or legacy paths
+            // that opt into disable_slot_reuse without queue_ref's
+            // dispatcher).
             self.allocations.len() as u16
         } else {
             self.find_free_slot()
@@ -75,8 +90,13 @@ impl Stores {
             self.allocations[slot as usize].unlock();
             self.allocations[slot as usize].init();
         }
-        if slot == self.max {
-            self.max += 1;
+        // Maintain the invariant `max == highest_allocated_index + 1`.
+        // The dispenser path can yield indices > current max (each
+        // dispense skips ahead in parent-namespace), so a bare
+        // `slot == self.max` check would leave max stale and
+        // subsequent free() trims to the wrong position.
+        if slot >= self.max {
+            self.max = slot + 1;
         }
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
@@ -586,9 +606,8 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
-            worker_slot_offset: 0,
-            worker_slot_limit: 0,
-            worker_slot_local_count: 0,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
@@ -664,9 +683,8 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
-            worker_slot_offset: 0,
-            worker_slot_limit: 0,
-            worker_slot_local_count: 0,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

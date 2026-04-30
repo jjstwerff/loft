@@ -9,6 +9,69 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### ARC.md A2: unbounded per-thread slot dispenser (8d.3 cap retired)
+
+Replaces the spine-8d.3 fixed `SLOTS_PER_THREAD = 16` per-worker
+reservation with a shared `Arc<AtomicU16>` dispenser.  Workers that
+allocated more than 16 fresh stores per batch hit a hard `assert!`
+in `database_named` ("worker exhausted reserved slot range
+[N, N+16) at local_count=16"); the new design grows unbounded.
+
+Mechanism:
+
+- `Stores::worker_slot_dispenser: Option<Arc<AtomicU16>>` carries the
+  shared counter into each worker's clone.  Initialised at
+  `parent.allocations.len() + 1` by `Stores::make_worker_slot_dispenser`
+  (the `+1` skips the parent-namespace index where each worker's
+  `prog.new_state(ws)` push-at-ends a 1000-byte stack store, so the
+  dispenser never collides with a worker's own stack-store slot).
+- `Stores::worker_allocated_indices: Vec<u16>` per-worker list of
+  parent-namespace indices the dispenser yielded.  After
+  `run_parallel_queue_ref` joins, each entry triggers a
+  `mem::swap` between parent and the worker's clone at that index.
+- `database_named` in worker context now: pulls a fresh index via
+  `dispenser.fetch_add(1, Relaxed)`, pushes
+  `Store::new(100)` placeholders into the worker's own `allocations`
+  Vec to fill any skipped indices owned by other workers, then
+  initialises at the yielded index.  The placeholders stay
+  `free=true` and are never swapped to parent (each worker only
+  swaps its OWN allocated indices).
+- 3 fields removed (`worker_slot_offset`, `worker_slot_limit`,
+  `worker_slot_local_count`); 2 added (above).
+  `reserve_worker_slots` / `release_worker_slots` removed.
+- `database_named`'s `if slot == self.max { self.max += 1 }` widened
+  to `if slot >= self.max { self.max = slot + 1 }` — the dispenser
+  yields indices that can be > current max (it skips ahead in
+  parent-namespace), so the strict-equality check missed cases and
+  left max stale.
+
+A2.3 invariant: an always-on `assert!` in `database_named` fires if
+a worker has a dispenser attached but `disable_slot_reuse` was
+cleared mid-call (the bypass would push to a parent-namespace index
+unrelated to the dispenser, silently corrupting the swap-back at
+thread join).  Always-on rather than `debug_assert!` because the
+loft library compiles with `debug-assertions = false` in the test
+profile per `[profile.dev.package.loft]` — a `debug_assert!` would
+be a silent no-op in `cargo test`.
+
+Tests:
+
+- `tests/threading.rs::par_queue_ref_unbounded_allocations_per_element`
+  exercises the allocator directly (bypassing the bytecode
+  pipeline's `execute_at_ref` calling-convention mismatch with
+  inline-struct-return functions): performs 50 named allocations
+  via the dispenser, asserts strictly increasing parent-namespace
+  indices and dispenser high-water = `parent_len + 1 + N_ALLOCS`.
+- `tests/threading.rs::par_queue_ref_dispenser_bypass_assertion_fires`
+  pins A2.3's invariant: a synthetic worker with dispenser attached
+  but `disable_slot_reuse=false` panics with the documented message.
+
+Bench-11 ±5%: ~101ms median post-A2 (vs ~98ms `main`, ~101ms
+post-A1) — within gate.  All 37 `tests/threading.rs` tests + 31
+`tests/threading_chars.rs` tests stay green.
+
+ARC.md A2 status flipped to DONE.
+
 ### P196: tuple-of-fn-ref native codegen — `(u32, DbRef) as i32`
 
 Fixes E0605 (`non-primitive cast`) + E0308 in native codegen when a

@@ -1306,6 +1306,126 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
     }
 }
 
+/// ARC.md A2.1 — stress-test the unbounded slot dispenser at the
+/// allocator level.
+///
+/// 8d.3 reserved a fixed `SLOTS_PER_THREAD = 16` range per worker
+/// thread; workers that allocated more than 16 fresh stores within
+/// a single batch hit a hard `assert!` in `database_named`.  The
+/// A2.2 fix replaces the fixed range with a shared
+/// `worker_slot_dispenser: Arc<AtomicU16>` so each `database_named`
+/// call dispenses a fresh parent-namespace index — no cap.
+///
+/// This test bypasses the bytecode pipeline (which has its own
+/// `execute_at_ref` calling convention with hidden return slots for
+/// inline-struct-returns that conflict with direct invocation) and
+/// exercises `database_named` directly: it sets up the dispenser
+/// exactly as `run_parallel_queue_ref` does, then performs 50
+/// named allocations.  All 50 must succeed — no exhaustion panic,
+/// indices strictly monotonic, every dispense recorded in
+/// `worker_allocated_indices`.
+///
+/// Pre-A2.2: panicked at the 17th call.
+/// Post-A2.2: all 50 land in distinct parent-namespace indices.
+#[test]
+fn par_queue_ref_unbounded_allocations_per_element() {
+    use std::sync::Arc;
+
+    let mut parent = loft::database::Stores::new();
+    // Pre-fill a few slots so the dispenser starts above zero.
+    let _seed = parent.null();
+    let parent_len_at_dispatch = parent.allocations.len();
+    let dispenser = parent.make_worker_slot_dispenser();
+
+    // Simulate a worker's `Stores`: schema-only clone (which resets
+    // allocations to empty), attach the dispenser, allocate many
+    // named stores.  The first dispense yields `parent_len + 1`;
+    // `database_named`'s `while` loop grows the worker's empty
+    // allocations to fit each yielded index by pushing
+    // `Store::new(100)` placeholders for any skipped slots.
+    let mut worker_stores: loft::database::Stores = parent.clone();
+    worker_stores.disable_slot_reuse = true;
+    worker_stores.worker_slot_dispenser = Some(Arc::clone(&dispenser));
+
+    const N_ALLOCS: usize = 50;
+    let mut refs = Vec::with_capacity(N_ALLOCS);
+    for i in 0..N_ALLOCS {
+        let r = worker_stores.database_named(8, "stress");
+        assert_ne!(
+            r.store_nr,
+            u16::MAX,
+            "alloc #{i}: must not return null sentinel"
+        );
+        refs.push(r);
+    }
+
+    // Indices must be strictly monotonic (atomic dispenses each one
+    // higher than the last) and start at parent_len + 1 (the +1
+    // skips the worker's stack-store slot — even though this test
+    // didn't allocate one, the dispenser is sized for the general
+    // run_parallel_queue_ref case).
+    let expected_first = parent_len_at_dispatch as u16 + 1;
+    assert_eq!(
+        refs[0].store_nr, expected_first,
+        "first dispense should be parent_len + 1 = {expected_first}"
+    );
+    for w in refs.windows(2) {
+        assert!(
+            w[1].store_nr > w[0].store_nr,
+            "dispenser must yield strictly increasing indices: got {} then {}",
+            w[0].store_nr,
+            w[1].store_nr
+        );
+    }
+    assert_eq!(
+        worker_stores.worker_allocated_indices.len(),
+        N_ALLOCS,
+        "every dispenser allocation must record its index"
+    );
+
+    // Final dispenser value reflects the +1 stack-store skip plus
+    // every dispense.
+    let final_val = dispenser.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        final_val as usize,
+        parent_len_at_dispatch + 1 + N_ALLOCS,
+        "dispenser high-water = parent_len + 1 + N_ALLOCS"
+    );
+}
+
+/// ARC.md A2.3 — the invariant in `database_named` must fire when a
+/// worker has a dispenser attached but `disable_slot_reuse` is
+/// cleared.  That bypass would push the allocation through the
+/// legacy `find_free_slot` / push-at-end path, producing a
+/// parent-namespace index OTHER than the next dispenser yield —
+/// silently colliding with another worker's dispensed slot at
+/// thread-join swap-back.  The assertion catches the misuse loudly.
+///
+/// Always-on (not gated by `debug_assertions`) because the loft
+/// library compiles with `debug-assertions = false` in the test
+/// profile per `[profile.dev.package.loft]`, so a `debug_assert!`
+/// would be a silent no-op.
+#[test]
+#[should_panic(
+    expected = "every dispenser-attached allocation must go through the offset-aware path"
+)]
+fn par_queue_ref_dispenser_bypass_assertion_fires() {
+    use std::sync::Arc;
+
+    let mut parent = loft::database::Stores::new();
+    let _seed = parent.null();
+    let dispenser = parent.make_worker_slot_dispenser();
+
+    let mut worker_stores: loft::database::Stores = parent.clone();
+    // Attach the dispenser but DON'T set disable_slot_reuse — that's
+    // the synthetic bypass shape A2.3 guards against.
+    worker_stores.worker_slot_dispenser = Some(Arc::clone(&dispenser));
+    worker_stores.disable_slot_reuse = false;
+
+    // Trigger the assertion.
+    let _ = worker_stores.database_named(8, "bypass");
+}
+
 /// Step 8d.0 — empty input: no workers spawn, no allocations adopted,
 /// returned refs and adopted lists are both empty.  Locks the
 /// short-circuit invariant 8d.1's native fn relies on (otherwise it

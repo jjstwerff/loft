@@ -689,37 +689,25 @@ pub fn run_parallel_queue_ref(
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
     }
-    // 8d.3: pre-allocate a per-thread reserved range in parent's
-    // allocations.  Each worker thread T_i gets a dedicated slice
-    // [offsets[i], offsets[i] + SLOTS_PER_THREAD) it can fill via
-    // `OpDatabase` / `OpNewRecord` without colliding with other
-    // threads' indices.  Workers' clones see the same reserved
-    // slots (clone_for_worker copies all of parent's allocations);
-    // workers fill their slice; we `mem::swap` each filled slice
-    // back into parent at thread join.  No rebase needed because
-    // every worker-written DbRef already lives in parent
-    // namespace.
-    //
-    // SLOTS_PER_THREAD = 16 covers typical workloads (one Result
-    // per row + intermediate variant reassignments like Pass→Fail).
-    // Workers that exceed the cap hit the assertion in
-    // `database_named` with a clear error message.
-    const SLOTS_PER_THREAD: u16 = 16;
+    // ARC.md A2: shared atomic dispenser for parent-namespace slot
+    // indices.  Every worker's `database_named` call pulls a unique
+    // index from this counter and records it in
+    // `worker_allocated_indices`; the worker extends its own
+    // `allocations` clone to fit.  Replaces 8d.3's fixed
+    // `[off, off+SLOTS_PER_THREAD)` ranges with unbounded growth.
+    // Cross-worker collisions are impossible because the atomic
+    // dispenses globally-unique values.
+    let dispenser = stores.make_worker_slot_dispenser();
     let n_workers = n_threads.max(1).min(n_rows.max(1));
-    let offsets = stores.reserve_worker_slots(n_workers, SLOTS_PER_THREAD);
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
-    // Inline rayon dispatch (instead of `parallel_workers`) so we
-    // can forward the thread index `t` to each worker — the worker
-    // closure uses it to index `offsets` and set its reserved
-    // range.  Otherwise identical to `parallel_workers`.
     use rayon::prelude::*;
     let pool = rayon_pool();
     let stores_immut: &Stores = &*stores;
-    let offsets_ref = &offsets;
     let prog_ref = &prog;
     let extras_ref = &extras;
+    let dispenser_ref = &dispenser;
     let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = pool.install(|| {
         (0..n_workers)
             .into_par_iter()
@@ -731,19 +719,17 @@ pub fn run_parallel_queue_ref(
                 ws.stores.disable_slot_reuse = true;
                 // The worker's stack store (allocated by
                 // `prog.new_state(ws)` via `db.database(1000)`) MUST
-                // land at `allocations.len()` (push-at-end), NOT in
-                // the per-thread reserved range.  The stack store is
-                // a worker-local scratch buffer; if it ended up in
-                // the reserved range, our swap loop would move it
-                // into parent — corrupting parent's slot with
-                // worker-stack data.  Leave `worker_slot_limit = 0`
-                // so the new gate stays disabled until after
-                // `new_state` returns, then enable it for the
+                // land at `allocations.len()` (push-at-end), NOT
+                // through the dispenser — the stack store is a
+                // worker-local scratch buffer; routing it through
+                // the parent-namespace dispenser would put parent at
+                // risk of swapping that scratch buffer back in.
+                // Leave `worker_slot_dispenser = None` until
+                // `new_state` returns, then attach it for the
                 // worker's user-code allocations.
                 let mut state = prog_ref.new_state(ws);
-                state.database.worker_slot_offset = offsets_ref[t];
-                state.database.worker_slot_limit = offsets_ref[t] + SLOTS_PER_THREAD;
-                state.database.worker_slot_local_count = 0;
+                state.database.worker_slot_dispenser = Some(Arc::clone(dispenser_ref));
+                state.database.worker_allocated_indices.clear();
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_ref = vector::get_vector(
@@ -765,27 +751,31 @@ pub fn run_parallel_queue_ref(
     };
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
-    // Swap every reserved-range slot from worker into parent —
-    // unconditionally on free flag.  Workers may have freed the
-    // result store during scope cleanup (`OpFreeRef` on intermediate
-    // temps that share the result's DbRef via variant assignment),
-    // but the bytes are still in worker memory at swap time.  Slots
-    // the worker never touched are fresh `Store::new(100)` clones
-    // (also empty); swapping them is harmless.
-    //
-    // Per-thread reserved ranges put every worker-written DbRef
-    // directly in parent namespace, so no per-batch rebase walker
-    // is needed.  After swapping, `revive_record_chain` walks each
-    // result DbRef and marks its store (and any nested DbRef
-    // chains) as active.
-    for (t, (batch, mut worker_stores)) in batches.into_iter().enumerate() {
-        let off = offsets[t] as usize;
-        let lim = (offsets[t] + SLOTS_PER_THREAD) as usize;
-        for slot_nr in off..lim.min(worker_stores.allocations.len()) {
-            std::mem::swap(
-                &mut stores.allocations[slot_nr],
-                &mut worker_stores.allocations[slot_nr],
-            );
+    // Grow parent's allocations to fit the dispenser's high-water
+    // mark, then iterate each worker's allocated-indices list and
+    // swap the worker's slot at that index into parent.  The
+    // dispenser's final value is one-past-the-last-index, so the
+    // parent's allocations vec must reach that length.
+    let high_water = dispenser.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    while stores.allocations.len() < high_water {
+        stores.allocations.push(crate::store::Store::new(100));
+    }
+    for (batch, mut worker_stores) in batches {
+        for &slot_nr in &worker_stores.worker_allocated_indices {
+            // Worker may have allocated and then freed the slot mid-
+            // call (e.g. via FreeRef on an intermediate temp).  Swap
+            // unconditionally — `revive_record_chain` below decides
+            // which slots stay active.  Skipped indices owned by
+            // OTHER workers are never in *this* worker's
+            // allocated_indices, so cross-thread swaps don't happen.
+            if (slot_nr as usize) < worker_stores.allocations.len()
+                && (slot_nr as usize) < stores.allocations.len()
+            {
+                std::mem::swap(
+                    &mut stores.allocations[slot_nr as usize],
+                    &mut worker_stores.allocations[slot_nr as usize],
+                );
+            }
         }
         for (i, src_ref) in batch {
             refs[i] = src_ref;
@@ -803,10 +793,12 @@ pub fn run_parallel_queue_ref(
         }
         revive_record_chain(stores, r, ret_type, data, &mut visited, &mut adopted);
     }
-    // Re-mark unused reserved slots in `free_bits` so future
-    // allocations can reclaim them.  Slots claimed by `revive_*`
-    // are now `free=false` and skip the if-branch below.
-    stores.release_worker_slots(&offsets, SLOTS_PER_THREAD);
+    // Update `max` to cover any slots the workers allocated past
+    // parent's pre-dispatch max.  Slots beyond `high_water` were
+    // never dispensed, so they don't exist.
+    if (high_water as u16) > stores.max {
+        stores.max = high_water as u16;
+    }
     (refs, adopted)
 }
 

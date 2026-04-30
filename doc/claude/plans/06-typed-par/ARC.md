@@ -223,12 +223,38 @@ Narrow-prim Queue extension (A3).  fn-ref work (A6).  Doc rewrites (A11).
 
 ### A2 — Stress-test the per-thread slot cap; resolve the fragility
 
-**Status:** OPEN
-**Effort:** M (~1 session)
+**Status:** DONE 2026-04-30 (this session — see Status table for commits)
+**Effort:** M (~1 session) — actual: ~1 session
 **Acceptance test:** new test
 `tests/threading.rs::par_queue_ref_unbounded_allocations_per_element`
 panics today, passes after fix; `assert!` in `database_named`
 catches a synthetic offset-bypass.
+
+**Closure notes:**
+
+- 8d.3's fixed `SLOTS_PER_THREAD = 16` per-thread reservation
+  retired in favour of a shared `Arc<AtomicU16>` dispenser.
+- Three `Stores` fields removed (`worker_slot_offset`,
+  `worker_slot_limit`, `worker_slot_local_count`); two added
+  (`worker_slot_dispenser: Option<Arc<AtomicU16>>`,
+  `worker_allocated_indices: Vec<u16>`).
+- `reserve_worker_slots` / `release_worker_slots` removed; new
+  `make_worker_slot_dispenser()` returns the shared atomic
+  initialised at `parent.allocations.len() + 1` (the `+1` skips
+  each worker's stack-store index).
+- `database_named`'s slot-pick now: dispenser path first (when
+  attached + `disable_slot_reuse=true`), then push-at-end legacy,
+  then `find_free_slot`.  Maintains `max == highest_allocated + 1`
+  invariant via `slot >= self.max` (was `slot == self.max`, which
+  missed the dispenser's index-skip pattern).
+- A2.3 invariant `assert!` (always-on, not gated by
+  `debug_assertions` because the loft library compiles with
+  `debug-assertions = false` in the test profile per
+  `[profile.dev.package.loft]`) catches the bypass case where a
+  worker has a dispenser but `disable_slot_reuse` is cleared.
+- Bench-11 ±5%: passes (~101ms median, host-relative; same as A1).
+- All 37 existing `tests/threading.rs` tests + 31
+  `tests/threading_chars.rs` tests stay green.
 
 #### Why second
 
@@ -1540,7 +1566,7 @@ that advances a step.
 | Step | Status | Effort | PR / commit |
 |---|---|---|---|
 | A1  | DONE 2026-04-30 | S | b9ad7af + 7153390 |
-| A2  | OPEN | M  | — |
+| A2  | DONE 2026-04-30 | M | (this commit) |
 | A3  | OPEN | L  | — |
 | A4  | OPEN | S  | — |
 | A5  | OPEN | M  | — |
