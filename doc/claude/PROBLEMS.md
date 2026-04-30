@@ -157,6 +157,17 @@ on this — A1 investigates whether the regression is a plan-06
 par-safety series side effect.  If confirmed, the fix becomes a new
 arc step before A2.
 
+**A1 status (2026-04-30):** test still fails on `roadmap-lsp-eclipse`
+post-A1 commit `b9ad7af` (heavy `parallel_execute_and_collect`
+retired).  Current symptom: `Database 3 not correctly freed
+(allocated by OpInitRef at pc=4842; …)` — pc shifted from 4788 → 4842
+from intermediate commits, but the alloc-without-free shape is
+unchanged.  A1 retired only `parallel_execute_and_collect` and the
+two `run_parallel_*` helpers it called; that code is unreachable from
+non-par scripts, so it is not the cause.  The leak persists into A2
+unchanged and remains a candidate for an A2-prerequisite spot fix in
+`scopes.rs::scan_set` Span/ParFor passthrough.
+
 ### 199. Native codegen E0499 — `n_assert(stores, n_add_pair(stores, …), …)`
 
 **Symptom:** `cargo test --release --test native native_tuple_script`
