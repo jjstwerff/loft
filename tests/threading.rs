@@ -17,7 +17,8 @@ use loft::compile::byte_code;
 use loft::database::Stores;
 use loft::keys::DbRef;
 use loft::parallel::{
-    WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_queue, run_parallel_text,
+    WorkerProgram, run_parallel_discard, run_parallel_int, run_parallel_queue,
+    run_parallel_queue_ref, run_parallel_text,
 };
 use loft::parser::Parser;
 use loft::scopes;
@@ -1188,6 +1189,162 @@ fn worker_id(r: const Num) -> integer { r.v }
         before, after,
         "Discard must not adopt worker stores into the parent's allocations \
          table (before={before}, after={after})"
+    );
+}
+
+// ── Plan-06 spine step 8d.0 — run_parallel_queue_ref ──────────────────────
+
+/// Step 8d.0 — `run_parallel_queue_ref` adopts each worker's output
+/// stores into the parent's allocations table and rebases each
+/// returned `DbRef` so it's parent-valid.  The returned
+/// `(refs, adopted_store_nrs)` pair gives 8d.1's
+/// `n_parallel_buf_get_ref` something to push and
+/// `n_parallel_buf_drop_ref` a list of stores to free at the
+/// fused-for-par body's tail.
+///
+/// Smoke-test: 4-element `vector<Score>` input, struct-returning
+/// worker `bump(s) -> Score { Score { value: s.value + 100 } }`,
+/// 2 threads.  Verifies:
+///   - `refs.len()` matches the input row count.
+///   - Every ref's `store_nr` is in the parent's allocations range
+///     (i.e. adoption actually moved the store) — proves the rebase
+///     ran.
+///   - Each ref's record has `value` matching the expected `100 + i`,
+///     read through the parent's store namespace.
+///   - `adopted` contains exactly the new store_nrs; the parent's
+///     allocations grew by `adopted.len()`.
+#[test]
+fn par_queue_ref_adopts_and_rebases() {
+    let code = r#"
+struct Score { value: integer }
+fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
+"#;
+    let (mut state, data) = compile(code);
+
+    // 4 × Score = 4 × 8 bytes per element (single integer field).
+    let db = state.database.null();
+    let n: u32 = 4;
+    let vec_words = (n * 8 + 15) / 8;
+    let vec_cr = state.database.claim(&db, vec_words.max(1));
+    let vec_rec = vec_cr.rec;
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+    {
+        let store = state.database.store_mut(&db);
+        store.set_u32_raw(vec_rec, 4, n);
+        for i in 0..n {
+            store.set_int(vec_rec, 8 + i * 8, i64::from(i));
+        }
+        store.set_u32_raw(header_rec, 4, vec_rec);
+    }
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+    let d_nr = data.def_nr("n_bump");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+    let ret_type = data.def(d_nr).returned.clone();
+
+    let allocations_before = state.database.allocations.len();
+    let (refs, adopted) = run_parallel_queue_ref(
+        &mut state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        n as usize,
+        &ret_type,
+        &data,
+    );
+    let allocations_after = state.database.allocations.len();
+
+    assert_eq!(refs.len(), n as usize, "one ref per input row");
+    assert!(
+        !adopted.is_empty(),
+        "expected at least one worker store to be adopted"
+    );
+    assert_eq!(
+        allocations_after - allocations_before,
+        adopted.len(),
+        "parent's allocations grew by exactly the adopted count"
+    );
+
+    // Each rebased DbRef should resolve in the parent's namespace.
+    // The Score's `value` field lives at offset 0 of the record.
+    for (i, r) in refs.iter().enumerate() {
+        assert_ne!(
+            r.store_nr,
+            u16::MAX,
+            "row {i}: rebased ref must not be the null sentinel"
+        );
+        assert!(
+            (r.store_nr as usize) < state.database.allocations.len(),
+            "row {i}: rebased store_nr {} out of parent range (len={})",
+            r.store_nr,
+            state.database.allocations.len()
+        );
+        let store = &state.database.allocations[r.store_nr as usize];
+        let v: i64 = *store.addr::<i64>(r.rec, r.pos);
+        assert_eq!(v, 100 + i as i64, "row {i}: expected 100+{i}, got {v}");
+    }
+}
+
+/// Step 8d.0 — empty input: no workers spawn, no allocations adopted,
+/// returned refs and adopted lists are both empty.  Locks the
+/// short-circuit invariant 8d.1's native fn relies on (otherwise it
+/// would push an empty buffer onto par_ref_buffer_stack and call
+/// `adopt_worker_excess` on stale state).
+#[test]
+fn par_queue_ref_empty_input() {
+    let code = r#"
+struct Score { value: integer }
+fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
+"#;
+    let (mut state, data) = compile(code);
+    let db = state.database.null();
+    let header_cr = state.database.claim(&db, 1);
+    let header_rec = header_cr.rec;
+    let vec_cr = state.database.claim(&db, 1);
+    let vec_rec = vec_cr.rec;
+    state.database.store_mut(&db).set_u32_raw(vec_rec, 4, 0);
+    state
+        .database
+        .store_mut(&db)
+        .set_u32_raw(header_rec, 4, vec_rec);
+    let input = DbRef {
+        store_nr: db.store_nr,
+        rec: header_rec,
+        pos: 4,
+    };
+    let d_nr = data.def_nr("n_bump");
+    let fn_pos = data.def(d_nr).code_position;
+    let program = worker_program(&state);
+    let ret_type = data.def(d_nr).returned.clone();
+
+    let allocations_before = state.database.allocations.len();
+    let (refs, adopted) = run_parallel_queue_ref(
+        &mut state.database,
+        program,
+        fn_pos,
+        &input,
+        8,
+        2,
+        &[],
+        0,
+        &ret_type,
+        &data,
+    );
+    let allocations_after = state.database.allocations.len();
+
+    assert!(refs.is_empty(), "empty input → no refs");
+    assert!(adopted.is_empty(), "empty input → nothing adopted");
+    assert_eq!(
+        allocations_before, allocations_after,
+        "empty input must not touch parent allocations"
     );
 }
 

@@ -417,6 +417,43 @@ prior par-suite tests must stay green at every sub-step's tip.
   via the `WorkerStores::take_all_owned` rebase machinery already
   shipped in phase 2a/2b prep.
 
+  **Sub-phasing** (mirrors 8a/8b/8c's split):
+
+  - **8d.0 (DONE 2026-04-30)** — `run_parallel_queue_ref` Rust
+    helper.  Builds on `run_parallel_ref` but post-processes each
+    worker's batch into a flat `Vec<DbRef>` ordered by input row,
+    with each `DbRef` rebased into the parent's namespace via
+    `Stores::adopt_worker_excess` + `rebase_walk_record`.  Returns
+    `(refs, adopted_store_nrs)` so 8d.1's `n_parallel_buf_drop_ref`
+    can free the adopted stores at body-tail.
+
+    Adoption (vs. deep-copy) is the cost-saving move that makes
+    Queue for refs cheaper than the legacy Concat path: workers'
+    output stores are moved into the parent's allocations table —
+    no per-record memcpy — and DbRef fields are translated in place
+    via `rebase_walk_record` so cross-record references stay valid.
+
+    Marked `#[allow(dead_code)]`; tested via two regression tests in
+    `tests/threading.rs`:
+    - `par_queue_ref_adopts_and_rebases` — 4-element vector input,
+      struct-returning worker, asserts adoption grew the parent's
+      allocations table by exactly `adopted.len()`, every ref
+      resolves in the parent namespace, and field reads return the
+      worker's computed values.
+    - `par_queue_ref_empty_input` — short-circuit invariant: no
+      workers spawn, no allocations touched.
+
+  - **8d.1 (NEXT)** — par_ref_buffer_stack field + 3 native fns
+    (`n_parallel_queue_ref` / `_buf_get_ref` / `_buf_drop_ref`) +
+    codegen extras.  Pattern matches 8a→8c.
+
+  - **8d.2** — parser-side `route_ref_queue` gate in
+    `build_parallel_for_ir`; route Type::Reference / Enum-payload /
+    Vector returns through Queue.
+
+  - **8d.3** — fn-ref returns (20-byte slot — needs the wide-return
+    path used by `execute_at_raw_to`).
+
 - **8e** — actual Concat retirement: delete
   `parallel_execute_and_collect` (~170 lines), the `Stitch::Concat`
   arm in `parallel.rs`, the `result_db = stores.null()` allocation
@@ -537,7 +574,10 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    8b parser primitive rewrite   — DONE 2026-04-29 (DbRef-input + i64 return)
    8b' extend Queue dispatch ladder — DONE 2026-04-29 (all input kinds)
    8c text return Queue path     — DONE 2026-04-29
-   8d ref/fn-ref/vector Queue    ← NEXT
+   8d.0 run_parallel_queue_ref   — DONE 2026-04-30 (adopt + rebase)
+   8d.1 par_ref_buffer_stack + natives ← NEXT
+   8d.2 parser ref-queue gate
+   8d.3 fn-ref returns
    8e Concat deletion
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC

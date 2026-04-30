@@ -884,6 +884,89 @@ pub fn run_parallel_ref(
     })
 }
 
+/// Plan-06 PRIORITY.md spine step 8d.0 — `Stitch::Queue` runtime for
+/// reference / struct-enum-payload / vector return shapes.
+///
+/// Builds on `run_parallel_ref` but post-processes the per-worker
+/// batches into a flat `Vec<DbRef>` ordered by input row, with each
+/// DbRef rebased into the parent's store namespace via
+/// `Stores::adopt_worker_excess` + `rebase_walk_record`.  Returns the
+/// rebased refs alongside the list of adopted parent-side store_nrs
+/// so `n_parallel_buf_drop_ref` (8d.1) can free them when the body
+/// loop completes.
+///
+/// Adoption (vs. deep-copy) is the cost-saving move that makes Queue
+/// for refs cheaper than the legacy Concat path: workers' output
+/// stores are moved into the parent's allocations table — no
+/// per-record memcpy — and DbRef fields are translated in place via
+/// `rebase_walk_record` so cross-record references stay valid.
+///
+/// `ret_type` is the worker's declared return type
+/// (`Type::Reference(_, _)`, `Type::Enum(_, true, _)`, or
+/// `Type::Vector(_, _)`); used by `rebase_walk_record` to find DbRef
+/// fields inside each adopted record.  Pass through unchanged from
+/// the parser-side gate.
+///
+/// Currently `#[allow(dead_code)]` — 8d.1 is the first call-site
+/// consumer (`n_parallel_queue_ref` native fn).
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
+#[allow(dead_code, clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_queue_ref(
+    stores: &mut Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    n_rows: usize,
+    ret_type: &crate::data::Type,
+    data: &crate::data::Data,
+) -> (Vec<DbRef>, Vec<u16>) {
+    if n_rows == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let parent_store_count = stores.allocations.len() as u16;
+    // run_parallel_ref takes `&Stores` — reborrow immutably for the
+    // duration of the call.  After it returns, `batches` owns its
+    // worker data (Stores moved by value) and we can mutate `stores`
+    // again.
+    let batches = run_parallel_ref(
+        &*stores,
+        program,
+        fn_pos,
+        input,
+        element_size,
+        n_threads,
+        extra_args,
+        n_rows,
+    );
+    let null_db = DbRef {
+        store_nr: u16::MAX,
+        rec: 0,
+        pos: 0,
+    };
+    let mut refs: Vec<DbRef> = vec![null_db; n_rows];
+    let mut adopted: Vec<u16> = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    for (batch, mut worker_stores) in batches {
+        let rebase = stores.adopt_worker_excess(&mut worker_stores, parent_store_count);
+        for &parent_nr in rebase.map.values() {
+            adopted.push(parent_nr);
+        }
+        for (i, src_ref) in batch {
+            let translated = rebase.translate(&src_ref);
+            rebase_walk_record(stores, &translated, ret_type, data, &rebase, &mut visited);
+            refs[i] = translated;
+        }
+    }
+    (refs, adopted)
+}
+
 /// Parallel integer returns: one `i64` per row, original order.
 ///
 /// Plan-06 phase 4b': the loft-surface `parallel_for_int` (string-based
