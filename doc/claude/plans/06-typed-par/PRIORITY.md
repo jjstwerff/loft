@@ -6,10 +6,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Plan-06 — fast-track order by complexity reduction
 
 > **SUPERSEDED by [ARC.md](ARC.md) (2026-04-30).**  Spine steps 1–7
-> shipped through this doc; step 8 is partially landed.  Remaining
-> work is tracked in ARC.md as steps A1–A11 with hard scope locks
-> and named acceptance tests.  This doc is retained as the
-> historical record of how steps 1–7 were sequenced.
+> shipped through this doc; step 8 was partially landed.  ARC.md
+> step A1 retired the heavy Concat path (commit `b9ad7af`) and ARC
+> step A2 replaced 8d.3's fixed `SLOTS_PER_THREAD = 16` per-thread
+> reservation with a shared `Arc<AtomicU16>` dispenser (commit
+> `217b3ac`).  Remaining work is tracked in ARC.md as steps A1–A11
+> with hard scope locks and named acceptance tests.  This doc is
+> retained as the historical record of how steps 1–7 were
+> sequenced; the 8d.3 per-thread-range design described below has
+> been replaced by A2.
 
 The original plan-06 phases are numbered by topic, not by impact.
 This doc reorders them as a **single sequential spine** — each step

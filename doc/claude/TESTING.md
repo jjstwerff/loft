@@ -20,24 +20,51 @@ pass and read the captured failures once.
 # result: /tmp/loft_problems.txt
 ```
 
-`--bg` starts `cargo test --release --no-fail-fast` in a detached
-subshell and writes the raw log to `/tmp/loft_test.log`.  `--peek`
-tails the live log and pulls out any `FAILED` markers, inline
-panics, and SIGSEGV context (last ~15 lines before each crash).
-`--wait` blocks on the background pid and then produces the
-final summary.
+`--bg` starts the test runner in a detached subshell and writes
+the raw log to `/tmp/loft_test.log`.  `--peek` tails the live log
+and pulls out any `FAILED` markers, inline panics, and SIGSEGV
+context (last ~15 lines before each crash).  `--wait` blocks on
+the background pid and then produces the final summary.
+
+**Test runner choice.**  The script prefers `cargo nextest run
+--release --no-fail-fast --status-level fail` when nextest is on
+`PATH` (typical loft suite is 2-3× faster wall-clock at test
+execution because nextest parallelises at the test level rather
+than the binary level).  Falls back to `cargo test --release
+--no-fail-fast` when nextest is not installed.  The runner choice
+is logged on launch so a regression in test execution speed can
+be tied to a runner / profile change.
 
 Before the test run starts, the script rebuilds every sibling
-cdylib under `lib/*/native/` via `rebuild_native_cdylibs`.  The
-suite dlopens these libraries through `extensions::load_all` or
-links them via `--native`; when the `.rlib` / `.so` is older than
-its source, rustc surfaces a confusing
-`cannot find function X in crate loft_*_native` and cascades a
-dozen unrelated test failures.  Cargo is incremental, so a clean
-tree is ~free; a stale tree costs one recompile but stops a
-whole class of misleading reports.  The same freshness step is
-wired into `make test`, `make quick`, `make ci`, and
+cdylib under `lib/*/native/`, plus `tests/lib/*/native/` and the
+`wasm32-unknown-unknown` rlib (when its `target/` directory
+exists).  The suite dlopens these libraries through
+`extensions::load_all` or links them via `--native`; when the
+`.rlib` / `.so` is older than its source, rustc surfaces a
+confusing `cannot find function X in crate loft_*_native` and
+cascades a dozen unrelated test failures.  Cargo is incremental,
+so a clean tree is ~free; a stale tree costs one recompile but
+stops a whole class of misleading reports.  The same freshness
+step is wired into `make test`, `make quick`, `make ci`, and
 `make run-tests` via the `rebuild-native-cdylibs` target.
+
+**Parallel rebuild + per-step timings.**  All cdylib + wasm32
+rebuilds run in parallel under `rebuild_native_cdylibs`; total
+wall-clock is the slowest single step rather than the sum.  Each
+step's timing prints to stderr live and accumulates in
+`/tmp/loft_timings.txt`.  At the end of `--wait` (and the
+foreground path) the script prints a `=== Wall-clock timing
+summary ===` block so a regressing step is named, not just "the
+suite is slow."  Format:
+
+```
+  cdylib lib/graphics/native                        1.910s
+  cdylib lib/imaging/native                         0.885s
+  ...
+  wasm32 rlib                                       0.588s
+  (rebuild_native_cdylibs total wall-clock)         1.949s
+  cargo nextest run --release --no-fail-fast …    313.479s
+```
 
 Running in the background is the default for a reason: the
 suite takes long enough that blocking on it wastes cycles you
