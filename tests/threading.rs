@@ -1267,10 +1267,23 @@ fn bump(s: const Score) -> Score { Score { value: s.value + 100 } }
         !adopted.is_empty(),
         "expected at least one worker store to be adopted"
     );
-    assert_eq!(
-        allocations_after - allocations_before,
+    // 8d.3: parent's allocations grow by `n_threads *
+    // SLOTS_PER_THREAD` (the reserved range), not by `adopted.len()`.
+    // Unused reserved slots stay in `allocations` but are flagged
+    // free in `free_bits` for future reuse — `release_worker_slots`
+    // handles that.  The adopted count is bounded above by the
+    // reservation but can be smaller (workers may not fill every
+    // reserved slot).
+    assert!(
+        adopted.len() <= allocations_after - allocations_before,
+        "adopted count ({}) ≤ reservation growth ({})",
         adopted.len(),
-        "parent's allocations grew by exactly the adopted count"
+        allocations_after - allocations_before
+    );
+    assert!(
+        adopted.len() >= n as usize,
+        "expected at least one adopted store per input row (got {} for n={n})",
+        adopted.len()
     );
 
     // Each rebased DbRef should resolve in the parent's namespace.

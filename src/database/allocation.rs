@@ -24,18 +24,43 @@ impl Stores {
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         // S29: find the lowest free slot using the free_bits bitmap.
         // If a freed slot exists below max, reuse it; otherwise grow max.
-        // Plan-06 spine 8d.2: workers spawned by `run_parallel_queue_ref`
-        // set `disable_slot_reuse = true` so each new store lands at
-        // `self.max` (above parent_store_count) — `adopt_worker_excess`
-        // requires that to catch all worker-created stores.
-        let slot = if self.disable_slot_reuse {
+        // Plan-06 spine 8d.3: workers spawned by `run_parallel_queue_ref`
+        // set `disable_slot_reuse = true` and a per-thread reserved
+        // range (`worker_slot_offset..worker_slot_limit`) so each
+        // worker's stores land at globally-unique parent indices.
+        // No per-batch rebase needed.  `worker_slot_limit > 0` is
+        // the active-range gate (offset can legitimately be 0 in
+        // pathological setups; limit cannot, since
+        // `reserve_worker_slots` always pushes at least 1 slot per
+        // thread).
+        let slot = if self.disable_slot_reuse && self.worker_slot_limit > 0 {
+            // 8d.3: per-thread reserved range.  Allocate at
+            // `worker_slot_offset + worker_slot_local_count`,
+            // bumping the counter.  The slot exists in
+            // `allocations` already (reserved as `free=true` by
+            // `reserve_worker_slots`), so the path falls through
+            // `unlock + init` below.  Cross-thread indices don't
+            // collide because each thread's range is disjoint.
+            let s = self
+                .worker_slot_offset
+                .saturating_add(self.worker_slot_local_count);
+            assert!(
+                s < self.worker_slot_limit,
+                "worker exhausted reserved slot range \
+                 [{}, {}) at local_count={} — raise slots_per_thread \
+                 in run_parallel_queue_ref",
+                self.worker_slot_offset,
+                self.worker_slot_limit,
+                self.worker_slot_local_count
+            );
+            self.worker_slot_local_count += 1;
+            s
+        } else if self.disable_slot_reuse {
             // 8d.2: push at the end of allocations so worker writes
-            // never reuse a cloned slot.  `self.max` would be wrong
-            // here — parent's slot-reuse history can leave
-            // `self.max < self.allocations.len()` (free + re-alloc
-            // doesn't bump max), and using `max` would overwrite a
-            // cloned slot that's still below `parent_store_count`
-            // and so invisible to `adopt_worker_excess`.
+            // never reuse a cloned slot.  Used when no per-thread
+            // range is reserved (single-thread queue dispatch or
+            // legacy paths that opt into disable_slot_reuse without
+            // setting an offset).
             self.allocations.len() as u16
         } else {
             self.find_free_slot()
@@ -561,6 +586,9 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
+            worker_slot_offset: 0,
+            worker_slot_limit: 0,
+            worker_slot_local_count: 0,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
@@ -636,6 +664,9 @@ impl Stores {
             frame_yield: false,
             poison_free: self.poison_free,
             disable_slot_reuse: self.disable_slot_reuse,
+            worker_slot_offset: 0,
+            worker_slot_limit: 0,
+            worker_slot_local_count: 0,
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

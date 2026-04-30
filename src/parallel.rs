@@ -909,10 +909,7 @@ pub fn run_parallel_ref(
 ///
 /// Currently `#[allow(dead_code)]` — 8d.1 is the first call-site
 /// consumer (`n_parallel_queue_ref` native fn).
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, dead_code)
-)]
+#[cfg(feature = "threading")]
 #[allow(dead_code, clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_queue_ref(
@@ -930,58 +927,74 @@ pub fn run_parallel_queue_ref(
     if n_rows == 0 {
         return (Vec::new(), Vec::new());
     }
-    let parent_store_count = stores.allocations.len() as u16;
+    // 8d.3: pre-allocate a per-thread reserved range in parent's
+    // allocations.  Each worker thread T_i gets a dedicated slice
+    // [offsets[i], offsets[i] + SLOTS_PER_THREAD) it can fill via
+    // `OpDatabase` / `OpNewRecord` without colliding with other
+    // threads' indices.  Workers' clones see the same reserved
+    // slots (clone_for_worker copies all of parent's allocations);
+    // workers fill their slice; we `mem::swap` each filled slice
+    // back into parent at thread join.  No rebase needed because
+    // every worker-written DbRef already lives in parent
+    // namespace.
+    //
+    // SLOTS_PER_THREAD = 16 covers typical workloads (one Result
+    // per row + intermediate variant reassignments like Pass→Fail).
+    // Workers that exceed the cap hit the assertion in
+    // `database_named` with a clear error message.
+    const SLOTS_PER_THREAD: u16 = 16;
+    let n_workers = n_threads.max(1).min(n_rows.max(1));
+    let offsets = stores.reserve_worker_slots(n_workers, SLOTS_PER_THREAD);
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
-    // 8d.2: inline `parallel_workers` (instead of delegating to
-    // `run_parallel_ref`) so we can disable the S29 free-slot reuse
-    // optimisation per worker.  `clone_for_worker` populates the
-    // worker's `free_bits` with parent's freed slots; without
-    // clearing it, the worker's `OpNewRecord` may reuse a freed
-    // parent slot — and `adopt_worker_excess(parent_store_count)`
-    // only adopts stores at indices ≥ `parent_store_count`, so a
-    // record written into a clone-of-freed-parent-slot is silently
-    // lost.  Clearing `free_bits` forces every new worker store to
-    // land at index ≥ `parent_store_count`, which adoption catches
-    // in full — preserving the streaming "no copy" benefit while
-    // fixing the lost-write bug.  The S29 optimisation stays in
-    // place for every other dispatch path (run_parallel_direct /
-    // _text / _int / _discard / the legacy run_parallel_ref) where
-    // adoption isn't part of the contract.
-    // 8d.2: inline `parallel_workers` (instead of delegating to
-    // `run_parallel_ref`) so we can disable the S29 free-slot reuse
-    // optimisation per worker.  `clone_for_worker` populates the
-    // worker's `free_bits` with parent's freed slots; without
-    // disabling reuse, the worker's `OpNewRecord` may reuse a freed
-    // parent slot or its own internal free slot — and
-    // `adopt_worker_excess(parent_store_count)` only adopts stores
-    // at indices ≥ `parent_store_count`, so a record written into a
-    // clone-of-parent-slot is silently lost.  Setting
-    // `disable_slot_reuse = true` forces every new worker store to
-    // land at `allocations.len()` (above parent_store_count, since
-    // clone_for_worker preserves parent's allocations vector
-    // start-of-clone), which adoption catches in full.  Preserves
-    // the streaming "no copy" benefit while fixing the lost-write
-    // bug.  S29 stays in place for every other dispatch path
-    // (run_parallel_direct / _text / _int / _discard / the legacy
-    // run_parallel_ref consumed by `parallel_execute_and_collect`)
-    // where adoption isn't part of the contract.
-    let batches = parallel_workers(&*stores, n_threads, n_rows, |start, end, mut ws| {
-        ws.stores.free_bits.clear();
-        ws.stores.disable_slot_reuse = true;
-        let mut state = prog.new_state(ws);
-        let mut batch = Vec::with_capacity(end - start);
-        for row_idx in start..end {
-            let row_ref = vector::get_vector(
-                &input_t,
-                element_size,
-                row_idx as i64,
-                &state.database.allocations,
-            );
-            batch.push((row_idx, state.execute_at_ref(fn_pos, &row_ref, &extras)));
-        }
-        (batch, state.database)
+    // Inline rayon dispatch (instead of `parallel_workers`) so we
+    // can forward the thread index `t` to each worker — the worker
+    // closure uses it to index `offsets` and set its reserved
+    // range.  Otherwise identical to `parallel_workers`.
+    use rayon::prelude::*;
+    let pool = rayon_pool();
+    let stores_immut: &Stores = &*stores;
+    let offsets_ref = &offsets;
+    let prog_ref = &prog;
+    let extras_ref = &extras;
+    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = pool.install(|| {
+        (0..n_workers)
+            .into_par_iter()
+            .map(|t| {
+                let start = t * n_rows / n_workers;
+                let end = (t + 1) * n_rows / n_workers;
+                let mut ws = stores_immut.clone_for_worker();
+                ws.stores.free_bits.clear();
+                ws.stores.disable_slot_reuse = true;
+                // The worker's stack store (allocated by
+                // `prog.new_state(ws)` via `db.database(1000)`) MUST
+                // land at `allocations.len()` (push-at-end), NOT in
+                // the per-thread reserved range.  The stack store is
+                // a worker-local scratch buffer; if it ended up in
+                // the reserved range, our swap loop would move it
+                // into parent — corrupting parent's slot with
+                // worker-stack data.  Leave `worker_slot_limit = 0`
+                // so the new gate stays disabled until after
+                // `new_state` returns, then enable it for the
+                // worker's user-code allocations.
+                let mut state = prog_ref.new_state(ws);
+                state.database.worker_slot_offset = offsets_ref[t];
+                state.database.worker_slot_limit = offsets_ref[t] + SLOTS_PER_THREAD;
+                state.database.worker_slot_local_count = 0;
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx as i64,
+                        &state.database.allocations,
+                    );
+                    batch.push((row_idx, state.execute_at_ref(fn_pos, &row_ref, extras_ref)));
+                }
+                (batch, state.database)
+            })
+            .collect()
     });
     let null_db = DbRef {
         store_nr: u16::MAX,
@@ -990,58 +1003,138 @@ pub fn run_parallel_queue_ref(
     };
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
-    // 8d.3: accumulate ALL workers' rebase maps into a single
-    // unified `StoreRebase` before walking records.  Thread A's
-    // record fields can reference thread B's store (e.g. when a
-    // struct-enum-payload's text storage is shared across worker
-    // batches via the rayon pool's reused state), so a per-batch
-    // rebase map alone misses cross-worker translations.  Adopt
-    // every worker's stores first, merge their `(worker_local →
-    // parent_nr)` entries into one map keyed by *per-thread
-    // worker_local* — each thread's allocations vector is private,
-    // but worker_local indices may collide across threads, so we
-    // can't directly merge.  Instead we adopt + translate
-    // immediately per-thread (the local→parent map for that
-    // thread's records), then collect refs without walking.
-    // After all batches' adopts are done, walk every collected ref
-    // with the unified parent-side map (which is just the parent's
-    // own allocations table — every adopted store now lives there
-    // at its parent_nr, and `rebase_walk_record`'s
-    // `(record_ref.store_nr as usize) < stores.allocations.len()`
-    // guard at line 512-513 catches the legitimate parent-shared
-    // refs).
-    let mut translated_refs: Vec<(usize, DbRef)> = Vec::with_capacity(n_rows);
-    for (batch, mut worker_stores) in batches {
-        let rebase = stores.adopt_worker_excess(&mut worker_stores, parent_store_count);
-        for &parent_nr in rebase.map.values() {
-            adopted.push(parent_nr);
+    // Swap every reserved-range slot from worker into parent —
+    // unconditionally on free flag.  Workers may have freed the
+    // result store during scope cleanup (`OpFreeRef` on intermediate
+    // temps that share the result's DbRef via variant assignment),
+    // but the bytes are still in worker memory at swap time.  Slots
+    // the worker never touched are fresh `Store::new(100)` clones
+    // (also empty); swapping them is harmless.
+    //
+    // Per-thread reserved ranges put every worker-written DbRef
+    // directly in parent namespace, so no per-batch rebase walker
+    // is needed.  After swapping, `revive_record_chain` walks each
+    // result DbRef and marks its store (and any nested DbRef
+    // chains) as active.
+    for (t, (batch, mut worker_stores)) in batches.into_iter().enumerate() {
+        let off = offsets[t] as usize;
+        let lim = (offsets[t] + SLOTS_PER_THREAD) as usize;
+        for slot_nr in off..lim.min(worker_stores.allocations.len()) {
+            std::mem::swap(
+                &mut stores.allocations[slot_nr],
+                &mut worker_stores.allocations[slot_nr],
+            );
         }
         for (i, src_ref) in batch {
-            let translated = rebase.translate(&src_ref);
-            translated_refs.push((i, translated));
+            refs[i] = src_ref;
         }
     }
-    // Build a unified rebase covering every adopted store.  Worker-
-    // local indices are gone now (all adopted stores live in the
-    // parent's namespace) — the unified rebase is essentially the
-    // identity map for parent slots.  `rebase_walk_record`'s
-    // recursion uses the map to translate inner DbRef fields; with
-    // an empty map, every ref falls into the "parent_shared / pass
-    // through" branch (`db.store_nr < parent_store_count`) which is
-    // correct now that all stores are parent-side.  Set
-    // `parent_store_count = stores.allocations.len()` so every
-    // rebased ref short-circuits through the cheap branch.
-    let unified = StoreRebase::with_parent_count(stores.allocations.len() as u16);
-    let mut visited = std::collections::HashSet::new();
-    for (i, translated) in translated_refs {
-        if translated.store_nr != u16::MAX
-            && (translated.store_nr as usize) < stores.allocations.len()
-        {
-            rebase_walk_record(stores, &translated, ret_type, data, &unified, &mut visited);
+    // Revive every result chain.  Without this, parent reads from
+    // worker-freed slots return uninitialised bytes (variant-
+    // reassignment workers like `if neg { v = Fail{...} }` fall
+    // into this case because their codegen unconditionally
+    // `OpFreeRef`s every variant temp at end-of-fn).
+    let mut visited: std::collections::HashSet<u16> = std::collections::HashSet::new();
+    for r in &refs {
+        if r.store_nr == u16::MAX {
+            continue;
         }
-        refs[i] = translated;
+        revive_record_chain(stores, r, ret_type, data, &mut visited, &mut adopted);
     }
+    // Re-mark unused reserved slots in `free_bits` so future
+    // allocations can reclaim them.  Slots claimed by `revive_*`
+    // are now `free=false` and skip the if-branch below.
+    stores.release_worker_slots(&offsets, SLOTS_PER_THREAD);
     (refs, adopted)
+}
+
+/// 8d.3 — mark a result record's slot (and any DbRef sub-field
+/// chain) as active in the parent's namespace, after `mem::swap`
+/// has moved worker data into parent.  Mirrors `rebase_walk_record`'s
+/// recursion shape but with a "revive" action (clear `free` flag,
+/// reset `ref_count`, clear `free_bits`) instead of "translate".
+///
+/// The worker may have freed the result store during scope
+/// cleanup; the bytes are still in memory but the store is flagged
+/// `free=true`, which would cause future parent allocations to
+/// overwrite it.  Reviving sets `free=false, ref_count=1` so the
+/// slot is owned by `par_ref_buffer_stack`'s adopted list — freed
+/// later by `n_parallel_buf_drop_ref`.
+#[cfg(feature = "threading")]
+fn revive_record_chain(
+    stores: &mut Stores,
+    record_ref: &DbRef,
+    record_type: &crate::data::Type,
+    data: &crate::data::Data,
+    visited: &mut std::collections::HashSet<u16>,
+    adopted: &mut Vec<u16>,
+) {
+    use crate::data::{Type, owned_elements};
+
+    let store_nr = record_ref.store_nr;
+    if !visited.insert(store_nr) {
+        return;
+    }
+    if (store_nr as usize) >= stores.allocations.len() {
+        return;
+    }
+    {
+        let store = &mut stores.allocations[store_nr as usize];
+        store.unlock();
+        if store.free {
+            store.free = false;
+            store.ref_count = 1;
+        }
+    }
+    let wi = store_nr as usize / 64;
+    let bi = store_nr as usize % 64;
+    if wi < stores.free_bits.len() {
+        stores.free_bits[wi] &= !(1u64 << bi);
+    }
+    adopted.push(store_nr);
+
+    // For plain `Type::Reference(struct_d, _)`, `attributes` lists
+    // the struct's fields — safe to walk for owned DbRef sub-fields.
+    // For `Type::Enum(_, true, _)`, `attributes` lists the parent
+    // enum's *variants*, NOT the active variant's fields — walking
+    // them as DbRef offsets reads garbage and segfaults.  Reaching
+    // the active variant requires reading the discriminant + type
+    // tag; deferred until a test with nested DbRef-in-variant
+    // payload exposes the gap (the spine's current corpus has no
+    // such test — Pass/Fail variants in `par_struct_to_struct_enum_t4`
+    // hold only byte / integer / text, none owned-DbRef).
+    let elem_types: Vec<Type> = match record_type {
+        Type::Reference(struct_d, _) => data
+            .def(*struct_d)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect(),
+        Type::Tuple(elems) => elems.clone(),
+        _ => return,
+    };
+    let owned: Vec<(usize, usize)> = owned_elements(&elem_types);
+    for (offset, idx) in owned {
+        let field_pos = record_ref.pos + offset as u32;
+        let field_tp = &elem_types[idx];
+        match field_tp {
+            Type::Text(_) => {}
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                let cur: DbRef =
+                    *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);
+                if cur.store_nr != u16::MAX && (cur.store_nr as usize) < stores.allocations.len() {
+                    revive_record_chain(stores, &cur, field_tp, data, visited, adopted);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Parallel integer returns: one `i64` per row, original order.
