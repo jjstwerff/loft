@@ -989,7 +989,7 @@ pub fn run_parallel_int(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
-#[allow(dead_code)] // step 3 is the first consumer; tested via tests/threading.rs
+#[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
 pub fn run_parallel_discard(
     stores: &Stores,
     program: WorkerProgram,

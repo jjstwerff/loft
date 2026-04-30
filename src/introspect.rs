@@ -118,6 +118,10 @@ impl Default for Options {
 /// Returns I/O errors from sink writes; propagates parser fatal
 /// diagnostics by exiting with status 1 (mirrors `loft <file>`'s
 /// behaviour).
+///
+/// # Panics
+/// Panics if the default stdlib directory cannot be parsed (mirrors
+/// `loft <file>`'s `unwrap()` on `parse_dir(default/)`).
 #[allow(dead_code)]
 pub fn run(filename: &str, opts: &Options) -> std::io::Result<()> {
     let abs_file = std::path::Path::new(filename)
@@ -126,7 +130,7 @@ pub fn run(filename: &str, opts: &Options) -> std::io::Result<()> {
         .to_string_lossy()
         .into_owned();
     let mut p = Parser::new();
-    p.lib_dirs = opts.lib_dirs.clone();
+    p.lib_dirs.clone_from(&opts.lib_dirs);
     let default_dir = if opts.install_dir.is_empty() {
         "default".to_string()
     } else {
@@ -266,19 +270,16 @@ fn run_diff_against_baseline(baseline: &str, buffer: &[u8]) -> std::io::Result<(
         .arg(&tmp)
         .status();
     let _ = std::fs::remove_file(&tmp);
-    match status {
-        Ok(s) => {
-            // 0 = identical, 1 = differs.  Both are valid outcomes;
-            // mirror diff's exit code.
-            std::process::exit(s.code().unwrap_or(2));
-        }
-        Err(_) => {
-            eprintln!(
-                "loft: --diff requires `diff` on PATH; \
-                 fall back to redirecting --introspect output and diffing manually."
-            );
-            std::process::exit(2);
-        }
+    if let Ok(s) = status {
+        // 0 = identical, 1 = differs.  Both are valid outcomes;
+        // mirror diff's exit code.
+        std::process::exit(s.code().unwrap_or(2));
+    } else {
+        eprintln!(
+            "loft: --diff requires `diff` on PATH; \
+             fall back to redirecting --introspect output and diffing manually."
+        );
+        std::process::exit(2);
     }
 }
 
@@ -394,11 +395,7 @@ fn emit_types(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
         }
         let ret_str = def.returned.show(data, &def.variables);
         writeln!(w, "fn {} -> {ret_str}:", def.name)?;
-        writeln!(
-            w,
-            "  {:<4} {:<4} {:<24} {}",
-            "#", "arg", "name", "type [deps]"
-        )?;
+        writeln!(w, "  {:<4} {:<4} {:<24} type [deps]", "#", "arg", "name")?;
         writeln!(w, "  {}", "-".repeat(70))?;
         for idx in 0..def.variables.count() {
             let arg_flag = if def.variables.is_argument(idx) {

@@ -914,6 +914,7 @@ impl Parser {
         *ctp = lhs_type.clone();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_operator(
         &mut self,
         var_tp: &Type,

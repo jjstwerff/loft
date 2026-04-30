@@ -950,8 +950,8 @@ fn worker_id(r: const Num) -> integer { r.v }
 /// Spine step 3c — fused for-par with empty body lowers to
 /// `n_parallel_discard` instead of allocating a result vector.
 /// Compiles + runs end-to-end; locks in the parser-side desugar
-/// + n_parallel_discard native dispatch + run_parallel_discard
-/// runtime.
+/// plus the n_parallel_discard native dispatch and the
+/// run_parallel_discard runtime.
 #[test]
 fn par_fused_empty_body_runs_through_discard() {
     use loft::compile::byte_code;

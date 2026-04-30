@@ -1960,7 +1960,7 @@ impl Parser {
                 // and `output_call` projects `.0` natively (see the
                 // val_is_fn_ref handling in src/generation/calls.rs).
                 let d_nr_only = match value {
-                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr as i32),
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
                     other => other,
                 };
                 self.cl("OpSetInt4", &[ref_code.clone(), pos_v, d_nr_only])
@@ -2150,7 +2150,7 @@ impl Parser {
                 // `src/generation/calls.rs` projects `.0` from the
                 // `(u32, DbRef)` fn-ref tuple before the i32 cast.
                 let d_nr_only = match val_code {
-                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr as i32),
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
                     other => other,
                 };
                 self.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])

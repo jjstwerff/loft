@@ -1734,9 +1734,7 @@ fn call_is_par_safe(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> boo
     let def = &data.definitions[callee as usize];
     match def.purity {
         Purity::Pure => true,
-        Purity::Impure(ImpureCategory::HostIo)
-        | Purity::Impure(ImpureCategory::Prng)
-        | Purity::Impure(ImpureCategory::Io) => true,
+        Purity::Impure(ImpureCategory::HostIo | ImpureCategory::Prng | ImpureCategory::Io) => true,
         Purity::Impure(ImpureCategory::ParCall) => {
             // Nested par: D8 R2 says inner worker fn must itself be
             // par-safe.  Minimum impl returns true; full 5b looks
@@ -1983,10 +1981,12 @@ fn call_reason(callee: u32, data: &Data, visited: &mut HashSet<u32>) -> Option<S
     let def = &data.definitions[callee as usize];
     match def.purity {
         Purity::Pure
-        | Purity::Impure(ImpureCategory::HostIo)
-        | Purity::Impure(ImpureCategory::Prng)
-        | Purity::Impure(ImpureCategory::Io)
-        | Purity::Impure(ImpureCategory::ParCall) => None,
+        | Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Prng
+            | ImpureCategory::Io
+            | ImpureCategory::ParCall,
+        ) => None,
         Purity::Impure(ImpureCategory::ParentWrite) => {
             Some(format!("call to parent-write stdlib fn '{}'", def.name))
         }
@@ -2208,10 +2208,12 @@ fn call_classified(callee: u32, data: &Data, classification: &HashMap<u32, bool>
     let def = &data.definitions[callee as usize];
     match def.purity {
         Purity::Pure
-        | Purity::Impure(ImpureCategory::HostIo)
-        | Purity::Impure(ImpureCategory::Prng)
-        | Purity::Impure(ImpureCategory::Io)
-        | Purity::Impure(ImpureCategory::ParCall) => true,
+        | Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Prng
+            | ImpureCategory::Io
+            | ImpureCategory::ParCall,
+        ) => true,
         Purity::Impure(ImpureCategory::ParentWrite) => false,
         Purity::Unknown => {
             if matches!(def.code, Value::Null) {
@@ -2470,10 +2472,12 @@ fn call_deep_parent_write(
     let def = &data.definitions[callee as usize];
     match def.purity {
         Purity::Pure
-        | Purity::Impure(ImpureCategory::HostIo)
-        | Purity::Impure(ImpureCategory::Prng)
-        | Purity::Impure(ImpureCategory::Io)
-        | Purity::Impure(ImpureCategory::ParCall) => None,
+        | Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Prng
+            | ImpureCategory::Io
+            | ImpureCategory::ParCall,
+        ) => None,
         Purity::Impure(ImpureCategory::ParentWrite) => {
             if first_arg_is_local_var(args, current_fn, data) {
                 None

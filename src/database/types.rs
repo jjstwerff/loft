@@ -601,7 +601,7 @@ impl Stores {
     /// Same as `validate_layout` but takes a type id directly.
     /// `visited` prevents infinite recursion through cyclic
     /// references (e.g. struct containing a vector of itself).
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::many_single_char_names)]
     pub fn validate_layout_by_nr(
         &self,
         tp: u16,
@@ -775,7 +775,8 @@ impl Stores {
                 } else {
                     (*pos + csz).to_string()
                 };
-                out += &format!("[{}]{}:{}@{}..{}", idx, f.name, cname, pos_str, end);
+                use std::fmt::Write;
+                let _ = write!(out, "[{}]{}:{}@{}..{}", idx, f.name, cname, pos_str, end);
             }
             out += "}";
         }
@@ -785,6 +786,7 @@ impl Stores {
     /// Helper — detect overlapping field byte ranges.  Each issue
     /// includes the full layout summary so the user can see the
     /// surrounding context without a separate debug_layout dump.
+    #[allow(clippy::similar_names)]
     fn check_fields_overlap(&self, tp: u16, fields: &[Field], issues: &mut Vec<String>) {
         let t_name = self.types[tp as usize].name.clone();
         let mut by_pos: Vec<(u16, &Field)> = fields
@@ -797,8 +799,8 @@ impl Stores {
         for window in by_pos.windows(2) {
             let (a_pos, a) = window[0];
             let (b_pos, b) = window[1];
-            let a_end = a_pos as u32 + self.types[a.content as usize].size as u32;
-            if (b_pos as u32) < a_end {
+            let a_end = u32::from(a_pos) + u32::from(self.types[a.content as usize].size);
+            if u32::from(b_pos) < a_end {
                 had_issue = true;
                 issues.push(format!(
                     "{}: fields '{}' [@{}..{}) and '{}' [@{}..) overlap",
@@ -834,8 +836,8 @@ impl Stores {
             if csz == u16::MAX {
                 continue;
             }
-            let end = f.position as u32 + csz as u32;
-            if end > t_size as u32 {
+            let end = u32::from(f.position) + u32::from(csz);
+            if end > u32::from(t_size) {
                 had_issue = true;
                 issues.push(format!(
                     "{}: field '{}' [@{}..{}) extends beyond type size {}",
@@ -866,13 +868,13 @@ impl Stores {
             let cname = &self.types[f.content as usize].name;
             // Show gap if this field's start > prev_end (when both
             // positions are real, not the u16::MAX "not laid out" sentinel).
-            if prev_end >= 0 && pos != u16::MAX && (pos as i32) > prev_end {
+            if prev_end >= 0 && pos != u16::MAX && i32::from(pos) > prev_end {
                 let _ = writeln!(
                     out,
                     "{pad}     ── gap [{}..{}) ({} bytes) ──",
                     prev_end,
                     pos,
-                    pos as i32 - prev_end
+                    i32::from(pos) - prev_end
                 );
             }
             let _ = writeln!(
@@ -881,7 +883,7 @@ impl Stores {
                 f.name, pos, csz, cname
             );
             if pos != u16::MAX && csz != u16::MAX {
-                prev_end = pos as i32 + csz as i32;
+                prev_end = i32::from(pos) + i32::from(csz);
             }
         }
     }
@@ -2573,6 +2575,7 @@ mod layout_tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn safe_access_yields_distinct_non_overlapping_positions() {
         // Every member's position must be DISTINCT from every other
         // member's, AND no two members can share bytes in the
@@ -2670,7 +2673,7 @@ mod layout_tests {
             }
         }
         // 2 groups × 3 members = 6 positions, all distinct.
-        all_positions.sort();
+        all_positions.sort_unstable();
         let original_len = all_positions.len();
         all_positions.dedup();
         assert_eq!(

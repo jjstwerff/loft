@@ -376,19 +376,17 @@ pub enum Value {
     ///   * `input`  — expression of type `vector<T>`
     ///   * `x_var`  — variable bound to each input element
     ///   * `r_var`  — bound to worker result; `u16::MAX` when the
-    ///                stitch policy is Discard (no result name)
+    ///     stitch policy is Discard (no result name)
     ///   * `worker` — call expression evaluated by workers per row
     ///   * `threads` — expression of type integer
     ///   * `body`   — sequential block on the main thread
     ///   * `stitch_id` — `Stitch` policy: 0=Concat, 1=Discard,
-    ///                   2=Reduce, 3=Queue.  Numeric here so
-    ///                   `data.rs` does not need to import the typed
-    ///                   `Stitch` enum from `parallel.rs` (avoids a
-    ///                   cross-module dependency); codegen converts
-    ///                   to the typed enum via the same id mapping.
-    ///                   Reduce/Queue policy payloads (fold_fn,
-    ///                   capacity) come from companion fields added
-    ///                   when their runtimes land in spine steps 4+9.
+    ///     2=Reduce, 3=Queue.  Numeric here so `data.rs` does not
+    ///     need to import the typed `Stitch` enum from `parallel.rs`
+    ///     (avoids a cross-module dependency); codegen converts to
+    ///     the typed enum via the same id mapping.  Reduce/Queue
+    ///     policy payloads (fold_fn, capacity) come from companion
+    ///     fields added when their runtimes land in spine steps 4+9.
     ///
     /// Currently dead code — spine step 3a (this commit) lands the
     /// variant + walker arms only.  Steps 3b (codegen) and 3c
@@ -1183,6 +1181,7 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
 /// Skips `Value::CallRef` (runtime function reference) — phase 5e
 /// pessimises CallRef-routed callers because the actual callee is
 /// not statically known.
+#[allow(clippy::similar_names)]
 fn collect_callees(value: &Value, caller: u32, edges: &mut Vec<(u32, u32)>) {
     match value {
         Value::Call(callee, args) => {

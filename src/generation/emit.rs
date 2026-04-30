@@ -251,8 +251,7 @@ impl Output<'_> {
                 let elem_is_text = match variables.tp(*var) {
                     Type::Tuple(elems) => elems
                         .get(*idx as usize)
-                        .map(|e| matches!(e, Type::Text(_)))
-                        .unwrap_or(false),
+                        .is_some_and(|e| matches!(e, Type::Text(_))),
                     _ => false,
                 };
                 let is_arg = variables.is_argument(*var);

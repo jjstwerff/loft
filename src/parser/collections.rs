@@ -1375,18 +1375,18 @@ use #count instead"
         // silently vanish at thread join (D2.0).  The error gives
         // the full reachability chain so the user can see exactly
         // which helper introduces the offending call.
-        if !self.first_pass && fn_d_nr != u32::MAX {
-            if let Some(chain) = crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
-            {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "par() worker reaches a parent-write callee: {}.  \
+        if !self.first_pass
+            && fn_d_nr != u32::MAX
+            && let Some(chain) = crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par() worker reaches a parent-write callee: {}.  \
                      Worker writes to non-local state silently vanish at thread join \
                      (plan-06 D2.0).  Return the value instead.",
-                    chain
-                );
-            }
+                chain
+            );
         }
 
         // Comma separating worker from thread count.
@@ -1543,7 +1543,7 @@ use #count instead"
                 | Type::Unknown(_)
         );
         let early_ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
-            &Type::Integer(spec.clone()),
+            &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
         let early_route_int_queue = early_is_primitive_return
@@ -1782,7 +1782,7 @@ use #count instead"
         let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
         let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
-            &Type::Integer(spec.clone()),
+            &Type::Integer(*spec),
             &Context::Argument,
         )) == 8);
         // 8b: integer-i64 returns route through `n_parallel_queue` +

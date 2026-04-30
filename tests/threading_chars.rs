@@ -595,7 +595,7 @@ fn run() -> integer {
 /// Closed by commits `ab08ad0` (P191 — `database.index` bookkeeping
 /// fields are now 4-byte `int<0,false>` instead of 8-byte `integer`,
 /// matching `tree::add`'s hardcoded RB_LEFT=0 / RB_RIGHT=4 offsets)
-/// + `592cde8` (P188 — local-var `+=` dispatches to the specific
+/// and `592cde8` (P188 — local-var `+=` dispatches to the specific
 /// `database.index(c, key)` instead of the generic `index` alias).
 #[test]
 fn par_index_input_t4() {

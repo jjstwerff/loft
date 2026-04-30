@@ -263,7 +263,7 @@ fn adopt_worker_excess_multi_store() {
     // collide with parent's free slots that opened up during adoption,
     // so we just assert the map covers them.
     assert!(
-        rebase.map.len() >= 1,
+        !rebase.map.is_empty(),
         "expected at least one adoption; got {:?}",
         rebase.map
     );
