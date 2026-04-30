@@ -57,12 +57,75 @@ PID_FILE=/tmp/loft_test.pid
 # output.  Failures here print a warning but do not stop the test run;
 # the pre-existing in-test detection will surface the underlying
 # problem with a specific rebuild command.
+# Per-step wall-clock timings accumulate in /tmp/loft_timings.txt and
+# stream live to stderr so a slow `--bg` start is visible.  Format:
+#   `  cdylib lib/server/native       3.4s`  (always >= 0.1s precision)
+# A `=== Wall-clock timing summary ===` block prints at run/wait end.
+TIMINGS_FILE=/tmp/loft_timings.txt
+
+# Pick the test runner.  cargo-nextest parallelises at the test level
+# (cargo-test only at the binary level), giving 2-3x faster wall-clock
+# on the loft suite.  Falls back to plain `cargo test` if nextest
+# isn't installed.  `--profile default` matches `.config/nextest.toml`'s
+# fail-fast=off-by-default-flag-set / no-retries / immediate-failure
+# settings.
+test_runner_cmd() {
+  if cargo nextest --version >/dev/null 2>&1; then
+    echo "cargo nextest run --release --no-fail-fast --status-level fail"
+  else
+    echo "cargo test --release --no-fail-fast"
+  fi
+}
+
+# Run all rebuilds in parallel.  Each cargo invocation has fixed
+# startup overhead (~0.05–0.7 s on a no-op rebuild); doing them in
+# parallel collapses the serial 1.5–2 s wall-clock to whatever the
+# slowest single rebuild costs.  When something genuinely needs
+# rebuilding the wins are larger (10s of seconds).
+#
+# Per-step timings are written to per-PID files and concatenated
+# back into TIMINGS_FILE in submission order so the summary stays
+# stable.
+rebuild_one() {
+  local label="$1" dir="$2" cmd="$3" log="$4" timing_file="$5"
+  local start_ns end_ns elapsed_ms
+  start_ns=$(date +%s%N)
+  if ! bash -c "$cmd" >> "$log" 2>&1; then
+    echo "warning: rebuild of $dir failed — see $log" >&2
+  fi
+  end_ns=$(date +%s%N)
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+  printf '  %-44s %6d.%03ds\n' "$label" \
+    "$(( elapsed_ms / 1000 ))" "$(( elapsed_ms % 1000 ))" \
+    > "$timing_file"
+}
+
 rebuild_native_cdylibs() {
   local repo_root
   repo_root=$(cd "$(dirname "$0")/.." && pwd)
   local log=/tmp/loft_cdylib.log
   : > "$log"
+  : > "$TIMINGS_FILE"
   local any_src_cdylib=0
+  local timing_dir
+  timing_dir=$(mktemp -d /tmp/loft_timings.XXXXXX)
+  local rebuild_start_ns
+  rebuild_start_ns=$(date +%s%N)
+
+  echo "=== rebuild_native_cdylibs (parallel; per-step timings) ===" >&2
+
+  local jobs=()
+  local timing_files=()
+  local idx=0
+
+  schedule() {
+    local label="$1" dir="$2" cmd="$3"
+    local tf="$timing_dir/$idx"
+    timing_files+=("$tf")
+    idx=$(( idx + 1 ))
+    rebuild_one "$label" "$dir" "$cmd" "$log" "$tf" &
+    jobs+=($!)
+  }
 
   # 1. Sibling cdylibs under lib/*/native/
   for manifest in "$repo_root"/lib/*/native/Cargo.toml; do
@@ -70,10 +133,9 @@ rebuild_native_cdylibs() {
     any_src_cdylib=1
     local dir
     dir=$(dirname "$manifest")
+    local rel="${dir#"$repo_root"/}"
     echo "== rebuild $dir ==" >> "$log"
-    if ! (cd "$dir" && cargo build --release -q >> "$log" 2>&1); then
-      echo "warning: rebuild of $dir failed — see $log" >&2
-    fi
+    schedule "cdylib $rel" "$dir" "cd '$dir' && cargo build --release -q"
   done
 
   # 2. Test fixture cdylibs under tests/lib/*/native/
@@ -82,10 +144,9 @@ rebuild_native_cdylibs() {
     any_src_cdylib=1
     local dir
     dir=$(dirname "$manifest")
+    local rel="${dir#"$repo_root"/}"
     echo "== rebuild $dir ==" >> "$log"
-    if ! (cd "$dir" && cargo build --release -q >> "$log" 2>&1); then
-      echo "warning: rebuild of $dir failed — see $log" >&2
-    fi
+    schedule "cdylib $rel" "$dir" "cd '$dir' && cargo build --release -q"
   done < <(find "$repo_root/tests" -name Cargo.toml -not -path '*/target/*' 2>/dev/null)
 
   # 3. The wasm32-unknown-unknown rlib used by the html_wasm suite.
@@ -94,13 +155,31 @@ rebuild_native_cdylibs() {
   #    wasm-target install on developers who never touch the HTML gate.
   if [[ -d "$repo_root/target/wasm32-unknown-unknown" ]]; then
     echo "== rebuild wasm32-unknown-unknown rlib ==" >> "$log"
-    if ! (cd "$repo_root" && cargo build --release \
-            --target wasm32-unknown-unknown \
-            --lib --no-default-features --features random \
-            -q >> "$log" 2>&1); then
-      echo "warning: wasm rlib rebuild failed — see $log" >&2
-    fi
+    schedule "wasm32 rlib" "$repo_root" \
+      "cd '$repo_root' && cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random -q"
   fi
+
+  # Wait for all parallel rebuilds; `wait` exits after the slowest.
+  for pid in "${jobs[@]}"; do wait "$pid"; done
+
+  # Collect timings — one file per scheduled job.  Concatenate in
+  # scheduled order so the summary table reads top-to-bottom by
+  # submission, even though jobs finished in arbitrary order.
+  for tf in "${timing_files[@]}"; do
+    if [[ -f "$tf" ]]; then
+      cat "$tf" >> "$TIMINGS_FILE"
+      cat "$tf" >&2
+    fi
+  done
+  rm -rf "$timing_dir"
+
+  local rebuild_end_ns
+  rebuild_end_ns=$(date +%s%N)
+  local rebuild_ms=$(( (rebuild_end_ns - rebuild_start_ns) / 1000000 ))
+  printf '  %-44s %6d.%03ds\n' \
+    "(rebuild_native_cdylibs total wall-clock)" \
+    "$(( rebuild_ms / 1000 ))" "$(( rebuild_ms % 1000 ))" \
+    | tee -a "$TIMINGS_FILE" >&2
 
   if [[ "$any_src_cdylib" -eq 0 ]]; then
     echo "no sibling cdylibs found — skipping freshness step" >&2
@@ -206,6 +285,13 @@ if [[ "${1:-}" == "--wait" ]]; then
   while kill -0 "$pid" 2>/dev/null; do sleep 2; done
   rm -f "$PID_FILE"
   summarise "$LOG" "$OUT"
+  echo
+  echo "=== Wall-clock timing summary ==="
+  if [[ -f "$TIMINGS_FILE" ]]; then
+    cat "$TIMINGS_FILE"
+  else
+    echo "(no timings recorded — older log)"
+  fi
   echo "wrote problems summary to $OUT"
   wc -l "$OUT"
   exit 0
@@ -228,8 +314,22 @@ if [[ "${1:-}" == "--bg" ]]; then
   # errors immediately, not 90 s later inside the test log.
   rebuild_native_cdylibs
   # Tee via a subshell so the script returns after backgrounding.
-  (cargo test --release --no-fail-fast > "$LOG" 2>&1
-   summarise "$LOG" "$OUT") &
+  # `|| true` after the runner so summarise still fires when tests
+  # fail (cargo's non-zero exit would otherwise short-circuit `set -e`
+  # in the subshell, leaving /tmp/loft_problems.txt unwritten).
+  RUNNER="$(test_runner_cmd)"
+  echo "test runner: $RUNNER"
+  (
+    start_ns=$(date +%s%N)
+    eval "$RUNNER" > "$LOG" 2>&1 || true
+    end_ns=$(date +%s%N)
+    elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+    printf '  %-44s %6d.%03ds\n' "$RUNNER" \
+      "$(( elapsed_ms / 1000 ))" "$(( elapsed_ms % 1000 ))" \
+      >> "$TIMINGS_FILE"
+    summarise "$LOG" "$OUT"
+    rm -f "$PID_FILE"
+  ) &
   echo "$!" > "$PID_FILE"
   echo "background run started (pid $!), log: $LOG, summary on finish: $OUT"
   echo "use --peek to inspect in flight, --wait to block until done"
@@ -242,8 +342,20 @@ OUT="${2:-$OUT_DEFAULT}"
 find tests/ -name '*.loftc' -delete 2>/dev/null || true
 find /tmp -maxdepth 1 -name '*.loftc' -delete 2>/dev/null || true
 rebuild_native_cdylibs
-cargo test --release --no-fail-fast 2>&1 | tee "$LOG"
+RUNNER="$(test_runner_cmd)"
+echo "test runner: $RUNNER"
+fg_start_ns=$(date +%s%N)
+# `|| true` so test failures don't short-circuit `set -e` and skip
+# the post-run summary block.
+eval "$RUNNER" 2>&1 | tee "$LOG" || true
+fg_end_ns=$(date +%s%N)
+fg_elapsed_ms=$(( (fg_end_ns - fg_start_ns) / 1000000 ))
+printf '  %-44s %6d.%03ds\n' "$RUNNER" \
+  "$(( fg_elapsed_ms / 1000 ))" "$(( fg_elapsed_ms % 1000 ))" \
+  >> "$TIMINGS_FILE"
 summarise "$LOG" "$OUT"
 echo
+echo "=== Wall-clock timing summary ==="
+cat "$TIMINGS_FILE"
 echo "wrote problems summary to $OUT"
 wc -l "$OUT"
