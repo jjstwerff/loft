@@ -1557,6 +1557,20 @@ use #count instead"
             && queue_text_d_nr != u32::MAX
             && buf_get_text_d_nr != u32::MAX
             && buf_drop_text_d_nr != u32::MAX;
+        // 8d.2 (live): plain `Type::Reference` only.
+        // 8d.3 (deferred): `Type::Enum(_, true, _)` and
+        // `Type::Vector(_, _)`.  Enum-payload's
+        // `par_struct_to_struct_enum_t4` test exposed a cross-worker
+        // DbRef issue when multiple threads each adopt their own
+        // worker stores: thread A's record can reference what looks
+        // like worker_local index 7, but A's per-thread rebase map
+        // doesn't have that mapping (it's in B's rebase).
+        // Translate's "passing through unchanged" path then leaves
+        // a stale worker-namespace DbRef in the parent's record,
+        // and downstream `OpGetField` walks the wrong store.
+        // Needs either a per-thread store-index range allocator or
+        // a unified-rebase with thread-prefixed worker-local
+        // indices.  Filed as 8d.3.
         let early_route_ref_queue = matches!(ret_type, Type::Reference(_, _))
             && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
@@ -1804,6 +1818,7 @@ use #count instead"
             && queue_text_d_nr != u32::MAX
             && buf_get_text_d_nr != u32::MAX
             && buf_drop_text_d_nr != u32::MAX;
+        // Late-gate matches early-gate (see comment above).
         let route_ref_queue = matches!(ret_type, Type::Reference(_, _))
             && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX

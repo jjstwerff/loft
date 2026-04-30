@@ -990,7 +990,27 @@ pub fn run_parallel_queue_ref(
     };
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    // 8d.3: accumulate ALL workers' rebase maps into a single
+    // unified `StoreRebase` before walking records.  Thread A's
+    // record fields can reference thread B's store (e.g. when a
+    // struct-enum-payload's text storage is shared across worker
+    // batches via the rayon pool's reused state), so a per-batch
+    // rebase map alone misses cross-worker translations.  Adopt
+    // every worker's stores first, merge their `(worker_local →
+    // parent_nr)` entries into one map keyed by *per-thread
+    // worker_local* — each thread's allocations vector is private,
+    // but worker_local indices may collide across threads, so we
+    // can't directly merge.  Instead we adopt + translate
+    // immediately per-thread (the local→parent map for that
+    // thread's records), then collect refs without walking.
+    // After all batches' adopts are done, walk every collected ref
+    // with the unified parent-side map (which is just the parent's
+    // own allocations table — every adopted store now lives there
+    // at its parent_nr, and `rebase_walk_record`'s
+    // `(record_ref.store_nr as usize) < stores.allocations.len()`
+    // guard at line 512-513 catches the legitimate parent-shared
+    // refs).
+    let mut translated_refs: Vec<(usize, DbRef)> = Vec::with_capacity(n_rows);
     for (batch, mut worker_stores) in batches {
         let rebase = stores.adopt_worker_excess(&mut worker_stores, parent_store_count);
         for &parent_nr in rebase.map.values() {
@@ -998,9 +1018,28 @@ pub fn run_parallel_queue_ref(
         }
         for (i, src_ref) in batch {
             let translated = rebase.translate(&src_ref);
-            rebase_walk_record(stores, &translated, ret_type, data, &rebase, &mut visited);
-            refs[i] = translated;
+            translated_refs.push((i, translated));
         }
+    }
+    // Build a unified rebase covering every adopted store.  Worker-
+    // local indices are gone now (all adopted stores live in the
+    // parent's namespace) — the unified rebase is essentially the
+    // identity map for parent slots.  `rebase_walk_record`'s
+    // recursion uses the map to translate inner DbRef fields; with
+    // an empty map, every ref falls into the "parent_shared / pass
+    // through" branch (`db.store_nr < parent_store_count`) which is
+    // correct now that all stores are parent-side.  Set
+    // `parent_store_count = stores.allocations.len()` so every
+    // rebased ref short-circuits through the cheap branch.
+    let unified = StoreRebase::with_parent_count(stores.allocations.len() as u16);
+    let mut visited = std::collections::HashSet::new();
+    for (i, translated) in translated_refs {
+        if translated.store_nr != u16::MAX
+            && (translated.store_nr as usize) < stores.allocations.len()
+        {
+            rebase_walk_record(stores, &translated, ret_type, data, &unified, &mut visited);
+        }
+        refs[i] = translated;
     }
     (refs, adopted)
 }

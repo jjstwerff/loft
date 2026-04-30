@@ -527,14 +527,51 @@ prior par-suite tests must stay green at every sub-step's tip.
     through the legacy materialised path; routing it through Queue
     is a separate verify-and-extend step.
 
-  - **8d.3** — extend `route_ref_queue` to `Type::Enum(_, true, _)`
-    + `Type::Vector(_, _)` (struct-enum-payload + vector returns).
-    The `disable_slot_reuse` fix landed in 8d.2 likely handles
-    these too — re-test by widening the gate and observing.  If
-    cross-worker `DbRef` rebase fails (`rebase_walk_record`'s
-    per-worker map can't resolve refs into another worker's
-    store), accumulate all workers' rebase maps before the
-    record walk.
+  - **8d.3 (PARTIAL — investigated; cross-worker DbRef issue
+    confirmed)** — extending `route_ref_queue` to
+    `Type::Enum(_, true, _)` + `Type::Vector(_, _)` exposed a
+    cross-worker DbRef issue.  With multi-thread workers, each
+    thread allocates worker-local stores starting at the same
+    `parent_store_count` index.  Worker-local indices collide
+    across threads (thread A's local 7 ≠ thread B's local 7), but
+    a record from thread A can only be translated through A's
+    rebase map.  When A's record references "store 7" but A
+    didn't allocate a store at 7 (B did), translate falls into
+    the "passing through unchanged" path, leaving a stale
+    worker-namespace DbRef in the parent's record.  Subsequent
+    `OpGetField` walks read the wrong store.
+
+    Two defensive hardenings landed pre-emptively in
+    `run_parallel_queue_ref` (still active for 8d.2's plain
+    `Type::Reference` path):
+    1. Adopt all batches' worker stores BEFORE walking records,
+       collect translated refs into a single Vec.
+    2. After all adopts, walk each translated ref using a unified
+       `StoreRebase` with `parent_store_count =
+       stores.allocations.len()` — every adopted store now lives
+       in the parent's namespace, so the walk's
+       `(record_ref.store_nr as usize) < stores.allocations.len()`
+       guard at line 512-513 catches refs to legitimate parent
+       slots.  Outer-call bounds guard added for safety.
+
+    These don't fully fix the cross-worker collision (worker-
+    local indices still collide across threads), but they make
+    the existing `Type::Reference` path more robust and prepare
+    the ground for the proper fix.
+
+    **Proper fix path**: assign each thread a distinct
+    `worker_local_offset` so their stores land at non-overlapping
+    parent indices.  Either (a) coordinate via an atomic counter
+    in `parallel_workers`, or (b) post-process: each thread reports
+    its store_nr range, parent rebases sequentially with thread-id
+    in the rebase key.
+
+    Until that lands, `Type::Enum(_, true, _)` and
+    `Type::Vector(_, _)` continue to use the legacy materialised
+    path via `parallel_execute_and_collect`.
+
+  - **8d.4** — fn-ref returns (20-byte slot — needs the wide-return
+    path used by `execute_at_raw_to`).
 
   - **8d.4** — fn-ref returns (20-byte slot — needs the wide-return
     path used by `execute_at_raw_to`).
@@ -662,8 +699,8 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    8d.0 run_parallel_queue_ref   — DONE 2026-04-30 (adopt + rebase)
    8d.1 par_ref_buffer_stack + natives — DONE 2026-04-30
    8d.2 parser ref-queue gate    — DONE 2026-04-30 (plain Type::Reference)
-   8d.3 ref-queue: enum-payload + vector ← NEXT
-   8d.4 fn-ref returns
+   8d.3 ref-queue: enum-payload + vector — PARTIAL (cross-worker rebase deferred)
+   8d.4 fn-ref returns            ← NEXT
    8e Concat deletion
        ↓
 [9 Stitch::Reduce + par_fold]   — M, +150 LOC
