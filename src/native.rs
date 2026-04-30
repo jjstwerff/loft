@@ -5,7 +5,7 @@ use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
 #[cfg(feature = "threading")]
-use crate::parallel::{WorkerProgram, run_parallel_direct, run_parallel_ref, run_parallel_text};
+use crate::parallel::{WorkerProgram, run_parallel_text};
 use crate::platform::sep;
 use crate::state::{Call, State};
 #[cfg(feature = "threading")]
@@ -26,6 +26,7 @@ use std::time::SystemTime;
 /// per-row push doesn't blow the worker stack frame budget.  64 is
 /// one cache line plus headroom for 4-element tuples of Long /
 /// Float.
+#[cfg(feature = "threading")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InputKind {
     /// Worker takes a `DbRef` in slot 0 (struct-by-ref, vector,
@@ -45,6 +46,7 @@ enum InputKind {
 /// Maximum bytes accepted for `InputKind::Primitive`.  Anything
 /// wider falls back to `InputKind::Ref` so the worker stack frame
 /// stays bounded.
+#[cfg(feature = "threading")]
 const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 
 /// P189d — element types of a tuple first-arg, or `None` if the
@@ -58,6 +60,7 @@ const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 /// `read_tuple_at_wide` which produces a clean failure mode (vs. the
 /// hang from raw `read_primitive_at_wide` reading 20 bytes from a
 /// 4-byte stride).
+#[cfg(feature = "threading")]
 fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::data::Type>> {
     let first = def.attributes.first()?;
     match &first.typedef {
@@ -67,6 +70,7 @@ fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::dat
     }
 }
 
+#[cfg(feature = "threading")]
 fn input_kind_for_first_arg(def: &crate::data::Definition) -> InputKind {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
@@ -90,28 +94,6 @@ fn input_kind_for_first_arg(def: &crate::data::Definition) -> InputKind {
         }
         _ => InputKind::Ref,
     }
-}
-
-/// Plan-06 phase 3d — par-runtime dispatch mode derived at the
-/// native-call boundary from the worker fn's `def.returned`, so the
-/// runtime no longer relies on the parser's historic `return_size`
-/// sentinels (`0` for text, `-1` for ref, `1..=8` for primitive).
-/// The sentinels still travel on the stack for binary compatibility
-/// but the runtime ignores them when `def.returned` is decisive.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum DispatchMode {
-    /// `Type::Text(_)` return — workers produce owned `String`s,
-    /// main thread interns into the result store.
-    Text,
-    /// `Type::Reference(_, _)` or `Type::Enum(_, true, _)` return —
-    /// workers return a `DbRef` into worker-local stores; main
-    /// thread deep-copies (or rebases per phase 2's narrow path).
-    Ref,
-    /// Inline-byte primitive return (1..=8 bytes: bool, byte, i32,
-    /// i64, f32, f64, fn-ref).  Workers write directly into per-
-    /// worker output slots (phase 1) and main thread copies bytes
-    /// back into the result vector.
-    Primitive,
 }
 
 pub const FUNCTIONS: &[(&str, Call)] = &[
@@ -598,153 +580,20 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 // ── Parallel threading functions (feature = "threading") ──────────────
 
 #[cfg(feature = "threading")]
-/// Internal `parallel_for` dispatch: pop args from stack, spawn workers, collect results.
-/// `return_size`: 0=text, 1=bool, 4=int, 8=long/float.
+/// Plan-06 spine step 8e — `n_parallel_for` delegates to the light
+/// path.  The heavy `parallel_execute_and_collect` was retired with
+/// 8e: every worker that previously needed the heavy deep-copy path
+/// (text / reference / struct-enum / vector) now routes through
+/// Queue (8c / 8d.0–3); narrow primitives stay on `n_parallel_for_light`'s
+/// per-worker pool.  Workers genuinely incompatible with the light
+/// path (recursive store allocation in non-Queue return shapes —
+/// none exist in the test corpus) hit `run_parallel_light`'s
+/// read-only assertion at runtime.
+///
+/// The stack layout matches `n_parallel_for_light` exactly, so the
+/// delegation is a single function call — no arg unpack/repack.
 fn n_parallel_for(stores: &mut Stores, stack: &mut DbRef) {
-    // Stack layout (push order from codegen, post-2c each `integer` = 8B):
-    //   vec(12B), elem_size(8B), return_size(8B), threads(8B), func(8B),
-    //   extra1(8B), ..., extraN(8B), n_extra(8B)
-    // Pop order (LIFO): n_extra, extraN, ..., extra1, func, threads, return_size, elem_size, vec
-
-    let n_extra = *stores.get::<i64>(stack) as usize;
-    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
-    for _ in 0..n_extra {
-        extra_args.push(*stores.get::<i64>(stack) as u64);
-    }
-    extra_args.reverse(); // restore push order (first extra = first worker param)
-
-    let v_func = *stores.get::<i64>(stack) as i32;
-    let v_threads = *stores.get::<i64>(stack) as i32;
-    let v_return_size = *stores.get::<i64>(stack) as i32;
-    let v_element_size = *stores.get::<i64>(stack) as i32;
-    let v_input = *stores.get::<DbRef>(stack);
-
-    let (fn_pos, program, n_hidden_text) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for called outside State::execute()");
-        let data = unsafe { &*ctx.data };
-        assert!(
-            v_func >= 0,
-            "parallel_for: invalid function reference {v_func}"
-        );
-        let d_nr = v_func as u32;
-        let fn_pos = data.def(d_nr).code_position;
-        // Count hidden __work_N text params for text-returning workers.
-        let n_hidden = data
-            .def(d_nr)
-            .attributes
-            .iter()
-            .filter(|a| a.name.starts_with("__"))
-            .count();
-        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
-        let library = unsafe { Arc::clone(&*ctx.library) };
-        (
-            fn_pos,
-            WorkerProgram {
-                bytecode,
-                library,
-                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
-                data_ptr: ctx.data,
-                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
-                // n_parallel_for path does not propagate line_numbers; workers
-                // get function name + file but report line 0.  Fixing this
-                // requires threading line_numbers through ParallelCtx.
-                line_numbers: Arc::new(std::collections::BTreeMap::new()),
-            },
-            n_hidden,
-        )
-    };
-
-    let element_size = v_element_size as u32;
-    let n_threads = (v_threads as usize).max(1);
-    let n = vector::length_vector(&v_input, &stores.allocations) as usize;
-
-    // Plan-06 phase 3d — derive dispatch mode and sizes from the
-    // worker fn's def.returned, NOT from `v_return_size` sentinels.
-    // The parser still emits the historic 0 / -1 / 1..=8 sentinels
-    // on the stack so legacy callers stay binary-compatible, but the
-    // runtime now ignores them: it inspects `def.returned` directly.
-    //
-    // - Text return  → text mode, return_size = 4 (text pointer slot)
-    // - heap_def_nr Some → ref/struct-enum mode, size from database
-    // - everything else → primitive mode, size from def.returned
-    //
-    // `v_return_size` is kept around as a backstop for the primitive
-    // path: when def.returned hasn't fully resolved (e.g. `Unknown`
-    // during partial parses) we fall back to the parser-supplied
-    // hint.  Once phase 4c lands the typed surface this fallback
-    // can be deleted.
-    let (dispatch_mode, known_type, return_size, primitive_input_size, tuple_input_types) = {
-        let ctx = stores
-            .parallel_ctx
-            .as_ref()
-            .expect("parallel_for: missing context");
-        let data = unsafe { &*ctx.data };
-        let def = data.def(v_func as u32);
-        let tuple_types = tuple_first_arg_types(def);
-        // Plan-06 phase 4d.A — typed input dispatch.  Encode the
-        // resolved `InputKind` back onto the legacy `prim_in: u32`
-        // channel that `run_parallel_*` still consumes, so the
-        // dispatcher's pre-loop branch reads:
-        //   prim_in == 0       → InputKind::Ref (DbRef-by-pointer)
-        //   prim_in == u32::MAX → InputKind::Text (Str slot 0)
-        //   prim_in in 1..=64  → InputKind::Primitive { size: prim_in }
-        // Sizes 9..=64 route through the new wide-input variants
-        // (`read_primitive_at_wide` + `execute_at_raw_primitive_input_wide`).
-        let pis = match input_kind_for_first_arg(def) {
-            InputKind::Ref => 0u32,
-            InputKind::Text => u32::MAX,
-            InputKind::Primitive { size } => u32::from(size),
-        };
-        if matches!(def.returned, crate::data::Type::Text(_)) {
-            (DispatchMode::Text, u16::MAX, 4u32, pis, tuple_types)
-        } else if let Some(heap_d_nr) = def.returned.heap_def_nr() {
-            let kt = data.def(heap_d_nr).known_type;
-            let sz = u32::from(stores.size(kt));
-            (DispatchMode::Ref, kt, sz, pis, tuple_types)
-        } else if matches!(def.returned, crate::data::Type::Function(_, _, _)) {
-            // Plan-06 phase 1 G4 — fn-ref return: 20 bytes (8B
-            // d_nr + 12B closure DbRef).  Workers write the
-            // 20-byte fn-ref into per-worker output slots via
-            // run_parallel_direct's execute_at_raw_to path.
-            (DispatchMode::Primitive, u16::MAX, 20u32, pis, tuple_types)
-        } else {
-            // Primitive (or partial-parse Unknown).  Trust v_return_size.
-            (
-                DispatchMode::Primitive,
-                u16::MAX,
-                v_return_size.clamp(1, 8) as u32,
-                pis,
-                tuple_types,
-            )
-        }
-    };
-    // Plan-06 phase 4c — the Stitch policy is now `Concat` (no
-    // payload); dispatch mode (text / ref / primitive) flows
-    // through `dispatch_mode` directly, derived from `def.returned`
-    // earlier in this function (phase 3d).
-    let stitch = crate::parallel::Stitch::Concat;
-
-    let result_ref = parallel_execute_and_collect(
-        stores,
-        program,
-        fn_pos,
-        &v_input,
-        element_size,
-        return_size,
-        stitch,
-        dispatch_mode,
-        known_type,
-        n_threads,
-        &extra_args,
-        n,
-        n_hidden_text,
-        primitive_input_size,
-        tuple_input_types,
-    );
-    stores.put(stack, result_ref);
+    n_parallel_for_light(stores, stack);
 }
 
 #[cfg(feature = "threading")]
@@ -1384,182 +1233,6 @@ fn parallel_light_execute_and_collect(
     );
     // Return with pos=4 (not pos=8 from claim) — par result vector readers
     // expect the header pointer at v_ref.pos.
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
-}
-
-#[cfg(feature = "threading")]
-/// Allocate a result vector, dispatch workers, and collect results.
-#[allow(clippy::too_many_arguments)]
-fn parallel_execute_and_collect(
-    stores: &mut Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    return_size: u32,
-    stitch: crate::parallel::Stitch,
-    dispatch_mode: DispatchMode,
-    known_type: u16,
-    n_threads: usize,
-    extra_args: &[u64],
-    n: usize,
-    n_hidden_text: usize,
-    primitive_input_size: u32,
-    tuple_input_types: Option<Vec<crate::data::Type>>,
-) -> DbRef {
-    // Plan-06 phase 4c (DESIGN.md D1b) — Stitch::Concat carries no
-    // payload; routing is by `dispatch_mode` (Text / Ref / Primitive).
-    // Sizes flow from the typed input vector and `Data::fn_return_type`.
-    use crate::parallel::Stitch;
-
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * return_size + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(vec_rec, 4, n as u32);
-    stores
-        .store_mut(&result_db)
-        .set_u32_raw(header_rec, 4, vec_rec);
-
-    // Phase 4c: only `Stitch::Concat` reaches this path.  The
-    // routing is by the caller-supplied `dispatch_mode`.
-    // Discard / Reduce / Queue land through `Value::ParFor` in
-    // phase 7 and never reach this function.
-    debug_assert!(
-        matches!(stitch, Stitch::Concat),
-        "parallel_execute_and_collect only handles Stitch::Concat; \
-         Discard/Reduce/Queue land via Value::ParFor in phase 7"
-    );
-    let _ = stitch;
-    match dispatch_mode {
-        DispatchMode::Text => {
-            // Text: workers return owned `String`; main thread
-            // interns each into the result store via set_str.
-            let strings = run_parallel_text(
-                stores,
-                program,
-                fn_pos,
-                input,
-                element_size,
-                n_threads,
-                extra_args,
-                n,
-                n_hidden_text,
-            );
-            let store = stores.store_mut(&result_db);
-            for (i, s) in strings.iter().enumerate() {
-                let s_pos = store.set_str(s);
-                store.set_u32_raw(vec_rec, 8 + i as u32 * 4, s_pos);
-            }
-        }
-        DispatchMode::Ref => {
-            // Reference / struct-enum: workers return DbRef into
-            // their own stores; main thread copies (or rebases per
-            // phase 2's narrow path when the struct is owned-free).
-            let batches = run_parallel_ref(
-                stores,
-                program,
-                fn_pos,
-                input,
-                element_size,
-                n_threads,
-                extra_args,
-                n,
-            );
-            let struct_size = u32::from(stores.size(known_type));
-            // Plan-06 phase 2b refinement: for struct-enums, the
-            // ownership question is per-variant, not per-type.
-            // Pre-compute whether the parent type is a struct-enum
-            // (vs a plain Reference) so we know to peek the disc
-            // byte per element.
-            let whole_unowned = !stores.has_owned_sub_fields(known_type);
-            // Detect struct-enum at the database-Parts level (not
-            // data::Type) — variant_has_owned_sub_fields keys off
-            // Parts::Enum's variant list.
-            let is_struct_enum = known_type != u16::MAX
-                && (known_type as usize) < stores.types.len()
-                && matches!(
-                    stores.types[known_type as usize].parts,
-                    crate::database::Parts::Enum(_)
-                );
-            for (batch, mut worker_stores) in batches {
-                for (i, src_ref) in batch {
-                    let dest = DbRef {
-                        store_nr: result_db.store_nr,
-                        rec: vec_rec,
-                        pos: 8 + (i as u32) * struct_size,
-                    };
-                    // Per-element ownership decision:
-                    //   - whole-type unowned → always cheap path
-                    //   - struct-enum → peek discriminant; cheap if
-                    //     the active variant has no owned sub-fields
-                    //   - everything else → full deep-copy path
-                    let elem_unowned = if whole_unowned {
-                        true
-                    } else if is_struct_enum {
-                        // Struct-enum disc byte is at offset 0 of the
-                        // value record (per loft's enum layout).
-                        let disc =
-                            worker_stores
-                                .store(&src_ref)
-                                .get_byte(src_ref.rec, src_ref.pos, 0)
-                                as u8;
-                        !stores.variant_has_owned_sub_fields(known_type, disc)
-                    } else {
-                        false
-                    };
-                    if elem_unowned {
-                        stores.copy_from_worker_unowned(
-                            &src_ref,
-                            &dest,
-                            &mut worker_stores,
-                            known_type,
-                        );
-                    } else {
-                        stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, known_type);
-                    }
-                }
-            }
-        }
-        DispatchMode::Primitive => {
-            // Primitive return — any inline byte width 1..=8 (bool,
-            // byte, i32, i64, single, float, fn-ref).  Workers write
-            // directly into per-worker output slots via the phase-1
-            // mechanism; main thread copies the slot bytes back into
-            // the contiguous result buffer at offset `start*ret_sz`.
-            //
-            // Plan-06 phase 3c consolidation: this single arm replaced
-            // the prior (ret_size>=4 → run_parallel_direct) /
-            // (ret_size<4 → run_parallel_raw + set_byte) split.  Both
-            // paths end up at the same byte offsets — buffer(vec_rec)
-            // begins at `ptr + vec_rec*8 + 8`, and set_byte(vec_rec,
-            // 8+i, 0, _) writes to `ptr + vec_rec*8 + 8 + i` — so
-            // run_parallel_direct subsumes the sub-4-byte case.
-            let out_ptr = stores.store_mut(&result_db).buffer(vec_rec).as_mut_ptr();
-            run_parallel_direct(
-                stores,
-                program,
-                fn_pos,
-                input,
-                element_size,
-                return_size,
-                n_threads,
-                extra_args,
-                out_ptr,
-                n,
-                primitive_input_size,
-                tuple_input_types,
-            );
-        }
-    }
     DbRef {
         store_nr: result_db.store_nr,
         rec: header_rec,
