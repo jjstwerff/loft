@@ -213,6 +213,21 @@ pub struct Stores {
     /// keeping the per-row read path tight (no enum match per
     /// element) is worth the duplication.
     pub par_text_buffer_stack: Vec<Vec<String>>,
+    /// Plan-06 PRIORITY.md spine step 8d.1 — sibling stack for
+    /// reference / struct-enum-payload / vector-returning par
+    /// workers.  Each entry is `(refs, adopted_store_nrs)`:
+    /// - `refs` — rebased `DbRef`s in input-row order, valid in the
+    ///   parent's namespace after `Stores::adopt_worker_excess` +
+    ///   `rebase_walk_record` (8d.0's `run_parallel_queue_ref`).
+    /// - `adopted_store_nrs` — parent-side store_nrs that the queue
+    ///   adopted from worker output stores.  `n_parallel_buf_drop_ref`
+    ///   frees these at the body-tail to release the worker memory.
+    ///
+    /// Separate from `par_buffer_stack` and `par_text_buffer_stack`
+    /// because ref returns own additional state (the adopted-store
+    /// list) — keeping the per-row read path tight (no enum match
+    /// per element) is worth the duplication.
+    pub par_ref_buffer_stack: Vec<(Vec<DbRef>, Vec<u16>)>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -298,6 +313,7 @@ impl Clone for Stores {
             parallel_ctx: None,
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
@@ -725,6 +741,7 @@ impl Stores {
             parallel_ctx: None,
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),

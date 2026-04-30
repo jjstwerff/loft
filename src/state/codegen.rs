@@ -1950,6 +1950,7 @@ impl State {
             || stack.data.def(op).name == "n_parallel_discard"
             || stack.data.def(op).name == "n_parallel_queue"
             || stack.data.def(op).name == "n_parallel_queue_text"
+            || stack.data.def(op).name == "n_parallel_queue_ref"
         {
             let n_declared = stack.data.def(op).attributes.len();
             for extra in parameters.iter().skip(n_declared) {

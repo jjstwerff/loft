@@ -443,9 +443,45 @@ prior par-suite tests must stay green at every sub-step's tip.
     - `par_queue_ref_empty_input` — short-circuit invariant: no
       workers spawn, no allocations touched.
 
-  - **8d.1 (NEXT)** — par_ref_buffer_stack field + 3 native fns
-    (`n_parallel_queue_ref` / `_buf_get_ref` / `_buf_drop_ref`) +
-    codegen extras.  Pattern matches 8a→8c.
+  - **8d.1 (DONE 2026-04-30)** — `par_ref_buffer_stack` field + 3
+    natives + codegen extras.  Pattern matches 8a→8c.
+
+    **Added:**
+    - `Stores::par_ref_buffer_stack: Vec<(Vec<DbRef>, Vec<u16>)>` —
+      stack of `(refs, adopted_store_nrs)` tuples.  4 init sites
+      (`Stores::new`, `Clone`, two `WorkerStores::new`).
+    - `n_parallel_queue_ref` native — same arg layout as
+      `n_parallel_for`; calls `run_parallel_queue_ref` (8d.0);
+      pushes the `(refs, adopted)` pair onto `par_ref_buffer_stack`;
+      returns row count (i64, matches `_par_len_N`'s 8-byte
+      `Type::Integer` slot).  Captures `def.returned` and the Data
+      ptr from `parallel_ctx` before the mutable borrow of `stores`
+      that `run_parallel_queue_ref` requires.
+    - `n_parallel_buf_get_ref(idx) -> reference` — reads one rebased
+      `DbRef` from the active buffer; pushes 12 bytes.
+    - `n_parallel_buf_drop_ref()` — pops the buffer; iterates
+      `adopted_store_nrs` and calls `Stores::free_named` with a
+      synthetic `DbRef { store_nr, rec: 0, pos: 0 }` so the alloc-
+      free instrumentation logs the release.
+    - Codegen extras-push / extras-subtract entries for
+      `n_parallel_queue_ref` (matching the `n_parallel_for /
+      _light / _discard / _queue / _queue_text` pattern; both
+      sites updated this time, learning from the 8c regression).
+    - `default/01_code.loft` decls for the three new natives.
+
+    **Tests:** 3 new `par_ref_buffer_stack_*` regression tests in
+    `tests/threading.rs`:
+    - `par_ref_buffer_stack_push_pop_round_trip` — round-trip
+      through the tuple shape.
+    - `par_ref_buffer_stack_nesting` — inner pop reveals outer
+      buffer unchanged (load-bearing for nested fused for-par).
+    - `par_ref_buffer_stack_initially_empty_in_clone` — clone-reset
+      semantics.
+
+    **Status:** infrastructure live; 8d.2 wires the parser-side gate
+    (route Type::Reference / Enum-payload / Vector returns through
+    Queue).  All 30 + 31 threading tests still green.  Goldens
+    regenerated for the 3-line shift in `src/native.rs`.
 
   - **8d.2** — parser-side `route_ref_queue` gate in
     `build_parallel_for_ir`; route Type::Reference / Enum-payload /
@@ -575,8 +611,8 @@ Pick them up after step 10 lands or when a concrete user need surfaces.
    8b' extend Queue dispatch ladder — DONE 2026-04-29 (all input kinds)
    8c text return Queue path     — DONE 2026-04-29
    8d.0 run_parallel_queue_ref   — DONE 2026-04-30 (adopt + rebase)
-   8d.1 par_ref_buffer_stack + natives ← NEXT
-   8d.2 parser ref-queue gate
+   8d.1 par_ref_buffer_stack + natives — DONE 2026-04-30
+   8d.2 parser ref-queue gate    ← NEXT
    8d.3 fn-ref returns
    8e Concat deletion
        ↓

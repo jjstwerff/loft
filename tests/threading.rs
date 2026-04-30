@@ -1406,3 +1406,87 @@ fn par_buffer_stack_initially_empty_in_clone() {
         cloned.par_buffer_stack.len()
     );
 }
+
+// ── Plan-06 spine step 8d.1 — par_ref_buffer_stack semantics ──────────────
+
+/// Step 8d.1 — `Stores::par_ref_buffer_stack` is a stack of
+/// `(refs, adopted_store_nrs)` tuples.  Round-trip: push, observe
+/// via `last()`, pop, verify empty.  Locks the contract
+/// `n_parallel_buf_get_ref` / `n_parallel_buf_drop_ref` rely on.
+#[test]
+fn par_ref_buffer_stack_push_pop_round_trip() {
+    let mut stores = loft::database::Stores::new();
+    assert!(stores.par_ref_buffer_stack.is_empty());
+    let r0 = DbRef {
+        store_nr: 5,
+        rec: 10,
+        pos: 4,
+    };
+    let r1 = DbRef {
+        store_nr: 6,
+        rec: 11,
+        pos: 8,
+    };
+    stores.par_ref_buffer_stack.push((vec![r0, r1], vec![5, 6]));
+    assert_eq!(stores.par_ref_buffer_stack.len(), 1);
+    let last = stores.par_ref_buffer_stack.last().unwrap();
+    assert_eq!(last.0, vec![r0, r1]);
+    assert_eq!(last.1, vec![5u16, 6]);
+    let popped = stores.par_ref_buffer_stack.pop();
+    assert!(popped.is_some());
+    assert!(stores.par_ref_buffer_stack.is_empty());
+}
+
+/// Step 8d.1 — nested fused for-par over ref-returning workers
+/// pushes its own buffer; inner pop must reveal the outer buffer
+/// unchanged.  Same nesting invariant `par_buffer_stack_nesting`
+/// locks for the int-buffer.
+#[test]
+fn par_ref_buffer_stack_nesting() {
+    let mut stores = loft::database::Stores::new();
+    let outer = DbRef {
+        store_nr: 1,
+        rec: 0,
+        pos: 0,
+    };
+    let inner = DbRef {
+        store_nr: 2,
+        rec: 0,
+        pos: 0,
+    };
+    stores.par_ref_buffer_stack.push((vec![outer], vec![1]));
+    stores
+        .par_ref_buffer_stack
+        .push((vec![inner, inner], vec![2, 3]));
+    assert_eq!(stores.par_ref_buffer_stack.len(), 2);
+    assert_eq!(
+        stores.par_ref_buffer_stack.last().unwrap().0,
+        vec![inner, inner]
+    );
+    stores.par_ref_buffer_stack.pop();
+    assert_eq!(
+        stores.par_ref_buffer_stack.last().unwrap().0,
+        vec![outer],
+        "outer buffer must survive inner pop"
+    );
+}
+
+/// Step 8d.1 — `Stores::clone()` resets `par_ref_buffer_stack` to
+/// empty; runtime state, not type schema.
+#[test]
+fn par_ref_buffer_stack_initially_empty_in_clone() {
+    let mut stores = loft::database::Stores::new();
+    let r = DbRef {
+        store_nr: 1,
+        rec: 0,
+        pos: 0,
+    };
+    stores.par_ref_buffer_stack.push((vec![r], vec![1]));
+    let cloned = stores.clone();
+    assert!(
+        cloned.par_ref_buffer_stack.is_empty(),
+        "Stores::clone must reset par_ref_buffer_stack — runtime state, \
+         not type schema (cloned len = {})",
+        cloned.par_ref_buffer_stack.len()
+    );
+}

@@ -171,6 +171,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_get_text", n_parallel_buf_get_text),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_text", n_parallel_buf_drop_text),
+    #[cfg(feature = "threading")]
+    ("n_parallel_queue_ref", n_parallel_queue_ref),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_ref", n_parallel_buf_get_ref),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_drop_ref", n_parallel_buf_drop_ref),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -1196,6 +1202,137 @@ fn n_parallel_buf_drop_text(stores: &mut Stores, _stack: &mut DbRef) {
         .par_text_buffer_stack
         .pop()
         .expect("parallel_buf_drop_text: par_text_buffer_stack is already empty");
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8d.1 — reference-return Queue runtime entry.
+/// Same arg layout as `n_parallel_queue` but workers return a
+/// `DbRef` into their own output stores.  `run_parallel_queue_ref`
+/// (8d.0) adopts each worker's output stores into the parent's
+/// allocations table and rebases the per-row `DbRef`s into the
+/// parent's namespace via `Stores::adopt_worker_excess` +
+/// `rebase_walk_record`.  The resulting `(refs, adopted_stores)`
+/// pair is pushed onto `stores.par_ref_buffer_stack`; the row count
+/// is pushed onto the operand stack so the caller can use it as a
+/// loop bound.
+///
+/// Step 8d.2 wires this through the parser; until then this is
+/// exercised only by Rust unit tests in `tests/threading.rs`.
+fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout / pop order as n_parallel_for.
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let _v_return_size = *stores.get::<i64>(stack) as i32;
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    // Snapshot the worker fn's return type and a pointer to Data
+    // before we hand the closure-bound WorkerProgram off; both are
+    // borrowed from `stores.parallel_ctx` which we cannot keep across
+    // the run_parallel_queue_ref mutable borrow of `stores`.
+    let (fn_pos, program, ret_type, data_ptr) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue_ref called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_queue_ref: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        let ret_type = data.def(d_nr).returned.clone();
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+            ret_type,
+            ctx.data,
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+    let n_rows = crate::vector::length_vector(&v_input, &stores.allocations) as usize;
+
+    // SAFETY: `data_ptr` was just read from `parallel_ctx` and the
+    // ParallelCtx outlives this native fn's stack frame (set by
+    // State::execute before any par fn dispatches).
+    let data: &crate::data::Data = unsafe { &*data_ptr };
+    let (refs, adopted) = crate::parallel::run_parallel_queue_ref(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+        n_rows,
+        &ret_type,
+        data,
+    );
+    let count = refs.len() as i64;
+    stores.par_ref_buffer_stack.push((refs, adopted));
+    stores.put(stack, count);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8d.1 — read one rebased `DbRef` from the
+/// active par-ref buffer.  Pops `idx` (i64), reads
+/// `par_ref_buffer_stack.last().0[idx]`, pushes the `DbRef` (12
+/// bytes) onto the operand stack.
+///
+/// Panics if `par_ref_buffer_stack` is empty (no active queue) or
+/// `idx` is out of range — both indicate a parser-side bug.
+fn n_parallel_buf_get_ref(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack);
+    let r = {
+        let buf = stores
+            .par_ref_buffer_stack
+            .last()
+            .expect("parallel_buf_get_ref: par_ref_buffer_stack is empty");
+        buf.0[idx as usize]
+    };
+    stores.put(stack, r);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 spine step 8d.1 — pop the active par-ref buffer and free
+/// every adopted store.  Called after the body loop completes.
+/// Panics if the stack is already empty (parser-side bug).
+///
+/// Each adopted store_nr is freed via `Stores::free_named` with a
+/// synthetic `DbRef` (`store_nr, rec=0, pos=0`) so the standard
+/// alloc-free instrumentation logs the release.
+fn n_parallel_buf_drop_ref(stores: &mut Stores, _stack: &mut DbRef) {
+    let (_refs, adopted) = stores
+        .par_ref_buffer_stack
+        .pop()
+        .expect("parallel_buf_drop_ref: par_ref_buffer_stack is already empty");
+    for store_nr in adopted {
+        let synthetic = DbRef {
+            store_nr,
+            rec: 0,
+            pos: 0,
+        };
+        stores.free_named(&synthetic, "par_buf_drop_ref");
+    }
 }
 
 #[cfg(feature = "threading")]

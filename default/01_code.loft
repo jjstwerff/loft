@@ -1107,6 +1107,21 @@ fn parallel_queue_text(input: reference, element_size: integer, return_size: int
 fn parallel_buf_get_text(idx: integer) -> text;
 // Step 8c — pop the active text-queue buffer.
 fn parallel_buf_drop_text();
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 8d.1 — reference-return Queue runtime
+// entry.  Same arg layout as parallel_for; workers return a DbRef
+// into their own output store, which run_parallel_queue_ref adopts
+// into the parent + rebases via Stores::adopt_worker_excess +
+// rebase_walk_record.  The (refs, adopted_stores) pair is pushed onto
+// stores.par_ref_buffer_stack; the row count is returned for use as
+// a loop bound.  Not callable from user code — IR-only entry the
+// fused for-par desugar emits.
+fn parallel_queue_ref(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Step 8d.1 — read one rebased DbRef from the active par-ref buffer.
+fn parallel_buf_get_ref(idx: integer) -> reference;
+// Step 8d.1 — pop the active par-ref buffer; free every adopted
+// store.
+fn parallel_buf_drop_ref();
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);
