@@ -88,6 +88,12 @@ fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
             }
         }
         Value::Return(v) | Value::Drop(v) => collect_int_fn_refs(v, calls),
+        // Span wraps most operators for parser diagnostics — recurse
+        // through it so `Span(Int(d_nr))` fn-ref literals at call
+        // sites get added to the reachable set (without this, the
+        // CallRef match-arm dispatch is missing candidates and panics
+        // at runtime with `invalid fn-ref: <n>`).
+        Value::Span(b) => collect_int_fn_refs(&b.1, calls),
         _ => {}
     }
 }
@@ -153,6 +159,10 @@ fn collect_fn_ref_literals(
         Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
             calls.insert((*d_nr).cast_unsigned());
         }
+        // Span wraps most operators for parser diagnostics — recurse so
+        // Set / Call args that arrive as Span(...) still trigger the
+        // fn-ref-literal walk.
+        Value::Span(b) => collect_fn_ref_literals(&b.1, data, variables, calls),
         _ => {}
     }
 }
