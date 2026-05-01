@@ -32,7 +32,7 @@ existing entry, not re-open it as a bug.
 |---|-------|----------|------------|
 | 198 | `tests/scripts/95-alias-copy.loft` leaked Database 3 + ran with aliased ac_orig/ac_copy in native.  **Closed (2026-05-01)**: scope analysis (`scan_set`) and native deep-copy emission (`output_set`) both pattern-matched `Value::Call(...)` / `Value::Var(...)` without unwrapping the parser's `Value::Span` wrapper, so the deep-copy and `make_independent` (deps-clearing) paths fell through.  Fix: bind unspanned RHS once at top of each function and pattern-match against that.  Also closes `95_alias_copy` native run failure. | High (closed) | n/a — fix landed in commit 30b01ce. |
 | 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Closed (2026-05-01)** for the borrow-conflict class.  Native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` (PR1), Op-stub helpers in `src/codegen_runtime.rs` follow the new ABI (Track 1), and `OpSet*` field-write templates lift `@val` into a let-binding before `store_mut(...)` (Track 2).  Result: `native_dir` 7/30 → 28/30; canonical reproducer `native_tuple_script` PASSES; 0 interpreter regressions.  Remaining `19_threading` failure tracked as P202 (separate feature gap — `n_parallel_queue` family has no native implementation, distinct from the borrow-conflict issue P199 addressed). | Medium (closed) | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list — only relevant for templates / Op-stubs not yet covered by this fix. |
-| 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts. | Medium | Compile the loft source via the interpreter (`cargo run --bin loft -- file.loft` without `--native`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
+| 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts.  See [P202 design](#202-native-n_parallel_queue-family-not-implemented). | Medium | Compile the loft source via the interpreter (`cargo run --bin loft --release -- --interpret file.loft`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 | 203 | Native: file handle written inside a `{...}` block isn't flushed/closed on block exit.  Subsequent `delete()` panics with `tests/scripts/42-file-result.loft:22 delete existing file`.  Interpreter passes — `OpFreeRef`-driven cleanup closes the file there.  Native's `OpFreeRef(cell, var_f, …)` free-emission lacks the file-close hook the interpreter has (or scope analysis doesn't emit `OpFreeRef` for file vars in block scope).  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Hoist file out of the block scope so it lives until the assert: `f = file("…"); f += "test"; assert(delete("…") == FileResult.Ok, …);` — the OpFreeRef at function exit closes the file before delete. |
@@ -298,12 +298,16 @@ mismatched-width Rust expression that rustc rejects.
 **Branch state (2026-04-29):** passes on `main`, fails on
 `roadmap-lsp-eclipse`.  Regression on this branch.
 
-**Fix path:** native codegen for `OpAddIntoFile` (or the equivalent
-binary-file-append op) must emit the same width cast the
-interpreter applies — the test exercises the un-cast 8-byte default
-path which is supposed to compile to `f.write_all(&val.to_be_bytes())`
-or similar.  Trace the expected and actual emitted Rust for the
-failing line in `/tmp/loft_native_20_binary.rs:522`.
+**Root cause:** the parser emits `Insert([Set(_wf, val), OpWriteFile(file, &_wf, db_tp)])` (`src/parser/objects.rs::write_to_file:431-505`) for `f += val`.  When `val` is `Type::Integer(...)` without a width cast, `db_tp` is the full 8-byte integer type.  Native codegen emits `OpWriteFile<T: FileVal>(cell, file, &mut _wf, db_tp)` with `T = i64`.  The READ counterpart emits a `(_ret) as <narrow>` cast at block-end (in `src/generation/emit.rs:845-849`'s `narrow_int_cast` branch) when `bl.result` is a narrow integer subtype — but in this script the loft `f += <int>` writes 8 bytes with NO narrow cast (so `bl.result` should be plain `Type::Integer`), yet `narrow_int_cast` returns `Some("u8")` because the FILE-level type metadata mislabels the read as `integer(0, 255)`.
+
+**Fix path:**
+1. Inspect `/tmp/loft_native_20_binary.rs` line 522 (write site) and 532 (read site) after a fresh build to confirm the actual emitted shapes.  Specifically check: what does `bl.name` look like for the `//reading file_4: integer(0, 255)` block — is it `"reading file"` or richer?
+2. In `src/generation/emit.rs:844`, add a `let is_reading_file = bl.name.starts_with("reading file");` guard (mirroring the existing `is_iter_next` exception at line 844) so reading-file blocks skip the narrow cast at the block-result emission point.  This was tried in this session and the COMPILE error went away but a different runtime test (`single LE roundtrip` line 82) failed with wrong values — meaning the narrow cast is also load-bearing for the WRITE path's serialisation.  Don't repeat that fix without the next step.
+3. Trace the WRITE path: `src/parser/objects.rs::write_to_file:493` calls `self.get_type(val_type)` for the un-cast case, returning the wide `Type::Integer` db_tp.  Native then serialises 8 bytes (correct), but the matching read uses a narrow db_tp, causing width mismatch.  Either:
+   - Make `write_to_file` emit a parser-level error / hard-require the cast (matching the existing warning at line 482-491), forcing the user to write `f += val as i32` — closes P200 by user-fix at the loft level.
+   - OR teach native codegen to widen the read result back to i64 at consumer boundaries, matching the interpreter's handling.
+
+**Concrete first-30-min path:** read `/tmp/loft_native_20_binary.rs:520-540`, identify block name + `bl.result` type, then choose option (a) for the simpler fix.
 
 **Workaround:** add the cast the parser warning suggests: `f += val
 as i32` (or whatever width matches the binary record format).
@@ -346,6 +350,83 @@ panic's message is still the only useful diagnostic.
 
 **Test:** `tests/html_wasm.rs::*` (any test that runs after a
 panicked sibling).
+
+### 202. Native: `n_parallel_queue` family not implemented
+
+**Symptom:** native compilation fails on any script using
+`for ... par(...)`:
+
+```
+error[E0061]: this function takes 6 arguments but 7 arguments were supplied
+   --> /tmp/loft_native_19_threading.rs:371:35
+    |
+371 |     let mut var__par_len_2: i64 = n_parallel_queue(cell, var__vector_1, 8_i64, 8_i64, 4_i64, 547_i64, 0_i64);
+```
+
+**Where:** `default/01_code.loft:1086` declares `parallel_queue` as
+"IR-only entry the codegen produces" (5 visible args).  Loft's
+`for v in input par(b=worker(v), N) { body }` desugar emits
+`n_parallel_queue(input, elem_sz, ret_sz, threads, worker_d_nr,
+extras..., n_extra)` — 5+ args.  Bytecode interpreter implements it
+in `src/native.rs:826` reading args off the operand stack and
+dispatching via `crate::parallel::run_parallel_queue`.  Native
+codegen has no equivalent and emits a `todo!()` stub; the call-site
+arg count doesn't match the stub's signature, breaking rustc.
+
+**Variants affected:** `n_parallel_queue`, `n_parallel_queue_text`,
+`n_parallel_queue_ref`, `n_parallel_queue_narrow`,
+`n_parallel_queue_fn` (all listed in `src/native.rs:145-169`).
+
+**Companion ops:** `n_parallel_buf_get` (read result by index),
+`n_parallel_buf_drop` (release buffer at end of for-loop) — same
+gap.
+
+**Fix path — Option A (intercept at codegen, recommended):**
+
+Extend `src/generation/dispatch.rs:805` (the existing handler that
+rewrites `n_parallel_for` / `n_parallel_for_light` to
+`n_parallel_for_native`) to ALSO rewrite `n_parallel_queue` /
+`n_parallel_queue_text` / `n_parallel_queue_ref` to the
+corresponding `n_parallel_for_*_native` helpers.  The semantics
+match per `default/01_code.loft:1086` ("Same arg layout as
+parallel_for").  At rewrite time:
+
+1. Allocate a result vector via `n_parallel_for_*_native`, store its
+   `DbRef` into a fresh `_par_result_N` local.
+2. Replace `n_parallel_queue(...)` with `_par_result_N.length()`
+   (returns the row count the queue would have pushed).
+3. Replace `n_parallel_buf_get(idx)` with vector read into the
+   `_par_result_N` store.
+4. Replace `n_parallel_buf_drop()` with `OpFreeRef(cell,
+   _par_result_N, …)`.
+
+Steps 3-4 require tracking the active `_par_result_N` across the
+for-body — push/pop on a stack as the for-loop emits.  This is
+~80-150 lines in dispatch.rs.
+
+**Fix path — Option B (implement helpers in codegen_runtime.rs):**
+
+Add `n_parallel_queue` etc. to `src/codegen_runtime.rs` mirroring
+`src/native.rs:826`.  Each helper does the same rayon-based
+dispatch but takes args as Rust values (not stack pops), pushes
+results into a thread-local `Vec<u64>` buffer.  Add
+`n_parallel_buf_get` reading from that buffer, `n_parallel_buf_drop`
+popping it.  ~200-300 lines.  Closer to the interpreter's runtime
+shape but requires duplicating buffer-stack machinery.
+
+**Recommended:** Option A.  Less code, no new runtime state, reuses
+existing `n_parallel_for_*_native` infrastructure already proven by
+P199's parallel test fixes.
+
+**First-30-min path:** read `dispatch.rs:805-898` (existing
+`n_parallel_for` rewrite), trace the argument shape; mirror it for
+`n_parallel_queue` family.  Write a probe loft script with
+`for x in v par(b=fn(x), 4) { sum += b; }`, dump the IR with
+`LOFT_LOG=static`, see exactly what the parser emits.
+
+**Test:** `tests/native::native_dir` slot `19_threading`,
+`tests/native::native_scripts` slots `22_threading`,
+`40_par_ref_return`.
 
 ### 203. Native: block-scope file not flushed on exit
 
@@ -390,15 +471,48 @@ PASSES (interpreter).
 `cargo run --bin loft --release -- --native tests/scripts/repro_p203.loft`
 — FAILS (native).
 
-**Fix path:** native codegen for `OpFreeRef` on a `File`-typed
-`DbRef` must drop the OS handle (call `loft::codegen_runtime::OpFreeFile`
-or similar) before / instead of just zeroing `store_nr`.  Or — more
-robustly — fuse the file-close into a single op that the interpreter
-and native both honour identically.
+**Verified observation:** running `cargo run --bin loft --release --
+tests/scripts/repro_p203.loft` panics on the assert AND the file
+`repro_p203.txt` is never created on disk.  So the OS-level write
+isn't reaching `File::create` (or it is, but the file is removed
+before delete runs).  Compare with interpreter mode (passes) — the
+write DOES reach the filesystem there.
+
+**Where the divergence lives:**
+- `src/codegen_runtime.rs:OpFreeRef` (line 95-122) DOES close
+  File-typed handles when `ref_count <= 1` (line 109).  The lookup
+  is by `stores.names.get("File")` — verify this match fires for
+  the test's `var_f` at runtime.
+- `src/codegen_runtime.rs:file_handle_write` (line 692-726) opens
+  the file with `File::create(&file_name)` (line 707).  Returns the
+  handle index; subsequent `OpWriteFile` writes via it.
+
+**Fix path:**
+
+1. Add `eprintln!` traces inside `file_handle_write` (line 707) and
+   the OpWriteFile path (`src/codegen_runtime.rs:1138-1173`) to
+   confirm whether `File::create` succeeds, the byte slice is
+   non-empty, and `f.write_all(&data)` returns `Ok`.  Run repro_p203
+   under native and inspect.
+2. If `file_handle_write` IS invoked and File::create succeeds: the
+   file is being created but immediately removed.  Suspects:
+   - `file.pos + 28` (the file_ref slot) is being read as
+     `i32::MIN` on the OpWriteFile path (line 1149), short-circuiting
+     to early return (line 1151).  Verify by tracing.
+   - The `var___ref_1` placeholder used by `n_file(...)` is
+     uninitialised (related to P204 — same `__ref_*` class).  This
+     is the most likely root cause given the symptom.  Native's
+     `n_file(cell, "name", var___ref_1)` may write the file struct
+     into a null-store placeholder, so `OpWriteFile` reads garbage
+     for `file.pos + 28`.
+3. If P204 turns out to be the upstream cause: P203 closes
+   automatically once P204's `__ref_*` init is fixed.  Test with
+   the P204 fix in place and re-run repro_p203 first.
 
 **Test:** `tests/native::native_scripts` slot `42_file_result`.
-Interpreter / wrap test `tests/wrap.rs::file_result` PASSES — issue
-is native-only.
+Reproducer `tests/scripts/repro_p203.loft` (verified: panics with
+`exit=0` after eprintln but file not on disk).  Interpreter / wrap
+test `tests/wrap.rs::file_result` PASSES — issue is native-only.
 
 ### 204. `__ref_*` placeholder uninitialised before helper call
 
@@ -547,16 +661,66 @@ Verified 2026-05-01: `cargo run --bin loft --release -- --interpret
 tests/scripts/repro_p205.loft` exits 0; default (native) panics with
 the assert.
 
-**Fix path:** generic-specialised text-returning functions need the
-same `__work_*` hidden-param ABI as non-generic text-returning fns.
-The caller passes a `&mut String` buffer; the callee writes the result
-into it and returns a `Str` pointing into the caller's buffer (which
-outlives the call).  Currently the bounded-generic specialisation
-(`t_<len><Type>_<method>` form) skips the work-param injection and
-uses a local `String` instead.  See `src/parser/operators.rs` /
-generic specialisation for the missing `__work_*` injection.
+**Root cause:** `src/parser/control.rs:369-377` explicitly skips
+`text_return` (the `__work_*` hidden-param injection for text-
+returning fns) when the function is `DefType::Generic`:
+
+```rust
+// I9-var: skip ref_return/text_return for generic templates.
+if self.data.def_type(self.context) != DefType::Generic {
+    if let Type::Text(ls) = t {
+        self.text_return(ls);
+    }
+    ...
+}
+```
+
+The comment explains: the template body is shared across all
+specialisations, but `__work_*` injection promotes locals to hidden
+params — for non-Text specialisations (Integer, Float) the hidden
+param is wrong.  So generics keep their template body unmodified,
+and specialised copies inherit it WITHOUT the `__work_*` injection.
+
+When a generic with `Type::Text` return is specialised (via
+`src/parser/mod.rs::try_generic_instantiation:1190`), the
+specialised function inherits the template's body that ends with
+`return Str::new(local_string)` — and at native codegen time
+(`src/generation/coroutine.rs` / `src/generation/emit.rs`) this
+emits the dangling `Str::new(&var___ret_1)`.
+
+**Fix path:**
+
+1. In `src/parser/mod.rs::try_generic_instantiation` (line 1190),
+   AFTER computing `concrete` (line 1210) and creating the
+   specialised function, check if `concrete` is `Type::Text(_)`.
+2. If yes, run `text_return` on the specialised function's
+   return-statement scan list.  This requires either:
+   - Re-running the relevant portion of `parse_block` /
+     `parse_function_body` for the specialised copy with
+     `def_type` temporarily set to `Function` (not `Generic`).
+   - OR post-processing the specialised IR to inject `__work_1` as
+     a hidden parameter and rewrite trailing `return X` → `*var___work_1 = X.to_string(); return Str::new(var___work_1.as_str())`.
+3. The post-processing approach is cleaner: walk the specialised
+   function's `code: Block` looking for `Value::Return(Value::*)`
+   nodes whose result type is Text, and rewrite them to use the
+   work-buffer pattern.  Mirrors what `src/parser/control.rs::text_return`
+   does for non-generic functions.
+4. Update each call site to pass a `&mut String` work-buffer for
+   the new hidden param.  This is automatic for native codegen
+   because `output_call_user_fn` already iterates all attributes
+   (including hidden); it would emit `&mut _w_<N>` for the new
+   `__work_*` param.
+
+**First-30-min path:** read `src/parser/control.rs:2337-2540`
+(`text_return` + `parse_block` flow); inspect a working specialised
+text-returning function (e.g. `t_4text_split` from
+`default/02_images.loft:132`) by grepping the generated rust to see
+the working pattern.  Then write the post-processing pass for
+specialised generics.
 
 **Test:** `tests/native::native_scripts` slot `86_interfaces`.
+Reproducer `tests/scripts/repro_p205.loft` (verified: interpreter
+PASSES, native panics with assert message).
 
 ## Web Services
 
