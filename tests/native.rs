@@ -348,9 +348,19 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
                     .map(String::from)
             })
             .collect();
+        // P199 — wrap Stores in UnsafeCell for the new ABI; the work
+        // buffers (`stores.null_named(...)`) need a temporary `&mut Stores`
+        // derived from the cell.
         writeln!(buf, "\nfn main() {{")?;
-        writeln!(buf, "    let mut stores = Stores::new();")?;
-        writeln!(buf, "    init(&mut stores);")?;
+        writeln!(
+            buf,
+            "    let cell = std::cell::UnsafeCell::new(Stores::new());"
+        )?;
+        writeln!(
+            buf,
+            "    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
+        writeln!(buf, "    init(&cell);")?;
         for (d_nr, name) in &test_fns {
             let user_name = name.strip_prefix("n_").unwrap_or(name);
             if expect_fail_fns
@@ -375,9 +385,9 @@ fn prepare_native_test(entry: &Path) -> std::io::Result<NativeJob> {
                     }
                 }
                 if work_args.is_empty() {
-                    writeln!(buf, "    {name}(&mut stores);")?;
+                    writeln!(buf, "    {name}(&cell);")?;
                 } else {
-                    writeln!(buf, "    {name}(&mut stores, {});", work_args.join(", "))?;
+                    writeln!(buf, "    {name}(&cell, {});", work_args.join(", "))?;
                 }
             }
         }

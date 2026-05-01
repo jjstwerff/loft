@@ -177,7 +177,27 @@ impl Output<'_> {
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 write!(w, "let mut var_{name}: {tp_str} = ")?;
             }
-            write!(w, "{}(stores", def_fn.name)?;
+            // P199 — user-fn / Op-stub callees take `&UnsafeCell<Stores>`
+            // (cell), not `&mut Stores` (stores).  Legacy CODEGEN_RUNTIME_FNS
+            // helpers still take stores; mirror the predicate from
+            // output_call_user_fn.
+            const LEGACY_STORES_FNS: &[&str] = &[
+                "n_now",
+                "n_ticks",
+                "n_get_store_lock",
+                "n_set_store_lock",
+                "n_rand",
+                "n_rand_indices",
+                "n_parallel_for_native",
+                "n_parallel_for_ref_native",
+                "n_path_sep",
+                "n_stack_trace",
+                "n_hash_sorted",
+            ];
+            let is_legacy_stores_fn = def_fn.code == Value::Null
+                && LEGACY_STORES_FNS.contains(&def_fn.name.as_str());
+            let stores_arg = if is_legacy_stores_fn { "stores" } else { "cell" };
+            write!(w, "{}({stores_arg}", def_fn.name)?;
             for (idx, arg) in args.iter().enumerate() {
                 write!(w, ", ")?;
                 if let Some(ref tmp) = hoisted[idx] {
