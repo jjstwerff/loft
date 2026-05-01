@@ -1629,7 +1629,7 @@ pub fn n_parallel_for_native<F>(
     worker: F,
 ) -> DbRef
 where
-    F: Fn(&mut Stores, DbRef) -> i64 + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let return_sz = return_size.clamp(1, 8) as u32;
@@ -1669,7 +1669,7 @@ fn run_native_workers_primitive<F>(
     worker: &F,
 ) -> Vec<i64>
 where
-    F: Fn(&mut Stores, DbRef) -> i64 + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
 {
     if n == 0 {
         return Vec::new();
@@ -1681,7 +1681,13 @@ where
         for row_idx in start..end {
             let elm =
                 vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
-            local.push(worker(&mut ws.stores, elm));
+            // P199 — generated worker closures take `&UnsafeCell<Stores>`
+            // (the new ABI).  Cast `&mut ws.stores` to `&UnsafeCell<Stores>`
+            // via the `repr(transparent)` layout guarantee.
+            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
+                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+            };
+            local.push(worker(cell, elm));
         }
         (start, local)
     });
@@ -1705,7 +1711,7 @@ pub fn n_parallel_for_text_native<F>(
     worker: F,
 ) -> DbRef
 where
-    F: Fn(&mut Stores, DbRef) -> String + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, 4);
@@ -1739,7 +1745,7 @@ fn run_native_workers_text<F>(
     worker: &F,
 ) -> Vec<String>
 where
-    F: Fn(&mut Stores, DbRef) -> String + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
 {
     if n == 0 {
         return Vec::new();
@@ -1758,7 +1764,11 @@ where
                 row_idx as i64,
                 &ws.stores.allocations,
             );
-            let s = worker(&mut ws.stores, elm);
+            // P199 — see run_native_workers_primitive comment.
+            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
+                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+            };
+            let s = worker(cell, elm);
             let slot_store = &mut ws.stores.allocations[slot.store_nr as usize];
             let s_pos = slot_store.set_str(&s);
             slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
@@ -1802,7 +1812,7 @@ pub fn n_parallel_for_ref_native<F>(
     worker: F,
 ) -> DbRef
 where
-    F: Fn(&mut Stores, DbRef) -> DbRef + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
 {
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let sz = struct_size as u32;
@@ -1845,7 +1855,7 @@ fn run_native_workers_ref<F>(
     worker: &F,
 ) -> Vec<(Vec<(usize, DbRef)>, Stores)>
 where
-    F: Fn(&mut Stores, DbRef) -> DbRef + Send + Sync,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
 {
     if n == 0 {
         return Vec::new();
@@ -1857,7 +1867,11 @@ where
         for row_idx in start..end {
             let elm =
                 vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
-            let r = worker(&mut ws.stores, elm);
+            // P199 — see run_native_workers_primitive comment.
+            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
+                &*(&mut ws.stores as *mut Stores as *const std::cell::UnsafeCell<Stores>)
+            };
+            let r = worker(cell, elm);
             batch.push((row_idx, r));
         }
         (batch, ws.stores)

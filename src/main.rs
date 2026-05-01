@@ -2123,8 +2123,20 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 }
                 if !test_fns.is_empty() {
                     let _ = writeln!(f, "\nfn main() {{");
-                    let _ = writeln!(f, "    let mut stores = Stores::new();");
-                    let _ = writeln!(f, "    init(&mut stores);");
+                    // P199 — wrap Stores in UnsafeCell so the native ABI
+                    // can pass `&UnsafeCell<Stores>` instead of `&mut Stores`,
+                    // eliminating E0499 in nested user-fn calls.  Each
+                    // generated function derives its own short-lived
+                    // `&mut Stores` from the cell at function entry.
+                    let _ = writeln!(
+                        f,
+                        "    let cell = std::cell::UnsafeCell::new(Stores::new());"
+                    );
+                    let _ = writeln!(
+                        f,
+                        "    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    );
+                    let _ = writeln!(f, "    init(&cell);");
                     for (d_nr, name) in &test_fns {
                         let def = p.data.def(*d_nr);
                         let mut work_args = Vec::new();
@@ -2143,10 +2155,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                             }
                         }
                         if work_args.is_empty() {
-                            let _ = writeln!(f, "    {name}(&mut stores);");
+                            let _ = writeln!(f, "    {name}(&cell);");
                         } else {
-                            let _ =
-                                writeln!(f, "    {name}(&mut stores, {});", work_args.join(", "));
+                            let _ = writeln!(f, "    {name}(&cell, {});", work_args.join(", "));
                         }
                     }
                     let _ = writeln!(f, "}}");

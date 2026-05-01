@@ -41,7 +41,36 @@ impl Output<'_> {
         if is_generator {
             write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
         }
-        write!(w, "{}(stores", def_fn.name)?;
+        // P199 — user-defined functions and generated stubs take
+        // `&UnsafeCell<Stores>` (the new ABI).  A small fixed list of
+        // hand-written helpers in `src/codegen_runtime.rs` keep the legacy
+        // `&mut Stores` ABI: `Op*`-prefixed stubs (skipped from generation
+        // entirely so callers see the codegen_runtime version) and the
+        // CODEGEN_RUNTIME_FNS imports listed in `output_function`.  Pass
+        // the local `stores` binding (derived from `cell` in the function
+        // entry prelude) for those.
+        const CODEGEN_RUNTIME_FNS: &[&str] = &[
+            "n_now",
+            "n_ticks",
+            "n_get_store_lock",
+            "n_set_store_lock",
+            "n_rand",
+            "n_rand_indices",
+            "n_parallel_for_native",
+            "n_parallel_for_ref_native",
+            "n_path_sep",
+            "n_stack_trace",
+            "n_hash_sorted",
+        ];
+        let is_op_stub = def_fn.code == Value::Null && def_fn.name.starts_with("Op");
+        let is_codegen_runtime_fn = def_fn.code == Value::Null
+            && CODEGEN_RUNTIME_FNS.contains(&def_fn.name.as_str());
+        let stores_arg = if is_op_stub || is_codegen_runtime_fn {
+            "stores"
+        } else {
+            "cell"
+        };
+        write!(w, "{}({stores_arg}", def_fn.name)?;
         for (idx, v) in vals.iter().enumerate() {
             write!(w, ", ")?;
             if let Some(vr) = self.create_stack_var(v) {

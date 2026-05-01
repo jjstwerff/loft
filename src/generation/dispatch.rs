@@ -865,25 +865,30 @@ impl Output<'_> {
                     // Generate closure with return-type-specific conversion.
                     // Heap-typed returns (Reference + struct-enum) all use the
                     // ref-path closure shape; heap_def_nr() catches both.
+                    // P199 — worker closures receive `&UnsafeCell<Stores>`
+                    // from the parallel-runner helpers (cast at the worker
+                    // entry boundary in `src/codegen_runtime.rs`).  User-fn
+                    // calls take `cell`, so the closure parameter is named
+                    // `cell` and threaded through verbatim.
                     if matches!(&worker_ret, Type::Text(_)) {
                         write!(
                             w,
-                            ", |stores, elm| {{ let mut _w = String::new(); {worker_name}(stores, elm{extras}, &mut _w); _w }})"
+                            ", |cell, elm| {{ let mut _w = String::new(); {worker_name}(cell, elm{extras}, &mut _w); _w }})"
                         )?;
                     } else if worker_ret.heap_def_nr().is_some() {
                         write!(
                             w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) }})"
+                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}) }})"
                         )?;
                     } else if matches!(&worker_ret, Type::Float | Type::Single) {
                         write!(
                             w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}).to_bits() as i64 }})"
+                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
                         )?;
                     } else {
                         write!(
                             w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) as i64 }})"
+                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
                         )?;
                     }
                     // Close the let-binding braces.

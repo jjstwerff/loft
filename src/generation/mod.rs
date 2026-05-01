@@ -542,7 +542,14 @@ extern crate loft;"
         till: u32,
     ) -> std::io::Result<()> {
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(w, "fn init(db: &mut Stores) {{")?;
+        writeln!(
+            w,
+            "fn init(cell: &std::cell::UnsafeCell<Stores>) {{"
+        )?;
+        writeln!(
+            w,
+            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
         self.output_functions(w, from, till, None)?;
@@ -566,7 +573,14 @@ extern crate loft;"
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(w, "fn init(db: &mut Stores) {{")?;
+        writeln!(
+            w,
+            "fn init(cell: &std::cell::UnsafeCell<Stores>) {{"
+        )?;
+        writeln!(
+            w,
+            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
         writeln!(w, "    db.finish();")?;
@@ -583,12 +597,12 @@ extern crate loft;"
                 // exported cdylib entry point for browser WASM.
                 writeln!(
                     w,
-                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             } else {
                 writeln!(
                     w,
-                    "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             }
         }
@@ -601,7 +615,7 @@ extern crate loft;"
         if main_nr < till {
             writeln!(
                 w,
-                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
             )?;
         }
         Ok(())
@@ -1599,7 +1613,7 @@ extern crate loft;"
         if def.name == "n_assert" && def.code == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i64) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: bool, msg: M, file: F, line: i64) {{"
             )?;
             writeln!(
                 w,
@@ -1615,7 +1629,7 @@ extern crate loft;"
         if !def.position.file.is_empty() {
             writeln!(w, "// loft:{}:{}", def.position.file, def.position.line)?;
         }
-        write!(w, "fn {}(stores: &mut Stores", def.name)?;
+        write!(w, "fn {}(cell: &std::cell::UnsafeCell<Stores>", def.name)?;
         for a in &def.attributes {
             let tp = rust_type(&a.typedef, &Context::Argument);
             write!(w, ", mut var_{}: {tp}", sanitize(&a.name))?;
@@ -1642,21 +1656,33 @@ extern crate loft;"
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
             if block_empty && def.returned != Type::Void {
                 writeln!(w, "{{")?;
+                writeln!(w, "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};")?;
                 writeln!(w, "  {}", default_native_value(&def.returned))?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.
                 // The CallGuard drop ensures cr_call_pop on all exit paths (including early return).
                 // We emit the push/guard as a prefix inside the block's opening `{`.
+                // P199 — prepend the `&mut Stores` derivation from the
+                // `&UnsafeCell<Stores>` parameter so templates and inner
+                // emissions see `stores` as a regular `&mut Stores` binding.
                 let escaped_file = loft_file.replace('\\', "\\\\");
                 self.call_stack_prefix = Some(format!(
-                    "  cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
+                    "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
+                     cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));
                 self.output_block(w, bl, returns_text)?;
                 self.call_stack_prefix = None;
             } else {
+                // Non-instrumented user-fn (e.g. `t_…` methods) — still
+                // needs the `&mut Stores` derivation from the UnsafeCell
+                // parameter for templates / inner calls.
+                self.call_stack_prefix = Some(
+                    "  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string(),
+                );
                 self.output_block(w, bl, returns_text)?;
+                self.call_stack_prefix = None;
             }
         } else if def.code == Value::Null {
             // Native-only function with no loft body.
@@ -1687,13 +1713,25 @@ extern crate loft;"
                 // all others get a todo!() stub.
                 writeln!(w, "{{")?;
                 if def.name == "i_parse_errors" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
                 } else if def.name == "i_parse_error_push" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(
                         w,
                         "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
                     )?;
                 } else if def.name == "n_json_errors" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
                 } else if def.returned != Type::Void {
                     writeln!(w, "  todo!(\"native function {}\")", def.name)?;
@@ -1702,6 +1740,10 @@ extern crate loft;"
             }
         } else {
             writeln!(w, "{{")?;
+            writeln!(
+                w,
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+            )?;
             self.output_code_inner(w, &def.code)?;
             writeln!(w, "\n}}")?;
         }
@@ -1719,6 +1761,10 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
         writeln!(w, "{{")?;
+        writeln!(
+            w,
+            "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         write!(w, "  {rust_symbol}(stores")?;
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
@@ -1757,6 +1803,10 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
         writeln!(w, "{{")?;
+        writeln!(
+            w,
+            "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
 
         // Pre-declare per-vector extraction variables before the call expression
         // so that raw pointers are stable for the duration of the unsafe block.

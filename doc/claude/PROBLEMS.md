@@ -31,7 +31,7 @@ existing entry, not re-open it as a bug.
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
 | 198 | `tests/scripts/95-alias-copy.loft` leaks Database 3 (allocated by `OpInitRef` at pc≈4788) — `p146_script_95_alias_copy_leak` regression test panics on `roadmap-lsp-eclipse`.  Passes on main; the regression sits in commits between `main` (`05b53b2`) and `roadmap-lsp-eclipse` HEAD.  Most likely culprits: plan-04/05 slot allocator refit, plan-06 par-safety series, or the plan-07 Span IR walker arms missing the alias-copy free path.  Investigated as part of [ARC.md A1](plans/06-typed-par/ARC.md). | High | None at the loft language level — the test catches a runtime invariant. Investigate scopes.rs `scan_set` aliased-return free-emission against the new IR variants (`Value::Span`, `Value::ParFor`) added on this branch. |
-| 199 | Native codegen for `n_assert(stores, n_add_pair(stores, var_p) == 30, …)` emits two simultaneous `&mut stores` borrows (E0499).  Reproducer: `tests/scripts/50-tuples.loft` line 21; `cargo test --release --test native native_tuple_script`.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch.  Blocks native-mode tuple par; see [ARC.md A7 risk register](plans/06-typed-par/ARC.md). | Medium | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list. |
+| 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Partially fixed (2026-05-01)**: native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` parameter — generated functions derive a fresh `&mut Stores` from the cell at function entry, so multiple cells can coexist without borrow conflict.  Closes the canonical reproducer (`native_tuple_script` PASSES) and lifts `native_dir` from 7/30 → 23/30 doc scripts.  **Remaining classes (3 sub-issues, see below):** P199.A Op-stub nesting, P199.B template compound expressions, P199.C `n_parallel_queue` native missing. | Medium | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list. |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 
@@ -102,45 +102,163 @@ error[E0499]: cannot borrow `*stores` as mutable more than once at a time
     |   |        first mutable borrow
 ```
 
-**Where:** `tests/scripts/50-tuples.loft` line 21:
+**Where:** `tests/scripts/50-tuples.loft` line 56:
 `assert(add_pair(p) == 30, …)`.  Native codegen lowers
-`assert(expr, msg)` to `n_assert(stores, expr_eval, msg_eval)` and
+`assert(expr, msg)` to `n_assert(stores, expr_eval, msg_eval, …)` and
 inlines both arguments — when the inner expression itself takes
 `&mut stores`, rustc rejects.
 
-**Branch state (2026-04-29):** passes on `main`, fails on
-`roadmap-lsp-eclipse`.  Regression on this branch.
+**Branch state (2026-05-01):** canonical case (`native_tuple_script`)
+**PASSES** after the UnsafeCell ABI refactor.  See "Shipped fix" below
+for what landed and "Remaining sub-issues" for what still fails.
 
-**Fix path:** in the native code generator, hoist any inner call
-that takes `&mut stores` into a temporary `let` before the outer
-call.  The fix mirrors what the loft-level value-semantics layer
-already does for the interpreter — native codegen needs an explicit
-sequence-point splitter for nested `&mut stores` consumers.  Files:
-`src/generation/emit.rs` (or wherever native call args are emitted).
+**Workaround (still applies for the remaining sub-issues):** rewrite
+the loft source as `r = add_pair(p); assert(r == 30, …);` so the
+second borrow leaves the outer call's argument list.
 
-**Workaround:** rewrite the loft source as
-`r = add_pair(p); assert(r == 30, …);` so the second borrow leaves
-`n_assert`'s argument list.
+**Tests that surface this (each runs `assert` with a nested
+`&mut stores` call inside the message format-string or the test
+expression):**
 
-**Test:** `tests/native.rs::native_tuple_script` (and
-`native_tuple_return_script` — same fingerprint).
+| Test | Failure shape | Inner call |
+|---|---|---|
+| `cargo test --release --test native native_tuple_script` | format-string with `add_pair(p)` | `n_add_pair(stores, var_p)` |
+| `cargo test --release --test native native_tuple_return_script` | same fingerprint as above | `n_add_pair` |
+| `cargo test --release --test native native_binary_script` | format-string with `vector_len(rv)` | `t_6vector_len(stores, var_rv)` |
+| `cargo test --release --test native native_dir` | 23 of 30 doc scripts | various user-fn calls inside `assert(...)` format-strings |
+| `cargo test --release --test html_wasm moros_editor_html_smoke` | `OpCopyRecord(stores, n_build_chunk(stores, …), …)` | `n_build_chunk` |
+| `bench/11_par/bench.loft` native column | format-string with `t_5float_round(stores, …)` | `t_5float_round` |
 
-**Tracked in plan-06:** [ARC.md A7](plans/06-typed-par/ARC.md) needs
-this fixed before tuple par compiles natively.  A7 covers
-interpreter mode first; native-mode tuple par becomes a follow-up
-(A7 risk register).
+#### Shipped fix (2026-05-01) — UnsafeCell ABI refactor
 
-**A1 status (2026-04-30):** the same E0499 fingerprint also fires
-in `tests/html_wasm.rs::moros_editor_html_smoke` —
-`OpCopyRecord(stores, n_build_chunk(stores, …), …)` at
-`/tmp/loft_html.rs:634`.  Failing on `roadmap-lsp-eclipse` even
-with a fresh `wasm32-unknown-unknown` rlib; `main` (post-rebuild)
-passes the test cleanly.  Same shape — nested `&mut stores`
-consumer in a single argument list — so the fix in A7 (hoist inner
-`&mut stores` calls into temporaries) closes both `native_tuple_*`
-and `moros_editor_html_smoke` simultaneously.  Also blocks
-`bench/11_par/bench.loft`'s native column (per THREADING.md
-A1-host-relative-check note).
+Native function ABI changed from `(stores: &mut Stores, …)` to
+`(cell: &std::cell::UnsafeCell<Stores>, …)`.  Each generated function
+opens its body with:
+
+```rust
+let stores: &mut Stores = unsafe { &mut *cell.get() };
+```
+
+so all subsequent template substitutions and inner emissions reference
+`stores` exactly as before.  When function A calls function B, A
+passes `cell` (a copyable shared borrow of the cell) — multiple `&cell`
+references coexist freely under Rust's borrow checker, eliminating
+E0499 by construction at the function-call boundary.
+
+`UnsafeCell<T>` is `repr(transparent)`; deriving the `&mut T` is
+zero-cost.  Each function's `&mut Stores` is scoped to its body and
+dropped before the function returns, so on a single-threaded call
+stack only one `&mut Stores` is actively dereferenced at any moment —
+this is the canonical safe usage of UnsafeCell-derived references.
+
+**Files touched:**
+- `src/generation/mod.rs` — function signature emission, init, main entry, native API call paths.
+- `src/generation/calls.rs` — `output_call_user_fn` passes `cell` for user-fns; `Op*` and `CODEGEN_RUNTIME_FNS` stubs still pass `stores` (legacy ABI).
+- `src/generation/coroutine.rs` — coroutine factory takes `cell`; `next_i64` body derives `cell` from `stores` for inner user-fn calls.
+- `src/generation/dispatch.rs` — fn-ref match dispatch passes `cell`; parallel worker closures take `cell`.
+- `src/generation/emit.rs` — fn-ref candidate match arms pass `cell`.
+- `src/codegen_runtime.rs` — `n_parallel_for_*` helpers updated to take `Fn(&UnsafeCell<Stores>, …)` closures and cast `&mut ws.stores` at the worker boundary via the `repr(transparent)` cast.
+- `src/main.rs` — test main bootstrap wraps `Stores::new()` in `UnsafeCell` at startup.
+
+**Verification (after refactor):**
+
+| Test | Result |
+|---|---|
+| `cargo test --release --test issues` | 538/540 (2 P144/P157 test-pattern checks need updating for new ABI) |
+| `cargo test --release --test threading` | 43/43 |
+| `cargo test --release --test threading_chars` | 35/35 |
+| `cargo test --release --test native native_tuple_script` | PASS |
+| `cargo test --release --test native native_dir` | 23/30 (was 7/30) |
+| `cargo test --release --test native` (full) | 37/92 |
+
+#### Remaining sub-issues
+
+##### 199.A — Op-stub nested calls still hit E0499
+
+**Pattern:** `OpNewRecord(stores, OpGetRecord(stores, …))` — two
+codegen_runtime.rs Op stubs nested at the same scope.  Both take
+`&mut Stores` (the legacy ABI we deliberately preserved for stubs); the
+borrow checker rejects two simultaneous mutable borrows.
+
+**Affects:** `15_lexer`, `16_parser` in `native_dir`; possibly more
+non-doc native tests.
+
+**Fix path:** Convert the ~32 `Op*` and `n_*` helpers in
+`src/codegen_runtime.rs` from `(stores: &mut Stores, …)` to
+`(cell: &UnsafeCell<Stores>, …)` + entry prelude.  Mechanical edit,
+same pattern as the generated-function refactor.  Once converted,
+remove the `is_op_stub`/`is_codegen_runtime_fn` special case in
+`src/generation/calls.rs::output_call_user_fn` so calls pass `cell`
+to these too.
+
+**Effort:** ~2-3 hours.  Well-bounded.
+
+##### 199.B — Template compound-expression conflict (E0502)
+
+**Pattern:** `stores.store_mut(&db).set_int(…, {…stores.st… inner…})`
+— `@v1.field = @v2` template substitutes both placeholders with text
+referencing `stores`.  After substitution, the outer `store_mut(&db)`
+holds `&mut stores` while the inner `stores.store(&db).foo()` wants
+`&stores` (immutable) — E0502.
+
+**Affects:** `08_struct`, `17_libraries`, `18_locks` in `native_dir`.
+
+**Fix path:** Either (1) re-attempt the IR-level lift in scope analysis
+focused on this specific compound shape, OR (2) rewrite the offending
+templates in `default/01_code.loft` to use `let _t = …;
+stores.store_mut(&db).set_int(…, _t);` form.  Approach (2) is more
+surgical — likely 5-10 specific templates touch this.
+
+**Effort:** ~2-4 hours.
+
+##### 199.C — `n_parallel_queue` native missing
+
+**Pattern:** `n_parallel_queue(cell, var__vector_1, 8, 8, 4, 547, 0)`
+— this function is registered in `src/native.rs` (interpreter
+opcode) but has no `codegen_runtime.rs` implementation.  Generated
+code calls it with the new `cell` ABI; rustc reports "unknown
+function".
+
+**Affects:** `19_threading` in `native_dir`; any native script using
+`parallel_queue`.
+
+**Fix path:** Either implement `n_parallel_queue` (and its `_text`,
+`_ref`, `_narrow`, `_fn` variants) in `codegen_runtime.rs` mirroring
+the interpreter version in `src/native.rs:826`, OR document as an
+interpreter-only feature.
+
+**Effort:** ~2-4 hours if implementing all variants; ~30 min if
+documenting.
+
+**Pre-existing — not caused by P199 fix.**
+
+#### Original investigation (superseded — kept for context)
+
+The original investigation explored a 4-tier fix in
+`src/generation/pre_eval.rs` (text-based pre-evaluation hoisting).
+That approach was abandoned in favour of the UnsafeCell ABI refactor
+above because each tier exposed a deeper interaction (Span wrappers,
+counter sharing, Op-template `@v0` letprop substitution).  The
+ABI-level fix sidesteps the entire problem class.
+
+The IR-level scope-analysis lift (`scopes.rs::scan_args` extension)
+was also explored and reverted — it conflicted with downstream slot
+allocation invariants in stdlib hot paths (`t_4text_split`).
+
+#### Acceptance for closing P199
+
+P199 closes when ALL of these hold (sub-issues 199.A, 199.B, 199.C
+landed):
+
+```bash
+cargo test --release --test native                       # 5/5 named native tests passing
+cargo test --release --test native native_dir            # 30/30
+cargo test --release --test html_wasm moros_editor_html_smoke  # PASS
+cargo test --release --test issues                       # 540 passing — unchanged
+cargo test --release --test threading                    # 43 passing — unchanged
+cargo test --release --test threading_chars              # 35 passing — unchanged
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo build --no-default-features
+```
 
 ### 200. Native codegen E0308 — `f += <integer>` width mismatch on binary file
 

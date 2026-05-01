@@ -400,7 +400,7 @@ impl Output<'_> {
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
         for (d_nr, fn_name, has_closure) in &candidates {
-            write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
+            write!(w, " {d_nr}_u32 => {fn_name}(cell")?;
             for expr in &arg_exprs {
                 write!(w, ", {expr}")?;
             }
