@@ -732,27 +732,70 @@ Five concrete changes:
 **Closes:** `par_struct_to_vector_t4` (line 639); G6 in
 `01-output-store.md`.
 
-#### A6.b — `par_struct_to_fn_t4` (fn-ref return)
+#### A6.b — `par_struct_to_fn_t4` (fn-ref return) — **OPEN, 2-layer scope**
 
-**Design:** Same root cause as A6.a (hidden-arg destination), but
-the destination is a 20-byte fn-ref instead of a vector.
+**Status (2026-05-01):** Investigated this session; revealed the post-A1
+landscape splits the work into two layers (L1 + L2).  L1 fix designed
+and tested in isolation; L2 is the remaining blocker.  Reverted both
+to keep main green; commit doc-only.
 
-Per the canary's ignore message: "stack snapshot at Return time
-shows d_nr correctly at stack[4..11] (i64 523) but the closure DbRef
-sentinel appears at stack[20..23] (0xFFFF) instead of stack[12..23]
-— i.e. the InitRefSentinel(var[24]) wrote 4 bytes higher than
-expected."
+**L1 — return_size truncation in light path (mechanical fix; ready to ship):**
+After commit `b9ad7af` retired the heavy path, fn-ref returns route
+through `n_parallel_for_light` → `parallel_light_execute_and_collect`
+→ `run_parallel_light` → `execute_at_raw`.  Two sub-bugs in this
+chain:
 
-The fix is to reconcile the codegen `stack_pos` accounting for
-`n_pick` with `execute_at_raw_to`'s 20-byte return frame.  After
-A6.a's 4e machinery is in place, the fn-ref destination becomes a
-particular case of `RefHiddenDest`, with `type_nr` resolving to the
-synthetic `__fn_ref` struct introduced in 4d.C.
+1. `n_parallel_for_light` clamps `return_size` to `1..=8` (`src/native.rs`
+   ~line 676): `let rs = if (1..=8).contains(&derived) { derived }
+   else { v_return_size.clamp(1, 8) as u32 };`.  For Type::Function,
+   `derived = 20`, so the clamp drops to 8.  Fix: relax to allow the
+   derived size when ≥ 1 (only fall back to v_return_size when
+   `derived = 0`).
+2. `run_parallel_light`'s body calls `execute_at_raw` (returns `u64`,
+   8 bytes) and then `copy_nonoverlapping(ret_sz)` from `&u64` —
+   reads UB Rust stack bytes for ret_sz > 8.  Fix: when `prim_in == 0
+   && ret_sz > 8`, route directly through `execute_at_raw_to` which
+   writes ret_sz bytes from the worker's stack top to dst.
 
-**Dependency:** the closure-storage redesign in
-[04d-fn-ref-closure-storage.md](04d-fn-ref-closure-storage.md) is a
-prerequisite if the destination must hold a 16-byte (d_nr +
-closure DbRef) layout.  If 4d.C ships first, A6.b becomes mechanical.
+L1 verified:
+- Worker correctly writes 20-byte fn-ref to the heap result vector.
+- Bytes at heap row[0..7] = correct d_nr (e.g. 0x21e = 542 for triple).
+- Bytes at heap row[8..19] = correct closure DbRef sentinel
+  (Rust reorders DbRef to {rec u32, pos u32, store_nr u16, padding},
+   so the u16::MAX lands at heap-row offsets 16-17, NOT 8-9 — but
+   that IS the correct in-memory layout for `*addr_mut::<DbRef>`).
+
+**L2 — body's `get_field` for Type::Function returns (deep codegen):**
+
+After L1 lands, the heap result vector contains correct 20-byte
+fn-refs.  But the body's read path is wrong:
+
+- Parser substitutes `Var(b_var: fn-ref)` with `get_field(vec_tp,
+  usize::MAX, OpGetVector(results, 20, idx))` (`src/parser/collections.rs:1880`).
+- For Type::Function, `vec_tp = type_def_nr(Type::Function) =
+  def_nr("i32")` (`src/data.rs:2944`).  So `get_field(i32_d, usize::MAX, ...)`
+  treats the fn-ref vector element as an i32 (4-byte int).
+- The body's `f` ends up with a 4-byte i32 read where 20 bytes of
+  fn-ref blob are needed.  `OpCallRef` then reads d_nr at the wrong
+  offset and panics with `d_nr=1344256 out of range`.
+
+**Why this is L2 (deep codegen)** — the existing get_field +
+OpGetVector pattern is shared across all return types; making it
+20-byte-fn-ref-aware requires either:
+- A typed wrapper around get_field that emits OpVarFnRef-style 20-byte
+  reads at the row's record position when ret_type is Type::Function, or
+- Routing fn-ref returns through a packed-buffer Queue path (similar
+  to A3 narrow-buffer) with a typed `n_parallel_buf_get_fn(idx) -> fn(_) -> _`
+  getter that pushes 20 bytes onto the operand stack.
+
+The packed-buffer route is structurally cleaner — it bypasses the
+heap-result-vector abstraction entirely and matches A6.c's working
+pattern for fn-ref vector inputs.  Estimated ~1 session.
+
+**Plan**: ship L1 + L2 together when L2 is approached.  Don't ship L1
+alone — it removes the truncation at the cost of adding UB at the
+get_field step (silently corrupted reads vs. earlier silent
+truncation).
 
 **Closes:** `par_struct_to_fn_t4` (line 686); G4 in
 `01-output-store.md`.  P196 was closed independently on 2026-04-30
