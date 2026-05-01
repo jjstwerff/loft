@@ -33,10 +33,20 @@ impl Output<'_> {
         }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
+        // P198 — most operators are wrapped in Value::Span by the parser.
+        // Unwrap before pattern-matching so the deep-copy emission below
+        // fires for Span(Call(...)) / Span(Var(...)) RHS values.  Without
+        // this, native codegen falls through to a plain assignment that
+        // aliases the parameter's store, breaking the loft invariant that
+        // each ref-typed variable owns its own store
+        // (tests/scripts/95-alias-copy.loft assert orig.x == 1.0 fails
+        // because mutating ac_copy mutates ac_orig too).
+        let to_unspanned = to.unspan();
         // when a call returns a Reference and the callee has
         // visible Reference params, the returned DbRef may alias a parameter.
         // Deep-copy to prevent aliasing.
-        if let (Some(d_nr), Value::Call(fn_nr, args)) = (variables.tp(var).heap_def_nr(), to)
+        if let (Some(d_nr), Value::Call(fn_nr, args)) =
+            (variables.tp(var).heap_def_nr(), to_unspanned)
             && self.data.def(*fn_nr).name.starts_with("n_")
             && self.data.def(*fn_nr).code != Value::Null
             && self.data.def(*fn_nr).attributes.iter().any(|a| {
@@ -59,7 +69,9 @@ impl Output<'_> {
             )?;
             self.indent(w)?;
             // Emit the call into a temporary, then deep-copy.
-            write!(w, "{{ let _src = {}(stores", self.data.def(*fn_nr).name)?;
+            // P198 — the inner user-fn call uses the new `cell` ABI; the
+            // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
+            write!(w, "{{ let _src = {}(cell", self.data.def(*fn_nr).name)?;
             for arg in args {
                 write!(w, ", ")?;
                 if let Some(vr) = self.create_stack_var(arg) {
@@ -80,7 +92,7 @@ impl Output<'_> {
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to)
+        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to_unspanned)
             && variables.tp(*src).heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));

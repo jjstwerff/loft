@@ -541,10 +541,17 @@ impl Scopes {
         //   the returned struct's store), OR the callee returned a
         //   different fresh store and the caller's __ref_N pre-alloc is
         //   orphaned.
+        // P198 — most operators are wrapped in Value::Span by the parser
+        // for diagnostics.  Unwrap before pattern-matching so the
+        // deep-copy / make_independent logic fires for Span(Call(...))
+        // assignments — without this, OpFreeRef is never emitted for the
+        // freshly-allocated store and Database N leaks at scope exit
+        // (e.g. tests/scripts/95-alias-copy.loft Database 3 leak).
+        let unspanned_value = value.unspan();
         if matches!(
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
-        ) && let Value::Call(fn_nr, _) = value
+        ) && let Value::Call(fn_nr, _) = unspanned_value
             && data.def(*fn_nr).name.starts_with("n_")
             && data.def(*fn_nr).code != Value::Null
         {
@@ -591,7 +598,7 @@ impl Scopes {
             // v)` instead of `OpFreeRef(__ref_N)`: the runtime
             // store-nr comparison settles the two cases per execution
             // path (match → skip; differ → free).
-            if !has_ref_params && let Value::Call(_, args) = value {
+            if !has_ref_params && let Value::Call(_, args) = unspanned_value {
                 for arg in args {
                     let arg_var = match arg {
                         Value::Var(av) => Some(*av),
@@ -631,7 +638,7 @@ impl Scopes {
         // path is hit by the I13 iterator protocol's hidden
         // `__iter_obj_N = c` setup (parser/collections.rs:209).
         // Strip v's declared deps so get_free_vars emits OpFreeRef.
-        if let Value::Var(src) = value
+        if let Value::Var(src) = unspanned_value
             && let Type::Reference(d_nr, _) | Type::Enum(d_nr, true, _) = function.tp(v).clone()
             && let Type::Reference(src_d, _) | Type::Enum(src_d, true, _) = function.tp(*src)
             && d_nr == *src_d
