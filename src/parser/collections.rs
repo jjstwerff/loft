@@ -1544,6 +1544,9 @@ use #count instead"
         let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
         let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
         let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
+        let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
+        let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
+        let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
         let early_is_primitive_return = !matches!(
             ret_type,
             Type::Text(_)
@@ -1587,8 +1590,21 @@ use #count instead"
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;
-        let early_route_through_queue =
-            early_route_int_queue || early_route_text_queue || early_route_ref_queue;
+        // ARC.md A6.b — fn-ref returns route through a packed-buffer
+        // queue (par_fn_buffer_stack) instead of the heap result
+        // vector.  See run_parallel_queue_fn for the runtime; the
+        // body substitution diverges below to emit
+        // `Set(b_var, Call(buf_get_fn, [idx]))` per iteration
+        // instead of inline-expanding b_var via replace_var_in_ir.
+        let early_route_fn_queue = matches!(ret_type, Type::Function(_, _, _))
+            && fn_d_nr != u32::MAX
+            && queue_fn_d_nr != u32::MAX
+            && buf_get_fn_d_nr != u32::MAX
+            && buf_drop_fn_d_nr != u32::MAX;
+        let early_route_through_queue = early_route_int_queue
+            || early_route_text_queue
+            || early_route_ref_queue
+            || early_route_fn_queue;
 
         // Create result-reference variable — only on the materialised
         // path.  The queue path stores results in
@@ -1798,6 +1814,9 @@ use #count instead"
         let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
         let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
         let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
+        let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
+        let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
+        let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
         let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
             &Type::Integer(*spec),
             &Context::Argument,
@@ -1818,6 +1837,14 @@ use #count instead"
         // ownership invariants and matches its element-stride
         // accounting differently; 8d.3 generalises Queue dispatch
         // to vector returns.
+        // ARC.md A6.b: fn-ref returns route through `n_parallel_queue_fn`
+        // + `par_fn_buffer_stack` (packed Vec<u8>, 20 bytes per row).
+        // The body substitution diverges: instead of inline-expanding
+        // b_var via `replace_var_in_ir`, b_var is kept as a real
+        // variable and `Set(b_var, Call(buf_get_fn, [idx]))` is emitted
+        // at the top of each iteration body.  This works around the
+        // `replace_var_in_ir` limitation that doesn't substitute the
+        // u16 fn-ref var index inside `Value::CallRef`.
         let route_int_queue = is_primitive_return
             && fn_d_nr != u32::MAX
             && ret_size_8
@@ -1845,7 +1872,13 @@ use #count instead"
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
             && buf_drop_ref_d_nr != u32::MAX;
-        let route_through_queue = route_int_queue || route_text_queue || route_ref_queue;
+        let route_fn_queue = matches!(ret_type, Type::Function(_, _, _))
+            && fn_d_nr != u32::MAX
+            && queue_fn_d_nr != u32::MAX
+            && buf_get_fn_d_nr != u32::MAX
+            && buf_drop_fn_d_nr != u32::MAX;
+        let route_through_queue =
+            route_int_queue || route_text_queue || route_ref_queue || route_fn_queue;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1855,7 +1888,7 @@ use #count instead"
         );
 
         // Build the body's `b` accessor.  For the queue paths it's
-        // `n_parallel_buf_get[_text/_ref](idx)`; for the materialised
+        // `n_parallel_buf_get[_text/_ref/_fn](idx)`; for the materialised
         // path it's `OpGetVector + get_field` indexing the heap
         // result vector.
         let get_call = if route_int_queue {
@@ -1867,6 +1900,13 @@ use #count instead"
             // accesses route through the standard OpGetField path,
             // same as Var(struct_var).foo.
             Value::Call(buf_get_ref_d_nr, vec![Value::Var(idx_var)])
+        } else if route_fn_queue {
+            // ARC.md A6.b: returns a 20-byte fn-ref blob.  Used as
+            // the RHS of `Set(b_var, ...)` below — NOT inline-substituted
+            // via `replace_var_in_ir` because the body's `f(10)`
+            // parses as `CallRef(b_var, [Int(10)])` and `replace_var_in_ir`
+            // doesn't substitute the u16 fn-ref var index inside CallRef.
+            Value::Call(buf_get_fn_d_nr, vec![Value::Var(idx_var)])
         } else {
             // Use OpGetVector + get_field to extract the element from the result
             // vector. This works for all return types (int, long, float, bool, text)
@@ -1913,7 +1953,34 @@ use #count instead"
         // is emitted; the body references ARE the reads.  Under the B.3
         // atomic bundle's slot-aware `OpPut*` dispatch this eliminates
         // the type-width mismatch and the stack drift.
-        replace_var_in_ir(&mut block, b_var, &get_call);
+        //
+        // ARC.md A6.b: fn-ref returns diverge — `f(10)` parses as
+        // `CallRef(b_var, [Int(10)])` and `replace_var_in_ir`
+        // (src/parser/collections.rs:replace_var_in_ir) walks
+        // `CallRef(_, args)` into `args` but doesn't substitute the
+        // first u16 (the fn-ref var index).  Inline substitution
+        // would leave b_var as a dangling reference.  Instead, keep
+        // b_var as a real variable with a 20-byte slot, and prepend
+        // `Set(b_var, Call(buf_get_fn, [idx]))` to the body so each
+        // iteration's CallRef reads the fresh fn-ref blob.
+        if route_fn_queue {
+            // Mark b_var as in_use so the slot allocator reserves
+            // a 20-byte slot.  The body's `f(10)` (CallRef) uses
+            // b_var implicitly through the u16 var index, which
+            // doesn't increment the standard use-count tracker.
+            self.vars.in_use(b_var, true);
+            let init = v_set(b_var, get_call.clone());
+            // Prepend init to the body block.  If the body is not
+            // already a Block, wrap it in one.
+            if let Value::Block(ref mut bl) = block {
+                bl.operators.insert(0, init);
+            } else {
+                let inner = std::mem::replace(&mut block, Value::Null);
+                block = v_block(vec![init, inner], Type::Void, "fn-queue body");
+            }
+        } else {
+            replace_var_in_ir(&mut block, b_var, &get_call);
+        }
 
         // apply the same inline-alias treatment to the outer
         // iterator variable `a`.  The desugared loop increments `idx`;
@@ -1986,6 +2053,13 @@ use #count instead"
                     buf_drop_ref_d_nr,
                     "Parallel for loop (queue ref)",
                     "Parallel for block (queue ref)",
+                )
+            } else if route_fn_queue {
+                (
+                    queue_fn_d_nr,
+                    buf_drop_fn_d_nr,
+                    "Parallel for loop (queue fn)",
+                    "Parallel for block (queue fn)",
                 )
             } else {
                 (

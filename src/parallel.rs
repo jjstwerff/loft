@@ -1169,6 +1169,111 @@ pub fn run_parallel_queue(
     merge_batches(batches, n_rows, 0u64)
 }
 
+// ── ARC.md A6.b — run_parallel_queue_fn (fn-ref returns) ────────────────────
+
+/// Plan-06 ARC.md A6.b — fn-ref-returning par dispatch.  Each worker
+/// writes its row's 20-byte fn-ref blob (8B i64 d_nr + 12B closure
+/// `DbRef` per Rust's reordered layout) directly into a packed
+/// `Vec<u8>` via `State::execute_at_raw_to`.  The result vector
+/// holds `n_rows * 20` bytes; readers (the `n_parallel_buf_get_fn`
+/// native fn) pull 20 bytes per row.
+///
+/// Scope: DbRef-input only (the canary `pick(s: const Score) -> fn(...)`
+/// shape).  Wide-input + fn-ref-return is left on the legacy path
+/// until a canary surfaces it — the dispatch ladder in
+/// `run_parallel_queue` for `prim_in == u32::MAX` (text input) /
+/// `> 8` (wide) / `1..=8` (primitive) only has the `execute_at_raw`
+/// 8-byte-return shape; reusing them for fn-ref returns would need
+/// new `_to`-returning variants of those entry points.
+///
+/// Bypasses the heap-result-vector + body's `get_field` indirection
+/// that A6.b's L2 issue stems from: the body's `f(10)` →
+/// `CallRef(b_var, [Int(10)])` reads `b_var`'s 20-byte slot directly,
+/// and the parser emits `Set(b_var, Call(buf_get_fn, [idx]))` at the
+/// top of each iteration to fill that slot from the packed buffer.
+///
+/// # Panics
+/// Panics if a worker thread panics.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_queue_fn(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+) -> Vec<u8> {
+    const FN_REF_SIZE: usize = 20;
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
+    let buf_ptr = Arc::new(SendMutPtr(buf.as_mut_ptr()));
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+
+    let _batches: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        let buf_ptr = Arc::clone(&buf_ptr);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // Each row's 20-byte slot is disjoint across workers
+            // (start..end ranges from `parallel_workers` are
+            // non-overlapping), so concurrent writes via raw
+            // pointer are safe.
+            unsafe {
+                let dst = buf_ptr.0.add(row_idx * FN_REF_SIZE);
+                state.execute_at_raw_to(fn_pos, &row_ref, &extras, FN_REF_SIZE as u32, dst);
+            }
+        }
+    });
+    buf
+}
+
+#[cfg(not(feature = "threading"))]
+#[allow(clippy::too_many_arguments, dead_code)]
+#[must_use]
+pub fn run_parallel_queue_fn(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    _n_threads: usize,
+    extra_args: &[u64],
+) -> Vec<u8> {
+    const FN_REF_SIZE: usize = 20;
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
+    let mut state = program.new_state(stores.clone_for_worker());
+    for row_idx in 0..n_rows {
+        let row_ref = vector::get_vector(
+            input,
+            element_size,
+            row_idx as i64,
+            &state.database.allocations,
+        );
+        unsafe {
+            let dst = buf.as_mut_ptr().add(row_idx * FN_REF_SIZE);
+            state.execute_at_raw_to(fn_pos, &row_ref, extra_args, FN_REF_SIZE as u32, dst);
+        }
+    }
+    buf
+}
+
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
 
 /// Lightweight parallel dispatch — borrows main stores read-only instead

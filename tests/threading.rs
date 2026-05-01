@@ -1682,3 +1682,65 @@ fn par_narrow_buffer_stack_initially_empty_in_clone() {
         cloned.par_narrow_buffer_stack.len()
     );
 }
+
+// ── Plan-06 ARC.md A6.b — par_fn_buffer_stack semantics ─────────────────
+
+/// ARC.md A6.b — `Stores::par_fn_buffer_stack` is a stack of packed
+/// `Vec<u8>` buffers, each `n_rows * 20` bytes for fn-ref-returning
+/// par workers (8B i64 d_nr + 12B closure DbRef per row).  Round-trip:
+/// push, observe via `last()`, pop, verify empty.  Locks the contract
+/// `n_parallel_buf_get_fn` / `n_parallel_buf_drop_fn` rely on.
+#[test]
+fn par_fn_buffer_stack_push_pop_round_trip() {
+    let mut stores = loft::database::Stores::new();
+    assert!(stores.par_fn_buffer_stack.is_empty(), "fresh: empty");
+    // Two fn-ref rows: row 0 d_nr=541, row 1 d_nr=542 (low 8B), each
+    // with sentinel closure (u16::MAX at slot offset 16-17 per Rust's
+    // reordered DbRef layout: rec u32 + pos u32 + store_nr u16 + padding).
+    let mut bytes = vec![0u8; 40];
+    bytes[0..8].copy_from_slice(&541i64.to_le_bytes());
+    bytes[16..18].copy_from_slice(&u16::MAX.to_le_bytes());
+    bytes[20..28].copy_from_slice(&542i64.to_le_bytes());
+    bytes[36..38].copy_from_slice(&u16::MAX.to_le_bytes());
+    stores.par_fn_buffer_stack.push(bytes.clone());
+    assert_eq!(stores.par_fn_buffer_stack.len(), 1);
+    assert_eq!(stores.par_fn_buffer_stack.last().unwrap(), &bytes);
+    let popped = stores.par_fn_buffer_stack.pop();
+    assert_eq!(popped, Some(bytes));
+    assert!(stores.par_fn_buffer_stack.is_empty());
+}
+
+/// ARC.md A6.b — nested fused for-par: inner pop reveals outer
+/// buffer underneath, unchanged.  Same load-bearing invariant as
+/// `par_buffer_stack_nesting`.
+#[test]
+fn par_fn_buffer_stack_nesting() {
+    let mut stores = loft::database::Stores::new();
+    let outer = vec![0xAAu8; 20];
+    let inner = vec![0xBBu8; 40];
+    stores.par_fn_buffer_stack.push(outer.clone());
+    stores.par_fn_buffer_stack.push(inner.clone());
+    assert_eq!(stores.par_fn_buffer_stack.len(), 2);
+    assert_eq!(stores.par_fn_buffer_stack.last().unwrap(), &inner);
+    stores.par_fn_buffer_stack.pop();
+    assert_eq!(
+        stores.par_fn_buffer_stack.last().unwrap(),
+        &outer,
+        "outer buffer must survive inner pop"
+    );
+}
+
+/// ARC.md A6.b — `Stores::clone()` resets `par_fn_buffer_stack` to
+/// empty; runtime state, not type schema.
+#[test]
+fn par_fn_buffer_stack_initially_empty_in_clone() {
+    let mut stores = loft::database::Stores::new();
+    stores.par_fn_buffer_stack.push(vec![1u8; 20]);
+    let cloned = stores.clone();
+    assert!(
+        cloned.par_fn_buffer_stack.is_empty(),
+        "Stores::clone must reset par_fn_buffer_stack — runtime state, \
+         not type schema (cloned len = {})",
+        cloned.par_fn_buffer_stack.len()
+    );
+}

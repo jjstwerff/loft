@@ -78,11 +78,10 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 (`25_runtime_panic_builtin`, `28_runtime_unwrap_none`) need regen.
 `n_parallel_for` now delegates to `n_parallel_for_light`.
 
-### 5 ignored canaries (2026-05-01: A6.d + A6.a + A6.c all closed)
+### 4 ignored canaries — all blocked on T1.8a external prerequisite (2026-05-01: A6.b closed; all 4 unblocked A6 canaries done in single session)
 
 | Test | Line | Blocker | Plan link |
 |---|---|---|---|
-| `par_struct_to_fn_t4` | 686 | fn-ref return; needs L1 (restore 20-byte return path post-A1) + L2 (codegen InitRefSentinel offset fix) | A6.b (deferred — 2-layer work) |
 | `par_tuple_return_int_int` | 749 | tuple return; var_size=16 > 8 byte cap | T1.8a + phase 9c ([09-tuple-support.md](09-tuple-support.md)) |
 | `par_tuple_return_int_text` | 767 | tuple return | T1.8a + phase 9c |
 | `par_tuple_return_struct_text` | 785 | tuple return | T1.8a + phase 9c |
@@ -732,12 +731,58 @@ Five concrete changes:
 **Closes:** `par_struct_to_vector_t4` (line 639); G6 in
 `01-output-store.md`.
 
-#### A6.b — `par_struct_to_fn_t4` (fn-ref return) — **OPEN, 2-layer scope**
+#### A6.b — `par_struct_to_fn_t4` (fn-ref return) — **DONE 2026-05-01**
 
-**Status (2026-05-01):** Investigated this session; revealed the post-A1
-landscape splits the work into two layers (L1 + L2).  L1 fix designed
-and tested in isolation; L2 is the remaining blocker.  Reverted both
-to keep main green; commit doc-only.
+**Closure notes:**
+
+Closed by a packed-buffer Queue route (mirrors A3 narrow-buffer + A6.c
+patterns).  L1 (post-A1 truncation) + L2 (body's get_field-as-i32
+misread) both bypassed by routing fn-ref returns through a dedicated
+buffer + getter that pushes 20 bytes directly onto the operand stack.
+
+**Six layers wired:**
+
+1. **`Stores::par_fn_buffer_stack: Vec<Vec<u8>>`** — sibling stack to
+   `par_buffer_stack` / `par_text_buffer_stack` / `par_ref_buffer_stack` /
+   `par_narrow_buffer_stack`.  Each entry is `n_rows * 20` bytes,
+   one fn-ref per row in Rust's reordered DbRef layout.  Init at 4
+   sites (`Stores::new`, `Clone`, both `WorkerStores::new`).
+2. **`run_parallel_queue_fn`** in `src/parallel.rs` — workers write
+   each row's 20-byte fn-ref directly via `State::execute_at_raw_to`
+   to disjoint slots in a packed `Vec<u8>` (concurrent writes safe;
+   row ranges from `parallel_workers` are non-overlapping).  Scope:
+   DbRef-input only (matches A6.c discipline).
+3. **3 native fns** — `n_parallel_queue_fn` / `_buf_get_fn` /
+   `_buf_drop_fn` in `src/native.rs` + FUNCTIONS table + decls in
+   `default/01_code.loft`.
+4. **Codegen extras** at both push and subtract sites for
+   `n_parallel_queue_fn`.
+5. **Parser gate** in `src/parser/collections.rs` — `route_fn_queue`
+   bool at early + late sites; new dispatch arm for fn-ref returns.
+6. **Body substitution divergence** — for fn-ref returns, do NOT
+   call `replace_var_in_ir`.  The body's `f(10)` parses as
+   `CallRef(b_var, [Int(10)])` and `replace_var_in_ir`
+   (`src/parser/collections.rs:replace_var_in_ir`) walks
+   `CallRef(_, args)` into `args` but doesn't substitute the first
+   u16 (the fn-ref var index).  Inline substitution would leave
+   b_var as a dangling reference.  Instead, keep b_var as a real
+   variable with a 20-byte slot, mark it `in_use(true)` for the
+   slot allocator, and prepend `Set(b_var, Call(buf_get_fn, [idx]))`
+   to the body block so each iteration's CallRef reads the fresh
+   fn-ref blob.
+
+**Critical decl detail:** `parallel_buf_get_fn` is declared with
+return type `fn(integer) -> integer` (NOT `integer`) so
+`variables::size(Type::Function, Argument) = 20` matches the runtime
+push via `put_stack::<[u8; 20]>`.  Declaring as `integer` would make
+the codegen tracker advance by 8 while runtime advances by 20 → 12-
+byte tracker drift → CallRef reads d_nr at the wrong offset → bogus
+d_nr → panic.  The fn signature is canary-specific today; future
+fn-ref-return canaries with different signatures may need decl
+variants or a more generic mechanism.
+
+**Closes:** `par_struct_to_fn_t4` (line 686); G4 in
+`01-output-store.md`.  Ignored canary count: 5 → 4.
 
 **L1 — return_size truncation in light path (mechanical fix; ready to ship):**
 After commit `b9ad7af` retired the heavy path, fn-ref returns route
@@ -1688,7 +1733,7 @@ that advances a step.
 | A4  | OPEN | S  | — |
 | A5  | OPEN | M  | — |
 | A6.a | DONE 2026-05-01 | M | (this branch) |
-| A6.b | OPEN | M | — |
+| A6.b | DONE 2026-05-01 | M | (this branch) |
 | A6.c | DONE 2026-05-01 | M | (this branch) |
 | A6.d | DONE 2026-05-01 | S | (this branch) |
 | A7  | BLOCKED on T1.8a | M | — |

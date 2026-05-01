@@ -238,6 +238,22 @@ pub struct Stores {
     ///
     /// Each entry is `(bytes, stride)`: stride is 1, 2, or 4.
     pub par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>,
+    /// Plan-06 ARC.md A6.b — sibling stack for fn-ref-returning par
+    /// workers.  Each entry is a packed `Vec<u8>` of `n_rows * 20`
+    /// bytes — one fn-ref per row in Rust's reordered `DbRef` layout
+    /// (8B i64 d_nr + 12B closure DbRef where DbRef is rec u32 +
+    /// pos u32 + store_nr u16 + 2B padding).  Workers write each
+    /// row directly via `State::execute_at_raw_to`; readers pull
+    /// 20 bytes via `n_parallel_buf_get_fn` and push them onto the
+    /// operand stack as a fn-ref blob.
+    ///
+    /// Separate from `par_buffer_stack` (8-byte rows),
+    /// `par_text_buffer_stack` (Vec<String>),
+    /// `par_ref_buffer_stack` ((Vec<DbRef>, Vec<u16>)), and
+    /// `par_narrow_buffer_stack` ((Vec<u8>, u8)) — fn-ref returns
+    /// have a fixed 20-byte stride so no per-call width field is
+    /// needed.
+    pub par_fn_buffer_stack: Vec<Vec<u8>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -363,6 +379,7 @@ impl Clone for Stores {
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),
             par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
@@ -820,6 +837,7 @@ impl Stores {
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),
             par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),

@@ -165,6 +165,12 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_parallel_buf_get_narrow", n_parallel_buf_get_narrow),
     #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_narrow", n_parallel_buf_drop_narrow),
+    #[cfg(feature = "threading")]
+    ("n_parallel_queue_fn", n_parallel_queue_fn),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_get_fn", n_parallel_buf_get_fn),
+    #[cfg(feature = "threading")]
+    ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
     ("n_stack_trace", n_stack_trace),
@@ -1366,6 +1372,121 @@ fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
         .par_narrow_buffer_stack
         .pop()
         .expect("parallel_buf_drop_narrow: par_narrow_buffer_stack is already empty");
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A6.b — fn-ref-return Queue runtime entry.  Same
+/// arg layout as `n_parallel_queue` but workers return 20-byte
+/// fn-ref blobs (8B i64 d_nr + 12B closure DbRef per Rust's
+/// reordered layout).  `run_parallel_queue_fn` writes each row's
+/// 20 bytes directly into a packed `Vec<u8>` via
+/// `State::execute_at_raw_to`, bypassing both the truncating light
+/// path (L1) and the body's `get_field`-as-i32 misread (L2).
+///
+/// The packed buffer is pushed onto `par_fn_buffer_stack`; readers
+/// pull 20 bytes per row via `n_parallel_buf_get_fn`.  Reads are
+/// inserted at the top of each fused-for-par iteration as
+/// `Set(b_var, Call(buf_get_fn, [idx]))` so the body's
+/// `CallRef(b_var, ...)` reads `b_var`'s 20-byte slot directly.
+fn n_parallel_queue_fn(stores: &mut Stores, stack: &mut DbRef) {
+    // Same stack layout / pop order as n_parallel_queue.
+    let n_extra = *stores.get::<i64>(stack) as usize;
+    let mut extra_args: Vec<u64> = Vec::with_capacity(n_extra);
+    for _ in 0..n_extra {
+        extra_args.push(*stores.get::<i64>(stack) as u64);
+    }
+    extra_args.reverse();
+
+    let v_func = *stores.get::<i64>(stack) as i32;
+    let v_threads = *stores.get::<i64>(stack) as i32;
+    let _v_return_size = *stores.get::<i64>(stack) as i32; // always 20 for fn-ref
+    let v_element_size = *stores.get::<i64>(stack) as i32;
+    let v_input = *stores.get::<DbRef>(stack);
+
+    let (fn_pos, program) = {
+        let ctx = stores
+            .parallel_ctx
+            .as_ref()
+            .expect("parallel_queue_fn called outside State::execute()");
+        let data = unsafe { &*ctx.data };
+        assert!(
+            v_func >= 0,
+            "parallel_queue_fn: invalid function reference {v_func}"
+        );
+        let d_nr = v_func as u32;
+        let fn_pos = data.def(d_nr).code_position;
+        let bytecode = unsafe { Arc::clone(&*ctx.bytecode) };
+        let library = unsafe { Arc::clone(&*ctx.library) };
+        (
+            fn_pos,
+            WorkerProgram {
+                bytecode,
+                library,
+                stack_trace_lib_nr: ctx.stack_trace_lib_nr,
+                data_ptr: ctx.data,
+                fn_positions: Arc::new(data.definitions.iter().map(|d| d.code_position).collect()),
+                line_numbers: Arc::new(std::collections::BTreeMap::new()),
+            },
+        )
+    };
+
+    let element_size = v_element_size as u32;
+    let n_threads = (v_threads as usize).max(1);
+
+    let buf = crate::parallel::run_parallel_queue_fn(
+        stores,
+        program,
+        fn_pos,
+        &v_input,
+        element_size,
+        n_threads,
+        &extra_args,
+    );
+    let n_rows = (buf.len() / 20) as i64;
+    stores.par_fn_buffer_stack.push(buf);
+    stores.put(stack, n_rows);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A6.b — read one 20-byte fn-ref blob from the
+/// active fn-buffer.  Pops `idx` (i64), reads 20 bytes at offset
+/// `idx * 20` from `par_fn_buffer_stack.last()`, and pushes them
+/// onto the operand stack as a fn-ref blob (matches the on-stack
+/// representation `OpVarFnRef` and `OpPutFnRef` operate on:
+/// `[u8; 20]`).
+///
+/// Declared as `-> integer` in stdlib (since loft's type system
+/// can't express a generic-fn-typed return), but the parser
+/// substitutes the call site's actual fn-ref type so codegen
+/// allocates a 20-byte slot for `b_var`.  The 20-byte stack push
+/// happens here at runtime regardless of the declared return type.
+///
+/// Panics if `par_fn_buffer_stack` is empty (no active queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+fn n_parallel_buf_get_fn(stores: &mut Stores, stack: &mut DbRef) {
+    let idx = *stores.get::<i64>(stack);
+    let bytes_20: [u8; 20] = {
+        let buf = stores
+            .par_fn_buffer_stack
+            .last()
+            .expect("parallel_buf_get_fn: par_fn_buffer_stack is empty");
+        let off = (idx as usize) * 20;
+        let mut arr = [0u8; 20];
+        arr.copy_from_slice(&buf[off..off + 20]);
+        arr
+    };
+    stores.put(stack, bytes_20);
+}
+
+#[cfg(feature = "threading")]
+/// Plan-06 ARC.md A6.b — pop the active fn-queue buffer.  Called
+/// after the body loop completes.  Panics if the stack is already
+/// empty (parser-side bug).  Void return.
+fn n_parallel_buf_drop_fn(stores: &mut Stores, _stack: &mut DbRef) {
+    stores
+        .par_fn_buffer_stack
+        .pop()
+        .expect("parallel_buf_drop_fn: par_fn_buffer_stack is already empty");
 }
 
 #[cfg(feature = "threading")]

@@ -708,8 +708,21 @@ fn run() -> integer {
     .result(Value::Int(4));
 }
 
+// par-fn-return: closed by ARC.md A6.b — packed-buffer Queue route
+// for fn-ref returns.  `Stores::par_fn_buffer_stack` (Vec<Vec<u8>>,
+// 20B per row) holds each worker's 8B d_nr + 12B closure DbRef
+// blob.  `run_parallel_queue_fn` writes rows directly via
+// `execute_at_raw_to`; `n_parallel_buf_get_fn` reads 20 bytes and
+// pushes them onto the operand stack.  Body substitution diverges
+// from `replace_var_in_ir` for fn-ref returns: b_var stays a real
+// variable with a 20-byte slot, and `Set(b_var, Call(buf_get_fn,
+// [idx]))` is prepended to each iteration body so `f(10)` (parsed
+// as `CallRef(b_var, [Int(10)])`) reads b_var's slot correctly.
+//
+// `parallel_buf_get_fn`'s declared return type is `fn(integer) ->
+// integer` — chosen so `variables::size(Type::Function, Argument)`
+// returns 20, matching the runtime push via `put_stack::<[u8; 20]>`.
 #[test]
-#[ignore = "par-fn-return: deferred from phase 1 to plan-06 phase 4 (typed surface) or phase 11 (par_to_vec opt-in).  G4 partial — parser, dispatch mode, and execute_at_raw_to all wired up to handle 20-byte returns through run_parallel_direct.  Stack snapshot at Return time shows d_nr correctly at stack[4..11] (i64 523) but the closure DbRef sentinel appears at stack[20..23] (0xFFFF) instead of stack[12..23] — i.e. the InitRefSentinel(var[24]) wrote 4 bytes higher than expected.  The codegen's stack_pos accounting for n_pick uses a different convention than execute_at_raw_to's setup; reconciling needs deep codegen-side work.  Not on the PRIORITY.md spine — fn-ref-return is a return-shape support, not an invariant blocker."]
 fn par_struct_to_fn_t4() {
     // Worker selects and returns a fn-ref based on its input.
     code!(
