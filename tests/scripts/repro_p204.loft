@@ -9,23 +9,24 @@
 // placeholder before the call; native codegen lacks the equivalent.
 // Verified 2026-05-01: `cargo run --bin loft --release -- --interpret
 // tests/scripts/repro_p204.loft` exits 0; default (native) panics.
+// The vector field on the struct triggers the `__ref_*` hidden-param
+// injection in `wrap` and `inner` — without a vector / Reference field,
+// the codegen takes a different path and the bug doesn't surface.
 // See doc/claude/PROBLEMS.md § 204.
 // @EXPECT_FAIL p204_ref_placeholder_uninitialised
-struct P204_S { p204_v: float not null }
+struct P204_S { p204_v: vector<float> }
 
 fn p204_inner(p204_a: const P204_S, p204_b: const P204_S) -> P204_S {
-  P204_S { p204_v: p204_a.p204_v + p204_b.p204_v }
+  P204_S { p204_v: [p204_a.p204_v[0] + p204_b.p204_v[0]] }
 }
 
 fn p204_wrap(p204_x: const P204_S) -> P204_S {
-  p204_y = P204_S { p204_v: 1.0 };
-  // Inner call returns through __ref_1 placeholder; placeholder has not
-  // been OpDatabase-initialised by the caller before this line.
+  p204_y = P204_S { p204_v: [1.0] };
   p204_inner(p204_x, p204_y)
 }
 
 fn p204_ref_placeholder_uninitialised() {
-  p204_p = P204_S { p204_v: 2.0 };
+  p204_p = P204_S { p204_v: [2.0] };
   p204_q = p204_wrap(p204_p);
-  assert(p204_q.p204_v == 3.0, "p204: q.v={p204_q.p204_v}");
+  assert(p204_q.p204_v[0] == 3.0, "p204: q.v={p204_q.p204_v[0]}");
 }

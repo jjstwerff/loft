@@ -36,7 +36,7 @@ existing entry, not re-open it as a bug.
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 | 203 | Native: file handle written inside a `{...}` block isn't flushed/closed on block exit.  Subsequent `delete()` panics with `tests/scripts/42-file-result.loft:22 delete existing file`.  Interpreter passes — `OpFreeRef`-driven cleanup closes the file there.  Native's `OpFreeRef(cell, var_f, …)` free-emission lacks the file-close hook the interpreter has (or scope analysis doesn't emit `OpFreeRef` for file vars in block scope).  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Hoist file out of the block scope so it lives until the assert: `f = file("…"); f += "test"; assert(delete("…") == FileResult.Ok, …);` — the OpFreeRef at function exit closes the file before delete. |
-| 204 | Native: `__ref_*` placeholder DbRef passed to a function that returns a struct via inner call is never `OpDatabase`-initialized before the call.  Function body dereferences a null DbRef (store_nr=u16::MAX) → `index out of bounds: the len is X but the index is 65535` at `src/database/allocation.rs:347`.  Surfaces in `tests/scripts/87-store-leaks.loft` and `tests/scripts/85-yield-resume.loft` after P199 made the surrounding code compile in native.  Interpreter PASSES — bytecode opcode `OpInitRef` (in `src/state/codegen.rs:gen_set_first_keyed_null`) sets up the placeholder; native codegen lacks the equivalent emission.  See [P204 reproducer + diagnosis](#204-ref-placeholder-uninitialized-before-helper-call). | Medium | Avoid the `r = wrapper_helper(arg)` pattern where `wrapper_helper` body calls another helper that returns a struct.  Inline the helper's logic in the caller, or restructure so the inner call's return assigns directly to the caller's named variable. |
+| 204 | Native: tail-expression `return inner_call()` from a struct-returning function emits `n_inner(cell, args)` as a void STATEMENT and then `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };` (null sentinel).  The caller does `let _src = n_wrap(...); OpCopyRecord(_src, var_q, ...)` — `_src` is null, OpCopyRecord panics with "index out of bounds: the len is X but the index is 65535" at `src/database/allocation.rs:347`.  Native FAILS, interpreter PASSES (interpreter routes the result through the `__ref_*` placeholder mechanism which native skips).  Surfaces in `87_store_leaks` and `85_yield_resume` after P199 made the surrounding code compile.  See [P204 reproducer + diagnosis](#204-tail-expression-return-of-inner-helper-call-discarded). | Medium | Avoid the tail-expression pattern: bind the result first.  `fn wrap(x) -> S { y = make_y(); r = inner(x, y); r }` — naming the result `r` produces a different IR shape that native handles correctly. |
 | 205 | Native: bounded-generic dispatch `fn f<T: Trait>(x: T) -> text { x.to_label() }` returns a `Str` whose pointer references a local `String` that's dropped on function return → dangling pointer, comparison fails.  Reproducer: `tests/scripts/86-interfaces.loft:47` — `assert(if_label(if_it) == "widget", …)` fails despite `to_label` returning `"widget"`.  See [P205 reproducer + diagnosis](#205-generic-text-return-dangles-via-str-newlocal_string).  Interpreter passes via different text-return ABI. | Medium | Avoid bounded-generic functions returning `text`.  Inline the body or use a non-generic specialisation. |
 
 ## Interpreter Robustness
@@ -514,7 +514,7 @@ Reproducer `tests/scripts/repro_p203.loft` (verified: panics with
 `exit=0` after eprintln but file not on disk).  Interpreter / wrap
 test `tests/wrap.rs::file_result` PASSES — issue is native-only.
 
-### 204. `__ref_*` placeholder uninitialised before helper call
+### 204. Tail-expression return of inner helper call discarded
 
 **Symptom:** `cargo test --release --test native native_scripts`
 (slots `87_store_leaks` and `85_yield_resume`) panics:
@@ -526,77 +526,109 @@ index out of bounds: the len is 4 but the index is 65535
 
 Interpreter mode (`cargo run --bin loft --release -- --interpret
 tests/scripts/87-store-leaks.loft`) PASSES — the bytecode interpreter
-emits `OpInitRef` to allocate the `__ref_*` placeholder before each
-helper call.  Native codegen lacks this initialisation step.
+routes the helper's result through a `__ref_*` placeholder.  Native
+codegen ignores the helper's return value entirely.
 
-**Where:** `tests/scripts/87-store-leaks.loft:35-39`:
+**Where:** `tests/scripts/87-store-leaks.loft:26-29`:
 
 ```loft
-fn sl_inner(sl_a: const SlSf, sl_b: const SlSf) -> SlSf {
-  sl_r = SlSf { sl_v: [sl_a.sl_v[0] + sl_b.sl_v[0]] };
-  sl_r
-}
 fn sl_wrap(sl_x: const SlSf) -> SlSf {
   sl_y = SlSf { sl_v: [1.0] };
-  sl_inner(sl_x, sl_y)
-}
-fn test_local_var_return_leak() {
-  sl_p = SlSf { sl_v: [2.0] };
-  sl_q = sl_wrap(sl_p);
-  assert(sl_q.sl_v[0] == 3.0, "sl_q.sl_v[0]={sl_q.sl_v[0]}");
+  sl_inner(sl_x, sl_y)  // tail expression — should be the return value
 }
 ```
 
-The native codegen emits:
+The native codegen emits (verified 2026-05-01 via
+`--native-emit /tmp/p204b.rs tests/scripts/repro_p204.loft`):
 
 ```rust
-let mut var___ref_1: DbRef = stores.null_named("var___ref_1");
-// ... no OpDatabase init for __ref_1 ...
-let mut var_sl_q: DbRef = n_sl_wrap(cell, var_sl_p, var___ref_1);
+fn n_p204_wrap(cell, mut var_p204_x: DbRef) -> DbRef {
+    n_set_store_lock(stores, var_p204_x, true);
+    let mut var_p204_y: DbRef = stores.null_named("var_p204_y");
+    var_p204_y = OpDatabase(cell, var_p204_y, 65_i32);
+    // ... initialize var_p204_y ...
+    n_p204_inner(cell, var_p204_x, var_p204_y);  // result DISCARDED
+    OpFreeRef(cell, var_p204_y, "var_p204_y"); var_p204_y.store_nr = u16::MAX;
+    n_set_store_lock(stores, var_p204_x, false);
+    return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };  // null sentinel
+}
 ```
 
-Inside `n_sl_wrap`, `var___ref_1` is used as the placeholder for the
-inner `n_sl_inner` call's return.  But `var___ref_1` was only
-`null_named` — it has no allocated record.  When `n_sl_inner` writes
-into it, store dereferences fail.
+The function discards `n_p204_inner`'s return and returns a null
+DbRef.  The caller then does
+`let _src = n_p204_wrap(...); OpCopyRecord(cell, _src, var_q, ...);`
+where `_src.store_nr == u16::MAX` → panic in `OpCopyRecord` reading
+`stores.allocations[u16::MAX]`.
 
-**Same shape:** `tests/scripts/85-yield-resume.loft:50` — `rect_mvp`
-returns `Mat4` via inner `mat4_mul` call; same `__ref_*` placeholder
-chain.
+**Compare with bytecode interpreter:** The IR for `sl_inner` at
+function exit is `[..., return sl_r]` where `sl_r` is the locally-
+allocated struct.  Interpreter's `gen_return` (in
+`src/state/codegen.rs`) routes the local through the caller-provided
+`__ref_*` placeholder via `OpCopyRecord` or adoption.  Native codegen
+falls through to the catch-all "Reference return" path that emits
+`return DbRef { store_nr: u16::MAX, ... }`.
 
-**Minimal reproducer:** `tests/scripts/repro_p204.loft`:
+**Minimal reproducer:** `tests/scripts/repro_p204.loft` (vector field
+on the struct triggers the relevant codegen path; without a Reference-
+typed field, the bug doesn't surface):
 
 ```loft
-struct P204_S { v: float not null }
-fn p204_inner(a: const P204_S, b: const P204_S) -> P204_S {
-  P204_S { v: a.v + b.v }
+struct P204_S { p204_v: vector<float> }
+fn p204_inner(p204_a: const P204_S, p204_b: const P204_S) -> P204_S {
+  P204_S { p204_v: [p204_a.p204_v[0] + p204_b.p204_v[0]] }
 }
-fn p204_wrap(x: const P204_S) -> P204_S {
-  y = P204_S { v: 1.0 };
-  p204_inner(x, y)  // returns through __ref_1 placeholder
+fn p204_wrap(p204_x: const P204_S) -> P204_S {
+  p204_y = P204_S { p204_v: [1.0] };
+  p204_inner(p204_x, p204_y)  // tail expression discarded by native
 }
-fn main() {
-  p = P204_S { v: 2.0 };
-  q = p204_wrap(p);  // __ref_1 not initialised before call
-  assert(q.v == 3.0, "q.v={q.v}");
+fn p204_ref_placeholder_uninitialised() {
+  p204_p = P204_S { p204_v: [2.0] };
+  p204_q = p204_wrap(p204_p);
+  assert(p204_q.p204_v[0] == 3.0, "p204: q.v={p204_q.p204_v[0]}");
 }
 ```
 
-**Fix path:** scope analysis (or native codegen at the call site) must
-emit `var___ref_X = OpDatabase(cell, var___ref_X, struct_tp);` BEFORE
-each call to a function whose hidden last param is a `__ref_*`
-placeholder of the corresponding struct type.  The interpreter's
-equivalent (`OpInitRef` + `OpDatabase` sequence) lives in
-`src/state/codegen.rs:gen_set_first_keyed_null` and friends; native
-needs the same emission.
+Verified 2026-05-01: `--interpret` exits 0, default (native) panics
+with `index out of bounds`.
 
-Bug is **native-only** — interpreter has the equivalent `OpInitRef`
-emission.  P199 made the surrounding code compile in native, exposing
-the missing init.
+**Fix path:**
+
+1. Identify the codegen site that emits the `return DbRef { store_nr:
+   u16::MAX, ... }` null sentinel for Reference-returning functions.
+   Likely in `src/generation/emit.rs::output_block` or a tail-expression
+   handler — search for `store_nr: u16::MAX, rec: 0, pos: 8` in
+   `src/generation/`.
+2. Detect the case where the function's tail expression is a
+   `Value::Call(inner_d_nr, …)` whose callee returns a Reference of the
+   same type as the outer function's return.
+3. Two implementation options:
+   - **Option A (capture-and-return):** Emit the inner call into a
+     `let _ret = n_inner(cell, args, …);` and then `return _ret;`
+     instead of discarding.  Requires the caller's `__ref_*` to be
+     initialised so the inner call has somewhere to write.
+   - **Option B (pass-through-placeholder):** Make the outer function
+     take a `__ref_*` hidden param matching the return type, and pass
+     it through to the inner call.  Mirrors how 87_store_leaks's
+     `n_sl_wrap` is generated (it DOES take `__ref_1`) — investigate
+     why my reproducer takes a different shape (likely `not null`
+     annotation difference).
+4. Investigation entry point: dump IR with `LOFT_LOG=static` for both
+   `tests/scripts/87-store-leaks.loft` (which generates `n_sl_wrap`
+   with `__ref_1` param) and `tests/scripts/repro_p204.loft` (which
+   generates `n_p204_wrap` WITHOUT `__ref_1`) — diff the IR to see
+   what triggers the placeholder injection in scope analysis.
+
+**Investigation note (2026-05-01):** A naive fix attempted in
+`src/generation/calls.rs::output_call_user_fn` to emit `var___ref_X
+= OpDatabase(...)` before each call with `__ref_*` arg PASSED for
+the simpler case but BROKE 62_index_range_queries and 76_struct_vector_return
+with "Incomplete record" panic — those tests already had the
+OpDatabase elsewhere in the IR; double-init clears the existing
+record.  A correct fix needs to be aware of init state, not blanket-
+emit.
 
 **Test:** `tests/native::native_scripts` slots `87_store_leaks` and
-`85_yield_resume`.  Reproducer `tests/scripts/repro_p204.loft` PASSES
-under `--interpret` and FAILS under default (native).
+`85_yield_resume`.  Reproducer `tests/scripts/repro_p204.loft`.
 
 ### 205. Generic text return dangles via `Str::new(&local_String)`
 
