@@ -1776,16 +1776,31 @@ impl Data {
         content: &Type,
         database: &mut crate::database::Stores,
     ) -> Option<u16> {
-        let Type::Integer(spec) = content else {
-            return None;
-        };
-        let n = spec.vector_narrow_width()?;
-        match n {
-            1 => Some(database.byte(spec.min, false)),
-            2 => Some(database.short_raw(spec.min, false)),
-            4 => Some(database.int(spec.min, false)),
-            _ => None,
+        if let Type::Integer(spec) = content {
+            let n = spec.vector_narrow_width()?;
+            return match n {
+                1 => Some(database.byte(spec.min, false)),
+                2 => Some(database.short_raw(spec.min, false)),
+                4 => Some(database.int(spec.min, false)),
+                _ => None,
+            };
         }
+        // Plan-06 ARC.md A6.c — fn-ref vector elements are 4-byte
+        // d_nrs (`element_size(Type::Function) = 4`).  The previous
+        // routing via `vector_of` → `type_elm(Function)` →
+        // `def_nr("i32").known_type` lands on a placeholder type
+        // with `size = 0`, so `vector_append`'s stride is 0 and
+        // every literal element overwrites offset 8 — yielding a
+        // `length=3` vector whose elements after the last write are
+        // all the SAME d_nr (the last one written) at offset 8 with
+        // zeros at offsets 12 and 16.  Routing through
+        // `database.int(0, false)` (Parts::Int with `size = 4`)
+        // makes `vector_append` step through the storage in 4-byte
+        // increments, matching `OpSetInt4`'s narrow writes.
+        if matches!(content, Type::Function(_, _, _)) {
+            return Some(database.int(0, false));
+        }
+        None
     }
 
     #[must_use]

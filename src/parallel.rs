@@ -1466,6 +1466,37 @@ pub(crate) fn read_tuple_at_wide(
                     buf.as_mut_ptr().add(arg_offset),
                     arg_sz,
                 );
+            } else if matches!(t, crate::data::Type::Function(_, _, _)) {
+                // ARC.md A6.c — fn-ref vector elements are 4-byte
+                // d_nr in storage (`element_size(Type::Function) = 4`)
+                // but the worker's argument slot is 20 bytes
+                // (`variables::size(.., Argument) = 8B i64 d_nr + 12B
+                // closure DbRef`).  A plain memcpy of 4 bytes leaves
+                // the remaining 16 bytes zero; the worker's OpCallRef
+                // would then dereference closure `(0, 0, 0)` (a real
+                // DbRef pointing into store 0) and SIGSEGV.
+                //
+                // vector<fn> can only store non-capturing functions
+                // (capturing-lambda storage is part of the open 4d.C
+                // closure-storage redesign), so the correct closure
+                // representation here is the u16::MAX sentinel.
+                let d_nr = src.cast::<u32>().read_unaligned();
+                let d_nr_i64: i64 = i64::from(d_nr);
+                std::ptr::copy_nonoverlapping(
+                    (&raw const d_nr_i64).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset),
+                    8,
+                );
+                let sentinel = DbRef {
+                    store_nr: u16::MAX,
+                    rec: 0,
+                    pos: 0,
+                };
+                std::ptr::copy_nonoverlapping(
+                    (&raw const sentinel).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset + 8),
+                    12,
+                );
             } else {
                 // Plain memcpy — in-vector and worker-slot widths
                 // match for primitives, references, and fn-refs.

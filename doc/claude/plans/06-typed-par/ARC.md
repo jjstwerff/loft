@@ -78,12 +78,11 @@ Heavy `parallel_execute_and_collect` retired.  Light path
 (`25_runtime_panic_builtin`, `28_runtime_unwrap_none`) need regen.
 `n_parallel_for` now delegates to `n_parallel_for_light`.
 
-### 6 ignored canaries (2026-05-01: A6.d + A6.a both closed)
+### 5 ignored canaries (2026-05-01: A6.d + A6.a + A6.c all closed)
 
 | Test | Line | Blocker | Plan link |
 |---|---|---|---|
-| `par_vec_of_fns_input_t4` | 530 | fn-ref vector storage; codegen stack tracker disagrees with `execute_at_raw_primitive_input_wide` | 4d.A.2 cascade ([04d-followups.md](04d-followups.md)) |
-| `par_struct_to_fn_t4` | 686 | fn-ref return; closure DbRef sentinel offset bug | 4e (same root cause as G6 via different shape) |
+| `par_struct_to_fn_t4` | 686 | fn-ref return; needs L1 (restore 20-byte return path post-A1) + L2 (codegen InitRefSentinel offset fix) | A6.b (deferred — 2-layer work) |
 | `par_tuple_return_int_int` | 749 | tuple return; var_size=16 > 8 byte cap | T1.8a + phase 9c ([09-tuple-support.md](09-tuple-support.md)) |
 | `par_tuple_return_int_text` | 767 | tuple return | T1.8a + phase 9c |
 | `par_tuple_return_struct_text` | 785 | tuple return | T1.8a + phase 9c |
@@ -759,10 +758,41 @@ closure DbRef) layout.  If 4d.C ships first, A6.b becomes mechanical.
 `01-output-store.md`.  P196 was closed independently on 2026-04-30
 via `output_call_template` projection (no longer requires 4d.C).
 
-#### A6.c — `par_vec_of_fns_input_t4` (fn-ref vector input)
+#### A6.c — `par_vec_of_fns_input_t4` (fn-ref vector input) — **DONE 2026-05-01**
 
-**Design:** Resolve the 4d.A.2 cascade documented in
-[04d-followups.md](04d-followups.md).  Three remaining bugs:
+**Closure notes:**
+
+The bug turned out to be different from the original 3-bug cascade
+documented in [04d-followups.md](04d-followups.md) — the post-A1
+dispatcher landscape made the codegen stack-tracker issue
+unreachable.  Two surgical fixes closed the canary:
+
+1. **`Data::narrow_vector_content` (`src/data.rs`)** extended to
+   route `Type::Function` to `database.int(0, false)` (a real
+   `Parts::Int` type with `size = 4`).  Previously, `vector_of`
+   fell through to `def_nr("i32").known_type` which lands on a
+   placeholder type with `size = 0`.  With stride 0, every literal
+   element write in `[dbl, triple, quad]` overlapped offset 8 —
+   `length=3` but only the last d_nr survived.
+2. **`read_tuple_at_wide` (`src/parallel.rs`)** special-cased for
+   `Type::Function` elements: the worker's argument slot is 20
+   bytes (8B i64 d_nr + 12B closure DbRef) but the storage is 4
+   bytes (just d_nr).  Plain memcpy of 4 bytes left the closure
+   DbRef portion zero, so OpCallRef in the worker dereferenced
+   `(store_nr=0, rec=0, pos=0)` — a real DbRef into store 0,
+   which SIGSEGV'd.  Fix: zero-extend the d_nr to 8 bytes and
+   write a `(u16::MAX, 0, 0)` sentinel for the closure portion
+   (vector<fn> can only store non-capturing fns; capturing-lambda
+   storage is part of the open 4d.C closure-storage redesign).
+
+Diagnosis path: traced via eprintlns through OpNewRecord,
+OpFinishRecord, vector_append, vector_finish, and read_tuple_at_wide
+to identify the size=0 stride at `record_new`'s `Parts::Vector(c)`
+arm.
+
+**Original design (superseded):** Resolve the 4d.A.2 cascade
+documented in [04d-followups.md](04d-followups.md).  Three remaining
+bugs:
 
 1. **Vector storage layout** — fn-ref vector elements need 4-byte
    stride (current parser fix landed) but read-back assumes 8 bytes.
@@ -1616,7 +1646,7 @@ that advances a step.
 | A5  | OPEN | M  | — |
 | A6.a | DONE 2026-05-01 | M | (this branch) |
 | A6.b | OPEN | M | — |
-| A6.c | OPEN | M | — |
+| A6.c | DONE 2026-05-01 | M | (this branch) |
 | A6.d | DONE 2026-05-01 | S | (this branch) |
 | A7  | BLOCKED on T1.8a | M | — |
 | A8  | OPEN | M  | — |
