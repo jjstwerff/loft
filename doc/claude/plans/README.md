@@ -56,6 +56,7 @@ the canonical example of this discipline in action.
 |---|---|---|
 | [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`. | Phase 0 (characterisation + bench) open |
 | [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phase 0 (survey + baseline corpus) open |
+| [`09-native-runtime-rewrite/`](09-native-runtime-rewrite/) | Per-Op emitter dispatch on top of `#rust` template substitution.  Simplification phases (01-04) dissolve the structural blockers that have caused prior P200/P202/P203/P205 fix attempts to fail; bug-fix phases (05-08) close them on top.  Introspection phases (00a/02a/05a/08a) at high-risk boundaries allow continue/pivot/stop decisions. | Phase 00 (scaffold) open |
 
 ## Finished initiatives
 
