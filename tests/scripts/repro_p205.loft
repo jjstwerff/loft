@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P205 minimal reproducer — bounded-generic function returning `text`
+// emits `Str::new(&local_String)` in native specialised codegen.  The
+// local String drops at function return, leaving the returned Str's
+// pointer dangling.  Comparison fails at runtime.
+// Native FAILS, interpreter PASSES.
+// See doc/claude/PROBLEMS.md § 205.
+// @EXPECT_FAIL p205_generic_text_return_dangles
+interface P205Labelable {
+  fn p205_to_label(self: Self) -> text
+}
+
+struct P205_S { p205_name: text }
+fn p205_to_label(self: P205_S) -> text { return self.p205_name; }
+
+fn p205_label<T: P205Labelable>(p205_x: T) -> text {
+  return p205_x.p205_to_label();
+}
+
+fn p205_generic_text_return_dangles() {
+  p205_s = P205_S { p205_name: "widget" };
+  assert(p205_label(p205_s) == "widget", "p205: generic text return");
+}

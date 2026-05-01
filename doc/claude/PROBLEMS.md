@@ -35,6 +35,9 @@ existing entry, not re-open it as a bug.
 | 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts. | Medium | Compile the loft source via the interpreter (`cargo run --bin loft -- file.loft` without `--native`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
+| 203 | Native: file handle written inside a `{...}` block isn't flushed/closed on block exit.  Subsequent `delete()` panics with `tests/scripts/42-file-result.loft:22 delete existing file`.  Interpreter passes — `OpFreeRef`-driven cleanup closes the file there.  Native's `OpFreeRef(cell, var_f, …)` free-emission lacks the file-close hook the interpreter has (or scope analysis doesn't emit `OpFreeRef` for file vars in block scope).  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Hoist file out of the block scope so it lives until the assert: `f = file("…"); f += "test"; assert(delete("…") == FileResult.Ok, …);` — the OpFreeRef at function exit closes the file before delete. |
+| 204 | Native: `__ref_*` placeholder DbRef passed to a function that returns a struct via inner call is never `OpDatabase`-initialized before the call.  Function body dereferences a null DbRef (store_nr=u16::MAX) → `index out of bounds: the len is X but the index is 65535` at `src/database/allocation.rs:347`.  Surfaces in `tests/scripts/87-store-leaks.loft` and `tests/scripts/85-yield-resume.loft` after P199 made the surrounding code compile in native.  Interpreter PASSES — bytecode opcode `OpInitRef` (in `src/state/codegen.rs:gen_set_first_keyed_null`) sets up the placeholder; native codegen lacks the equivalent emission.  See [P204 reproducer + diagnosis](#204-ref-placeholder-uninitialized-before-helper-call). | Medium | Avoid the `r = wrapper_helper(arg)` pattern where `wrapper_helper` body calls another helper that returns a struct.  Inline the helper's logic in the caller, or restructure so the inner call's return assigns directly to the caller's named variable. |
+| 205 | Native: bounded-generic dispatch `fn f<T: Trait>(x: T) -> text { x.to_label() }` returns a `Str` whose pointer references a local `String` that's dropped on function return → dangling pointer, comparison fails.  Reproducer: `tests/scripts/86-interfaces.loft:47` — `assert(if_label(if_it) == "widget", …)` fails despite `to_label` returning `"widget"`.  See [P205 reproducer + diagnosis](#205-generic-text-return-dangles-via-str-newlocal_string).  Interpreter passes via different text-return ABI. | Medium | Avoid bounded-generic functions returning `text`.  Inline the body or use a non-generic specialisation. |
 
 ## Interpreter Robustness
 
@@ -343,6 +346,217 @@ panic's message is still the only useful diagnostic.
 
 **Test:** `tests/html_wasm.rs::*` (any test that runs after a
 panicked sibling).
+
+### 203. Native: block-scope file not flushed on exit
+
+**Symptom:** `cargo test --release --test native native_scripts` (the
+`42_file_result` slot) panics at runtime:
+
+```
+thread 'main' panicked at /tmp/loft_native_42_file_result.rs:287:14:
+tests/scripts/42-file-result.loft:22 delete existing file
+```
+
+**Where:** `tests/scripts/42-file-result.loft` lines 19-23:
+
+```loft
+{f = file("test_loft_fr.txt");
+ f += "test content";
+}
+assert(delete("test_loft_fr.txt") == FileResult.Ok, "delete existing file");
+```
+
+The file write happens inside a `{...}` block.  In interpreter mode,
+the block-scope `OpFreeRef(f)` runs on block exit and that close-hook
+flushes + closes the underlying OS file handle.  Native codegen emits
+`OpFreeRef(cell, var_f, "var_f"); var_f.store_nr = u16::MAX;` at block
+exit but the close happens too late (or not at all) — the next-line
+`delete()` call sees the file still open and the OS rejects the
+delete.
+
+**Minimal reproducer:** create `tests/scripts/repro_p203.loft`:
+
+```loft
+fn main() {
+  {f = file("repro_p203.txt");
+   f += "x";
+  }
+  assert(delete("repro_p203.txt") == FileResult.Ok, "delete after block close");
+}
+```
+
+`cargo run --bin loft --release tests/scripts/repro_p203.loft` —
+PASSES (interpreter).
+`cargo run --bin loft --release -- --native tests/scripts/repro_p203.loft`
+— FAILS (native).
+
+**Fix path:** native codegen for `OpFreeRef` on a `File`-typed
+`DbRef` must drop the OS handle (call `loft::codegen_runtime::OpFreeFile`
+or similar) before / instead of just zeroing `store_nr`.  Or — more
+robustly — fuse the file-close into a single op that the interpreter
+and native both honour identically.
+
+**Test:** `tests/native::native_scripts` slot `42_file_result`.
+Interpreter / wrap test `tests/wrap.rs::file_result` PASSES — issue
+is native-only.
+
+### 204. `__ref_*` placeholder uninitialised before helper call
+
+**Symptom:** `cargo test --release --test native native_scripts`
+(slots `87_store_leaks` and `85_yield_resume`) panics:
+
+```
+thread 'main' panicked at src/database/allocation.rs:347:34:
+index out of bounds: the len is 4 but the index is 65535
+```
+
+Interpreter mode (`cargo run --bin loft --release -- --interpret
+tests/scripts/87-store-leaks.loft`) PASSES — the bytecode interpreter
+emits `OpInitRef` to allocate the `__ref_*` placeholder before each
+helper call.  Native codegen lacks this initialisation step.
+
+**Where:** `tests/scripts/87-store-leaks.loft:35-39`:
+
+```loft
+fn sl_inner(sl_a: const SlSf, sl_b: const SlSf) -> SlSf {
+  sl_r = SlSf { sl_v: [sl_a.sl_v[0] + sl_b.sl_v[0]] };
+  sl_r
+}
+fn sl_wrap(sl_x: const SlSf) -> SlSf {
+  sl_y = SlSf { sl_v: [1.0] };
+  sl_inner(sl_x, sl_y)
+}
+fn test_local_var_return_leak() {
+  sl_p = SlSf { sl_v: [2.0] };
+  sl_q = sl_wrap(sl_p);
+  assert(sl_q.sl_v[0] == 3.0, "sl_q.sl_v[0]={sl_q.sl_v[0]}");
+}
+```
+
+The native codegen emits:
+
+```rust
+let mut var___ref_1: DbRef = stores.null_named("var___ref_1");
+// ... no OpDatabase init for __ref_1 ...
+let mut var_sl_q: DbRef = n_sl_wrap(cell, var_sl_p, var___ref_1);
+```
+
+Inside `n_sl_wrap`, `var___ref_1` is used as the placeholder for the
+inner `n_sl_inner` call's return.  But `var___ref_1` was only
+`null_named` — it has no allocated record.  When `n_sl_inner` writes
+into it, store dereferences fail.
+
+**Same shape:** `tests/scripts/85-yield-resume.loft:50` — `rect_mvp`
+returns `Mat4` via inner `mat4_mul` call; same `__ref_*` placeholder
+chain.
+
+**Minimal reproducer:** `tests/scripts/repro_p204.loft`:
+
+```loft
+struct P204_S { v: float not null }
+fn p204_inner(a: const P204_S, b: const P204_S) -> P204_S {
+  P204_S { v: a.v + b.v }
+}
+fn p204_wrap(x: const P204_S) -> P204_S {
+  y = P204_S { v: 1.0 };
+  p204_inner(x, y)  // returns through __ref_1 placeholder
+}
+fn main() {
+  p = P204_S { v: 2.0 };
+  q = p204_wrap(p);  // __ref_1 not initialised before call
+  assert(q.v == 3.0, "q.v={q.v}");
+}
+```
+
+**Fix path:** scope analysis (or native codegen at the call site) must
+emit `var___ref_X = OpDatabase(cell, var___ref_X, struct_tp);` BEFORE
+each call to a function whose hidden last param is a `__ref_*`
+placeholder of the corresponding struct type.  The interpreter's
+equivalent (`OpInitRef` + `OpDatabase` sequence) lives in
+`src/state/codegen.rs:gen_set_first_keyed_null` and friends; native
+needs the same emission.
+
+Bug is **native-only** — interpreter has the equivalent `OpInitRef`
+emission.  P199 made the surrounding code compile in native, exposing
+the missing init.
+
+**Test:** `tests/native::native_scripts` slots `87_store_leaks` and
+`85_yield_resume`.  Reproducer `tests/scripts/repro_p204.loft` PASSES
+under `--interpret` and FAILS under default (native).
+
+### 205. Generic text return dangles via `Str::new(&local_String)`
+
+**Symptom:** `cargo test --release --test native native_scripts`
+(slot `86_interfaces`) panics:
+
+```
+thread 'main' panicked at /tmp/loft_native_86_interfaces.rs:288:14:
+tests/scripts/86-interfaces.loft:47 single bound method call
+```
+
+The assert message is just "single bound method call" — it fires
+because `if_label(if_it) == "widget"` evaluates to false at runtime.
+
+**Where:** `tests/scripts/86-interfaces.loft:25-32, 45-48`:
+
+```loft
+struct IfItem { if_name: text, if_score: integer }
+fn to_label(self: IfItem) -> text { return self.if_name; }
+fn if_label<T: Labelable>(if_x: T) -> text {
+  return if_x.to_label();
+}
+fn test_single_bound() {
+  if_it = IfItem { if_name: "widget", if_score: 5 };
+  assert(if_label(if_it) == "widget", "single bound method call");
+}
+```
+
+The native codegen for `if_label` (specialised as `t_6IfItem_if_label`):
+
+```rust
+fn t_6IfItem_if_label(cell, var_if_x: DbRef) -> Str {
+    let mut var___ret_1: String = t_6IfItem_to_label(cell, var_if_x).to_string();
+    return Str::new(&var___ret_1);  // dangling — &var___ret_1 dies at return
+}
+```
+
+`Str` is a `(*const u8, u32)` raw pointer + length pair.  `Str::new(&s)`
+captures `s.as_ptr()`, but `s` is the local `var___ret_1: String` which
+drops at function return.  The returned `Str` then points into freed
+memory; the caller's `==` compares garbage bytes against `"widget"`.
+
+**Minimal reproducer:** `tests/scripts/repro_p205.loft` (CamelCase
+interface name required by parser):
+
+```loft
+interface P205Labelable {
+  fn p205_to_label(self: Self) -> text
+}
+struct P205_S { p205_name: text }
+fn p205_to_label(self: P205_S) -> text { return self.p205_name; }
+fn p205_label<T: P205Labelable>(p205_x: T) -> text {
+  return p205_x.p205_to_label();
+}
+fn p205_generic_text_return_dangles() {
+  p205_s = P205_S { p205_name: "widget" };
+  assert(p205_label(p205_s) == "widget", "p205: generic text return");
+}
+```
+
+Verified 2026-05-01: `cargo run --bin loft --release -- --interpret
+tests/scripts/repro_p205.loft` exits 0; default (native) panics with
+the assert.
+
+**Fix path:** generic-specialised text-returning functions need the
+same `__work_*` hidden-param ABI as non-generic text-returning fns.
+The caller passes a `&mut String` buffer; the callee writes the result
+into it and returns a `Str` pointing into the caller's buffer (which
+outlives the call).  Currently the bounded-generic specialisation
+(`t_<len><Type>_<method>` form) skips the work-param injection and
+uses a local `String` instead.  See `src/parser/operators.rs` /
+generic specialisation for the missing `__work_*` injection.
+
+**Test:** `tests/native::native_scripts` slot `86_interfaces`.
 
 ## Web Services
 
