@@ -83,6 +83,47 @@ grep -n "Str::new(&" /tmp/p205.rs
 Note the function name + Op surrounding the borrow — needed for
 emitter registration in step 7.5.
 
+### Step 7.2b — Corpus-wide survey for sibling dangles
+
+**Action**: P205's reproducer surfaces ONE Op with the
+borrow-of-local pattern.  But the same defect may exist for
+sibling Ops (other generic-text-return paths, interface dispatch,
+fn-ref-of-text-return).  Survey the doc-test corpus to find them
+all before declaring P205 closed.
+
+```bash
+# Compile every doc test under --native-emit, grep for the
+# dangling shape across all generated code:
+mkdir -p /tmp/p205-survey
+for t in tests/docs/*.loft tests/scripts/*.loft; do
+    name=$(basename "$t" .loft)
+    cargo run --bin loft --release --quiet -- \
+        --native-emit "/tmp/p205-survey/$name.rs" "$t" 2>/dev/null
+done
+
+# All occurrences of `Str::new(&_local_*)` — the dangling pattern:
+grep -rn "Str::new(&_local_" /tmp/p205-survey/ | sort -u
+
+# Capture context (function name + surrounding Op) for each hit.
+# Each unique (function, Op) pair is a candidate for the
+# emitter / probe in steps 7.3-7.5.
+```
+
+**Validation**: produces a list of all (test, function, Op)
+tuples where the dangling shape appears.  This list is the FULL
+scope of P205, not just the reproducer's scope.
+
+**Decision**:
+- If the list contains ONLY the reproducer's Op → phase 07 scope
+  is correct as-is; proceed to step 7.3.
+- If the list contains ADDITIONAL Ops → phase 07 scope expands.
+  Each additional (function, Op) pair gets the same probe-or-
+  emitter treatment.  Document in "Diagnosis findings" before
+  proceeding.
+- If the list is empty → P205 doesn't surface in the doc corpus at
+  all.  Either the reproducer is misleading or the corpus is too
+  narrow.  Investigate before continuing.
+
 ### Step 7.3 — Skip-removal probe
 
 **Action**: in an isolated worktree:

@@ -92,11 +92,62 @@ cargo test --release --test codegen_diagnostic -- --ignored p203_file_flavour_is
 ```
 
 **Outcomes**:
-- Test passes → flavour info is reachable; proceed with the
-  emitter as planned.
+- Test passes → flavour info is reachable; proceed to step 5.1b.
 - Test fails → flavour info is genuinely lost.  Do NOT write the
   emitter; instead reroute P203 to a separate parser/IR-level fix
   and remove P203 from this phase.
+
+### Step 5.1b — Pre-work: verify OpFreeRef fires at scope exit
+
+**Action**: even if flavour info is reachable (step 5.1), the
+emitter only runs when an OpFreeRef is *emitted*.  P203 might be
+downstream of P204's dep-tracking gap — meaning the OpFreeRef
+isn't emitted at all for file refs in some block exits.  Catch
+this before writing the emitter.
+
+**If [Plan 10](../10-scope-exit-emission/README.md) phase 02 has
+already landed**, this diagnostic is redundant — plan 10's
+mechanical scope-walk guarantees OpFreeRef fires for every local
+at every block close.  Skip step 5.1b in that case and proceed to
+step 5.2.
+
+**If plan 10 has not landed**:
+
+```rust
+// tests/codegen_diagnostic.rs
+#[test]
+#[ignore]  // run manually
+fn p203_free_ref_fires_at_block_exit_for_file_ref() {
+    // Compile repro_p203.loft to native; inspect generated code.
+    // For the file ref `f` in a block, the generated function
+    // body MUST contain an OpFreeRef call before the block's
+    // closing `}`.
+    let src = compile_to_rust("tests/scripts/repro_p203.loft");
+    // Heuristic: locate the block that opens with file_open_write
+    // and verify it contains "OpFreeRef" before its closing brace.
+    let open_pos = src.find("file_open_write").expect("file open present");
+    let block_end = find_matching_close_brace(&src, open_pos);
+    let block = &src[open_pos..block_end];
+    assert!(block.contains("OpFreeRef"),
+        "P203: OpFreeRef not emitted at block exit for file ref. \
+         This is likely upstream of codegen — parser dep-tracking \
+         (P204-adjacent) needs to attach __ref_* to the file-ref \
+         var before phase 05's emitter can help.");
+}
+```
+
+```bash
+cargo test --release --test codegen_diagnostic -- --ignored \
+    p203_free_ref_fires_at_block_exit_for_file_ref
+```
+
+**Outcomes**:
+- Test passes → emission timing is correct; phase 05's emitter
+  handles the rest.  Proceed to step 5.2.
+- Test fails → P203 is fundamentally a parser bug (OpFreeRef
+  doesn't fire).  No codegen emitter fixes it.  Reroute P203 to
+  a parser plan (sibling of P204); remove P203 from phase 05's
+  scope.  Phase 05 still ships P200 write side closure.
 
 ### Step 5.2 — Pre-work: pin the prior P200 failure mode
 

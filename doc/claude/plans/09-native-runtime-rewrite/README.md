@@ -103,6 +103,7 @@ between work phases at decision points.
 | 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapses 95-line `dispatch.rs:837-930`) — **prerequisite for P202** | simplification | OPEN |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | OPEN |
+| 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | OPEN |
 | 05 | [File emitters](05-file.md) | P200 (write side), P203 | bug fix | OPEN |
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | OPEN |
@@ -136,10 +137,16 @@ introspection means earlier escape hatches.
   ├─→ 01 ABI consolidation (independent simplification)
   ├─→ 02 param adapter ──────────→ 05 file (P200 write + P203)
   │                              └─→ 08 binary (P200 read)
-  ├─→ 03 parallel emitter ───────→ 06 threading (P202)
+  ├─→ 03 parallel emitter ───┐
+  │                          └─→ 09 parallel runtime ──→ 06 threading (P202)
   ├─→ 04 key ops (independent)
   └─→ 07 generics (P205) — needs scaffold + 02 only if probe cascades
 ```
+
+Phase 09 is sequenced **between 03 and 06** because phase 06 will
+otherwise multiply the duplication that phase 09 retires.  Phases
+04 and 05 can run in parallel with 09 since they don't touch the
+parallel runtime fns.
 
 Phase 07 (P205) has a **diagnostic probe** that may short-circuit
 to a 1-line parser fix without needing the emitter — see phase 07
@@ -149,10 +156,10 @@ for the branching.
 
 | P-issue | Prior blocker | What dissolves it | Phase |
 |---|---|---|---|
-| P200 | `narrow_int_cast` dual role; fix collided with itself | Phase 02 splits the cast into per-type adapters; bug-fix emitters bypass it | 02 → 05 + 08 |
-| P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gives queue fns a 15-line slot in the emitter family | 03 → 06 |
-| P203 | `is_file_ref` helper has no home in current emission code | Phase 00 adds `EmitCtx` where the helper lives; phase 05 wires the flavour info | 00 → 05 |
-| P205 | Direct skip-removal might cascade; template lacks type-binding info | Phase 07 runs a 30-min probe; if cascade, emitter sidesteps the skip; if not, 1-line fix | 07 |
+| P200 | `narrow_int_cast` dual role; fix collided with itself | Phase 02 splits the cast into per-type adapters AND extracts shared `narrow_for_int` helper that retires the dual-role; bug-fix emitters bypass it | 02 → 05 + 08 |
+| P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gives queue fns a 15-line slot in the emitter family; phase 09 collapses runtime fns so queue variants are 3-line wrappers | 03 → 09 → 06 |
+| P203 | `is_file_ref` helper has no home; OpFreeRef may not fire at all | Phase 00 adds `EmitCtx` where the helper lives; phase 05 step 5.1b verifies OpFreeRef fires (parser-side reroute if not) | 00 → 05 |
+| P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 surveys corpus for all dangling-shape sites, runs probe, then either 1-line fix or per-Op emitter | 07 |
 
 Each bug-fix phase includes:
 

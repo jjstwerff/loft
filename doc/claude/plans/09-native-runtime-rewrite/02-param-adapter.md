@@ -199,6 +199,75 @@ fn param_adaptation_does_not_route_through_narrow_int_cast() {
 
 **Validation**: this test passes — proving the prerequisite for P200's fix is in place.
 
+### Step 2.7 — Extract shared `narrow_for_int` helper
+
+**Action**: `narrow_int_cast` in `src/generation/emit.rs` is called
+from five block-tail-expression sites (`emit.rs:157, 173, 846, 880,
+892`).  After step 2.6, the param-adaptation role is gone, but the
+function still does double duty if any future change needs to
+share width logic.
+
+Extract the core decision — given a width and signedness, produce
+the cast string — into a free helper in
+`src/generation/ops/params.rs`:
+
+```rust
+/// Single source of truth for "given a width (8/16/32/64) and
+/// signedness, emit the matching narrow cast for an i64-shaped
+/// expression."  Used by NarrowIntAdapter (param adaptation) AND
+/// by emit.rs's block-tail-expression coercion.  Retires the
+/// dual-role state of narrow_int_cast.
+pub fn narrow_for_int(width: u8, signed: bool, src: &str) -> String {
+    let prim = if signed { format!("i{width}") } else { format!("u{width}") };
+    format!("({src}) as {prim}")
+}
+```
+
+Route both `NarrowIntAdapter::emit()` and the five
+`emit.rs::narrow_int_cast` call sites through `narrow_for_int`.
+The block-tail sites previously called `narrow_int_cast(returned)`
+which combined width-detection + cast emission; split into:
+1. `int_width_for(value)` (already added in phase 02 for the adapter)
+2. `narrow_for_int(width, signed, src)` (the helper above)
+
+After this step, `narrow_int_cast` either becomes a thin wrapper
+that calls both helpers, or is deleted in favour of direct calls
+at each site.
+
+**Validation**:
+```rust
+#[test]
+fn narrow_for_int_is_single_source_of_truth() {
+    // Adapter and block-tail both produce the same cast for the
+    // same (width, signed, expr).
+    assert_eq!(narrow_for_int(16, false, "x"), "(x) as u16");
+    assert_eq!(narrow_for_int(32, true, "y"), "(y) as i32");
+
+    // No file under src/generation/ implements its own narrow
+    // logic outside of params.rs::narrow_for_int.
+    let pat = "_i32";  // legacy ad-hoc cast suffix
+    let calls = std::fs::read_to_string("src/generation/calls.rs").unwrap();
+    let emit = std::fs::read_to_string("src/generation/emit.rs").unwrap();
+    let dispatch = std::fs::read_to_string("src/generation/dispatch.rs").unwrap();
+    // Each file should reference narrow_for_int (via use) OR
+    // contain no ad-hoc narrow casts; not both diverging.
+    // Mechanical check: grep narrow casts; assert ≤ N occurrences
+    // (where N is the count after consolidation).
+    // Refine N during the actual extraction.
+}
+```
+
+```bash
+cargo test --release --test codegen_emitter::narrow_for_int_is_single_source_of_truth
+cargo test --release --test issues 2>&1 | tail -3            # 540/540
+cargo test --release --test codegen_emitter::baseline_emission_unchanged
+# Baseline diff stays byte-identical — the helper is just a refactor.
+```
+
+This step retires the dual-role state by **sharing the helper**,
+not by extending the emitter dispatch.  Block emission stays
+direct; the cast logic is the one shared bit.
+
 ## Acceptance for phase 02 overall
 
 ```bash
@@ -215,8 +284,8 @@ added across `src/generation/ops/params.rs`.
 
 ## Commit shape
 
-11-13 commits (one trait + ten adapters + ordering test +
-acceptance test); ships as one PR.
+12-14 commits (one trait + ten adapters + ordering test +
+acceptance test + narrow_for_int extraction); ships as one PR.
 
 ## Problems encountered
 
