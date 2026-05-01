@@ -705,7 +705,7 @@ a.name",
     )
     .expect("generated file not found");
     assert!(
-        src.contains("OpCopyRecord(stores,"),
+        src.contains("OpCopyRecord(cell,"),
         "generated code missing OpCopyRecord after reference assignment"
     );
 }
@@ -8886,13 +8886,15 @@ fn p144_ref_param_forward_native() {
     // Read and check the generated source contains the fix pattern.
     let source = std::fs::read_to_string(&rs_path).unwrap();
     // The call to box_ensure should pass var_b directly, not *var_b.
+    // P199 ABI change: native fns take `cell` (`&UnsafeCell<Stores>`),
+    // not `stores` (`&mut Stores`).
     assert!(
-        !source.contains("n_box_ensure(stores, *var_b)"),
+        !source.contains("n_box_ensure(cell, *var_b)"),
         "P144 regression: native codegen still emits *var_b for & param forward.\nGenerated: {}",
         rs_path.display()
     );
     assert!(
-        source.contains("n_box_ensure(stores, var_b)"),
+        source.contains("n_box_ensure(cell, var_b)"),
         "P144 regression: expected direct var_b pass-through for & param.\nGenerated: {}",
         rs_path.display()
     );
@@ -9272,14 +9274,16 @@ fn p157_native_refvar_forwarding_with_preeval() {
             .unwrap();
     }
     let source = std::fs::read_to_string(&rs_path).unwrap();
+    // P199 ABI change: native fns take `cell` (`&UnsafeCell<Stores>`),
+    // not `stores` (`&mut Stores`).
     assert!(
-        !source.contains("n_helper(stores, *var_o"),
+        !source.contains("n_helper(cell, *var_o"),
         "P157 regression: pre-eval path still emits *var_o for & param forward.\n\
          Generated: {}",
         rs_path.display()
     );
     assert!(
-        source.contains("n_helper(stores, var_o"),
+        source.contains("n_helper(cell, var_o"),
         "P157 regression: expected direct var_o pass-through.\n\
          Generated: {}",
         rs_path.display()

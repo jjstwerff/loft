@@ -1236,9 +1236,10 @@ fn set_ref(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val.rec);
+            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v.rec);
     }
 }
 
@@ -1377,9 +1378,10 @@ fn set_enum(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v_val));
+            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
     }
 }
 
@@ -1415,9 +1417,10 @@ fn set_int(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_int(db.rec, db.pos + u32::from(v_fld), v);
     }
 }
 
@@ -1427,9 +1430,10 @@ fn set_character(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v_val as u32);
+            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v as u32);
     }
 }
 
@@ -1439,9 +1443,10 @@ fn set_single(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_single(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_single(db.rec, db.pos + u32::from(v_fld), v);
     }
 }
 
@@ -1451,9 +1456,10 @@ fn set_float(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database
             .store_mut(&db)
-            .set_float(db.rec, db.pos + u32::from(v_fld), v_val);
+            .set_float(db.rec, db.pos + u32::from(v_fld), v);
     }
 }
 
@@ -1464,11 +1470,12 @@ fn set_byte(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database.store_mut(&db).set_byte(
             db.rec,
             db.pos + u32::from(v_fld),
             i32::from(v_min),
-            v_val as i32,
+            v as i32,
         );
     }
 }
@@ -1480,11 +1487,12 @@ fn set_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     {
         let db = v_v1;
+        let v = v_val;
         s.database.store_mut(&db).set_short(
             db.rec,
             db.pos + u32::from(v_fld),
             i32::from(v_min),
-            v_val as i32,
+            v as i32,
         );
     }
 }

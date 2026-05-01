@@ -55,7 +55,7 @@ impl Output<'_> {
             }
             writeln!(
                 w,
-                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
+                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);"
             )?;
             self.indent(w)?;
             // Emit the call into a temporary, then deep-copy.
@@ -71,7 +71,7 @@ impl Output<'_> {
             }
             write!(
                 w,
-                "); OpCopyRecord(stores, _src, var_{name}, {tp_nr}_i32); }}"
+                "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}"
             )?;
             return Ok(());
         }
@@ -102,12 +102,12 @@ impl Output<'_> {
             }
             writeln!(
                 w,
-                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
+                "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);"
             )?;
             self.indent(w)?;
             write!(
                 w,
-                "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+                "OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32)"
             )?;
             return Ok(());
         }
@@ -393,7 +393,7 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(
                     w,
-                    "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)"
+                    "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
                 )?;
             }
         }
@@ -518,7 +518,7 @@ impl Output<'_> {
                 }
             }
             "OpFreeRef" => {
-                // Emit OpFreeRef(stores, var, "var_name") so LOFT_STORE_LOG shows the loft name.
+                // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.
                 // After freeing, reset the variable to null so a subsequent OpDatabase
                 // knows to allocate a fresh store rather than reusing the freed one.
                 if let [ref db_val] = vals[..] {
@@ -545,7 +545,7 @@ impl Output<'_> {
                         write!(
                             w,
                             "if {vn}.1.store_nr != u16::MAX {{ \
-                             OpFreeRef(stores, {vn}.1, \"{vn}.1\"); \
+                             OpFreeRef(cell,{vn}.1, \"{vn}.1\"); \
                              {vn}.1.store_nr = u16::MAX }}"
                         )?;
                         return Ok(());
@@ -558,7 +558,7 @@ impl Output<'_> {
                     } else {
                         String::new()
                     };
-                    write!(w, "OpFreeRef(stores, ")?;
+                    write!(w, "OpFreeRef(cell,")?;
                     self.output_code_inner(w, db_val)?;
                     write!(w, ", \"{var_name}\")")?;
                     // Reset variable to null sentinel after free.
@@ -571,7 +571,7 @@ impl Output<'_> {
             "OpFreeRefIfDistinct" => {
                 // free the placeholder only when its store_nr
                 // differs from the witness's.  Emit:
-                //   if ph.store_nr != wit.store_nr { OpFreeRef(stores, ph, "ph"); ph.store_nr = u16::MAX }
+                //   if ph.store_nr != wit.store_nr { OpFreeRef(cell,ph, "ph"); ph.store_nr = u16::MAX }
                 // so the fresh-store path still reclaims the orphan
                 // and the adoption path leaves both slots alone until
                 // the caller's OpFreeRef on the witness fires.
@@ -588,7 +588,7 @@ impl Output<'_> {
                     self.output_code_inner(w, ph_val)?;
                     write!(w, ".store_nr != ")?;
                     self.output_code_inner(w, wit_val)?;
-                    write!(w, ".store_nr {{ OpFreeRef(stores, ")?;
+                    write!(w, ".store_nr {{ OpFreeRef(cell,")?;
                     self.output_code_inner(w, ph_val)?;
                     write!(w, ", \"{ph_name}\")")?;
                     if let Value::Var(_) = ph_val {
@@ -601,7 +601,7 @@ impl Output<'_> {
             "OpCopyRecord" => {
                 // Deep copy: copy_block + copy_claims
                 if let [ref src, ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpCopyRecord(stores, ")?;
+                    write!(w, "OpCopyRecord(cell,")?;
                     self.output_code_inner(w, src)?;
                     write!(w, ", ")?;
                     self.output_code_inner(w, dst)?;
@@ -634,7 +634,7 @@ impl Output<'_> {
             }
             "OpSizeofRef" => {
                 if let [ref val] = vals[..] {
-                    write!(w, "OpSizeofRef(stores, ")?;
+                    write!(w, "OpSizeofRef(cell,")?;
                     self.output_code_inner(w, val)?;
                     write!(w, ")")?;
                 }
@@ -644,7 +644,7 @@ impl Output<'_> {
                 // OpDatabase modifies its DbRef argument in-place; emit as reassignment.
                 if let [ref var_val, ref tp_val] = vals[..] {
                     self.output_code_inner(w, var_val)?;
-                    write!(w, " = OpDatabase(stores, ")?;
+                    write!(w, " = OpDatabase(cell,")?;
                     self.output_code_inner(w, var_val)?;
                     write!(w, ", ")?;
                     self.emit_i32_slot(w, tp_val)?;
@@ -655,7 +655,7 @@ impl Output<'_> {
             "OpFormatDatabase" | "OpFormatStackDatabase" => {
                 // OpFormatDatabase takes a &mut String as the output buffer.
                 if let [ref work_val, ref record_val, ref tp_val, ref fmt_val] = vals[..] {
-                    write!(w, "OpFormatDatabase(stores, &mut ")?;
+                    write!(w, "OpFormatDatabase(cell,&mut ")?;
                     // work_val is Var(nr) — strip the leading & that output_code_inner adds
                     if let Value::Var(nr) = work_val {
                         let variables = &self.data.def(self.def_nr).variables;
@@ -675,7 +675,7 @@ impl Output<'_> {
             }
             "OpGetRecord" => {
                 // vals: [data, db_tp, count, key1, key2, …]
-                // Emit: OpGetRecord(stores, data, db_tp, &[Content::…, …])
+                // Emit: OpGetRecord(cell,data, db_tp, &[Content::…, …])
                 if vals.len() >= 3
                     && let (Value::Int(db_tp), Value::Int(_count)) = (&vals[1], &vals[2])
                 {
@@ -687,7 +687,7 @@ impl Output<'_> {
                         .map(|t| t.keys.iter().map(|k| k.type_nr).collect())
                         .unwrap_or_default();
                     let key_vals = &vals[3..];
-                    write!(w, "OpGetRecord(stores, ")?;
+                    write!(w, "OpGetRecord(cell,")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", {db_tp}_i32, &[")?;
                     for (i, key_val) in key_vals.iter().enumerate() {
@@ -703,7 +703,7 @@ impl Output<'_> {
             }
             "OpIterate" => {
                 // vals: [data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]
-                // Emit: OpIterate(stores, data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
+                // Emit: OpIterate(cell,data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
                 if vals.len() >= 4
                     && let Value::Keys(keys) = &vals[3]
                 {
@@ -724,7 +724,7 @@ impl Output<'_> {
                     let till_vals = rest
                         .get(till_start + 1..till_start + 1 + till_count)
                         .unwrap_or(&[]);
-                    write!(w, "OpIterate(stores, ")?;
+                    write!(w, "OpIterate(cell,")?;
                     self.output_code_inner(w, &vals[0])?;
                     write!(w, ", ")?;
                     self.emit_i32_slot(w, &vals[1])?;
@@ -763,9 +763,9 @@ impl Output<'_> {
             }
             "OpStep"
                 // vals: [iter_var, data, on, arg]
-                // Emit: OpStep(stores, &mut var_iter, data, on, arg)
+                // Emit: OpStep(cell,&mut var_iter, data, on, arg)
                 if vals.len() == 4 => {
-                    write!(w, "OpStep(stores, &mut ")?;
+                    write!(w, "OpStep(cell,&mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;
@@ -783,10 +783,10 @@ impl Output<'_> {
                 }
             "OpRemove"
                 // vals: [state_var, data, on, tp/arg]
-                // Emit: OpRemove(stores, &mut var_state, data, on, arg)
+                // Emit: OpRemove(cell,&mut var_state, data, on, arg)
                 // The state may be i32 (plain vector) or i64 (sorted/tree iterator).
                 if vals.len() == 4 => {
-                    write!(w, "OpRemove(stores, &mut ")?;
+                    write!(w, "OpRemove(cell,&mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;

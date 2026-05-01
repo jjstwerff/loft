@@ -46,7 +46,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// passed by value (`DbRef`).  The function allocates into the store referenced by
 /// `db`, then returns the updated `DbRef`.
 /// Bytecode equivalent: `OpDatabase` in `src/state/io.rs:319`.
-pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
+pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i32) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
     let size = stores.size(db_tp);
     if db.store_nr == u16::MAX {
@@ -66,7 +67,8 @@ pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
 /// Create a new record element inside a vector/sorted/index collection.
 /// Returns a `DbRef` pointing to the new element with default field values.
 /// Bytecode equivalent: `OpNewRecord` in `src/state/io.rs:336`.
-pub fn OpNewRecord(stores: &mut Stores, data: DbRef, parent_tp: i32, fld: i32) -> DbRef {
+pub fn OpNewRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, parent_tp: i32, fld: i32) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let parent_tp = parent_tp as u16;
     let fld = fld as u16;
     let new_value = stores.record_new(&data, parent_tp, fld);
@@ -84,7 +86,8 @@ pub fn OpNewRecord(stores: &mut Stores, data: DbRef, parent_tp: i32, fld: i32) -
 /// Finalize a record after its fields have been assigned.
 /// For sorted/index collections this inserts the record at the correct position.
 /// Bytecode equivalent: `OpFinishRecord` in `src/state/io.rs:772`.
-pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp: i32, fld: i32) {
+pub fn OpFinishRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, record: DbRef, parent_tp: i32, fld: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.record_finish(&data, &record, parent_tp as u16, fld as u16);
 }
 
@@ -92,7 +95,8 @@ pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp
 /// Bytecode equivalent: `OpFreeRef` in `src/state/io.rs:262`.
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in
 /// `LOFT_STORE_LOG` output for diagnosing LIFO store-free order violations.
-pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
+pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if db.store_nr == u16::MAX {
         return;
     }
@@ -123,7 +127,8 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
 /// scope (adoption vs. fresh-store is a runtime choice the caller's
 /// compiler cannot resolve statically).  Bytecode equivalent:
 /// `OpFreeRefIfDistinct` in `src/fill.rs`.
-pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbRef) {
+pub fn OpFreeRefIfDistinct(cell: &std::cell::UnsafeCell<Stores>, placeholder: DbRef, witness: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if placeholder.store_nr != witness.store_nr {
         stores.free(&placeholder);
     }
@@ -132,12 +137,13 @@ pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbR
 /// Format a database record as text and append it to the output string.
 /// Bytecode equivalent: `OpFormatDatabase` in `src/state/io.rs:278`.
 pub fn OpFormatDatabase(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     output: &mut String,
     record: DbRef,
     db_tp: i32,
     db_format: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let mut s = String::new();
     ShowDb {
         stores,
@@ -155,11 +161,12 @@ pub fn OpFormatDatabase(
 /// Look up a record in a collection by key values.
 /// Bytecode equivalent: `OpGetRecord` in `src/state/io.rs:353`.
 pub fn OpGetRecord(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     db_tp: i32,
     key: &[crate::keys::Content],
 ) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if data.rec == 0 {
         DbRef {
             store_nr: data.store_nr,
@@ -212,7 +219,8 @@ pub fn OpGetTextSub(text: &str, from: i64, till: i64) -> &str {
 /// Return the byte size of a database record's type.
 /// Bytecode equivalent: `OpSizeofRef` in `src/state/io.rs:290`.
 #[must_use]
-pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i64 {
+pub fn OpSizeofRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if db.rec == 0 {
         0
     } else {
@@ -269,7 +277,8 @@ pub fn i_json_errors(stores: &mut Stores) -> Str {
 /// Deep-copy a database record: copies the raw bytes and duplicates
 /// all owned sub-structures (text fields, vectors, etc.).
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
-pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
+pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
     // indexing into `stores.types` (0x8000 marks "free source after
@@ -300,7 +309,8 @@ pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
 
 /// Sort a vector in-place using the element type's natural ordering.
 /// Bytecode equivalent: `sort_vector` in `src/fill.rs:1835`.
-pub fn OpSortVector(stores: &mut Stores, data: DbRef, db_tp: i32) {
+pub fn OpSortVector(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, db_tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
     let elem_size = stores.size(db_tp);
     let is_float = db_tp == 2 || db_tp == 3;
@@ -311,12 +321,13 @@ pub fn OpSortVector(stores: &mut Stores, data: DbRef, db_tp: i32) {
 /// Returns a `DbRef` pointing to the newly inserted element.
 /// Bytecode equivalent: `State::insert_vector` in `src/state/io.rs:819`.
 pub fn OpInsertVector(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     size: i32,
     index: i64,
     db_tp: i32,
 ) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
@@ -326,7 +337,7 @@ pub fn OpInsertVector(
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
 #[must_use]
-pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i64 {
+pub fn OpLengthCharacter(_cell: &std::cell::UnsafeCell<Stores>, c: i32) -> i64 {
     let ch = ops::to_char(c);
     if ch == '\0' {
         0
@@ -366,7 +377,7 @@ fn iter_ref(data: &DbRef, rec: u32, pos: u16) -> DbRef {
 /// Bytecode equivalent: `State::iterate` in `src/state/io.rs`.
 #[must_use]
 pub fn OpIterate(
-    stores: &Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     on: i32,
     arg: i32,
@@ -374,6 +385,7 @@ pub fn OpIterate(
     from: &[Content],
     till: &[Content],
 ) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if data.rec == 0 {
         return pack_iter(u32::MAX, u32::MAX);
     }
@@ -453,7 +465,8 @@ pub fn OpIterate(
 /// `on` and `arg` must match the corresponding `OpIterate` call.
 ///
 /// Bytecode equivalent: `State::step` in `src/state/io.rs`.
-pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -> DbRef {
+pub fn OpStep(cell: &std::cell::UnsafeCell<Stores>, iter: &mut i64, data: DbRef, on: i32, arg: i32) -> DbRef {
+    let stores: &Stores = unsafe { &*cell.get() };
     let mut cur = (*iter as u64) as u32;
     let mut finish = ((*iter as u64) >> 32) as u32;
 
@@ -549,7 +562,8 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
+pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content: &mut String) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -569,7 +583,7 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
 
 /// WASM stub: file I/O not available; clears content.
 #[cfg(feature = "wasm")]
-pub fn OpGetFileText(_stores: &mut Stores, _file: DbRef, content: &mut String) {
+pub fn OpGetFileText(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, content: &mut String) {
     content.clear();
 }
 
@@ -578,7 +592,8 @@ pub fn OpGetFileText(_stores: &mut Stores, _file: DbRef, content: &mut String) {
 /// read/write applies the seek after opening.
 /// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
+pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -596,13 +611,14 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
 
 /// WASM stub: file I/O not available.
 #[cfg(feature = "wasm")]
-pub fn OpSeekFile(_stores: &mut Stores, _file: DbRef, _pos: i64) {}
+pub fn OpSeekFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _pos: i64) {}
 
 /// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
 /// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
 #[must_use]
 #[cfg(not(feature = "wasm"))]
-pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
+pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if file.rec == 0 {
         return i64::MIN;
     }
@@ -622,7 +638,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
 /// WASM stub: file I/O not available; always returns `i64::MIN`.
 #[must_use]
 #[cfg(feature = "wasm")]
-pub fn OpSizeFile(_stores: &Stores, _file: DbRef) -> i64 {
+pub fn OpSizeFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> i64 {
     i64::MIN
 }
 
@@ -630,7 +646,8 @@ pub fn OpSizeFile(_stores: &Stores, _file: DbRef) -> i64 {
 /// Returns `true` on success, `false` on failure.
 /// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
+pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i64) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return false;
     }
@@ -663,7 +680,7 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
 
 /// WASM stub: file I/O not available; always returns `false`.
 #[cfg(feature = "wasm")]
-pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
+pub fn OpTruncateFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _size: i64) -> bool {
     false
 }
 
@@ -1118,7 +1135,8 @@ impl FileVal for DbRef {
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db_tp: i32) {
+pub fn OpWriteFile<T: FileVal>(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, val: &mut T, db_tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -1156,18 +1174,19 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
 
 /// WASM stub: file write not available.
 #[cfg(feature = "wasm")]
-pub fn OpWriteFile<T: FileVal>(_stores: &mut Stores, _file: DbRef, _val: &mut T, _db_tp: i32) {}
+pub fn OpWriteFile<T: FileVal>(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _val: &mut T, _db_tp: i32) {}
 
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
 pub fn OpReadFile<T: FileVal>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     file: DbRef,
     val: &mut T,
     bytes: i64,
     db_tp: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -1214,7 +1233,7 @@ pub fn OpReadFile<T: FileVal>(
 /// WASM stub: file read not available.
 #[cfg(feature = "wasm")]
 pub fn OpReadFile<T: FileVal>(
-    _stores: &mut Stores,
+    _cell: &std::cell::UnsafeCell<Stores>,
     _file: DbRef,
     _val: &mut T,
     _bytes: i64,
@@ -1293,7 +1312,8 @@ impl IterState for i64 {
 /// # Panics
 /// Panics if `data.store_nr == u16::MAX` (coroutine `DbRef`) — the compiler is
 /// expected to reject `e#remove` on generator iterators before this is reached.
-pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
+pub fn OpRemove<S: IterState>(cell: &std::cell::UnsafeCell<Stores>, state: &mut S, data: DbRef, on: i32, arg: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
     // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
     assert!(
@@ -1372,7 +1392,8 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
 /// Remove a record from a hash or index collection.
 ///
 /// Bytecode equivalent: `State::hash_remove` in `src/state/io.rs`.
-pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
+pub fn OpHashRemove(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, rec: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if rec.rec != 0 {
         stores.remove(&data, &rec, tp as u16);
     }
@@ -1381,7 +1402,8 @@ pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
 /// Append `count - 1` copies of the last element of `data`, expanding the vector.
 ///
 /// Bytecode equivalent: `State::append_copy` in `src/state/io.rs`.
-pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i64, tp: i32) {
+pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i64, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
@@ -2031,7 +2053,8 @@ pub fn fs_mkdir_all(path: &str) -> bool {
 /// Called in generated native code when `OpStoreClosure` appears in the IR,
 /// immediately before the fn-ref variable is stored.
 /// The closure is later retrieved by `OpGetClosure` in the match-dispatch arm.
-pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
+pub fn OpStoreClosure(cell: &std::cell::UnsafeCell<Stores>, d_nr: u32, closure: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.closure_map.insert(d_nr, closure);
 }
 
@@ -2039,7 +2062,8 @@ pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
 /// Called in generated native code inside match-dispatch arms for closure-capturing lambdas.
 /// Returns a null DbRef if no closure was registered for `d_nr`.
 #[must_use]
-pub fn OpGetClosure(stores: &Stores, d_nr: u32) -> DbRef {
+pub fn OpGetClosure(cell: &std::cell::UnsafeCell<Stores>, d_nr: u32) -> DbRef {
+    let stores: &Stores = unsafe { &*cell.get() };
     stores.closure_map.get(&d_nr).copied().unwrap_or(DbRef {
         store_nr: 0,
         rec: 0,
