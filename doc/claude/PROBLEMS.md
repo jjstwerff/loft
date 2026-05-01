@@ -31,7 +31,8 @@ existing entry, not re-open it as a bug.
 | # | Issue | Severity | Workaround |
 |---|-------|----------|------------|
 | 198 | `tests/scripts/95-alias-copy.loft` leaks Database 3 (allocated by `OpInitRef` at pc≈4788) — `p146_script_95_alias_copy_leak` regression test panics on `roadmap-lsp-eclipse`.  Passes on main; the regression sits in commits between `main` (`05b53b2`) and `roadmap-lsp-eclipse` HEAD.  Most likely culprits: plan-04/05 slot allocator refit, plan-06 par-safety series, or the plan-07 Span IR walker arms missing the alias-copy free path.  Investigated as part of [ARC.md A1](plans/06-typed-par/ARC.md). | High | None at the loft language level — the test catches a runtime invariant. Investigate scopes.rs `scan_set` aliased-return free-emission against the new IR variants (`Value::Span`, `Value::ParFor`) added on this branch. |
-| 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Partially fixed (2026-05-01)**: native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` parameter — generated functions derive a fresh `&mut Stores` from the cell at function entry, so multiple cells can coexist without borrow conflict.  Closes the canonical reproducer (`native_tuple_script` PASSES) and lifts `native_dir` from 7/30 → 23/30 doc scripts.  **Remaining classes (3 sub-issues, see below):** P199.A Op-stub nesting, P199.B template compound expressions, P199.C `n_parallel_queue` native missing. | Medium | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list. |
+| 199 | Native codegen E0499/E0502 when nested calls borrow `&mut Stores` simultaneously.  **Closed (2026-05-01)** for the borrow-conflict class.  Native ABI changed from `&mut Stores` to `&UnsafeCell<Stores>` (PR1), Op-stub helpers in `src/codegen_runtime.rs` follow the new ABI (Track 1), and `OpSet*` field-write templates lift `@val` into a let-binding before `store_mut(...)` (Track 2).  Result: `native_dir` 7/30 → 28/30; canonical reproducer `native_tuple_script` PASSES; 0 interpreter regressions.  Remaining `19_threading` failure tracked as P202 (separate feature gap — `n_parallel_queue` family has no native implementation, distinct from the borrow-conflict issue P199 addressed). | Medium (closed) | Hoist the inner call into a temporary: `let r = add_pair(p); assert(r == 30);` makes the second borrow fall outside `n_assert`'s argument list — only relevant for templates / Op-stubs not yet covered by this fix. |
+| 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts. | Medium | Compile the loft source via the interpreter (`cargo run --bin loft -- file.loft` without `--native`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
 
@@ -87,10 +88,27 @@ non-par scripts, so it is not the cause.  The leak persists into A2
 unchanged and remains a candidate for an A2-prerequisite spot fix in
 `scopes.rs::scan_set` Span/ParFor passthrough.
 
-### 199. Native codegen E0499 — `n_assert(stores, n_add_pair(stores, …), …)`
+### 199. Native codegen E0499 — `n_assert(stores, n_add_pair(stores, …), …)` *(CLOSED 2026-05-01)*
 
-**Symptom:** `cargo test --release --test native native_tuple_script`
-fails with rustc:
+**Status:** Closed for the borrow-conflict class.  Three coordinated
+fixes shipped on `roadmap-lsp-eclipse`:
+
+- PR1 — Native ABI from `&mut Stores` to `&UnsafeCell<Stores>` for
+  generated functions and the `n_parallel_for_*` helpers.
+- Track 1 — Op-stubs in `src/codegen_runtime.rs` (and their direct
+  emission sites in `dispatch.rs`) routed through the new ABI.
+- Track 2 — `OpSet*` field-write templates in `default/01_code.loft`
+  lift `@val` into a `let v = @val;` binding before `store_mut(…)`.
+
+**Result:** `native_dir` 7/30 → 28/30; `native_tuple_script` PASSES; 0
+interpreter regressions across 540 issues / 43 threading / 35
+threading_chars tests.  Remaining `19_threading` failure tracked as
+**P202** (separate feature gap, not a borrow-conflict bug).
+
+#### Original symptom (kept for context)
+
+`cargo test --release --test native native_tuple_script` was failing
+with rustc:
 
 ```
 error[E0499]: cannot borrow `*stores` as mutable more than once at a time
