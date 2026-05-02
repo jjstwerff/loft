@@ -47,6 +47,49 @@ verified 2026-04-25) and `src/codegen_runtime.rs:1581-1805` (224
 lines), plus the parser auto-light heuristic at
 `src/parser/builtins.rs:403::check_light_eligible`.
 
+## Realised value (so far) — bug discovery
+
+Plan-06's headline metric is "~1100 LOC retired."  That undersells
+the work: getting there has surfaced **14+ P-issues** in the
+type-system × native-codegen × parallel-runtime intersection that
+would have hit users in their own threading code with much harder
+reproducers than a curated canary.  The plan functions as a
+structured fuzz/bug-hunt of that intersection — every canary
+triage round, every G-surface coverage extension, every D11
+type-spectrum sweep is a probe that has, in fact, kept finding
+real bugs.
+
+Filed and/or closed during plan-06 work (chronological):
+
+| P-issue | Surface | Title |
+|---|---|---|
+| P188 | keyed collections | `field += elem` on hash/index/sorted (compound-assign codegen) |
+| P189 | par dispatch | typed wide-input dispatch + tuple-as-vector-element |
+| P189c | par dispatch | vector<tuple> element write + light wide path |
+| P190 | type registration | local-var sorted/hash/index types weren't registered on demand |
+| P191 | keyed bookkeeping | `index<T[key]>` 4-byte int<0,false> (range-bookkeeping mismatch) |
+| P192 | stdlib | `len()` overload missing for hash/index |
+| P194 | tuple structs | tuple-struct field reassignment |
+| P195 | lexer | chained tuple-index lex (`n.v.0.0`) |
+| P196 | native codegen | tuple-of-fn-ref native codegen ((u32, DbRef) as i32) |
+| P197 | dep tracking | dep-tracked text reads (bundled with P194) |
+| P198 | scan_set | unwrap Span in scan_set + native deep-copy emission |
+| P199 | native ABI | `&mut Stores` → `&UnsafeCell<Stores>` (3-commit fix series) |
+| P200 | native codegen | int compare emission (closed in plan-09; surfaced here) |
+| P201 | misc | branch-local regression (filed 2026-04-29) |
+
+Several of these (P191, P195, P196, P198, P199) are bugs that
+ordinary doc-tests do not surface — they require the specific
+type-shape interactions that the par() canaries force.
+
+The implication for evaluating plan-06's value: **as long as
+canaries keep surfacing P-issues, plan-06's per-day yield is
+high.**  When canaries stop surfacing new bugs, that's itself a
+useful signal that this surface is mature — at which point
+finishing the LOC retirement becomes the dominant remaining
+value.  Today (2026-05-02) we are still in the bug-finding
+regime.
+
 ## Phase 0 findings folded back into the plan
 
 Phase 0a's source survey + characterisation tests + bench surfaced
