@@ -1,12 +1,22 @@
 # Phase 08a — Introspection: retrospective
 
-**Status:** OPEN
+**Status:** SUPERSEDED (2026-05-02) — folded into phase 10
+step 10.6.  The original 08a was sequenced as a closer for
+phases 06/07/08; plan-09's tail consolidation absorbed it
+into phase 10's final retrospective step (which fires after
+plan-11 closes P204 so the retrospective covers the full arc
+including the sibling-plan handover).
 
 **Kind:** Retrospective (no code; produces lasting memory entries
 and informs future plans)
 
-**Trigger:** Final landed phase among 06/07/08.  May fire after
-fewer phases if 05a decided to stop early.
+**Original trigger** (no longer relevant): Final landed phase
+among 06/07/08.  May fire after fewer phases if 05a decided to
+stop early.
+
+**Active trigger**: phase 10 step 10.6 — fires after plan-11
+closes P204.  See `10-final-closure.md` § Step 10.6 for the
+populate-at-retrospective outline.
 
 **Time budget:** 1 day max.
 

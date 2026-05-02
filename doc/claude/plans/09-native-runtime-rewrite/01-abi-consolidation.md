@@ -1,6 +1,8 @@
 # Phase 01 — Cell/Stores ABI consolidation
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02) — `LegacyStores` ABI variant
+retired; `Abi::None` introduced for nullary fns; all 12 (now
+21 after phase 06) runtime fns use `Abi::Cell` or `Abi::None`.
 
 **Kind:** Simplification (no P-issue closes)
 

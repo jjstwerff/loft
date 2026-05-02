@@ -1,6 +1,9 @@
 # Phase 03 — Parallel-for emitter family
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02) — `ParallelForEmitter` registered
+for `n_parallel_for` / `n_parallel_for_light`; the 95-line
+special case in `dispatch.rs` retired.  Phase 06 reused this
+emitter family for the queue variants.
 
 **Kind:** Simplification — **prerequisite for phase 06 (P202).**
 Without this, adding the missing `n_parallel_queue*` runtime fns

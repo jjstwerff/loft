@@ -8,9 +8,12 @@ statement and returns the null sentinel).
 
 **PR gate:** P204's two failing native tests (`85_yield_resume`,
 `87_store_leaks`) BLOCK PR-readiness.  Per
-`feedback_no_expect_fail_on_pr_bugs.md`, the bug must be actually
-fixed — @EXPECT_FAIL is not an acceptable resolution.  Plan-11
-must complete before any PR opens.
+`feedback_no_expect_fail_on_pr_bugs.md` and
+`feedback_zero_regression_tolerance.md`, the bug must be
+actually fixed — @EXPECT_FAIL is not an acceptable resolution,
+and "ship now, fix later" is also not acceptable regardless of
+how long the proper fix takes.  Plan-11 must complete before
+any PR opens.
 
 ## Out of scope for plan-09
 

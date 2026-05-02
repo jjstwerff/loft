@@ -110,12 +110,12 @@ between work phases at decision points.
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | **DONE (2026-05-02)** |
 | 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | **DONE (2026-05-02)** |
 | 05 | [File emitters](05-file.md) | P200 (read-side comparison emission) | bug fix | **DONE (2026-05-02)** via phase 10 step 10.3 — `IntCompareEmitter` widens both operands to i64 |
-| 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
+| 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | **DONE (2026-05-02)** via phase 10 step 10.1 |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | **DONE (2026-05-02)** |
 | 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | **DONE (2026-05-02)** |
-| 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | **superseded by phase 10** (decision in step 10.4) |
+| 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | **SUPERSEDED by phase 10 step 10.3** (one fix closed read + write) |
 | 08a | [Retrospective](08a-introspect.md) | — | introspection | **superseded by phase 10 step 10.6** |
-| 10 | [Final closure](10-final-closure.md) | **P200** + plan-09 close-out | bug fix + admin | OPEN — consolidates 05/05a/08/08a |
+| 10 | [Final closure](10-final-closure.md) | **P200** + plan-09 close-out | bug fix + admin | IN PROGRESS — 5/7 steps DONE (10.1-10.4 + 10.5-scaffold); 10.5 polish + 10.6 retrospective + 10.7 directory move OPEN |
 
 Status legend: OPEN → IN PROGRESS → DONE.
 
@@ -139,38 +139,52 @@ introspection means earlier escape hatches.
 ## Dependency chain — what unblocks what
 
 ```
-00 scaffold (DONE) ──→ 00a introspection (DONE 2026-05-02)
+00 scaffold (DONE) ──→ 00a introspection (DONE)
   ├─→ 01 ABI consolidation (DONE)
   ├─→ 02 param adapter (DEMOTED — no longer P200 prereq; optional)
   ├─→ 03 parallel emitter (DONE) ───┐
   │                                 └─→ 09 parallel runtime (DONE) ──→ 06 threading (DONE — P202 closed)
   ├─→ 04 key ops (DONE)
-  ├─→ 05 file (P200) — plan rewritten 2026-05-02 (read-side comparison emission)
-  ├─→ 05a introspection — trigger revised: fire after first framework bug fix
-  ├─→ 07 generics (P205) — Outcome B confirmed (custom emitter required)
-  └─→ 08 binary (P200 read closure) — depends on 05 outcome
+  ├─→ 07 generics (DONE — P205 closed via emit.rs scratch routing)
+  └─→ 10 final closure (IN PROGRESS — P200 closed via step 10.3; admin remaining)
+        ├── absorbed phase 05 (read-side scope, was write-side)
+        ├── absorbed phase 05a (fired as step 10.1)
+        ├── superseded phase 08 (one fix closed read + write)
+        └── absorbed phase 08a (retrospective at step 10.6)
 
-P204 — out of plan-09 scope; sibling stub at plans/11-p204-ref-propagation/
+P204 — out of plan-09 scope; full plan at plans/11-p204-ref-propagation/
 ```
 
 Phase 09 was sequenced **between 03 and 06** because phase 06
 would otherwise multiply the duplication that phase 09 retires.
-That sequencing held; phase 06 SHIPPED with its runtime fns flat
-(per phase 06's "Implementation notes — trait reuse vs flat") and
-gained from phase 09's `ParShape` only indirectly (the closure-
-shape selection logic is shared via `closure_shape` /
-`queue_helper_name` in `parallel.rs`).
+That sequencing held; phase 06 shipped with its runtime fns flat
+(per phase 06's "Implementation notes — trait reuse vs flat")
+and gained from phase 09's `ParShape` only indirectly — the
+closure-shape selection logic is shared via `closure_shape` /
+`queue_helper_name` in `parallel.rs`.
 
-Phase 07 (P205) used a **diagnostic probe** that revealed Outcome
-B — the `text_return` parser-side promotion is structurally
-incomplete for bounded-generic specialisations (the `Str::new(&local)`
-dangle persists even after the skip is removed).  Phase 07 needs
-a custom emitter that emits owned `String` for the affected sites.
+Phase 07 (P205) used a **diagnostic probe** that revealed
+Outcome B — the `text_return` parser-side promotion is
+structurally incomplete for bounded-generic specialisations.
+The fix landed as direct emit.rs scratch routing at two sites
+(Value::Return wrap_text + block-tail wrap_result), not as an
+Op-level custom emitter.  See `07-generics.md` § Implementation
+notes for the rationale.
 
 Phase 02's prereq role to phase 05 was demoted by **phase 00a**:
-phase 05's actual P200 bug is `narrow_int_cast`'s block-tail
-role, not its param-narrowing role.  Phase 02 retains independent
-simplification value but is no longer on the critical path.
+phase 05's actual P200 bug was the block-tail role of
+`narrow_int_cast`, not its param-narrowing role.  The fix
+shipped via phase 10 step 10.3's `IntCompareEmitter` —
+comparison-emission, not param adaptation.  Phase 02 retains
+independent simplification value but is no longer on the
+critical path; status remains DEMOTED.
+
+Phase 05's plan was rewritten on 2026-05-02 to target read-side
+comparison emission (per phase 00a's actual-error survey).
+Phase 10's step 10.3 implements that revised plan and closes
+P200; the original write-side scope (separate `OpWriteIntFile`
+emitter) was not needed — the `IntCompareEmitter` at the
+comparison level closed both read AND write sites in one fix.
 
 ## Native suite progression
 
@@ -254,9 +268,14 @@ cargo test --release --test native -- --test-threads=1 2>&1 \
     | grep "native result"                              # ≥ baseline
 ```
 
-Bug-fix phases (05-08) additionally run the regression test
-introduced by their pre-work step, which pins the prior failure
-mode.  Any regression aborts the commit.
+Bug-fix phases (06, 07, 10 step 10.3) additionally run the
+regression tests introduced alongside the fix, which pin the
+prior failure mode.  Any regression aborts the commit.
+
+Per `feedback_zero_regression_tolerance.md`: regressions are
+never accepted, regardless of how long the proper fix takes.
+The fast gate, baseline corpus, structural emitter tests, and
+this acceptance gate together enforce that.
 
 ## Fast gate (every step)
 

@@ -1,15 +1,15 @@
 # Phase 05 — File emitters
 
-**Status:** OPEN — **PLAN MISALIGNED with current errors; rewrite
-required before implementation.**  See
-[Diagnosis findings](#diagnosis-findings) for details: the failing
-sites in `tests/scripts/20-binary.loft` are read-side comparison-
-emission errors (E0308 between a narrowed `as u8/u16/u32` LHS and
-an `_i64` literal RHS), not the write-side `f += val` template
-issue this plan was originally designed for.
+**Status:** DONE (2026-05-02) — folded into phase 10 step 10.3.
+Original plan targeted a write-side `OpWriteIntFile` custom
+emitter; phase 00a's actual-error survey revealed the bug was
+read-side comparison-emission.  Plan 10 step 10.3's
+`IntCompareEmitter` (in `src/generation/ops/int_compare.rs`)
+closed the bug — both originally-anticipated read AND write
+scopes resolved by one fix.  See § Diagnosis findings + phase
+10 doc for the closure narrative.
 
-**Closes:** **P200** (binary file `f += <int>` width mismatch —
-write side).
+**Closes:** **P200** — closed via phase 10 step 10.3.
 
 **Reproducers:** `tests/docs/13-file.loft`,
 `tests/scripts/20-binary.loft`.

@@ -1,6 +1,8 @@
 # Phase 04 — Key-keyed Op emitter
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02) — `OpGetRecordEmitter` +
+`OpIterateEmitter` registered; ~70 lines of dispatch.rs
+match arms retired.
 
 **Kind:** Simplification — independent of bug-fix phases.  Lands
 when convenient; not on the critical path for P-issue closures.

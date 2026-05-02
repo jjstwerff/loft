@@ -1,8 +1,11 @@
 # Phase 00 — Scaffold
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02) — see § Findings (post-completion).
+Step 0.7b (let-bind-on-repeat in `DefaultTemplateEmitter`)
+closed P203 inline.
 
-**Closes:** — (infrastructure only)
+**Closes:** P203 (via step 0.7b's structural fix to repeated
+`@<name>` placeholder substitution).
 
 ## Goal
 
