@@ -748,3 +748,67 @@ fn no_unsanctioned_codegen_value_variants() {
          AND document why in plan 09 phase 00's scaffold doc."
     );
 }
+
+/// Plan-12 phase 01: structural guard against the Span-miss walker
+/// pattern that caused P204.
+///
+/// `pre_eval.rs::patch_hoisted_returns` and `value_mentions_var` walk
+/// the IR matching against `Value::Set(_, _)`, `Value::Return(_)`, etc.
+/// directly.  When the parser wraps an operator in `Value::Span(box
+/// (pos, inner))` the bare `matches!` falls through to `_ => false /
+/// no match`, so the walker silently bails on Span-wrapped IR.  Plan-11
+/// fixed one such site in `detect_ref_tail_capture`; plan-12 phase 01
+/// fixes the rest.
+///
+/// This test scans `pre_eval.rs::patch_hoisted_returns` for `matches!`
+/// against `Value::*` variants and asserts each is paired with
+/// `.unspan()`.  Heuristic gate — doesn't catch every form — but
+/// prevents the obvious regressions that would re-open P204-style
+/// bugs.
+#[test]
+fn pre_eval_walkers_unspan() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/pre_eval.rs"))
+        .expect("read pre_eval.rs");
+    // Slice patch_hoisted_returns + value_mentions_var (the area the
+    // plan-12 audit covers).  The deeper sites in
+    // collect_pre_evals_inner / output_call handle Span via the existing
+    // recursive helpers (`needs_pre_eval`, `create_stack_var`) and
+    // intentionally don't unspan at every leaf.
+    let start = src
+        .find("fn patch_hoisted_returns")
+        .expect("patch_hoisted_returns marker missing");
+    let end_marker = "fn op_uses_stores";
+    let end = src[start..]
+        .find(end_marker)
+        .map(|o| start + o)
+        .expect("op_uses_stores marker missing");
+    let region = &src[start..end];
+    let mut offenders: Vec<(usize, &str)> = Vec::new();
+    for (n, line) in region.lines().enumerate() {
+        // Detect raw `matches!(op, Value::*` or `match v.as_ref()`
+        // forms that don't already unspan.
+        let trimmed = line.trim_start();
+        let raw_matches_op = (trimmed.contains("matches!(op,") || trimmed.contains("matches!(op."))
+            && !trimmed.contains("op.unspan(")
+            && trimmed.contains("Value::");
+        let raw_value_var = trimmed.contains("Value::Var")
+            && trimmed.contains("inner.as_ref()")
+            && !trimmed.contains(".unspan(");
+        if raw_matches_op || raw_value_var {
+            offenders.push((n, line));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "Plan-12 phase 01: {} walker site(s) in pre_eval.rs::patch_hoisted_returns \
+         match against Value::* without `.unspan()`.  This re-opens the P204-style \
+         Span-miss bug class.  Add `.unspan()` before each match (see plan-11 P204 \
+         fix and plan-12 phase 01 doc for the rationale).  Offenders:\n  {}",
+        offenders.len(),
+        offenders
+            .iter()
+            .map(|(n, l)| format!("L{}: `{}`", n + 1, l.trim()))
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}

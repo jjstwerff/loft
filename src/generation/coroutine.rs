@@ -65,25 +65,27 @@ enum YieldSegment {
 /// ```
 /// Returns `init_expr` when matched.
 fn detect_yield_from(val: &Value) -> Option<Value> {
-    let Value::Block(bl) = val else { return None };
+    let Value::Block(bl) = val.unspan() else {
+        return None;
+    };
     if bl.operators.len() != 2 {
         return None;
     }
-    let Value::Set(sub_var, init_expr) = &bl.operators[0] else {
+    let Value::Set(sub_var, init_expr) = bl.operators[0].unspan() else {
         return None;
     };
-    let Value::Loop(lp) = &bl.operators[1] else {
+    let Value::Loop(lp) = bl.operators[1].unspan() else {
         return None;
     };
     if lp.operators.len() != 3 {
         return None;
     }
-    let Value::Set(item_var, _) = &lp.operators[0] else {
+    let Value::Set(item_var, _) = lp.operators[0].unspan() else {
         return None;
     };
     // Third op must be Yield(Var(item_var)).
-    if let Value::Yield(yv) = &lp.operators[2]
-        && matches!(yv.as_ref(), Value::Var(v) if v == item_var)
+    if let Value::Yield(yv) = lp.operators[2].unspan()
+        && matches!(yv.as_ref().unspan(), Value::Var(v) if v == item_var)
     {
         // Only the init expression is needed — sub_var is an internal detail.
         let _ = sub_var;
@@ -96,6 +98,9 @@ fn detect_yield_from(val: &Value) -> Option<Value> {
 /// Returns true if `v` contains any `Value::Yield` node at any depth.
 fn contains_yield(v: &Value) -> bool {
     match v {
+        // Plan-12 phase 01: descend through Span wrappers so a
+        // Span-wrapped Yield isn't silently missed.
+        Value::Span(b) => contains_yield(&b.1),
         Value::Yield(_) => true,
         Value::Block(bl) | Value::Loop(bl) => bl.operators.iter().any(contains_yield),
         Value::If(_, t, f) => contains_yield(t) || contains_yield(f),
@@ -113,9 +118,9 @@ fn collect_segments(ops: &[Value]) -> Vec<YieldSegment> {
         // get an implicit `Return(<for-block>)` wrap from block_result.  Peek through
         // Return/Insert wrappers so the inner Block-with-yields still becomes a
         // ForLoopBody segment instead of an opaque `pre` statement.
-        let inner_op = match op {
-            Value::Return(inner) | Value::Drop(inner) => inner.as_ref(),
-            _ => op,
+        let inner_op = match op.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => inner.as_ref().unspan(),
+            other => other,
         };
         if let Value::Yield(inner) = inner_op {
             segments.push(YieldSegment::Simple {

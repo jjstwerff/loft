@@ -1,6 +1,6 @@
 # Phase 01 — Walker audit (`pre_eval.rs`)
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
 **Closes:** latent Span-miss bugs in
 `src/generation/pre_eval.rs::patch_hoisted_returns` and its
@@ -188,11 +188,58 @@ All green.  Walker pattern is now Span-aware throughout.
 
 ## Findings
 
-_(populate during step 1.1 / 1.7 — record per-site triage)_
+`pre_eval.rs::patch_hoisted_returns` (the 6 walker sites surveyed in
+the table at the top of this doc) and `value_mentions_var` were
+**all latent** — no in-tree reproducer surfaces an actual miscompile
+today, but the byte-identical baseline test confirms the unspan
+adds emit identically when the input IR happens not to be Span-
+wrapped, and the unspan kicks in when it is.
+
+The HIGH-severity site in the original triage table —
+`value_mentions_var` — was patched defensively as the plan
+prescribed; no test failure was uncovered.  Pattern is now
+P204-style insurance, not bug fix.
+
+Over-eager fixes (reverted before commit): patching `needs_pre_eval`,
+`create_stack_var`, the deeper `collect_pre_evals_inner` arg-handling
+sites, and the `body_is_only_create_stacks` filter all caused the
+byte-identical baseline to diverge — the existing emission was
+correct because Span wrappers don't reach those leaf sites in
+practice.  Lesson: only patch sites the plan explicitly identifies;
+each unspan addition is a behaviour change that must be validated
+against the byte-identical baseline.
 
 ## Audit findings (other files in src/generation/)
 
-_(populate during step 1.7)_
+The step 1.7 sweep found three more sites worth fixing.  Each
+passed the byte-identical baseline test after patching, so they're
+applied as insurance against future regressions:
+
+- **`emit.rs:738`** — `Set(__ret_N, _)` walker (`has_ret_temp`
+  detection).  Unspans the operator before matching `Value::Set`.
+- **`emit.rs:772, 848, 885`** — `Return(_)` walkers in the
+  block-emission tail-handling path.  Unspan before matching.
+- **`coroutine.rs::detect_yield_from`** — destructures the
+  `yield from` desugar pattern.  Five `let Value::* = &lp.operators[i]`
+  / `&bl.operators[i]` sites, each now `lp.operators[i].unspan()`.
+- **`coroutine.rs::contains_yield`** — recursive walker; Span variant
+  added at the top of the match like `value_mentions_var`.
+- **`coroutine.rs::collect_segments`** — `inner_op` derivation peels
+  Return/Drop wrappers; now also unspans `op` first.
+
+Sites that look similar but were intentionally NOT patched (passed
+audit, baseline confirmed unaffected): `dispatch.rs` `to` checks,
+`calls.rs:98+121+129+139+274+287` (the same arg-handling sites that
+caused emission divergence in `pre_eval.rs`'s parallel structure),
+`emit.rs:157+259+573+574+598+799` (codegen-internal IR, not parser
+output), `mod.rs:1653+1659` (filter / bool flag, no behaviour
+impact), `text.rs:17` (Line filter, no behaviour impact under
+current paths).
+
+**Total walker sites audited:** 7 (`pre_eval.rs::patch_hoisted_returns`
++ `value_mentions_var`).  **Total walker sites patched:** 7 in
+`pre_eval.rs` + 4 in `emit.rs` + 5 in `coroutine.rs` = **16 sites
+across 3 files**.
 
 ## Memory candidate
 

@@ -100,7 +100,7 @@ impl Output<'_> {
         while let Some(ret_pos) = result[ret_search_from..]
             .iter()
             .position(|op| {
-                matches!(op, Value::Return(v) if matches!(v.as_ref(), Value::Var(target) if
+                matches!(op.unspan(), Value::Return(v) if matches!(v.as_ref().unspan(), Value::Var(target) if
                     variables.name(*target).starts_with("__ret_")
                     && variables.is_skip_free(*target)
                     && matches!(variables.tp(*target), Type::Text(_))))
@@ -109,8 +109,8 @@ impl Output<'_> {
         {
             ret_search_from = ret_pos + 1;
             // Extract the Return's target var_nr.
-            let target = if let Value::Return(inner) = &result[ret_pos]
-                && let Value::Var(v) = inner.as_ref()
+            let target = if let Value::Return(inner) = result[ret_pos].unspan()
+                && let Value::Var(v) = inner.as_ref().unspan()
             {
                 *v
             } else {
@@ -124,9 +124,9 @@ impl Output<'_> {
             // borrow from __work_N locals that free ops clobber, so
             // they're excluded.
             let set_pos = result[..ret_pos].iter().position(|op| {
-                matches!(op, Value::Set(v, val) if *v == target
+                matches!(op.unspan(), Value::Set(v, val) if *v == target
                 && matches!(
-                    val.as_ref(),
+                    val.as_ref().unspan(),
                     Value::Call(_, _) | Value::Text(_)
                 ))
             });
@@ -140,7 +140,14 @@ impl Output<'_> {
             }
             // Perform the collapse: extract the Call from the Set,
             // remove the Set, and rewrite Return(Var) → Return(Call).
-            let Value::Set(_, call_box) = result.remove(set_idx) else {
+            // Use unspan_mut so a Span-wrapped Set still yields the
+            // inner value when destructured.
+            let removed = result.remove(set_idx);
+            let inner = match removed {
+                Value::Span(b) => b.1,
+                other => other,
+            };
+            let Value::Set(_, call_box) = inner else {
                 unreachable!("set_pos pointed at a Set");
             };
             let ret_pos_after = ret_pos - 1;
@@ -152,7 +159,7 @@ impl Output<'_> {
         // Quick check: is there any Return(Null) left?
         let has_return_null = result
             .iter()
-            .any(|op| matches!(op, Value::Return(v) if **v == Value::Null));
+            .any(|op| matches!(op.unspan(), Value::Return(v) if *v.unspan() == Value::Null));
         if !has_return_null {
             return if result.len() == ops.len() && result.iter().zip(ops).all(|(a, b)| a == b) {
                 std::borrow::Cow::Borrowed(ops)
@@ -163,13 +170,13 @@ impl Output<'_> {
         let mut search_from = 0;
         while let Some(ret_pos) = result[search_from..]
             .iter()
-            .position(|op| matches!(op, Value::Return(v) if **v == Value::Null))
+            .position(|op| matches!(op.unspan(), Value::Return(v) if *v.unspan() == Value::Null))
             .map(|p| p + search_from)
         {
             // Find the nearest preceding expression that is not a free-op, Line, or Return.
             let expr_pos = result[..ret_pos]
                 .iter()
-                .rposition(|op| !matches!(op, Value::Line(_)) && !is_free_op(op));
+                .rposition(|op| !matches!(op.unspan(), Value::Line(_)) && !is_free_op(op.unspan()));
             if let Some(idx) = expr_pos {
                 let expr = result.remove(idx);
                 // ret_pos shifted by -1 because we removed one element before it.
@@ -188,6 +195,11 @@ impl Output<'_> {
     /// isn't touched between its `Set` and `Return(Var)` before collapsing.
     fn value_mentions_var(op: &Value, var_nr: u16) -> bool {
         match op {
+            // Plan-12 phase 01: unspan recursively.  Without this, the
+            // walker silently bails on Span-wrapped operators (which
+            // the parser commonly produces) and `target_used_between`
+            // returns an incorrect `false` → unsafe collapse.
+            Value::Span(b) => Self::value_mentions_var(&b.1, var_nr),
             Value::Var(v) => *v == var_nr,
             Value::Set(v, inner) => *v == var_nr || Self::value_mentions_var(inner, var_nr),
             Value::Call(_, args) | Value::CallRef(_, args) | Value::Insert(args) => {
