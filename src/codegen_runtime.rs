@@ -2045,9 +2045,8 @@ where
             // P199 — generated worker closures take `&UnsafeCell<Stores>`
             // (the new ABI).  Cast `&mut ws.stores` to `&UnsafeCell<Stores>`
             // via the `repr(transparent)` layout guarantee.
-            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
-            };
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
             local.push(worker(cell, elm));
         }
         (start, local)
@@ -2116,9 +2115,8 @@ where
                 &ws.stores.allocations,
             );
             // P199 — see run_native_workers_primitive comment.
-            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
-            };
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
             let s = worker(cell, elm);
             let slot_store = &mut ws.stores.allocations[slot.store_nr as usize];
             let s_pos = slot_store.set_str(&s);
@@ -2205,9 +2203,8 @@ where
             let elm =
                 vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
             // P199 — see run_native_workers_primitive comment.
-            let cell: &std::cell::UnsafeCell<Stores> = unsafe {
-                &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>)
-            };
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
             let r = worker(cell, elm);
             batch.push((row_idx, r));
         }
