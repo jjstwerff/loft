@@ -55,6 +55,21 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo build --no-default-features
 
+      # The `html_wasm` test suite asserts the
+      # `wasm32-unknown-unknown` rlib is fresh against
+      # `src/codegen_runtime.rs` and other runtime sources.  Without
+      # this rebuild step, a cache-restored rlib from main is older
+      # than the PR's runtime sources and the staleness check panics.
+      # Linux-only: macOS / Windows test jobs skip html_wasm via the
+      # rust-target check inside the test (no wasm target installed).
+      - name: Install wasm target (for html_wasm tests)
+        if: runner.os == 'Linux'
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build wasm rlib (for html_wasm tests)
+        if: runner.os == 'Linux'
+        run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+
       # cargo-nextest runs each test in its own process with better
       # scheduling than cargo test — typically 30-50 % faster on this
       # suite.  Tests that rely on WRAP_LOCK to serialise file-system

@@ -88,6 +88,13 @@ fn collect_cases() -> Vec<Case> {
 ///   * absolute workspace-root prefix → "<workspace>"
 ///   * /tmp/loft_native scratch paths → "<tmp>/loft_native"
 ///   * `thread 'NAME' (PID)` → `thread 'NAME' (<pid>)` (Rust panic header)
+///   * `<file>.rs:NNN:NNN` from the loft *crate's* sources →
+///     `<file>.rs:<line>:<col>` (panic origin moves on every edit;
+///     the test's contract is the panic *content*, not the line in
+///     loft's internal `panic_fmt` site).  Only crate-internal
+///     paths (`src/...`) are scrubbed; the case-file path remains
+///     literal because the user-visible loft source line IS part
+///     of the contract.
 fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
     let entry_abs = entry.to_string_lossy().to_string();
     let entry_rel = format!("<cases>/{case_name}.loft");
@@ -105,7 +112,57 @@ fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
     s = s.replace("/tmp/loft_native", "<tmp>/loft_native");
     // PID in Rust panic header: `thread 'main' (12345)` → `thread 'main' (<pid>)`.
     s = scrub_thread_pid(&s);
+    // Crate-internal source line numbers in Rust panic origins.
+    s = scrub_crate_source_locations(&s);
     s
+}
+
+/// Replace `src/<path>.rs:NNN:NNN` with `src/<path>.rs:<line>:<col>`.
+/// Catches Rust panic origin lines in the loft crate; preserves
+/// case-file lines (`<cases>/foo.loft:42:10`) which are the actual
+/// user-visible contract.
+fn scrub_crate_source_locations(s: &str) -> String {
+    // Match `src/...rs:NNN:NNN` and `src/...rs:NNN`.
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(idx) = rest.find("src/") {
+        out.push_str(&rest[..idx]);
+        let tail = &rest[idx..];
+        // Find ".rs:" to confirm this is a Rust file reference.
+        if let Some(rs_idx) = tail.find(".rs:") {
+            let (path_part, after) = tail.split_at(rs_idx + ".rs:".len());
+            // after starts with "NNN" or "NNN:NNN".  Consume digits +
+            // optional ":NNN".  Anything else stays literal.
+            let after_bytes = after.as_bytes();
+            let mut i = 0;
+            while i < after_bytes.len() && after_bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > 0 {
+                // Has digits — scrub them.
+                out.push_str(path_part);
+                out.push_str("<line>");
+                let mut j = i;
+                if j < after_bytes.len() && after_bytes[j] == b':' {
+                    let mut k = j + 1;
+                    while k < after_bytes.len() && after_bytes[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    if k > j + 1 {
+                        out.push_str(":<col>");
+                        j = k;
+                    }
+                }
+                rest = &after[j..];
+                continue;
+            }
+        }
+        // No match — copy "src/" and continue.
+        out.push_str(&tail[..4]);
+        rest = &tail[4..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Replace the numeric PID inside `thread 'NAME' (NNN)` panic headers.
