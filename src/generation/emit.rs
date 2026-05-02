@@ -735,7 +735,7 @@ impl Output<'_> {
         // (`tests/scripts/86-interfaces.loft::if_label`).
         let has_ret_temp = matches!(bl.result, Type::Text(_))
             && bl.operators.iter().any(|op| {
-                matches!(op, Value::Set(v, _) if
+                matches!(op.unspan(), Value::Set(v, _) if
                     self.data.def(self.def_nr).variables.name(*v).starts_with("__ret_")
                     && self.data.def(self.def_nr).variables.is_skip_free(*v))
             });
@@ -769,7 +769,7 @@ impl Output<'_> {
         // If the captured "return value" is a Return(…) expression, it diverges —
         // we emit it directly and skip the `_ret` tail.
         let return_value_is_return = has_trailing_void
-            && return_idx.is_some_and(|i| matches!(operators[i], Value::Return(_)));
+            && return_idx.is_some_and(|i| matches!(operators[i].unspan(), Value::Return(_)));
         for (vnr, v) in operators.iter().enumerate() {
             // DX-source-map: surface line comments at the
             // statement-list level so rustc errors map back to .loft
@@ -845,7 +845,7 @@ impl Output<'_> {
                 // emitting `let _ret = return expr;` produces an unreachable `_ret`
                 // binding of type `!` that fails a later `_ret as T` cast.
                 // Emit the return directly instead; the function exits here.
-                if matches!(v, Value::Return(_)) {
+                if matches!(v.unspan(), Value::Return(_)) {
                     self.indent += 1;
                     self.output_code_with_subst(w, v, &pre_evals)?;
                     self.indent -= 1;
@@ -882,7 +882,7 @@ impl Output<'_> {
                     // `Str::new(...)` would produce `Str::new(return Str::new(X))`
                     // which fails Rust type-check.  Same reasoning for narrow
                     // int casts: the return statement carries the right type.
-                    let value_is_return = matches!(v, Value::Return(_));
+                    let value_is_return = matches!(v.unspan(), Value::Return(_));
                     let wrap_result = is_return_expr && is_text_result && !value_is_return;
                     // Iterator-next blocks (name "iter next" / "sorted iter next")
                     // return their element value OR `i64::MIN` as the

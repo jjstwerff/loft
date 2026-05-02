@@ -28,7 +28,6 @@
 #![allow(dead_code)]
 
 pub mod default;
-pub mod forwarding_smoke;
 pub mod int_compare;
 pub mod key_ops;
 pub mod parallel;
@@ -116,20 +115,12 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     let mut r: std::collections::HashMap<&'static str, Box<dyn OpEmitter>> =
         std::collections::HashMap::new();
 
-    // Plan 09 phase 00 runtime smoke test — register a forwarding emitter
-    // for the curated Op list in `forwarding_smoke::FORWARDING_OP_NAMES`.
-    // Each entry exercises the registry → emit_op → custom emitter
-    // dispatch path with byte-identical output.  When a future phase
-    // ships a real (non-forwarding) emitter for one of these Op names,
-    // remove the name from FORWARDING_OP_NAMES — that phase's
-    // `r.insert(name, …)` below takes priority.
-    for op_name in forwarding_smoke::FORWARDING_OP_NAMES {
-        r.insert(op_name, Box::new(forwarding_smoke::ForwardingEmitter));
-    }
-
-    // Real (non-forwarding) custom emitters register here as future
-    // phases add them.  Example (when phase 05 lands):
-    //     r.insert("OpWriteIntFile", Box::new(op_write_int_file::Emitter));
+    // Plan 09 phase 00's forwarding-smoke emitters were retired by
+    // plan-12 phase 02 — their job (proving the registry → emit_op →
+    // DefaultEmitter dispatch fires across many Op shapes) is now
+    // done load-bearingly by the 5 production emitters below.
+    // Forwarding entries persisted as pure overhead with conceptually
+    // misleading "custom emitter registered" status.
 
     // Phase 03 — parallel-for emitter family.  Replaces the 95-line
     // special case in dispatch.rs::output_call_inner.  Both Op names

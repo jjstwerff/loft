@@ -1,6 +1,16 @@
 # Plan 12 — Codegen simplifications (post-09 follow-ups)
 
-**Status:** OPEN
+**Status:** DEFERRED (2026-05-02 — Tier 2 onwards).  Tier 1 (phases
+01 + 02) shipped on branch `plan-12-codegen-simplifications`
+(commits `c0c27e5` walker audit, `d446e5d` forwarding-smoke retire);
+Tier 2 (phases 03-05) parked here until a driver arrives.
+
+**Trigger to unpause:** the same conditions that would unpause
+plan 13 (`deferred/13-rust-template-migration/`) — 3+ template-path
+bugs, major codegen evolution forcing ≥50 Op-annotation touches,
+or contributor appetite for a multi-week structural refactor.
+Plan 12 Tier 2 is plan 13's preamble; if plan 13 stays parked,
+plan 12 Tier 2 doesn't earn its keep.
 
 **Origin:** Surfaced during plan-09's simplification audit
 (2026-05-02) after plan-09 + plan-11 closed all 5 in-scope
@@ -37,12 +47,12 @@ Span-miss pattern that caused P204.  This plan addresses those.
 
 | # | Phase | Tier | Value | Status |
 |---|-------|------|-------|--------|
-| 01 | [Walker audit (`pre_eval.rs`)](01-walker-audit.md) | 1 | latent Span-miss bugs | OPEN |
-| 02 | [Retire `forwarding_smoke.rs`](02-forwarding-smoke-retire.md) | 1 | dead-weight in registry | OPEN |
+| 01 | [Walker audit (`pre_eval.rs`)](01-walker-audit.md) | 1 | latent Span-miss bugs | DONE (2026-05-02) |
+| 02 | [Retire `forwarding_smoke.rs`](02-forwarding-smoke-retire.md) | 1 | dead-weight in registry | DONE (2026-05-02) |
 | 03 | [Migrate format/append dispatch arms](03-dispatch-format-append.md) | 2 | 12 dispatch.rs arms → custom emitters | OPEN |
 | 04 | [Migrate free/record dispatch arms](04-dispatch-free-record.md) | 2 | 10 dispatch.rs arms → custom emitters | OPEN |
 | 05 | [Split `narrow_int_cast` dual role](05-narrow-int-cast-split.md) | 2 | param vs block-tail narrowing | OPEN |
-| 06 | [`#rust"..."` template migration plan stub](06-rust-template-migration-stub.md) | 3 | deferred to plan-13 | STUB |
+| 06 | [`#rust"..."` template migration plan stub](06-rust-template-migration-stub.md) | 3 | relocated to `deferred/13-rust-template-migration/` (2026-05-02) | RELOCATED |
 
 ## What stays (out of scope)
 
