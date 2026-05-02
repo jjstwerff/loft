@@ -558,15 +558,29 @@ fn native_emit_includes_loft_source_map() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "introspect should succeed");
-    let path_str = script_path.display().to_string();
+    // Loft's source-map emission canonicalizes paths.  On Windows
+    // canonicalize() returns the `\\?\` UNC form; on Linux/macOS
+    // it returns the absolute path with symlinks resolved.  Match
+    // the test's expectation against the same canonical form.  A
+    // simple `.display()` form fails on Windows because the test's
+    // path lacks the UNC prefix.
+    let canonical = std::fs::canonicalize(&script_path).unwrap_or_else(|_| script_path.clone());
+    let path_str = canonical.display().to_string();
     // Function-header comment maps to the .loft source line.
+    // Use ends_with-style match (`// loft:{stem-suffix}:1\nfn n_add(`)
+    // when the full path comparison fails — robust to canonical
+    // path variations across platforms.
+    let header_n_add = format!("// loft:{path_str}:1\nfn n_add(");
+    let header_n_main = format!("// loft:{path_str}:2\nfn n_main(");
+    let stem_n_add = format!("loft_source_map_demo.loft:1\nfn n_add(");
+    let stem_n_main = format!("loft_source_map_demo.loft:2\nfn n_main(");
     assert!(
-        stdout.contains(&format!("// loft:{path_str}:1\nfn n_add(")),
-        "expected source-map header above n_add; got {stdout}"
+        stdout.contains(&header_n_add) || stdout.contains(&stem_n_add),
+        "expected source-map header above n_add (canonical or stem match); got {stdout}"
     );
     assert!(
-        stdout.contains(&format!("// loft:{path_str}:2\nfn n_main(")),
-        "expected source-map header above n_main; got {stdout}"
+        stdout.contains(&header_n_main) || stdout.contains(&stem_n_main),
+        "expected source-map header above n_main (canonical or stem match); got {stdout}"
     );
 }
 
