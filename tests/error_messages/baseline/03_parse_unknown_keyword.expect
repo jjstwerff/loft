@@ -1,19 +1,28 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Expect token = at <cases>/03_parse_unknown_keyword.loft:1:13
+error: Expect token =
+  --> <cases>/03_parse_unknown_keyword.loft:1:13
   |
-   1 | funcion main() {
-     |             ^
-Error: Expect constants to be in upper case style at <cases>/03_parse_unknown_keyword.loft:1:13
+1 | funcion main() {
+  |             ^
+
+error: Expect constants to be in upper case style
+  --> <cases>/03_parse_unknown_keyword.loft:1:13
   |
-   1 | funcion main() {
-     |             ^
-Error: Expect token ; at <cases>/03_parse_unknown_keyword.loft:1:17
+1 | funcion main() {
+  |             ^
+
+error: Expect token ;
+  --> <cases>/03_parse_unknown_keyword.loft:1:17
   |
-   1 | funcion main() {
-     |                 ^
-Error: Syntax error: unexpected '{' at <cases>/03_parse_unknown_keyword.loft:1:17
+1 | funcion main() {
+  |                 ^
+
+error: Syntax error: unexpected '{'
+  --> <cases>/03_parse_unknown_keyword.loft:1:17
   |
-   1 | funcion main() {
-     |                 ^
+1 | funcion main() {
+  |                 ^
+
+error: aborting due to 4 previous errors
 ==== stderr ====

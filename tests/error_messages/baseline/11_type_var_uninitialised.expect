@@ -1,23 +1,34 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Unknown variable 'x' at <cases>/11_type_var_uninitialised.loft:2:13
+error: Unknown variable 'x'
+  --> <cases>/11_type_var_uninitialised.loft:2:13
   |
-   2 |   print("{x}");
-     |             ^
-Error: Incorrect expression in string was Unknown(0) at <cases>/11_type_var_uninitialised.loft:2:13
+2 |   print("{x}");
+  |             ^
+
+error: Incorrect expression in string was Unknown(0)
+  --> <cases>/11_type_var_uninitialised.loft:2:13
   |
-   2 |   print("{x}");
-     |             ^
-Error: Expect token ) at <cases>/11_type_var_uninitialised.loft:2:13
+2 |   print("{x}");
+  |             ^
+
+error: Expect token )
+  --> <cases>/11_type_var_uninitialised.loft:2:13
   |
-   2 |   print("{x}");
-     |             ^
-Error: expected text, got void on call to print at <cases>/11_type_var_uninitialised.loft:2:12
+2 |   print("{x}");
+  |             ^
+
+error: expected text, got void on call to print
+  --> <cases>/11_type_var_uninitialised.loft:2:12
   |
-   2 |   print("{x}");
-     |            ^
-Fatal: Nested string literal not correctly terminated at <cases>/11_type_var_uninitialised.loft:2:16
+2 |   print("{x}");
+  |            ^
+
+fatal: Nested string literal not correctly terminated
+  --> <cases>/11_type_var_uninitialised.loft:2:16
   |
-   2 |   print("{x}");
-     |                ^
+2 |   print("{x}");
+  |                ^
+
+error: aborting due to 5 previous errors
 ==== stderr ====

@@ -1,35 +1,52 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Expect token , at <cases>/37_par_thread_count_zero.loft:3:25
+error: Expect token ,
+  --> <cases>/37_par_thread_count_zero.loft:3:25
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                         ^
-Error: Expect token ) at <cases>/37_par_thread_count_zero.loft:3:28
+3 |   for x in v par(b = x * 2, 0) {
+  |                         ^
+
+error: Expect token )
+  --> <cases>/37_par_thread_count_zero.loft:3:28
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                            ^
-Error: Expect token { at <cases>/37_par_thread_count_zero.loft:3:28
+3 |   for x in v par(b = x * 2, 0) {
+  |                            ^
+
+error: Expect token {
+  --> <cases>/37_par_thread_count_zero.loft:3:28
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                            ^
-Error: Expect token ; at <cases>/37_par_thread_count_zero.loft:3:28
+3 |   for x in v par(b = x * 2, 0) {
+  |                            ^
+
+error: Expect token ;
+  --> <cases>/37_par_thread_count_zero.loft:3:28
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                            ^
-Error: Expect token } at <cases>/37_par_thread_count_zero.loft:3:31
+3 |   for x in v par(b = x * 2, 0) {
+  |                            ^
+
+error: Expect token }
+  --> <cases>/37_par_thread_count_zero.loft:3:31
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                               ^
-Error: Expect token ; at <cases>/37_par_thread_count_zero.loft:3:31
+3 |   for x in v par(b = x * 2, 0) {
+  |                               ^
+
+error: Expect token ;
+  --> <cases>/37_par_thread_count_zero.loft:3:31
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                               ^
-Error: Expect token } at <cases>/37_par_thread_count_zero.loft:3:31
+3 |   for x in v par(b = x * 2, 0) {
+  |                               ^
+
+error: Expect token }
+  --> <cases>/37_par_thread_count_zero.loft:3:31
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                               ^
-Error: Syntax error: unexpected ')' at <cases>/37_par_thread_count_zero.loft:3:31
+3 |   for x in v par(b = x * 2, 0) {
+  |                               ^
+
+error: Syntax error: unexpected ')'
+  --> <cases>/37_par_thread_count_zero.loft:3:31
   |
-   3 |   for x in v par(b = x * 2, 0) {
-     |                               ^
+3 |   for x in v par(b = x * 2, 0) {
+  |                               ^
+
+error: aborting due to 8 previous errors
 ==== stderr ====

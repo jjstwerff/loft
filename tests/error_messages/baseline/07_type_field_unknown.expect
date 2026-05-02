@@ -1,23 +1,34 @@
 ==== exit: 1 ====
 ==== stdout ====
-Error: Unknown field Player.naem at <cases>/07_type_field_unknown.loft:4:18
+error: Unknown field Player.naem
+  --> <cases>/07_type_field_unknown.loft:4:18
   |
-   4 |   print("{p.naem}");
-     |                  ^
-Error: Incorrect expression in string was Unknown(0) at <cases>/07_type_field_unknown.loft:4:18
+4 |   print("{p.naem}");
+  |                  ^
+
+error: Incorrect expression in string was Unknown(0)
+  --> <cases>/07_type_field_unknown.loft:4:18
   |
-   4 |   print("{p.naem}");
-     |                  ^
-Error: Expect token ) at <cases>/07_type_field_unknown.loft:4:18
+4 |   print("{p.naem}");
+  |                  ^
+
+error: Expect token )
+  --> <cases>/07_type_field_unknown.loft:4:18
   |
-   4 |   print("{p.naem}");
-     |                  ^
-Error: expected text, got void on call to print at <cases>/07_type_field_unknown.loft:4:17
+4 |   print("{p.naem}");
+  |                  ^
+
+error: expected text, got void on call to print
+  --> <cases>/07_type_field_unknown.loft:4:17
   |
-   4 |   print("{p.naem}");
-     |                 ^
-Fatal: Nested string literal not correctly terminated at <cases>/07_type_field_unknown.loft:4:21
+4 |   print("{p.naem}");
+  |                 ^
+
+fatal: Nested string literal not correctly terminated
+  --> <cases>/07_type_field_unknown.loft:4:21
   |
-   4 |   print("{p.naem}");
-     |                     ^
+4 |   print("{p.naem}");
+  |                     ^
+
+error: aborting due to 5 previous errors
 ==== stderr ====

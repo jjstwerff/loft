@@ -5,7 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Phase 2 — Pretty renderer
 
-Status: open
+Status: shipped (2026-05-02) — core renderer + CLI wiring landed.
+Atomic steps 2.1, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10 all
+covered by `src/diagnostic_render.rs` + 10 unit tests + the
+regenerated `tests/error_messages/baseline/` corpus.  Step 2.2
+(lexer hand-off of `self.source` to `FileSourceLoader`) was
+skipped — the simpler "load on demand + cache" path in
+`FileSourceLoader::line` produces equivalent behaviour with no
+parser API churn.  Step 2.11 (separate `baseline_pretty/`
+directory) collapsed into a single `baseline/` regeneration
+since the new pretty format IS what users see; the original
+plan's split-directory shape would only earn its keep if both
+modes shipped to users, but compact mode is a harness/dev
+tool, not a published surface.
 
 ## Goal
 

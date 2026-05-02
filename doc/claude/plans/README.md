@@ -63,7 +63,7 @@ the canonical example of this discipline in action.
 | Dir | Initiative | Status |
 |---|---|---|
 | [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`.  **Doubles as a structured bug-hunt of the type-system × native-codegen × parallel-runtime intersection** — 14+ P-issues filed/closed during the work so far (P188-P201 family).  See plan README § "Realised value (so far)" for the running tally. | Phase 0 (characterisation + bench) open; bug-finding regime active |
-| [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phase 0 + 1 shipped; phases 2-7 open |
+| [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phases 0/1/2 shipped (rustc-style renderer + caret + UTF-8/tab handling + cascade dedup + summary line + `LOFT_ERRORS` env var + `--errors` CLI flag); phases 3-7 open |
 | [`08-repl-and-introspection/`](08-repl-and-introspection/) | REPL + interpreter-introspection tool — `loft>` interactive prompt with persistent state plus a clean CLI surface for IR/Rust/slot-table dumps. | Phase 0 + 1 shipped; phases 2-6 open |
 
 ## Deferred initiatives
