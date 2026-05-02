@@ -93,6 +93,7 @@ fn build_scope_parents(val: &Value, parent: u16, parents: &mut HashMap<u16, u16>
             build_scope_parents(next, parent, parents);
             build_scope_parents(extra, parent, parents);
         }
+        Value::Span(b) => build_scope_parents(&b.1, parent, parents),
         _ => {}
     }
 }
@@ -436,6 +437,7 @@ fn walk_frame_bases(val: &Value, current_base: u16, frames: &mut HashMap<u16, (u
             walk_frame_bases(n, current_base, frames);
             walk_frame_bases(e, current_base, frames);
         }
+        Value::Span(b) => walk_frame_bases(&b.1, current_base, frames),
         _ => {}
     }
 }

@@ -1,0 +1,6 @@
+struct Node { value: integer, next: reference<Node> }
+fn main() {
+  n = Node { value: 1, next: null };
+  m = n.next;
+  print("{m.value}");
+}

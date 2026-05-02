@@ -396,6 +396,18 @@ fn place_large_and_recurse(
                 *tos = branch_tos;
             }
         }
+        Value::Span(b) => {
+            place_large_and_recurse(function, &mut b.1, scope, tos, depth + 1);
+        }
+        Value::ParFor(b) => {
+            // Plan-06 spine step 3 — walk every child Value so any Set
+            // nodes inside the input expression / worker / threads /
+            // body get slot-assigned.
+            place_large_and_recurse(function, &mut b.input, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.worker, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.threads, scope, tos, depth + 1);
+            place_large_and_recurse(function, &mut b.body, scope, tos, depth + 1);
+        }
         _ => {}
     }
 }
@@ -443,6 +455,7 @@ fn inner_has_pre_assignments(val: &Value) -> bool {
         }
         Value::Insert(ops) => ops.iter().any(inner_has_pre_assignments),
         Value::Drop(inner) | Value::Return(inner) => inner_has_pre_assignments(inner),
+        Value::Span(b) => inner_has_pre_assignments(&b.1),
         _ => false,
     }
 }

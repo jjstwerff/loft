@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P204 minimal reproducer — `__ref_*` placeholder DbRef passed to a function
+// whose body returns a struct via an inner call is never `OpDatabase`-
+// initialised before the call.  Function dereferences a null DbRef
+// (store_nr = u16::MAX) → "index out of bounds: the len is X but the index
+// is 65535" at src/database/allocation.rs:347.
+// Native FAILS, interpreter PASSES — bytecode `OpInitRef` allocates the
+// placeholder before the call; native codegen lacks the equivalent.
+// Verified 2026-05-01: `cargo run --bin loft --release -- --interpret
+// tests/scripts/repro_p204.loft` exits 0; default (native) panics.
+// The vector field on the struct triggers the `__ref_*` hidden-param
+// injection in `wrap` and `inner` — without a vector / Reference field,
+// the codegen takes a different path and the bug doesn't surface.
+// See doc/claude/PROBLEMS.md § 204.  CLOSED 2026-05-02 by plan-11
+// (commit landing this entry): the parser-side
+// `detect_ref_tail_capture` walker now unspans Value::Span wrappers
+// before matching, so the tail-position Call is properly captured
+// via `let __native_tail_ret: DbRef = call(...);` and returned
+// instead of the null sentinel.
+struct P204_S { p204_v: vector<float> }
+
+fn p204_inner(p204_a: const P204_S, p204_b: const P204_S) -> P204_S {
+  P204_S { p204_v: [p204_a.p204_v[0] + p204_b.p204_v[0]] }
+}
+
+fn p204_wrap(p204_x: const P204_S) -> P204_S {
+  p204_y = P204_S { p204_v: [1.0] };
+  p204_inner(p204_x, p204_y)
+}
+
+fn p204_ref_placeholder_uninitialised() {
+  p204_p = P204_S { p204_v: [2.0] };
+  p204_q = p204_wrap(p204_p);
+  assert(p204_q.p204_v[0] == 3.0, "p204: q.v={p204_q.p204_v[0]}");
+}

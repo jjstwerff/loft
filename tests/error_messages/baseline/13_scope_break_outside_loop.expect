@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Cannot break outside a loop at <cases>/13_scope_break_outside_loop.loft:2:9
+  |
+   2 |   break;
+     |         ^
+==== stderr ====

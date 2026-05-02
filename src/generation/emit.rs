@@ -20,9 +20,22 @@ impl Output<'_> {
         code: &Value,
     ) -> std::io::Result<()> {
         match code {
+            // Phase 09 phase 00 step 0.7 — synthetic raw-expression
+            // passthrough used by fn-ref dispatch to thread pre-evaluated
+            // `let _farg_N` bindings through `output_call_user_fn`.  Emit
+            // the string verbatim with no transformation.
+            Value::RawExpr(s) => write!(w, "{s}")?,
             Value::Text(txt) => {
                 // Use debug format to produce a properly escaped Rust string literal.
                 write!(w, "{txt:?}")?;
+                if self.tuple_text_to_string {
+                    // Inside a `(String, String, …)` variable assignment:
+                    // wrap the `&str` literal so it fits a `String`-typed
+                    // tuple slot.  Argument-context tuples (function calls
+                    // taking `(&str, &str)`) clear this flag, so they keep
+                    // the borrowed-string form.
+                    write!(w, ".to_string()")?;
+                }
             }
             Value::Long(v) => write!(w, "{v}_i64")?,
             Value::Int(v) => {
@@ -45,7 +58,16 @@ impl Output<'_> {
             Value::Float(v) => write!(w, "{v}_f64")?,
             Value::Single(v) => write!(w, "{v}_f32")?,
             Value::Null => write!(w, "()")?,
-            Value::Line(_) => {}
+            // P198 / DX-source-map: emit a `// loft:<file>:<line>`
+            // comment so rustc errors on generated Rust code can be
+            // traced back to the originating loft source line.  The
+            // comment is on its own line, ahead of the next emitted
+            // statement.  File is implicit (per-function) so the
+            // comment uses the current def's source path.
+            Value::Line(line) => {
+                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                writeln!(w, "// loft:{file}:{line}")?;
+            }
             Value::Break(n) => {
                 if *n == 0 || self.loop_stack.is_empty() {
                     write!(w, "break")?;
@@ -163,14 +185,35 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
+                    // P205 (plan-09 phase 07): if the function returns
+                    // Type::Text but has no `Type::RefVar(Type::Text(_))`
+                    // attribute (no proper work buffer set up by
+                    // `text_return`), `Str::new(<local_String>)` would
+                    // dangle.  Route through `stores.scratch` instead so
+                    // the value's backing String lives as long as `stores`.
+                    // Note: text_return doesn't set the `hidden` flag (only
+                    // ref_return does), so we don't filter on `a.hidden`.
+                    let needs_p205_scratch = wrap_text && {
+                        let def = self.data.def(self.def_nr);
+                        !def.attributes.iter().any(|a| {
+                            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                        })
+                    };
                     write!(w, "return ")?;
-                    if wrap_text {
+                    if needs_p205_scratch {
+                        write!(w, "{{ stores.scratch.push((")?;
+                    } else if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
-                    if wrap_text {
+                    if needs_p205_scratch {
+                        write!(
+                            w,
+                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                        )?;
+                    } else if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
@@ -201,7 +244,21 @@ impl Output<'_> {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
+                    let elem_is_text = matches!(self.infer_type(e), Some(Type::Text(_)));
                     self.output_code_inner(w, e)?;
+                    // Wrap text-returning element with `.to_string()` so it
+                    // fits a `String`-typed tuple slot.  The outer
+                    // `tuple_text_to_string` flag is set by `set_var` when
+                    // the destination tuple has at least one Text element.
+                    // Argument-context tuples (function calls taking
+                    // `(&str, …)`) clear this flag, so they keep the
+                    // borrowed-string form.  Skip when the value is
+                    // already a `Value::Text` literal — its own emit
+                    // arm appends `.to_string()` directly via the same
+                    // flag, and we'd otherwise double-wrap.
+                    if elem_is_text && self.tuple_text_to_string && !matches!(e, Value::Text(_)) {
+                        write!(w, ".to_string()")?;
+                    }
                 }
                 write!(w, ")")?;
             }
@@ -211,7 +268,24 @@ impl Output<'_> {
                 // when the parameter was declared as `var_pair`.
                 let variables = &self.data.def(self.def_nr).variables;
                 let name = sanitize(variables.name(*var));
-                write!(w, "var_{name}.{idx}")?;
+                // For text-typed tuple elements of a Variable-context
+                // tuple, the field is `String`; consumers expecting
+                // `&str` need a borrow prefix.  Mirrors the plain text
+                // local case at line ~132 (`&var_name`).  Skip for
+                // arguments — the variable's tuple element types in
+                // Argument context emit as `&str` already.
+                let elem_is_text = match variables.tp(*var) {
+                    Type::Tuple(elems) => elems
+                        .get(*idx as usize)
+                        .is_some_and(|e| matches!(e, Type::Text(_))),
+                    _ => false,
+                };
+                let is_arg = variables.is_argument(*var);
+                if elem_is_text && !is_arg {
+                    write!(w, "&var_{name}.{idx}")?;
+                } else {
+                    write!(w, "var_{name}.{idx}")?;
+                }
             }
             Value::TuplePut(var, idx, val) => {
                 // N8a.2: emit the actual element assignment instead of the `= ...` stub.
@@ -254,6 +328,18 @@ impl Output<'_> {
             Value::Parallel(_) => {
                 // Native codegen for parallel {} is not yet supported.
                 write!(w, "/* parallel {{}} — not supported in native codegen */")?;
+            }
+            // Plan-07 phase 1 — Span is transparent in native emit.
+            Value::Span(b) => self.output_code_inner(w, &b.1)?,
+            // Plan-06 spine step 3 — ParFor native codegen lands in
+            // step 3b.  Until then, emit a placeholder comment so the
+            // file at least compiles when it accidentally appears in
+            // a reachable definition.
+            Value::ParFor(_) => {
+                write!(
+                    w,
+                    "/* par_for(...) — native codegen lands in spine step 3b */"
+                )?;
             }
         }
         Ok(())
@@ -329,36 +415,65 @@ impl Output<'_> {
             }
             candidates.push((d, def.name.clone(), has_closure));
         }
-        // Evaluate args into pre-eval bindings to avoid double-borrow.
-        let mut arg_exprs: Vec<String> = Vec::new();
-        for arg in args {
+        // Phase 09 phase 00 step 0.7 — fn-ref dispatch routes each
+        // candidate arm through `output_call_user_fn` (which dispatches
+        // via `emit_op`), so a custom emitter registered for any
+        // candidate target is honoured even when the call comes via
+        // fn-ref dispatch.
+        //
+        // Args evaluate exactly once across all arms (correctness for
+        // side-effecting expressions, plus the original "avoid
+        // double-borrow of `stores`" concern).  Hoist them into Rust
+        // `let _farg_N` bindings inside a wrapping block, then pass
+        // synthetic `Value::RawExpr("_farg_N")` args to each per-arm
+        // call.  `output_code_inner`'s `RawExpr` arm emits the binding
+        // name verbatim, so the per-arm code reads
+        // `fn_name(cell, _farg_0, _farg_1, …, closure_expr)` —
+        // semantically the same shape as the pre-step-0.7 direct
+        // emission, just routed through emit_op.
+        //
+        // `output_call_user_fn` iterates over the candidate's
+        // `def_fn.attributes` and emits one arg per attribute.  When
+        // `has_closure`, the candidate's last attribute is the
+        // synthetic `__closure` (a `DbRef`); we append a RawExpr arg
+        // for the closure expression so attribute count and arg count
+        // line up.
+        write!(w, "{{ ")?;
+        for (i, arg) in args.iter().enumerate() {
             let expr = self.generate_expr_buf(arg)?;
-            arg_exprs.push(expr);
+            write!(w, "let _farg_{i} = {expr}; ")?;
         }
         // Look up the closure work-var for this fn-ref variable (if any).
         let closure_var_nr = self.data.def(self.def_nr).variables.closure_var_of(v_nr);
+        let closure_expr: String = if let Some(clos_nr) = closure_var_nr {
+            // Same-scope closure: pass the local ___clos_N variable.
+            let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
+            format!("var_{clos_name}")
+        } else {
+            // Cross-scope closure — pass .1 from the fn-ref tuple.
+            format!("var_{var_name}.1")
+        };
         // match on .0 (d_nr) of the (u32, DbRef) fn-ref tuple.
         write!(w, "match var_{var_name}.0 {{")?;
-        for (d_nr, fn_name, has_closure) in &candidates {
-            write!(w, " {d_nr}_u32 => {fn_name}(stores")?;
-            for expr in &arg_exprs {
-                write!(w, ", {expr}")?;
-            }
+        for (d_nr, _fn_name, has_closure) in &candidates {
+            write!(w, " {d_nr}_u32 => ")?;
+            // Build synthetic args: visible let-bindings + closure (if any).
+            let mut synthetic: Vec<Value> = (0..args.len())
+                .map(|i| Value::RawExpr(format!("_farg_{i}")))
+                .collect();
             if *has_closure {
-                if let Some(clos_nr) = closure_var_nr {
-                    // Same-scope closure: pass the local ___clos_N variable.
-                    let clos_name = sanitize(self.data.def(self.def_nr).variables.name(clos_nr));
-                    write!(w, ", var_{clos_name}")?;
-                } else {
-                    // cross-scope closure — pass .1 from the fn-ref tuple.
-                    write!(w, ", var_{var_name}.1")?;
-                }
+                synthetic.push(Value::RawExpr(closure_expr.clone()));
             }
-            write!(w, "),")?;
+            // Route through output_call_user_fn → emit_op → custom emitter
+            // (or DefaultEmitter::user_fn_call_body when no emitter is
+            // registered for this candidate).
+            let candidate_def = self.data.def(*d_nr);
+            self.output_call_user_fn(w, candidate_def, &synthetic)?;
+            write!(w, ",")?;
         }
         write!(
             w,
-            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }}"
+            " _ => unreachable!(\"invalid fn-ref: {{}} in {var_name}\", var_{var_name}.0) }} }}"
         )?;
         Ok(())
     }
@@ -568,6 +683,23 @@ impl Output<'_> {
         bl: &Block,
         wrap_text: bool,
     ) -> std::io::Result<()> {
+        // Plan-06 phase 4d: fn-ref field read emits the (u32, DbRef)
+        // native tuple form directly.  The block carries two ops —
+        // `OpGetInt4(ref, fld)` (returns i64) and `OpNullRefSentinel()`
+        // (returns DbRef) — which the interpreter pushes sequentially
+        // onto the eval stack to form the 20-byte fn-ref slot.  Native
+        // can't use a generic Rust block here because the last
+        // expression's type would be `DbRef`, not `(u32, DbRef)`; and
+        // the `i64` from OpGetInt4 needs an explicit `as u32` cast to
+        // match the fn-ref tuple's first slot.
+        if bl.name == "fn_ref_field_read" && bl.operators.len() == 2 {
+            write!(w, "((")?;
+            self.output_code_inner(w, &bl.operators[0])?;
+            write!(w, ") as u32, ")?;
+            self.output_code_inner(w, &bl.operators[1])?;
+            write!(w, ")")?;
+            return Ok(());
+        }
         writeln!(
             w,
             "{{ //{}_{}: {}",
@@ -639,7 +771,14 @@ impl Output<'_> {
         let return_value_is_return = has_trailing_void
             && return_idx.is_some_and(|i| matches!(operators[i], Value::Return(_)));
         for (vnr, v) in operators.iter().enumerate() {
-            if matches!(v, Value::Line(_)) {
+            // DX-source-map: surface line comments at the
+            // statement-list level so rustc errors map back to .loft
+            // source.  Without this, only Value::Line nodes inside an
+            // expression context get rendered (rare in practice).
+            if let Value::Line(line) = v {
+                let file = self.data.def(self.def_nr).position.file.replace('\n', "");
+                self.indent(w)?;
+                writeln!(w, "// loft:{file}:{line}")?;
                 continue;
             }
             // Ref-return tail-call capture: `return __native_tail_ret;` in
@@ -731,7 +870,7 @@ impl Output<'_> {
                 // the block must return the mutable reference.  Emit `&mut var_<name>`
                 // directly rather than delegating to output_call which writes nothing.
                 if is_return_expr
-                    && let Value::Call(d_nr, args) = v
+                    && let Value::Call(d_nr, args) = v.unspan()
                     && self.data.def(*d_nr).name == "OpCreateStack"
                     && let [Value::Var(nr)] = args.as_slice()
                 {
@@ -763,8 +902,34 @@ impl Output<'_> {
                     } else {
                         None
                     };
+                    // P205 (plan-09 phase 07): when this function returns
+                    // Type::Text but has NO `Type::RefVar(Type::Text(_))`
+                    // attribute (i.e. text_return didn't add a proper
+                    // work buffer — happens for bounded-generic
+                    // specialisations and a few other text-return paths),
+                    // a plain `Str::new(<value>)` wrap captures a borrow
+                    // into a local String that drops at function return,
+                    // dangling the returned `Str`'s raw pointer.  Route
+                    // through `stores.scratch` instead so the value's
+                    // backing String lives as long as `stores` does.
+                    // Note: text_return doesn't set the `hidden` flag (only
+                    // ref_return does), so we don't filter on `a.hidden`.
+                    let needs_p205_scratch = wrap_result
+                        && {
+                            let def = self.data.def(self.def_nr);
+                            matches!(def.returned, Type::Text(_))
+                            && !def.attributes.iter().any(|a| {
+                                matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                            })
+                        };
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
+                    } else if needs_p205_scratch {
+                        // Move the String into stores.scratch, then return
+                        // a Str pointing into the scratch entry.  The
+                        // `(value).to_string()` coerces &str / String /
+                        // Str all into an owned String.
+                        write!(w, "{{ stores.scratch.push((")?;
                     } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
@@ -773,7 +938,12 @@ impl Output<'_> {
                     self.indent += 1;
                     self.output_code_with_subst(w, v, &pre_evals)?;
                     self.indent -= 1;
-                    if wrap_result {
+                    if needs_p205_scratch {
+                        write!(
+                            w,
+                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                        )?;
+                    } else if wrap_result {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow_cast {
                         write!(w, ") as {cast}")?;

@@ -10,14 +10,14 @@ mod testing;
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")
-        .error("boolean should be integer on call to def at wrong_parameter:1:40")
+        .error("expected integer, got boolean on call to def at wrong_parameter:1:40")
         .warning("Parameter i is never read at wrong_parameter:1:21");
 }
 
 #[test]
 fn wrong_boolean() {
     code!("enum EType{ Val }\nfn def(t: EType) {}\nfn test() { def(true); }")
-        .error("boolean should be EType on call to def at wrong_boolean:2:38")
+        .error("expected EType, got boolean on call to def at wrong_boolean:2:38")
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
@@ -35,6 +35,46 @@ fn typo_var_name() {
         .warning("Variable count is never read at typo_var_name:1:20");
 }
 
+// ── Plan-07 phase 5 — suggestion paths ──────────────────────────────────────
+
+/// Function-name typo (Levenshtein 1) appends `did you mean` suffix.
+/// Wires `Parser::suggest_function_name` at `mod.rs::call`'s
+/// "Unknown function" diagnostic.
+#[test]
+fn p07_suggest_unknown_function() {
+    code!(
+        "fn double(x: integer) -> integer { x + x }
+fn test() { doublet(5); }"
+    )
+    .error(
+        "Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:24",
+    );
+}
+
+/// Type-name typo (Levenshtein 1) appends `did you mean` suffix.
+/// Wires `Data::suggest_type_name` at `parser/mod.rs`'s deferred
+/// "Undefined type" emitter.
+#[test]
+fn p07_suggest_undefined_type() {
+    code!(
+        "struct Counter { n: integer }
+fn build() -> Conter { Counter { n: 0 } }
+fn test() {}"
+    )
+    .error("Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23");
+}
+
+// Field-suggestion paths (struct-literal + field-access) and the
+// 1-char cap behaviour are end-to-end-validated by
+// `quality_6c_unknown_field_without_free_fn_has_no_hint` in
+// `tests/issues.rs` (the existing assertion of plain "Unknown field
+// Point.z" depends on the length-aware cap suppressing the single-
+// char suggestion).  Adding dedicated `p07_suggest_*` tests for
+// these cases is blocked by `Variable v has unknown type` cascades
+// when an unknown-field expression is bound to a local; those
+// cascades are part of the parser's existing error-recovery shape
+// and would dominate the suggestion-specific assertion.
+
 #[test]
 fn use_before_define() {
     code!("fn test() { if a == 1 { panic(); }; a = 1; }")
@@ -44,7 +84,7 @@ fn use_before_define() {
 #[test]
 fn wrong_text() {
     code!("fn rout(a: integer) -> integer {if a > 4 {return \"a\"} 2}\nfn test() {}")
-        .error("text should be integer on return at wrong_text:1:53");
+        .error("expected integer, got text on return at wrong_text:1:53");
 }
 
 #[test]
@@ -97,7 +137,7 @@ fn wrong_plus() {
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
-        .error("text should be integer on else at wrong_if:2:1");
+        .error("expected integer, got text on else at wrong_if:2:1");
 }
 
 #[test]
@@ -109,7 +149,7 @@ fn wrong_assign() {
 #[test]
 fn mixed_enums() {
     code!("enum E1 { V1 }\nenum E2 { V2 }\nfn a(v: E2) -> E2 { v }\nfn test() { a(V1) }")
-        .error("E1 should be E2 on call to a at mixed_enums:4:19");
+        .error("expected E2, got E1 on call to a at mixed_enums:4:19");
 }
 
 #[test]
@@ -121,7 +161,7 @@ fn wrong_cast() {
 #[test]
 fn field_type() {
     code!("struct Rec { v: u8 }\nfn test() { r = Rec { v: \"a\" }; assert(\"{r}\" == \"{{v:\\\"a\\\"}}\", \"Object\"); }")
-        .error("Cannot write integer(0, 255) on field Rec.v:text at field_type:2:31");
+        .error("Cannot assign text to field Rec.v of type integer(0, 255) at field_type:2:31");
 }
 
 #[test]
@@ -722,13 +762,13 @@ fn par_worker_returns_generator() {
 
 // ── T1.11 — Tuple type constraints ───────────────────────────────────────────
 
-/// T1.11a: a tuple type in a struct field position must be rejected at compile
-/// time because tuples are stack-only values that cannot be heap-allocated.
-#[test]
-fn tuple_in_struct_field_rejected() {
-    code!("struct Foo { pair: (integer, integer) }\nfn test() {}")
-        .error("struct field cannot have a tuple type — tuples are stack-only values at tuple_in_struct_field_rejected:1:40");
-}
+// T1.11a (Plan-06 phase 4d): the original rejection of tuple-typed struct
+// fields ("tuples are stack-only values that cannot be heap-allocated")
+// has been LIFTED.  Tuple fields now lay out their elements inline using
+// the synthetic `__tuple<…>` struct's positions, mirroring how index
+// bookkeeping triples are placed atomically.  See
+// `parser/mod.rs::set_field_check`/`get_val` (Type::Tuple arms) and the
+// `/tmp/tup_field*.loft` smoke tests for the working behaviour.
 
 /// T1.11b: compound assignment on a tuple LHS must produce a clear diagnostic
 /// instead of a generic internal error.
@@ -881,7 +921,7 @@ fn p85b_enum_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("enum E { Foo, Bar }\nfn test() {}").error(&format!(
         "enum 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:349:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_enum_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -891,7 +931,7 @@ fn p85b_struct_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("struct E { n: integer }\nfn test() {}").error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:349:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_struct_shadowing_stdlib_constant_emits_diagnostic:1:11"
     ));
 }
@@ -901,7 +941,7 @@ fn p85b_type_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("type E = integer;\nfn test() {}").error(&format!(
         "type 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:349:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_type_shadowing_stdlib_constant_emits_diagnostic:1:9"
     ));
 }
@@ -911,7 +951,7 @@ fn p85b_constant_shadowing_stdlib_constant_emits_diagnostic() {
     let s = loft::platform::sep_str();
     code!("E = 42;\nfn test() {}").error(&format!(
         "constant 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:349:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p85b_constant_shadowing_stdlib_constant_emits_diagnostic:1:8"
     ));
 }

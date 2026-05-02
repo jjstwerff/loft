@@ -63,6 +63,72 @@ pub(crate) fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
 }
 
+/// Parse every `target/<profile>/build/*/output` file and extract
+/// `cargo:rustc-link-search=native=<path>` directives, returning the
+/// list of directories that should be passed to rustc as
+/// `-L native=<path>`.
+///
+/// Cargo passes these flags automatically when building the loft
+/// binary itself, but when loft's `--native` mode invokes rustc
+/// directly to compile generated user code we must replicate the
+/// link environment by hand.  Without these search paths the
+/// Windows link step fails with `LNK1181: cannot open input file
+/// 'windows.0.48.5.lib'` because the `windows-targets` crate emits a
+/// search path pointing into its registry source directory (not
+/// `OUT_DIR`).
+///
+/// `lib_dir` is either `target/<profile>/` or `target/<profile>/deps/`
+/// — both resolve to the same parent build root.
+pub(crate) fn build_script_native_lib_dirs(lib_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let target_profile = if lib_dir.file_name().is_some_and(|n| n == "deps") {
+        match lib_dir.parent() {
+            Some(p) => p,
+            None => return Vec::new(),
+        }
+    } else {
+        lib_dir
+    };
+    let build_root = target_profile.join("build");
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&build_root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let output_path = entry.path().join("output");
+        let Ok(text) = std::fs::read_to_string(&output_path) else {
+            continue;
+        };
+        for line in text.lines() {
+            // Strip optional `cargo::` (1.77+) or `cargo:` (legacy) prefix.
+            let body = line
+                .strip_prefix("cargo::")
+                .or_else(|| line.strip_prefix("cargo:"))
+                .unwrap_or(line);
+            // Match `rustc-link-search=native=<path>` and the form
+            // without an explicit kind (`rustc-link-search=<path>`,
+            // which defaults to `all` and includes native).
+            let Some(rest) = body.strip_prefix("rustc-link-search=") else {
+                continue;
+            };
+            let path_str = rest.strip_prefix("native=").unwrap_or(rest);
+            // Skip framework= / dependency= / crate= kinds — they're
+            // unrelated to native lib search.
+            if rest.starts_with("framework=")
+                || rest.starts_with("dependency=")
+                || rest.starts_with("crate=")
+            {
+                continue;
+            }
+            let p = std::path::PathBuf::from(path_str);
+            if seen.insert(p.clone()) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 /// Ensure `libloft.rlib` is at least as fresh as the newest `src/*.rs` file.
 /// If any source is newer, run `cargo build --lib` to rebuild it.
 pub(crate) fn ensure_rlib_fresh() {

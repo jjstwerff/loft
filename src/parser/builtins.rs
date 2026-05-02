@@ -189,10 +189,16 @@ impl Parser {
             return (u32::MAX, Type::Unknown(0), extra_vals, extra_types);
         }
         // Validate extra arg count against function signature.
-        // Skip hidden __ref_* / __rref_* / __work_* parameters (work-refs for text/vector returns).
+        // Skip hidden __ref_* / __rref_* / __work_* parameters (work-refs
+        // for text/vector returns) and any attribute marked
+        // `hidden: true` by ref_return() (heap-typed return values
+        // promoted to a hidden caller arg, e.g. `out: vector<integer>`).
         if !self.first_pass {
             let n_params = (0..self.data.attributes(d_nr))
-                .filter(|&a| !self.data.attr_name(d_nr, a).starts_with("__"))
+                .filter(|&a| {
+                    !self.data.attr_name(d_nr, a).starts_with("__")
+                        && !self.data.def(d_nr).attributes[a].hidden
+                })
                 .count();
             let n_extra = extra_vals.len();
             let expected_extra = if n_params > 0 { n_params - 1 } else { 0 };

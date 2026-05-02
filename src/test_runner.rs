@@ -795,6 +795,7 @@ pub(crate) fn run_tests(
                             yield_collect: false,
                             fn_ref_context: false,
                             i32_literal_context: false,
+                            tuple_text_to_string: false,
                             call_stack_prefix: None,
                             wasm_browser: false,
                         };
@@ -805,11 +806,18 @@ pub(crate) fn run_tests(
                         // a main() that calls each test function.
                         if !has_main {
                             use std::io::Write;
+                            // P199 — wrap Stores in UnsafeCell so the new
+                            // ABI's `&UnsafeCell<Stores>` parameter type is
+                            // satisfied by the entry call.
                             writeln!(buf, "\nfn main() {{").unwrap();
-                            writeln!(buf, "    let mut stores = Stores::new();").unwrap();
-                            writeln!(buf, "    init(&mut stores);").unwrap();
+                            writeln!(
+                                buf,
+                                "    let cell = std::cell::UnsafeCell::new(Stores::new());"
+                            )
+                            .unwrap();
+                            writeln!(buf, "    init(&cell);").unwrap();
                             for (_, name) in &native_fns {
-                                writeln!(buf, "    n_{name}(&mut stores);").unwrap();
+                                writeln!(buf, "    n_{name}(&cell);").unwrap();
                             }
                             writeln!(buf, "}}").unwrap();
                         }

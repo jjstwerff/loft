@@ -126,6 +126,12 @@ impl Store {
     }
 
     pub fn new(size: u32) -> Store {
+        // `init()` writes record 1's header at byte offset 8, so the
+        // backing buffer must hold at least 2 words.  Smaller sizes
+        // produce an OOB write that Linux's allocator slack tolerates
+        // but Windows catches at deallocation as STATUS_HEAP_CORRUPTION
+        // (0xc0000374).
+        let size = size.max(2);
         let l = Layout::from_size_align(size as usize * 8, 8).expect("Problem");
         let ptr = unsafe { A.alloc_zeroed(l) };
         let mut store = Store {

@@ -52,7 +52,12 @@ the canonical example of this discipline in action.
 
 ## Current initiatives
 
-*(none — next initiative opens a new numbered subdirectory.)*
+| Dir | Initiative | Status |
+|---|---|---|
+| [`06-typed-par/`](06-typed-par/) | Simple typed `par`: collapse the 7-variant runtime + 3-fn native dispatch into one store-stitch path; "everything is a store".  Retires ~1100 lines net across `src/parallel.rs` and `src/codegen_runtime.rs`. | Phase 0 (characterisation + bench) open |
+| [`07-error-messages/`](07-error-messages/) | Better error messages: every error reaches the user as `file:line:col` + concrete message + source line with caret + optional suggestion.  Spans on IR, pc→source-line table, typed `RuntimeError`, retire the implicit panic-vs-sentinel coin-flip. | Phase 0 (survey + baseline corpus) open |
+| [`09-native-runtime-rewrite/`](09-native-runtime-rewrite/) | Per-Op emitter dispatch on top of `#rust` template substitution.  Simplification phases (01-04) dissolve the structural blockers that have caused prior P200/P202/P203/P205 fix attempts to fail; bug-fix phases (05-08) close them on top.  Introspection phases (00a/02a/05a/08a) at high-risk boundaries allow continue/pivot/stop decisions. | Phase 00 (scaffold) open |
+| [`10-scope-exit-emission/`](10-scope-exit-emission/) | Scope-exit gate simplification (deferred).  Drops the `(dep.is_empty() \|\| is_work_ref) &&` prefix from `src/scopes.rs:1053` so cleanup emission no longer depends on dep-tracker precision.  Pure cognitive-clarity win backed by existing runtime safety + Drop semantics; no P-issue closes here.  Originally framed as a P203 fix — that framing turned out wrong (P203 is a template double-sub bug, tracked in PROBLEMS.md). | **DEFERRED** (2026-05-02) — pick up when triggered by another bug in this gate's territory, dep-tracking maintenance, or contributor interest. |
 
 ## Finished initiatives
 

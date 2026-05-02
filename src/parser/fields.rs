@@ -36,12 +36,16 @@ impl Parser {
         };
         let enr = self.data.type_elm(&t);
         if enr == u32::MAX {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Unknown type {}",
-                t.show(&self.data, &self.vars)
-            );
+            let shown = t.show(&self.data, &self.vars);
+            if let Some(s) = self.suggest_type_name(&shown) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown type {shown} — did you mean '{s}'?"
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown type {shown}");
+            }
             return Type::Unknown(0);
         }
         let e_size = i32::from(self.database.size(self.data.def(enr).known_type));
@@ -124,6 +128,13 @@ impl Parser {
                             self.lexer,
                             Level::Error,
                             "Unknown field {}.{field} — did you mean the free function `{field}(…)` ? (stdlib declared `{field}` as free-only; see LOFT.md § Methods and function calls)",
+                            self.data.def(dnr).name
+                        );
+                    } else if let Some(s) = self.suggest_field_name(dnr, &field) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown field {}.{field} — did you mean '{s}'?",
                             self.data.def(dnr).name
                         );
                     } else {
@@ -437,6 +448,8 @@ impl Parser {
                     );
                     if self.database.is_base(known) {
                         v = self.get_val(etp, true, 0, v, u32::MAX);
+                    } else if let Type::Tuple(elems) = etp {
+                        v = self.unbox_tuple_from_dbref(v, elems);
                     }
                     v
                 };
@@ -465,15 +478,77 @@ impl Parser {
         // Linked structs: array stores 4-byte record pointers → OpVectorRef dereferences correctly.
         // Base/primitive types: inline data → OpGetVector + get_val reads the primitive value.
         // Plain inline structs: OpGetVector only (field access happens at the next level).
+        // Tuple elements: OpGetVector + per-field reads via the DbRef (P189b — see
+        // `unbox_tuple_from_dbref`).  Without this the assignment `p = pairs[0]`
+        // wrote DbRef bytes into the tuple slot and `p.0` / `p.1` decoded them
+        // as garbage integers.
         if self.database.is_linked(known) {
             *code = self.cl("OpVectorRef", &[code.clone(), p]);
         } else {
             *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
             if self.database.is_base(known) {
                 *code = self.get_val(etp, true, 0, code.clone(), u32::MAX);
+            } else if let Type::Tuple(elems) = etp {
+                *code = self.unbox_tuple_from_dbref(code.clone(), elems);
             }
         }
         None
+    }
+
+    /// P189b: assemble a stack-tuple from a DbRef pointing to an
+    /// inline tuple in vector storage.
+    ///
+    /// `dbref` is a Value that, at runtime, evaluates to a `DbRef`
+    /// pointing at the start of an inline tuple's bytes (typically
+    /// `OpGetVector(pairs, stride, idx)`).  This helper stashes the
+    /// DbRef in a fresh work-ref of type `Reference(__tuple<…>)` so
+    /// per-element loads (`OpGetInt(dbref, off)`, `OpGetText(dbref,
+    /// off)`, etc. via `get_val`) read at the right field offsets,
+    /// then wraps the per-element loads in `Value::Tuple` so the
+    /// caller's `Set(p, …)` produces the correct stack-tuple
+    /// representation (each element pushed onto contiguous slots).
+    ///
+    /// Heap-vs-stack layout differs for `text` and reference fields
+    /// (heap stores a 4-byte interned pointer; stack uses a 16-byte
+    /// `Str` / `DbRef`).  `get_val`'s per-type dispatch handles the
+    /// inflation correctly because each type uses the same opcodes
+    /// the struct-field path uses (`OpGetText` reads a 4-byte heap
+    /// text pointer and pushes a 16-byte `Str` onto the stack).
+    pub(crate) fn unbox_tuple_from_dbref(&mut self, dbref: Value, elems: &[Type]) -> Value {
+        let elems_vec = elems.to_vec();
+        let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+        let ref_tp = Type::Reference(tuple_d_nr, Vec::new());
+        let tmp = self.vars.work_refs(&ref_tp, &mut self.lexer);
+        if !self.first_pass {
+            self.change_var_type(tmp, &ref_tp);
+        }
+        // Stored tuples MUST use the synthetic `__tuple<…>` struct's
+        // post-finish field positions (the same offsets used by
+        // `OpGetInt` for ordinary struct fields).  Falls back to the
+        // alignment-aware `element_offsets` only on early-parse paths
+        // before `finish_type` has run.
+        let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+            &self.data,
+            &self.database,
+            tuple_d_nr,
+            elems_vec.len(),
+        )
+        .unwrap_or_else(|| {
+            crate::data::element_offsets(&elems_vec)
+                .into_iter()
+                .map(|x| x as u16)
+                .collect()
+        });
+        let mut tuple_elems = Vec::new();
+        for (i, et) in elems_vec.iter().enumerate() {
+            let off = u32::from(offsets[i]);
+            tuple_elems.push(self.get_val(et, false, off, Value::Var(tmp), u32::MAX));
+        }
+        v_block(
+            vec![v_set(tmp, dbref), Value::Tuple(tuple_elems)],
+            Type::Tuple(elems_vec),
+            "tuple_unbox",
+        )
     }
 
     pub(crate) fn parse_text_index(

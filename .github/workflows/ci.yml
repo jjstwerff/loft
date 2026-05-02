@@ -28,6 +28,14 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # `.cargo/config.toml` activates the `mold` linker on
+      # x86_64-unknown-linux-gnu for a unified cache + slightly faster
+      # link.  Mac / Windows runners use different target triples and
+      # ignore that config — no install needed there.
+      - name: Install mold (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold
+
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
@@ -41,11 +49,41 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
+      # Defensive build step: some integration tests spawn
+      # `target/release/loft` directly (e.g. via Command::new helpers)
+      # and assume the release binary exists.  `cargo build
+      # --all-targets` builds dev profile only.
+      #
+      # `--lib` ensures the canonical `target/release/libloft.rlib`
+      # is built (cargo only places the canonical artifact when
+      # `--lib` is explicit; `--bin loft` alone only puts the
+      # hashed version in `target/release/deps/`).  Without the
+      # canonical lib, loft's `--native` mode falls back to the
+      # deps directory and rustc can't resolve transitive deps
+      # like rand_core (E0463 on macOS/Windows).
+      - name: Build (release loft binary + lib for integration tests)
+        run: cargo build --release --lib --bin loft
+
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.
       - name: Build (no default features)
         if: runner.os == 'Linux'
         run: cargo build --no-default-features
+
+      # The `html_wasm` test suite asserts the
+      # `wasm32-unknown-unknown` rlib is fresh against
+      # `src/codegen_runtime.rs` and other runtime sources.  Without
+      # this rebuild step, a cache-restored rlib from main is older
+      # than the PR's runtime sources and the staleness check panics.
+      # Linux-only: macOS / Windows test jobs skip html_wasm via the
+      # rust-target check inside the test (no wasm target installed).
+      - name: Install wasm target (for html_wasm tests)
+        if: runner.os == 'Linux'
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build wasm rlib (for html_wasm tests)
+        if: runner.os == 'Linux'
+        run: cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 
       # cargo-nextest runs each test in its own process with better
       # scheduling than cargo test — typically 30-50 % faster on this
@@ -69,6 +107,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      # `.cargo/config.toml` activates mold on x86_64-unknown-linux-gnu
+      # for build-script + proc-macro linking.  The clippy job needs
+      # this even though it doesn't link the final binary — cargo
+      # still compiles + links build scripts.
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -113,6 +158,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      # `.cargo/config.toml` activates mold for native x86_64 builds
+      # (the wasm target is unaffected, but the gallery job also
+      # builds loft-native for the Brick Buster HTML pipeline).
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
 
       - name: Install wasm-pack
         run: |

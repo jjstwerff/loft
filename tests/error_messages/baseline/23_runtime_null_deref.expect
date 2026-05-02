@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Struct 'Node' contains itself (directly or indirectly) — use reference<Node> to break the cycle at <cases>/23_runtime_null_deref.loft:1:14
+  |
+   1 | struct Node { value: integer, next: reference<Node> }
+     |              ^
+==== stderr ====

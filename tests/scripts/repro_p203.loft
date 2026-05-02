@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// P203 regression guard — apparent file-not-flushed bug whose actual
+// root cause was template double-substitution at default/01_code.loft:705.
+// `OpConvIntFromEnum` substituted @v1 twice; the comparison
+// `delete(path) == FileResult.Ok` evaluated `delete()` once in the null
+// check and once in the conversion, so the file got deleted then
+// "didn't exist" on the second call.
+// Fix: src/generation/calls.rs::output_call_template now hoists any
+// repeated @<name> placeholder into a `let` binding so the arg
+// expression evaluates exactly once.
+// See doc/claude/PROBLEMS.md § 203.
+fn p203_native_block_scope_file() {
+  {f = file("repro_p203.txt");
+   f += "x";
+  }
+  assert(delete("repro_p203.txt") == FileResult.Ok,
+         "p203: delete after block-scope close");
+}

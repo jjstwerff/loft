@@ -1,0 +1,5 @@
+struct Player { name: text, health: integer }
+fn main() {
+  p = Player { name: "Bob" };
+  print("{p.name}");
+}

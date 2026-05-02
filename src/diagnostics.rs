@@ -176,7 +176,8 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-/// Find the closest match to `name` among `candidates` (Levenshtein distance ≤ 2).
+/// Find the closest match to `name` among `candidates` (Levenshtein
+/// distance ≤ 2).
 #[must_use]
 pub fn suggest_similar<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
     candidates
@@ -185,6 +186,36 @@ pub fn suggest_similar<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str
         .filter(|c| {
             let d = levenshtein(name, c);
             d > 0 && d <= 2
+        })
+        .min_by_key(|c| levenshtein(name, c))
+}
+
+/// Plan-07 phase 5: suggestion with a length-aware distance cap.
+/// Caps Levenshtein distance at `min(2, name_chars / 4)` so very short
+/// inputs (1–3 chars) do not over-match.  Empty `name` never suggests.
+///
+/// Distance bounds by name length:
+/// - 1 char → 0 (no suggestion — would over-match generic-type
+///   placeholders like `T` / `K` / `V`).
+/// - 2–3 chars → 0 (≤ ½ char of edits).
+/// - 4–7 chars → 1 (single-char typo).
+/// - 8+ chars → 2 (the standard `suggest_similar` ceiling).
+#[must_use]
+pub fn suggest_similar_capped<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let n = name.chars().count();
+    if n == 0 {
+        return None;
+    }
+    let max_dist = std::cmp::min(2, n / 4);
+    if max_dist == 0 {
+        return None;
+    }
+    candidates
+        .iter()
+        .copied()
+        .filter(|c| {
+            let d = levenshtein(name, c);
+            d > 0 && d <= max_dist
         })
         .min_by_key(|c| levenshtein(name, c))
 }

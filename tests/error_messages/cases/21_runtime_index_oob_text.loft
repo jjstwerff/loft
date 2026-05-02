@@ -1,0 +1,5 @@
+fn main() {
+  t = "abc";
+  c = t[100];
+  print("c={c}");
+}

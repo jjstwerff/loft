@@ -9,6 +9,7 @@ mod calls;
 mod coroutine;
 mod dispatch;
 mod emit;
+mod ops;
 mod pre_eval;
 mod text;
 
@@ -21,12 +22,22 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
     match val {
         Value::Call(d, args) => {
             calls.insert(*d);
-            // n_parallel_for passes a worker function as args[4]: an integer
-            // literal that is resolved to a closure in native output_call.
-            // Detect it here so the worker is included in the reachable set.
+            // n_parallel_for / n_parallel_queue pass a worker function as
+            // args[4]: an integer literal that the codegen emitter
+            // (src/generation/ops/parallel.rs) resolves into a closure body
+            // calling the worker by name.  Detect it here so the worker
+            // is included in the reachable set — without this, the
+            // closure refers to a fn that never gets emitted and rustc
+            // fails with "cannot find function" (E0425).
             if matches!(
                 data.def(*d).name.as_str(),
-                "n_parallel_for" | "n_parallel_for_light"
+                "n_parallel_for"
+                    | "n_parallel_for_light"
+                    | "n_parallel_queue"
+                    | "n_parallel_queue_text"
+                    | "n_parallel_queue_ref"
+                    | "n_parallel_queue_narrow"
+                    | "n_parallel_queue_fn"
             ) && args.len() >= 5
                 && let Value::Int(fn_d_nr) = &args[4]
                 && *fn_d_nr >= 0
@@ -61,6 +72,7 @@ fn collect_calls(val: &Value, data: &Data, calls: &mut HashSet<u32>) {
         // N8b.1: walk into yield expressions so helper functions are included in the
         // reachable set and emitted before the coroutine state-machine struct.
         Value::Yield(inner) => collect_calls(inner, data, calls),
+        Value::Span(b) => collect_calls(&b.1, data, calls),
         _ => {}
     }
 }
@@ -87,6 +99,12 @@ fn collect_int_fn_refs(val: &Value, calls: &mut HashSet<u32>) {
             }
         }
         Value::Return(v) | Value::Drop(v) => collect_int_fn_refs(v, calls),
+        // Span wraps most operators for parser diagnostics — recurse
+        // through it so `Span(Int(d_nr))` fn-ref literals at call
+        // sites get added to the reachable set (without this, the
+        // CallRef match-arm dispatch is missing candidates and panics
+        // at runtime with `invalid fn-ref: <n>`).
+        Value::Span(b) => collect_int_fn_refs(&b.1, calls),
         _ => {}
     }
 }
@@ -152,6 +170,10 @@ fn collect_fn_ref_literals(
         Value::FnRef(d_nr, _, _) if *d_nr >= 0 => {
             calls.insert((*d_nr).cast_unsigned());
         }
+        // Span wraps most operators for parser diagnostics — recurse so
+        // Set / Call args that arrive as Span(...) still trigger the
+        // fn-ref-literal walk.
+        Value::Span(b) => collect_fn_ref_literals(&b.1, data, variables, calls),
         _ => {}
     }
 }
@@ -215,6 +237,14 @@ pub struct Output<'a> {
     /// entry to every recursive `output_code_inner` that isn't
     /// explicitly inside such a slot.
     pub i32_literal_context: bool,
+    /// When true, `Value::Text` literals inside a `Value::Tuple` emit
+    /// with a trailing `.to_string()` so the element fits a
+    /// `String`-typed tuple slot.  Set by `set_var` (and similar
+    /// destination-aware paths) when assigning a `Value::Tuple` to a
+    /// `Type::Tuple(...)` variable that has at least one `Type::Text`
+    /// element.  Cleared after the assignment so argument-context
+    /// tuples (which need `&str`) keep the default emit.
+    pub tuple_text_to_string: bool,
     /// When set, `output_block` inserts this code right after the opening `{`.
     /// Used to inject `cr_call_push` / `CallGuard` for shadow call stack support.
     pub call_stack_prefix: Option<String>,
@@ -332,7 +362,19 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Iterator(_, _) => "DbRef { store_nr: u16::MAX, rec: 0, pos: 8 }".into(),
         // N8a.1: a tuple null is the zero-default for each element type.
         Type::Tuple(elems) => {
-            let parts: Vec<String> = elems.iter().map(default_native_value).collect();
+            // Tuple variables hold Variable-context element types
+            // (`String` for `Text`, etc.), so the per-element default
+            // must match.  Map `Type::Text` to `String::new()` here
+            // — the bare `default_native_value(Text)` would return
+            // `Str::new(...)` which is the Argument-context literal
+            // and won't fit a `String`-typed tuple slot.
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| match e {
+                    Type::Text(_) => "String::new()".to_string(),
+                    other => default_native_value(other),
+                })
+                .collect();
             format!("({})", parts.join(", "))
         }
         _ => "0".into(), // Integer, Character, Enum(u8), etc.
@@ -495,6 +537,8 @@ extern crate loft;"
         writeln!(w, "use loft::keys::{{DbRef, Str, Key, Content}};")?;
         writeln!(w, "use loft::ops;")?;
         writeln!(w, "use loft::vector;")?;
+        writeln!(w, "use loft::hash;")?;
+        writeln!(w, "use loft::tree;")?;
         writeln!(w, "use loft::codegen_runtime;")?;
         writeln!(w, "use loft::codegen_runtime::*;")?;
         // The `external::` namespace is used by stdlib #rust templates for rand/random ops.
@@ -519,7 +563,11 @@ extern crate loft;"
         till: u32,
     ) -> std::io::Result<()> {
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(w, "fn init(db: &mut Stores) {{")?;
+        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
+        writeln!(
+            w,
+            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         self.output_init(w, from, till)?;
         writeln!(w, "    db.finish();\n}}\n")?;
         self.output_functions(w, from, till, None)?;
@@ -543,7 +591,11 @@ extern crate loft;"
         let reachable = reachable_functions(self.data, entry_defs);
         self.reachable.clone_from(&reachable);
         Self::emit_file_header(w, self.data, self.wasm_browser)?;
-        writeln!(w, "fn init(db: &mut Stores) {{")?;
+        writeln!(w, "fn init(cell: &std::cell::UnsafeCell<Stores>) {{")?;
+        writeln!(
+            w,
+            "    let db: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         // Register ALL types (0..till) so runtime type IDs match compile-time IDs.
         self.output_init(w, 0, till)?;
         writeln!(w, "    db.finish();")?;
@@ -560,12 +612,12 @@ extern crate loft;"
                 // exported cdylib entry point for browser WASM.
                 writeln!(
                     w,
-                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                    "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             } else {
                 writeln!(
                     w,
-                    "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                    "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
                 )?;
             }
         }
@@ -578,7 +630,7 @@ extern crate loft;"
         if main_nr < till {
             writeln!(
                 w,
-                "\nfn main() {{\n    let mut stores = Stores::new();\n    init(&mut stores);\n    n_main(&mut stores);\n}}"
+                "\nfn main() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
             )?;
         }
         Ok(())
@@ -1129,6 +1181,18 @@ extern crate loft;"
                             .then(|| self.data.def(n).known_type)
                             .filter(|t| *t != u16::MAX)
                     }
+                    // Plan-06 phase 4d: tuple struct fields inline the
+                    // synthetic `__tuple<…>` struct's bytes — emit its
+                    // type-creation call before the parent's `db.field`
+                    // so the forward reference (`db.field(t_parent, "v",
+                    // t_synthetic_tuple)`) sees the synthetic binding
+                    // already declared.
+                    Type::Tuple(_) => {
+                        let n = self.data.type_def_nr(&a.typedef);
+                        (n != u32::MAX)
+                            .then(|| self.data.def(n).known_type)
+                            .filter(|t| *t != u16::MAX)
+                    }
                     _ => None,
                 };
                 if let Some(dep_tp) = dep_tp
@@ -1460,6 +1524,13 @@ extern crate loft;"
             )?;
             return Ok(());
         }
+        if matches!(typedef, Type::Function(_, _, _)) {
+            // Storage holds the 4-byte i32 d_nr; closure half is not
+            // stored.  Mirrors the typedef.rs Function arm so native
+            // and interpreter agree on layout.
+            emit_db_field(w, s_var, field_name, "int", "db.int(0, false)")?;
+            return Ok(());
+        }
         if known_type != u16::MAX {
             let kt_ref = type_id_ref(known_type);
             writeln!(w, "    db.field({s_var}, \"{field_name}\", {kt_ref});")?;
@@ -1524,34 +1595,17 @@ extern crate loft;"
     /// Use this to emit one loft function as a Rust function.
     /// Every loft function receives `stores: &mut Stores` as its first implicit argument.
     fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
-        // Functions implemented in codegen_runtime (imported via `use loft::codegen_runtime::*`).
-        // Emitting a stub would shadow the real implementation.
-        const CODEGEN_RUNTIME_FNS: &[&str] = &[
-            "n_now",
-            "n_ticks",
-            "n_get_store_lock",
-            "n_set_store_lock",
-            "n_rand",
-            "n_rand_indices",
-            "n_parallel_for_native",
-            "n_parallel_get_int",
-            "n_parallel_get_long",
-            "n_parallel_get_float",
-            "n_parallel_get_bool",
-            "n_parallel_for_ref_native",
-            "n_parallel_get_ref",
-            "n_path_sep",
-            "n_stack_trace",
-            "n_hash_sorted",
-        ];
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
         // Skip Op functions with no callable body.
         if def.name.starts_with("Op") && def.code == Value::Null {
             return Ok(());
         }
-        // Skip functions implemented in codegen_runtime.
-        if def.code == Value::Null && CODEGEN_RUNTIME_FNS.contains(&def.name.as_str()) {
+        // Skip functions implemented in codegen_runtime — emitting a stub
+        // would shadow the real implementation.  Plan 09 phase 01
+        // consolidated the hardcoded list into the registry in
+        // `src/codegen_runtime.rs::CODEGEN_RUNTIME_FNS`.
+        if def.code == Value::Null && crate::codegen_runtime::is_codegen_runtime_fn(&def.name) {
             return Ok(());
         }
         // N8b.1: generator functions (returning iterator<T>) are emitted as state machines.
@@ -1562,7 +1616,7 @@ extern crate loft;"
         if def.name == "n_assert" && def.code == Value::Null {
             writeln!(
                 w,
-                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_s: &mut Stores, test: bool, msg: M, file: F, line: i64) {{"
+                "fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: bool, msg: M, file: F, line: i64) {{"
             )?;
             writeln!(
                 w,
@@ -1571,7 +1625,14 @@ extern crate loft;"
             writeln!(w, "}}\n")?;
             return Ok(());
         }
-        write!(w, "fn {}(stores: &mut Stores", def.name)?;
+        // DX-source-map: emit a `// loft:<file>:<line>` comment
+        // above each function so rustc errors at the function header
+        // (e.g. wrong arg type, missing trait impl) map directly to
+        // the .loft definition site.
+        if !def.position.file.is_empty() {
+            writeln!(w, "// loft:{}:{}", def.position.file, def.position.line)?;
+        }
+        write!(w, "fn {}(cell: &std::cell::UnsafeCell<Stores>", def.name)?;
         for a in &def.attributes {
             let tp = rust_type(&a.typedef, &Context::Argument);
             write!(w, ", mut var_{}: {tp}", sanitize(&a.name))?;
@@ -1598,21 +1659,35 @@ extern crate loft;"
             let block_empty = bl.operators.iter().all(|v| matches!(v, Value::Line(_)));
             if block_empty && def.returned != Type::Void {
                 writeln!(w, "{{")?;
+                writeln!(
+                    w,
+                    "  let _stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                )?;
                 writeln!(w, "  {}", default_native_value(&def.returned))?;
                 writeln!(w, "}}")?;
             } else if instrument {
                 // Emit shadow call stack instrumentation before the block body.
                 // The CallGuard drop ensures cr_call_pop on all exit paths (including early return).
                 // We emit the push/guard as a prefix inside the block's opening `{`.
+                // P199 — prepend the `&mut Stores` derivation from the
+                // `&UnsafeCell<Stores>` parameter so templates and inner
+                // emissions see `stores` as a regular `&mut Stores` binding.
                 let escaped_file = loft_file.replace('\\', "\\\\");
                 self.call_stack_prefix = Some(format!(
-                    "  cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
+                    "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};\n  \
+                     cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;"
                 ));
                 self.output_block(w, bl, returns_text)?;
                 self.call_stack_prefix = None;
             } else {
+                // Non-instrumented user-fn (e.g. `t_…` methods) — still
+                // needs the `&mut Stores` derivation from the UnsafeCell
+                // parameter for templates / inner calls.
+                self.call_stack_prefix =
+                    Some("  let stores: &mut Stores = unsafe { &mut *cell.get() };".to_string());
                 self.output_block(w, bl, returns_text)?;
+                self.call_stack_prefix = None;
             }
         } else if def.code == Value::Null {
             // Native-only function with no loft body.
@@ -1643,13 +1718,25 @@ extern crate loft;"
                 // all others get a todo!() stub.
                 writeln!(w, "{{")?;
                 if def.name == "i_parse_errors" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(w, "  loft::codegen_runtime::i_parse_errors(stores)")?;
                 } else if def.name == "i_parse_error_push" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(
                         w,
                         "  loft::codegen_runtime::i_parse_error_push(stores, var_msg)"
                     )?;
                 } else if def.name == "n_json_errors" {
+                    writeln!(
+                        w,
+                        "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    )?;
                     writeln!(w, "  loft::codegen_runtime::i_json_errors(stores)")?;
                 } else if def.returned != Type::Void {
                     writeln!(w, "  todo!(\"native function {}\")", def.name)?;
@@ -1658,6 +1745,10 @@ extern crate loft;"
             }
         } else {
             writeln!(w, "{{")?;
+            writeln!(
+                w,
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+            )?;
             self.output_code_inner(w, &def.code)?;
             writeln!(w, "\n}}")?;
         }
@@ -1675,6 +1766,10 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
         writeln!(w, "{{")?;
+        writeln!(
+            w,
+            "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
         write!(w, "  {rust_symbol}(stores")?;
         for attr in &def.attributes {
             if attr.name.starts_with("__") {
@@ -1713,6 +1808,10 @@ extern crate loft;"
     ) -> std::io::Result<()> {
         let def = self.data.def(d_nr);
         writeln!(w, "{{")?;
+        writeln!(
+            w,
+            "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
 
         // Pre-declare per-vector extraction variables before the call expression
         // so that raw pointers are stable for the duration of the unsafe block.

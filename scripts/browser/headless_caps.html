@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!--
+  Copyright (c) 2026 Jurjen Stellingwerff
+  SPDX-License-Identifier: LGPL-3.0-or-later
+
+  Headless-Chrome capability probe for plan-06 phase 8 browser testing.
+
+  Reports four capabilities loft cares about:
+    - SharedArrayBuffer is defined (`sab`)
+    - crossOriginIsolated is true (`coi`) — gates SAB usage in workers
+    - WebGL/WebGL2 context obtainable (`gl`)
+    - Console output is captured by --enable-logging=stderr
+
+  Invocation:
+    python3 scripts/browser/coop_server.py 8765 scripts/browser &
+    google-chrome --headless --no-sandbox --enable-logging=stderr --log-level=0 \
+        --enable-features=SharedArrayBuffer --dump-dom \
+        http://127.0.0.1:8765/headless_caps.html
+
+  Look for the page title — `CAPS:{...}` JSON — and stderr lines containing
+  `INFO:CONSOLE:` for the console.* outputs.
+
+  Pass criteria for plan-06 phase 8:
+    sab == true && coi == true && gl == "webgl" (or "webgl2")
+-->
+<html><head><meta charset="utf-8">
+<meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+<meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+</head>
+<body>
+<canvas id="c" width="64" height="64"></canvas>
+<script>
+const out = {
+  sab: typeof SharedArrayBuffer !== 'undefined',
+  coi: self.crossOriginIsolated,
+  gl: 'none',
+  webgl_renderer: null,
+  gl2: false,
+};
+console.log('CONSOLE_PROBE: hello from page');
+console.warn('CONSOLE_PROBE: warn line');
+console.error('CONSOLE_PROBE: error line');
+const c = document.getElementById('c');
+const gl1 = c.getContext('webgl');
+const gl2 = c.getContext('webgl2');
+out.gl = gl1 ? 'webgl' : (gl2 ? 'webgl2' : 'none');
+out.gl2 = !!gl2;
+if (gl1) {
+  const dbg = gl1.getExtension('WEBGL_debug_renderer_info');
+  out.webgl_renderer = dbg ? gl1.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'no_dbg_ext';
+  gl1.clearColor(0.1, 0.2, 0.3, 1.0);
+  gl1.clear(gl1.COLOR_BUFFER_BIT);
+}
+document.title = 'CAPS:' + JSON.stringify(out);
+</script>
+</body></html>

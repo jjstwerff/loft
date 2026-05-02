@@ -1,0 +1,139 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! Plan 09 phase 04 — key-keyed Op emitters.
+//!
+//! Replaces the two arms in
+//! `src/generation/dispatch.rs::output_call_inner`:
+//!
+//! - `"OpGetRecord" => …`  (~25 lines): lookup-by-key for typed
+//!   stores.  Reads key types from the schema (`stores.types`) and
+//!   emits one `Content::*` wrapper per key argument.
+//! - `"OpIterate" => …`  (~45 lines): iterator setup with from/till
+//!   key ranges.  Key types come from a `Value::Keys(keys)` payload
+//!   carried in `vals[3]`.
+//!
+//! Both emitters share `emit_content_array` to write the
+//! `&[Content::…]` tail.  Adding a third key-keyed Op (e.g. a future
+//! `OpIterateRange`) reuses the same helper.
+//!
+//! Phase 00 step 0.6 registry-first guard routes both Op names through
+//! these emitters before reaching the legacy match in dispatch.rs;
+//! phase 04 deletes the legacy arms.
+
+use super::{EmitCtx, OpEmitter};
+use crate::data::Value;
+use std::io;
+
+/// Emit `&[Content::…, …]` for a sequence of key argument values,
+/// using `key_types[i]` (or `1` as fallback) for each.
+fn emit_content_array(
+    ctx: &mut EmitCtx<'_, '_>,
+    vals: &[Value],
+    key_types: &[i8],
+) -> io::Result<()> {
+    write!(ctx.w, "&[")?;
+    for (i, v) in vals.iter().enumerate() {
+        if i > 0 {
+            write!(ctx.w, ", ")?;
+        }
+        let type_nr = key_types.get(i).copied().unwrap_or(1);
+        ctx.output.emit_content(&mut *ctx.w, v, type_nr)?;
+    }
+    write!(ctx.w, "]")
+}
+
+/// `OpGetRecord` emitter — lookup by key in a typed-store collection.
+///
+/// `args`: `[data, db_tp, count, key1, key2, …]`
+/// Emits: `OpGetRecord(cell, data, db_tp_i32, &[Content::…, …])`
+pub struct OpGetRecordEmitter;
+
+impl OpEmitter for OpGetRecordEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        let (Some(Value::Int(db_tp)), Some(Value::Int(_count))) = (args.get(1), args.get(2)) else {
+            // Shape didn't match the legacy `if let` guard — fall through
+            // to default (matches pre-phase-04 behaviour where the
+            // special case skipped malformed inputs silently).
+            return super::default::DefaultEmitter.emit(ctx, args);
+        };
+        if args.len() < 3 {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        }
+        let db_tp = *db_tp;
+        let key_types: Vec<i8> = ctx
+            .output
+            .stores
+            .types
+            .get(usize::try_from(db_tp).unwrap_or(0))
+            .map(|t| t.keys.iter().map(|k| k.type_nr).collect())
+            .unwrap_or_default();
+        let key_vals = &args[3..];
+        write!(ctx.w, "OpGetRecord(cell,")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", {db_tp}_i32, ")?;
+        emit_content_array(ctx, key_vals, &key_types)?;
+        write!(ctx.w, ")")
+    }
+}
+
+/// `OpIterate` emitter — set up an iterator over a typed-store
+/// collection with from/till key ranges.
+///
+/// `args`: `[data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]`
+/// Emits: `OpIterate(cell, data, on, arg, &[Key{…}], &[Content::…], &[Content::…])`
+pub struct OpIterateEmitter;
+
+impl OpEmitter for OpIterateEmitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        let Some(Value::Keys(keys)) = args.get(3) else {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        };
+        if args.len() < 4 {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        }
+        let keys = keys.clone();
+        let rest = &args[4..];
+        let from_count = if let Some(Value::Int(n)) = rest.first() {
+            usize::try_from(*n).unwrap_or(0)
+        } else {
+            0
+        };
+        let till_start = 1 + from_count;
+        let till_count = if let Some(Value::Int(n)) = rest.get(till_start) {
+            usize::try_from(*n).unwrap_or(0)
+        } else {
+            0
+        };
+        let from_vals = rest.get(1..till_start).unwrap_or(&[]);
+        let till_vals = rest
+            .get(till_start + 1..till_start + 1 + till_count)
+            .unwrap_or(&[]);
+        write!(ctx.w, "OpIterate(cell,")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[1])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[2])?;
+        // Keys array — emitted inline because `Key` is its own
+        // struct shape (not a Content wrapper).
+        write!(ctx.w, ", &[")?;
+        for (i, k) in keys.iter().enumerate() {
+            if i > 0 {
+                write!(ctx.w, ", ")?;
+            }
+            write!(
+                ctx.w,
+                "Key {{ type_nr: {}, position: {} }}",
+                k.type_nr, k.position
+            )?;
+        }
+        write!(ctx.w, "], ")?;
+        // From + till content arrays — both keyed by `keys[i].type_nr`.
+        let key_types: Vec<i8> = keys.iter().map(|k| k.type_nr).collect();
+        emit_content_array(ctx, from_vals, &key_types)?;
+        write!(ctx.w, ", ")?;
+        emit_content_array(ctx, till_vals, &key_types)?;
+        write!(ctx.w, ")")
+    }
+}

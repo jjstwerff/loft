@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Cannot assign integer to field S.name of type text at <cases>/05_type_assign_int_to_text.loft:3:20
+  |
+   3 |   s = S { name: 5 };
+     |                    ^
+==== stderr ====

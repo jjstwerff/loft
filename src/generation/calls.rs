@@ -30,7 +30,30 @@ pub(super) fn contains_op_database(val: &Value, data: &Data) -> bool {
 }
 
 impl Output<'_> {
+    /// Emit a user-defined function call (or Op-stub call without a `#rust`
+    /// template).  Public entry point — dispatches through
+    /// `emit_op` so custom emitters can override per Op.
+    /// Default emitter delegates back to [`Self::user_fn_call_body`].
     pub(super) fn output_call_user_fn(
+        &mut self,
+        w: &mut dyn Write,
+        def_fn: &Definition,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        let name = def_fn.name.clone();
+        let mut ctx = crate::generation::ops::EmitCtx {
+            w,
+            def_fn,
+            output: self,
+        };
+        crate::generation::ops::emit_op(&mut ctx, &name, vals)
+    }
+
+    /// Internal helper: emits the user-fn / Op-stub call body.  Reachable
+    /// from `crate::generation::ops::default::DefaultEmitter` when
+    /// `def_fn.rust.is_empty()`.  Behaviour is byte-identical to the
+    /// pre-phase-09 `output_call_user_fn`.
+    pub(super) fn user_fn_call_body(
         &mut self,
         w: &mut dyn Write,
         def_fn: &Definition,
@@ -41,16 +64,35 @@ impl Output<'_> {
         if is_generator {
             write!(w, "loft::codegen_runtime::alloc_coroutine(")?;
         }
-        write!(w, "{}(stores", def_fn.name)?;
+        // P199 — user-defined functions, generated stubs, AND Op stubs in
+        // `src/codegen_runtime.rs` all take `&UnsafeCell<Stores>` (Track 1).
+        // Plan 09 phase 01 added per-fn ABI tagging via the
+        // `CODEGEN_RUNTIME_FNS` registry.  `abi_of(name)` returns:
+        //   - `Cell`  → emit `name(cell, args...)`     (default)
+        //   - `None`  → emit `name(args...)`           (no implicit Stores)
+        let abi = if def_fn.code == Value::Null {
+            crate::codegen_runtime::abi_of(&def_fn.name)
+        } else {
+            crate::codegen_runtime::Abi::Cell
+        };
+        write!(w, "{}(", def_fn.name)?;
+        let mut first_arg = true;
+        if matches!(abi, crate::codegen_runtime::Abi::Cell) {
+            write!(w, "cell")?;
+            first_arg = false;
+        }
         for (idx, v) in vals.iter().enumerate() {
-            write!(w, ", ")?;
+            if !first_arg {
+                write!(w, ", ")?;
+            }
+            first_arg = false;
             if let Some(vr) = self.create_stack_var(v) {
                 let name = sanitize(self.data.def(self.def_nr).variables.name(vr));
                 write!(w, "&mut var_{name}")?;
             // OpCreateStack wrapping an addressable expression
             // (e.g. v[i] as & param).  Emit a temporary + &mut so the
             // callee can write through the DbRef into the store.
-            } else if let Value::Call(d_nr, args) = v
+            } else if let Value::Call(d_nr, args) = v.unspan()
                 && self.data.def(*d_nr).name == "OpCreateStack"
                 && args.len() == 1
                 && !matches!(&args[0], Value::Var(_))
@@ -140,8 +182,42 @@ impl Output<'_> {
 
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
     /// with generated argument expressions.
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// Phase 09 phase 00 step 0.4: dispatches through
+    /// `crate::generation::ops::emit_op`.  When no custom emitter is
+    /// registered for `def_fn.name`, `emit_op` falls through to
+    /// `DefaultTemplateEmitter` which calls back into
+    /// [`Self::substitute_template_body`] — the byte-identical
+    /// extraction of the original substitution body.  Result: every
+    /// existing call site sees the same emission as before.
     pub(super) fn output_call_template(
+        &mut self,
+        w: &mut dyn Write,
+        def_fn: &Definition,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        // Clone the name so we can pass it to `emit_op` without
+        // co-borrowing `def_fn` from inside the EmitCtx.
+        let name = def_fn.name.clone();
+        let mut ctx = crate::generation::ops::EmitCtx {
+            w,
+            def_fn,
+            output: self,
+        };
+        crate::generation::ops::emit_op(&mut ctx, &name, vals)
+    }
+
+    /// Internal helper holding the actual `#rust` template substitution
+    /// logic.  Reachable by name from [`Self::output_call_template`] (the
+    /// pre-step-0.4 caller) and from
+    /// `crate::generation::ops::default::DefaultTemplateEmitter` (the
+    /// post-step-0.4 fall-through).
+    ///
+    /// Behaviour exactly matches the pre-phase-09 `output_call_template`.
+    /// The byte-identical golden corpus at `/tmp/p09-baseline/*.rs` is
+    /// the regression oracle.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn substitute_template_body(
         &mut self,
         w: &mut dyn Write,
         def_fn: &Definition,
@@ -174,6 +250,22 @@ impl Output<'_> {
                 &res[arg_start..end],
                 &res[end + 1..]
             );
+        }
+        // P203 fix — bind repeated @<name> placeholders to a local so
+        // side-effecting argument expressions (e.g. n_delete(...) compared to
+        // an enum) evaluate exactly once.  For each attribute whose
+        // @<name> appears two or more times in the template, replace every
+        // occurrence with `_v_<name>` and prepend a `let _v_<name> = @<name>;`
+        // wrapping `{ ... }`.  The substitution loop below then rewrites the
+        // single remaining `@<name>` (the let-RHS) into the actual value
+        // expression; subsequent uses read `_v_<name>` instead of re-evaluating.
+        for a in &def_fn.attributes {
+            let placeholder = format!("@{}", a.name);
+            if res.matches(&placeholder).count() >= 2 {
+                let local = format!("_v_{}", a.name);
+                res = res.replace(&placeholder, &local);
+                res = format!("{{ let {local} = {placeholder}; {res} }}");
+            }
         }
         for (a_nr, a) in def_fn.attributes.iter().enumerate() {
             let name = "@".to_string() + &a.name;
@@ -218,7 +310,7 @@ impl Output<'_> {
                 // For character-typed parameters, a call returning character yields `i32`
                 // (due to the `as u32 as i32` auto-cast), so wrap with ops::to_char().
                 if matches!(a.typedef, Type::Character)
-                    && let Value::Call(d, _) = &vals[a_nr]
+                    && let Value::Call(d, _) = vals[a_nr].unspan()
                     && matches!(self.data.def(*d).returned, Type::Character)
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
@@ -228,7 +320,7 @@ impl Output<'_> {
                 // Text-typed parameters: all text-returning calls produce `Str` or `String`,
                 // but templates expect `&str`. Deref with `&*` to get `&str` in all cases.
                 if matches!(a.typedef, Type::Text(_))
-                    && let Value::Call(d, _) = &vals[a_nr]
+                    && let Value::Call(d, _) = vals[a_nr].unspan()
                     && matches!(self.data.def(*d).returned, Type::Text(_))
                 {
                     let inner = self.generate_expr_buf(&vals[a_nr])?;
@@ -238,7 +330,7 @@ impl Output<'_> {
                 let mut with = self.generate_expr_buf(&vals[a_nr])?;
                 // Integer parameter receiving a char value needs explicit cast.
                 if matches!(a.typedef, Type::Integer(_)) {
-                    let val_is_char = match &vals[a_nr] {
+                    let val_is_char = match vals[a_nr].unspan() {
                         Value::Var(n) => {
                             matches!(self.data.def(self.def_nr).variables.tp(*n), Type::Character)
                         }
@@ -249,6 +341,30 @@ impl Output<'_> {
                     };
                     if val_is_char {
                         with += " as u32 as i32";
+                    }
+                    // P196: tuple element of fn-ref type lands as
+                    // `(u32, DbRef)` in native — but the template
+                    // expects an i64-shaped value (it does `@val ==
+                    // i64::MIN` and `@val as i32`).  Project `.0` to
+                    // get the `u32` d_nr and widen to i64 so the null
+                    // check + narrow cast both compile.  The
+                    // d_nr u32 can never equal i64::MIN, so the null
+                    // branch is a tautological no-op — unavoidable
+                    // until a fn-ref-aware OpSet variant exists.
+                    let val_is_fn_ref_tuple_elem = match vals[a_nr].unspan() {
+                        Value::TupleGet(var, idx) => {
+                            match self.data.def(self.def_nr).variables.tp(*var) {
+                                Type::Tuple(elems) => matches!(
+                                    elems.get(*idx as usize),
+                                    Some(Type::Function(_, _, _))
+                                ),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+                    if val_is_fn_ref_tuple_elem {
+                        with = format!("(i64::from(({with}).0))");
                     }
                 }
                 // Templates use u32::from(@name) for field offsets; that was written for u16

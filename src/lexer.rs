@@ -892,6 +892,11 @@ impl Lexer {
         let pos = self.position.clone();
         let mut val = self.get_number();
         let mut f = false;
+        // P195: when the previous emitted token was a `.` (field
+        // access), the current number is a tuple/struct field index —
+        // never a float.  `n.v.0.0` must lex as `n`, `.`, `v`, `.`,
+        // `0`, `.`, `0` instead of `n`, `.`, `v`, `.`, `0.0`.
+        let prev_was_field_dot = self.peek.has == LexItem::Token(".".to_string());
         if let Some('.') = self.iter.peek() {
             self.next_char();
             if let Some('.') = self.iter.peek() {
@@ -905,6 +910,22 @@ impl Lexer {
                     LexResult::new(LexItem::Integer(r, val.starts_with('0')), pos)
                 } else {
                     self.err(Level::Error, "Problem parsing float");
+                    Lexer::none()
+                };
+            }
+            if prev_was_field_dot && self.iter.peek().is_some_and(char::is_ascii_digit) {
+                // Emit the leading integer now, queue the `.` so the next
+                // `cont()` returns it as a separator.  The next digit is
+                // re-lexed as a fresh number on the call after that.
+                self.link = self.memory.len();
+                self.memory.push(LexResult::new(
+                    LexItem::Token(".".to_string()),
+                    self.position.clone(),
+                ));
+                return if let Ok(r) = val.parse::<u32>() {
+                    LexResult::new(LexItem::Integer(r, val.starts_with('0')), pos)
+                } else {
+                    self.err(Level::Error, "Problem parsing tuple index");
                     Lexer::none()
                 };
             }
@@ -1395,6 +1416,91 @@ mod test {
         );
         tokens("=1+2", &["=", "1", "+", "2"]);
         tokens("=if 1 in a", &["=", "if", "1", "in", "a"]);
+    }
+
+    /// Drive the lexer through `cont()` (the API the parser uses) so
+    /// `self.peek` stays current for context-dependent rules like
+    /// P195's "previous token was `.`".  The plain `array()` helper
+    /// calls `next()` directly and leaves `peek` stale, which is fine
+    /// for whitespace-insensitive tokens but not for context-aware
+    /// ones.
+    fn cont_array(lexer: &mut Lexer) -> Vec<LexItem> {
+        let mut rest = Vec::new();
+        while !matches!(lexer.peek().has, LexItem::None) {
+            rest.push(lexer.peek().has);
+            lexer.cont();
+        }
+        rest
+    }
+
+    fn validate_cont(s: &'static str, data: &[LexItem]) {
+        let mut lex = Lexer::from_str(s, "validate_cont");
+        let res = cont_array(&mut lex);
+        assert_eq!(res, data);
+    }
+
+    /// P195: when the previous token is `.` (field access), a digit
+    /// followed by `.<digit>` must lex as integer + `.` + integer
+    /// (chained tuple-index access), not as a single float literal.
+    #[test]
+    fn p195_chained_tuple_index_does_not_glue_into_float() {
+        // n.v.0.0 — the inner `0.0` is two tuple indices, not a float.
+        validate_cont(
+            "n.v.0.0",
+            &[
+                LexItem::Identifier("n".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Identifier("v".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(0, true),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(0, true),
+            ],
+        );
+        // Stand-alone float still works at expression position.
+        validate_cont("0.0", &[LexItem::Float(0.0)]);
+        validate_cont(
+            "x = 0.0",
+            &[
+                LexItem::Identifier("x".to_string()),
+                LexItem::Token("=".to_string()),
+                LexItem::Float(0.0),
+            ],
+        );
+        // Mixed: float at expression position, integer after `.`.
+        validate_cont(
+            "1.5 + p.0",
+            &[
+                LexItem::Float(1.5),
+                LexItem::Token("+".to_string()),
+                LexItem::Identifier("p".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(0, true),
+            ],
+        );
+        // Non-leading-zero too: `t.1.2.3`.
+        validate_cont(
+            "t.1.2.3",
+            &[
+                LexItem::Identifier("t".to_string()),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(1, false),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(2, false),
+                LexItem::Token(".".to_string()),
+                LexItem::Integer(3, false),
+            ],
+        );
+        // Range still wins over field access: `0..5` is range, not
+        // tuple index `.5`.
+        validate_cont(
+            "0..5",
+            &[
+                LexItem::Integer(0, true),
+                LexItem::Token("..".to_string()),
+                LexItem::Integer(5, false),
+            ],
+        );
     }
 
     #[test]

@@ -1,0 +1,5 @@
+struct S { name: text }
+fn main() {
+  s = S { name: 5 };
+  print("{s.name}");
+}

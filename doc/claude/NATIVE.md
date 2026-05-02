@@ -93,6 +93,128 @@ Each generated file contains:
 2. Rust functions for each loft function, receiving `stores: &mut Stores` as first arg
 3. A `#[test]` wrapper that calls `init()` then the test function
 
+### Per-Op emitter dispatch (plan 09 phase 00)
+
+Every `#rust` template substitution AND every user-fn / Op-stub call
+flows through a single dispatch surface in `src/generation/ops/`:
+
+```text
+output_call_template(Output, w, def_fn, vals)   ← templates
+output_call_user_fn(Output, w, def_fn, vals)    ← user fns / Op stubs
+fn-ref dispatch in emit.rs:387                  ← runtime polymorphism
+                            ↓
+                     emit_op(ctx, name, args)
+                            ↓
+       custom emitter registered for `name`?
+              yes ↓                ↓ no
+       custom_emitter.emit()    DefaultEmitter::emit()
+                                       ↓
+              def_fn.rust.is_empty()?
+                yes ↓              ↓ no
+       user_fn_call_body()    substitute_template_body()
+```
+
+Custom emitters live in `src/generation/ops/<op>.rs` and
+implement `OpEmitter::emit(&self, ctx, args)`.  Register them in
+`src/generation/ops/mod.rs::build_registry`.  Today the registry
+is empty — every Op falls through to `DefaultEmitter`.  Future
+phases (and external contributors) opt in per-Op as needs arise.
+
+`EmitCtx<'a, 'b>` carries the writer, the Op definition, and a
+back-reference to `Output<'b>` (the codegen state).  Custom
+emitters call back into `Output` for helpers like
+`generate_expr_buf`, the field-width / signedness probes, and the
+template substitution itself.
+
+The `dispatch.rs:output_call_inner` special-case match (Op-specific
+inline emission for OpFormatInt, OpFreeRef, OpCopyRecord, etc.) gets
+a registry-first guard at its top.  When a custom emitter is
+registered for one of those Op names, dispatch routes through
+`emit_op` instead of running the special case.  When no emitter is
+registered, the special-case match runs unchanged.
+
+The fn-ref dispatch (`emit.rs::output_fn_ref_dispatch`) hoists
+arguments into `let _farg_N` Rust bindings before the runtime
+match, then routes each candidate arm through `output_call_user_fn`
+with synthetic `Value::RawExpr("_farg_N")` arguments.  This means a
+custom emitter registered for any candidate target is honoured
+even when called via fn-ref.  `Value::RawExpr` is a codegen-only
+variant created on the codegen stack; the parser and bytecode
+codegen never produce it.
+
+#### How to register a custom emitter
+
+```rust
+// src/generation/ops/op_my_op.rs
+use super::{EmitCtx, OpEmitter};
+use crate::data::Value;
+use std::io;
+
+pub struct Emitter;
+
+impl OpEmitter for Emitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        // ctx.w        — the writer (use `write!(ctx.w, …)` for raw text).
+        // ctx.def_fn   — the resolved Op definition.
+        // ctx.output   — back-reference to the codegen state (`Output`).
+        // Prefer ctx.emit(value) over ctx.output.output_code_inner(…)
+        // — it forwards to the same method but cuts the reborrow noise
+        // (`&mut *ctx.w`).  Same for ctx.emit_i32_slot(value).
+        write!(ctx.w, "ops::my_helper(cell, ")?;
+        ctx.emit(&args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.emit_i32_slot(&args[1])?;
+        write!(ctx.w, ")")
+    }
+}
+
+// In src/generation/ops/mod.rs::build_registry:
+//     r.insert("OpMyOp", Box::new(super::op_my_op::Emitter));
+```
+
+#### Forwarding-first recipe (verify before writing real emission)
+
+When adding an emitter for an Op for the first time, register a
+**forwarding emitter** first (delegate to `DefaultEmitter::emit`)
+and verify byte-identical baseline.  Only then replace the body
+with real emission logic.  This catches dispatch-path conflicts
+before any real code is written.
+
+**Pre-flight check** — does the Op have a special case in
+`dispatch.rs::output_call_inner`?
+
+```bash
+grep -n '"OpYourOp" =>' src/generation/dispatch.rs
+```
+
+- **Empty result** → forwarding is safe.  Register a forwarding
+  emitter first; the dispatch path is exercised end-to-end and
+  the byte-identical baseline confirms no logic gets bypassed.
+- **Hit** → forwarding will SKIP the special-case logic (e.g.
+  OpFreeRef's debug-name string + store_nr reset, OpDatabase's
+  `var_X = OpDatabase(...)` assignment shape).  Skip the
+  forwarding step and write the real emitter directly,
+  absorbing whatever the special-case arm does.
+
+The forwarding registration looks like (see
+`src/generation/ops/forwarding_smoke.rs` for the live example
+covering 9 Ops):
+
+```rust
+pub struct Emitter;
+
+impl OpEmitter for Emitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        DefaultEmitter.emit(ctx, args)
+    }
+}
+```
+
+Validation:
+- `cargo test --release --test codegen_emitter` runs the byte-identical
+  baseline guard + P203 regression guard.
+- `scripts/p09_fast_gate.sh` is the ~4-second human-driven gate.
+
 ---
 
 ## Steps

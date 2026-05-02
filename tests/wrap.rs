@@ -123,6 +123,7 @@ fn run_wasm_test(entry: &Path) -> std::io::Result<()> {
             yield_collect: false,
             fn_ref_context: false,
             i32_literal_context: false,
+            tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };

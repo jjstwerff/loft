@@ -44,6 +44,7 @@ mod fill;
 mod formatter;
 mod generation;
 mod hash;
+mod introspect;
 mod json;
 mod keys;
 mod lexer;
@@ -73,7 +74,8 @@ mod wasm;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{
-    default_artifact_path, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
+    build_script_native_lib_dirs, default_artifact_path, is_output_path, loft_lib_dir,
+    loft_lib_dir_for, project_dir,
 };
 use crate::state::State;
 use crate::test_runner::run_tests;
@@ -1134,6 +1136,22 @@ fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
     // last-executed opcode before the default handler fires.
     crate::crash_report::install("loft");
+    // Plan-07 phase 1 step 1.20 / phase 3 — chain a Rust panic hook
+    // that surfaces the loft source position of the offending pc
+    // before the default panic message.  Reads the per-thread snapshot
+    // published by `State::execute_argv` via `crash_report`.  Falls
+    // through to the default hook if no source-span snapshot is
+    // active or no entry precedes the offending pc.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let (pc, _op, _fn_d_nr) = crate::crash_report::last_context();
+        if pc != u32::MAX
+            && let Some(pos) = crate::crash_report::source_loc_for_pc(pc)
+        {
+            eprintln!("  at {}:{}:{}", pos.file, pos.line, pos.pos);
+        }
+        prev_hook(info);
+    }));
     let argv: Vec<String> = env::args_os()
         .skip(1)
         .map(|a| a.to_str().unwrap_or("").to_string())
@@ -1157,6 +1175,21 @@ fn main() {
     let mut native_wasm: Option<String> = None;
     let mut html_out: Option<String> = None;
     let mut tests_dir: Option<String> = None;
+    // Plan-08 phase 01: --introspect mode collects per-section
+    // selectors, output paths, and filters into one Options bundle.
+    // The flag itself only toggles the mode; sub-flags accumulate
+    // into `introspect_opts` and are flushed into a real
+    // `introspect::Options` after argv parsing.
+    let mut introspect_mode = false;
+    let mut introspect_sections: Vec<crate::introspect::Section> = Vec::new();
+    let mut introspect_bytecode_out: Option<String> = None;
+    let mut introspect_rust_out: Option<String> = None;
+    let mut introspect_slots_out: Option<String> = None;
+    let mut introspect_types_out: Option<String> = None;
+    let mut introspect_diff_against: Option<String> = None;
+    let mut introspect_trace = false;
+    let mut introspect_fn_filter: Vec<String> = Vec::new();
+    let mut introspect_all_fns = false;
     let mut native_lib_paths: Vec<String> = Vec::new();
     let mut no_warnings = false;
     let mut check_only = false;
@@ -1236,6 +1269,45 @@ fn main() {
         } else if a == "--dump" {
             native_mode = false;
             dump_only = true;
+        } else if a == "--introspect" {
+            // Plan-08 phase 01: introspection mode.  Default = emit
+            // bytecode + Rust + slots to stdout.  Sub-flags below
+            // narrow the section list, redirect per-section output
+            // to files, and filter by function name.
+            introspect_mode = true;
+            native_mode = false;
+        } else if a == "--show-bytecode" {
+            introspect_sections.push(crate::introspect::Section::Bytecode);
+        } else if a == "--show-rust" {
+            introspect_sections.push(crate::introspect::Section::Rust);
+        } else if a == "--show-slots" {
+            introspect_sections.push(crate::introspect::Section::Slots);
+        } else if a == "--show-types" {
+            introspect_sections.push(crate::introspect::Section::Types);
+        } else if a == "--bytecode-out" {
+            introspect_bytecode_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--rust-out" {
+            introspect_rust_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--slots-out" {
+            introspect_slots_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--types-out" {
+            introspect_types_out = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--diff" {
+            introspect_diff_against = argv.get(i).cloned();
+            i += 1;
+        } else if a == "--trace" {
+            introspect_trace = true;
+        } else if a == "--fn" {
+            if let Some(name) = argv.get(i) {
+                introspect_fn_filter.push(name.clone());
+                i += 1;
+            }
+        } else if a == "--all-fns" {
+            introspect_all_fns = true;
         } else if a == "--native" {
             native_mode = true;
         } else if a == "--native-release" {
@@ -1613,6 +1685,12 @@ fn main() {
     p.lib_dirs = lib_dirs;
     p.parse_dir(&(dir + "default"), true, false).unwrap();
     let start_def = p.data.definitions();
+    // `--show-types --trace`: enable per-expression type recording
+    // BEFORE parsing the user file (parse_dir on default/* already
+    // ran without tracing — those are stdlib internals).
+    if introspect_mode && introspect_trace {
+        p.trace_types = true;
+    }
     p.parse(&abs_file, false);
     if !p.diagnostics.is_empty() {
         // Cache source files for source-line display.
@@ -1707,6 +1785,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+                tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };
@@ -1802,6 +1881,7 @@ fn main() {
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+                tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: true,
             };
@@ -1969,7 +2049,13 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     if native_mode || native_emit.is_some() {
         let end_def = p.data.definitions();
         let emit_path = match native_emit.as_deref() {
-            None => std::env::temp_dir().join("loft_native.rs"),
+            // Default `loft <file>` writes to a per-process tmp file
+            // so concurrent invocations (e.g. nextest's parallel test
+            // execution) don't race on a single shared
+            // `temp_dir/loft_native.rs`.  The PID suffix is a process-
+            // local choice; user-visible artefacts pass through
+            // `--native-emit <path>` which the user controls.
+            None => std::env::temp_dir().join(format!("loft_native_{}.rs", std::process::id())),
             Some("") => default_artifact_path(&abs_file, "rs"),
             Some(p) => std::path::PathBuf::from(p),
         };
@@ -1997,6 +2083,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 yield_collect: false,
                 fn_ref_context: false,
                 i32_literal_context: false,
+                tuple_text_to_string: false,
                 call_stack_prefix: None,
                 wasm_browser: false,
             };
@@ -2043,8 +2130,20 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 }
                 if !test_fns.is_empty() {
                     let _ = writeln!(f, "\nfn main() {{");
-                    let _ = writeln!(f, "    let mut stores = Stores::new();");
-                    let _ = writeln!(f, "    init(&mut stores);");
+                    // P199 — wrap Stores in UnsafeCell so the native ABI
+                    // can pass `&UnsafeCell<Stores>` instead of `&mut Stores`,
+                    // eliminating E0499 in nested user-fn calls.  Each
+                    // generated function derives its own short-lived
+                    // `&mut Stores` from the cell at function entry.
+                    let _ = writeln!(
+                        f,
+                        "    let cell = std::cell::UnsafeCell::new(Stores::new());"
+                    );
+                    let _ = writeln!(
+                        f,
+                        "    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+                    );
+                    let _ = writeln!(f, "    init(&cell);");
                     for (d_nr, name) in &test_fns {
                         let def = p.data.def(*d_nr);
                         let mut work_args = Vec::new();
@@ -2063,10 +2162,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                             }
                         }
                         if work_args.is_empty() {
-                            let _ = writeln!(f, "    {name}(&mut stores);");
+                            let _ = writeln!(f, "    {name}(&cell);");
                         } else {
-                            let _ =
-                                writeln!(f, "    {name}(&mut stores, {});", work_args.join(", "));
+                            let _ = writeln!(f, "    {name}(&cell, {});", work_args.join(", "));
                         }
                     }
                     let _ = writeln!(f, "}}");
@@ -2121,7 +2219,15 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
         let binary = if cached_binary.exists() {
             cached_binary.clone()
         } else {
-            let binary = std::env::temp_dir().join("loft_native_bin");
+            // Per-process tmp path — same rationale as the emit_path
+            // above: avoids races between concurrent `loft <file>`
+            // invocations.  The cached path (`cached_binary` above)
+            // is content-addressed (source_hash) and thus safe to
+            // share across processes; this fallback is only used
+            // when the cache miss; it doesn't need to be content-
+            // addressed but does need to be unique per process.
+            let binary =
+                std::env::temp_dir().join(format!("loft_native_bin_{}", std::process::id()));
             let mut cmd = std::process::Command::new("rustc");
             cmd.arg("--edition=2024")
                 .arg("-o")
@@ -2133,7 +2239,22 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = lib_dir.join("deps");
+                // `loft_lib_dir()` returns either the binary's directory
+                // (when libloft.rlib lives next to the binary) or the
+                // `deps/` subdirectory (cargo's standard layout — macOS
+                // and Windows always; Linux when the canonical sibling
+                // is absent).  In the latter case `lib_dir` IS already
+                // the deps directory; appending "deps" yields an
+                // invalid `target/release/deps/deps` path that rustc
+                // can't search, leading to E0463 "can't find crate"
+                // for transitive deps like rand_core.
+                //
+                // Detect the deps-already case via the directory name.
+                let deps = if lib_dir.file_name().is_some_and(|n| n == "deps") {
+                    lib_dir.clone()
+                } else {
+                    lib_dir.join("deps")
+                };
                 cmd.arg("-L").arg(format!("dependency={}", deps.display()));
                 if let Ok(rd) = std::fs::read_dir(&deps) {
                     for e in rd.flatten() {
@@ -2148,6 +2269,14 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                             break;
                         }
                     }
+                }
+                // Propagate `-L native=` for every build-script `OUT_DIR`
+                // that bundles a native lib.  Windows-targets ships
+                // `windows.0.48.5.lib` inside its OUT_DIR; without these
+                // paths the link step fails with `LNK1181: cannot open
+                // input file 'windows.0.48.5.lib'`.
+                for out_dir in build_script_native_lib_dirs(&lib_dir) {
+                    cmd.arg("-L").arg(format!("native={}", out_dir.display()));
                 }
                 Some(deps)
             } else {
@@ -2177,16 +2306,64 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                 // detect the rand_core / cargo-cache staleness and print a
                 // clear recovery hint instead of a generic codegen-bug message.
                 let stderr_utf8 = String::from_utf8_lossy(&output.stderr);
-                if stderr_utf8.contains("E0460")
+                let crate_resolution_failure = (stderr_utf8.contains("E0460")
+                    || stderr_utf8.contains("E0463"))
                     && (stderr_utf8.contains("rand_core")
-                        || stderr_utf8.contains("possibly newer version of crate"))
-                {
+                        || stderr_utf8.contains("possibly newer version of crate")
+                        || stderr_utf8.contains("can't find crate"));
+                if crate_resolution_failure {
+                    // Print the rustc invocation + the deps directory listing
+                    // so the diagnostic shows what was actually attempted.
+                    // Surfaces the Windows latent issue + any future
+                    // platform-specific dep-resolution gaps.
+                    eprintln!("\nloft: rustc could not resolve a transitive crate dep.");
+                    eprintln!("\nrustc invocation:");
+                    let prog = cmd.get_program().to_string_lossy().to_string();
+                    eprintln!("  {prog}");
+                    for arg in cmd.get_args() {
+                        eprintln!("    {}", arg.to_string_lossy());
+                    }
+                    if let Some(deps) = native_deps_dir.as_ref() {
+                        eprintln!("\nDeps directory: {}", deps.display());
+                        match std::fs::read_dir(deps) {
+                            Ok(rd) => {
+                                let mut entries: Vec<_> = rd
+                                    .flatten()
+                                    .filter_map(|e| {
+                                        let n = e.file_name().to_string_lossy().to_string();
+                                        let is_rlib = std::path::Path::new(&n)
+                                            .extension()
+                                            .is_some_and(|ext| ext.eq_ignore_ascii_case("rlib"));
+                                        if n.contains("rand") || n.contains("loft") || is_rlib {
+                                            Some(n)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                entries.sort();
+                                if entries.is_empty() {
+                                    eprintln!("  (no rlibs found in deps directory)");
+                                } else {
+                                    for n in entries.iter().take(40) {
+                                        eprintln!("  {n}");
+                                    }
+                                    if entries.len() > 40 {
+                                        eprintln!("  ... ({} more)", entries.len() - 40);
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("  (cannot read deps directory: {e})"),
+                        }
+                    } else {
+                        eprintln!(
+                            "\nNo deps directory was passed to rustc — `loft_lib_dir()` returned None."
+                        );
+                    }
                     eprintln!(
-                        "\nloft: native compilation failed because the cached `libloft.rlib` \
-                         references a different dependency version than the one now in \
-                         `target/release/deps/`.\n\n\
-                         This happens when `cargo build --bin loft` rebuilt the binary but \
-                         left the library (`--lib`) stale.\n\n\
+                        "\nMost likely cause: cached `libloft.rlib` references a different \
+                         dependency version than the one now in `target/release/deps/`, \
+                         or the deps directory is missing the named crate.\n\n\
                          Fix:  cargo build --release --lib --bin loft\n\
                          Or:   cargo clean && cargo build --release\n"
                     );
@@ -2258,6 +2435,30 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
     state.database.logger = Some(Arc::new(Mutex::new(lg)));
 
     let main_nr = p.data.def_nr("n_main");
+    // Plan-08 phase 01: --introspect short-circuits everything.
+    // Bypass execution; emit bytecode + Rust + slots and exit.
+    if introspect_mode {
+        let trace_lines = std::mem::take(&mut p.trace_types_lines);
+        let opts = crate::introspect::Options {
+            sections: introspect_sections.clone(),
+            bytecode_out: introspect_bytecode_out.clone(),
+            rust_out: introspect_rust_out.clone(),
+            slots_out: introspect_slots_out.clone(),
+            types_out: introspect_types_out.clone(),
+            diff_against: introspect_diff_against.clone(),
+            trace_lines,
+            fn_filter: introspect_fn_filter.clone(),
+            all_fns: introspect_all_fns,
+            lib_dirs: Vec::new(),
+            install_dir: String::new(),
+        };
+        let end_def = p.data.definitions();
+        if let Err(e) = crate::introspect::emit_all(&mut p.data, &mut state, end_def, &opts) {
+            eprintln!("loft: introspect failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if main_nr == u32::MAX && !dump_only {
         // No main() — wrap each zero-parameter user function in a synthetic
         // main() that calls it. This ensures proper scope cleanup: stores

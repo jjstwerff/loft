@@ -289,6 +289,19 @@ pub enum Value {
     Null,
     /// Line number inside the source file
     Line(u32),
+    /// Source span wrapper (plan-07 phase 1, decision A).
+    /// Wraps a single fault-prone IR node with its source `Position`.
+    /// Walkers should treat this as a transparent passthrough that
+    /// updates the walker's `current_span` so diagnostics raised
+    /// while recursing into `inner` carry the correct file:line:col.
+    /// Codegen mirrors the entry pc into `Definition.source_spans`
+    /// so phase 3's pc→span lookup can run.
+    ///
+    /// Both `Position` and the inner `Value` are heap-boxed together
+    /// to keep `size_of::<Value>()` at 32 bytes — `Position` carries a
+    /// `String` and would otherwise grow the enum by 8 bytes,
+    /// affecting every `Vec<Value>` allocation in the IR.
+    Span(Box<(Position, Value)>),
     Int(i32),
     /// Enum value and database type
     Enum(u8, u16),
@@ -351,6 +364,65 @@ pub enum Value {
     FnRef(i32, u16, Box<Type>),
     /// Parallel { arm1; arm2; } — each arm runs concurrently.
     Parallel(Vec<Value>),
+    /// Plan-06 PRIORITY.md spine step 3 — fused for-par IR shape
+    /// (DESIGN.md D7).  Captures the streaming-only par construct
+    /// `for x in input par(r=worker(x), threads) { body }` without
+    /// materialising a result vector.  Heap-boxed because the
+    /// variant carries 5 child `Value`s plus 3 small fields and
+    /// would otherwise grow `size_of::<Value>()` past the 32-byte
+    /// budget that every `Vec<Value>` allocation pays for.
+    ///
+    /// Field layout (mirrors the design doc's struct):
+    ///   * `input`  — expression of type `vector<T>`
+    ///   * `x_var`  — variable bound to each input element
+    ///   * `r_var`  — bound to worker result; `u16::MAX` when the
+    ///     stitch policy is Discard (no result name)
+    ///   * `worker` — call expression evaluated by workers per row
+    ///   * `threads` — expression of type integer
+    ///   * `body`   — sequential block on the main thread
+    ///   * `stitch_id` — `Stitch` policy: 0=Concat, 1=Discard,
+    ///     2=Reduce, 3=Queue.  Numeric here so `data.rs` does not
+    ///     need to import the typed `Stitch` enum from `parallel.rs`
+    ///     (avoids a cross-module dependency); codegen converts to
+    ///     the typed enum via the same id mapping.  Reduce/Queue
+    ///     policy payloads (fold_fn, capacity) come from companion
+    ///     fields added when their runtimes land in spine steps 4+9.
+    ///
+    /// Currently dead code — spine step 3a (this commit) lands the
+    /// variant + walker arms only.  Steps 3b (codegen) and 3c
+    /// (parser detection) follow.
+    ParFor(Box<ParForBody>),
+    /// Plan 09 phase 00 step 0.7 — codegen-internal "raw expression"
+    /// passthrough.
+    ///
+    /// Holds a pre-emitted Rust expression string that emits verbatim
+    /// when reached by `output_code_inner`.  Used exclusively by
+    /// fn-ref dispatch in `src/generation/emit.rs` to inject
+    /// pre-evaluated `let _farg_N` bindings as synthetic arg `Value`s
+    /// into per-arm calls that route through `emit_op` /
+    /// `output_call_user_fn`.
+    ///
+    /// **Not produced by the parser.**  Created only during native
+    /// code generation, lives only on the codegen stack, and is
+    /// consumed by `output_code_inner` which writes its string
+    /// directly to the writer with no further transformation.  Other
+    /// walkers (scopes.rs liveness, pre_eval.rs, parser passes) never
+    /// see this variant — the catch-all `_ =>` arms in those walkers
+    /// suffice as a defensive default.
+    RawExpr(String),
+}
+
+/// Plan-06 PRIORITY.md spine step 3 — payload for `Value::ParFor`.
+/// Heap-boxed so the variant fits the 32-byte budget.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ParForBody {
+    pub input: Value,
+    pub x_var: u16,
+    pub r_var: u16,
+    pub worker: Value,
+    pub threads: Value,
+    pub body: Value,
+    pub stitch_id: u8,
 }
 
 #[allow(dead_code)]
@@ -366,6 +438,67 @@ impl Value {
             return *func == op;
         }
         false
+    }
+
+    /// Plan-07 phase 1 — wrap a fault-prone IR construction with its
+    /// source position.  Walkers see `Span(box (pos, inner))` and
+    /// recurse into `inner` while remembering `pos` as the
+    /// `current_span` for any diagnostic raised inside.  Codegen
+    /// records the entry pc → pos mapping in `Definition.source_spans`
+    /// (phase-1 step 1.D), which phase 3's pc→span table consumes.
+    ///
+    /// Caller must capture `pos` from the lexer at the *exact* token
+    /// the diagnostic should point to (e.g. the `/` of a binary
+    /// division), not at whatever the lexer drifted to while parsing
+    /// the inner construct.
+    #[must_use]
+    pub fn with_span(pos: Position, inner: Value) -> Value {
+        Value::Span(Box::new((pos, inner)))
+    }
+
+    /// Read a `Value::Span`'s `Position`.  Returns `None` for any
+    /// other variant.  Convenience for codegen / renderer that asks
+    /// "what's the span of the IR node I'm about to lower?".
+    #[must_use]
+    pub fn span_pos(&self) -> Option<&Position> {
+        if let Value::Span(b) = self {
+            Some(&b.0)
+        } else {
+            None
+        }
+    }
+
+    /// Plan-07 phase 1, step 1.B.0 — see through any number of nested
+    /// `Value::Span` wrappers and return the inner non-Span node.
+    ///
+    /// Every second-pass site that pattern-matches a specific Value
+    /// variant (`if let Value::Call(...) = code`, etc.) must call
+    /// `code.unspan()` first.  Without this, the per-site wraps in
+    /// 1.B.1+ silently break optimisations that rely on the unwrapped
+    /// shape.  See the plan doc for the audit list.
+    ///
+    /// `Span` may nest in principle (e.g. a nested struct field
+    /// access wrapped at multiple parser layers); the recursion
+    /// flattens any depth.  In practice depth is 1.
+    #[must_use]
+    pub fn unspan(&self) -> &Value {
+        if let Value::Span(b) = self {
+            b.1.unspan()
+        } else {
+            self
+        }
+    }
+
+    /// Mutable counterpart of `unspan()` — returns `&mut` to the inner
+    /// non-Span node, for sites that need to rewrite the wrapped value
+    /// in place (e.g. compound-assignment LHS rewrites).
+    #[must_use]
+    pub fn unspan_mut(&mut self) -> &mut Value {
+        if let Value::Span(b) = self {
+            b.1.unspan_mut()
+        } else {
+            self
+        }
     }
 }
 
@@ -383,6 +516,19 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         Type::Text(_) => Value::Text(String::new()),
+        // Plan-06 phase 4d (P193): null fn-ref defaults are needed
+        // when a struct with a fn-ref field is default-initialised.
+        // `Value::FnRef(0, u16::MAX, …)` produces 8B `OpConstInt(0)`
+        // + 12B null DbRef in the interpreter, and `(0_u32,
+        // null_DbRef)` natively — both shapes the downstream
+        // `set_field_check::Type::Function` arm reduces to a 4-byte
+        // d_nr=0 storage write.
+        Type::Function(_, _, _) => Value::FnRef(0, u16::MAX, Box::new(tp.clone())),
+        // Plan-06 phase 4d (P193): tuple struct fields default to
+        // per-element defaults so `Pair {}` with `v: (text,
+        // integer)` lands as `("", 0)`.  Recurses through nested
+        // tuples and other compound element types.
+        Type::Tuple(elems) => Value::Tuple(elems.iter().map(|e| to_default(e, data)).collect()),
         _ => Value::Null,
     }
 }
@@ -452,13 +598,21 @@ pub enum Type {
 
 impl Type {
     /// Returns the dep list if this is a heap-allocated, store-backed type
-    /// (Reference, Vector, or struct-enum with is_ref=true).
-    /// Use this instead of manual pattern matches on Reference/Vector/Enum
-    /// to avoid forgetting the Enum arm.
+    /// (Reference, Vector, struct-enum with is_ref=true, or any keyed
+    /// collection: Sorted/Hash/Index/Spacial — each `gen_set_first_keyed_null`
+    /// allocates a fresh store via `OpDatabase` that needs scope-exit
+    /// `OpFreeRef` cleanup).
+    /// Use this instead of manual pattern matches to avoid forgetting an arm.
     #[must_use]
     pub fn heap_dep(&self) -> Option<&Vec<u16>> {
         match self {
-            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => Some(dep),
+            Type::Reference(_, dep)
+            | Type::Vector(_, dep)
+            | Type::Enum(_, true, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep) => Some(dep),
             _ => None,
         }
     }
@@ -552,6 +706,14 @@ impl Type {
                 Type::Function(params.clone(), ret.clone(), v)
             }
             Type::RefVar(tp) => Type::RefVar(Box::new(tp.depending(on))),
+            // P197: Type::Tuple has no dep field of its own — propagate
+            // the dep into each element type so per-element reads
+            // (`OpGetText` / `OpGetRef` / nested tuple reads) retain
+            // the host's lifetime when the struct field is unboxed
+            // into per-element values via `get_val::Type::Tuple`.
+            // Without this, returning a `text` element from a tuple
+            // struct field reads from a freed host record (P197 abort).
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.depending(on)).collect()),
             _ => self.clone(),
         }
     }
@@ -570,6 +732,17 @@ impl Type {
             | Type::Vector(_, dep)
             | Type::Function(_, _, dep) => v.append(&mut dep.clone()),
             Type::RefVar(tp) => return tp.depend(),
+            // P197: a tuple's effective dependencies are the union of
+            // its elements'.  Dedup to keep the vector compact.
+            Type::Tuple(elems) => {
+                for e in elems {
+                    for d in e.depend() {
+                        if !v.contains(&d) {
+                            v.push(d);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         v
@@ -709,6 +882,14 @@ impl Type {
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             Type::Text(dep) if dep.is_empty() => "text".to_string(),
             Type::Text(dep) => format!("text{}", Self::dep_var(dep, vars)),
+            Type::Tuple(elems) => {
+                let inner = elems
+                    .iter()
+                    .map(|e| e.show(data, vars))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({inner})")
+            }
             _ => self.to_string(),
         }
     }
@@ -760,8 +941,48 @@ impl Type {
 
 // ── T1.1 — Tuple element layout helpers ─────────────────────────────────────
 
+/// Natural-alignment of a single element type, in bytes.
+///
+/// Used by `element_offsets` to pad tuple-element offsets so each
+/// element lands on its natural-alignment boundary — a tuple
+/// `(byte, integer)` has `_0` at offset 0 and `_1` at offset 8 (not 1).
+/// Mirrors the alignment table in `LinkedFieldGroup::group_alignment`'s
+/// caller (`Data::tuple_def`) and the database `align` field set by
+/// `database::types`.
+#[must_use]
+pub fn element_align(t: &Type) -> u8 {
+    match t {
+        Type::Boolean | Type::Enum(_, false, _) => 1,
+        Type::Single | Type::Function(_, _, _) | Type::Character => 4,
+        Type::Integer(_) | Type::Float => 8,
+        Type::Text(_) => 4,
+        Type::Reference(_, _)
+        | Type::Vector(_, _)
+        | Type::RefVar(_)
+        | Type::Sorted(_, _, _)
+        | Type::Index(_, _, _)
+        | Type::Hash(_, _, _)
+        | Type::Spacial(_, _, _)
+        | Type::Enum(_, true, _) => 4,
+        Type::Tuple(elems) => element_offsets_alignment_max(elems),
+        _ => 1,
+    }
+}
+
+/// Internal: max alignment across a tuple's elements.  Recursive
+/// because nested tuples contribute their own max alignment.
+fn element_offsets_alignment_max(types: &[Type]) -> u8 {
+    types.iter().map(element_align).max().unwrap_or(1)
+}
+
 /// Stack width in bytes of a single element type.
 /// Uses the same sizing as `variables::size(tp, &Context::Argument)`.
+///
+/// For tuples this returns the **atomic group size** —
+/// alignment-padded so each element lands on its natural-alignment
+/// boundary.  Matches `LinkedFieldGroup::group_size`'s packing so
+/// the runtime read path (`element_offsets`) and the storage layout
+/// (`calculate_positions_with_groups`) agree on every byte offset.
 #[must_use]
 pub fn element_size(t: &Type) -> usize {
     match t {
@@ -777,24 +998,174 @@ pub fn element_size(t: &Type) -> usize {
         | Type::Spacial(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
-            element_offsets(elems).last().map_or(0, |&off| off)
-                + elems.last().map_or(0, element_size)
+            // Atomic-group size: each element padded to its natural-
+            // alignment boundary inside the tuple block.  Identical
+            // to `LinkedFieldGroup::group_size` so storage layout
+            // (via `calculate_positions_with_groups`) and runtime
+            // reads (via `element_offsets`) line up byte-for-byte.
+            let mut pos: usize = 0;
+            for t in elems {
+                let align = element_align(t).max(1) as usize;
+                let rem = pos % align;
+                if rem != 0 {
+                    pos += align - rem;
+                }
+                pos += element_size(t);
+            }
+            pos
         }
         _ => 0,
     }
 }
 
 /// Byte offset of each element in a tuple-like layout.
-/// Element *i* starts at `offsets[i]`; total size is `offsets[last] + element_size(last)`.
+/// Element *i* starts at `offsets[i]`; total size is `element_size(&Type::Tuple(types))`.
+///
+/// **Alignment-aware**: each element is placed at the next position
+/// that satisfies its natural alignment.  For `(byte, integer)`,
+/// returns `[0, 8]` (not `[0, 1]`) — `_1` (integer, align 8) needs
+/// an 8-byte boundary, so 7 bytes of padding follow `_0`.
+///
+/// This matches `LinkedFieldGroup::group_member_offsets` exactly,
+/// so storage layout (synthetic `__tuple<…>` struct via
+/// `calculate_positions_with_groups`) and runtime reads (via
+/// codegen / `read_tuple_at_wide`) compute the same offsets.
 #[must_use]
 pub fn element_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
     let mut pos: usize = 0;
     for t in types {
+        let align = element_align(t).max(1) as usize;
+        let rem = pos % align;
+        if rem != 0 {
+            pos += align - rem;
+        }
         offsets.push(pos);
         pos += element_size(t);
     }
     offsets
+}
+
+/// Resolve per-element byte offsets for a STORED tuple via the synthetic
+/// `__tuple<…>` struct's post-finish field positions.
+///
+/// Returns `Some(offsets)` when:
+/// - `tuple_def` has registered the synthetic struct, AND
+/// - `Stores::finish_type` has assigned `position` to every field
+///   (i.e. layout has been finalised).
+///
+/// Returns `None` in any other situation (struct not yet registered,
+/// not yet finished, or wrong arity) so callers can fall back to
+/// `element_offsets` for early-parse paths.
+///
+/// **Why this exists**: storage reads / writes for tuple elements MUST
+/// use the same field offsets that ordinary struct fields use via
+/// `OpGetInt` / `OpSetInt`.  Routing through the synthetic struct's
+/// finished layout (rather than recomputing via `element_offsets`)
+/// means any divergence between the two paths is detected immediately
+/// — and keeps a single source of truth for stored-tuple field
+/// offsets.
+#[must_use]
+pub fn stored_tuple_offsets(
+    data: &Data,
+    database: &crate::database::Stores,
+    elems: &[Type],
+) -> Option<Vec<u16>> {
+    let inner_names: Vec<String> = elems.iter().map(|t| t.name(data)).collect();
+    let name = format!("__tuple<{}>", inner_names.join(","));
+    let def_nr = data.def_nr(&name);
+    if def_nr == u32::MAX {
+        return None;
+    }
+    stored_tuple_offsets_for_def(data, database, def_nr, elems.len())
+}
+
+/// Same as [`stored_tuple_offsets`] but with the synthetic struct's
+/// `def_nr` already resolved.  Use when the caller already has the
+/// def_nr (e.g. parser sites that called `tuple_def` directly).
+#[must_use]
+pub fn stored_tuple_offsets_for_def(
+    data: &Data,
+    database: &crate::database::Stores,
+    def_nr: u32,
+    expected_arity: usize,
+) -> Option<Vec<u16>> {
+    if def_nr == u32::MAX {
+        return None;
+    }
+    let known_type = data.def(def_nr).known_type;
+    if (known_type as usize) >= database.types.len() {
+        return None;
+    }
+    let parts = &database.types[known_type as usize].parts;
+    let fields = match parts {
+        crate::database::Parts::Struct(f) | crate::database::Parts::EnumValue(_, f) => f,
+        _ => return None,
+    };
+    if fields.len() != expected_arity {
+        return None;
+    }
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        if f.position == u16::MAX {
+            return None;
+        }
+        out.push(f.position);
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tuple_stack_layout_tests {
+    //! Stack-level tuple layout tests.  `element_size` and
+    //! `element_offsets` operate at stack widths — every
+    //! `Type::Integer` reports 8 bytes regardless of `forced_size`,
+    //! `Type::Text` reports `size_of::<Str>()` (16 bytes), etc.
+    //! Used by codegen for STACK tuples (`Value::TupleGet` on
+    //! `Type::Tuple` variables) and the par worker's tuple-arg
+    //! inflation in `read_tuple_at_wide`.
+    //!
+    //! **Storage** (`Store` heap) tuple element access does NOT use
+    //! these helpers — it goes through the synthetic `__tuple<…>`
+    //! struct's post-finish field positions via
+    //! `state::codegen::stored_tuple_field_offset`.
+    use super::{IntegerSpec, Type, element_align, element_offsets, element_size};
+
+    fn integer() -> Type {
+        Type::Integer(IntegerSpec {
+            min: i32::MIN + 1,
+            max: i32::MAX as u32,
+            not_null: false,
+            forced_size: None,
+        })
+    }
+
+    fn boolean() -> Type {
+        Type::Boolean
+    }
+
+    #[test]
+    fn stack_offsets_two_integers() {
+        // (int, int): both 8B aligned 8.  Stack layout: [0, 8].
+        let elems = vec![integer(), integer()];
+        assert_eq!(element_offsets(&elems), vec![0, 8]);
+        assert_eq!(element_size(&Type::Tuple(elems)), 16);
+    }
+
+    #[test]
+    fn stack_offsets_three_bools() {
+        // (bool, bool, bool): all 1B align 1.  Tightly packed.
+        let elems = vec![boolean(), boolean(), boolean()];
+        assert_eq!(element_offsets(&elems), vec![0, 1, 2]);
+        assert_eq!(element_size(&Type::Tuple(elems)), 3);
+    }
+
+    #[test]
+    fn stack_alignment_max_member() {
+        // Max alignment among elements drives the tuple's alignment.
+        let elems = vec![boolean(), integer()];
+        assert_eq!(element_align(&Type::Tuple(elems)), 8);
+    }
 }
 
 /// `(offset, index)` pairs for elements that need cleanup on scope exit
@@ -819,6 +1190,62 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
         }
     }
     result
+}
+
+/// Plan-06 phase 5b' (DESIGN.md D12) — recursive walk of a `Value`
+/// tree collecting every `Value::Call(callee, _)` edge.  Pushes
+/// `(callee, caller_d_nr)` pairs onto `edges`.
+///
+/// Skips `Value::CallRef` (runtime function reference) — phase 5e
+/// pessimises CallRef-routed callers because the actual callee is
+/// not statically known.
+#[allow(clippy::similar_names)]
+fn collect_callees(value: &Value, caller: u32, edges: &mut Vec<(u32, u32)>) {
+    match value {
+        Value::Call(callee, args) => {
+            edges.push((*callee, caller));
+            for a in args {
+                collect_callees(a, caller, edges);
+            }
+        }
+        Value::CallRef(_, args) => {
+            // The actual callee is a runtime value; skip the edge,
+            // but still walk arg expressions for nested Call edges.
+            for a in args {
+                collect_callees(a, caller, edges);
+            }
+        }
+        Value::Block(b) => {
+            for v in &b.operators {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::Insert(vs) => {
+            for v in vs {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::If(c, t, e) => {
+            collect_callees(c, caller, edges);
+            collect_callees(t, caller, edges);
+            collect_callees(e, caller, edges);
+        }
+        Value::Loop(body) => {
+            for v in &body.operators {
+                collect_callees(v, caller, edges);
+            }
+        }
+        Value::Set(_, rhs) => {
+            collect_callees(rhs, caller, edges);
+        }
+        // Leaves and Value variants without nested expressions —
+        // nothing to walk.  Conservative: any future Value variant
+        // not enumerated here is treated as a leaf, missing any
+        // nested calls inside it.  Phase 5e's tests cover this so
+        // a missed variant surfaces as a "callers_of returns
+        // empty" regression.
+        _ => {}
+    }
 }
 
 impl Display for Type {
@@ -884,6 +1311,58 @@ impl Debug for Attribute {
     }
 }
 
+/// Plan-06 phase 5a (DESIGN.md D8.1) — purity classification of a
+/// function definition for the `is_par_safe` analyser.
+///
+/// Set by the `#pure` and `#impure(category)` annotations parsed
+/// from `default/*.loft` (and user code, future).  Phase 5b's
+/// analyser uses this to short-circuit: a worker fn that calls a
+/// `Pure` or `Impure(HostIo|Prng|Io)` stdlib fn is itself still
+/// par-safe; calls into `Impure(ParentWrite|ParCall)` are rejected.
+///
+/// `Unknown` (the default) means "no annotation provided" — phase
+/// 5b conservatively treats this as `Impure(ParentWrite)` to avoid
+/// false-positive par-safety classifications.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Purity {
+    /// No annotation — conservatively treated as parent-write
+    /// impure by the analyser to avoid false positives.
+    #[default]
+    Unknown,
+    /// `#pure` — no observable side effects, no parent-store writes.
+    /// Always par-safe.
+    Pure,
+    /// `#impure(category)` — observable side effect, classified by
+    /// category for the par-safety analyser's per-call check.
+    Impure(ImpureCategory),
+}
+
+/// Plan-06 phase 5a (DESIGN.md D8.1) — sub-classification of
+/// observable side effects.  Distinguishes "writes parent state"
+/// (forbidden in par workers) from "has side effects but doesn't
+/// write parent state" (allowed; host bridges serialise).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImpureCategory {
+    /// Host I/O — log_*, print, file read/write through host
+    /// bridges.  Allowed in par workers; the host serialises.
+    HostIo,
+    /// PRNG state mutation — random_int, random_seed, etc.  Allowed
+    /// in par workers (non-deterministic across runs but correct).
+    Prng,
+    /// Filesystem / network I/O beyond host_io — write_file,
+    /// delete_file, network ops.  Allowed in par workers; user
+    /// accepts that I/O happens in parallel.
+    Io,
+    /// Writes to a parent-side store via its first argument
+    /// (vector_add, hash_set, vector_insert, vector_remove, etc.).
+    /// Compile error in par workers when first arg is non-local.
+    ParentWrite,
+    /// Spawns parallel workers — par, par_fold, parallel_for.
+    /// Allowed if inner worker fn is par-safe (DESIGN.md D8 R2);
+    /// the analyser recurses.
+    ParCall,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum DefType {
     // Not yet known, must be filled in after the first parse pass.
@@ -916,6 +1395,127 @@ pub enum DefType {
 impl Display for DefType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format!("{self:?}"))
+    }
+}
+
+/// A group of fields on a struct/type that belong together as a single
+/// logical unit.  Used **exclusively** for two patterns — tuple
+/// elements and index bookkeeping triples.  Do not extend for other
+/// uses without explicit user direction.
+///
+/// `Tuple` — synthetic `__tuple<T1,T2,…>` struct's element fields
+/// `_0`, `_1`, ….  One group per tuple-shape struct; `field_indices`
+/// lists every attribute in element order.  Registered by
+/// [`Data::tuple_def`].
+///
+/// `Index` — bookkeeping triple appended to a content struct when
+/// `index<T[key]>` is registered.  One group per index instance on the
+/// struct (multiple indexes → multiple groups); `field_indices`
+/// lists exactly `[left, right, color]` in that order.  Registered by
+/// [`Stores::index`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum LinkedFieldKind {
+    Tuple,
+    Index,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkedFieldGroup {
+    pub kind: LinkedFieldKind,
+    /// 0 for Tuple (only one tuple group per synthetic struct).
+    /// 1-based index instance counter for Index (matches the `_N`
+    /// suffix on `#left_N` / `#right_N` / `#color_N`).
+    pub instance: u16,
+    /// Indices into the host struct's field/attribute list.
+    /// For Tuple: element order, length = arity.
+    /// For Index: exactly `[left, right, color]`, length = 3.
+    pub field_indices: Vec<u16>,
+    /// Alignment the GROUP must be placed at — the MAX of every
+    /// member field's alignment.  An index triple
+    /// `[int4 (align 4), int4 (align 4), bool (align 1)]` has group
+    /// alignment 4.  A tuple `(integer (align 8), byte (align 1))` has
+    /// group alignment 8.  Pass this to the layout routine as the
+    /// alignment requirement when reserving the group's contiguous
+    /// block — the routine must honour it so the int/integer members
+    /// land on their natural-alignment boundaries.
+    pub alignment: u8,
+    /// Total bytes the group occupies when laid out atomically — the
+    /// sum of every member's size, **plus** any internal padding
+    /// needed to align larger members after smaller ones in element
+    /// order.  An index triple is `4 + 4 + 1 = 9` (no internal padding,
+    /// 1-byte bool last).  A tuple `(byte, integer)` requires 7 bytes
+    /// of internal padding between them: `1 + 7 + 8 = 16`.
+    pub size: u16,
+}
+
+impl LinkedFieldGroup {
+    /// Compute group alignment as the max of every member's
+    /// alignment.  `member_aligns` lists each member's natural
+    /// alignment in element order — e.g. for an index triple
+    /// `[4, 4, 1]`, returns 4.
+    #[must_use]
+    pub fn group_alignment(member_aligns: &[u8]) -> u8 {
+        member_aligns.iter().copied().max().unwrap_or(1)
+    }
+
+    /// Compute the group's total atomic size: each member at its
+    /// natural-alignment offset within the group, ending at the
+    /// natural-alignment-padded total.  `member_sizes_aligns` lists
+    /// `(size, alignment)` per member in element order.
+    ///
+    /// For an index triple `[(4,4), (4,4), (1,1)]` returns 9.
+    /// For a tuple `[(byte=1,1), (integer=8,8)]` returns 16 (the
+    /// 1-byte byte then 7 bytes padding then 8-byte integer).
+    #[must_use]
+    pub fn group_size(member_sizes_aligns: &[(u16, u8)]) -> u16 {
+        let mut pos: u16 = 0;
+        for &(size, align) in member_sizes_aligns {
+            // Pad up to the member's natural alignment.
+            let align_u16 = u16::from(align.max(1));
+            let rem = pos % align_u16;
+            if rem != 0 {
+                pos += align_u16 - rem;
+            }
+            pos += size;
+        }
+        pos
+    }
+
+    /// Number of fields in this group.  For Tuple = arity, for Index
+    /// = 3 (always `[left, right, color]`).
+    #[must_use]
+    pub fn arity(&self) -> usize {
+        self.field_indices.len()
+    }
+
+    /// Index into the host struct's field/attribute list of the
+    /// `member_idx`-th group member.  Returns `None` if `member_idx`
+    /// is out of range.  Safe entry point — replaces ad-hoc
+    /// `group.field_indices[i]` with bounds-checked access.
+    #[must_use]
+    pub fn member_field_index(&self, member_idx: usize) -> Option<u16> {
+        self.field_indices.get(member_idx).copied()
+    }
+
+    /// Per-member offsets inside the group, in element order.  Used
+    /// by the layout routine (post-group-atomic placement) to assign
+    /// each member's position relative to the group's anchor.
+    /// Mirrors `group_size`'s internal packing — first member at 0,
+    /// each subsequent member at the next natural-alignment offset.
+    #[must_use]
+    pub fn group_member_offsets(member_sizes_aligns: &[(u16, u8)]) -> Vec<u16> {
+        let mut offsets = Vec::with_capacity(member_sizes_aligns.len());
+        let mut pos: u16 = 0;
+        for &(size, align) in member_sizes_aligns {
+            let align_u16 = u16::from(align.max(1));
+            let rem = pos % align_u16;
+            if rem != 0 {
+                pos += align_u16 - rem;
+            }
+            offsets.push(pos);
+            pos += size;
+        }
+        offsets
     }
 }
 
@@ -972,6 +1572,18 @@ pub struct Definition {
     /// limit()-based heuristic; `Some(n)` forces the stored-width to n
     /// bytes (n ∈ {1, 2, 4, 8}).
     pub forced_size: Option<u8>,
+    /// Plan-06 phase 5a (DESIGN.md D8.1) — purity classification set
+    /// by `#pure` / `#impure(category)` annotations.  Default
+    /// `Purity::Unknown` (no annotation provided); phase 5b's
+    /// `is_par_safe` analyser treats unknown as ParentWrite-impure
+    /// for safety.
+    pub purity: Purity,
+    /// Linked-field groups on this definition's attributes.
+    /// Used **exclusively** for tuple elements (one group covering all
+    /// `_0`, `_1`, …) and index bookkeeping triples (one group per
+    /// index instance, covering `#left_N` / `#right_N` / `#color_N`).
+    /// Empty for ordinary user-defined structs.
+    pub field_groups: Vec<LinkedFieldGroup>,
 }
 
 impl Definition {
@@ -985,6 +1597,17 @@ impl Definition {
                 .next()
                 .unwrap_or_default()
                 .is_uppercase()
+    }
+
+    /// Tuple-element field group on this synthetic `__tuple<…>` struct,
+    /// or `None` for non-tuple defs.  Reuses the `LinkedFieldGroup`
+    /// infrastructure rather than parsing the `__tuple<` name prefix
+    /// or scanning attributes named `_0`, `_1`, ….
+    #[must_use]
+    pub fn tuple_group(&self) -> Option<&LinkedFieldGroup> {
+        self.field_groups
+            .iter()
+            .find(|g| matches!(g.kind, LinkedFieldKind::Tuple))
     }
 
     #[must_use]
@@ -1068,6 +1691,14 @@ pub struct Data {
     /// Populated when a package declares `[native] crate` in loft.toml.
     /// Used by native codegen to emit `crate::symbol(args)` calls.
     pub native_symbol_crates: HashMap<String, String>,
+    /// Plan-06 phase 5b' (DESIGN.md D12) — lazy caller-graph cache.
+    /// Maps callee def_nr → list of caller def_nrs.  Built once on
+    /// first `callers_of` call by walking every user fn's body and
+    /// collecting `Value::Call` edges.  `OnceLock` (not RefCell) so
+    /// `Data` stays `Sync` — required because tests park `Data` in
+    /// a process-wide `OnceLock<(Data, Stores)>` and parallel
+    /// workers read from a `&Data` across threads.
+    caller_index: std::sync::OnceLock<HashMap<u32, Vec<u32>>>,
 }
 
 #[must_use]
@@ -1163,16 +1794,31 @@ impl Data {
         content: &Type,
         database: &mut crate::database::Stores,
     ) -> Option<u16> {
-        let Type::Integer(spec) = content else {
-            return None;
-        };
-        let n = spec.vector_narrow_width()?;
-        match n {
-            1 => Some(database.byte(spec.min, false)),
-            2 => Some(database.short_raw(spec.min, false)),
-            4 => Some(database.int(spec.min, false)),
-            _ => None,
+        if let Type::Integer(spec) = content {
+            let n = spec.vector_narrow_width()?;
+            return match n {
+                1 => Some(database.byte(spec.min, false)),
+                2 => Some(database.short_raw(spec.min, false)),
+                4 => Some(database.int(spec.min, false)),
+                _ => None,
+            };
         }
+        // Plan-06 ARC.md A6.c — fn-ref vector elements are 4-byte
+        // d_nrs (`element_size(Type::Function) = 4`).  The previous
+        // routing via `vector_of` → `type_elm(Function)` →
+        // `def_nr("i32").known_type` lands on a placeholder type
+        // with `size = 0`, so `vector_append`'s stride is 0 and
+        // every literal element overwrites offset 8 — yielding a
+        // `length=3` vector whose elements after the last write are
+        // all the SAME d_nr (the last one written) at offset 8 with
+        // zeros at offsets 12 and 16.  Routing through
+        // `database.int(0, false)` (Parts::Int with `size = 4`)
+        // makes `vector_append` step through the storage in 4-byte
+        // increments, matching `OpSetInt4`'s narrow writes.
+        if matches!(content, Type::Function(_, _, _)) {
+            return Some(database.int(0, false));
+        }
+        None
     }
 
     #[must_use]
@@ -1192,6 +1838,7 @@ impl Data {
             native_symbols: HashMap::new(),
             native_packages: Vec::new(),
             native_symbol_crates: HashMap::new(),
+            caller_index: std::sync::OnceLock::new(),
         }
     }
 
@@ -1309,6 +1956,8 @@ impl Data {
             bounds: Vec::new(),
             const_ref: None,
             forced_size: None,
+            purity: Purity::Unknown,
+            field_groups: Vec::new(),
         };
         self.definitions.push(new_def);
         rec
@@ -1696,6 +2345,151 @@ impl Data {
         }
     }
 
+    /// P189 — register a synthetic struct definition for a tuple type
+    /// shape `(T1, T2, ...)`.  Each tuple shape resolves to a single
+    /// struct with attributes named `_0`, `_1`, ... so the rest of the
+    /// type system (vector storage, field access, fill_database) can
+    /// treat tuple-as-vector-element identically to struct-as-vector-element.
+    ///
+    /// Idempotent: returns the existing def_nr on subsequent calls
+    /// for the same tuple shape.
+    pub fn tuple_def(&mut self, lexer: &mut Lexer, types: &[Type]) -> u32 {
+        let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+        let name = format!("__tuple<{}>", inner_names.join(","));
+        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+            return nr;
+        }
+        if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
+            return nr;
+        }
+        let d = self.add_def(&name, lexer.pos(), DefType::Struct);
+        // Register globally (source 0) so other files referencing the
+        // same tuple shape resolve to the same def.
+        self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        let mut indices: Vec<u16> = Vec::with_capacity(types.len());
+        let mut sizes_aligns: Vec<(u16, u8)> = Vec::with_capacity(types.len());
+        for (i, t) in types.iter().enumerate() {
+            let aname = format!("_{i}");
+            let attr_idx = self.add_attribute(lexer, d, &aname, t.clone());
+            indices.push(attr_idx as u16);
+            // For tuple element-size we use `data::element_size` (the
+            // vector-storage width).  Natural alignment of an integer-
+            // width field equals its size.  Text is 4 bytes via
+            // interned heap pointer.  References are 12 bytes (DbRef);
+            // alignment is 4.  Functions are 4 bytes (i32 d_nr); the
+            // stack-slot inflation (to 20B) happens at read-back, not
+            // here — the GROUP's storage view is what matters.
+            let sz = element_size(t) as u16;
+            let align = match t {
+                Type::Boolean | Type::Enum(_, false, _) => 1,
+                Type::Single | Type::Character | Type::Function(_, _, _) => 4,
+                Type::Integer(_) | Type::Float => 8,
+                Type::Text(_) => 4, // heap pointer
+                Type::Reference(_, _)
+                | Type::Vector(_, _)
+                | Type::RefVar(_)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Spacial(_, _, _)
+                | Type::Enum(_, true, _) => 4, // DbRef alignment
+                Type::Tuple(_) => 8, // conservative max
+                _ => 1,
+            };
+            sizes_aligns.push((sz, align));
+        }
+        let alignment = LinkedFieldGroup::group_alignment(
+            &sizes_aligns.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
+        );
+        let size = LinkedFieldGroup::group_size(&sizes_aligns);
+        // Register the tuple element field group — single Tuple-kind
+        // group covering all `_0`, `_1`, … attributes in element order.
+        // Used by codegen / runtime to identify tuple structs without
+        // string-prefix matching on attribute names.  Alignment + size
+        // are pre-computed so the layout routine can honour the
+        // group's atomic placement.
+        self.definitions[d as usize]
+            .field_groups
+            .push(LinkedFieldGroup {
+                kind: LinkedFieldKind::Tuple,
+                instance: 0,
+                field_indices: indices,
+                alignment,
+                size,
+            });
+        d
+    }
+
+    /// Plan-06 phase 4d.C step 1 — register the synthetic struct
+    /// definition that backs `Type::Function` storage.  Mirrors
+    /// [`tuple_def`]: idempotent, globally registered (source 0),
+    /// returns the existing def_nr on subsequent calls.
+    ///
+    /// Storage layout (16 bytes total, finalised by `fill_database`
+    /// + `Stores::finish_type` in later phases):
+    /// - `_d_nr`: `i32` at offset 0 (4 bytes; `i32::MIN` = null fn-ref).
+    /// - `_closure`: 12-byte stored DbRef at offset 4 (store_nr +
+    ///   rec + pos pointing at the closure record in the same store).
+    ///
+    /// Phase 1 wires the **data-side definition only**; no database
+    /// type-id is assigned yet, no fill_database arm routes through
+    /// it, no codegen reads/writes it.  The function exists so phase
+    /// 2 (opcode addition + Parts::DbRef + database routing) and
+    /// phase 3 (codegen rework) have a single place to call.
+    ///
+    /// All fn-refs share the same storage shape regardless of
+    /// signature, so the synthetic struct's name carries no
+    /// argument-list suffix — `__fn_ref` is canonical and reused
+    /// across every `Type::Function(...)` value in the program.
+    pub fn fn_ref_def(&mut self, lexer: &mut Lexer) -> u32 {
+        let name = "__fn_ref".to_string();
+        if let Some(&nr) = self.def_names.get(&(name.clone(), 0)) {
+            return nr;
+        }
+        if let Some(&nr) = self.def_names.get(&(name.clone(), self.source)) {
+            return nr;
+        }
+        let d = self.add_def(&name, lexer.pos(), DefType::Struct);
+        // Register globally (source 0) so every reference to
+        // `Type::Function` across all source files resolves to the
+        // same synthetic struct.
+        self.def_names.entry((name.clone(), 0)).or_insert(d);
+        self.definitions[d as usize].returned = Type::Reference(d, Vec::new());
+        // `_d_nr`: 4-byte signed integer holding the function's
+        // def-nr.  The integer alias `i32` carries the `size(4)`
+        // annotation that fill_database honours via
+        // `Data::forced_size(alias_d_nr)`.  When phase 2 routes
+        // `Type::Function` through this synthetic struct,
+        // fill_database registers `_d_nr` as `Parts::Int` (4-byte
+        // storage) automatically.
+        let i32_d_nr = self.def_nr("i32");
+        let d_nr_attr_idx = self.add_attribute(
+            lexer,
+            d,
+            "_d_nr",
+            Type::Integer(IntegerSpec {
+                min: i32::MIN + 1,
+                max: i32::MAX as u32,
+                not_null: false,
+                forced_size: NonZeroU8::new(4),
+            }),
+        );
+        if i32_d_nr != u32::MAX {
+            self.definitions[d as usize].attributes[d_nr_attr_idx].alias_d_nr = i32_d_nr;
+        }
+        // `_closure`: 12-byte stored DbRef pointing at the captured-
+        // state record in the host's store.  Phase 2 introduces
+        // `Parts::DbRef` (12B) and a `Type` shape that fill_database
+        // routes through it — for now we leave the attribute typed
+        // as `Type::Reference(d, _)` (self-reference is a benign
+        // placeholder that fill_database will overwrite once the
+        // real DbRef Parts variant lands).  The data-side definition
+        // is the load-bearing piece; the runtime layout is deferred.
+        self.add_attribute(lexer, d, "_closure", Type::Reference(d, Vec::new()));
+        d
+    }
+
     pub fn check_vector(&mut self, d_nr: u32, vec_tp: u16, pos: &Position) -> u32 {
         let vec_name = format!("vector<{}>", self.def(d_nr).name);
         let mut v_nr = self.def_nr(&vec_name);
@@ -1992,6 +2786,112 @@ impl Data {
         &self.definitions[dnr as usize]
     }
 
+    /// Plan-07 phase 5 suggestions.  Find a similar type name —
+    /// struct, enum, or enum-value — across all loaded definitions.
+    /// Skips synthetic compiler-generated types (`__tuple<…>`,
+    /// `__fn_ref`, `Self`, etc.) and single-character names (which
+    /// are almost always interface generic-type parameters like
+    /// `T` / `K` / `V` and would mis-suggest in user code).
+    ///
+    /// Free function on `Data` so both `Parser::suggest_type_name`
+    /// and `typedef::actual_types`'s "Undefined type" emitter can
+    /// reach it without threading the parser through.
+    #[must_use]
+    pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        let candidates: Vec<&str> = self
+            .definitions
+            .iter()
+            .filter_map(|d| {
+                if !matches!(
+                    d.def_type,
+                    DefType::Struct | DefType::Enum | DefType::EnumValue
+                ) {
+                    return None;
+                }
+                if d.name.starts_with("__") || d.name == "Self" {
+                    return None;
+                }
+                // Filter out single-character names — they're
+                // generic-type placeholders (`T`, `K`, `V`, …) on
+                // interface declarations; suggesting `T` for an
+                // unknown user type is more misleading than helpful.
+                if d.name.chars().count() <= 1 {
+                    return None;
+                }
+                Some(d.name.as_str())
+            })
+            .collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
+    }
+
+    /// Plan-06 phase 5b' (DESIGN.md D12) — every user-defined
+    /// function's def_nr (excludes stdlib `n_*` natives whose code
+    /// body is `Value::Null`, excludes structs / enums / constants).
+    ///
+    /// "User function" = a `DefType::Function` definition with a
+    /// non-Null code body.  This includes functions declared in
+    /// `default/*.loft` that have explicit loft-body code, but
+    /// excludes `#native`-only declarations.  The set is what the
+    /// par-safety analyser (phase 5e) iterates over for the
+    /// fixed-point classification.
+    #[must_use]
+    pub fn user_fn_d_nrs(&self) -> Vec<u32> {
+        self.definitions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, def)| {
+                if def.def_type == DefType::Function && !matches!(def.code, Value::Null) {
+                    Some(idx as u32)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Plan-06 phase 5b' (DESIGN.md D12) — every user fn that calls
+    /// `callee_d_nr`, lazily-built and cached on first call.
+    ///
+    /// Walks every user fn body once collecting `Value::Call(callee, _)`
+    /// edges, builds the inverted index `callee → [callers]`, caches
+    /// it for the program's lifetime.  `Value::CallRef(local, _)` is
+    /// not added to the graph because the actual callee is a runtime
+    /// value (a function reference stored in a local variable);
+    /// phase 5e's analyser pessimises any caller of a CallRef-routed
+    /// fn (treats it as par-unsafe by default).
+    ///
+    /// Returns an empty slice if `callee_d_nr` has no callers (or
+    /// only CallRef-style callers).
+    ///
+    /// Cost: linear in the call-graph edge count for the first call;
+    /// O(1) thereafter.  For a typical loft codebase (~150 stdlib
+    /// fns + a few hundred user fns), the build is sub-50 ms.
+    pub fn callers_of(&self, callee_d_nr: u32) -> Vec<u32> {
+        let map = self.caller_index.get_or_init(|| self.build_caller_index());
+        map.get(&callee_d_nr).cloned().unwrap_or_default()
+    }
+
+    /// Internal helper for `callers_of`.  Walks every user fn body,
+    /// collects `Value::Call(callee, _)` edges, returns the
+    /// inverted `callee → [callers]` map.
+    fn build_caller_index(&self) -> HashMap<u32, Vec<u32>> {
+        let mut edges: Vec<(u32, u32)> = Vec::new(); // (callee, caller)
+        for caller_d_nr in self.user_fn_d_nrs() {
+            collect_callees(&self.def(caller_d_nr).code, caller_d_nr, &mut edges);
+        }
+        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (callee, caller) in edges {
+            map.entry(callee).or_default().push(caller);
+        }
+        // Deduplicate: a fn that calls another fn many times still
+        // counts as one caller.  Sort for stable test output.
+        for callers in map.values_mut() {
+            callers.sort_unstable();
+            callers.dedup();
+        }
+        map
+    }
+
     /// Post-2c: return the explicit `size(N)` annotation on the definition,
     /// if any.  Used by field allocation and sizeof() to honor `pub type i32 =
     /// integer size(4);` — the size overrides the limit()-based heuristic.
@@ -2055,9 +2955,26 @@ impl Data {
             | Type::Unknown(d_nr) => *d_nr,
             Type::Vector(_, _) => self.source_nr(0, "vector"),
             Type::RefVar(t) if matches!(**t, Type::Reference(_, _)) => self.type_def_nr(t),
-            Type::RefVar(_) | Type::Sorted(_, _, _) => self.source_nr(0, "reference"),
+            Type::RefVar(_) => self.source_nr(0, "reference"),
+            Type::Sorted(_, _, _) => self.source_nr(0, "sorted"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
+            // P189: look up the synthetic tuple struct registered by
+            // `tuple_def` at parse time.  Returns u32::MAX if the
+            // tuple shape was never registered (caller must register
+            // via `tuple_def` before reaching here, e.g. in `sub_type`
+            // when parsing `vector<(...)>`).
+            Type::Tuple(types) => {
+                let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+                let name = format!("__tuple<{}>", inner_names.join(","));
+                self.def_nr(&name)
+            }
+            // Plan-06 phase 4d.A.2 — fn-ref vector elements use 4-byte
+            // i32 d_nr storage.  Route to `i32`'s def_nr (registered as
+            // a type alias for `integer size(4)` in `default/01_code.loft`)
+            // so the vector storage path treats fn-ref vectors
+            // identically to `vector<i32>`.
+            Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
     }
@@ -2086,6 +3003,18 @@ impl Data {
             Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Hash(_, _, _) => {
                 self.source_nr(0, "reference")
             }
+            // P189: tuple element types resolve to the synthetic
+            // tuple struct registered by `tuple_def`.  Same lookup
+            // as `type_def_nr`'s Tuple arm.
+            Type::Tuple(types) => {
+                let inner_names: Vec<String> = types.iter().map(|t| t.name(self)).collect();
+                let name = format!("__tuple<{}>", inner_names.join(","));
+                self.def_nr(&name)
+            }
+            // Plan-06 phase 4d.A.2 — fn-ref element types route to
+            // `i32` (4-byte int alias) so vector storage is flat.
+            // Same lookup as `type_def_nr`'s Function arm.
+            Type::Function(_, _, _) => self.def_nr("i32"),
             _ => u32::MAX,
         }
     }
@@ -2348,6 +3277,36 @@ impl Data {
                 }
                 write!(write, "}}")
             }
+            // Plan-07 phase 1 — Span is transparent in pretty-print.
+            Value::Span(b) => self.show_code(write, vars, &b.1, indent, start),
+            Value::ParFor(b) => {
+                let stitch_name = match b.stitch_id {
+                    0 => "concat",
+                    1 => "discard",
+                    2 => "reduce",
+                    3 => "queue",
+                    _ => "?",
+                };
+                write!(write, "par_for[{stitch_name}](x={}, r=", b.x_var)?;
+                if b.r_var == u16::MAX {
+                    write!(write, "_")?;
+                } else {
+                    write!(write, "{}", b.r_var)?;
+                }
+                write!(write, ", input=")?;
+                self.show_code(write, vars, &b.input, 0, false)?;
+                write!(write, ", worker=")?;
+                self.show_code(write, vars, &b.worker, 0, false)?;
+                write!(write, ", threads=")?;
+                self.show_code(write, vars, &b.threads, 0, false)?;
+                writeln!(write, ", body=")?;
+                self.show_code(write, vars, &b.body, indent + 1, true)?;
+                write!(write, ")")
+            }
+            // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+            // pretty-print should never see it (it's only created during
+            // native emission, downstream of this IR walker).
+            Value::RawExpr(s) => write!(write, "raw({s})"),
         }
     }
 
@@ -2443,4 +3402,148 @@ fn value_sizes() {
     assert_eq!(size_of::<(u8, u16, Box<Value>)>(), 16); // Set
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>, Box<Value>)>(), 32); // If
     assert_eq!(size_of::<(u8, Box<Value>, Box<Value>)>(), 24); // Iter
+    assert_eq!(size_of::<(u8, Box<(Position, Value)>)>(), 16); // Span (plan-07 phase 1)
+}
+
+#[test]
+fn span_clone_and_eq_roundtrip() {
+    // Plan-07 phase 1, step 1.1 acceptance: construct a Span, clone it,
+    // debug-format it, assert round-trip equality.  Span is a transparent
+    // wrapper, so the cloned tree must compare equal to the original.
+    let pos = Position {
+        file: "x.loft".to_string(),
+        line: 17,
+        pos: 4,
+    };
+    let v = Value::Span(Box::new((pos.clone(), Value::Int(7))));
+    let v2 = v.clone();
+    assert_eq!(v, v2, "clone must be Eq");
+    let dbg = format!("{v:?}");
+    assert!(
+        dbg.contains("x.loft") && dbg.contains("17") && dbg.contains("Int(7)"),
+        "debug shows file, line, and inner: {dbg}"
+    );
+}
+
+#[test]
+fn span_unspan_strips_wrapper() {
+    // Plan-07 phase 1, step 1.B.0 acceptance: `unspan()` returns the
+    // inner non-Span node, recursing through any number of wraps.
+    let pos = Position {
+        file: "y.loft".to_string(),
+        line: 3,
+        pos: 7,
+    };
+    let inner = Value::Int(42);
+    // Single wrap.
+    let wrapped = Value::Span(Box::new((pos.clone(), inner.clone())));
+    assert_eq!(wrapped.unspan(), &inner);
+    // Doubly wrapped.
+    let double = Value::Span(Box::new((pos.clone(), wrapped.clone())));
+    assert_eq!(double.unspan(), &inner);
+    // Non-Span passes through unchanged.
+    assert_eq!(inner.unspan(), &inner);
+    // Mutable variant.
+    let mut wrapped_mut = Value::Span(Box::new((pos, Value::Int(99))));
+    if let Value::Int(n) = wrapped_mut.unspan_mut() {
+        *n = 100;
+    }
+    assert_eq!(wrapped_mut.unspan(), &Value::Int(100));
+}
+
+#[cfg(test)]
+mod caller_graph_tests {
+    use super::{Block, Data, DefType, Type, Value};
+    use crate::lexer::Position;
+
+    /// Build a synthetic Data with three user fns:
+    ///   fn0: calls fn1
+    ///   fn1: calls fn2 + fn2 again (test dedup)
+    ///   fn2: leaf (no calls)
+    /// Plus a stdlib-style entry (Value::Null body) that should be
+    /// excluded from user_fn_d_nrs.
+    fn build_test_data() -> Data {
+        let mut d = Data::new();
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        // fn0: calls fn1 with no args
+        let d0 = d.add_def("fn0", &pos, DefType::Function);
+        // fn1: calls fn2 twice
+        let d1 = d.add_def("fn1", &pos, DefType::Function);
+        // fn2: leaf
+        let d2 = d.add_def("fn2", &pos, DefType::Function);
+        // n_native: stdlib-style (Value::Null body — excluded)
+        let _dn = d.add_def("n_native", &pos, DefType::Function);
+        // Set codes.
+        d.definitions[d0 as usize].code = Value::Call(d1, vec![]);
+        d.definitions[d1 as usize].code = Value::Block(Box::new(Block {
+            name: "test",
+            operators: vec![Value::Call(d2, vec![]), Value::Call(d2, vec![])],
+            result: Type::Void,
+            scope: 0,
+            var_size: 0,
+        }));
+        d.definitions[d2 as usize].code = Value::Int(42);
+        // n_native stays Value::Null.
+        d
+    }
+
+    #[test]
+    fn user_fn_d_nrs_excludes_null_body_natives() {
+        let d = build_test_data();
+        let user_fns = d.user_fn_d_nrs();
+        assert_eq!(user_fns.len(), 3, "fn0/fn1/fn2 only — n_native excluded");
+        // fn0/1/2 are at indices 0/1/2.
+        assert_eq!(user_fns, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn callers_of_finds_direct_callers() {
+        let d = build_test_data();
+        // fn1's caller is fn0.
+        assert_eq!(d.callers_of(1), vec![0]);
+        // fn2's caller is fn1 (deduplicated despite two call sites).
+        assert_eq!(d.callers_of(2), vec![1]);
+    }
+
+    #[test]
+    fn callers_of_uncalled_returns_empty() {
+        let d = build_test_data();
+        // fn0 has no callers.
+        assert!(d.callers_of(0).is_empty());
+    }
+
+    #[test]
+    fn callers_of_caches_after_first_call() {
+        let d = build_test_data();
+        // First call builds the cache.
+        let _ = d.callers_of(1);
+        // Cache is now populated.
+        assert!(d.caller_index.get().is_some());
+        // Second call returns the same answer cheaply.
+        assert_eq!(d.callers_of(1), vec![0]);
+    }
+
+    #[test]
+    fn callers_of_walks_block_and_call_args_recursively() {
+        let mut d = Data::new();
+        let pos = Position {
+            file: String::new(),
+            line: 0,
+            pos: 0,
+        };
+        let d_inner = d.add_def("inner", &pos, DefType::Function);
+        let d_outer = d.add_def("outer", &pos, DefType::Function);
+        // outer's body wraps inner's call inside an If condition.
+        d.definitions[d_inner as usize].code = Value::Int(1);
+        d.definitions[d_outer as usize].code = Value::If(
+            Box::new(Value::Call(d_inner, vec![])),
+            Box::new(Value::Int(0)),
+            Box::new(Value::Int(0)),
+        );
+        assert_eq!(d.callers_of(d_inner), vec![d_outer]);
+    }
 }

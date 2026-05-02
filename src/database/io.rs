@@ -218,6 +218,14 @@ impl Stores {
                      with store-internal references that cannot be serialized",
                     self.types[tp as usize].name
                 ),
+                // Plan-06 phase 4d.C step 2: stored DbRef pointer is
+                // store-internal — same restriction as collection fields,
+                // can't be serialised across machines.
+                Parts::DbRef => panic!(
+                    "binary I/O not supported for type '{}': stored DbRef \
+                     pointers are store-internal and cannot be serialised",
+                    self.types[tp as usize].name
+                ),
                 Parts::Base => unreachable!(
                     "Parts::Base should never appear as a field type in read_data \
                      (type: {})",
@@ -386,6 +394,12 @@ impl Stores {
                 | Parts::Spacial(_, _) => panic!(
                     "binary I/O not supported for type '{}': it contains a collection field \
                      with store-internal references that cannot be serialized",
+                    self.types[tp as usize].name
+                ),
+                // Plan-06 phase 4d.C step 2: see read_data's DbRef arm.
+                Parts::DbRef => panic!(
+                    "binary I/O not supported for type '{}': stored DbRef \
+                     pointers are store-internal and cannot be serialised",
                     self.types[tp as usize].name
                 ),
                 Parts::Base => unreachable!(

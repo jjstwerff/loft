@@ -1,0 +1,4 @@
+use circ_b::*;
+fn main() {
+  print("from main");
+}

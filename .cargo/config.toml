@@ -1,0 +1,24 @@
+# Cargo project config.
+#
+# Activates the `mold` linker on Linux x64 for slightly faster link
+# time AND — more importantly — a unified cache.  Without this,
+# devs who occasionally invoke cargo with custom RUSTFLAGS end up
+# with a separate cache keyed on the flag set, forcing rebuilds
+# when alternating between flagged and unflagged invocations.
+# Pinning the linker here keeps every cargo run from this checkout
+# on a single cache key.
+#
+# Required setup:
+# - Linux x64: `sudo apt-get install mold` (~3 MB).
+# - macOS / Windows: nothing.  This block targets only
+#   `x86_64-unknown-linux-gnu`; other platforms ignore it and use
+#   the system default linker.
+# - CI: `.github/workflows/ci.yml` installs mold on the ubuntu
+#   runner; mac / windows runners are unaffected.
+#
+# If you must build without mold (e.g. on a system without apt or
+# behind a firewall), comment out the rustflags line below.
+# Cargo will fall back to the system linker.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

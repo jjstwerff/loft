@@ -13,8 +13,6 @@ use crate::state::State;
 use crate::vector;
 use std::sync::Arc;
 #[cfg(feature = "threading")]
-use std::sync::mpsc;
-#[cfg(feature = "threading")]
 use std::thread;
 
 /// Shared bytecode + library for a single `parallel_for` dispatch.
@@ -81,124 +79,463 @@ impl WorkerProgram {
     }
 }
 
-/// Run workers, writing results directly into `out_ptr`.
-/// # Panics
-/// Panics if a worker thread panics.
-/// Each thread writes a non-overlapping slice — no channel, no reordering.
-#[allow(clippy::too_many_arguments)]
-// Threading path moves `program` into `Arc::new(program)`; non-threading path
-// only borrows it, hence the feature-gated allow.  The raw `out_ptr` is written
-// to from inside `unsafe { }` blocks in both paths; making the public function
-// `unsafe` would cascade across every `par(...)` call site and the QUALITY 6a
-// native-codegen path, so the allow narrows to the non-threading build where
-// clippy can trace the bare deref inline.  `dead_code` for the same reason as
-// `needless_pass_by_value`: only the threading callers live in main.rs's
-// binary crate view; under `--no-default-features` those callers are cfg'd out.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(
-        clippy::needless_pass_by_value,
-        clippy::not_unsafe_ptr_arg_deref,
-        dead_code
-    )
-)]
-pub fn run_parallel_direct(
-    stores: &Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    return_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    out_ptr: *mut u8,
-    n_rows: usize,
-) {
-    if n_rows == 0 {
-        return;
-    }
-    // WASM threading dispatches to JS host bridge (Worker Threads).
-    #[cfg(all(feature = "threading", feature = "wasm"))]
-    {
-        let _ = (stores, program, extra_args);
-        // Call globalThis.loftHost.parallel_run(fn_pos, input_store, input_rec,
-        //   input_pos, element_size, return_size, n_threads, out_store, out_rec, out_pos, n_rows)
-        let args = js_sys::Array::new();
-        args.push(&wasm_bindgen::JsValue::from(fn_pos));
-        args.push(&wasm_bindgen::JsValue::from(input.store_nr));
-        args.push(&wasm_bindgen::JsValue::from(input.rec));
-        args.push(&wasm_bindgen::JsValue::from(input.pos));
-        args.push(&wasm_bindgen::JsValue::from(element_size));
-        args.push(&wasm_bindgen::JsValue::from(return_size));
-        args.push(&wasm_bindgen::JsValue::from(n_threads as u32));
-        args.push(&wasm_bindgen::JsValue::from(n_rows as u32));
-        crate::wasm::host_call_raw("parallel_run", &args);
-    }
-    // Native OS threads via thread::scope.
-    #[cfg(all(feature = "threading", not(feature = "wasm")))]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let out = Arc::new(SendMutPtr(out_ptr));
+// ── Plan-06 phase 1 step 4.5 — shared run_parallel_* template ─────────────────
+//
+// Five of the six run_parallel_* variants share a uniform shape after the
+// channel→thread::scope conversion in steps 2–4:
+//
+//   1. Spawn N worker threads via `thread::scope`.
+//   2. Each worker gets a fresh `clone_for_worker()` snapshot, an Arc-bumped
+//      reference to the WorkerProgram, and a row range `start..end`.
+//   3. Each worker computes some R from its row range and returns it.
+//   4. The main thread joins all workers, collecting `Vec<R>` in worker-id order.
+//
+// `parallel_workers` captures that scaffolding; the per-variant `run_parallel_*`
+// fns become thin wrappers that pass a closure describing the per-worker work.
+// `run_parallel_light` is **not** on this template — it uses
+// `clone_for_light_worker(pool_slice)` with a mutable borrow of pre-allocated
+// pool stores.  Phase 5's `Arc<Store>` rewrite makes every path light by
+// default; at that point the template absorbs run_parallel_light too.
 
-        thread::scope(|s| {
-            for t in 0..threads {
+/// Common scope-spawn-collect scaffolding for the parallel runtime.
+///
+/// Spawns N worker threads (N = `min(n_threads, n_rows)`), each running
+/// `f(start, end, worker_stores) -> R` over its row range with a fresh
+/// `clone_for_worker` snapshot.  Returns `Vec<R>` in worker-id order.
+///
+/// Used by both the interpreter dispatchers in this file and the native
+/// codegen dispatchers in `src/codegen_runtime.rs`.  The interpreter
+/// path needs an `Arc<WorkerProgram>`; it constructs its own and the
+/// closure captures it.  The native path constructs no extra context;
+/// it just runs a Rust closure per row.
+///
+/// Implementation notes:
+/// - `f` is captured by reference inside the spawn closures.  The
+///   spawn closures are `move`, so they capture `&f` by `Copy`; the
+///   `Sync` bound ensures concurrent calls are safe.
+/// - Each worker gets its own `WorkerStores` via `clone_for_worker`;
+///   the closure may call `add_output_slot` / `take_slot` as needed
+///   and include them in its `R` payload.
+/// - `n_threads` is clamped to `min(n_threads, n_rows)`; for `n_rows == 0`
+///   the caller is expected to short-circuit before calling.
+#[cfg(feature = "threading")]
+pub(crate) fn parallel_workers<R, F>(
+    stores: &Stores,
+    n_threads: usize,
+    n_rows: usize,
+    f: F,
+) -> Vec<R>
+where
+    R: Send,
+    F: Fn(usize, usize, WorkerStores) -> R + Sync,
+{
+    // Plan-06 phase 1.5 — use rayon's global work-stealing pool
+    // instead of `std::thread::scope` per-call.  Per-call cost drops
+    // from ~200 µs (thread spawn × N) to ~5 µs (task submission ×
+    // N).  Nested par submits onto the same pool — no thread-count
+    // explosion at depth K.  Matches the browser's
+    // wasm-bindgen-rayon model so the two scheduler stories converge.
+    use rayon::prelude::*;
+    let threads = n_threads.max(1).min(n_rows.max(1));
+    let pool = rayon_pool();
+    pool.install(|| {
+        (0..threads)
+            .into_par_iter()
+            .map(|t| {
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 let worker_stores = stores.clone_for_worker();
-                let prog = Arc::clone(&program);
-                let input_t = *input;
-                let extras = extra_args.to_vec();
-                let out_t = Arc::clone(&out);
-                let ret_sz = return_size as usize;
+                f(start, end, worker_stores)
+            })
+            .collect()
+    })
+}
 
-                s.spawn(move || {
-                    let mut state = prog.new_state(worker_stores);
-                    for row_idx in start..end {
-                        let row_idx_i32 = row_idx as i64;
-                        let row_ref = vector::get_vector(
-                            &input_t,
-                            element_size,
-                            row_idx_i32,
-                            &state.database.allocations,
-                        );
-                        let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
-                        unsafe {
-                            let dst = out_t.0.add(row_idx * ret_sz);
-                            std::ptr::copy_nonoverlapping(
-                                (&raw const val).cast::<u8>(),
-                                dst,
-                                ret_sz,
-                            );
-                        }
-                    }
-                });
-            }
-        });
+/// Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.
+///
+/// Each `parallel_workers` call returns a `Vec<(start, batch)>` where every
+/// batch's `i`-th element belongs at row `start + i` of the result.  This
+/// helper writes the merge sequentially into a vector pre-filled with
+/// `default` and returns it.
+///
+/// Used by `run_parallel_raw`, `run_parallel_text`, `run_parallel_int`, and
+/// the codegen-runtime `run_native_workers_*` triple — five sites that
+/// previously inlined the same 5-line loop.
+///
+/// `R: Clone` because `vec![default; n_rows]` clones the seed once per row.
+/// For owning types (`String`, `Vec<…>`) the default is typically empty.
+pub(crate) fn merge_batches<R: Clone>(
+    batches: Vec<(usize, Vec<R>)>,
+    n_rows: usize,
+    default: R,
+) -> Vec<R> {
+    let mut results = vec![default; n_rows];
+    for (start, batch) in batches {
+        for (offset, val) in batch.into_iter().enumerate() {
+            results[start + offset] = val;
+        }
     }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let ret_sz = return_size as usize;
-        for row_idx in 0..n_rows {
-            let row_idx_i32 = row_idx as i64;
-            let row_ref = vector::get_vector(
-                input,
-                element_size,
-                row_idx_i32,
-                &state.database.allocations,
-            );
-            let val = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
-            unsafe {
-                let dst = out_ptr.add(row_idx * ret_sz);
-                std::ptr::copy_nonoverlapping((&raw const val).cast::<u8>(), dst, ret_sz);
+    results
+}
+
+/// Lazily-initialised global rayon pool.  Threading-feature only.
+/// Uses `num_cpus`'s default thread count (rayon's default).
+#[cfg(feature = "threading")]
+fn rayon_pool() -> &'static rayon::ThreadPool {
+    use std::sync::OnceLock;
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .build()
+            .expect("rayon pool init failed")
+    })
+}
+
+/// Sequential equivalent of `parallel_workers` for the `not(threading)` path.
+/// Runs the closure once with `start = 0`, `end = n_rows`, and a single
+/// `clone_for_worker()` snapshot.  Returned `Vec<R>` always has length 1.
+#[cfg(not(feature = "threading"))]
+pub(crate) fn parallel_workers<R, F>(
+    stores: &Stores,
+    _n_threads: usize,
+    n_rows: usize,
+    f: F,
+) -> Vec<R>
+where
+    F: FnOnce(usize, usize, WorkerStores) -> R,
+{
+    let worker_stores = stores.clone_for_worker();
+    vec![f(0, n_rows, worker_stores)]
+}
+
+// ── Plan-06 phase 3a — Stitch policy enum (DESIGN.md D1) ─────────────────────
+//
+// The unified runtime entry point that phase 3b lands will be
+// `n_parallel_native(stores, program, fn_pos, input, threads, fn, stitch)`,
+// inner-dispatching on the `Stitch` policy.  Today the runtime branches
+// on three native fns (`n_parallel_for_native` / `_text_native` /
+// `_ref_native`) selected at codegen time by inspecting the worker fn's
+// return type; phase 3 collapses those into one polymorphic dispatcher
+// parameterised by `Stitch`.
+//
+// Phase 3a (this commit) lands just the type — no dispatcher, no opcode,
+// no production caller.  The variants exist so that phase 3b/3d/3e have
+// a stable shape to compile against, and so that `OpParallel(stitch_id)`
+// payload encoding can be designed with the final variant set in mind.
+//
+// Phase 4c shape (DESIGN.md D1b):
+//   `Concat` (no payload — sizes come from `Data::fn_return_type` and
+//   the caller's `DispatchMode`).  Phase 4c retired the transitional
+//   `{ elem_size, ret_size }` payload that earlier phases needed.
+
+/// Plan-06 phase 3a (DESIGN.md D1a) — selects the per-call stitch
+/// policy that the unified `n_parallel_native` dispatcher will use.
+///
+/// Runtime enum (not compile-time generics) so codegen emits one
+/// `OpParallel(stitch_id)` opcode regardless of policy; the policy is
+/// selected at parse / scope-analysis time and hardcoded into the
+/// opcode stream.
+///
+/// **Currently dead code** — phase 3b lands the dispatcher that
+/// consumes this; until then no production caller exists.  The type
+/// is here so that downstream phases (3d codegen-embedding, 3e
+/// `Stitch::Reduce` runtime) have a stable shape.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stitch {
+    /// Concatenate per-worker output stores into one result vector.
+    /// No payload — the dispatcher routes by the caller-supplied
+    /// `DispatchMode` (Text / Ref / Primitive) and reads sizes from
+    /// `Data::fn_return_type`.  This is the phase-4c (DESIGN.md
+    /// D1b) **final** shape.
+    Concat,
+
+    /// Run workers, drop their results.  Used by the fused for-loop
+    /// when the body never references `r`, and by future
+    /// `par_for_each`.  Lands in plan-06 phase 7.
+    Discard,
+
+    /// Each worker accumulates over its slice via a user-supplied
+    /// monoidal fold; main thread combines per-worker partials with
+    /// the same fold fn.  Used by `par_fold(input, init, fold,
+    /// threads) -> U` and by the fused for-loop when the body is a
+    /// pure single-accumulator update (auto-detected at scope
+    /// analysis).  Runtime lands in phase 3e; surface in phase 7e.
+    ///
+    /// `fold_fn` is the fold function's def_nr; `init` lives in the
+    /// opcode payload separately (sized to `U`).
+    Reduce { fold_fn: u32 },
+
+    /// Bounded queue: workers push, parent body pops in completion
+    /// order (per D1c — input order is NOT preserved).  Used by the
+    /// fused for-loop when the body references `r` or has side
+    /// effects.  Runtime lands in phase 7b.
+    ///
+    /// `capacity` is the queue depth in elements (typically
+    /// `2 × threads` to absorb worker-burstiness without blocking).
+    Queue { capacity: u32 },
+}
+
+#[cfg(test)]
+mod stitch_tests {
+    use super::Stitch;
+
+    #[test]
+    fn enum_size_is_at_most_8_bytes() {
+        // Largest variant is Reduce { fold_fn: u32 } or Queue {
+        // capacity: u32 } — both 4 bytes payload + 1 disc + 3
+        // padding = 8.  Validates the opcode payload budget.
+        assert!(
+            std::mem::size_of::<Stitch>() <= 8,
+            "Stitch enum size {} bytes — opcode payload budget is 8",
+            std::mem::size_of::<Stitch>()
+        );
+    }
+
+    #[test]
+    fn variants_distinguishable_by_match() {
+        let cases = [
+            Stitch::Concat,
+            Stitch::Discard,
+            Stitch::Reduce { fold_fn: 42 },
+            Stitch::Queue { capacity: 16 },
+        ];
+        let names: Vec<&str> = cases
+            .iter()
+            .map(|s| match s {
+                Stitch::Concat => "concat",
+                Stitch::Discard => "discard",
+                Stitch::Reduce { .. } => "reduce",
+                Stitch::Queue { .. } => "queue",
+            })
+            .collect();
+        assert_eq!(names, vec!["concat", "discard", "reduce", "queue"]);
+    }
+}
+
+// ── Plan-06 phase 2 — store-rebase infrastructure ─────────────────────────────
+//
+// Today's `copy_from_worker` (src/database/allocation.rs:409) deep-copies
+// every struct result from a worker's WorkerStores into the parent's
+// result vector via `copy_block` + `copy_claims`.  For a 100K-element
+// result of 256-byte structs that's 25.6 MB of memcpy per parallel call.
+//
+// Phase 2's `StoreRebase` replaces deep-copy with **store adoption +
+// DbRef translation**: the worker's allocated stores are moved into
+// the parent's allocations table (store ownership transferred); any
+// DbRef referring to those stores from the worker's local namespace
+// is translated to the parent's new store_nr.  Bytes never move.
+//
+// See plan-06 DESIGN.md D2.1 (slot-marker design) and DESIGN.md D11c
+// (the per-field worker-own / parent-shared / cross-worker translation
+// rule).
+
+/// Translates DbRefs across the worker→parent adoption boundary.
+///
+/// Built once per `parallel_for` call: every worker-allocated store
+/// is adopted into the parent (via `Stores::adopt_store`), recording
+/// its worker-local store_nr → parent-side store_nr mapping in a
+/// per-worker `StoreRebase`.  When the parent later inspects a DbRef
+/// the worker handed back, it calls `StoreRebase::translate` to rewrite
+/// the `store_nr` field.
+///
+/// The translation is per-worker: each worker's DbRefs come from a
+/// different worker-local namespace, so the rebase map is constructed
+/// fresh for each worker.
+///
+/// Currently unused at runtime — phase 2b's narrow path
+/// (`copy_from_worker_unowned`) handles owned-free struct returns
+/// without needing the rebase walk.  The full step 2b will use this
+/// for owned-field structs (text, refs).
+#[allow(dead_code)]
+#[derive(Debug, Default)]
+pub struct StoreRebase {
+    /// Maps worker-local `store_nr` → parent-side `store_nr` for stores
+    /// adopted from one worker's WorkerStores.  A DbRef whose `store_nr`
+    /// is **not** in the map either points at a parent-shared store
+    /// (the original parent allocations the worker only read, store_nr
+    /// < parent_store_count) or at a worker-local store that wasn't
+    /// adopted (which would be a codegen bug).
+    pub map: std::collections::HashMap<u16, u16>,
+    /// Number of parent-side stores at the moment this rebase was
+    /// constructed (before any worker output was adopted).  Set via
+    /// `with_parent_count`; used by `translate` to apply the
+    /// 3-category rule from DESIGN.md D11c:
+    ///   - `db.store_nr` in `map` → worker-own, translate
+    ///   - `db.store_nr < parent_store_count` → parent-shared, pass through
+    ///   - otherwise → cross-worker (codegen bug); panic in debug,
+    ///     log + pass through in release
+    pub parent_store_count: u16,
+}
+
+#[allow(dead_code)]
+impl StoreRebase {
+    /// Construct an empty rebase map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Construct an empty rebase map with the parent-side store count
+    /// captured at the moment of construction.  Adoption monotonically
+    /// increases the parent's store count, so any pre-existing parent
+    /// store has a `store_nr < parent_store_count` — which is how
+    /// `translate` separates parent-shared refs from worker-own ones.
+    #[must_use]
+    pub fn with_parent_count(parent_store_count: u16) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            parent_store_count,
+        }
+    }
+
+    /// Record a worker-local → parent-side translation.
+    pub fn add(&mut self, worker_local: u16, parent_nr: u16) {
+        self.map.insert(worker_local, parent_nr);
+    }
+
+    /// Translate a DbRef from the worker's local namespace to the
+    /// parent's namespace.  Implements the 3-category rule from
+    /// DESIGN.md D11c:
+    ///
+    /// | `db.store_nr` shape | Category | Action |
+    /// |---|---|---|
+    /// | In `map` | Worker-own | Translate to parent-side `store_nr` |
+    /// | `< parent_store_count` | Parent-shared | Pass through |
+    /// | Otherwise | Cross-worker | Debug-panic; release-pass-through |
+    ///
+    /// The cross-worker case is a codegen bug — workers should never
+    /// hand out DbRefs into a sibling worker's stores.  Phase 5's
+    /// auto-light analyser tightens this further; until then we keep
+    /// the release path defensive (pass through unchanged).
+    #[must_use]
+    pub fn translate(&self, db: &DbRef) -> DbRef {
+        if let Some(&parent_nr) = self.map.get(&db.store_nr) {
+            return DbRef {
+                store_nr: parent_nr,
+                rec: db.rec,
+                pos: db.pos,
+            };
+        }
+        if db.store_nr < self.parent_store_count {
+            // Parent-shared (input store, stdlib const, parent-allocated
+            // read-only).  Pass through.
+            return *db;
+        }
+        // Cross-worker: codegen bug.  Debug builds panic so the bug
+        // surfaces immediately; release builds log + pass through so a
+        // released runtime degrades gracefully on a corner the test
+        // suite missed.
+        debug_assert!(
+            false,
+            "StoreRebase::translate cross-worker DbRef: \
+             store_nr={} not in rebase map and not parent-shared \
+             (parent_store_count={})",
+            db.store_nr, self.parent_store_count
+        );
+        eprintln!(
+            "loft: StoreRebase cross-worker DbRef store_nr={} (parent_store_count={}); passing through unchanged",
+            db.store_nr, self.parent_store_count
+        );
+        *db
+    }
+}
+
+/// Plan-06 phase 2 — type-driven recursive walk that translates every
+/// DbRef field inside a record so the worker's store-local references
+/// become valid in the parent's namespace after store adoption.
+///
+/// `record_ref` is a parent-side DbRef pointing at a record (typically
+/// in an adopted worker output store) that needs its DbRef-shaped
+/// fields translated.  `record_type` describes the layout used to
+/// locate those fields: a `Type::Reference(struct_d, _)` looks up the
+/// struct's attribute types from `data`, a `Type::Tuple(elems)` reads
+/// `elems` directly.  Any other shape has no DbRef fields and the walk
+/// returns immediately.
+///
+/// Cycles are broken via `visited` (keyed by `(store_nr, rec, pos)`).
+///
+/// Currently unused at runtime — phase 2b's reference-path switch is
+/// the first consumer.  Lives here so it can be unit-tested in
+/// isolation against synthetic Stores before the larger phase-2b
+/// surgery wires it into `run_parallel_ref`.
+#[allow(dead_code)]
+pub fn rebase_walk_record(
+    stores: &mut Stores,
+    record_ref: &DbRef,
+    record_type: &crate::data::Type,
+    data: &crate::data::Data,
+    map: &StoreRebase,
+    visited: &mut std::collections::HashSet<(u16, u32, u32)>,
+) {
+    use crate::data::{Type, owned_elements};
+    let key = (record_ref.store_nr, record_ref.rec, record_ref.pos);
+    if !visited.insert(key) {
+        return;
+    }
+    let elem_types: Vec<Type> = match record_type {
+        Type::Reference(struct_d, _) | Type::Enum(struct_d, true, _) => data
+            .def(*struct_d)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect(),
+        Type::Tuple(elems) => elems.clone(),
+        _ => return,
+    };
+    let owned: Vec<(usize, usize)> = owned_elements(&elem_types);
+    for (offset, idx) in owned {
+        let field_pos = record_ref.pos + offset as u32;
+        let field_tp = &elem_types[idx];
+        match field_tp {
+            // Text fields use `Str { ptr, len }` — the pointer is a
+            // raw heap address, not a store-relative slot.  Adoption
+            // doesn't move bytes, so the pointer stays valid; no
+            // translation needed.
+            Type::Text(_) => {}
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                let store = &mut stores.allocations[record_ref.store_nr as usize];
+                let cur: DbRef = *store.addr::<DbRef>(record_ref.rec, field_pos);
+                let translated = map.translate(&cur);
+                if translated != cur {
+                    *store.addr_mut::<DbRef>(record_ref.rec, field_pos) = translated;
+                }
+                // Recurse into the pointed-at record using the field's
+                // declared type so the next layer's `owned_elements`
+                // call sees the right shape.
+                if translated.store_nr != u16::MAX
+                    && (translated.store_nr as usize) < stores.allocations.len()
+                {
+                    rebase_walk_record(stores, &translated, field_tp, data, map, visited);
+                }
+            }
+            _ => {
+                // owned_elements only returns owned types; this arm is
+                // defensive.  Hitting it would indicate `owned_elements`
+                // and the match above are out of sync.
+                debug_assert!(
+                    false,
+                    "rebase_walk_record: unexpected owned-element type {field_tp:?}"
+                );
             }
         }
     }
 }
 
-/// Channel-based parallel: one u64 per row (for bool and other sub-4-byte types).
+/// Channel-based parallel: one u64 per row.
+///
+/// Plan-06 phase 3c: production paths now use `run_parallel_direct`
+/// uniformly (it handles every inline byte width 1..=8 via per-worker
+/// output slots).  This helper survives because `tests/threading.rs`
+/// drives it directly to verify the parallel runtime returns one
+/// `u64` per row in the right order.
+///
 /// # Panics
 /// Panics if a worker thread panics.
 #[allow(clippy::too_many_arguments)]
@@ -207,6 +544,7 @@ pub fn run_parallel_direct(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
+#[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-3c
 #[must_use]
 pub fn run_parallel_raw(
     stores: &Stores,
@@ -222,65 +560,24 @@ pub fn run_parallel_raw(
     if n_rows == 0 {
         return Vec::new();
     }
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, u64)>>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
-                    batch.push((row_idx, val));
-                }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = vec![0u64; n_rows];
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
-            }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results = vec![0u64; n_rows];
-        for (row_idx, result) in results.iter_mut().enumerate() {
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            batch.push(state.execute_at_raw(fn_pos, &row_ref, &extras, return_size));
         }
-        results
-    }
+        (start, batch)
+    });
+    merge_batches(batches, n_rows, 0u64)
 }
 
 /// Parallel text returns: workers copy `Str` to owned `String` before state drops.
@@ -307,80 +604,78 @@ pub fn run_parallel_text(
     if n_rows == 0 {
         return Vec::new();
     }
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, String)>>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
-                    batch.push((row_idx, s));
-                }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
-            }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results: Vec<String> = (0..n_rows).map(|_| String::new()).collect();
-        for (row_idx, result) in results.iter_mut().enumerate() {
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    // Plan-06 phase 1b: workers write text results into a per-worker
+    // output Store slot — same path text always uses inside loft.
+    // Each worker reserves a single record holding `row_count` u32
+    // s_pos pointers (`set_str` interns each string into the slot's
+    // store).  After join, the parent reads each adopted slot's
+    // s_pos array, calls `get_str` to retrieve the bytes, and copies
+    // them into the result `Vec<String>`.  The `Vec<String>` per-
+    // thread accumulation is gone — replaced by N store slots.
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, mut ws| {
+        let row_count = end - start;
+        let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
+        let slot = ws.add_output_slot(array_words);
+        let mut state = prog.new_state(ws);
+        let array_rec = state.database.allocations[slot.store_nr as usize].claim(array_words);
+        for (local_idx, row_idx) in (start..end).enumerate() {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
                 row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at_text(fn_pos, &row_ref, extra_args, n_hidden_text);
+            let s = state.execute_at_text(fn_pos, &row_ref, &extras, n_hidden_text);
+            let slot_store = &mut state.database.allocations[slot.store_nr as usize];
+            let s_pos = slot_store.set_str(&s);
+            slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
         }
-        results
+        (start, row_count, slot.store_nr, array_rec, state.database)
+    });
+    let mut results = vec![String::new(); n_rows];
+    for (start, count, slot_nr, array_rec, worker_db) in batches {
+        let slot_store = &worker_db.allocations[slot_nr as usize];
+        for local_idx in 0..count {
+            let s_pos = slot_store.get_u32_raw(array_rec, (local_idx as u32) * 4);
+            results[start + local_idx] = slot_store.get_str(s_pos).to_string();
+        }
     }
+    results
 }
 
-/// Parallel struct-reference returns: workers send back `(index, DbRef)` batches
-/// together with their `Stores` so the main thread can deep-copy struct data.
-/// # Panics
-/// Panics if a worker thread panics.
-#[allow(clippy::too_many_arguments)]
-// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, dead_code)
-)]
+/// Plan-06 PRIORITY.md spine step 8d.0 — `Stitch::Queue` runtime for
+/// reference / struct-enum-payload / vector return shapes.
+///
+/// Builds on `run_parallel_ref` but post-processes the per-worker
+/// batches into a flat `Vec<DbRef>` ordered by input row, with each
+/// DbRef rebased into the parent's store namespace via
+/// `Stores::adopt_worker_excess` + `rebase_walk_record`.  Returns the
+/// rebased refs alongside the list of adopted parent-side store_nrs
+/// so `n_parallel_buf_drop_ref` (8d.1) can free them when the body
+/// loop completes.
+///
+/// Adoption (vs. deep-copy) is the cost-saving move that makes Queue
+/// for refs cheaper than the legacy Concat path: workers' output
+/// stores are moved into the parent's allocations table — no
+/// per-record memcpy — and DbRef fields are translated in place via
+/// `rebase_walk_record` so cross-record references stay valid.
+///
+/// `ret_type` is the worker's declared return type
+/// (`Type::Reference(_, _)`, `Type::Enum(_, true, _)`, or
+/// `Type::Vector(_, _)`); used by `rebase_walk_record` to find DbRef
+/// fields inside each adopted record.  Pass through unchanged from
+/// the parser-side gate.
+///
+/// Currently `#[allow(dead_code)]` — 8d.1 is the first call-site
+/// consumer (`n_parallel_queue_ref` native fn).
+#[cfg(feature = "threading")]
+#[allow(dead_code, clippy::too_many_arguments)]
 #[must_use]
-pub fn run_parallel_ref(
-    stores: &Stores,
+pub fn run_parallel_queue_ref(
+    stores: &mut Stores,
     program: WorkerProgram,
     fn_pos: u32,
     input: &DbRef,
@@ -388,26 +683,54 @@ pub fn run_parallel_ref(
     n_threads: usize,
     extra_args: &[u64],
     n_rows: usize,
-) -> Vec<(Vec<(usize, DbRef)>, crate::database::Stores)> {
+    ret_type: &crate::data::Type,
+    data: &crate::data::Data,
+    n_hidden_dests: usize,
+) -> (Vec<DbRef>, Vec<u16>) {
     if n_rows == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<(Vec<(usize, DbRef)>, crate::database::Stores)>();
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-            let extras = extra_args.to_vec();
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
+    // ARC.md A2: shared atomic dispenser for parent-namespace slot
+    // indices.  Every worker's `database_named` call pulls a unique
+    // index from this counter and records it in
+    // `worker_allocated_indices`; the worker extends its own
+    // `allocations` clone to fit.  Replaces 8d.3's fixed
+    // `[off, off+SLOTS_PER_THREAD)` ranges with unbounded growth.
+    // Cross-worker collisions are impossible because the atomic
+    // dispenses globally-unique values.
+    let dispenser = stores.make_worker_slot_dispenser();
+    let n_workers = n_threads.max(1).min(n_rows.max(1));
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    use rayon::prelude::*;
+    let pool = rayon_pool();
+    let stores_immut: &Stores = &*stores;
+    let prog_ref = &prog;
+    let extras_ref = &extras;
+    let dispenser_ref = &dispenser;
+    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = pool.install(|| {
+        (0..n_workers)
+            .into_par_iter()
+            .map(|t| {
+                let start = t * n_rows / n_workers;
+                let end = (t + 1) * n_rows / n_workers;
+                let mut ws = stores_immut.clone_for_worker();
+                ws.stores.free_bits.clear();
+                ws.stores.disable_slot_reuse = true;
+                // The worker's stack store (allocated by
+                // `prog.new_state(ws)` via `db.database(1000)`) MUST
+                // land at `allocations.len()` (push-at-end), NOT
+                // through the dispenser — the stack store is a
+                // worker-local scratch buffer; routing it through
+                // the parent-namespace dispenser would put parent at
+                // risk of swapping that scratch buffer back in.
+                // Leave `worker_slot_dispenser = None` until
+                // `new_state` returns, then attach it for the
+                // worker's user-code allocations.
+                let mut state = prog_ref.new_state(ws);
+                state.database.worker_slot_dispenser = Some(Arc::clone(dispenser_ref));
+                state.database.worker_allocated_indices.clear();
                 let mut batch = Vec::with_capacity(end - start);
                 for row_idx in start..end {
                     let row_ref = vector::get_vector(
@@ -416,44 +739,193 @@ pub fn run_parallel_ref(
                         row_idx as i64,
                         &state.database.allocations,
                     );
-                    let val = state.execute_at_ref(fn_pos, &row_ref, &extras);
-                    batch.push((row_idx, val));
+                    // ARC.md A6.a — when the worker fn has hidden
+                    // caller-supplied destination params (added by
+                    // `ref_return` for Vector / Reference / Enum-payload
+                    // returns), allocate a fresh storage slot per
+                    // hidden arg in the worker's output store and pass
+                    // it as a 12-byte param after the input element.
+                    // The worker writes its result into the destination;
+                    // its DbRef survives in the worker's allocations
+                    // table and gets adopted + rebased back to parent
+                    // alongside the rest.
+                    // ARC.md A6.a — pre-allocate a real backing store
+                    // (NOT `state.database.null()`) for each hidden
+                    // destination.  `null()` returns a u32::MAX-sized
+                    // sentinel store: subsequent record claims silently
+                    // fail, so `out += [i]` writes go nowhere and the
+                    // returned vector is empty.  A 100-word real store
+                    // is enough seed; the standard claim path grows it
+                    // as the worker appends.
+                    let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
+                        .map(|_| state.database.database(100))
+                        .collect();
+                    batch.push((
+                        row_idx,
+                        state.execute_at_ref(fn_pos, &row_ref, &hidden_dests, extras_ref),
+                    ));
                 }
-                tx_t.send((batch, state.database))
-                    .expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = Vec::with_capacity(threads);
-        for batch in rx {
-            results.push(batch);
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
+                (batch, state.database)
+            })
+            .collect()
+    });
+    let null_db = DbRef {
+        store_nr: u16::MAX,
+        rec: 0,
+        pos: 0,
+    };
+    let mut refs: Vec<DbRef> = vec![null_db; n_rows];
+    let mut adopted: Vec<u16> = Vec::new();
+    // Grow parent's allocations to fit the dispenser's high-water
+    // mark, then iterate each worker's allocated-indices list and
+    // swap the worker's slot at that index into parent.  The
+    // dispenser's final value is one-past-the-last-index, so the
+    // parent's allocations vec must reach that length.
+    let high_water = dispenser.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    while stores.allocations.len() < high_water {
+        stores.allocations.push(crate::store::Store::new(100));
     }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut batch = Vec::with_capacity(n_rows);
-        for row_idx in 0..n_rows {
-            let row_ref = vector::get_vector(
-                input,
-                element_size,
-                row_idx as i64,
-                &state.database.allocations,
-            );
-            let val = state.execute_at_ref(fn_pos, &row_ref, extra_args);
-            batch.push((row_idx, val));
+    for (batch, mut worker_stores) in batches {
+        for &slot_nr in &worker_stores.worker_allocated_indices {
+            // Worker may have allocated and then freed the slot mid-
+            // call (e.g. via FreeRef on an intermediate temp).  Swap
+            // unconditionally — `revive_record_chain` below decides
+            // which slots stay active.  Skipped indices owned by
+            // OTHER workers are never in *this* worker's
+            // allocated_indices, so cross-thread swaps don't happen.
+            if (slot_nr as usize) < worker_stores.allocations.len()
+                && (slot_nr as usize) < stores.allocations.len()
+            {
+                std::mem::swap(
+                    &mut stores.allocations[slot_nr as usize],
+                    &mut worker_stores.allocations[slot_nr as usize],
+                );
+            }
         }
-        vec![(batch, state.database)]
+        for (i, src_ref) in batch {
+            refs[i] = src_ref;
+        }
+    }
+    // Revive every result chain.  Without this, parent reads from
+    // worker-freed slots return uninitialised bytes (variant-
+    // reassignment workers like `if neg { v = Fail{...} }` fall
+    // into this case because their codegen unconditionally
+    // `OpFreeRef`s every variant temp at end-of-fn).
+    let mut visited: std::collections::HashSet<u16> = std::collections::HashSet::new();
+    for r in &refs {
+        if r.store_nr == u16::MAX {
+            continue;
+        }
+        revive_record_chain(stores, r, ret_type, data, &mut visited, &mut adopted);
+    }
+    // Update `max` to cover any slots the workers allocated past
+    // parent's pre-dispatch max.  Slots beyond `high_water` were
+    // never dispensed, so they don't exist.
+    if (high_water as u16) > stores.max {
+        stores.max = high_water as u16;
+    }
+    (refs, adopted)
+}
+
+/// 8d.3 — mark a result record's slot (and any DbRef sub-field
+/// chain) as active in the parent's namespace, after `mem::swap`
+/// has moved worker data into parent.  Mirrors `rebase_walk_record`'s
+/// recursion shape but with a "revive" action (clear `free` flag,
+/// reset `ref_count`, clear `free_bits`) instead of "translate".
+///
+/// The worker may have freed the result store during scope
+/// cleanup; the bytes are still in memory but the store is flagged
+/// `free=true`, which would cause future parent allocations to
+/// overwrite it.  Reviving sets `free=false, ref_count=1` so the
+/// slot is owned by `par_ref_buffer_stack`'s adopted list — freed
+/// later by `n_parallel_buf_drop_ref`.
+#[cfg(feature = "threading")]
+fn revive_record_chain(
+    stores: &mut Stores,
+    record_ref: &DbRef,
+    record_type: &crate::data::Type,
+    data: &crate::data::Data,
+    visited: &mut std::collections::HashSet<u16>,
+    adopted: &mut Vec<u16>,
+) {
+    use crate::data::{Type, owned_elements};
+
+    let store_nr = record_ref.store_nr;
+    if !visited.insert(store_nr) {
+        return;
+    }
+    if (store_nr as usize) >= stores.allocations.len() {
+        return;
+    }
+    {
+        let store = &mut stores.allocations[store_nr as usize];
+        store.unlock();
+        if store.free {
+            store.free = false;
+            store.ref_count = 1;
+        }
+    }
+    let wi = store_nr as usize / 64;
+    let bi = store_nr as usize % 64;
+    if wi < stores.free_bits.len() {
+        stores.free_bits[wi] &= !(1u64 << bi);
+    }
+    adopted.push(store_nr);
+
+    // For plain `Type::Reference(struct_d, _)`, `attributes` lists
+    // the struct's fields — safe to walk for owned DbRef sub-fields.
+    // For `Type::Enum(_, true, _)`, `attributes` lists the parent
+    // enum's *variants*, NOT the active variant's fields — walking
+    // them as DbRef offsets reads garbage and segfaults.  Reaching
+    // the active variant requires reading the discriminant + type
+    // tag; deferred until a test with nested DbRef-in-variant
+    // payload exposes the gap (the spine's current corpus has no
+    // such test — Pass/Fail variants in `par_struct_to_struct_enum_t4`
+    // hold only byte / integer / text, none owned-DbRef).
+    let elem_types: Vec<Type> = match record_type {
+        Type::Reference(struct_d, _) => data
+            .def(*struct_d)
+            .attributes
+            .iter()
+            .map(|a| a.typedef.clone())
+            .collect(),
+        Type::Tuple(elems) => elems.clone(),
+        _ => return,
+    };
+    let owned: Vec<(usize, usize)> = owned_elements(&elem_types);
+    for (offset, idx) in owned {
+        let field_pos = record_ref.pos + offset as u32;
+        let field_tp = &elem_types[idx];
+        match field_tp {
+            Type::Text(_) => {}
+            Type::Reference(_, _)
+            | Type::Vector(_, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Enum(_, true, _) => {
+                let cur: DbRef =
+                    *stores.allocations[store_nr as usize].addr::<DbRef>(record_ref.rec, field_pos);
+                if cur.store_nr != u16::MAX && (cur.store_nr as usize) < stores.allocations.len() {
+                    revive_record_chain(stores, &cur, field_tp, data, visited, adopted);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
-/// Parallel integer returns: one `i32` per row, original order.
+/// Parallel integer returns: one `i64` per row, original order.
+///
+/// Plan-06 phase 4b': the loft-surface `parallel_for_int` (string-based
+/// dispatch) and its `n_parallel_for_int` native impl have been retired,
+/// but this helper stays as a tested Rust-side API — `tests/threading.rs`
+/// drives it directly to verify the parallel runtime semantics.  It's
+/// equivalent to `run_parallel_raw` with `return_size=8`, but exists as
+/// a separate fn for the no-extras / fixed-i64-return ergonomics that
+/// the threading tests rely on.
+///
 /// # Panics
 /// Panics if a worker thread panics.
 // See `run_parallel_direct` for the threading-vs-non-threading split rationale.
@@ -461,6 +933,7 @@ pub fn run_parallel_ref(
     not(feature = "threading"),
     allow(clippy::needless_pass_by_value, dead_code)
 )]
+#[allow(dead_code)] // tested by tests/threading.rs but no production caller post-phase-4b'
 #[must_use]
 pub fn run_parallel_int(
     stores: &Stores,
@@ -474,68 +947,331 @@ pub fn run_parallel_int(
     if n_rows == 0 {
         return Vec::new();
     }
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let (tx, rx) = mpsc::channel::<Vec<(usize, i64)>>();
-
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            let worker_stores = stores.clone_for_worker();
-            let prog = Arc::clone(&program);
-            let tx_t = tx.clone();
-            let input_t = *input;
-
-            let handle = thread::spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_idx_i32 = row_idx as i64;
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx_i32,
-                        &state.database.allocations,
-                    );
-                    let val = state.execute_at(fn_pos, &row_ref);
-                    batch.push((row_idx, val));
-                }
-                tx_t.send(batch).expect("channel send failed");
-            });
-            handles.push(handle);
-        }
-        drop(tx);
-        let mut results = vec![i64::MIN; n_rows];
-        for batch in rx {
-            for (idx, val) in batch {
-                results[idx] = val;
-            }
-        }
-        for h in handles {
-            h.join().expect("worker thread panicked");
-        }
-        results
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let _ = n_threads;
-        let mut state = program.new_state(stores.clone_for_worker());
-        let mut results = vec![i64::MIN; n_rows];
-        for (row_idx, result) in results.iter_mut().enumerate() {
-            let row_idx_i32 = row_idx as i64;
+    let input_t = *input;
+    let prog = Arc::new(program);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
             let row_ref = vector::get_vector(
-                input,
+                &input_t,
                 element_size,
-                row_idx_i32,
+                row_idx as i64,
                 &state.database.allocations,
             );
-            *result = state.execute_at(fn_pos, &row_ref);
+            batch.push(state.execute_at(fn_pos, &row_ref));
         }
-        results
+        (start, batch)
+    });
+    merge_batches(batches, n_rows, i64::MIN)
+}
+
+// ── Plan-06 PRIORITY.md spine step 2 — Stitch::Discard runtime ──────────────
+//
+// Discard is the simplest of the three streaming Stitch policies: workers run,
+// results are dropped on the floor, worker output stores deallocate at thread
+// join.  No order preservation, no per-element allocation, no merge pass.
+//
+// Used by phase 7's fused for-par when the body never references `r`, and by
+// `par_for_each` (future surface).  Compiles to `Value::ParFor { stitch:
+// Discard }` — see `doc/claude/plans/06-typed-par/PRIORITY.md` step 3.
+//
+// Currently dead code at the call-site level — step 3 (fused for-par + ParFor
+// IR) is the first consumer.  Self-tested in `tests/threading.rs::par_discard_*`.
+
+/// Plan-06 spine step 2 — `Stitch::Discard` worker runtime.
+///
+/// Iterates `input` rows in parallel across `n_threads`, dispatching the
+/// worker fn at `fn_pos` per row and **dropping** the return value.  The
+/// worker is run for its side effects (e.g. `log_info`, host_io) — workers
+/// must be par-safe (D8 rule, enforced by phase 5b').
+///
+/// The worker's return type is irrelevant: dispatch goes through
+/// `execute_at_raw` with the caller-supplied `return_size`, and the result
+/// is `let _`-bound.  `return_size = 0` is also valid (void worker — caller
+/// passes 0 and the post-return stack drain is a no-op).
+///
+/// `extra_args` are extra context args that follow the row arg in the
+/// worker's parameter list (matches the `execute_at_raw` convention used by
+/// `run_parallel_direct` / `run_parallel_int`).
+///
+/// # Panics
+///
+/// Panics if a worker thread panics.  No worker output is collected, so a
+/// non-panicking worker that produces an invalid value (e.g. `i64::MIN`
+/// sentinel) is silently absorbed — the caller is expected to enforce
+/// par-safety + side-effect-correctness via phase 5's analyser before
+/// reaching this dispatcher.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
+#[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
+pub fn run_parallel_discard(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+) {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return;
     }
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    let _: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // Discard the worker's return — Stitch::Discard contract.
+            let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+        }
+    });
+}
+
+// ── Plan-06 PRIORITY.md spine step 4 — Stitch::Queue runtime ────────────────
+//
+// Queue is the order-preserving streaming Stitch policy.  Workers run
+// in parallel; their results are collected per-worker in input order
+// and merged in start-index order for sequential consumption by the
+// main thread's body.
+//
+// Used by phase 7's fused for-par when the body references the worker
+// result, and by phase 10's value-position lowering (`let r =
+// parallel_for(input, fn, threads); for x in r { … }`).  The key
+// invariant: a result for row N appears in slot N of the merged Vec —
+// `run_parallel_queue` is order-preserving, identical to today's
+// `run_parallel_int` but with a configurable `return_size` and
+// `extra_args` payload.
+//
+// This commit lands the Rust runtime + tests; codegen wiring lands
+// in spine step 5 (value-position par lowering).  True streaming
+// (workers running while the main thread consumes) is a follow-up
+// once the API shape stabilises — for the MVP the runtime collects
+// every batch before returning.
+
+/// Plan-06 spine step 4 — `Stitch::Queue` worker runtime.
+///
+/// Iterates `input` rows in parallel across `n_threads`, dispatching the
+/// worker fn at `fn_pos` per row and collecting each return value as a
+/// `u64`.  The returned `Vec<u64>` has `len(input)` entries, with
+/// element `i` holding the worker's result for input row `i` —
+/// **order preserved** regardless of how the rayon pool dispatched
+/// workers.
+///
+/// `return_size` controls how `execute_at_raw_*` reads the worker's
+/// return off the stack: 1, 4, or 8 bytes.  Narrow returns are
+/// zero-extended into the u64 slot.  Text and reference returns are
+/// not supported here — they need the Concat path (step 8c/8d will
+/// extend Queue once the encoding is settled).
+///
+/// `primitive_input_size` selects the input dispatch shape, mirroring
+/// `run_parallel_direct`:
+/// - `0`: DbRef input (worker reads slot 0 as a 12-byte `DbRef`).
+/// - `u32::MAX`: text input (slot 0 is a 16-byte `Str`).
+/// - `1..=8`: primitive input (worker reads slot 0 as a 1/4/8-byte
+///   inline value — bool / i32 / i64 / single / character / enum-no-
+///   payload).
+/// - `9..=64`: wide-inline input (tuple, fn-ref, or any inline-typed
+///   first-arg slot exceeding 8 bytes).  When the worker's first arg
+///   is a tuple, `tuple_input_types` contains the per-element types
+///   so the dispatcher can inflate text fields from a 4-byte heap
+///   pointer to a 16-byte `Str` argument slot.
+///
+/// `extra_args` are extra context args that follow the row arg in the
+/// worker's parameter list (matches `execute_at_raw`'s convention used
+/// by `run_parallel_direct` / `run_parallel_int` /
+/// `run_parallel_discard`).
+///
+/// # Panics
+/// Panics if a worker thread panics.
+#[cfg_attr(
+    not(feature = "threading"),
+    allow(clippy::needless_pass_by_value, dead_code)
+)]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_queue(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+    primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
+) -> Vec<u64> {
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+    let prim_in = primitive_input_size;
+    // Wrap tuple types in an Arc so each worker thread shares the same
+    // Vec instead of cloning it (mirrors `run_parallel_direct`).
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
+    let batches = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let tuple_types_arc = tuple_types_arc.as_ref().map(Arc::clone);
+        let mut state = prog.new_state(ws);
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // Mirrors `run_parallel_direct`'s primitive-/text-/wide-
+            // /DbRef-input dispatch ladder so the Queue path covers
+            // the same input shapes.  Step 8b' wired in the primitive
+            // and tuple/wide arms so fused for-par over
+            // `vector<integer>` / `vector<u8>` / `vector<(int, int)>`
+            // can route through Queue too.
+            let val = if prim_in == u32::MAX {
+                let s = read_text_at(&state.database, &row_ref);
+                state.execute_at_raw_text_input(fn_pos, s, &extras, return_size)
+            } else if prim_in > 8 {
+                let buf = if let Some(ref types) = tuple_types_arc {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
+                state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..prim_in as usize],
+                    &extras,
+                    return_size,
+                )
+            } else if prim_in > 0 {
+                let v = read_primitive_at(&state.database, &row_ref, element_size);
+                state.execute_at_raw_primitive_input(fn_pos, v, prim_in, &extras, return_size)
+            } else {
+                state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
+            };
+            batch.push(val);
+        }
+        (start, batch)
+    });
+    merge_batches(batches, n_rows, 0u64)
+}
+
+// ── ARC.md A6.b — run_parallel_queue_fn (fn-ref returns) ────────────────────
+
+/// Plan-06 ARC.md A6.b — fn-ref-returning par dispatch.  Each worker
+/// writes its row's 20-byte fn-ref blob (8B i64 d_nr + 12B closure
+/// `DbRef` per Rust's reordered layout) directly into a packed
+/// `Vec<u8>` via `State::execute_at_raw_to`.  The result vector
+/// holds `n_rows * 20` bytes; readers (the `n_parallel_buf_get_fn`
+/// native fn) pull 20 bytes per row.
+///
+/// Scope: DbRef-input only (the canary `pick(s: const Score) -> fn(...)`
+/// shape).  Wide-input + fn-ref-return is left on the legacy path
+/// until a canary surfaces it — the dispatch ladder in
+/// `run_parallel_queue` for `prim_in == u32::MAX` (text input) /
+/// `> 8` (wide) / `1..=8` (primitive) only has the `execute_at_raw`
+/// 8-byte-return shape; reusing them for fn-ref returns would need
+/// new `_to`-returning variants of those entry points.
+///
+/// Bypasses the heap-result-vector + body's `get_field` indirection
+/// that A6.b's L2 issue stems from: the body's `f(10)` →
+/// `CallRef(b_var, [Int(10)])` reads `b_var`'s 20-byte slot directly,
+/// and the parser emits `Set(b_var, Call(buf_get_fn, [idx]))` at the
+/// top of each iteration to fill that slot from the packed buffer.
+///
+/// # Panics
+/// Panics if a worker thread panics.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_parallel_queue_fn(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+) -> Vec<u8> {
+    const FN_REF_SIZE: usize = 20;
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
+    let buf_ptr = Arc::new(SendMutPtr(buf.as_mut_ptr()));
+    let input_t = *input;
+    let extras = extra_args.to_vec();
+    let prog = Arc::new(program);
+
+    let _batches: Vec<()> = parallel_workers(stores, n_threads, n_rows, |start, end, ws| {
+        let mut state = prog.new_state(ws);
+        let buf_ptr = Arc::clone(&buf_ptr);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // Each row's 20-byte slot is disjoint across workers
+            // (start..end ranges from `parallel_workers` are
+            // non-overlapping), so concurrent writes via raw
+            // pointer are safe.
+            unsafe {
+                let dst = buf_ptr.0.add(row_idx * FN_REF_SIZE);
+                state.execute_at_raw_to(fn_pos, &row_ref, &extras, FN_REF_SIZE as u32, dst);
+            }
+        }
+    });
+    buf
+}
+
+#[cfg(not(feature = "threading"))]
+#[allow(clippy::too_many_arguments, dead_code)]
+#[must_use]
+pub fn run_parallel_queue_fn(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    _n_threads: usize,
+    extra_args: &[u64],
+) -> Vec<u8> {
+    const FN_REF_SIZE: usize = 20;
+    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
+    let mut state = program.new_state(stores.clone_for_worker());
+    for row_idx in 0..n_rows {
+        let row_ref = vector::get_vector(
+            input,
+            element_size,
+            row_idx as i64,
+            &state.database.allocations,
+        );
+        unsafe {
+            let dst = buf.as_mut_ptr().add(row_idx * FN_REF_SIZE);
+            state.execute_at_raw_to(fn_pos, &row_ref, extra_args, FN_REF_SIZE as u32, dst);
+        }
+    }
+    buf
 }
 
 // ── A14.4 — run_parallel_light ───────────────────────────────────────────────
@@ -566,6 +1302,8 @@ pub fn run_parallel_light(
     out_ptr: *mut u8,
     n_rows: usize,
     pool: &mut WorkerPool,
+    primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
 ) {
     if n_rows == 0 {
         return;
@@ -575,6 +1313,9 @@ pub fn run_parallel_light(
         let threads = n_threads.max(1).min(n_rows);
         let program = Arc::new(program);
         let out = Arc::new(SendMutPtr(out_ptr));
+        // P189d: Arc-wrap the per-element type list so each worker
+        // thread shares the same Vec instead of cloning it.
+        let tuple_types_arc = tuple_input_types.map(Arc::new);
 
         thread::scope(|s| {
             for t in 0..threads {
@@ -587,6 +1328,8 @@ pub fn run_parallel_light(
                 let extras = extra_args.to_vec();
                 let out_t = Arc::clone(&out);
                 let ret_sz = return_size as usize;
+                let prim_in = primitive_input_size;
+                let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
 
                 s.spawn(move || {
                     let mut state = prog.new_state(worker_stores);
@@ -598,7 +1341,48 @@ pub fn run_parallel_light(
                             row_idx_i32,
                             &state.database.allocations,
                         );
-                        let val = state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32);
+                        // Plan-06 phase 1 G2/G3 — input-type dispatch.
+                        // Three paths selected by prim_in:
+                        //   0          → struct/ref input, push DbRef
+                        //   u32::MAX   → text input, read &str at row
+                        //                offset and push 16-byte Str
+                        //   1/4/8      → primitive input (slot width);
+                        //                read element_size bytes and
+                        //                zero-extend into a slot of
+                        //                that width
+                        let val = if prim_in == u32::MAX {
+                            let s = read_text_at(&state.database, &row_ref);
+                            state.execute_at_raw_text_input(fn_pos, s, &extras, ret_sz as u32)
+                        } else if prim_in > 8 {
+                            // P189c — wide-input path for tuple /
+                            // fn-ref / 9..=64 byte first-arg slots.
+                            // Mirrors the run_parallel_direct branch.
+                            // P189d: tuple inputs walk per-element so
+                            // text fields inflate from heap-pointer
+                            // into argument-slot `Str`.
+                            let buf = if let Some(ref types) = tuple_types {
+                                read_tuple_at_wide(&state.database, &row_ref, types)
+                            } else {
+                                read_primitive_at_wide(&state.database, &row_ref, element_size)
+                            };
+                            state.execute_at_raw_primitive_input_wide(
+                                fn_pos,
+                                &buf[..prim_in as usize],
+                                &extras,
+                                ret_sz as u32,
+                            )
+                        } else if prim_in > 0 {
+                            let v = read_primitive_at(&state.database, &row_ref, element_size);
+                            state.execute_at_raw_primitive_input(
+                                fn_pos,
+                                v,
+                                prim_in,
+                                &extras,
+                                ret_sz as u32,
+                            )
+                        } else {
+                            state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
+                        };
                         unsafe {
                             let dst = out_t.0.add(row_idx * ret_sz);
                             std::ptr::copy_nonoverlapping(
@@ -624,7 +1408,36 @@ pub fn run_parallel_light(
                 row_idx_i32,
                 &state.database.allocations,
             );
-            let val = state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size);
+            let val = if primitive_input_size == u32::MAX {
+                let s = read_text_at(&state.database, &row_ref);
+                state.execute_at_raw_text_input(fn_pos, s, extra_args, return_size)
+            } else if primitive_input_size > 8 {
+                // P189c — wide-input path.
+                // P189d: tuple inputs walk per-element so text fields
+                // inflate from heap-pointer into argument-slot `Str`.
+                let buf = if let Some(ref types) = tuple_input_types {
+                    read_tuple_at_wide(&state.database, &row_ref, types)
+                } else {
+                    read_primitive_at_wide(&state.database, &row_ref, element_size)
+                };
+                state.execute_at_raw_primitive_input_wide(
+                    fn_pos,
+                    &buf[..primitive_input_size as usize],
+                    extra_args,
+                    return_size,
+                )
+            } else if primitive_input_size > 0 {
+                let v = read_primitive_at(&state.database, &row_ref, element_size);
+                state.execute_at_raw_primitive_input(
+                    fn_pos,
+                    v,
+                    primitive_input_size,
+                    extra_args,
+                    return_size,
+                )
+            } else {
+                state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size)
+            };
             unsafe {
                 let dst = out_ptr.add(row_idx * return_size as usize);
                 std::ptr::copy_nonoverlapping(
@@ -635,6 +1448,170 @@ pub fn run_parallel_light(
             }
         }
     }
+}
+
+/// Plan-06 phase 1 G3 — read the `&str` slice that the input row's
+/// 4-byte text-pointer field points to.  Returns a `Str { ptr, len }`
+/// borrowing into the input store's allocation; the worker's frame
+/// receives this as a 16-byte slot.  Safe for the lifetime of the
+/// par call because the parent stores are pinned (D2.0 read-only-
+/// parent).
+#[allow(dead_code)] // not threading: only the sequential branch uses it
+fn read_text_at(stores: &crate::database::Stores, row_ref: &DbRef) -> crate::keys::Str {
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    // 4-byte u32 text-pointer at row.pos.  Unaligned read because `p`
+    // comes from a `*mut u8` (row stride is 8 bytes but the pos offset
+    // can land on any byte boundary inside a row).
+    let text_rec = unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        p.cast::<u32>().read_unaligned()
+    };
+    let s = store.get_str(text_rec);
+    crate::keys::Str::new(s)
+}
+
+/// Plan-06 phase 1 G2 — read a 1/4/8-byte primitive from a row
+/// `DbRef`.  Returns the value zero-extended into a `u64` for
+/// uniform passing to `execute_at_raw_primitive_input`.
+#[allow(dead_code)] // not threading: only the sequential branch uses it
+fn read_primitive_at(stores: &crate::database::Stores, row_ref: &DbRef, size: u32) -> u64 {
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        // Unaligned reads — same rationale as `read_text_at`: row stride
+        // is 8 bytes but `pos` can land on any byte boundary inside a row.
+        match size {
+            1 => u64::from(*p),
+            4 => u64::from(p.cast::<u32>().read_unaligned()),
+            _ => p.cast::<u64>().read_unaligned(),
+        }
+    }
+}
+
+/// Plan-06 phase 4d.A — wide-inline element reader for tuple,
+/// fn-ref, and other 9..=64 byte first-arg types.  Returns a
+/// stack-allocated `[u8; 64]` filled with `size` bytes copied from
+/// the row record; bytes past `size` are zero.  Caller passes the
+/// resulting buffer + `size` to `execute_at_raw_primitive_input_wide`.
+///
+/// Stays separate from `read_primitive_at` so the inline-fast-path
+/// (1/4/8-byte primitives) keeps its `u64` channel — no regression
+/// risk for primitive worker calls that already work today.
+pub(crate) fn read_primitive_at_wide(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    size: u32,
+) -> [u8; 64] {
+    debug_assert!(
+        size as usize <= 64,
+        "wide read size {size} exceeds 64-byte cap"
+    );
+    let mut buf = [0u8; 64];
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    unsafe {
+        let p = base.offset(row_ref.rec as isize * 8 + row_ref.pos as isize);
+        std::ptr::copy_nonoverlapping(p, buf.as_mut_ptr(), size as usize);
+    }
+    buf
+}
+
+/// P189d — wide-inline reader for `vector<(T1, T2, …)>` worker inputs
+/// where one or more elements need representation inflation between
+/// in-vector storage and the worker's argument slot.
+///
+/// In-vector layout (`data::element_size`):
+///   - `text`: 4-byte heap-pointer (interns into the input store).
+///   - `reference`: 12-byte `DbRef`.
+///   - others: same as their `Context::Argument` width.
+///
+/// Worker-slot layout (`variables::size(_, Context::Argument)`):
+///   - `text`: 16-byte `Str` (8B ptr + 8B len).
+///   - others: same as in-vector for primitives.
+///
+/// For each element this function copies `element_size` bytes from
+/// `row_ref + in_vec_offset` to `buf + arg_offset`, except for `Text`
+/// where the 4-byte pointer is inflated to a `Str` via
+/// `store.get_str(...)` — same path as `read_text_at`.
+///
+/// `elem_types` is the list of tuple element types (from the synthetic
+/// `__tuple<…>` struct's attributes).  Bytes outside the populated
+/// regions stay zero.
+pub(crate) fn read_tuple_at_wide(
+    stores: &crate::database::Stores,
+    row_ref: &DbRef,
+    elem_types: &[crate::data::Type],
+) -> [u8; 64] {
+    let mut buf = [0u8; 64];
+    let store = &stores.allocations[row_ref.store_nr as usize];
+    let base = store.base_ptr();
+    let in_vec_offsets = crate::data::element_offsets(elem_types);
+    let mut arg_offset: usize = 0;
+    for (i, t) in elem_types.iter().enumerate() {
+        let in_off = in_vec_offsets[i];
+        let in_sz = crate::data::element_size(t);
+        let arg_sz = crate::variables::size(t, &crate::data::Context::Argument) as usize;
+        debug_assert!(
+            arg_offset + arg_sz <= 64,
+            "read_tuple_at_wide: tuple slot exceeds 64-byte cap"
+        );
+        unsafe {
+            let src =
+                base.offset(row_ref.rec as isize * 8 + (row_ref.pos as usize + in_off) as isize);
+            if matches!(t, crate::data::Type::Text(_)) {
+                // Inflate the 4-byte heap text-pointer into a 16-byte
+                // Str for the worker's argument slot.
+                let text_rec = src.cast::<u32>().read_unaligned();
+                let s = store.get_str(text_rec);
+                let str_val = crate::keys::Str::new(s);
+                std::ptr::copy_nonoverlapping(
+                    (&raw const str_val).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset),
+                    arg_sz,
+                );
+            } else if matches!(t, crate::data::Type::Function(_, _, _)) {
+                // ARC.md A6.c — fn-ref vector elements are 4-byte
+                // d_nr in storage (`element_size(Type::Function) = 4`)
+                // but the worker's argument slot is 20 bytes
+                // (`variables::size(.., Argument) = 8B i64 d_nr + 12B
+                // closure DbRef`).  A plain memcpy of 4 bytes leaves
+                // the remaining 16 bytes zero; the worker's OpCallRef
+                // would then dereference closure `(0, 0, 0)` (a real
+                // DbRef pointing into store 0) and SIGSEGV.
+                //
+                // vector<fn> can only store non-capturing functions
+                // (capturing-lambda storage is part of the open 4d.C
+                // closure-storage redesign), so the correct closure
+                // representation here is the u16::MAX sentinel.
+                let d_nr = src.cast::<u32>().read_unaligned();
+                let d_nr_i64: i64 = i64::from(d_nr);
+                std::ptr::copy_nonoverlapping(
+                    (&raw const d_nr_i64).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset),
+                    8,
+                );
+                let sentinel = DbRef {
+                    store_nr: u16::MAX,
+                    rec: 0,
+                    pos: 0,
+                };
+                std::ptr::copy_nonoverlapping(
+                    (&raw const sentinel).cast::<u8>(),
+                    buf.as_mut_ptr().add(arg_offset + 8),
+                    12,
+                );
+            } else {
+                // Plain memcpy — in-vector and worker-slot widths
+                // match for primitives, references, and fn-refs.
+                let copy_n = in_sz.min(arg_sz);
+                std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr().add(arg_offset), copy_n);
+            }
+        }
+        arg_offset += arg_sz;
+    }
+    buf
 }
 
 // ── A14.2 — WorkerPool ──────────────────────────────────────────────────────

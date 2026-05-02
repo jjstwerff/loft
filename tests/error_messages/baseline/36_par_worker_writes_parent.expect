@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Expect token ; at <cases>/36_par_worker_writes_parent.loft:7:8
+  |
+   7 |   print("shared={shared}");
+     |        ^
+==== stderr ====

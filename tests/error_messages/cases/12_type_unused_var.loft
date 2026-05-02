@@ -1,0 +1,4 @@
+fn main() {
+  unused_local = 42;
+  print("hi");
+}

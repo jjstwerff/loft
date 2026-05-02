@@ -33,10 +33,20 @@ impl Output<'_> {
         }
         let needs_to_string = matches!(variables.tp(var), Type::Text(_));
         let name = sanitize(variables.name(var));
+        // P198 — most operators are wrapped in Value::Span by the parser.
+        // Unwrap before pattern-matching so the deep-copy emission below
+        // fires for Span(Call(...)) / Span(Var(...)) RHS values.  Without
+        // this, native codegen falls through to a plain assignment that
+        // aliases the parameter's store, breaking the loft invariant that
+        // each ref-typed variable owns its own store
+        // (tests/scripts/95-alias-copy.loft assert orig.x == 1.0 fails
+        // because mutating ac_copy mutates ac_orig too).
+        let to_unspanned = to.unspan();
         // when a call returns a Reference and the callee has
         // visible Reference params, the returned DbRef may alias a parameter.
         // Deep-copy to prevent aliasing.
-        if let (Some(d_nr), Value::Call(fn_nr, args)) = (variables.tp(var).heap_def_nr(), to)
+        if let (Some(d_nr), Value::Call(fn_nr, args)) =
+            (variables.tp(var).heap_def_nr(), to_unspanned)
             && self.data.def(*fn_nr).name.starts_with("n_")
             && self.data.def(*fn_nr).code != Value::Null
             && self.data.def(*fn_nr).attributes.iter().any(|a| {
@@ -53,13 +63,12 @@ impl Output<'_> {
                 )?;
                 self.indent(w)?;
             }
-            writeln!(
-                w,
-                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
-            )?;
+            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
             // Emit the call into a temporary, then deep-copy.
-            write!(w, "{{ let _src = {}(stores", self.data.def(*fn_nr).name)?;
+            // P198 — the inner user-fn call uses the new `cell` ABI; the
+            // outer OpCopyRecord wraps `cell` to a fresh `&mut Stores`.
+            write!(w, "{{ let _src = {}(cell", self.data.def(*fn_nr).name)?;
             for arg in args {
                 write!(w, ", ")?;
                 if let Some(vr) = self.create_stack_var(arg) {
@@ -69,10 +78,7 @@ impl Output<'_> {
                     self.output_code_inner(w, arg)?;
                 }
             }
-            write!(
-                w,
-                "); OpCopyRecord(stores, _src, var_{name}, {tp_nr}_i32); }}"
-            )?;
+            write!(w, "); OpCopyRecord(cell,_src, var_{name}, {tp_nr}_i32); }}")?;
             return Ok(());
         }
         // When assigning a reference to a reference variable, a pointer copy is not
@@ -80,7 +86,7 @@ impl Output<'_> {
         // For a first declaration, we also need to allocate a fresh store via
         // OpDatabase(null_named(…)) so the destination has its own record to copy into.
         // For reassignment, the existing destination record is reused in-place.
-        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to)
+        if let (Some(d_nr), Value::Var(src)) = (variables.tp(var).heap_def_nr(), to_unspanned)
             && variables.tp(*src).heap_def_nr().is_some()
         {
             let src_name = sanitize(variables.name(*src));
@@ -100,14 +106,11 @@ impl Output<'_> {
                 )?;
                 self.indent(w)?;
             }
-            writeln!(
-                w,
-                "var_{name} = OpDatabase(stores, var_{name}, {tp_nr}_i32);"
-            )?;
+            writeln!(w, "var_{name} = OpDatabase(cell,var_{name}, {tp_nr}_i32);")?;
             self.indent(w)?;
             write!(
                 w,
-                "OpCopyRecord(stores, var_{src_name}, var_{name}, {tp_nr}_i32)"
+                "OpCopyRecord(cell,var_{src_name}, var_{name}, {tp_nr}_i32)"
             )?;
             return Ok(());
         }
@@ -150,7 +153,7 @@ impl Output<'_> {
         }
         // Hoist call arguments that mutate stores into temporaries to prevent
         // double-mutable-borrow of `stores` in the call expression.
-        if let Value::Call(call_dnr, args) = to
+        if let Value::Call(call_dnr, args) = to.unspan()
             && args.iter().any(|a| contains_op_database(a, self.data))
         {
             let def_fn = self.data.def(*call_dnr);
@@ -177,9 +180,27 @@ impl Output<'_> {
                 let tp_str = rust_type(variables.tp(var), &Context::Variable);
                 write!(w, "let mut var_{name}: {tp_str} = ")?;
             }
-            write!(w, "{}(stores", def_fn.name)?;
+            // P199 — user-fn / Op-stub callees take `&UnsafeCell<Stores>`
+            // (cell), not `&mut Stores` (stores).  Plan 09 phase 01 added
+            // per-fn ABI tagging via `crate::codegen_runtime::abi_of`:
+            //   - Cell  → `name(cell, args...)`     (default)
+            //   - None  → `name(args...)`           (no implicit Stores)
+            let abi = if def_fn.code == Value::Null {
+                crate::codegen_runtime::abi_of(&def_fn.name)
+            } else {
+                crate::codegen_runtime::Abi::Cell
+            };
+            write!(w, "{}(", def_fn.name)?;
+            let mut first_arg = true;
+            if matches!(abi, crate::codegen_runtime::Abi::Cell) {
+                write!(w, "cell")?;
+                first_arg = false;
+            }
             for (idx, arg) in args.iter().enumerate() {
-                write!(w, ", ")?;
+                if !first_arg {
+                    write!(w, ", ")?;
+                }
+                first_arg = false;
                 if let Some(ref tmp) = hoisted[idx] {
                     write!(w, "{tmp}")?;
                 } else if let Some(vr) = self.create_stack_var(arg) {
@@ -243,6 +264,18 @@ impl Output<'_> {
                 if is_fn_ref_var && !wrap_fn_ref {
                     self.fn_ref_context = true;
                 }
+                // When assigning to a `(String, …)` tuple variable, the
+                // element values that emit as `&str` literals need a
+                // `.to_string()` wrap so the tuple's runtime type
+                // matches its declared `(String, …)` shape.  Without
+                // this the Rust compiler rejects `("a", "b")` against
+                // `(String, String)`.  See `Value::Text` in emit.rs.
+                let prev_tuple_text = self.tuple_text_to_string;
+                if let Type::Tuple(elems) = variables.tp(var)
+                    && elems.iter().any(|e| matches!(e, Type::Text(_)))
+                {
+                    self.tuple_text_to_string = true;
+                }
                 // When assigning to a String variable from a text-local source,
                 // output_code_inner emits `&var_name` (borrow to &str), and
                 // appending `.to_string()` yields `&String` not `String`.
@@ -261,6 +294,7 @@ impl Output<'_> {
                     self.output_code_inner(w, to)?;
                 }
                 self.fn_ref_context = prev_ctx;
+                self.tuple_text_to_string = prev_tuple_text;
                 if needs_to_string && !text_local_clone {
                     write!(w, ".to_string()")?;
                 } else if wrap_fn_ref {
@@ -277,7 +311,7 @@ impl Output<'_> {
                     // (a function returning u16 or an iterator block returning as u16) produces
                     // the narrow type.  Post-2c: widen to i64 to match the default Integer.
                     write!(w, " as i64")?;
-                } else if let Value::Call(d_nr, _) = to {
+                } else if let Value::Call(d_nr, _) = to.unspan() {
                     // When the variable type and the called function's return type differ
                     // (e.g., multiple parallel-for loops reusing `b` with different worker types),
                     // add a cast so Rust accepts the assignment.
@@ -299,9 +333,13 @@ impl Output<'_> {
         let var_raw_name = variables.name(var);
         let is_elm = var_raw_name.starts_with("_elm");
         let owns_store = match variables.tp(var) {
-            Type::Reference(_, dep) | Type::Vector(_, dep) | Type::Enum(_, true, dep) => {
-                dep.is_empty()
-            }
+            Type::Reference(_, dep)
+            | Type::Vector(_, dep)
+            | Type::Enum(_, true, dep)
+            | Type::Sorted(_, _, dep)
+            | Type::Hash(_, _, dep)
+            | Type::Index(_, _, dep)
+            | Type::Spacial(_, _, dep) => dep.is_empty(),
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || !owns_store {
@@ -309,11 +347,64 @@ impl Output<'_> {
         } else {
             let ref_buf_type_id = {
                 let var_tp = variables.tp(var).clone();
-                if let Type::Vector(elm_tp, _) = &var_tp {
-                    let elm_name = elm_tp.name(self.data);
-                    self.data.name_type(&format!("main_vector<{elm_name}>"), 0)
-                } else {
-                    u16::MAX
+                match &var_tp {
+                    Type::Vector(elm_tp, _) => {
+                        let elm_name = elm_tp.name(self.data);
+                        self.data.name_type(&format!("main_vector<{elm_name}>"), 0)
+                    }
+                    // P188: keyed-collection locals need an OpDatabase
+                    // call against the specific keyed-collection type so
+                    // the backing store is allocated and the root pointer
+                    // is zero-initialised.  Resolves to the same database
+                    // type id that struct-field registration uses.
+                    Type::Sorted(td, key, _) | Type::Index(td, key, _) => {
+                        let c = self.data.def(*td).known_type;
+                        if c == u16::MAX {
+                            u16::MAX
+                        } else {
+                            let prefix = match &var_tp {
+                                Type::Sorted(_, _, _) => "sorted",
+                                Type::Index(_, _, _) => "index",
+                                _ => unreachable!(),
+                            };
+                            let mut name =
+                                format!("{prefix}<{}[", self.stores.types[c as usize].name);
+                            for (k_nr, (k, asc)) in key.iter().enumerate() {
+                                if k_nr > 0 {
+                                    name += ",";
+                                }
+                                if !*asc {
+                                    name += "-";
+                                }
+                                name += k;
+                            }
+                            name += "]>";
+                            self.stores.name(&name)
+                        }
+                    }
+                    Type::Hash(td, key, _) | Type::Spacial(td, key, _) => {
+                        let c = self.data.def(*td).known_type;
+                        if c == u16::MAX {
+                            u16::MAX
+                        } else {
+                            let prefix = match &var_tp {
+                                Type::Hash(_, _, _) => "hash",
+                                Type::Spacial(_, _, _) => "spacial",
+                                _ => unreachable!(),
+                            };
+                            let mut name =
+                                format!("{prefix}<{}[", self.stores.types[c as usize].name);
+                            for (k_nr, k) in key.iter().enumerate() {
+                                if k_nr > 0 {
+                                    name += ",";
+                                }
+                                name += k;
+                            }
+                            name += "]>";
+                            self.stores.name(&name)
+                        }
+                    }
+                    _ => u16::MAX,
                 }
             };
             if ref_buf_type_id == u16::MAX {
@@ -323,7 +414,7 @@ impl Output<'_> {
                 self.indent(w)?;
                 write!(
                     w,
-                    "var_{name} = OpDatabase(stores, var_{name}, {ref_buf_type_id}_i32)"
+                    "var_{name} = OpDatabase(cell,var_{name}, {ref_buf_type_id}_i32)"
                 )?;
             }
         }
@@ -358,6 +449,21 @@ impl Output<'_> {
     ) -> std::io::Result<()> {
         let def_fn = self.data.def(def_nr);
         let name: &str = &def_fn.name;
+        // Phase 09 phase 00 step 0.6: registry-first dispatch.  When a
+        // custom emitter is registered for this Op, run it instead of
+        // the special-case match arms below.  Today the registry is
+        // empty so every Op falls through to the existing dispatch.
+        // Future phases register per-Op emitters that take over these
+        // emissions one Op at a time (without touching the bulk match).
+        if crate::generation::ops::has_custom_emitter(name) {
+            let name_owned = name.to_string();
+            let mut ctx = crate::generation::ops::EmitCtx {
+                w,
+                def_fn,
+                output: self,
+            };
+            return crate::generation::ops::emit_op(&mut ctx, &name_owned, vals);
+        }
         match name {
             "OpFormatInt" | "OpFormatStackInt" => {
                 return self.format_long(w, vals, name == "OpFormatStackInt");
@@ -448,7 +554,7 @@ impl Output<'_> {
                 }
             }
             "OpFreeRef" => {
-                // Emit OpFreeRef(stores, var, "var_name") so LOFT_STORE_LOG shows the loft name.
+                // Emit OpFreeRef(cell,var, "var_name") so LOFT_STORE_LOG shows the loft name.
                 // After freeing, reset the variable to null so a subsequent OpDatabase
                 // knows to allocate a fresh store rather than reusing the freed one.
                 if let [ref db_val] = vals[..] {
@@ -475,7 +581,7 @@ impl Output<'_> {
                         write!(
                             w,
                             "if {vn}.1.store_nr != u16::MAX {{ \
-                             OpFreeRef(stores, {vn}.1, \"{vn}.1\"); \
+                             OpFreeRef(cell,{vn}.1, \"{vn}.1\"); \
                              {vn}.1.store_nr = u16::MAX }}"
                         )?;
                         return Ok(());
@@ -488,7 +594,7 @@ impl Output<'_> {
                     } else {
                         String::new()
                     };
-                    write!(w, "OpFreeRef(stores, ")?;
+                    write!(w, "OpFreeRef(cell,")?;
                     self.output_code_inner(w, db_val)?;
                     write!(w, ", \"{var_name}\")")?;
                     // Reset variable to null sentinel after free.
@@ -501,7 +607,7 @@ impl Output<'_> {
             "OpFreeRefIfDistinct" => {
                 // free the placeholder only when its store_nr
                 // differs from the witness's.  Emit:
-                //   if ph.store_nr != wit.store_nr { OpFreeRef(stores, ph, "ph"); ph.store_nr = u16::MAX }
+                //   if ph.store_nr != wit.store_nr { OpFreeRef(cell,ph, "ph"); ph.store_nr = u16::MAX }
                 // so the fresh-store path still reclaims the orphan
                 // and the adoption path leaves both slots alone until
                 // the caller's OpFreeRef on the witness fires.
@@ -518,7 +624,7 @@ impl Output<'_> {
                     self.output_code_inner(w, ph_val)?;
                     write!(w, ".store_nr != ")?;
                     self.output_code_inner(w, wit_val)?;
-                    write!(w, ".store_nr {{ OpFreeRef(stores, ")?;
+                    write!(w, ".store_nr {{ OpFreeRef(cell,")?;
                     self.output_code_inner(w, ph_val)?;
                     write!(w, ", \"{ph_name}\")")?;
                     if let Value::Var(_) = ph_val {
@@ -531,7 +637,7 @@ impl Output<'_> {
             "OpCopyRecord" => {
                 // Deep copy: copy_block + copy_claims
                 if let [ref src, ref dst, ref tp_val] = vals[..] {
-                    write!(w, "OpCopyRecord(stores, ")?;
+                    write!(w, "OpCopyRecord(cell,")?;
                     self.output_code_inner(w, src)?;
                     write!(w, ", ")?;
                     self.output_code_inner(w, dst)?;
@@ -564,7 +670,7 @@ impl Output<'_> {
             }
             "OpSizeofRef" => {
                 if let [ref val] = vals[..] {
-                    write!(w, "OpSizeofRef(stores, ")?;
+                    write!(w, "OpSizeofRef(cell,")?;
                     self.output_code_inner(w, val)?;
                     write!(w, ")")?;
                 }
@@ -574,7 +680,7 @@ impl Output<'_> {
                 // OpDatabase modifies its DbRef argument in-place; emit as reassignment.
                 if let [ref var_val, ref tp_val] = vals[..] {
                     self.output_code_inner(w, var_val)?;
-                    write!(w, " = OpDatabase(stores, ")?;
+                    write!(w, " = OpDatabase(cell,")?;
                     self.output_code_inner(w, var_val)?;
                     write!(w, ", ")?;
                     self.emit_i32_slot(w, tp_val)?;
@@ -585,7 +691,7 @@ impl Output<'_> {
             "OpFormatDatabase" | "OpFormatStackDatabase" => {
                 // OpFormatDatabase takes a &mut String as the output buffer.
                 if let [ref work_val, ref record_val, ref tp_val, ref fmt_val] = vals[..] {
-                    write!(w, "OpFormatDatabase(stores, &mut ")?;
+                    write!(w, "OpFormatDatabase(cell,&mut ")?;
                     // work_val is Var(nr) — strip the leading & that output_code_inner adds
                     if let Value::Var(nr) = work_val {
                         let variables = &self.data.def(self.def_nr).variables;
@@ -603,99 +709,17 @@ impl Output<'_> {
                 }
                 return Ok(());
             }
-            "OpGetRecord" => {
-                // vals: [data, db_tp, count, key1, key2, …]
-                // Emit: OpGetRecord(stores, data, db_tp, &[Content::…, …])
-                if vals.len() >= 3
-                    && let (Value::Int(db_tp), Value::Int(_count)) = (&vals[1], &vals[2])
-                {
-                    let db_tp = *db_tp;
-                    let key_types: Vec<i8> = self
-                        .stores
-                        .types
-                        .get(usize::try_from(db_tp).unwrap_or(0))
-                        .map(|t| t.keys.iter().map(|k| k.type_nr).collect())
-                        .unwrap_or_default();
-                    let key_vals = &vals[3..];
-                    write!(w, "OpGetRecord(stores, ")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", {db_tp}_i32, &[")?;
-                    for (i, key_val) in key_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = key_types.get(i).copied().unwrap_or(1);
-                        self.emit_content(w, key_val, type_nr)?;
-                    }
-                    write!(w, "])")?;
-                    return Ok(());
-                }
-            }
-            "OpIterate" => {
-                // vals: [data, on, arg, Keys(keys), from_count, from_vals…, till_count, till_vals…]
-                // Emit: OpIterate(stores, data, on, arg, &[Key{…}], &[Content::…], &[Content::…])
-                if vals.len() >= 4
-                    && let Value::Keys(keys) = &vals[3]
-                {
-                    let keys = keys.clone();
-                    let rest = &vals[4..];
-                    let from_count = if let Some(Value::Int(n)) = rest.first() {
-                        usize::try_from(*n).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let till_start = 1 + from_count;
-                    let till_count = if let Some(Value::Int(n)) = rest.get(till_start) {
-                        usize::try_from(*n).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let from_vals = rest.get(1..till_start).unwrap_or(&[]);
-                    let till_vals = rest
-                        .get(till_start + 1..till_start + 1 + till_count)
-                        .unwrap_or(&[]);
-                    write!(w, "OpIterate(stores, ")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[2])?;
-                    write!(w, ", &[")?;
-                    for (i, k) in keys.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        write!(
-                            w,
-                            "Key {{ type_nr: {}, position: {} }}",
-                            k.type_nr, k.position
-                        )?;
-                    }
-                    write!(w, "], &[")?;
-                    for (i, v) in from_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
-                        self.emit_content(w, v, type_nr)?;
-                    }
-                    write!(w, "], &[")?;
-                    for (i, v) in till_vals.iter().enumerate() {
-                        if i > 0 {
-                            write!(w, ", ")?;
-                        }
-                        let type_nr = keys.get(i).map_or(1, |k| k.type_nr);
-                        self.emit_content(w, v, type_nr)?;
-                    }
-                    write!(w, "])")?;
-                    return Ok(());
-                }
-            }
+            // Plan 09 phase 04 — `OpGetRecord` and `OpIterate` emission
+            // moved to `crate::generation::ops::key_ops::{OpGetRecordEmitter,
+            // OpIterateEmitter}` (registered in build_registry).  The
+            // phase 00 step 0.6 registry-first guard at the top of
+            // `output_call_inner` routes both names to the emitters
+            // before reaching this match.
             "OpStep"
                 // vals: [iter_var, data, on, arg]
-                // Emit: OpStep(stores, &mut var_iter, data, on, arg)
+                // Emit: OpStep(cell,&mut var_iter, data, on, arg)
                 if vals.len() == 4 => {
-                    write!(w, "OpStep(stores, &mut ")?;
+                    write!(w, "OpStep(cell,&mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;
@@ -713,10 +737,10 @@ impl Output<'_> {
                 }
             "OpRemove"
                 // vals: [state_var, data, on, tp/arg]
-                // Emit: OpRemove(stores, &mut var_state, data, on, arg)
+                // Emit: OpRemove(cell,&mut var_state, data, on, arg)
                 // The state may be i32 (plain vector) or i64 (sorted/tree iterator).
                 if vals.len() == 4 => {
-                    write!(w, "OpRemove(stores, &mut ")?;
+                    write!(w, "OpRemove(cell,&mut ")?;
                     if let Value::Var(v) = &vals[0] {
                         let name = sanitize(self.data.def(self.def_nr).variables.name(*v));
                         write!(w, "var_{name}")?;
@@ -732,88 +756,13 @@ impl Output<'_> {
                     write!(w, ")")?;
                     return Ok(());
                 }
-            "n_parallel_for" | "n_parallel_for_light" => {
-                // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr, extras..., n_extra)
-                // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm, extras...) as i64 }).
-                if vals.len() >= 5
-                    && let Value::Int(fn_d_nr) = &vals[4]
-                    && *fn_d_nr >= 0
-                {
-                    let fn_d_nr = (*fn_d_nr).cast_unsigned();
-                    let worker_def = self.data.def(fn_d_nr);
-                    let worker_name = worker_def.name.clone();
-                    let worker_ret = worker_def.returned.clone();
-                    // Extra context args: vals[5..len-1], last element is n_extra count.
-                    let n_extra = if vals.len() > 6 { vals.len() - 6 } else { 0 };
-                    // Emit let-bindings for extra args so they can be captured by the closure.
-                    for i in 0..n_extra {
-                        write!(w, "{{ let _ex{i} = ")?;
-                        self.output_code_inner(w, &vals[5 + i])?;
-                        write!(w, "; ")?;
-                    }
-                    let is_ref = worker_ret.heap_def_nr().is_some();
-                    let par_fn = if matches!(&worker_ret, Type::Text(_)) {
-                        "n_parallel_for_text_native"
-                    } else if is_ref {
-                        "n_parallel_for_ref_native"
-                    } else {
-                        "n_parallel_for_native"
-                    };
-                    write!(w, "{par_fn}(stores, ")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    if is_ref {
-                        // For ref mode, pass struct_size and known_type instead of return_size.
-                        let (struct_size, known_type) =
-                            if let Type::Reference(d_nr, _) = &worker_ret {
-                                let kt = self.data.def(*d_nr).known_type;
-                                (i32::from(self.stores.size(kt)), i32::from(kt))
-                            } else {
-                                (0, 0)
-                            };
-                        write!(w, "{struct_size}, {known_type}, ")?;
-                    } else {
-                        self.emit_i32_slot(w, &vals[2])?;
-                        write!(w, ", ")?;
-                    }
-                    self.emit_i32_slot(w, &vals[3])?;
-                    // Build the extra arg list for the worker call inside the closure.
-                    let extras = {
-                        use std::fmt::Write;
-                        let mut s = String::new();
-                        for i in 0..n_extra {
-                            write!(s, ", _ex{i}").unwrap();
-                        }
-                        s
-                    };
-                    // Generate closure with return-type-specific conversion.
-                    match &worker_ret {
-                        Type::Text(_) => write!(
-                            w,
-                            ", |stores, elm| {{ let mut _w = String::new(); {worker_name}(stores, elm{extras}, &mut _w); _w }})"
-                        )?,
-                        Type::Reference(_, _) => write!(
-                            w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) }})"
-                        )?,
-                        Type::Float | Type::Single => write!(
-                            w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}).to_bits() as i64 }})"
-                        )?,
-                        _ => write!(
-                            w,
-                            ", |stores, elm| {{ {worker_name}(stores, elm{extras}) as i64 }})"
-                        )?,
-                    }
-                    // Close the let-binding braces.
-                    for _ in 0..n_extra {
-                        write!(w, " }}")?;
-                    }
-                    return Ok(());
-                }
-            }
+            // Plan 09 phase 03 — `n_parallel_for` / `n_parallel_for_light`
+            // emission moved to `crate::generation::ops::parallel::ParallelForEmitter`
+            // (registered in build_registry).  The phase 00 step 0.6
+            // registry-first guard at the top of `output_call_inner`
+            // routes both names to the emitter before reaching this
+            // match.  Phase 04 / phase 06 will retire more arms here
+            // following the same pattern.
             _ => {}
         }
         if def_fn.rust.is_empty() {

@@ -135,7 +135,7 @@ fn pe_next_fn(v: PENext) -> PENext { v }
 
 struct PEFieldT { v: u8 }
 
-// @EXPECT_ERROR: Cannot write integer
+// @EXPECT_ERROR: Cannot assign text to field
 fn test_field_type() {
   r = PEFieldT { v: "a" };
 }

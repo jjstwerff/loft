@@ -1,0 +1,21 @@
+cargo build --release -q
+bash bench/run_bench.sh --warmup
+warning: wasmtime not found — loft-wasm column will show '-' (install via: cargo install wasmtime-cli  OR  brew install wasmtime)
+bench                python       loft-interp   loft-native   loft-wasm     rust      
+---------------------------------------------------------------------------------
+01_fibonacci         3079ms       4015ms        563ms         -             86ms      
+02_sum_loop          91ms         58ms          24ms          -             11ms      
+03_sieve             37ms         35ms          4ms           -             2ms       
+04_collatz           5658ms       3204ms        369ms         -             147ms     
+05_mandelbrot        151ms        24ms          9ms           -             7ms       
+06_newton_sqrt       1672ms       487ms         209ms         -             144ms     
+07_string_build      68ms         109ms         23ms          -             31ms      
+08_word_count        51ms         100ms         32ms          -             1ms       
+09_matrix_mul        189ms        137ms         39ms          -             4ms       
+10_sort              113ms        122ms         36ms          -             2ms       
+11_par               66ms         22ms          15ms          -             6ms       
+
+# Captured 2026-04-28 by `make bench` for plan-07 phase 0.
+# Phase 1 (spans on IR) re-runs this and asserts ±5 % drift on every
+# row to satisfy plan-07 ground rule #4 ("Spans on IR are additive").
+# Phase 4 (typed RuntimeError) similarly re-runs.

@@ -1,0 +1,5 @@
+enum Color { Red, Green, Blue }
+fn main() {
+  c = Color::Bleu;
+  print("c=Color::{c}");
+}

@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: expected integer, got text on call to add at <cases>/06_type_arg_mismatch.loft:3:20
+  |
+   3 |   x = add(1, "two");
+     |                    ^
+==== stderr ====

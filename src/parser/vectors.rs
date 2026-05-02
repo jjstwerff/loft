@@ -321,7 +321,15 @@ impl Parser {
         };
         if d_nr == u32::MAX {
             if !self.first_pass {
-                diagnostic!(self.lexer, Level::Error, "Unknown function '{name}'");
+                if let Some(s) = self.suggest_function_name(&name) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Unknown function '{name}' — did you mean '{s}'?"
+                    );
+                } else {
+                    diagnostic!(self.lexer, Level::Error, "Unknown function '{name}'");
+                }
             }
             return Type::Unknown(0);
         }
@@ -1343,15 +1351,17 @@ impl Parser {
     }
 
     pub(crate) fn is_field(&self, val: &Value) -> bool {
-        if let Value::Call(o, _) = *val {
-            o == self.data.def_nr("OpGetField")
+        // Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+        // hide the field-access shape from compound-assignment dispatch.
+        if let Value::Call(o, _) = val.unspan() {
+            *o == self.data.def_nr("OpGetField")
         } else {
             false
         }
     }
 
     pub(crate) fn new_record_field_op(&mut self, val: &Value, parent_tp: &Type, op: &str) -> Value {
-        if let Value::Call(_, ps) = val {
+        if let Value::Call(_, ps) = val.unspan() {
             let parent = self.data.def(self.data.type_def_nr(parent_tp)).known_type;
             let field_nr = if let Value::Int(pos) = ps[1] {
                 self.database.field_nr(parent, pos)
@@ -1402,6 +1412,65 @@ impl Parser {
             in_t.name(&self.data),
             self.lexer.pos()
         );
+        // P188: when the LHS local is a keyed collection
+        // (sorted/hash/index/spacial<T[key]>), the container type id
+        // must be the keyed-collection's own known_type so OpNewRecord
+        // dispatches to sorted_new / hash::add / tree::add / etc.
+        // Falling back to `vector_of(in_t)` returns the wrap-`vector<T>`
+        // id which would route through `Parts::Vector` → vector_append
+        // and crash with index 65535.
+        //
+        // P188-followup: previously this used
+        // `data.def(type_def_nr(lhs_tp)).known_type`, but
+        // `type_def_nr` returns the GENERIC alias (`hash` / `index`)
+        // not the specific `hash<Score[name]>` instantiation.  The
+        // alias's `known_type` happened to be a vector type, so
+        // record_finish dispatched through `Parts::Vector` instead of
+        // `Parts::Hash`/`Parts::Index` — producing 6 records for 3
+        // adds (vector_finish appends without dedup) and bypassing
+        // tree::add entirely (1 record for 2 adds).  Fix: register
+        // the keyed-collection db type directly (idempotent — same
+        // call as gen_set_first_keyed_null and the typedef walker).
+        let lhs_known = if !is_field && vec != u16::MAX && !self.first_pass {
+            let lhs_tp = self.vars.tp(vec).clone();
+            match &lhs_tp {
+                Type::Sorted(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.sorted(c, key))
+                    }
+                }
+                Type::Hash(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.hash(c, key))
+                    }
+                }
+                Type::Index(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.index(c, key))
+                    }
+                }
+                Type::Spacial(td, key, _) => {
+                    let c = self.data.def(*td).known_type;
+                    if c == u16::MAX {
+                        None
+                    } else {
+                        Some(self.database.spacial(c, key))
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         for p in res {
             // route through `vector_of` so narrow integer
             // aliases (i32, u8) produce the same narrow-element vector
@@ -1409,7 +1478,7 @@ impl Parser {
             // this the literal-append path would register
             // `vector<integer>` (8-byte stride) into a narrow-registered
             // local, and reads would mis-align with writes.
-            let known = Value::Int(i32::from(self.vector_of(in_t)));
+            let known = Value::Int(i32::from(lhs_known.unwrap_or_else(|| self.vector_of(in_t))));
             if let Value::Return(multiply) = p {
                 let to = if let Value::Call(_, ps) = val {
                     ps[0].clone()
@@ -1457,6 +1526,23 @@ impl Parser {
                     };
                     ls.push(self.cl("OpCopyRecord", &[p.clone(), Value::Var(elm), type_nr]));
                 }
+            } else if let Value::Tuple(values) = p {
+                // P189c — vector-element tuple literal.  Emit
+                // per-attribute writes against the synthetic
+                // `__tuple<T1,T2,…>` struct that P189's `tuple_def`
+                // registered.  Mirrors the struct-literal path
+                // (`Value::Insert` arm below) but tuple literals
+                // arrive as `Value::Tuple([v0, v1, …])` without
+                // pre-emitted `SetField` steps — `parse_single` at
+                // src/parser/vectors.rs:223 builds a bare wrapper —
+                // so we emit them here.  `ed_nr` is already the
+                // synthetic struct's d_nr (`type_def_nr(Type::Tuple)`),
+                // and `set_field` with an explicit attribute index
+                // routes through the standard per-field layout
+                // dispatch (Integer/Text/Reference/etc.).
+                for (i, val) in values.iter().enumerate() {
+                    ls.push(self.set_field(ed_nr, i, 0, Value::Var(elm), val.clone()));
+                }
             } else if let Value::Insert(steps) = p {
                 for l in steps {
                     ls.push(l.clone());
@@ -1490,6 +1576,15 @@ impl Parser {
                     _ => self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()),
                 };
                 ls.push(op);
+            } else if matches!(in_t, Type::Function(_, _, _)) {
+                // Plan-06 phase 4d.A.2 — fn-ref vector elements store
+                // the 4-byte i32 d_nr.  Emit OpSetInt4 (4-byte write)
+                // not OpSetInt (8-byte) so adjacent element slots
+                // aren't corrupted by overflow.  The Value `p` here
+                // is `Value::Int(d_nr as i32)` (from `parse_fn_ref`),
+                // so the int4 write picks up the correct value.
+                let pos = Value::Int(0);
+                ls.push(self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]));
             } else {
                 ls.push(self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()));
             }
@@ -1615,32 +1710,66 @@ impl Parser {
             Type::Float => self.database.name("float"),
             Type::Single => self.database.name("single"),
             Type::Text(_) => self.database.name("text"),
+            // Plan-06 phase 4d.A.2 — fn-ref in a vector stores as
+            // 4-byte i32 d_nr.  Use the same DB type as `i32`
+            // (signed 32-bit, registered via `database.int(0, false)`)
+            // so vector storage uses the flat narrow-int path.  The
+            // semantic difference (d_nr vs. integer) is recovered at
+            // read-back time via fn-ref unbox.
+            Type::Function(_, _, _) => self.database.int(0, false),
             Type::Reference(r, _) | Type::Enum(r, _, _) => self.data.def(*r).known_type,
             Type::Hash(tp, key, _) => {
                 let mut name = "hash<".to_string() + &self.data.def(*tp).name + "[";
                 self.database
                     .field_name(self.data.def(*tp).known_type, key, &mut name);
-                self.database.name(&name)
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                // P190 — local-var hash iteration: register on demand.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.hash(c_tp, key)
             }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + &self.data.def(*tp).name + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
-                if r == u16::MAX {
-                    name = "ordered<".to_string() + &self.data.def(*tp).name + "[";
-                    field_id(key, &mut name);
+                if r != u16::MAX {
+                    return r;
                 }
-                self.database.name(&name)
+                let mut ordered = "ordered<".to_string() + &self.data.def(*tp).name + "[";
+                field_id(key, &mut ordered);
+                let r = self.database.name(&ordered);
+                if r != u16::MAX {
+                    return r;
+                }
+                // P190 — local-var keyed collection iteration: the
+                // sorted/ordered type wasn't pre-registered by
+                // fill_database (which only runs on struct fields).
+                // Register on demand here so OpIterate gets the right
+                // db type id and `fill_iter` produces all 6 args.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.sorted(c_tp, key)
             }
             Type::Index(tp, key, _) => {
                 let mut name = "index<".to_string() + &self.data.def(*tp).name + "[";
                 field_id(key, &mut name);
                 let r = self.database.name(&name);
-                if r == u16::MAX {
-                    name = "index<".to_string() + &self.data.def(*tp).name + "[";
-                    field_id(key, &mut name);
+                if r != u16::MAX {
+                    return r;
                 }
-                self.database.name(&name)
+                // P190 — same on-demand registration for local-var index.
+                let c_tp = self.data.def(*tp).known_type;
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.index(c_tp, key)
             }
             Type::Vector(tp, _) => {
                 // route through `vector_of` so narrow-alias

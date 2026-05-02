@@ -414,6 +414,13 @@ impl Stores {
                 self.store_mut(to).set_i32_raw(to.rec, to.pos, raw);
                 Ok(())
             }
+            // Plan-06 phase 4d.C step 2: stored DbRef pointer has no
+            // JSON-representable form — closures don't survive a JSON
+            // round-trip.  Surface as a clean error.
+            Parts::DbRef => Err(WalkErr {
+                at: 0,
+                path: path.clone(),
+            }),
         }
     }
 
@@ -648,6 +655,18 @@ impl Stores {
             | Parts::Array(_)
             | Parts::Vector(_) => {
                 self.store_mut(rec).set_u32_raw(rec.rec, rec.pos, 0);
+            }
+            // Plan-06 phase 4d.C step 2: default for a 12-byte
+            // stored DbRef = the null-DbRef bytes (store_nr=u16::MAX,
+            // rec=0, pos=0 — three u32 zeros works since u16::MAX as
+            // u32 is 0xFFFF, BUT for "not initialised" we want the
+            // sentinel pattern; write all zeros and let the read
+            // path treat rec=0 as null).
+            Parts::DbRef => {
+                let s = self.store_mut(rec);
+                s.set_u32_raw(rec.rec, rec.pos, 0);
+                s.set_u32_raw(rec.rec, rec.pos + 4, 0);
+                s.set_u32_raw(rec.rec, rec.pos + 8, 0);
             }
             Parts::Base => {
                 panic!(

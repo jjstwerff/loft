@@ -1174,12 +1174,21 @@ impl Parser {
         }
         let nr = self.data.attr(td_nr, &field);
         if nr == usize::MAX {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "Unknown field {}.{field}",
-                self.data.def(td_nr).name
-            );
+            if let Some(s) = self.suggest_field_name(td_nr, &field) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown field {}.{field} — did you mean '{s}'?",
+                    self.data.def(td_nr).name
+                );
+            } else {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown field {}.{field}",
+                    self.data.def(td_nr).name
+                );
+            }
         } else {
             let td = self.data.attr_type(td_nr, nr);
             let pos = self
@@ -1376,6 +1385,11 @@ impl Parser {
                 Value::Return(Box::new(Self::replace_record_ref(*inner, record)))
             }
             Value::Drop(inner) => Value::Drop(Box::new(Self::replace_record_ref(*inner, record))),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::replace_record_ref(inner, record);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
@@ -1480,13 +1494,18 @@ impl Parser {
             }
         } else {
             if !self.convert(value, exp_tp, &td) {
+                // Plan-07 phase 6 (partial) — name the value side first
+                // ("cannot assign <got> to <expected>"), the field-type
+                // side last.  Old shape "Cannot write {field_type} on
+                // field {S}.{f}:{value_type}" used a colon that read
+                // as "field declared as <value_type>" — backwards.
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "Cannot write {} on field {}.{field}:{}",
-                    td.show(&self.data, &self.vars),
+                    "Cannot assign {} to field {}.{field} of type {}",
+                    exp_tp.show(&self.data, &self.vars),
                     self.data.def(td_nr).name,
-                    exp_tp.show(&self.data, &self.vars)
+                    td.show(&self.data, &self.vars)
                 );
             }
             list.push(self.set_field_no_check(td_nr, nr, 0, code.clone(), value.clone()));

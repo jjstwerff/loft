@@ -25,7 +25,7 @@ path = "src/gendoc.rs"
 
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions"]
-threading    = []
+threading    = ["dep:rayon"]
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
                 "dep:console_error_panic_hook"]
@@ -57,6 +57,7 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }
 wasm-bindgen-rayon = { version = "1.2", optional = true }
+rayon              = { version = "1.10", optional = true }
 libloading         = { version = "0.8", optional = true }
 loft-ffi           = { path = "loft-ffi" }
 console_error_panic_hook = { version = "0.1", optional = true }

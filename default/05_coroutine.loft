@@ -17,3 +17,8 @@ pub enum CoroutineStatus {
 pub fn exhausted(gen: reference) -> boolean {
   OpCoroutineExhausted(gen)
 }
+// Plan-06 phase 5a: #pure — read-only flag inspection.  Under
+// D2.0 (read-only-parent) workers may read parent coroutine
+// state without locking; the operation has no side effects and
+// no parent-store writes.
+#pure

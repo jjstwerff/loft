@@ -76,6 +76,7 @@ pub mod state;
 
 pub mod compile;
 pub mod extensions;
+pub mod introspect;
 pub mod log_config;
 pub mod logger;
 pub mod manifest;

@@ -172,6 +172,31 @@ Check the allocations and structure of the hash table.
 # Panics
 When the structure is not correctly filled
 */
+/// Count the live records in a hash table.
+///
+/// Walks the bucket array (same loop as `records()` but counting
+/// instead of collecting).  O(room) where `room` is the bucket array
+/// length, typically ~1.5× the live-record count.  Returns 0 for an
+/// uninitialised hash (no claim allocated yet).
+///
+/// Powers `len(h)` for `hash<T[key]>` (P192).
+#[must_use]
+pub fn count(hash_ref: &DbRef, stores: &[Store]) -> u32 {
+    let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
+    if claim == 0 {
+        return 0;
+    }
+    let room = *keys::store(hash_ref, stores).addr::<i32>(claim, 0) as u32;
+    let elms = (room - 1) * 2;
+    let mut total: u32 = 0;
+    for i in 0..elms {
+        if keys::store(hash_ref, stores).get_u32_raw(claim, 8 + i * 4) != 0 {
+            total += 1;
+        }
+    }
+    total
+}
+
 // C60 Step 1a: this primitive is used from tests today; the stdlib
 // `hash_records` wrapper in Step 2 will be its first production caller.
 #[allow(dead_code)]

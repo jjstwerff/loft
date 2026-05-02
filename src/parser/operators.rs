@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 use super::{
-    Level, OPERATORS, Parser, Type, Value, diagnostic_format, rename, v_block, v_if, v_set,
+    Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename, v_block, v_if,
+    v_set,
 };
 
 /// Check if a Value tree contains a reference to the given variable.
@@ -12,6 +13,7 @@ fn code_references_var(code: &Value, var_nr: u16) -> bool {
         Value::Call(_, args) => args.iter().any(|a| code_references_var(a, var_nr)),
         Value::Set(_, inner) => code_references_var(inner, var_nr),
         Value::Insert(ls) => ls.iter().any(|v| code_references_var(v, var_nr)),
+        Value::Span(b) => code_references_var(&b.1, var_nr),
         _ => false,
     }
 }
@@ -36,7 +38,7 @@ impl Parser {
                 self.vars.name(var_nr)
             );
         }
-        if let Value::Call(_, parms) = to.clone() {
+        if let Value::Call(_, parms) = to.unspan().clone() {
             if op == "=" {
                 let mut p = parms.clone();
                 p.push(code.clone());
@@ -65,7 +67,7 @@ impl Parser {
                 // removing the self-append and skipping the clear.  Without this,
                 // the clear destroys h's content before the append reads it.
                 let self_append = ls.first().is_some_and(|first| {
-                    if let Value::Call(_, args) = first {
+                    if let Value::Call(_, args) = first.unspan() {
                         args.len() >= 2
                             && args[0] == Value::Var(var_nr)
                             && args[1] == Value::Var(var_nr)
@@ -136,6 +138,65 @@ impl Parser {
         }
     }
 
+    /// P193: eager init for `local: keyed_collection<T[key]> = []`.
+    ///
+    /// Without this, the empty `[]` literal parses to `Value::Insert(empty)`
+    /// which doesn't match either the `Set(v, Value::Null)` arm of
+    /// codegen (which would call `gen_set_first_keyed_null`) nor the
+    /// vector-style `create_vector` rewrite.  The variable then has no
+    /// init bytecode emitted: subsequent reads hit u16::MAX slot, and
+    /// when the FIRST WRITE is inside a loop body the lazy init runs
+    /// once per iteration — every iteration zeros the collection's
+    /// root pointer.  Symptom: `for i in 0..N { ix += ... }` over a
+    /// local-var keyed collection leaves `len(ix) == 1`.
+    ///
+    /// Fix: rewrite `Set(v, Insert(empty))` to `Set(v, Null)` for
+    /// keyed-collection types and op == "=", so the standard codegen
+    /// path emits `gen_set_first_keyed_null` at the declaration site
+    /// (outside any loop body).
+    ///
+    /// Returns true when the rewrite happened so the caller short-
+    /// circuits the rest of the assign pipeline.
+    pub(crate) fn create_keyed(
+        &mut self,
+        code: &mut Value,
+        f_type: &Type,
+        op: &str,
+        var_nr: u16,
+    ) -> bool {
+        if op != "="
+            || var_nr == u16::MAX
+            || !matches!(
+                f_type,
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
+            return false;
+        }
+        let is_empty_insert = matches!(code, Value::Insert(ls) if ls.is_empty());
+        if !is_empty_insert {
+            return false;
+        }
+        if !self.first_pass && self.vars.is_const_param(var_nr) {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot modify {} '{}'; remove 'const' or use a local copy",
+                self.vars.const_kind(var_nr),
+                self.vars.name(var_nr)
+            );
+        }
+        // Codegen's Set(v, Null) arm matches keyed types and dispatches
+        // to gen_set_first_keyed_null — emits OpInitRef + OpDatabase
+        // for the slot, anchored at the declaration's statement
+        // position (NOT inside any enclosing loop body).
+        *code = Value::Null;
+        true
+    }
+
     /// Check whether `val` is a call to a user-defined function that returns a struct
     /// via a temporary store.  Used by `copy_ref` to decide whether to free the source
     /// store after the deep copy.  The free bit is suppressed under WASM,
@@ -145,7 +206,7 @@ impl Parser {
         if self.first_pass {
             return false;
         }
-        match val {
+        match val.unspan() {
             Value::Call(fn_nr, _) => {
                 let def = &self.data.def(*fn_nr);
                 // User function with code (not a built-in op)
@@ -293,6 +354,12 @@ impl Parser {
             if matches!(current_type, Type::Void) {
                 return current_type;
             }
+            // Plan-07 phase 1, step 1.B.1 — capture the operator's source
+            // position *before* `has_token` consumes it.  `op_pos` is then
+            // threaded into `handle_operator` so the resulting Value::Span
+            // points at the operator token (e.g. the `/`), not at whatever
+            // the lexer drifted to while parsing the RHS.
+            let op_pos = self.lexer.pos().clone();
             let mut operator = "";
             for op in OPERATORS[precedence] {
                 if self.lexer.has_token(op) {
@@ -384,6 +451,7 @@ impl Parser {
                 precedence,
                 &mut current_type,
                 operator,
+                &op_pos,
             ) {
                 return value;
             }
@@ -398,14 +466,26 @@ impl Parser {
         parent_tp: &mut Type,
     ) -> Type {
         let mut t = self.parse_single(var_tp, code, parent_tp);
+        // --show-types --trace: log the type after the initial
+        // `parse_single` (variable, literal, parenthesised expr).
+        self.record_type_trace(&t);
         while self.lexer.peek_token(".")
             || self.lexer.peek_token("[")
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
         {
+            // Plan-07 phase 1, steps 1.11 + 1.12 — capture the chaining
+            // token's source position before `has_token` consumes it.
+            // Wrapped when the iteration consumes a fault-prone access
+            // (`.` field/method or `[` index — both can deref null or
+            // out-of-bounds at runtime).  The `(` chained-call branch
+            // is wrapped under step 1.13.
+            let chain_pos = self.lexer.pos().clone();
+            let mut wrap_chain = false;
             if !self.first_pass && t.is_unknown() && matches!(code, Value::Var(_)) {
                 diagnostic!(self.lexer, Level::Error, "Unknown variable");
             }
             if self.lexer.has_token(".") {
+                wrap_chain = true;
                 *parent_tp = t.clone();
                 // T1.2: tuple element access — t.0, t.1, etc.
                 if let Type::Tuple(ref elems) = t {
@@ -421,10 +501,39 @@ impl Parser {
                             );
                             t = Type::Unknown(0);
                         } else {
+                            // P197: propagate parent tuple's deps into the
+                            // element type so a returned text/reference
+                            // carries the host's lifetime through.  Without
+                            // this, `fn f() -> text { ...; a.v.0 }` returns
+                            // a `Str` whose ptr points into a freed host.
+                            let parent_deps = t.depend();
                             t = elems[idx].clone();
+                            for on in parent_deps {
+                                t = t.depending(on);
+                            }
                             // T1.4: emit TupleGet IR for codegen.
-                            if let Value::Var(var_nr) = code {
-                                *code = Value::TupleGet(*var_nr, idx as u16);
+                            // Plan-07 phase 1: unspan() so wraps on `.`
+                            // (step 1.12) don't hide the underlying Var
+                            // or Tuple shape of the parent expression.
+                            let unspanned = code.unspan().clone();
+                            if let Value::Var(var_nr) = unspanned {
+                                *code = Value::TupleGet(var_nr, idx as u16);
+                            } else if let Value::Tuple(elems_v) = unspanned {
+                                // P197: code is already a literal tuple of
+                                // per-element reads (e.g. produced by
+                                // `get_val::Type::Tuple` for a tuple struct
+                                // field).  Materialising the whole tuple
+                                // into a `(String, String)` work var causes
+                                // a native-codegen borrow lifetime error
+                                // because the owned-`String` tuple temp
+                                // dies before the returned `&str` is
+                                // consumed.  Short-circuit: take the
+                                // already-built element read directly.
+                                if idx < elems_v.len() {
+                                    *code = elems_v[idx].clone();
+                                } else {
+                                    *code = Value::Null;
+                                }
                             } else {
                                 // Temporary tuple — store in work var first.
                                 let tmp_tp = Type::Tuple(elems.clone());
@@ -458,6 +567,57 @@ impl Parser {
                     // T1.5: element access through a reference-tuple parameter — pair.0, pair.1.
                     let elems = elems.clone();
                     self.parse_ref_tuple_elem(&mut t, code, &elems);
+                } else if let Type::Reference(d_nr, _) = t
+                    && self.data.def(d_nr).name.starts_with("__tuple<")
+                    && matches!(self.lexer.peek().has, crate::lexer::LexItem::Integer(_, _))
+                {
+                    // P189b: vector-of-tuple loop var / index result —
+                    // the loop variable is typed as `Reference(__tuple<…>)`
+                    // pointing at inline tuple bytes inside the vector
+                    // record.  `.0` / `.1` route through `get_val` so
+                    // both interpreter (`OpGetInt(off)` / `OpGetText(off)`)
+                    // and native codegen (per-type `stores.store(&db)`
+                    // pattern) read at the right field offset.  Element
+                    // types come from the synthetic struct's attributes.
+                    let elems: Vec<Type> = self
+                        .data
+                        .def(d_nr)
+                        .attributes
+                        .iter()
+                        .map(|a| a.typedef.clone())
+                        .collect();
+                    if let Some(idx) = self.lexer.has_integer() {
+                        let idx = idx as usize;
+                        if idx >= elems.len() {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "Tuple index {idx} out of range — tuple has {} elements",
+                                elems.len()
+                            );
+                            t = Type::Unknown(0);
+                        } else {
+                            // Stored-tuple field offset goes through the
+                            // synthetic struct's post-finish layout — same
+                            // offsets `OpGetInt` uses for an ordinary
+                            // struct field.
+                            let elem_offset = if let Some(v) =
+                                crate::data::stored_tuple_offsets_for_def(
+                                    &self.data,
+                                    &self.database,
+                                    d_nr,
+                                    elems.len(),
+                                ) {
+                                u32::from(v[idx])
+                            } else {
+                                crate::data::element_offsets(&elems)[idx] as u32
+                            };
+                            let elem_tp = elems[idx].clone();
+                            *code =
+                                self.get_val(&elem_tp, false, elem_offset, code.clone(), u32::MAX);
+                            t = elem_tp;
+                        }
+                    }
                 } else {
                     t = self.field(code, t);
                 }
@@ -487,6 +647,7 @@ impl Parser {
                     t = Type::Reference(d_nr, vec![w]);
                 }
             } else if self.lexer.has_token("[") {
+                wrap_chain = true;
                 t = self.parse_index(code, &t);
                 self.lexer.token("]");
             } else if self.lexer.has_token("(") {
@@ -547,6 +708,28 @@ impl Parser {
                     t = *ret_type;
                 }
             }
+            // Plan-07 phase 1, steps 1.11 + 1.12 — wrap the chained
+            // expression in a Span at the access-token position so
+            // runtime null-deref / out-of-bounds errors can be
+            // reported with the source location of the offending `.`
+            // or `[` token.  Skip when the result is an `Iter` (range
+            // subscript like `v[0..5]` produces an iterator that
+            // parse_for / iterator() must pattern-match without
+            // a Span wrapper) — the access token doesn't fault for
+            // a range-subscript shape, only the eventual element
+            // reads do, and those go through the normal `[idx]`
+            // path inside the rewritten loop.
+            if wrap_chain && !self.first_pass && !matches!(code, Value::Iter(_, _, _, _)) {
+                let inner = std::mem::replace(code, Value::Null);
+                *code = Value::with_span(chain_pos, inner);
+            }
+            // --show-types --trace: log the resulting type after
+            // each chaining step (`.field`, `.tuple_idx`, `[idx]`,
+            // `(args)`).  Combined with the post-`parse_single`
+            // log at the top, this produces a per-step "tape" of
+            // how the type evolves through a chained expression
+            // like `a.v.0` — the shape that hid the P197 dep loss.
+            self.record_type_trace(&t);
         }
         t
     }
@@ -588,7 +771,7 @@ impl Parser {
     /// variant isn't registered (defensive — should always be, via
     /// `default/01_code.loft`).
     fn rewrite_outer_arith_to_nullable(code: &mut Value, data: &crate::data::Data) {
-        let Value::Call(def_nr, _) = code else {
+        let Value::Call(def_nr, _) = code.unspan_mut() else {
             return;
         };
         // `original_name()` on an operator returns the stripped form
@@ -731,6 +914,7 @@ impl Parser {
         *ctp = lhs_type.clone();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_operator(
         &mut self,
         var_tp: &Type,
@@ -739,6 +923,7 @@ impl Parser {
         precedence: usize,
         ctp: &mut Type,
         operator: &str,
+        op_pos: &Position,
     ) -> Option<Type> {
         if operator == "??" {
             self.handle_null_coalesce(var_tp, code, parent_tp, precedence, ctp);
@@ -865,6 +1050,23 @@ impl Parser {
                 &[code.clone(), second_code],
                 &[ctp.clone(), second_type],
             );
+            // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
+            // arithmetic ops in `Value::Span` so runtime errors
+            // (div-by-zero, narrow overflow, signed-overflow panic
+            // from `checked_long!`) can be reported with the
+            // operator's source position.  Covers `+ - * / %` plus
+            // shifts; comparisons and boolean ops never panic, so
+            // they stay unwrapped (saves IR size).
+            //
+            // Walker discipline: every IR walker that pattern-matches
+            // `Value::Call(...)` either calls `unspan()` first or
+            // carries a `Value::Span(b)` arm (scopes.rs, intervals.rs,
+            // slots.rs, slots_v2.rs, validate.rs, codegen.rs,
+            // parser/mod.rs::substitute_type_in_value, generation/*).
+            if !self.first_pass && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>") {
+                let inner = std::mem::replace(code, Value::Null);
+                *code = Value::with_span(op_pos.clone(), inner);
+            }
         }
         None
     }

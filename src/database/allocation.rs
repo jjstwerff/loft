@@ -24,7 +24,62 @@ impl Stores {
     pub fn database_named(&mut self, size: u32, name: &str) -> DbRef {
         // S29: find the lowest free slot using the free_bits bitmap.
         // If a freed slot exists below max, reuse it; otherwise grow max.
-        let slot = self.find_free_slot();
+        //
+        // ARC.md A2: workers spawned by `run_parallel_queue_ref` set
+        // `disable_slot_reuse = true` and carry a shared
+        // `worker_slot_dispenser` (an `Arc<AtomicU16>`).  Every named
+        // alloc consumes the next index from the dispenser, extends
+        // the worker's clone's `allocations` to fit, and records the
+        // index in `worker_allocated_indices`.  Cross-thread
+        // collisions are impossible because the atomic dispenses
+        // globally-unique indices; growth is unbounded (replaces
+        // 8d.3's fixed 16-slot per-thread cap).
+        // ARC.md A2.3 — invariant: if a dispenser is attached, every
+        // named allocation MUST route through it.  The dispenser
+        // becomes the single source of truth for the worker's
+        // parent-namespace indices; bypassing it (e.g. by clearing
+        // `disable_slot_reuse` mid-call) would let the worker push
+        // into its own clone at an index that collides with another
+        // worker's dispensed slot, silently corrupting the swap-back
+        // at thread join.
+        //
+        // Always-on (not gated by `debug_assertions`) because the
+        // loft library compiles with `debug-assertions = false` in
+        // the test profile (per `[profile.dev.package.loft]`), so a
+        // `debug_assert!` here would be silently a no-op in `cargo
+        // test`.  This is a slow-path check (one-shot per fresh
+        // store allocation), so the perf cost is negligible.
+        assert!(
+            self.worker_slot_dispenser.is_none() || self.disable_slot_reuse,
+            "database_named: worker has a dispenser but disable_slot_reuse \
+             was cleared — every dispenser-attached allocation must go \
+             through the offset-aware path"
+        );
+        let slot = if let Some(dispenser) = self.worker_slot_dispenser.clone()
+            && self.disable_slot_reuse
+        {
+            let idx = dispenser.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.worker_allocated_indices.push(idx);
+            // Worker's clone may not have a slot at `idx` yet —
+            // extend `allocations` (with empty Store::new(100)
+            // placeholders for any skipped indices owned by other
+            // threads).  Skipped indices stay `free=true` in this
+            // worker's clone; only the just-allocated `idx` will be
+            // reinitialised below.
+            while self.allocations.len() <= idx as usize {
+                self.allocations.push(Store::new(100));
+            }
+            idx
+        } else if self.disable_slot_reuse {
+            // 8d.2: push at the end of allocations so worker writes
+            // never reuse a cloned slot.  Used when no dispenser is
+            // attached (single-thread queue dispatch or legacy paths
+            // that opt into disable_slot_reuse without queue_ref's
+            // dispatcher).
+            self.allocations.len() as u16
+        } else {
+            self.find_free_slot()
+        };
         if slot >= self.allocations.len() as u16 {
             self.allocations.push(Store::new(100));
         } else {
@@ -35,8 +90,13 @@ impl Stores {
             self.allocations[slot as usize].unlock();
             self.allocations[slot as usize].init();
         }
-        if slot == self.max {
-            self.max += 1;
+        // Maintain the invariant `max == highest_allocated_index + 1`.
+        // The dispenser path can yield indices > current max (each
+        // dispense skips ahead in parent-namespace), so a bare
+        // `slot == self.max` check would leave max stale and
+        // subsequent free() trims to the wrong position.
+        if slot >= self.max {
+            self.max = slot + 1;
         }
         // Clear the bitmap bit for this slot (it is now active).
         self.clear_free_bit(slot);
@@ -438,6 +498,58 @@ impl Stores {
         );
     }
 
+    /// Plan-06 phase 2 step 2b — narrow rebase path for structs whose
+    /// fields are entirely self-contained (no text, no DbRef sub-fields).
+    /// `copy_block`s the struct bytes from the worker store into the
+    /// dest record without invoking `copy_claims` — there's nothing to
+    /// deep-copy.  The graft + ungraft swap is replaced by a single
+    /// graft (the worker's store is borrowed via the existing slot
+    /// for the duration of the copy_block, then swapped back).
+    ///
+    /// Caller MUST verify `Stores::has_owned_sub_fields(tp) == false`
+    /// before calling — otherwise the dest's text/DbRef fields will
+    /// reference invalid positions/store_nrs after the worker's stores
+    /// are dropped at thread join.
+    ///
+    /// This is the "no copy_claims" version of `copy_from_worker`,
+    /// applicable to ~40 % of typical struct returns (those without
+    /// text or nested references — the common case for compute-heavy
+    /// workloads returning numeric records).
+    pub fn copy_from_worker_unowned(
+        &mut self,
+        src_ref: &DbRef,
+        dest: &DbRef,
+        worker_stores: &mut Stores,
+        tp: u16,
+    ) {
+        debug_assert!(
+            !self.has_owned_sub_fields(tp),
+            "copy_from_worker_unowned called with owned-fields struct (tp={tp})",
+        );
+
+        let ws = src_ref.store_nr as usize;
+        while self.allocations.len() <= ws {
+            self.allocations.push(Store::new(100));
+        }
+
+        // Graft the worker's store in (so copy_block can read from it
+        // through the parent's allocations table).
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+
+        let size = u32::from(self.size(tp));
+        self.copy_block(src_ref, dest, size);
+        // No copy_claims — caller verified the struct is self-contained.
+
+        // Un-graft.
+        std::mem::swap(
+            &mut self.allocations[ws],
+            &mut worker_stores.allocations[ws],
+        );
+    }
+
     /// Clone all current stores as locked read-only copies for use in a worker thread.
     /// The returned `Stores` has the same type schema but no files and no `parallel_ctx`.
     /// When a worker `State` is created from this, `State::new()` will allocate its own
@@ -485,11 +597,19 @@ impl Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
@@ -556,11 +676,19 @@ impl Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

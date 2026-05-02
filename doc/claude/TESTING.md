@@ -20,24 +20,51 @@ pass and read the captured failures once.
 # result: /tmp/loft_problems.txt
 ```
 
-`--bg` starts `cargo test --release --no-fail-fast` in a detached
-subshell and writes the raw log to `/tmp/loft_test.log`.  `--peek`
-tails the live log and pulls out any `FAILED` markers, inline
-panics, and SIGSEGV context (last ~15 lines before each crash).
-`--wait` blocks on the background pid and then produces the
-final summary.
+`--bg` starts the test runner in a detached subshell and writes
+the raw log to `/tmp/loft_test.log`.  `--peek` tails the live log
+and pulls out any `FAILED` markers, inline panics, and SIGSEGV
+context (last ~15 lines before each crash).  `--wait` blocks on
+the background pid and then produces the final summary.
+
+**Test runner choice.**  The script prefers `cargo nextest run
+--release --no-fail-fast --status-level fail` when nextest is on
+`PATH` (typical loft suite is 2-3× faster wall-clock at test
+execution because nextest parallelises at the test level rather
+than the binary level).  Falls back to `cargo test --release
+--no-fail-fast` when nextest is not installed.  The runner choice
+is logged on launch so a regression in test execution speed can
+be tied to a runner / profile change.
 
 Before the test run starts, the script rebuilds every sibling
-cdylib under `lib/*/native/` via `rebuild_native_cdylibs`.  The
-suite dlopens these libraries through `extensions::load_all` or
-links them via `--native`; when the `.rlib` / `.so` is older than
-its source, rustc surfaces a confusing
-`cannot find function X in crate loft_*_native` and cascades a
-dozen unrelated test failures.  Cargo is incremental, so a clean
-tree is ~free; a stale tree costs one recompile but stops a
-whole class of misleading reports.  The same freshness step is
-wired into `make test`, `make quick`, `make ci`, and
+cdylib under `lib/*/native/`, plus `tests/lib/*/native/` and the
+`wasm32-unknown-unknown` rlib (when its `target/` directory
+exists).  The suite dlopens these libraries through
+`extensions::load_all` or links them via `--native`; when the
+`.rlib` / `.so` is older than its source, rustc surfaces a
+confusing `cannot find function X in crate loft_*_native` and
+cascades a dozen unrelated test failures.  Cargo is incremental,
+so a clean tree is ~free; a stale tree costs one recompile but
+stops a whole class of misleading reports.  The same freshness
+step is wired into `make test`, `make quick`, `make ci`, and
 `make run-tests` via the `rebuild-native-cdylibs` target.
+
+**Parallel rebuild + per-step timings.**  All cdylib + wasm32
+rebuilds run in parallel under `rebuild_native_cdylibs`; total
+wall-clock is the slowest single step rather than the sum.  Each
+step's timing prints to stderr live and accumulates in
+`/tmp/loft_timings.txt`.  At the end of `--wait` (and the
+foreground path) the script prints a `=== Wall-clock timing
+summary ===` block so a regressing step is named, not just "the
+suite is slow."  Format:
+
+```
+  cdylib lib/graphics/native                        1.910s
+  cdylib lib/imaging/native                         0.885s
+  ...
+  wasm32 rlib                                       0.588s
+  (rebuild_native_cdylibs total wall-clock)         1.949s
+  cargo nextest run --release --no-fail-fast …    313.479s
+```
 
 Running in the background is the default for a reason: the
 suite takes long enough that blocking on it wastes cycles you
@@ -1256,6 +1283,62 @@ point of first access, before corruption propagates:
 | `stack.pos ≥ size_of::<T>()` | `src/database/mod.rs` `get<T>()` | Stack underflow from popping more bytes than were pushed (e.g. wrong native-function arg order) |
 
 All three are zero-cost in release builds.
+
+> **Note:** `[profile.dev.package.loft] debug-assertions = false` opts the
+> loft package itself out of `debug_assertions` even in dev/test builds (for
+> hot-path performance).  The boundary checks above are therefore **silent
+> on every platform** during ordinary `cargo test` runs.  Latent
+> out-of-bounds writes inside `Store` are tolerated by Linux's allocator
+> slack (16-byte chunk minimum) but caught by Windows as
+> `STATUS_HEAP_CORRUPTION (0xc0000374)` at deallocation — see the valgrind
+> section below for how to surface this on Linux without waiting for
+> Windows CI.
+
+---
+
+## Occasional valgrind pass (Linux)
+
+The loft codebase has a large `unsafe` surface in `src/store.rs`,
+`src/database/`, and `src/parallel.rs` (raw `addr`/`addr_mut`, LLRB
+free-tree rotations, claim/free splits, worker store adoption).  Linux
+runs the test suite cleanly because the system allocator over-allocates
+small chunks; latent OOB writes land in slack and don't corrupt anything
+visibly.  The same code on Windows hit `STATUS_HEAP_CORRUPTION` once the
+heap manager validated chunk metadata at deallocation.
+
+Valgrind's memcheck tool catches this class of bug instantly: every
+load/store is instrumented and OOB accesses fail loudly, regardless of
+allocator behaviour.
+
+### Recipe
+
+```bash
+# 1. Build test binaries (debug profile keeps the boundary checks for
+#    crates other than loft, but the real value is valgrind's redzones).
+cargo test --no-run
+
+# 2. Run unit + integration tests under valgrind.  Skip threading-heavy
+#    tests if they are too slow under instrumentation; valgrind is
+#    typically 5-10x slower than a normal run.
+for t in target/debug/deps/loft-*; do
+    [ -x "$t" ] || continue
+    valgrind --error-exitcode=1 --leak-check=no \
+             --track-origins=yes "$t" --test-threads=1 || exit 1
+done
+```
+
+### When to run
+
+- **Before a release** — once per release cycle.  Catches any latent
+  UB introduced since the last pass.
+- **After significant `unsafe` changes** in `Store`, `Stores`, the
+  parallel runtime, or the LLRB free-tree (`fl_*` in `src/store.rs`).
+- **When a Windows-only failure appears** with heap-corruption-style
+  symptoms (`0xc0000374`, `LdrpAllocate*`, `RtlReportFatalFailure`).
+
+Not a CI default: too slow for every PR.  Tracked as a release-blocker
+gate in [RELEASE.md](RELEASE.md) — run on the tag candidate, not on
+every push.
 
 ---
 

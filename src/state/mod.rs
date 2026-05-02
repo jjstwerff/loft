@@ -13,6 +13,7 @@ pub use crate::database::Call;
 use crate::database::{ParallelCtx, Stores, WorkerStores};
 use crate::fill::OPERATORS;
 use crate::keys::{DbRef, Str};
+use crate::lexer::Position;
 use crate::log_config::LogConfig;
 use crate::variables::size as var_size;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -110,6 +111,16 @@ pub struct State {
     pub library_names: HashMap<String, u16>,
     pub(crate) text_positions: BTreeSet<u32>,
     pub(crate) line_numbers: BTreeMap<u32, u32>,
+    /// Plan-07 phase 1 step 1.20 / phase 3 — pc → source-position table
+    /// populated by codegen on every `Value::Span` it walks.  Runtime
+    /// fault printers (div-by-zero, OOB, null deref, panic call) look up
+    /// the offending pc here to print `at file:line:col` alongside the
+    /// existing op-name + bytecode-pos context.  Sparse — only fault-prone
+    /// IR constructs (the wrapped ones in steps 1.B.1, 1.11, 1.12, 1.13)
+    /// produce entries.  Lookup is `range(..=pc).next_back()` so an
+    /// unwrapped pc inherits the nearest preceding span (mirrors the
+    /// `line_numbers` map's behaviour).
+    pub(crate) source_spans: BTreeMap<u32, Position>,
     pub(crate) fn_positions: Vec<u32>,
     /// Shadow call-frame vector (TR1.1).  One entry per active loft function call.
     pub call_stack: Vec<CallFrame>,
@@ -190,6 +201,7 @@ impl State {
             library_names: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
@@ -1488,6 +1500,17 @@ impl State {
         self.execute_argv(name, data, &[]);
     }
 
+    /// Plan-07 phase 1 step 1.20 / phase 3 — look up the source position
+    /// for a bytecode `pc`.  Returns the most recent `Position` recorded
+    /// at or before `pc` (sparse map; mid-instruction lookups inherit
+    /// the surrounding Span).  Used by runtime fault printers (panic
+    /// builtin, future div-by-zero / OOB / null-deref kinds) to surface
+    /// `at file:line:col` alongside the bytecode-level context.
+    #[must_use]
+    pub fn source_loc_for(&self, pc: u32) -> Option<&Position> {
+        self.source_spans.range(..=pc).next_back().map(|(_, p)| p)
+    }
+
     /// Execute entry-point `name`, optionally passing `argv` as a `vector<text>` argument.
     ///
     /// If the named function has exactly one `vector<…>` parameter, the strings in `argv`
@@ -1501,7 +1524,7 @@ impl State {
         let pos = data.def(d_nr).code_position;
 
         // Expose bytecode, library, and Data to native functions
-        // that need to spawn worker threads (e.g. n_parallel_for_int).
+        // that need to spawn worker threads (e.g. n_parallel_for / _light).
         let bc_ptr = &raw const self.bytecode;
         let lib_ptr = &raw const self.library;
         let data_ptr = std::ptr::from_ref::<Data>(data);
@@ -1521,6 +1544,11 @@ impl State {
         self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
         self.code_pos = pos;
         self.stack_pos = 4;
+        // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
+        // to the panic hook so a Rust panic inside any opcode dispatch
+        // (e.g. arithmetic overflow in `checked_long!`, the `panic`
+        // builtin) can print `at file:line:col` for the offending pc.
+        crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
         // Fix #88: push a synthetic CallFrame for the entry function so it
         // appears in stack_trace() output.
         self.call_stack.push(CallFrame {
@@ -1732,6 +1760,7 @@ impl State {
             types: HashMap::new(),
             text_positions: BTreeSet::new(),
             line_numbers: BTreeMap::new(),
+            source_spans: BTreeMap::new(),
             fn_positions: Vec::new(),
             call_stack: Vec::new(),
             data_ptr: std::ptr::null(),
@@ -1760,8 +1789,9 @@ impl State {
     pub fn execute_at(&mut self, fn_pos: u32, arg: &DbRef) -> i64 {
         // Fix #92: propagate data_ptr, stack_trace_lib_nr, and fn_positions from
         // ParallelCtx so that stack_trace() works inside parallel workers called via
-        // n_parallel_for_int.  When parallel_ctx is None (direct run_parallel_* path),
-        // stack_trace_lib_nr is already set by WorkerProgram::new_state — don't clobber it.
+        // the n_parallel_for / _light dispatch.  When parallel_ctx is None (direct
+        // run_parallel_* path), stack_trace_lib_nr is already set by
+        // WorkerProgram::new_state — don't clobber it.
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
             self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
@@ -1868,10 +1898,184 @@ impl State {
         }
     }
 
-    /// Execute a worker function that returns a struct reference (`DbRef`).
-    /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
-    /// record lives in `self.database` (the worker's cloned stores).
-    pub fn execute_at_ref(&mut self, fn_pos: u32, arg: &DbRef, extra_args: &[u64]) -> DbRef {
+    /// Plan-06 phase 1 G2 — primitive-input worker dispatch.
+    /// Same as `execute_at_raw` but pushes a primitive value of
+    /// `input_size` bytes (1, 4, or 8) instead of a 12-byte
+    /// `DbRef`, so workers whose first param is a primitive type
+    /// (bool/byte/integer/single/float/character/non-payload enum)
+    /// see the actual element value in slot 0 instead of a ref to
+    /// the row record.  Used by `run_parallel_*` when the dispatch
+    /// detects a primitive input.
+    pub fn execute_at_raw_primitive_input(
+        &mut self,
+        fn_pos: u32,
+        input_value: u64,
+        input_size: u32,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: input_size as u16,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        // Push the primitive input value at its native byte width.
+        // `put_stack` advances stack_pos by `size_of::<T>()`, so we
+        // pick the type by `input_size` to match the worker's
+        // expected slot 0 width.
+        match input_size {
+            1 => self.put_stack(input_value as u8),
+            4 => self.put_stack(input_value as u32),
+            _ => self.put_stack(input_value),
+        }
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        match return_size {
+            8 => *self.get_stack::<u64>(),
+            1 => u64::from(*self.get_stack::<u8>()),
+            _ => u64::from(*self.get_stack::<u32>()),
+        }
+    }
+
+    /// Plan-06 phase 4d.A — wide-inline-input worker dispatch.
+    /// Same as `execute_at_raw_primitive_input` but accepts an
+    /// arbitrary-width slot 0 (1..=64 bytes) instead of a u64.
+    /// Used for tuple inputs, fn-ref inputs, and any inline-typed
+    /// first arg whose stack representation exceeds 8 bytes.
+    ///
+    /// `input_bytes.len()` is the slot 0 width; `args_size` becomes
+    /// `input_bytes.len() + 8 * extra_args.len()` so the call frame
+    /// accounting matches what the worker frame's variable table
+    /// expects.
+    ///
+    /// Return value is read as a u64 (worker returning ≤ 8 bytes).
+    /// Wide-return cases use `execute_at_raw_to` instead.
+    pub fn execute_at_raw_primitive_input_wide(
+        &mut self,
+        fn_pos: u32,
+        input_bytes: &[u8],
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
+        debug_assert!(
+            input_bytes.len() <= 64,
+            "wide input slot {} exceeds 64-byte cap",
+            input_bytes.len()
+        );
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        let input_size = input_bytes.len() as u16;
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: input_size,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        // Push the input bytes as a single chunk into slot 0.
+        for &b in input_bytes {
+            self.put_stack(b);
+        }
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        match return_size {
+            8 => *self.get_stack::<u64>(),
+            1 => u64::from(*self.get_stack::<u8>()),
+            _ => u64::from(*self.get_stack::<u32>()),
+        }
+    }
+
+    /// Plan-06 phase 1 G4 — variable-width-return worker dispatch.
+    /// Same as `execute_at_raw` but copies the worker's return
+    /// value as `return_size` raw bytes from the top of the stack
+    /// to `dst`, instead of reading at most 8 bytes.  Used for
+    /// fn-ref returns (20 bytes), large-tuple returns, and other
+    /// inline returns that exceed the u64 width.
+    ///
+    /// # Panics
+    /// Panics if `return_size` exceeds the worker's current stack
+    /// depth at the moment of return — that would mean the worker
+    /// fn left less data on the stack than its declared return
+    /// width, which is a codegen bug rather than a runtime input.
+    ///
+    /// # Safety
+    /// Caller must ensure `dst` points to at least `return_size`
+    /// writable bytes.  The function does no bounds checking on
+    /// the destination buffer.
+    pub unsafe fn execute_at_raw_to(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        extra_args: &[u64],
+        return_size: u32,
+        dst: *mut u8,
+    ) {
         if let Some(ctx) = &self.database.parallel_ctx {
             self.data_ptr = ctx.data;
             self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
@@ -1894,6 +2098,157 @@ impl State {
         });
         self.stack_pos = 4;
         self.put_stack(*arg);
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        // Copy `return_size` bytes from the top of the worker
+        // stack to `dst`.  Stack grows upward; the return value
+        // occupies the topmost `return_size` bytes.
+        assert!(
+            return_size <= self.stack_pos,
+            "execute_at_raw_to: return_size {} exceeds stack_pos {}",
+            return_size,
+            self.stack_pos
+        );
+        let src_offset = self.stack_pos - return_size;
+        let store = self.database.store(&self.stack_cur);
+        unsafe {
+            let src = store.base_ptr().offset(
+                self.stack_cur.rec as isize * 8 + self.stack_cur.pos as isize + src_offset as isize,
+            );
+            std::ptr::copy_nonoverlapping(src, dst, return_size as usize);
+        }
+        self.stack_pos = src_offset;
+    }
+
+    /// Plan-06 phase 1 G3 — text-input worker dispatch.
+    /// Same as `execute_at_raw` but the first param is a `text`
+    /// argument: pushes a 16-byte `Str { ptr, len }` slot built
+    /// from the input row's `&str` instead of a 12-byte `DbRef`.
+    /// `args_size` is fixed at 16 (Str width).
+    pub fn execute_at_raw_text_input(
+        &mut self,
+        fn_pos: u32,
+        input_str: crate::keys::Str,
+        extra_args: &[u64],
+        return_size: u32,
+    ) -> u64 {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 16,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        self.put_stack(input_str); // 16 bytes
+        for &extra in extra_args {
+            self.put_stack(extra as i64);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let mut step = 0;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = *self.code::<u8>();
+            if op == 255 {
+                let ext = *self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            step += 1;
+            debug_assert!(step < 10_000_000, "Worker: too many operations");
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        match return_size {
+            8 => *self.get_stack::<u64>(),
+            1 => u64::from(*self.get_stack::<u8>()),
+            _ => u64::from(*self.get_stack::<u32>()),
+        }
+    }
+
+    /// Execute a worker function that returns a struct reference (`DbRef`).
+    /// Returns the 12-byte `DbRef` from the worker's stack.  The referenced
+    /// record lives in `self.database` (the worker's cloned stores).
+    ///
+    /// `hidden_dests` is the slice of pre-allocated destination `DbRef`s
+    /// for the worker's hidden caller-supplied destination params (added
+    /// by `ref_return` for `Type::Vector` / `Type::Reference` /
+    /// `Type::Enum(_, true, _)` returns).  Each destination is pushed
+    /// as 12 bytes after the input arg and before regular extras —
+    /// matching the parameter order the codegen assumes.  Pass `&[]`
+    /// when the worker has no hidden args.
+    pub fn execute_at_ref(
+        &mut self,
+        fn_pos: u32,
+        arg: &DbRef,
+        hidden_dests: &[DbRef],
+        extra_args: &[u64],
+    ) -> DbRef {
+        if let Some(ctx) = &self.database.parallel_ctx {
+            self.data_ptr = ctx.data;
+            self.stack_trace_lib_nr = ctx.stack_trace_lib_nr;
+            if self.fn_positions.is_empty() && !ctx.data.is_null() {
+                let data = unsafe { &*ctx.data };
+                self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+            }
+        }
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: 4,
+            args_size: 12,
+            line: 0,
+        });
+        self.stack_pos = 4;
+        self.put_stack(*arg);
+        for &dest in hidden_dests {
+            // ARC.md A6.a — push hidden destination DbRefs as 12 bytes
+            // (NOT 8-byte i64 like extras).  The codegen for the
+            // worker's body computes the next param's offset assuming
+            // 12-byte hidden DbRefs; pushing 8 bytes here would
+            // misalign every subsequent slot read in the worker.
+            self.put_stack(dest);
+        }
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }

@@ -9,6 +9,557 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### plan-09 phase 07: close P205 — bounded-generic text return scratch routing
+
+Closes P205 (1 of 4 native sub-failures retired).  The bug:
+bounded-generic dispatch `fn f<T: Trait>(x: T) -> text` produced
+native code that emitted `Str::new(&local_String)` whose pointer
+referenced a stack-local that dropped at function return,
+dangling the returned `Str` into freed memory.
+
+Fix in `src/generation/emit.rs` at TWO emit sites (the dangle
+isn't tied to a single Op — it's emit.rs's `Str::new(...)` wrap
+choice for text-returning functions):
+
+- **`Value::Return(val)` text-wrap path** (line 188+): detects
+  "function returns Type::Text but has no
+  `Type::RefVar(Type::Text(_))` attribute" and routes the value
+  through `stores.scratch`.
+- **Block-tail `wrap_result` path** (line 887+): same detection,
+  same routing.
+
+Detection logic:
+```rust
+let needs_p205_scratch = wrap_text && {
+    let def = self.data.def(self.def_nr);
+    matches!(def.returned, Type::Text(_))
+        && !def.attributes.iter().any(|a| {
+            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+        })
+};
+if needs_p205_scratch {
+    write!(w, "{{ stores.scratch.push((")?;
+    self.output_code_inner(w, val)?;
+    write!(w, ").to_string()); Str::new(stores.scratch.last().unwrap()) }}")?;
+}
+```
+
+`stores.scratch` is the same Vec<String> that
+`n_parallel_buf_get_text_native` uses — lifetime stable for the
+caller's use of the returned `Str`.
+
+Detection nuance: `text_return` doesn't set `hidden=true` on the
+attributes it adds (only `ref_return` does, at
+`parser/control.rs:2452`).  Initial detection used
+`a.hidden && Type::RefVar(...)` and filtered out every
+text-returning function.  Fix dropped the `hidden` filter.
+
+Probe finding (Outcome B from phase 07's diagnostic step):
+removing the `DefType::Generic` skip at `parser/control.rs:375`
+makes `text_return` run for generic specialisations but doesn't
+help — text_return promotes locals to hidden RefVar(Text)
+parameters, but bounded-generic specialisations have no local
+text vars to promote.  The fix had to move from parser-side to
+codegen-side.
+
+Verified:
+- `repro_p205.loft` exits 0 under native (was: panic on assert)
+- `86_interfaces` no longer in run failures
+- `native_scripts`: 89/93 → 90/93
+- threading 43/43, threading_chars 35/35, issues 540/540 unchanged
+- p09 fast gate: byte-identical (baseline refreshed for
+  25-generics)
+- fmt + clippy `-D warnings` clean
+
+Regression tests in `tests/codegen_emitter.rs`:
+- `p205_repro_passes_under_native` — runs the reproducer under
+  native, asserts exit 0.
+- `p205_no_str_new_of_local_in_corpus` — greps the doc-test
+  baseline for `Str::new(&var___ret_*)` and fails if reintroduced.
+
+Commit `6151231`.
+
+### plan-09 phase 06: close P202 — n_parallel_queue family in native
+
+Closes P202 (3 of 6 native sub-failures retired: 19_threading,
+22_threading, 40_par_ref_return).  Native compilation of
+`for ... par(...)` for-loops now works.
+
+Three components ship together:
+
+1. **Runtime fns** in `src/codegen_runtime.rs`:
+   - `n_parallel_queue_native` / `_text_native` / `_ref_native`
+     — queue dispatch (closure-based, mirroring
+     `n_parallel_for_*_native`).  The ref variant adopts a
+     single result store (simpler than the interpreter's
+     per-worker dispenser); buf_drop_ref frees it.
+   - `n_parallel_buf_get_native` / `_text_native` / `_ref_native`
+     — per-row reads from the active par buffer.
+   - `n_parallel_buf_drop_native` / `_text_native` / `_ref_native`
+     — end-of-loop cleanup.
+   - All 9 take `&UnsafeCell<Stores>` per phase 01's ABI;
+     registered in `CODEGEN_RUNTIME_FNS` with `Abi::Cell`.
+   - `# Panics` sections added to satisfy
+     `clippy::missing_panics_doc`.
+
+2. **Emitters** in `src/generation/ops/parallel.rs`:
+   - `ParallelQueueEmitter` mirrors phase 03's
+     `ParallelForEmitter` but routes calls to
+     `n_parallel_queue_*_native` (returning i64 row count
+     instead of DbRef).  Reuses `closure_shape` /
+     `queue_helper_name` / extra-arg let-binding scaffolding.
+   - `ParallelBufRenameEmitter` is a pass-through name
+     rewriter for the 6 buf-get / buf-drop names — no closure
+     transformation, just appends `_native` to the call site.
+   - All 9 names registered in
+     `src/generation/ops/mod.rs::build_registry`.
+
+3. **Reachability fix** in `src/generation/mod.rs::collect_calls`:
+   - The worker-fn-via-d_nr-arg detection (originally for
+     `n_parallel_for*`) extended to the queue family.  Without
+     this, the emitter's closure refers to a worker fn that
+     never gets emitted (E0425 "cannot find function").  Caught
+     during validation, not pre-flight — the lesson is captured
+     in `feedback_forwarding_first_recipe.md` (extend reachability
+     when emitter synthesises calls by name).
+
+Trait-reuse decision (per phase 06 doc § Implementation notes):
+Phase 09's plan-doc projected 3 thin wrappers around a
+`ParQueueShape` trait following the for-par pattern.
+Implementation revealed each variant pushes to a different
+`par_*_buffer_stack` field with a different value type — a
+trait would have ~80% conditional branching.  Kept queue
+runtime fns flat (~90 LOC vs ~120 with a trait).  Codified in
+`feedback_phase_doc_trait_drafts.md` ("if 3 impls share <50%
+of method bodies, prefer flat over trait").
+
+Verified:
+- native_dir: 29/30 → **30/30** (19_threading compile fix)
+- native_scripts: 87/93 → **89/93** (22_threading +
+  40_par_ref_return compile fixes)
+- threading 43/43, threading_chars 35/35, issues 540/540 unchanged
+- p09 fast gate: 9/9 byte-identical (baseline refreshed for
+  19-threading + 22-threading — emission shape changed
+  intentionally as queue calls now route through emitter)
+- fmt + clippy `-D warnings` clean
+
+Regression tests in `tests/codegen_emitter.rs`:
+- `p202_parallel_queue_runtime_fns_registered` — pins the 9
+  runtime-fn names with `Abi::Cell`.
+- `p202_parallel_queue_emitter_registered` — pins the 9
+  build_registry entries.
+
+Commit `8cf0676`.
+
+### plan-09 phase 00a: introspection findings + downstream updates
+
+Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
+introspection retroactively covers the simplification cluster.
+
+Findings populate `doc/claude/plans/finished/09-native-runtime-rewrite/00a-introspect.md`:
+
+- **Effort vs estimate**: phase 00 landed in 6 commits (under
+  7-9 budget) + 4 follow-on infrastructure commits (smoke test,
+  evaluation gates, CI cleanup, fmt followup).  Future plans
+  should budget post-step infrastructure explicitly.
+- **EmitCtx surface area**: 3 planned helpers (`w` / `def_fn` /
+  `output`) + 2 surfaced during phase 03 (`emit(v)`,
+  `emit_i32_slot(v)`).  Phase 05's int-width helpers not added
+  yet — phase 05 itself is misaligned (see below).
+- **dispatch.rs op match arms**: 26 → 24 (phase 03 retired
+  `n_parallel_for`; phase 04 retired `OpGetRecord` + `OpIterate`).
+  Wart-budget gate `dispatch_op_arm_budget_not_exceeded` enforces
+  shrink-only.
+- **`Value::RawExpr` wart**: accepted with budget gate; future
+  codegen synthesis must avoid extending it.
+- **Byte-identical contract**: held across all 6 hoist commits +
+  every subsequent simplification phase.
+- **Two surprises caught and fixed**:
+  - Forwarding-first recipe trap (initial 16-Op forwarding list
+    included Ops in dispatch.rs special-case match) — caught by
+    fast gate, list pruned to 9, recipe documented in NATIVE.md
+    + phase 00 findings.  Phase 03/04 used the recipe as planned
+    pre-flight.
+  - Phase 09's `ParShape` sketch was too narrow (single `WorkerOut`
+    type would have erased text's per-worker slot mechanism and
+    ref's cross-store deep-copy capability) — implementation
+    extended trait with `Self::Batches` second associated type +
+    `store_results` method.
+
+Hidden assumptions surfaced (drove downstream doc updates):
+
+1. **Phase 05's WRITE-side scope was wrong** — actual P200 bug is
+   READ-side block-tail comparison-emission (`(_var as u8) ==
+   (0_i64)` E0308), not the `f += val` template.  Plan rewrite
+   required.  Documented in 05-file.md § Diagnosis findings;
+   PROBLEMS.md P200 entry updated with the surveyed shape.
+2. **Phase 02 demoted from "P200 prerequisite" to "optional
+   simplification"** — phase 02 splits `narrow_int_cast`'s
+   param-narrowing role (role #2); phase 05's actual bug is the
+   block-tail role (role #1).  02-param-adapter.md now carries a
+   "Status reassessment" block.
+3. **Pre-existing CI breakage accreted** across phases 00-04 — 1
+   fmt drift (hand-aligned `RuntimeFn` table from phase 01 step
+   1.7) + 5 clippy errors (`map().unwrap_or()`, `borrow as raw
+   pointer` ×3, lifetime elision, `let _stub = …` patterns,
+   unused `Write` import).  Closed in commits f4d288a +
+   97d17cc.  CI gate memory updated to "before each commit on
+   hot-path edits."
+
+Decision: **Continue with updated plans** (per the introspection's
+decision criteria table — "2-3 surprises that updated downstream
+phases").
+
+Memory entries saved (durable beyond plan-09):
+
+- `feedback_forwarding_first_recipe.md` — pre-flight pattern.
+- `feedback_phase_doc_trait_drafts.md` — trait sketches in plan
+  docs are drafts; expect to extend on first contact.
+- `feedback_actual_error_survey.md` — bug-fix phases need
+  `--native-emit` survey BEFORE writing implementation steps.
+
+### plan-09 CI cleanup: fmt + clippy + no-default-features green
+
+Pre-existing breakage that accumulated across phases 00-04:
+
+- `cargo fmt --check` rejected the hand-aligned `RuntimeFn` table
+  in `src/codegen_runtime.rs` introduced by phase 01 step 1.7
+  (commit `2005f6e`).  Resolution: `#[rustfmt::skip]` on the
+  const preserves the alignment.  Rest of the file (and 9 other
+  files) reformatted to `cargo fmt` defaults.
+- `cargo clippy --tests --release -- -D warnings` failed with 5
+  errors (lib) / 9 (lib + tests).  All fixed:
+  - `src/generation/ops/mod.rs:178` unused `Write` import — removed.
+  - `src/generation/ops/mod.rs:54` explicit lifetimes on
+    `EmitCtx<'a, 'b>` — elided to `EmitCtx<'_, '_>`.
+  - `src/generation/ops/mod.rs:216-218` `let _stub = StubEmitter`
+    pattern (binding to `_`-prefixed without side-effect) —
+    rewritten as `let _: &dyn OpEmitter = &StubEmitter` (also
+    strengthens the trait-impl-able assertion).
+  - `src/codegen_runtime.rs:88` `.map(...).unwrap_or(...)` —
+    collapsed to `.map_or(default, fn)`.
+  - `src/codegen_runtime.rs:2049/2120/2209` `&mut ws.stores as *mut`
+    borrow-as-raw-pointer — rewritten as `&raw mut ws.stores`
+    (modern reference-to-raw idiom; clearer + clippy-clean).
+
+Verified: fmt + clippy + no-default-features all clean; behavioural
+baselines preserved (codegen_emitter 10/10, threading 43/43,
+threading_chars 35/35, issues 540/540).
+
+### plan-09 phase 09: parallel runtime consolidation
+
+`src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
+fns (scalar / text / heap-ref) collapsed to thin wrappers around a
+generic `n_parallel_for_native_core<S: ParShape, F>(...)` core.
+
+Mechanism:
+
+- New `ParShape` trait with `WorkerOut: Send` + `Batches`
+  associated types, `return_sz()`, `run_workers(...)` (static),
+  `store_results(&self, ...)`.  Three impls: `ScalarShape`
+  (carries `return_size`), `TextShape` (unit), `RefShape`
+  (carries `struct_size` + `known_type`).
+- The shared core sequences allocate (`alloc_par_result`) → run
+  workers → store results → finalise (`finalize_par_result`).
+- The three existing `run_native_workers_*` free fns stay as
+  internal worker dispatchers; each `ParShape` impl's
+  `run_workers` calls the appropriate one.
+- Public fn bodies shrank from 36 / 24 / 39 lines to 20 / 13 / 24
+  lines (full pub-fn span including signature; body is ~3 lines
+  for each).  Pinned by `parallel_runtime_consolidated` test in
+  `tests/codegen_emitter.rs` (≤ 15 body lines + must call
+  `n_parallel_for_native_core`).
+- Phase 06 (P202 — adds `n_parallel_queue_*_native` queue variants)
+  will add 3 thin wrappers (~10 lines) instead of 3 full ~80-line
+  fns; cumulative saving ~240 lines.
+
+Emission stays byte-identical (codegen calls the same public fn
+names with the same ABI).  Behavioural baselines unchanged:
+threading 43/43, threading_chars 35/35, issues 540/540, native
+29/30 + 87/93 — same pre-existing failures (85_yield_resume,
+86_interfaces, 87_store_leaks; compile failures in
+19_threading / 20_binary / 22_threading / 40_par_ref_return).
+
+### ARC.md A2: unbounded per-thread slot dispenser (8d.3 cap retired)
+
+Replaces the spine-8d.3 fixed `SLOTS_PER_THREAD = 16` per-worker
+reservation with a shared `Arc<AtomicU16>` dispenser.  Workers that
+allocated more than 16 fresh stores per batch hit a hard `assert!`
+in `database_named` ("worker exhausted reserved slot range
+[N, N+16) at local_count=16"); the new design grows unbounded.
+
+Mechanism:
+
+- `Stores::worker_slot_dispenser: Option<Arc<AtomicU16>>` carries the
+  shared counter into each worker's clone.  Initialised at
+  `parent.allocations.len() + 1` by `Stores::make_worker_slot_dispenser`
+  (the `+1` skips the parent-namespace index where each worker's
+  `prog.new_state(ws)` push-at-ends a 1000-byte stack store, so the
+  dispenser never collides with a worker's own stack-store slot).
+- `Stores::worker_allocated_indices: Vec<u16>` per-worker list of
+  parent-namespace indices the dispenser yielded.  After
+  `run_parallel_queue_ref` joins, each entry triggers a
+  `mem::swap` between parent and the worker's clone at that index.
+- `database_named` in worker context now: pulls a fresh index via
+  `dispenser.fetch_add(1, Relaxed)`, pushes
+  `Store::new(100)` placeholders into the worker's own `allocations`
+  Vec to fill any skipped indices owned by other workers, then
+  initialises at the yielded index.  The placeholders stay
+  `free=true` and are never swapped to parent (each worker only
+  swaps its OWN allocated indices).
+- 3 fields removed (`worker_slot_offset`, `worker_slot_limit`,
+  `worker_slot_local_count`); 2 added (above).
+  `reserve_worker_slots` / `release_worker_slots` removed.
+- `database_named`'s `if slot == self.max { self.max += 1 }` widened
+  to `if slot >= self.max { self.max = slot + 1 }` — the dispenser
+  yields indices that can be > current max (it skips ahead in
+  parent-namespace), so the strict-equality check missed cases and
+  left max stale.
+
+A2.3 invariant: an always-on `assert!` in `database_named` fires if
+a worker has a dispenser attached but `disable_slot_reuse` was
+cleared mid-call (the bypass would push to a parent-namespace index
+unrelated to the dispenser, silently corrupting the swap-back at
+thread join).  Always-on rather than `debug_assert!` because the
+loft library compiles with `debug-assertions = false` in the test
+profile per `[profile.dev.package.loft]` — a `debug_assert!` would
+be a silent no-op in `cargo test`.
+
+Tests:
+
+- `tests/threading.rs::par_queue_ref_unbounded_allocations_per_element`
+  exercises the allocator directly (bypassing the bytecode
+  pipeline's `execute_at_ref` calling-convention mismatch with
+  inline-struct-return functions): performs 50 named allocations
+  via the dispenser, asserts strictly increasing parent-namespace
+  indices and dispenser high-water = `parent_len + 1 + N_ALLOCS`.
+- `tests/threading.rs::par_queue_ref_dispenser_bypass_assertion_fires`
+  pins A2.3's invariant: a synthetic worker with dispenser attached
+  but `disable_slot_reuse=false` panics with the documented message.
+
+Bench-11 ±5%: ~101ms median post-A2 (vs ~98ms `main`, ~101ms
+post-A1) — within gate.  All 37 `tests/threading.rs` tests + 31
+`tests/threading_chars.rs` tests stay green.
+
+ARC.md A2 status flipped to DONE.
+
+### P196: tuple-of-fn-ref native codegen — `(u32, DbRef) as i32`
+
+Fixes E0605 (`non-primitive cast`) + E0308 in native codegen when a
+struct field of type `(fn(...) -> ..., int)` is assigned from a Var
+or function-call source rather than a literal `(name, n)` tuple.
+
+The bug: `set_field_check::Type::Tuple` non-literal path stashes the
+RHS into a work-ref local, then for each element `i` emits
+`OpSet*(ref, pos, TupleGet(tmp, i))`.  For a fn-ref element, native
+codegen substitutes the template body's `@val` with `var_tmp.0` —
+which has Rust type `(u32, DbRef)` (the fn-ref runtime
+representation).  `OpSetInt4`'s template wraps `@val` with both
+`@val == i64::MIN` (E0308 — comparing tuple to i64) and `@val as
+i32` (E0605 — non-primitive cast on tuple type).
+
+Fix in `src/generation/calls.rs::output_call_template`: when the
+template parameter is `Type::Integer` and the IR value is a
+`Value::TupleGet(var, idx)` whose tuple element type is
+`Type::Function`, wrap the substituted expression with
+`(i64::from(({with}).0))` — projecting the `u32` d_nr from the
+fn-ref tuple's first element and widening to i64.  The template's
+null-check (`== i64::MIN`) becomes tautologically false (a u32
+can't equal i64::MIN) but compiles cleanly, and the `as i32` cast
+narrows from i64.
+
+The literal-tuple path was unaffected — `set_field_check::Type::Function`
+already reduces `Value::FnRef(d_nr, _, _)` to `Value::Int(d_nr)`,
+sidestepping the tuple shape entirely.
+
+Tests:
+
+- `tests/issues.rs::p4d_tuple_field_with_fn_ref` covers the literal
+  case end-to-end through the interpreter (same shape as
+  `p4d_fn_ref_as_struct_field`, but with the fn-ref nested inside a
+  tuple field).
+- `tests/exit_codes.rs::p196_native_codegen_projects_fn_ref_d_nr`
+  pins the codegen-text invariant: a script with a non-literal
+  fn-ref tuple source must emit `i64::from((var___ref_1.0).0)` and
+  must NOT contain the buggy `(var___ref_1.0) == i64::MIN` shape.
+
+PROBLEMS.md P196 entry retired.  ARC.md A6.c no longer gates on
+P196 — closes independently of the 4d.C closure-storage redesign.
+
+### P195: chained tuple-index lex (`n.v.0.0`)
+
+Fixes the lexer's greedy `<digit>.<digit>` → float read when the
+previous emitted token was `.` (field access).  Before: `n.v.0.0`
+lexed as `n`, `.`, `v`, `.`, `Float(0.0)` — the parser then saw a
+type mismatch on assignment and a stray `.` it could not place.
+After: lexes as 7 tokens — `n`, `.`, `v`, `.`, `Integer(0)`, `.`,
+`Integer(0)` — which is the correct chained tuple-index access.
+
+Mechanism (`src/lexer.rs::number`):
+
+- At entry, capture `prev_was_field_dot = self.peek.has ==
+  Token(".")`.  `self.peek` holds the previously-emitted token at
+  this point (the parser flow uses `cont()` which sets `peek =
+  next()`-result; inside `number()`, `peek` is still the
+  before-the-current-number token).
+- After consuming a `.` and confirming it is **not** the start of a
+  `..` range token, peek the next char in `iter`.  If
+  `prev_was_field_dot && next.is_ascii_digit()`, push `Token(".")`
+  onto `memory` (so the next `cont()` returns it) and return
+  `Integer(val)` immediately — the trailing digit is then re-lexed
+  as a fresh number on the call after that.
+- The `..` range branch is unchanged: `0..5` still lexes as range,
+  not tuple index.  Stand-alone floats like `0.0`, `1.5e3`, and
+  expression-position floats like `x = 0.0` are unaffected because
+  their preceding token is not `.`.
+
+Test: `src/lexer.rs::test::p195_chained_tuple_index_does_not_glue_into_float`
+exercises 5 cases — chained tuple index, stand-alone float,
+expression-position float, mixed expression, range — using a new
+`cont_array` test helper that drives the lexer through the same
+`cont()` API the parser uses (the existing `array()` helper bypasses
+`cont()` and would not catch context-aware lexing).
+
+### `--show-types --trace` per-expression type tape
+
+Adds a per-expression tape to the `--show-types` introspection
+section.  Where the existing variable-level table catches dep loss
+in *stored* values (the function's args, locals, return type), the
+trace catches dep loss in *intermediate* sub-expressions of a
+chained access.  Specifically, for a nested expression like
+`a.v.0`, the tape shows the type at each step:
+
+```
+4:7        ref(A)["a"]              <- a
+4:9        (text["a"], text["a"])   <- a.v
+5:2        text["a"]                <- a.v.0
+```
+
+If P197 had been a regression today, line 4:9 would have rendered
+`(text, text)` (no host dep) and the bug would have been visible
+without reading any code.
+
+Mechanism:
+- `Parser::trace_types: bool` flag enables recording.
+- `Parser::trace_types_lines: Vec<String>` accumulates entries
+  formatted `<fn>\t<line>:<col>\t<type>`.
+- `parse_part` calls `record_type_trace(&t)` after the initial
+  `parse_single` and after each chaining step.
+- Only fires on the second pass (first-pass types are placeholders
+  that would emit thousands of meaningless lines).
+- `main.rs` enables the flag for the user's file (not for the
+  `default/*` stdlib parsed by `parse_dir`).
+- `emit_types` in `introspect.rs` reads `opts.trace_lines`,
+  filters to the current function (matching the user-typed name,
+  i.e. without the `n_` prefix), and renders one section per fn.
+
+Tangential fix discovered while testing on dev profile:
+`emit_tuple_set_ops` had a `base_pos + offsets[i]` u16 overflow
+when `base_pos` was the `database.position` u16::MAX sentinel
+during first-pass placeholder resolution.  Release silently
+wrapped; dev profile (with overflow checks) panics.  Switched
+both arithmetic sites to `saturating_add` — first-pass IR is
+regenerated in pass 2, so a saturated placeholder is safe.
+
+Tests: `introspect_show_types_trace_renders_per_expression` in
+`tests/exit_codes.rs`.
+
+### Native-codegen source map + introspection `--diff`
+
+Two developer-velocity wins, both targeting the long tail of
+debugging time:
+
+- **`// loft:<file>:<line>` comments in generated Rust.** Every
+  function header and every statement boundary in `output_native`
+  output now carries a comment mapping back to the originating
+  loft source.  Lets `rustc` errors on `/tmp/loft_native.rs` be
+  traced to the .loft line in seconds rather than by manually
+  reading the generated code.  Cost: ~10 LOC; comments are
+  cheap (one per source line).
+- **`--introspect --diff <baseline>`.** Captures the requested
+  sections to a buffer and runs `diff -u baseline tmp`.  Exits 0
+  identical, 1 differs.  Lets devs answer "did this parser tweak
+  change anything?" with one command.
+
+Tests: `native_emit_includes_loft_source_map`,
+`introspect_diff_against_baseline` in `tests/exit_codes.rs`.
+
+### P194 — tuple-typed struct field reassignment
+
+`p.v = (1, 2)` (where `v` is a tuple-typed struct field) used to
+fail with `Tuple destructuring requires plain variable names`.
+Root cause: `get_val::Type::Tuple` returns `Value::Tuple([reads])`
+for a tuple field read, and the parser's destructuring branch
+matched any `Value::Tuple` LHS unconditionally.  Fix: detect
+"tuple of OpGet*-style reads (not all `Value::Var`) on a
+`Type::Tuple` LHS" in `parse_assign` and route through
+`emit_tuple_set_ops` instead of the destructuring branch.
+
+- New helper `leaf_tuple_lhs` walks the leftmost leaf of the
+  tuple-of-reads to recover `(host_ref, base_position)`; nested
+  tuple elements recurse cleanly.
+- `emit_tuple_set_ops` lifted to `pub(crate)` so the new branch in
+  `parse_assign` can call it.
+
+Tests: `p194_tuple_field_reassign`,
+`p194_tuple_field_reassign_twice` in `tests/issues.rs`.
+
+### P197 — returning `text` from tuple struct field corrupts memory
+
+Surfaced while regression-testing P194.  Returning a `text` element
+extracted from a tuple struct field returned garbage characters
+(`.0`) or hard-crashed (`.1`, `.2`) with `ptr::copy_nonoverlapping
+requires that both pointer arguments are aligned and non-null`.
+Construction + read-via-print worked; only the function-return
+path failed.
+
+Root cause was two-part — both fixed in the same commit:
+
+1. **`Type::Tuple` had no dep field**, so calling
+   `.depending(host)` on a struct field's tuple type fell into the
+   `_ => self.clone()` arm at `data.rs:580` and lost the host
+   dependency entirely.  Fix: `depending` now recurses into tuple
+   elements (each text/reference inside the tuple gets the host
+   dep), and `depend()` returns the union of element deps.
+2. **Native codegen materialised the tuple into a `(String,
+   String)` work-var temp**, then borrowed `&temp.0` past its
+   drop — `rustc` rejected with "borrowed value does not live long
+   enough".  Fix: when `code` is already a literal `Value::Tuple`,
+   `parse_part`'s tuple-index branch returns the indexed read
+   directly instead of allocating the work-var temp.
+
+Tests: `p197_text_returned_from_tuple_field`,
+`p197_text_returned_from_tuple_field_index_one`,
+`p197_text_returned_from_mixed_tuple_field` in `tests/issues.rs`.
+
+### Plan-06 phase 4d.C step 2 — `Parts::DbRef` storage shape + new opcodes
+
+Foundation pieces for closure storage in fn-ref struct fields and
+tuple elements.  No user-visible behaviour change yet — the
+parser still emits the truncated 4-byte `OpSetInt4` path, which
+phase 4d.C step 4 will replace with the new opcodes.
+
+**Database:**
+
+- New `Parts::DbRef` variant in `src/database/mod.rs` — 12-byte
+  raw `DbRef` storage cell (`u32` store_nr + `u32` rec + `u32`
+  pos).  Match arms wired through `database/io.rs`,
+  `database/structures.rs`, `database/format.rs`, and
+  `database/search.rs`.  Non-collection operations panic;
+  debug-format renders as `DbRef(s,r,p)` or `null` (rec == 0).
+- `Stores::dbref()` registers a primitive type named `"dbref"`
+  with `Parts::DbRef` and size 12 (idempotent).
+
+**Opcodes (`default/01_code.loft`):**
+
+- `OpSetDbRef(v1: reference, fld: const u16, val: reference)` —
+  writes 3 × `set_u32_raw` words at `v1.pos + fld`.
+- `OpGetDbRef(v1: reference, fld: const u16) -> reference` —
+  reads 3 × `get_u32_raw` words and assembles a `DbRef`.
+- OPERATORS array in `src/fill.rs` grown 243 → 245.  Interpreter
+  dispatch fns `set_db_ref` / `get_db_ref` regenerated via
+  `cargo test regen_fill_rs -- --ignored`.
+
 ### Slot allocator & frame layout (plans 04 + 05)
 
 Two companion plans closed together; user-visible only as the
@@ -129,6 +680,559 @@ Type extractors: `as_text()`, `as_number()`, `as_long()`, `as_bool()`.
 **Struct integration** — `MyStruct.parse(json_value)` populates
 a struct from a JsonValue. Type mismatches are reported via
 `json_errors()`.
+
+### Plan-06 phases 4c + 4d.A — typed parallel-for dispatch
+
+Two coupled phases of plan-06 ("simple typed `par`: everything is a
+store") landed.  User-visible only as one extra par canary closing
+(`tests/threading_chars.rs::par_tuple_input_int_int`); structurally
+this lays the foundation for the remaining phase 4 work (4d.B
+keyed-collection input materialisation, 4e caller-supplied
+destinations).
+
+**Phase 4c (DESIGN.md D1b):** `Stitch::ConcatLegacy { elem_size,
+ret_size }` retired in favour of payload-free `Stitch::Concat`.
+`parallel_execute_and_collect` now takes `dispatch_mode:
+DispatchMode` and routes via the `Text / Ref / Primitive` arms
+keyed on the caller-supplied dispatch mode.  `grep ConcatLegacy
+src/` returns zero (spec acceptance).  Opcode payload shrinks 2
+bytes per call.
+
+**Phase 4d.A:** typed worker-input dispatch via `InputKind` enum
+(`Ref / Text / Primitive { size: u8 }`) with a 64-byte cap on the
+`Primitive` slot.  New `read_primitive_at_wide` (stack-allocated
+`[u8; 64]` reader) and `execute_at_raw_primitive_input_wide`
+(byte-chunk push) handle 9..=64 byte first-arg slots — tuples,
+fn-refs, and any inline-typed first arg whose stack representation
+exceeds 8 bytes.  Both `run_parallel_direct` and
+`run_parallel_light` got matching `prim_in > 8` arms.  Retires
+the sentinel-encoded `primitive_first_arg_slot_size` channel.
+
+### Local-var keyed collection iteration (P190)
+
+`for x in <local sorted/hash/index>` used to panic at
+`src/state/codegen.rs:1689` with "Too few parameters on
+OpIterate (got 2, need 6)".  P188 enabled local-var keyed
+collections but the iteration codegen path's
+`src/parser/vectors.rs::get_type` only resolved the database
+type-name for fields registered via `fill_database` — local-var
+keyed collections never reached that registration path, so the
+lookup returned `u16::MAX`, `fill_iter` exited early, and
+`OpIterate` got 2 args instead of the 6 it needed.
+
+Fix: register the type on demand in `get_type` when the name
+lookup misses, mirroring `fill_database`'s `database.sorted` /
+`database.hash` / `database.index` calls.  Idempotent — same
+content+keys → same type id.  Regression test
+`tests/issues.rs::p190_local_var_sorted_iteration`.
+
+Note: this unblocked the iteration codepath; plan-06 phase
+4d.B for sorted then closed by the parser-side desugar (see
+the next entry).
+
+### Plan-06 phase 4d.B sorted — par-over-keyed-collection materialise
+
+`for s in sorted_items par(...)` now compiles end-to-end and
+closes the `par_sorted_input_t4` canary (1 more canary
+green; 11 ignored, was 12).
+
+When parse_for sees a par() clause with a sorted/hash/index/
+spacial input, the new `materialise_keyed_for_par` helper
+allocates a temporary `vector<reference<T>>`, walks the
+source via the existing `OpIterate`/`OpStep` machinery (the
+same helpers `for x in sorted_items` uses), and appends each
+element-DbRef.  The par dispatch then runs over the
+materialised vector — workers receive the same 12-byte
+DbRef as the closed `par_vec_of_refs_input_t4` canary.
+
+The IR shape mirrors the parser's emission for the manual
+workaround `refs += [s]`: `OpPreAllocVector` +
+`OpNewRecord` + `OpCopyRecord` + `OpFinishRecord` per loop
+iteration.  An earlier attempt missed `OpPreAllocVector`
+and produced uninitialised slots; this commit lands the full
+sequence.
+
+Cost contract: O(N) materialisation + 12-byte temporary
+vector + the par work itself.  Documented as known cost;
+users can opt out by materialising explicitly into
+`vector<reference<T>>` first.
+
+`par_hash_input_t4` and `par_index_input_t4` stay
+`#[ignore]`d on **P191** (filed in PROBLEMS.md) —
+sequential local-var iteration over hash/index produces
+wrong elements (0 for index, 195 instead of 30 for hash).
+After P191 closes, both canaries should pass via the same
+4d.B desugar.
+
+Regression test:
+`tests/issues.rs::p4d_b_par_over_sorted_via_materialise`.
+
+### P191 — `index<T[key]>` bookkeeping field size mismatch
+
+`database.index` appended `#left_N` / `#right_N` bookkeeping
+fields declared as 8-byte `integer`, but `tree::add` writes
+those tree pointers via `set_i32_raw` at hardcoded offsets
+`[pos, pos+4, pos+8]` (RB_LEFT=0 / RB_RIGHT=4 / RB_FLAG=8).
+Alignment-aware packing placed the 8-byte fields 8 bytes
+apart, so tree pointers landed in the wrong record bytes.
+Iteration only returned the root element (e.g., a struct-
+field index iteration that should sum 60 returned 10).
+
+Fix: switch bookkeeping to 4-byte `int<0,false>` so the
+layout matches `tree::add`'s offsets.  Side benefit: indexed
+records shrink by 8 bytes each.  `tree.rs` already operates
+exclusively on i32 via `set_i32_raw` / `get_i32_raw`; no
+other code changes.
+
+Same commit also adds new `validate_layout` /
+`validate_all_layouts` / `debug_layout` / `layout_summary`
+helpers in `src/database/types.rs`, wired into the parser
+flow after `database.finish()` so future regressions surface
+as build-time errors.  16 unit tests cover overlap detection,
+beyond-size, bookkeeping-offset mismatch, enum-variant
+overlap-within-variant, and the layout-summary format.
+
+Regression test:
+`tests/issues.rs::p191_struct_field_index_iteration_after_layout_fix`.
+
+### P192 — `len()` for `hash<T[key]>` and `index<T[key]>`
+
+Only `vector` and `sorted` had `len()` overloads.  Added
+two new runtime helpers — `hash::count` (walks the bucket
+array, O(room)) and `tree::count` (walks via `first` +
+`next`, O(n)) — exposed via `OpLengthHash` (normal stdlib
+overload) and `OpLengthIndex` (parser hook in `call()` to
+inject the bookkeeping-offset const).
+
+Regression tests:
+`p192_len_hash_struct_field`,
+`p192_len_index_struct_field`.
+
+### P188 follow-up — `field += elem` for keyed-collection fields
+
+Two distinct bugs broke `db.x += Foo{...}` for hash / sorted /
+index / spacial fields and local-vars; vector-literal init
+(`db = Db { x: [...] }`) worked because its codegen built
+records directly.  Both surfaced once P192's `len()` made
+the broken state observable.
+
+**Bug 1 — struct-literal RHS retarget.**  `Score{name: "a",
+value: 10}` parses with the LHS field as its target, so the
+field-init steps wrote into the field's storage —
+overwriting the hash/index root pointer with stray bytes of
+the score record.  Struct-field hash with `+=` reported
+`len = 11` after one add then SIGSEGV on the next.
+
+Fix: extend the `field += elem` branch in `expressions.rs` to
+also match keyed-collection fields with struct-literal RHS,
+allocate a fresh element via `new_record_field_op`, and walk
+the parsed steps with a new `substitute_value` helper that
+replaces the LHS field expression with `Var(elm)` so each
+field write lands in the new record.  Gated on
+`elm_tp.is_equal(&s_type)` so vector field `+= [1, 2, 3]`
+(multi-element append) keeps its existing OpAppendVector path.
+
+**Bug 2 — local-var dispatch via wrong db type.**  `new_record`
+local-var branch looked up the keyed-collection's known_type
+via `data.def(type_def_nr(lhs_tp)).known_type`, but
+`type_def_nr` returns the GENERIC alias (`hash` / `index`),
+not the specific `hash<Score[name]>` instantiation.  The
+alias's known_type pointed at a Vector type, so
+`record_finish` dispatched through `Parts::Vector` and
+appended raw bytes — `hash::add` / `tree::add` never fired.
+Local-var hash with 3 adds showed 6 records (vector_finish
+appends without dedup); local-var index with 2 adds showed 1
+(tree::add was bypassed entirely).
+
+Fix: register the specific keyed-collection db type directly
+(`database.hash(c, key)` / `index(c, key)` / etc.) —
+idempotent with the gen_set_first_keyed_null and typedef-
+walker registrations.
+
+4 new P188 regression tests cover struct-field and local-var
+hash and index `+=` (each asserts both `len` and the
+iteration sum).
+
+### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, clean diagnostic emitted
+
+A 2026-04-27 spike landed two contained changes that flip the
+canary's failure mode from "infinite-loop in parser, requires
+`pkill`" to "fast clean diagnostic, 0.02 s test failure".
+
+**Root cause (parser hang)**: `src/parser/definitions.rs::sub_type`
+had no `fn` keyword arm.  When the parser saw
+`vector<fn(integer) -> integer>`, sub_type's identifier-only check
+rejected `fn`, the lexer reverted past `<`, and the caller's
+annotation parser (`expressions.rs::parse_assign:1009`) entered a
+tight retry loop on the unconsumed `<`.  The loft binary's `--dump`
+flag and `cargo test` both hung at 100% CPU during pass 1 of the
+2-pass parser.
+
+**Fix #1 — parser sub_type**: new `fn` arm in `sub_type` that
+consumes the `fn(...) -> ...` declaration via `parse_fn_type`,
+then emits a clean diagnostic and returns `Type::Unknown(0)` until
+full storage support lands.  The parser advances cleanly instead
+of looping.
+
+**Fix #2 — vector literal new_record**: `parser/vectors.rs::new_record`
+checks for `Type::Function` element type at entry and emits a
+clean diagnostic with a workaround suggestion ("wrap the fn-ref in
+a struct") instead of hitting the cryptic
+`assert_ne!(ed_nr, u32::MAX)` assertion downstream.
+
+**Tests pass**: `threading_chars` 31/0/8, `threading` 16/0/0,
+`issues` 522/0/4 (the +3 ignored are diagnostic regression guards
+documenting V1/V2/V3 reduced cases).  `cargo clippy` clean.
+
+**Canary remains `#[ignore]`d** — full closure of the canary needs
+real storage support for `vector<fn-ref>`, which is its own
+plan-06 phase 4d.A.2 work (M effort, 2-3 days).  See
+`/home/jurjen/.claude/plans/serialized-churning-journal.md` for
+the full design (Steps A–E).
+
+### Plan-06 phase 4d.A.2 — partial fix: parser hang eliminated, runtime cascade exposed
+
+A 2026-04-27 spike landed three contained changes that flip the
+canary's failure mode from "infinite-loop in parser, requires
+`pkill`" to "fast SIGSEGV in runtime, 0.02 s test failure".
+
+**Root cause (parser hang)**: `src/parser/definitions.rs::sub_type`
+had no `fn` keyword arm.  When the parser saw
+`vector<fn(integer) -> integer>`, sub_type's identifier-only check
+rejected `fn`, the lexer reverted past `<`, and the caller's
+annotation parser (`expressions.rs::parse_assign:1009`) entered a
+tight retry loop on the unconsumed `<`.  The loft binary's `--dump`
+flag and `cargo test` both hung at 100% CPU during pass 1 of the
+2-pass parser.
+
+**Fix**: new `fn` arm in sub_type that calls `parse_fn_type` and
+registers a synthetic `__fn_ref` global struct via the new
+`Data::fn_ref_def` helper.  Mirrors the tuple_def pattern (P189):
+one global struct shared across all fn-ref shapes, since all
+fn-refs have the same vector-storage shape (4-byte i32 d_nr).
+`type_def_nr` and `type_elm` get matching `Type::Function` arms
+returning the `__fn_ref` def's number.
+
+**Generated-code diagnosis**: with parsing fixed, the test
+framework wrote `tests/generated/threading_chars_par_vec_of_fns_input_t4.rs`
+for the first time.  Reading it reveals 3 remaining bugs:
+
+1. **`n_apply` empty match** — native codegen specialises
+   `OpCallRef` to `match var_f.0 { ... }` over statically-known
+   d_nrs.  For `apply(f)` where `f` flows from a generic vector,
+   no analysis populates the arms — only `_ => unreachable!()`
+   remains.
+2. **Vector literal as struct-records** — my `__fn_ref` synthetic
+   struct routed `[dbl, triple, quad]` through the
+   `OpNewRecord/OpCopyRecord/OpFinishRecord` STRUCT-element
+   vector path.  Each fn-ref becomes a heap record with a `d_nr`
+   field; vector stride is the record size, not 4.  The
+   interpreter SIGSEGVs reading back struct-DbRefs into a worker
+   slot expecting flat 4-byte d_nr bytes.
+3. **Par dispatch closure type-mismatch** —
+   `|stores, elm: DbRef| { n_apply(stores, elm) as i64 }` but
+   `n_apply` takes `(u32, DbRef)`.  Dispatcher needs a
+   `Type::Function` worker-input arm that reads the 4-byte d_nr
+   and constructs the tuple.
+
+**Remaining work to fully close 4d.A.2** (effort: M, 2-3 days):
+
+- Re-design `__fn_ref` as a primitive 4-byte alias (drop struct).
+- Vector element-write flat-byte arm in `parse_append_vector`.
+- Vector read-back unbox in `parser/fields.rs` (P189b-style).
+- Par dispatcher worker-closure `(u32, DbRef)` wrap in
+  `src/generation/dispatch.rs:792-870`.
+- Native codegen — populate match arms or fallback to interpreter.
+
+Tracked in `/home/jurjen/.claude/plans/serialized-churning-journal.md`.
+
+The canary remains `#[ignore]`d but with an updated message naming
+the new failure mode (SIGSEGV instead of hang).
+
+### Plan-06 phase 4d.A.2 — investigation: vec-of-fn-refs is bigger than estimated
+
+A 2026-04-27 spike attempted to close `par_vec_of_fns_input_t4`
+by un-ignoring the canary and observing the failure.  Result:
+**the worker infinite-loops** rather than failing cleanly.
+
+The README's planned fix ("per-row synthesis of the 12-byte
+null closure DbRef") turns out to only address half the gap:
+
+- In-vector storage: 4 bytes per row (just the d_nr stored as i32 —
+  `data::element_size(Type::Function) = 4`).
+- Worker arg slot: 20 bytes — 8B i64 d_nr + 12B closure DbRef
+  (`variables::size(.., Context::Argument) = 20`).
+
+The current wide-input dispatcher (`read_primitive_at_wide`)
+reads `element_size = 4` bytes into a 64-byte zero-initialised
+buffer, then `execute_at_raw_primitive_input_wide` slices to
+`prim_in = 20` bytes.  Slot bytes 4-7 are zero (high 32 bits of
+i64 d_nr — fine for any practical d_nr) and bytes 8-19 are zero
+(null closure DbRef).
+
+The resulting fn-ref **runs** but `apply(f) → f(10)` loops
+indefinitely, suggesting the call-dispatch path (likely
+`OpCallRef`) doesn't tolerate a null closure DbRef in this
+context — possibly because it interprets `store_nr=0, rec=0`
+as a back-pointer to itself, or because the worker's stack
+state after `OpCallRef` is wrong without a real closure.
+
+Closing 4d.A.2 needs:
+
+1. A `read_fn_ref_at_wide` helper that explicitly handles the
+   i32→i64 d_nr widening (rather than relying on flat memcpy
+   into a zeroed buffer).
+2. A runtime fix to the `OpCallRef`-on-null-closure path so
+   workers don't loop when the closure DbRef is null.
+3. A new wide-input plumbing channel similar to
+   `tuple_input_types: Option<Vec<Type>>` from P189d — likely
+   generalised to `WideInputLayout::{Tuple, FnRef, Plain}`.
+
+Effort revised: **S–M** (was S).  Test-side guard added: the
+canary's `#[ignore]` message now warns "DO NOT un-ignore
+without fixing — the test infinite-loops and needs `pkill` to
+terminate."
+
+### Plan-06 phase 3b.1 — extract shared `merge_batches` helper
+
+Five sites across `src/parallel.rs` and `src/codegen_runtime.rs`
+inlined the same 5-line loop after every `parallel_workers`
+call: pre-fill a `Vec<R>` with a default value, then walk each
+`(start, batch)` pair and write each element into
+`results[start + offset]`.
+
+Extracted to `parallel::merge_batches<R: Clone>(batches, n_rows,
+default) -> Vec<R>` and applied at:
+
+- `parallel::run_parallel_raw` (Vec<u64>, default `0u64`)
+- `parallel::run_parallel_text` (Vec<String>, default `String::new()`)
+- `parallel::run_parallel_int` (Vec<i64>, default `i64::MIN` — null sentinel)
+- `codegen_runtime::run_native_workers_primitive` (Vec<i64>, `0i64`)
+- `codegen_runtime::run_native_workers_text` (Vec<String>, `String::new()`)
+
+Net retire ~25 lines.  The helper accepts the default as a
+parameter rather than `R: Default` so the int variant can keep
+its `i64::MIN` null sentinel and the text variant can document
+the empty-String seed explicitly.
+
+### Plan-06 phase 3b.1 — extract shared par result store helpers
+
+Three native par fns (`n_parallel_for_native`,
+`n_parallel_for_text_native`, `n_parallel_for_ref_native`)
+shared two identical 7- and 10-line boilerplate blocks for
+allocating + finalising the result store.
+
+Extracted to two helpers in `src/codegen_runtime.rs`:
+
+- `alloc_par_result(stores, n, elem_size) -> (DbRef, u32, u32)`
+  — allocates the result store, claims the vector body
+  (`n * elem_size` bytes) and the 1-word header record, returns
+  (result_db, vec_rec, header_rec).
+- `finalize_par_result(stores, result_db, n, vec_rec, header_rec) -> DbRef`
+  — writes the vector length into `vec_rec[4]`, points the
+  header record at the vector, returns the canonical
+  `DbRef { …, pos: 4 }` every par caller expects.
+
+Each native par variant now opens with one helper call and
+closes with another instead of inlining the boilerplate.  Net
+removal: ~30 lines.  No API change — all 30 generated test
+fixtures in `tests/generated/threading_chars_par_*.rs` still
+match.  Sets up phase 3b.2 (true unification with a `Stitch`
+trait).
+
+### Plan-06 phase 1 — clippy gate restored on threading build
+
+`cargo clippy --release --all-targets` was failing on the
+default (threading) build with two `not_unsafe_ptr_arg_deref`
+errors:
+
+- `state::execute_at_raw_to(dst: *mut u8)` (added by
+  plan-06 phase 1 G4 / 4d.A in commit 6973b182) was a public
+  function that called `ptr::copy_nonoverlapping` without an
+  `unsafe` signature.  Now `pub unsafe fn` with a `# Safety`
+  doc-comment block; the single caller in
+  `parallel.rs::run_parallel_direct` wraps the call in
+  `unsafe { … }` with a SAFETY comment naming the slot
+  pre-allocation invariant.
+- `parallel::run_parallel_direct(out_ptr: *mut u8)` (added by
+  4b90d89a) had a `cfg_attr(not(feature = "threading"), allow(
+  not_unsafe_ptr_arg_deref))` that suppressed the lint only on
+  the WASM-style build.  The attached comment explained the
+  reasoning ("making the public function `unsafe` would cascade
+  across every par(...) call site and the QUALITY 6a native-
+  codegen path") — applied to both builds, so the allow now
+  hoists out of the `cfg_attr` and the `cfg_attr` keeps only the
+  feature-specific `needless_pass_by_value` + `dead_code`.
+
+`make ci`'s clippy step is green again on the default build.
+
+### P189b / P189d — `vector<(T1, T2, …)>` access closed end-to-end
+
+Two follow-ups to P189 / P189c that closed the remaining
+read-side gaps for tuple-element vectors.
+
+**P189b — index-access + for-loop iteration unbox.**
+
+`pairs[0]` returns a `DbRef` into vector storage; the existing
+`OpTupleGet(slot, byte_offset)` reads from a *local slot*, so it
+decoded the DbRef bytes (`store_nr | (rec << 32)`) as if they
+were the tuple's first element.  For-loop iteration hit a
+matching shape mismatch and reported "Field access not supported
+on type tuple([…])".
+
+Fix: when the tuple value lives in vector storage, the parser
+unboxes via the synthetic `__tuple<…>` struct.
+
+- `parser/fields.rs::unbox_tuple_from_dbref` — for `p = pairs[i]`,
+  emits per-element loads (`OpGetInt`, `OpGetText`, …) against
+  the DbRef and packs the results into a `Value::Tuple` so the
+  assignment target receives the inline-on-stack representation.
+- `parser/control.rs` for-loop iteration — re-types the loop
+  variable as `Reference(__tuple<…>)`, so `p.0` / `p.1` route
+  through `parse_part`'s new `__tuple<` arm, which calls
+  `get_val(elem, …, offset, …)` (struct-field-style access)
+  instead of the stack-tuple `OpTupleGet`.
+- `parser/collections.rs::for_iter` — keeps the iterator's
+  block-result type aligned with the loop variable's `RefVar(Tuple)`,
+  so the next-expression yields the 12-byte DbRef the body expects.
+
+**P189d — text-element worker arg inflation.**
+
+After P189c made `(int, int)` tuple-input workers wide-input
+correct, `(int, text)` workers still saw `len(p.1) == 0`.  The
+in-vector tuple stores text as a 4-byte interned-pointer; the
+worker's argument slot expects the full 16-byte `Str` (8B ptr +
+8B len).  `read_primitive_at_wide`'s flat memcpy left the upper
+12 bytes of the `Str` slot zero.
+
+Fix: per-element reader.
+
+- `parallel.rs::read_tuple_at_wide(stores, row_ref, elem_types)`
+  — walks the tuple element types, copies primitives by memcpy
+  and inflates `Text` fields by reading the heap pointer and
+  reconstructing a `Str` via `store.get_str(...)`.
+- `native.rs::tuple_first_arg_types(def)` — extracts
+  `Some(elems)` when the worker's first argument is a tuple,
+  else `None`.  Threaded through both `n_parallel_for` (heavy
+  path) and `n_parallel_for_light`, then through
+  `parallel_execute_and_collect` /
+  `parallel_light_execute_and_collect` to the underlying
+  `run_parallel_direct` / `run_parallel_light` calls.
+- `parallel.rs::run_parallel_direct` and `run_parallel_light` —
+  new `tuple_input_types: Option<Vec<Type>>` parameter.  When
+  `Some`, the wide-input branch routes through
+  `read_tuple_at_wide` instead of `read_primitive_at_wide`; both
+  the threaded and sequential branches.  The parameter is
+  Arc-wrapped per-call so worker threads share a cheap clone.
+
+**Native codegen header.**
+
+`generation/mod.rs` now emits `use loft::hash;` and
+`use loft::tree;` alongside the existing `loft::ops` /
+`loft::vector` imports.  P192's `OpLengthHash` (`hash::count`)
+and `OpLengthIndex` (`tree::count`) `#rust` templates referenced
+the bare module names — without the imports, any program that
+reaches `len(h)` / `len(ix)` failed native compilation with
+`error[E0433]: cannot find module or crate "hash"`.
+
+**Tests:** `par_tuple_input_int_text` un-`#[ignore]`d;
+`p189b_vector_tuple_for_loop_int_int` and
+`p189b_vector_tuple_for_loop_int_text` added to `tests/issues.rs`
+(the existing index-access tests already cover P189b's first
+half).
+
+### P193 — eager init for `local: keyed_collection<T> = []`
+
+`gen_set_first_keyed_null` (P188's local-var alloc) fired
+lazily on first WRITE.  When that first write was inside a
+`for` loop body, the OpInitRef + OpDatabase init bytecode
+landed inside the loop body — every iteration zeroed the
+collection's root pointer.  Symptom:
+`for i in 0..N { ix += ... }` over a local-var keyed
+collection left `len(ix) == 1` (only the last add) and leaked
+N stores.  Reading the collection BEFORE any write also
+panicked with `Incorrect var ix[65535] versus N`.
+
+Two fixes in concert:
+
+1. **Eager init via parser rewrite** (`parser/operators.rs::create_keyed`).
+   When the parser sees `Set(v, Insert(empty))` for a
+   keyed-collection local, rewrite to `Set(v, Null)` so
+   codegen's existing `gen_set_first_keyed_null` arm fires at
+   the declaration's statement position (outside any
+   enclosing loop body).
+
+2. **Scope-exit free** (`data.rs::heap_dep` and
+   `scopes.rs::get_free_vars`).  Recognise Sorted / Hash /
+   Index / Spacial as heap-owned (they each get a fresh
+   OpDatabase store on init), so the scope-exit OpFreeRef
+   pass emits cleanup for them.  Without this the store
+   leaked on program exit ("Stores not freed at program exit:
+   N(bc:M)").
+
+3 new P193 regression tests cover loop-form add (index +
+hash) and read-before-write.
+
+### Plan-06 phase 4d.B hash + index — closed by P191/P192/P188
+
+`par_hash_input_t4` and `par_index_input_t4` un-`#[ignore]`d
+and pass once the underlying P191/P188 fixes landed: the same
+4d.B materialise-then-route desugar that closed
+`par_sorted_input_t4` extends to hash and index automatically
+once the local-var keyed-collection iteration and `+=` paths
+are correct.  Phase 4 partial → 4d.B fully done; remaining
+phase 4 work: 4a (typed-arity declaration), 4b (5-arg form
+retirement), 4e (caller-supplied destination via ref_return).
+
+### Vector-of-tuple support (P189 / P189c)
+
+`vector<(T1, T2, …)>` now parses, constructs, and serves its
+elements correctly via the par worker path.  Previously the type
+was rejected at parse, then panicked at construction, then read
+garbage — three layers fixed jointly:
+
+- `src/parser/definitions.rs::sub_type` accepts `(...)` as the
+  inner type of `vector<T>` / `iterator<T>`.
+- `src/data.rs::tuple_def(lexer, types) -> u32` registers a
+  synthetic struct (`__tuple<T1,T2,…>`) with attributes `_0, _1,
+  …` typed per the tuple element.  Idempotent — same shape →
+  same def_nr.  `Type::Tuple` arms in `type_def_nr` and
+  `type_elm` look up the registered struct.
+- `src/parser/vectors.rs::new_record` got a `Value::Tuple(values)`
+  arm that emits per-attribute `set_field(tuple_struct_d_nr, i, 0,
+  elm, values[i])` calls, mirroring the struct-literal path's
+  per-field writes (which are pre-emitted via Value::Insert).
+
+**Open follow-ups documented in PROBLEMS.md:**
+- P189b: `pairs[0].0` (DbRef-aware tuple field access) reads the
+  DbRef bytes as inline tuple — needs heap-tuple unboxing opcodes.
+- P189d: `vector<(integer, text)>` text element reads as
+  zero-length — text has different in-vector (4-byte pointer) vs
+  on-stack (16-byte Str) representation; read path needs to
+  inflate.
+
+### Local-var keyed collections (P188)
+
+`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`, and
+`spacial<T[key]>` now work as locals; previously they were only
+usable as struct fields.  Patterns like
+
+```loft
+fn build() -> sorted<Tag[id]> {
+    out: sorted<Tag[id]> = [];
+    out += Tag { id: 1, label: "v1" };
+    out
+}
+```
+
+used to crash at runtime with an out-of-bounds `mut_store`
+because the slot allocator gave `out` a position but neither the
+bytecode codegen nor the native generator emitted the
+`OpDatabase` init that allocates the backing store and zeroes
+the root pointer.  Both paths now allocate the backing record on
+first assignment, and subsequent `+= T {...}` operations grow the
+collection in place via `record_new`'s
+`Parts::Sorted/Hash/Index/Spacial` dispatch.
 
 ### Crash fixes
 

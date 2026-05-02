@@ -705,7 +705,7 @@ a.name",
     )
     .expect("generated file not found");
     assert!(
-        src.contains("OpCopyRecord(stores,"),
+        src.contains("OpCopyRecord(cell,"),
         "generated code missing OpCopyRecord after reference assignment"
     );
 }
@@ -949,6 +949,7 @@ fn n1_native_pipeline_trivial_program() {
         yield_collect: false,
         fn_ref_context: false,
         i32_literal_context: false,
+        tuple_text_to_string: false,
         call_stack_prefix: None,
         wasm_browser: false,
     };
@@ -1902,6 +1903,258 @@ fn test() {
     r = map(v, triple);
     assert(r[0] == 3);
     assert(r[1] == 6);
+}"
+    )
+    .result(Value::Null);
+}
+
+// ── Plan-06 phase 4d: Fn-ref and tuple as struct fields ─────────────────────
+
+// Fn-ref as a struct field: store the d_nr in 4 bytes, read back as a
+// 20-byte stack fn-ref slot with null closure, then call through it.
+// Storage and stack widths differ (matching `vector<fn-ref>`); the
+// closure half is intentionally null because tuple/struct fields don't
+// store closures.
+#[test]
+fn p4d_fn_ref_as_struct_field() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer }
+fn dbl(x: integer) -> integer { x + x }
+fn triple(x: integer) -> integer { x * 3 }
+fn test() {
+    h1 = Holder { f: dbl };
+    h2 = Holder { f: triple };
+    assert(h1.f(10) == 20, \"h1.f(10)={h1.f(10)}\");
+    assert(h2.f(10) == 30, \"h2.f(10)={h2.f(10)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple as a struct field: elements are inlined into the host struct's
+// bytes via the synthetic `__tuple<…>` struct's positions; per-element
+// reads/writes use the same OpInt variants as ordinary struct fields.
+#[test]
+fn p4d_tuple_as_struct_field() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn test() {
+    p = Pair { v: (3, 4) };
+    assert(p.v.0 == 3, \"p.v.0={p.v.0}\");
+    assert(p.v.1 == 4, \"p.v.1={p.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Mixed-element tuple field with text + numeric atom: heap text pointer
+// and primitive ints share the inlined tuple block, each at the offset
+// the synthetic struct's layout assigns.
+#[test]
+fn p4d_tuple_field_mixed_with_text() {
+    code!(
+        "struct Mixed {
+    name: text,
+    coords: (integer, integer),
+    scale: float
+}
+fn test() {
+    m = Mixed { name: \"origin\", coords: (10, 20), scale: 1.5 };
+    assert(m.coords.0 == 10, \"x={m.coords.0}\");
+    assert(m.coords.1 == 20, \"y={m.coords.1}\");
+    assert(m.scale == 1.5, \"scale={m.scale}\");
+    assert(m.name == \"origin\", \"name={m.name}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P196: tuple struct field whose element is a fn-ref.  Storage holds the
+// 4-byte i32 d_nr only (matching plain `Holder { f: dbl }`), but the
+// native runtime representation of a fn-ref is the 16-byte `(u32, DbRef)`
+// tuple.  When the source value is a `Value::TupleGet` of a fn-ref tuple
+// element, the native codegen used to substitute `var_tmp.0` directly
+// into `OpSetInt4`'s template — emitting `(var_tmp.0) as i32` which
+// rustc rejects (`non-primitive cast: (u32, DbRef) as i32`, E0605) plus
+// the matching E0308 on the null-check half.  The fix in
+// `output_call_template` projects `.0` from the fn-ref tuple before the
+// cast.  Interpreter behaviour was already correct (TupleGet of a
+// fn-ref element pushes only the d_nr's 8 bytes); this test guards the
+// end-to-end behaviour through the literal-tuple path.
+#[test]
+fn p4d_tuple_field_with_fn_ref() {
+    code!(
+        "struct Pair { v: (fn(integer) -> integer, integer) }
+fn p_dbl(x: integer) -> integer { x + x }
+fn p_triple(x: integer) -> integer { x * 3 }
+fn test() {
+    p1 = Pair { v: (p_dbl, 21) };
+    p2 = Pair { v: (p_triple, 14) };
+    pf1 = p1.v.0;
+    pf2 = p2.v.0;
+    assert(pf1(p1.v.1) == 42, \"p1.v.0(p1.v.1)={pf1(p1.v.1)}\");
+    assert(pf2(p2.v.1) == 42, \"p2.v.0(p2.v.1)={pf2(p2.v.1)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with text element only: write+read of interned strings
+// inside the host record's store.  Verifies the native-codegen `String`
+// vs `&str` plumbing via the `tuple_text_to_string` flag and the
+// pre-eval block-text deref wrap.
+#[test]
+fn p4d_tuple_field_text_pair() {
+    code!(
+        "struct A { v: (text, text) }
+fn test() {
+    a = A { v: (\"hello\", \"world\") };
+    assert(a.v.0 == \"hello\", \"0={a.v.0}\");
+    assert(a.v.1 == \"world\", \"1={a.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with vector element: deep-copy via OpAppendVector into a
+// vector record allocated in the host's store, plus a primitive
+// follower so the synthetic struct's atomic layout has both heap and
+// inline elements.
+#[test]
+fn p4d_tuple_field_with_vector() {
+    code!(
+        "struct WithVec { v: (vector<integer>, integer) }
+fn test() {
+    w = WithVec { v: ([1, 2, 3], 42) };
+    assert(w.v.0[0] == 1, \"vec[0]={w.v.0[0]}\");
+    assert(w.v.0[1] == 2, \"vec[1]={w.v.0[1]}\");
+    assert(w.v.0[2] == 3, \"vec[2]={w.v.0[2]}\");
+    assert(w.v.1 == 42, \"second={w.v.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Tuple field with a struct reference element: inlined struct bytes
+// inside the host record (same-store) via OpCopyRecord.  Validates the
+// `Rewritten(Reference)`-aware `convert` path so `(Inner { … }, 11)`
+// matches `(Inner, integer)`.
+#[test]
+fn p4d_tuple_field_with_reference() {
+    code!(
+        "struct Inner { v: integer }
+struct Outer { pair: (Inner, integer) }
+fn test() {
+    o = Outer { pair: (Inner { v: 7 }, 11) };
+    inner = o.pair.0;
+    assert(inner.v == 7, \"inner.v={inner.v}\");
+    assert(o.pair.1 == 11, \"second={o.pair.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple struct field: inner tuples inline their bytes inside
+// the outer tuple's bytes inside the host record.  All access paths
+// (set, get, null-init) recurse through nested `Type::Tuple` elements
+// so the layout is fully recursive.
+#[test]
+fn p4d_tuple_field_nested_homogeneous() {
+    code!(
+        "struct Nested { v: ((integer, integer), (integer, integer)) }
+fn test() {
+    n = Nested { v: ((1, 2), (3, 4)) };
+    inner1 = n.v.0;
+    inner2 = n.v.1;
+    assert(inner1.0 == 1, \"0.0={inner1.0}\");
+    assert(inner1.1 == 2, \"0.1={inner1.1}\");
+    assert(inner2.0 == 3, \"1.0={inner2.0}\");
+    assert(inner2.1 == 4, \"1.1={inner2.1}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple with mixed-type inner elements (text + integer): each
+// leaf primitive's offset is computed from `outer_offset +
+// inner_offset`, with text elements writing interned pointers in the
+// host's store while integers stay inline.
+#[test]
+fn p4d_tuple_field_nested_mixed() {
+    code!(
+        "struct Pair { v: ((integer, text), (text, integer)) }
+fn test() {
+    p = Pair { v: ((1, \"a\"), (\"b\", 2)) };
+    i1 = p.v.0;
+    i2 = p.v.1;
+    assert(i1.0 == 1, \"i1.0\");
+    assert(i1.1 == \"a\", \"i1.1={i1.1}\");
+    assert(i2.0 == \"b\", \"i2.0={i2.0}\");
+    assert(i2.1 == 2, \"i2.1\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// Nested tuple with asymmetric arities (3-of-2 elements vs 2-of-2):
+// covers element-offset adjustment when sub-tuples have different
+// sizes side-by-side.
+#[test]
+fn p4d_tuple_field_nested_asymmetric() {
+    code!(
+        "struct Triple { v: ((integer, integer, integer), (integer, integer)) }
+fn test() {
+    t = Triple { v: ((1, 2, 3), (10, 20)) };
+    a = t.v.0;
+    b = t.v.1;
+    assert(a.0 == 1 && a.1 == 2 && a.2 == 3, \"a\");
+    assert(b.0 == 10 && b.1 == 20, \"b\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init for a struct with a fn-ref field.  Previously
+// the native code emitted `(()) as i32` because `to_default(Type::
+// Function)` returned `Value::Null`; the fn-ref arm now returns
+// `Value::FnRef(0, u16::MAX, …)` which the downstream `set_field_check
+// ::Function` arm reduces to a `d_nr=0` 4-byte storage write.
+#[test]
+fn p4d_fn_ref_field_default_init() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer, n: integer }
+fn test() {
+    h = Holder { n: 7 };
+    assert(h.n == 7, \"n={h.n}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init `Holder {}` with no fields supplied.  The
+// fn-ref field defaults via the same null-fn-ref path; the integer
+// field defaults to 0 via the existing `Value::Int(0)` arm.
+#[test]
+fn p4d_fn_ref_field_bare_default() {
+    code!(
+        "struct Holder { f: fn(integer) -> integer }
+fn test() { h = Holder {}; }"
+    )
+    .result(Value::Null);
+}
+
+// P193 — Default-init for a tuple struct field where elements are a
+// mix of heap-pointed (text) and primitive (integer).  Recursive
+// `to_default(Type::Tuple)` produces per-element defaults: text `\"\"`
+// (interned empty string in the host's store) and integer `0`.
+#[test]
+fn p4d_tuple_field_default_init() {
+    code!(
+        "struct Pair { v: (text, integer) }
+fn test() {
+    p = Pair {};
+    assert(p.v.0 == \"\", \"v.0='{p.v.0}'\");
+    assert(p.v.1 == 0, \"v.1={p.v.1}\");
 }"
     )
     .result(Value::Null);
@@ -8314,7 +8567,7 @@ fn p140_vector_range_slice_reports_type_mismatch() {
 }"
     )
     .expr("run()")
-    .error("iterator(integer(-2147483647, 2147483647, false), null) should be vector<integer> on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
+    .error("expected vector<integer>, got iterator(integer(-2147483647, 2147483647, false), null) on call to sum_of at p140_vector_range_slice_reports_type_mismatch:5:1");
 }
 
 // INC#2 — vector has comprehensions; sorted/index do not.  Documented
@@ -8403,8 +8656,14 @@ fn run() -> integer {
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces
-/// the plain "Unknown field" message without a misleading
-/// "did you mean …" tail.
+/// the plain "Unknown field" message without a misleading "did you
+/// mean …" tail.
+///
+/// Plan-07 phase 5 added a generic Levenshtein-based field
+/// suggestion via `Parser::suggest_field_name`, but its length-aware
+/// cap (`min(2, name.len() / 4)`) suppresses suggestions for 1-char
+/// inputs like `z` — over-match risk is too high — so this test
+/// continues to assert the plain "Unknown field" message.
 #[test]
 fn quality_6c_unknown_field_without_free_fn_has_no_hint() {
     code!(
@@ -8616,6 +8875,7 @@ fn p144_ref_param_forward_native() {
             yield_collect: false,
             fn_ref_context: false,
             i32_literal_context: false,
+            tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -8626,13 +8886,15 @@ fn p144_ref_param_forward_native() {
     // Read and check the generated source contains the fix pattern.
     let source = std::fs::read_to_string(&rs_path).unwrap();
     // The call to box_ensure should pass var_b directly, not *var_b.
+    // P199 ABI change: native fns take `cell` (`&UnsafeCell<Stores>`),
+    // not `stores` (`&mut Stores`).
     assert!(
-        !source.contains("n_box_ensure(stores, *var_b)"),
+        !source.contains("n_box_ensure(cell, *var_b)"),
         "P144 regression: native codegen still emits *var_b for & param forward.\nGenerated: {}",
         rs_path.display()
     );
     assert!(
-        source.contains("n_box_ensure(stores, var_b)"),
+        source.contains("n_box_ensure(cell, var_b)"),
         "P144 regression: expected direct var_b pass-through for & param.\nGenerated: {}",
         rs_path.display()
     );
@@ -8944,12 +9206,12 @@ fn test() { }"
     )
     .error(&format!(
         "struct 'E' conflicts with a constant of the same name already defined \
-         at default{s}01_code.loft:349:24 — pick a different name \
+         at default{s}01_code.loft:365:24 — pick a different name \
          at p156_vector_element_shadows_constant:1:11"
     ))
     .error(&format!(
         "'E' is a Constant, not a type — the element of vector<T> must be a \
-         struct or enum (defined at default{s}01_code.loft:349:24) \
+         struct or enum (defined at default{s}01_code.loft:365:24) \
          at p156_vector_element_shadows_constant:2:26"
     ));
 }
@@ -9004,6 +9266,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
             yield_collect: false,
             fn_ref_context: false,
             i32_literal_context: false,
+            tuple_text_to_string: false,
             call_stack_prefix: None,
             wasm_browser: false,
         };
@@ -9011,14 +9274,16 @@ fn p157_native_refvar_forwarding_with_preeval() {
             .unwrap();
     }
     let source = std::fs::read_to_string(&rs_path).unwrap();
+    // P199 ABI change: native fns take `cell` (`&UnsafeCell<Stores>`),
+    // not `stores` (`&mut Stores`).
     assert!(
-        !source.contains("n_helper(stores, *var_o"),
+        !source.contains("n_helper(cell, *var_o"),
         "P157 regression: pre-eval path still emits *var_o for & param forward.\n\
          Generated: {}",
         rs_path.display()
     );
     assert!(
-        source.contains("n_helper(stores, var_o"),
+        source.contains("n_helper(cell, var_o"),
         "P157 regression: expected direct var_o pass-through.\n\
          Generated: {}",
         rs_path.display()
@@ -10086,8 +10351,9 @@ fn test() {
 ///      builder before `return`.
 ///   3. A subsequent sibling function allocates a local vector of its
 ///      own (any element type).
-///   After those three things, `atlas.width` — a scalar field set at
-///   struct-literal time — reads as a corrupt value.
+///
+/// After those three things, `atlas.width` — a scalar field set at
+/// struct-literal time — reads as a corrupt value.
 ///
 /// Drop any of the three and the bug disappears: no comprehension,
 /// no mutator call, or no post-return vector allocation → correct read.
@@ -10131,4 +10397,659 @@ fn test() {
 }"
     )
     .result(Value::Null);
+}
+
+// ── P188: local-var keyed collections ────────────────────────────────────────
+// `out: sorted<T[key]> = []; out += T {...}; out` used to panic at
+// `keys::mut_store` because the local's slot was never allocated a backing
+// store: the slot allocator gave it a position but neither the bytecode
+// codegen nor the native generator emitted an OpDatabase init for keyed
+// collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
+// `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
+// store and zero the root pointer; subsequent `+= T {...}` operations grow
+// the collection in place via record_new's Parts::Sorted/Hash/Index/Spacial
+// dispatch.
+#[test]
+fn p188_sorted_local_via_plus_equals() {
+    code!(
+        "struct P188Tag { id: integer not null, label: text }
+fn build() -> sorted<P188Tag[id]> {
+    out: sorted<P188Tag[id]> = [];
+    out += P188Tag { id: 2, label: \"v2\" };
+    out += P188Tag { id: 1, label: \"v1\" };
+    out
+}"
+    )
+    .expr("build().len()")
+    .result(Value::Int(2));
+}
+
+/// P189 — `vector<(T1, T2, …)>` literal construction used to panic
+/// at `src/parser/vectors.rs:1398` because `Type::Tuple` had no
+/// `def_nr` (no `tuple_def` analogue of `vector_def`).  Fix: register
+/// a synthetic struct (`__tuple<T1,T2,…>`) at parse time when
+/// `sub_type` sees `vector<(...)>`, expose it via `type_def_nr` /
+/// `type_elm`'s new Tuple arm.  This test pins the construction +
+/// `len()` path; element ACCESS via `pairs[0].0` is still broken
+/// (TupleGet reads the DbRef's bytes as inline tuple) and stays
+/// out-of-scope here.
+#[test]
+fn p189_vector_tuple_literal_constructs() {
+    code!(
+        "fn build() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    pairs.len()
+}"
+    )
+    .expr("build()")
+    .result(Value::Int(3));
+}
+
+/// P189c — `vector<(integer, integer)>` element bytes are now
+/// written via per-attribute `set_field` calls in `new_record`'s
+/// `Value::Tuple` arm (mirrors the struct-literal `Value::Insert`
+/// path).  Verifies via the par worker (which reads the tuple via
+/// the wide-input dispatch landed in 4d.A) that the bytes round-trip
+/// correctly: each pair (i, i*10) has i+i*10 = 11*i, summed across
+/// rows = 11*(1+2+3+4) = 110.  This avoids P189b's broken sequential
+/// `pairs[0].0` access path by reading via the worker's slot 0
+/// (which gets the raw 16 bytes pushed by execute_at_raw_primitive_input_wide).
+#[test]
+fn p189c_vector_tuple_element_bytes_written() {
+    code!(
+        "fn pair_sum(p: const (integer, integer)) -> integer { p.0 + p.1 }
+fn run() -> integer {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30), (4, 40)];
+    sum = 0;
+    for p in pairs par(r = pair_sum(p), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(110));
+}
+
+/// Plan-06 phase 4d.B (sorted) — `for s in sorted_items par(...)`
+/// no longer hangs the worker.  The desugar in
+/// `parse_for` (collections.rs) detects keyed-collection input,
+/// allocates a temp `vector<reference<T>>` via `materialise_keyed_for_par`,
+/// walks the source via `OpIterate`/`OpStep` appending each element,
+/// and re-routes par() to the materialised vector.  Closes the
+/// `par_sorted_input_t4` canary; `par_hash_input_t4` and
+/// `par_index_input_t4` still ignored (different interaction with
+/// pre-existing iterator special-cases).
+#[test]
+fn p4d_b_par_over_sorted_via_materialise() {
+    code!(
+        "struct P4dScore { value: integer not null }
+fn p4d_dbl(s: const P4dScore) -> integer { s.value * 2 }
+fn run() -> integer {
+    items: sorted<P4dScore[value]> = [];
+    items += P4dScore { value: 30 };
+    items += P4dScore { value: 10 };
+    items += P4dScore { value: 20 };
+    sum = 0;
+    for s in items par(r = p4d_dbl(s), 4) { sum += r; }
+    sum
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(120));
+}
+
+/// P190 — `for x in <local sorted/hash/index>` used to panic at
+/// `src/state/codegen.rs:1689` with "Too few parameters on
+/// OpIterate (got 2, need 6)".  Root cause: P188 enabled local-var
+/// keyed collections but `src/parser/vectors.rs::get_type` looked
+/// up the database type-name (e.g. `sorted<Score[value]>`) which
+/// is only registered via `fill_database` for struct fields.  Fix:
+/// register the type on demand in `get_type` when the name lookup
+/// misses — mirrors the struct-field path's `database.sorted` /
+/// `database.hash` / `database.index` calls, idempotent so no
+/// double-registration risk.
+#[test]
+fn p190_local_var_sorted_iteration() {
+    code!(
+        "struct P190Score { value: integer not null }
+fn test() {
+    items: sorted<P190Score[value]> = [];
+    items += P190Score { value: 30 };
+    items += P190Score { value: 10 };
+    items += P190Score { value: 20 };
+    sum = 0;
+    for s in items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P188 follow-up — `field += elem` for keyed-collection fields
+/// (hash/sorted/index/spacial<T[key]>) and for vector fields with
+/// struct-literal RHS were broken.  Two bugs:
+///
+/// 1. The struct-literal RHS (`Score{name:"a", value:10}`) parses
+///    with the LHS field as its target, so the field-init steps
+///    wrote into the field's storage (overwriting the hash/index
+///    root pointer) instead of into a fresh element record.  Fix:
+///    after allocating a new element via `new_record_field_op`,
+///    walk the steps and substitute the LHS field expression with
+///    `Var(elm)` (`substitute_value` helper).
+///
+/// 2. The local-var `+=` codepath in `new_record` looked up the
+///    keyed-collection's known_type via
+///    `data.def(type_def_nr(lhs_tp)).known_type` — but
+///    `type_def_nr` returns the GENERIC alias (`hash` / `index`),
+///    not the specific `hash<Score[name]>` instantiation.  The
+///    alias's known_type pointed at a Vector type, so
+///    `record_finish` dispatched through `Parts::Vector` and
+///    appended raw bytes instead of calling `hash::add` /
+///    `tree::add`.  Fix: register the specific keyed-collection db
+///    type directly (`database.hash(c, key)` / `index(c, key)` /
+///    etc.) — idempotent with the gen_set_first_keyed_null and
+///    typedef-walker registrations.
+#[test]
+fn p188_struct_field_hash_pluseq_struct_literal() {
+    code!(
+        "struct P188aScore { name: text not null, value: integer }
+struct P188aDb { items: hash<P188aScore[name]> }
+fn test() {
+    db = P188aDb { items: [] };
+    db.items += P188aScore { name: \"a\", value: 10 };
+    db.items += P188aScore { name: \"b\", value: 20 };
+    db.items += P188aScore { name: \"c\", value: 30 };
+    assert(len(db.items) == 3, \"len={len(db.items)}, expected 3\");
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_struct_field_index_pluseq_struct_literal() {
+    code!(
+        "struct P188bScore { name: text not null, value: integer }
+struct P188bDb { items: index<P188bScore[name]> }
+fn test() {
+    db = P188bDb { items: [] };
+    db.items += P188bScore { name: \"a\", value: 10 };
+    db.items += P188bScore { name: \"b\", value: 20 };
+    db.items += P188bScore { name: \"c\", value: 30 };
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_local_var_hash_pluseq_struct_literal() {
+    code!(
+        "struct P188cScore { name: text not null, value: integer }
+fn test() {
+    h: hash<P188cScore[name]> = [];
+    h += P188cScore { name: \"a\", value: 10 };
+    h += P188cScore { name: \"b\", value: 20 };
+    h += P188cScore { name: \"c\", value: 30 };
+    assert(len(h) == 3, \"len={len(h)}, expected 3\");
+    sum = 0;
+    for s in h { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p188_local_var_index_pluseq_struct_literal() {
+    code!(
+        "struct P188dScore { name: text not null, value: integer }
+fn test() {
+    ix: index<P188dScore[name]> = [];
+    ix += P188dScore { name: \"a\", value: 10 };
+    ix += P188dScore { name: \"b\", value: 20 };
+    ix += P188dScore { name: \"c\", value: 30 };
+    sum = 0;
+    for s in ix { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P189b — `vector<(T1, T2, …)>` index access used to return
+/// garbage because `OpGetVector` returns a 12-byte `DbRef` to the
+/// inline tuple bytes but `OpTupleGet` reads from the local slot
+/// directly (assuming inline-on-stack representation).  Result:
+/// `pairs[0].0` decoded the DbRef bytes (`store_nr | (rec << 32)`)
+/// as `i64`, producing `21474836482` instead of `1` for `(1, 10)`.
+///
+/// Fix: when index/iter access on `vector<(T1, T2, …)>` produces a
+/// DbRef, `unbox_tuple_from_dbref` (in `parser/fields.rs`) wraps
+/// the DbRef in a fresh work-ref and emits per-element loads via
+/// `get_val` (`OpGetInt` / `OpGetText` / etc.) into a
+/// `Value::Tuple` so the assignment target receives the proper
+/// stack-tuple representation.  Same helper handles text elements
+/// correctly because `OpGetText` inflates the 4-byte heap pointer
+/// to the 16-byte stack `Str`.
+///
+/// **Out of scope for this fix:** for-loop iteration `for p in pairs`
+/// — the iteration's break-check (`if OpNot(loop_var) { break }`)
+/// requires the loop var to be a DbRef so the null-sentinel works.
+/// Wrapping the loop var as `RefVar(Tuple)` would propagate the
+/// DbRef cleanly but `gen_set_first_at_tos` doesn't yet know how
+/// to allocate a RefVar(Tuple) slot.  Use index access (`pairs[i].0`)
+/// as a workaround until that codegen lands.
+#[test]
+fn p189b_vector_tuple_index_access() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    p = pairs[1];
+    assert(p.0 == 2, \"p.0={p.0}, expected 2\");
+    assert(p.1 == 20, \"p.1={p.1}, expected 20\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p189b_vector_tuple_int_text_index_access() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    p = pairs[2];
+    assert(p.0 == 3, \"p.0={p.0}, expected 3\");
+    assert(len(p.1) == 5, \"len(p.1)={len(p.1)}, expected 5\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P189b — for-loop iteration over `vector<(T1, T2, …)>`.
+///
+/// Element binding (`for p in pairs`) used to fail with
+/// `Field access not supported on type tuple([…])` because the
+/// loop var was typed as the bare tuple.  The parser now retypes
+/// it as `Reference(__tuple<…>)` so per-element loads (`p.0`,
+/// `p.1`) route through the struct-style field-access path,
+/// matching the index-access fix in `p189b_vector_tuple_index_access`.
+#[test]
+fn p189b_vector_tuple_for_loop_int_int() {
+    code!(
+        "fn test() {
+    pairs: vector<(integer, integer)> = [(1, 10), (2, 20), (3, 30)];
+    sum_a = 0;
+    sum_b = 0;
+    for p in pairs {
+        sum_a += p.0;
+        sum_b += p.1;
+    }
+    assert(sum_a == 6, \"sum_a={sum_a}, expected 6\");
+    assert(sum_b == 60, \"sum_b={sum_b}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p189b_vector_tuple_for_loop_int_text() {
+    code!(
+        "fn test() {
+    labels: vector<(integer, text)> = [(1, \"one\"), (2, \"two\"), (3, \"three\")];
+    sum_id = 0;
+    sum_len = 0;
+    for q in labels {
+        sum_id += q.0;
+        sum_len += len(q.1);
+    }
+    assert(sum_id == 6, \"sum_id={sum_id}, expected 6\");
+    assert(sum_len == 11, \"sum_len={sum_len}, expected 11\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P193 — eager init for `local: keyed_collection<T> = []`.
+///
+/// Without the fix, the empty `[]` literal parses to
+/// `Value::Insert(empty)` which doesn't match codegen's
+/// `Set(v, Null) → gen_set_first_keyed_null` arm — so the var
+/// gets no init bytecode.  Lazy init then fires on first WRITE,
+/// inside any enclosing loop body, re-allocating the data store
+/// per iteration and overwriting the root pointer.  Symptom:
+/// `for i in 0..N { ix += Score{id:i, value:i}; }` left
+/// `len(ix) == 1` (only the last add) and leaked N stores.
+///
+/// Fix path:
+/// - `parser/operators.rs::create_keyed` rewrites `Set(v, Insert([]))`
+///   to `Set(v, Null)` for keyed-collection types so codegen's
+///   gen_set_first_keyed_null fires at the declaration site.
+/// - `data.rs::heap_dep` and `scopes.rs::get_free_vars` now
+///   recognise Sorted/Hash/Index/Spacial as heap-owned, so
+///   scope-exit `OpFreeRef` is emitted (no more "stores not
+///   freed" warnings on program exit).
+#[test]
+fn p193_local_var_index_init_then_loop_add() {
+    code!(
+        "struct P193aScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P193aScore[id]> = [];
+    for i in 0..10 { ix += P193aScore { id: i, value: i }; }
+    assert(len(ix) == 10, \"len={len(ix)}, expected 10\");
+    sum = 0;
+    for s in ix { sum += s.value; }
+    assert(sum == 45, \"sum={sum}, expected 45\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p193_local_var_hash_init_then_loop_add() {
+    code!(
+        "struct P193bScore { id: integer not null, value: integer }
+fn test() {
+    h: hash<P193bScore[id]> = [];
+    for i in 0..10 { h += P193bScore { id: i, value: i }; }
+    assert(len(h) == 10, \"len={len(h)}, expected 10\");
+    sum = 0;
+    for s in h { sum += s.value; }
+    assert(sum == 45, \"sum={sum}, expected 45\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p193_local_var_index_read_before_write() {
+    // Reading the collection BEFORE any write used to panic with
+    // "Incorrect var ix[65535] versus N" because the init never
+    // emitted.  With eager init, len() returns 0 immediately.
+    code!(
+        "struct P193cScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P193cScore[id]> = [];
+    assert(len(ix) == 0, \"empty len={len(ix)}, expected 0\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Scale test for the P188 += keyed-collection fix when the adds
+/// happen OUTSIDE a loop and iteration runs over the result.  The
+/// 3-element test above proves dispatch correctness; this test
+/// proves the RB tree rebalance + iteration sequence hold for many
+/// inserts (sum 0..49 = 1225).  After P193 closed eager init, the
+/// loop-form scale test is also covered (`p193_local_var_index_init_then_loop_add`).
+#[test]
+fn p188_local_var_index_scale_50_elements_unrolled() {
+    let mut body = String::from(
+        "struct P188eScore { id: integer not null, value: integer }
+fn test() {
+    ix: index<P188eScore[id]> = [];\n",
+    );
+    for i in 0..50 {
+        body.push_str(&format!(
+            "    ix += P188eScore {{ id: {i}, value: {i} }};\n"
+        ));
+    }
+    body.push_str(
+        "    assert(len(ix) == 50, \"len={len(ix)}, expected 50\");
+    sum = 0;
+    n = 0;
+    for s in ix { sum += s.value; n += 1; }
+    assert(n == 50, \"iter count={n}, expected 50\");
+    assert(sum == 1225, \"sum={sum}, expected 1225\");
+}",
+    );
+    code!(&body).result(Value::Null);
+}
+
+/// P192 — `len()` was missing for `hash<T[key]>` and
+/// `index<T[key]>` collections.  Only `vector` and `sorted` had
+/// overloads.  Fix: added `OpLengthHash` (walks the bucket array
+/// via `hash::count`) and `OpLengthIndex` (walks the red-black
+/// tree via `tree::count`).  Hash gets a normal stdlib overload
+/// (`pub fn len(both: hash)`); index uses a parser hook in
+/// `src/parser/mod.rs::call()` because `OpLengthIndex` needs a
+/// `const u16` bookkeeping-offset arg that's only computable at
+/// parse time via `database.fields(tp)`.
+#[test]
+fn p192_len_hash_struct_field() {
+    code!(
+        "struct P192aScore { name: text not null, value: integer }
+struct P192aDb { items: hash<P192aScore[name]> }
+fn test() {
+    db = P192aDb { items: [
+        P192aScore { name: \"a\", value: 10 },
+        P192aScore { name: \"b\", value: 20 },
+        P192aScore { name: \"c\", value: 30 }
+    ] };
+    n = len(db.items);
+    assert(n == 3, \"hash len={n}, expected 3\");
+}"
+    )
+    .result(Value::Null);
+}
+
+#[test]
+fn p192_len_index_struct_field() {
+    code!(
+        "struct P192bScore { name: text not null, value: integer }
+struct P192bDb { items: index<P192bScore[name]> }
+fn test() {
+    db = P192bDb { items: [
+        P192bScore { name: \"a\", value: 10 },
+        P192bScore { name: \"b\", value: 20 },
+        P192bScore { name: \"c\", value: 30 }
+    ] };
+    n = len(db.items);
+    assert(n == 3, \"index len={n}, expected 3\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// P191 — `index<T[key]>` iteration produced wrong sums (e.g.
+/// `sum=10` instead of `sum=60` for three `Score` records).  Root
+/// cause: `database.index` (src/database/types.rs:957) appended
+/// `#left_N` / `#right_N` bookkeeping fields with `content =
+/// self.name("integer")` (8 bytes), but `tree::add` writes those
+/// pointers via `set_i32_raw` at hardcoded offsets `[pos, pos+4,
+/// pos+8]` — an alignment-aware layout placed the 8-byte fields 8
+/// bytes apart, so tree pointers landed in the wrong record bytes
+/// and the right-child link was never followed during iteration.
+/// Fix: switch bookkeeping to 4-byte `int<0,false>` so the layout
+/// matches `tree::add`'s offsets.
+///
+/// Verified by `validate_all_layouts_index_bookkeeping_after_p191_fix_no_issues`
+/// in `src/database/types.rs::layout_tests`.
+#[test]
+fn p191_struct_field_index_iteration_after_layout_fix() {
+    code!(
+        "struct P191Score { name: text not null, value: integer }
+struct P191Db { items: index<P191Score[name]> }
+fn test() {
+    db = P191Db { items: [
+        P191Score { name: \"a\", value: 10 },
+        P191Score { name: \"b\", value: 20 },
+        P191Score { name: \"c\", value: 30 }
+    ] };
+    sum = 0;
+    for s in db.items { sum += s.value; }
+    assert(sum == 60, \"sum={sum}, expected 60\");
+}"
+    )
+    .result(Value::Null);
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V1 — vector<fn-ref> index access.
+///
+/// Localises the bug behind `par_vec_of_fns_input_t4`'s infinite loop:
+/// is vector<fn-ref> storage broken (root cause A/B), or is the par
+/// dispatcher broken (root cause C)?
+///
+/// If this test fails: vector storage is broken — par is downstream.
+/// If this test passes: storage works; check V2 (for-loop iteration)
+/// and V3 (par with single element) next.
+#[test]
+#[ignore = "p4dA2 — parse fails with 'Expect token ;' at the vector<fn(...)> declaration when the body uses index access (`f = fs[0]`) instead of `for f in fs par(...)`.  Keeping ignored while diagnosing."]
+fn p4d_a2_vector_fn_ref_index_access() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    f = fs[0];
+    apply(f)
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V2 — non-par for-loop iteration.
+///
+/// Keeps the canary's `for f in fs` shape but drops `par(...)` so we
+/// can see if iteration alone hangs or if par-specific dispatch is the
+/// culprit.  If this hangs too: the bug is in for-loop iteration codegen
+/// for vector<fn-ref>.  If this returns 20: the bug is par-specific.
+#[test]
+#[ignore = "p4dA2 — parse fails identically to V1 (`Expect token ; at line 4:18` — the `(` in `fn(integer)`).  Suggests the parser only accepts vector<fn(...)> declaration syntax in specific contexts (canary's `for f in fs par(...)` clause).  Keeping ignored while investigating the parser path."]
+fn p4d_a2_vector_fn_ref_for_loop() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    total = 0;
+    for f in fs { total += apply(f); }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
+}
+
+/// Plan-06 phase 4d.A.2 diagnostic V3 — par with single element.
+///
+/// If V1/V2 fail but V3 works (or hangs): the parse path is gated on
+/// `par(...)` syntax.  V3 hanging at runtime would cleanly localise
+/// the bug to the par dispatcher (matching the canary).
+#[test]
+#[ignore = "p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path."]
+fn p4d_a2_par_vector_fn_ref_single() {
+    code!(
+        "fn dbl(x: integer) -> integer { x * 2 }
+fn apply(f: fn(integer) -> integer) -> integer { f(10) }
+fn run() -> integer {
+    fs: vector<fn(integer) -> integer> = [dbl];
+    total = 0;
+    for f in fs par(r = apply(f), 1) { total += r; }
+    total
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(20));
+}
+
+/// P194 — tuple-typed struct field reassignment.
+///
+/// Before the fix: `p.v = (100, 200)` triggered the "Tuple
+/// destructuring requires plain variable names" diagnostic because
+/// `get_val::Type::Tuple` returns `Value::Tuple([reads])` for the
+/// tuple field read, which then matched the destructuring branch
+/// in `parse_assign`.  The fix routes a tuple-of-reads LHS through
+/// `emit_tuple_set_ops` instead.
+#[test]
+fn p194_tuple_field_reassign() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn run() -> integer {
+    p = Pair { v: (3, 4) };
+    p.v = (100, 200);
+    p.v.0 + p.v.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(300));
+}
+
+/// P194 — tuple-typed reassignment with multiple writes.
+#[test]
+fn p194_tuple_field_reassign_twice() {
+    code!(
+        "struct Pair { v: (integer, integer) }
+fn run() -> integer {
+    p = Pair { v: (3, 4) };
+    p.v = (100, 200);
+    p.v = (500, 600);
+    p.v.0 + p.v.1
+}"
+    )
+    .expr("run()")
+    .result(Value::Int(1100));
+}
+
+/// P197 — returning a `text` element from a tuple struct field.
+///
+/// Before the fix:
+/// - Index `.0` returned garbage characters (`Str` with a dangling
+///   ptr into a freed host record).
+/// - Index `.1` and indices in larger tuples hard-crashed with
+///   `ptr::copy_nonoverlapping requires that both pointer arguments
+///   are aligned and non-null`.
+/// - Native codegen produced a `(String, String)` work-var temp,
+///   then borrowed `&temp.0` past its drop — `rustc` rejected with
+///   `borrowed value does not live long enough`.
+///
+/// Two-part fix:
+/// 1. `Type::depending`/`Type::depend` now recurse into
+///    `Type::Tuple` elements so a tuple struct field read carries
+///    the host as a dep on each text/reference element.
+/// 2. `parse_part`'s tuple-index branch short-circuits when `code`
+///    is already a literal `Value::Tuple([reads])` — return the
+///    indexed read directly instead of materialising a
+///    `(String, String)` work-var temp.
+#[test]
+fn p197_text_returned_from_tuple_field() {
+    code!(
+        "struct A { v: (text, text) }
+fn first() -> text {
+    a = A { v: (\"hello\", \"world\") };
+    a.v.0
+}"
+    )
+    .expr("first()")
+    .result(Value::Text("hello".to_string()));
+}
+
+#[test]
+fn p197_text_returned_from_tuple_field_index_one() {
+    code!(
+        "struct A { v: (text, text) }
+fn second() -> text {
+    a = A { v: (\"hello\", \"world\") };
+    a.v.1
+}"
+    )
+    .expr("second()")
+    .result(Value::Text("world".to_string()));
+}
+
+#[test]
+fn p197_text_returned_from_mixed_tuple_field() {
+    code!(
+        "struct P { v: (integer, integer, text) }
+fn third() -> text {
+    p = P { v: (1, 2, \"hello\") };
+    p.v.2
+}"
+    )
+    .expr("third()")
+    .result(Value::Text("hello".to_string()));
 }

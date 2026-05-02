@@ -38,6 +38,7 @@ pub enum FileResult {
 pub fn ok(self: FileResult) -> boolean {
   self == FileResult.Ok
 }
+#pure
 // A handle to a filesystem entry.
 // Fields: path (full path), size (file size in bytes), format (open mode),
 // current (byte position after last read), next (byte position to read next).
@@ -92,6 +93,10 @@ pub fn content(self: File) -> text {
   result += txt;
   result
 }
+// Plan-06 phase 5a: #impure(io) — reads from filesystem.  Allocates
+// the result text into worker-local stores → par-safe; host bridge
+// serialises filesystem access.
+#impure(io)
 // Reads the file and splits it into lines.
 // Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce
 // identical results. Use when processing line-by-line (logs, CSV, etc.).
@@ -118,6 +123,8 @@ pub fn lines(self: File) -> vector < text > {
   }
   result
 }
+// Plan-06 phase 5a: #impure(io) — wraps content() (filesystem read).
+#impure(io)
 // --- Text ---
 // Splits self on every occurrence of separator and returns the parts as a vector.
 // Use to parse CSV lines or space-separated tokens.
@@ -139,6 +146,7 @@ pub fn split(self: text, separator: character) -> vector < text > {
   }
   result
 }
+#pure
 // Joins a vector of text values with a separator between each pair.
 // Inverse of split: "a,b,c".split(',').join(",") == "a,b,c".
 
@@ -150,11 +158,17 @@ pub fn join(self: vector<text>, jn_sep: text) -> text {
   }
   return jn_result;
 }
+#pure
 // --- File System ---
 // Returns the platform path separator character: '\' on Windows, '/' elsewhere.
 // Detected once at startup from the runtime filesystem.
 
 pub fn path_sep() -> character;
+// Plan-06 phase 5a: #impure(host_io) — reads a host-detected
+// constant.  Could be #pure once detected (it's invariant for
+// the lifetime of a process), but the runtime caches it inside
+// Stores so the access is observable.
+#impure(host_io)
 // Returns true if path stays within the project directory (no net upward traversal).
 // Accepts both '/' and '\' as separators so loft programs can use either style.
 fn valid_path(path: text) -> boolean {
@@ -182,6 +196,7 @@ fn valid_path(path: text) -> boolean {
   }
   depth >= 0
 }
+#pure
 // Use as the entry point for all file I/O.
 // Paths outside the project directory are treated as NotExists without touching the filesystem.
 
@@ -194,17 +209,22 @@ pub fn file(path: text) -> File {
   }
   result
 }
+// Plan-06 phase 5a: #impure(io) — stat-equivalent filesystem read.
+#impure(io)
 // Use to check whether a path is accessible before reading or writing it.
 // Paths outside the project directory are always absent.
 
 pub fn exists(path: text) -> boolean {
   file(path).format != Format.NotExists
 }
+// Plan-06 phase 5a: #impure(io) — calls file() (filesystem stat).
+#impure(io)
 // Method form: f = file("path"); if f.exists() { ... }
 // Also callable as exists(file_obj) via the 'both' parameter name.
 pub fn exists(both: File) -> boolean {
   both.format != Format.NotExists
 }
+#pure
 // Use to remove a file after processing or as a cleanup step.
 // Returns FileResult.Ok on success, FileResult.NotFound when the file did
 // not exist or is outside the project directory.
@@ -214,6 +234,9 @@ pub fn delete(path: text) -> FileResult {
   if OpDelete(path) { return FileResult.Ok }
   FileResult.Other
 }
+// Plan-06 phase 5a: #impure(io) — filesystem write (deletion).
+// Par-safe under D8.1: host bridge serialises filesystem mutation.
+#impure(io)
 // Use to rename or relocate a file within the project.
 // Both paths must stay within the project directory; the destination must
 // not already exist.
@@ -225,6 +248,7 @@ pub fn move(from: text, to: text) -> FileResult {
   if OpMoveFile(from, to) { return FileResult.Ok }
   FileResult.Other
 }
+#impure(io)
 // Create a single directory level. Returns FileResult.NotFound if the path
 // is outside the project directory.
 
@@ -233,6 +257,7 @@ pub fn mkdir(path: text) -> FileResult {
   if OpMkdir(path) { return FileResult.Ok }
   FileResult.Other
 }
+#impure(io)
 // Create a directory and all missing parents (like Unix mkdir -p).
 // Returns FileResult.NotFound if the path is outside the project directory.
 
@@ -241,6 +266,7 @@ pub fn mkdir_all(path: text) -> FileResult {
   if OpMkdirAll(path) { return FileResult.Ok }
   FileResult.Other
 }
+#impure(io)
 // Truncate or extend the file to exactly `size` bytes.
 // Truncating removes bytes beyond `size`; extending fills with null bytes.
 // Returns FileResult.NotFound if the file does not exist; FileResult.IsDirectory
@@ -253,6 +279,7 @@ pub fn set_file_size(self: File, size: integer) -> FileResult {
   if OpTruncateFile(self, size) { return FileResult.Ok }
   FileResult.Other
 }
+#impure(io)
 // Returns the entries inside a directory.
 // The File must have format == Format.Directory.
 // Use to iterate over all files in a folder.
@@ -264,27 +291,33 @@ pub fn files(self: File) -> vector < File > {
   }
   result
 }
+#impure(io)
 // Writes v as UTF-8 text to the file. Overwrites existing content.
 
 pub fn write(self: File, v: text);
 #rust"stores.write_file(&@self, @v);"
+#impure(io)
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).
 // Use to inspect or forward the full environment.
 
 pub fn env_variables() -> vector < EnvVariable >;
 #rust"stores.os_variables()"
+#impure(host_io)
 // Returns the value of the environment variable name, or null if it is not set.
 // Use to read configuration from the shell environment.
 pub fn env_variable(name: text) -> text;
 #rust"Stores::os_variable(@name)"
+#impure(host_io)
 // --- Time ---
 // Returns the current wall-clock time as milliseconds since the Unix epoch
 // (1970-01-01T00:00:00 UTC). Use for timestamps and logging.
 pub fn now() -> integer;
+#impure(host_io)
 // Returns microseconds elapsed since program start (monotonic clock).
 // Unaffected by system clock adjustments. Use for benchmarks and frame timing.
 pub fn ticks() -> integer;
+#impure(host_io)
 
 // Clears the scratch buffer used by text-returning native functions (A8).
 // Emitted at statement boundaries by the compiler; not callable from user code.

@@ -179,6 +179,16 @@ pub struct Parser {
     /// Drained by `parse_if` and prepended to the if-body so they only
     /// execute when the discriminant matches.
     pub(crate) is_capture_bindings: Vec<Value>,
+    /// `--show-types --trace`: when `true`, `parse_part` appends one
+    /// trace line per resolved sub-expression (after each `.field`,
+    /// `.tuple_idx`, `[idx]` step).  Surfaces dep-tracking flow that
+    /// the per-variable view misses — e.g. P197 was a missing dep on
+    /// the `.0` step of a tuple field read.
+    pub trace_types: bool,
+    /// Accumulated trace entries; drained by the introspection CLI.
+    /// Each entry is a tab-separated record:
+    /// `<fn_name>\t<line>:<col>\t<step_kind>\t<type_with_deps>`.
+    pub trace_types_lines: Vec<String>,
 }
 
 // Operators ordered on their precedence
@@ -343,6 +353,8 @@ impl Parser {
             is_capture_aliases: Vec::new(),
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
+            trace_types: false,
+            trace_types_lines: Vec::new(),
         }
     }
 
@@ -458,6 +470,8 @@ impl Parser {
             // Case (c): emit the deferred error
             let msg = if stub_name == "string" {
                 "Undefined type 'string' — did you mean 'text'?".to_string()
+            } else if let Some(s) = self.data.suggest_type_name(&stub_name) {
+                format!("Undefined type {stub_name} — did you mean '{s}'?")
             } else {
                 format!("Undefined type {stub_name}")
             };
@@ -665,6 +679,30 @@ impl Parser {
         // the wrapper so method calls chained on the constructor are accepted correctly.
         if let Type::Rewritten(inner) = is_type {
             return self.convert(code, inner, should);
+        }
+        if let Type::Rewritten(inner) = should {
+            return self.convert(code, is_type, inner);
+        }
+        // Plan-06 phase 4d: tuple-to-tuple convert is element-wise.
+        // Without this, a value with a `Rewritten(Reference)` element
+        // (e.g. `(Inner { … }, 11)` from inline struct construction)
+        // fails to match a field declared as `(Inner, integer)` even
+        // though the underlying types are compatible.  We don't
+        // mutate `code` here — element conversions are by-shape only.
+        if let (Type::Tuple(src_elems), Type::Tuple(dst_elems)) = (is_type, should)
+            && src_elems.len() == dst_elems.len()
+        {
+            let mut all_compatible = true;
+            for (s, d) in src_elems.iter().zip(dst_elems.iter()) {
+                let mut placeholder = Value::Null;
+                if !self.convert(&mut placeholder, s, d) {
+                    all_compatible = false;
+                    break;
+                }
+            }
+            if all_compatible {
+                return true;
+            }
         }
         if let (Type::Reference(ref_tp, _), Type::Enum(enum_tp, true, _)) = (is_type, should) {
             for a in &self.data.def(*enum_tp).attributes {
@@ -898,6 +936,25 @@ impl Parser {
             {
                 return true;
             }
+            // Bare collection parameter (sorted / hash / index / spacial)
+            // accepts the corresponding parameterised collection
+            // argument.  Mirrors how `Type::Vector(_, _)` matches via
+            // is_same: the parameter type carries no element-type
+            // constraint, so any concrete instantiation is structurally
+            // compatible.  Used for stdlib helpers like `len(both: sorted)`.
+            if let Type::Reference(r, _) = should {
+                let r = *r;
+                let bare = (r == self.data.def_nr("sorted")
+                    && matches!(test_type, Type::Sorted(_, _, _)))
+                    || (r == self.data.def_nr("hash") && matches!(test_type, Type::Hash(_, _, _)))
+                    || (r == self.data.def_nr("index")
+                        && matches!(test_type, Type::Index(_, _, _)))
+                    || (r == self.data.def_nr("spacial")
+                        && matches!(test_type, Type::Spacial(_, _, _)));
+                if bare {
+                    return true;
+                }
+            }
             // Text types with different dep lists are structurally compatible.
             if matches!((test_type, should), (Type::Text(_), Type::Text(_))) {
                 return true;
@@ -919,13 +976,18 @@ impl Parser {
     fn validate_convert(&mut self, context: &str, test_type: &Type, should: &Type) {
         if !self.first_pass && !self.can_convert(test_type, should) {
             let res = self.lexer.peek();
+            // Plan-07 phase 6 (partial) — "expected E, got G on context"
+            // reads the same direction as English ("we expected this,
+            // we got that"); the old shape "G should be E on context"
+            // forced a mental flip and confused users new to the
+            // language.
             specific!(
                 &mut self.lexer,
                 &res,
                 Level::Error,
-                "{} should be {} on {context}",
-                test_type.name(&self.data),
-                should.name(&self.data)
+                "expected {}, got {} on {context}",
+                should.name(&self.data),
+                test_type.name(&self.data)
             );
         }
     }
@@ -1007,6 +1069,46 @@ impl Parser {
             self.call_with_named(code, d_nr, list, types, named_args, true)
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
+        } else if name == "len"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Index(_, _, _))
+        {
+            // P192: `len(ix)` for `ix: index<T[key]>`.  Dispatched
+            // here (not via stdlib overload) because the runtime
+            // helper `tree::count` needs the per-record bookkeeping
+            // byte offset, which is `database.fields(tp)` — only
+            // computable at parse time once the type is registered.
+            //
+            // Strict arity / named-arg gates: `len(ix, x)` or
+            // `len(ix, key: 1)` should NOT route here — they would
+            // fall through standard dispatch to the existing
+            // `Unknown function len` error message which lists the
+            // method-style alternative.
+            let known = self.get_type(&types[0]);
+            let op_d_nr = self.data.def_nr("OpLengthIndex");
+            if known != u16::MAX && op_d_nr != u32::MAX {
+                let fields = self.database.fields(known);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(fields)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            // Type or op not registered — drop to the standard
+            // error path so the user sees the same diagnostic shape
+            // they get for any other unresolved `len()` call.  P07.5
+            // adds a "did you mean" suffix when a similarly-named
+            // user function exists.
+            if let Some(s) = self.suggest_function_name(name) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Unknown function {name} — did you mean '{s}'?"
+                );
+            } else {
+                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            }
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
@@ -1020,9 +1122,19 @@ impl Parser {
                 // `t_<LEN><Type>_<name>` exists on some other type, tell the
                 // user to call it as a method.  Mirror image of the
                 // field-access hint that covers the method→free direction.
+                // P07.5: when no method receiver is found EITHER, fall back to
+                // a similar-name suggestion across all user functions.
                 let method_types = self.find_method_receivers(name);
                 if method_types.is_empty() {
-                    diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                    if let Some(s) = self.suggest_function_name(name) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown function {name} — did you mean '{s}'?"
+                        );
+                    } else {
+                        diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                    }
                 } else {
                     let receivers = method_types.join(" / ");
                     diagnostic!(
@@ -1403,6 +1515,11 @@ impl Parser {
                     *extra, tv_nr, concrete, data,
                 )),
             ),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::substitute_type_in_value(inner, tv_nr, concrete, data);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
@@ -1682,6 +1799,47 @@ impl Parser {
                 let info = self.type_info(tp);
                 self.cl("OpGetField", &[code, p, info])
             }
+            Type::Function(_, _, _) => {
+                // Storage holds the 4-byte i32 d_nr; the stack-side
+                // fn-ref slot is 20 bytes (8B i64 d_nr + 12B null
+                // closure DbRef).  Read d_nr via OpGetInt4 (pushes
+                // 8B), then push a 12B null sentinel for the closure
+                // half.  Mirrors `gen_fn_ref_value`'s "if value
+                // generated < 16 bytes, fill" pattern but emits the
+                // sequence inline as a Block so callers see a single
+                // Type::Function value.
+                let read_dnr = self.cl("OpGetInt4", &[code, p]);
+                let null_clos = self.cl("OpNullRefSentinel", &[]);
+                crate::data::v_block(vec![read_dnr, null_clos], tp.clone(), "fn_ref_field_read")
+            }
+            Type::Tuple(elems) => {
+                // Plan-06 phase 4d: tuple struct field read.  Each
+                // element is read from `pos + element_offsets[i]`
+                // using the same OpGet* opcodes that ordinary struct
+                // fields use; the assembled stack tuple matches the
+                // shape `Type::Tuple(...)` consumers expect.
+                let elems_vec = elems.clone();
+                let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+                let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elems_vec.len(),
+                )
+                .unwrap_or_else(|| {
+                    crate::data::element_offsets(&elems_vec)
+                        .into_iter()
+                        .map(|x| x as u16)
+                        .collect()
+                });
+                let mut tuple_elems = Vec::with_capacity(elems_vec.len());
+                for (i, et) in elems_vec.iter().enumerate() {
+                    let elem_pos = pos + u32::from(offsets[i]);
+                    let elem_val = self.get_val(et, false, elem_pos, code.clone(), u32::MAX);
+                    tuple_elems.push(elem_val);
+                }
+                Value::Tuple(tuple_elems)
+            }
             _ => {
                 diagnostic!(
                     self.lexer,
@@ -1703,6 +1861,171 @@ impl Parser {
         val_code: Value,
     ) -> Value {
         self.set_field_check(d_nr, f_nr, d_pos, ref_code, val_code, true)
+    }
+
+    /// Plan-06 phase 4d: emit the per-element OpSet* sequence for a
+    /// tuple struct field's value.  Recurses for nested Tuple element
+    /// types so `((1, 2), (3, 4))` written into a `((int, int), (int,
+    /// int))` field flattens to four `OpSetInt` calls at offsets
+    /// `[0, 8, 16, 24]`.
+    ///
+    /// `base_pos` is the byte offset within the host record where the
+    /// tuple's first element begins.  `elems` lists the tuple's
+    /// element types in declaration order.  `val_code` is the IR for
+    /// the tuple value.
+    ///
+    /// Two flavours of `val_code`:
+    /// - `Value::Tuple([…])` literal — walked element-wise without a
+    ///   temp variable, allowing direct recursion for nested tuples.
+    /// - Anything else (variable, function call, etc.) — stashed in a
+    ///   work-ref tuple temp first, then read element-by-element via
+    ///   `Value::TupleGet`.  Nested tuple elements in this branch
+    ///   require codegen support for `TupleGet` on `Type::Tuple`
+    ///   (see `state/codegen.rs::Value::TupleGet` stack-tuple arm).
+    pub(crate) fn emit_tuple_set_ops(
+        &mut self,
+        ref_code: &Value,
+        base_pos: u16,
+        elems: &[Type],
+        val_code: Value,
+    ) -> Vec<Value> {
+        let elems_vec = elems.to_vec();
+        let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+        let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+            &self.data,
+            &self.database,
+            tuple_d_nr,
+            elems_vec.len(),
+        )
+        .unwrap_or_else(|| {
+            crate::data::element_offsets(&elems_vec)
+                .into_iter()
+                .map(|x| x as u16)
+                .collect()
+        });
+        if let Value::Tuple(values) = val_code {
+            // Literal tuple value — recurse element-wise so nested
+            // tuple elements flatten into per-leaf OpSet* calls.
+            let mut ops = Vec::new();
+            for (i, (elem_tp, value_i)) in elems_vec.iter().zip(values).enumerate() {
+                // First-pass `base_pos` can be the `database.position`
+                // u16::MAX sentinel for not-yet-resolved fields.  The
+                // raw `+` panics under dev-profile overflow checks
+                // (caught by `make iter`); release silently wraps.
+                // The IR built during pass 1 is regenerated in pass 2,
+                // so a saturating placeholder is safe and keeps the
+                // arithmetic well-defined across both profiles.
+                let elem_pos = base_pos.saturating_add(offsets[i]);
+                ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, value_i));
+            }
+            return ops;
+        }
+        // Non-literal source: stash to a work-ref Tuple local, then
+        // read each element via `Value::TupleGet`.
+        let tup_tp = Type::Tuple(elems_vec.clone());
+        let tmp = self.vars.work_refs(&tup_tp, &mut self.lexer);
+        if !self.first_pass {
+            self.change_var_type(tmp, &tup_tp);
+        }
+        let mut ops = vec![v_set(tmp, val_code)];
+        for (i, elem_tp) in elems_vec.iter().enumerate() {
+            let elem_pos = base_pos.saturating_add(offsets[i]);
+            let elem_val = Value::TupleGet(tmp, i as u16);
+            ops.extend(self.emit_set_one_element(ref_code, elem_pos, elem_tp, elem_val));
+        }
+        ops
+    }
+
+    /// Emit the OpSet* (or recursive flatten) for a single tuple
+    /// element at a fixed byte offset within the host record.
+    /// Returns a vec because nested-tuple elements expand to multiple
+    /// per-leaf set ops.
+    fn emit_set_one_element(
+        &mut self,
+        ref_code: &Value,
+        pos: u16,
+        elem_tp: &Type,
+        value: Value,
+    ) -> Vec<Value> {
+        let pos_v = Value::Int(i32::from(pos));
+        let single = match elem_tp {
+            Type::Integer(_) => self.cl("OpSetInt", &[ref_code.clone(), pos_v, value]),
+            Type::Function(_, _, _) => {
+                // P196: storage holds the 4-byte i32 d_nr only.  Reduce
+                // `Value::FnRef` to its bare `Value::Int(d_nr)` so the
+                // OpSetInt4 template body sees an i64 the interpreter
+                // pops in 8 bytes; for fn-ref-shaped sources (Var,
+                // TupleGet, function call), interpreter `TupleGet`
+                // already pushes only the d_nr's 8 bytes via OpVarInt,
+                // and `output_call` projects `.0` natively (see the
+                // val_is_fn_ref handling in src/generation/calls.rs).
+                let d_nr_only = match value {
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
+                    other => other,
+                };
+                self.cl("OpSetInt4", &[ref_code.clone(), pos_v, d_nr_only])
+            }
+            Type::Float => self.cl("OpSetFloat", &[ref_code.clone(), pos_v, value]),
+            Type::Single => self.cl("OpSetSingle", &[ref_code.clone(), pos_v, value]),
+            Type::Character => self.cl("OpSetCharacter", &[ref_code.clone(), pos_v, value]),
+            Type::Boolean => {
+                let v = v_if(value, Value::Int(1), Value::Int(0));
+                self.cl("OpSetByte", &[ref_code.clone(), pos_v, Value::Int(0), v])
+            }
+            Type::Text(_) => self.cl("OpSetText", &[ref_code.clone(), pos_v, value]),
+            Type::Reference(inner_d_nr, _) | Type::Enum(inner_d_nr, true, _) => {
+                let type_nr = if self.first_pass {
+                    Value::Int(i32::from(u16::MAX))
+                } else {
+                    Value::Int(i32::from(self.data.def(*inner_d_nr).known_type))
+                };
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[ref_code.clone(), pos_v.clone(), type_nr.clone()],
+                );
+                self.cl("OpCopyRecord", &[value, field_ref, type_nr])
+            }
+            Type::Vector(content, _) => {
+                let vec_tp = self.vector_of(content);
+                let elem_db_tp = self.database.content(vec_tp);
+                let field_ref = self.cl(
+                    "OpGetField",
+                    &[
+                        ref_code.clone(),
+                        pos_v.clone(),
+                        Value::Int(i32::from(vec_tp)),
+                    ],
+                );
+                self.cl(
+                    "OpAppendVector",
+                    &[field_ref, value, Value::Int(i32::from(elem_db_tp))],
+                )
+            }
+            Type::Hash(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Spacial(_, _, _)
+            | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
+            // Plan-06 phase 4d: nested tuple element — recurse into
+            // `emit_tuple_set_ops` with the inner tuple's offsets so
+            // each leaf primitive lands at `outer_pos +
+            // outer_offsets[i] + inner_offsets[j]`.  The flattened
+            // ops are returned as a single Vec.
+            Type::Tuple(inner_elems) => {
+                return self.emit_tuple_set_ops(ref_code, pos, inner_elems, value);
+            }
+            _ => {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Tuple struct field cannot contain element of type {}",
+                        elem_tp.name(&self.data)
+                    );
+                }
+                Value::Null
+            }
+        };
+        vec![single]
     }
 
     fn set_field_no_check(
@@ -1813,6 +2136,42 @@ impl Parser {
                 // next field.  Use `OpSetInt4` to write only 4 bytes.
                 self.cl("OpSetInt4", &[ref_code, pos_val, val_code])
             }
+            Type::Function(_, _, _) => {
+                // Storage holds the 4-byte i32 d_nr only — closures
+                // (the 12-byte trailing half of a 20-byte stack
+                // fn-ref slot) are NOT stored here.  Reduce
+                // `Value::FnRef` to its bare `Value::Int(d_nr)` so
+                // the literal lambda case bypasses any tuple shape;
+                // for non-literal sources (Var of fn-ref, TupleGet
+                // of a fn-ref tuple element, function-call return)
+                // the interpreter's `TupleGet`/`Var` codegen pushes
+                // only the d_nr's 8 bytes via `OpVarInt`, and the
+                // native template substitution in
+                // `src/generation/calls.rs` projects `.0` from the
+                // `(u32, DbRef)` fn-ref tuple before the i32 cast.
+                let d_nr_only = match val_code {
+                    Value::FnRef(d_nr, _, _) => Value::Int(d_nr),
+                    other => other,
+                };
+                self.cl("OpSetInt4", &[ref_code, pos_val, d_nr_only])
+            }
+            Type::Tuple(ref elems) => {
+                // Plan-06 phase 4d: tuple struct field assignment.
+                // Storage layout matches the synthetic `__tuple<…>`
+                // struct's element positions (registered via
+                // `tuple_def`) so each element write goes through
+                // the same `OpSetInt`/`OpSetFloat`/etc. opcodes used
+                // for ordinary struct fields.  Recurses for nested
+                // Tuple element types — see `emit_tuple_set_ops`.
+                let elems_vec = elems.clone();
+                let host_field_pos = if let Value::Int(p) = pos_val {
+                    p as u16
+                } else {
+                    0
+                };
+                let ops = self.emit_tuple_set_ops(&ref_code, host_field_pos, &elems_vec, val_code);
+                v_block(ops, Type::Void, "tuple_field_set")
+            }
             Type::Character => self.cl("OpSetCharacter", &[ref_code, pos_val, val_code]),
             Type::Reference(inner_tp, _) => {
                 // The value is a 12-byte DbRef; OpSetInt would only read 4 bytes of it.
@@ -1897,6 +2256,24 @@ impl Parser {
             ],
         );
         Value::Insert(vec![set_op, assert_call])
+    }
+
+    /// Append a `--show-types --trace` entry for the type at the
+    /// current parse position.  No-op unless `trace_types` is set
+    /// AND we are on the second pass (first-pass types are
+    /// placeholders and would emit thousands of meaningless lines).
+    pub(crate) fn record_type_trace(&mut self, t: &Type) {
+        if !self.trace_types || self.first_pass {
+            return;
+        }
+        let pos = self.lexer.pos();
+        let fn_name = self.vars.name.clone();
+        if fn_name.is_empty() {
+            return;
+        }
+        let type_str = t.show(&self.data, &self.vars);
+        self.trace_types_lines
+            .push(format!("{fn_name}\t{}:{}\t{type_str}", pos.line, pos.pos));
     }
 
     fn cl(&mut self, op: &str, list: &[Value]) -> Value {
@@ -2369,6 +2746,11 @@ impl Parser {
                     .map(|x| Self::substitute_param_refs(x, args))
                     .collect(),
             ),
+            Value::Span(b) => {
+                let (pos, inner) = *b;
+                let new_inner = Self::substitute_param_refs(inner, args);
+                Value::with_span(pos, new_inner)
+            }
             other => other,
         }
     }
@@ -2543,6 +2925,23 @@ impl Parser {
             start_def,
         );
         self.database.finish();
+        // Validate layouts of all registered types — catches late-
+        // mutation bugs (e.g. P191's bookkeeping fields landing at
+        // overlapping positions because finish_type already ran).
+        // Skip when the parser has already reported errors: an
+        // incomplete struct (e.g. a self-referential type that the
+        // parser correctly rejected) can have unlaid fields whose
+        // position == u16::MAX, and re-flagging that here just adds
+        // noise on top of the real diagnostic.
+        let already_failed = matches!(
+            self.lexer.diagnostics().level(),
+            Level::Error | Level::Fatal
+        );
+        if !already_failed {
+            for issue in self.database.validate_all_layouts() {
+                diagnostic!(self.lexer, Level::Error, "type layout: {}", issue);
+            }
+        }
         self.enum_fn();
         let lvl = self.lexer.diagnostics().level();
         if lvl == Level::Error || lvl == Level::Fatal {
@@ -2981,6 +3380,66 @@ impl Parser {
         }
     }
 
+    /// Plan-07 phase 5 suggestions.  Find a similar user-defined
+    /// function name (typed without the `n_` prefix) that might be
+    /// the correct spelling.  Returns `None` when no candidate is
+    /// within Levenshtein distance 2.
+    ///
+    /// Uses the same `suggest_similar` primitive as the existing
+    /// variable-suggestion path at `parser/objects.rs::known_var_or_type`.
+    pub fn suggest_function_name(&self, name: &str) -> Option<String> {
+        let candidates_owned: Vec<String> = self
+            .data
+            .user_fn_d_nrs()
+            .iter()
+            .filter_map(|&d_nr| {
+                let n = &self.data.def(d_nr).name;
+                if let Some(stripped) = n.strip_prefix("n_") {
+                    // Skip synthetic lambda names — they're not user-typeable.
+                    if stripped.starts_with("__lambda_") {
+                        None
+                    } else {
+                        Some(stripped.to_string())
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let candidates: Vec<&str> = candidates_owned.iter().map(String::as_str).collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates).map(String::from)
+    }
+
+    /// Plan-07 phase 5 suggestions.  Find a similar field name on
+    /// the given struct definition.  Skips synthetic compiler-
+    /// generated attributes (those starting with `_` or `#`).
+    pub fn suggest_field_name(&self, struct_d_nr: u32, name: &str) -> Option<String> {
+        if struct_d_nr == u32::MAX {
+            return None;
+        }
+        let candidates_owned: Vec<&str> = self
+            .data
+            .def(struct_d_nr)
+            .attributes
+            .iter()
+            .filter_map(|a| {
+                if a.name.starts_with('_') || a.name.starts_with('#') {
+                    None
+                } else {
+                    Some(a.name.as_str())
+                }
+            })
+            .collect();
+        crate::diagnostics::suggest_similar_capped(name, &candidates_owned).map(String::from)
+    }
+
+    /// Plan-07 phase 5 suggestions.  Find a similar type name —
+    /// thin wrapper around `Data::suggest_type_name` so callers in
+    /// the parser don't have to thread `self.data` explicitly.
+    pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        self.data.suggest_type_name(name)
+    }
+
     // Determine if there need to be special enum functions that call enum_value variants.
     pub fn create_var(&mut self, name: &str, var_type: &Type) -> u16 {
         if self.context == u32::MAX {
@@ -3010,7 +3469,10 @@ impl Parser {
     /// DbRef into existing mutable storage, so they are safe to pass as
     /// `&` parameters.
     fn is_addressable(val: &Value, data: &Data) -> bool {
-        match val {
+        // Plan-07 phase 1: unspan() so wraps on `[` / `.` (steps 1.11
+        // / 1.12) don't hide an addressable shape from the `&` arg
+        // check.
+        match val.unspan() {
             Value::Var(_) => true,
             Value::Call(d_nr, args) => {
                 let name = &data.def(*d_nr).name;
@@ -3019,6 +3481,240 @@ impl Parser {
                     && Self::is_addressable(&args[0], data)
             }
             _ => false,
+        }
+    }
+
+    /// Plan-06 PRIORITY.md spine step 5 — par-result use-site analyser.
+    ///
+    /// After the function body is fully parsed, find each
+    /// `let r = parallel_for(...)` (or fused `for x in input par(r=...,
+    /// N) { body }` whose result-vector flows into the body), and walk
+    /// the body for uses of `r`.  Each use is classified:
+    ///
+    /// - **Streaming-eligible**: the result is iterated once via `for x
+    ///   in r { … }` — lowers to `Stitch::Queue` in spine step 5b.
+    /// - **Materialising**: random access (`r[i]`), length-of-filter,
+    ///   multi-pass, alias (`r2 = r`), passed as `vector<S>` arg, stored
+    ///   in `vector<S>` field, returned from `-> vector<S>` fn.  These
+    ///   require the materialised vector (today's path) and will fail
+    ///   compilation in spine step 7 unless rewritten via the explicit
+    ///   `par_to_vec(...)` helper (planned phase 11).
+    ///
+    /// Spine step 7 (DONE 2026-04-29): emits `Level::Error` on
+    /// materialising uses.  The deprecation window from step 5
+    /// (warning) closed once the audit in step 6 confirmed zero
+    /// corpus sites trigger it.  Materialising par results now fail
+    /// to compile.  Streaming-eligible patterns (single
+    /// `for x in r {}` use) stay silent and keep working through the
+    /// existing materialised path until step 8 lands the streaming
+    /// rewrite.
+    fn check_par_result_singlepass(&mut self) {
+        let par_for_d_nr = self.data.def_nr("n_parallel_for");
+        if par_for_d_nr == u32::MAX || self.context == u32::MAX {
+            return;
+        }
+        let body = self.data.def(self.context).code.clone();
+        // Find each (var, par_call_pos) where `Set(var, Call(n_parallel_for, ...))`.
+        let mut par_results: Vec<u16> = Vec::new();
+        Self::collect_par_assignments(&body, par_for_d_nr, &mut par_results);
+        for v in par_results {
+            // Walk the body counting uses of v.  Each use lands in a
+            // category — `streaming` (Iter init position) or `other`
+            // (everything else, treated as materialising for the warn
+            // policy).
+            let mut streaming = 0usize;
+            let mut other = 0usize;
+            Self::classify_var_uses(&body, v, &mut streaming, &mut other);
+            // The `Set(v, par_call)` itself counts as a use.  Subtract
+            // exactly one read (the par-call's appearance in arg-position
+            // of the assignment is an artifact of how Set is encoded —
+            // some encodings do, some don't; conservative: don't double
+            // count by subtracting the assignment read).
+            //
+            // Heuristic: if `other > 0` AND the only `streaming` use is
+            // 0, the result is purely materialising — warn.  If
+            // `streaming` >= 1 and `other` >= 1, mixed-use — warn (one
+            // read can't be both streamed and materialised).
+            let var_name = self.vars.name(v).to_string();
+            // Skip compiler-generated bindings: the fused for-par
+            // desugar in `parse_parallel_for_loop` emits a hidden
+            // `_par_results_N` var that's bound to a parallel_for
+            // call and then indexed per iteration.  That's the
+            // existing materialised path we WILL retire (step 8),
+            // but warning on the compiler's own desugaring spams
+            // every fused for-par site with output the user can't
+            // act on.  Names starting with `_` are unique-counter
+            // generated; user-typed bindings never start with `_`.
+            if var_name.starts_with('_') {
+                continue;
+            }
+            if streaming == 0 && other == 0 {
+                // Result is bound but never read — par dispatched for
+                // worker side effects only.  Suggest the explicit
+                // form so the materialised result vector isn't
+                // allocated for nothing.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "par result '{var_name}' is never read — the materialised \
+                     result vector is allocated but unused.  Use a fused `for x \
+                     in input par(_=fn(x), N) {{}}` loop with discard policy \
+                     (plan-06 spine step 3c) instead, or remove the assignment \
+                     if the worker has no observable side effects."
+                );
+            } else if other > 0 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "par result '{var_name}' is used in a materialising context \
+                     (random access, multi-pass, or stored as vector<S>) — \
+                     phase 10 of plan-06 will require single-pass consumption.  \
+                     Either rewrite to a fused `for x in input par(r=fn(x), N) {{ body }}` \
+                     loop, or call `par_to_vec(input, fn, N)` (planned phase 11) \
+                     for an explicit materialised vector.  \
+                     {streaming} streaming use(s), {other} materialising use(s) detected."
+                );
+            }
+            // streaming == 1 && other == 0 — single-pass eligible.
+            // Step 5b's lowering would rewrite to a fused for-par
+            // dispatching through `run_parallel_queue` (no result
+            // vector).  Deferred — bundles with step 8 (Concat
+            // retirement) where the runtime question becomes
+            // concrete and the rewrite has a clear destination IR.
+            // For now this case is silent: existing code keeps
+            // working through the materialised path.
+        }
+    }
+
+    /// Plan-06 spine step 5 — find each `Set(v, Call(par_for_d_nr, ...))`
+    /// occurrence in the IR tree and push `v` into `result`.  Recurses
+    /// through every compound variant (Block / Loop / If / Insert /
+    /// Iter / Span / ParFor) so a par assignment buried inside an `if`
+    /// branch or a sub-block is still found.
+    fn collect_par_assignments(val: &Value, par_for_d_nr: u32, result: &mut Vec<u16>) {
+        match val {
+            Value::Set(v, inner) => {
+                if let Value::Call(d, _) = inner.as_ref().unspan()
+                    && *d == par_for_d_nr
+                {
+                    result.push(*v);
+                }
+                Self::collect_par_assignments(inner, par_for_d_nr, result);
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &bl.operators {
+                    Self::collect_par_assignments(op, par_for_d_nr, result);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    Self::collect_par_assignments(op, par_for_d_nr, result);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::collect_par_assignments(c, par_for_d_nr, result);
+                Self::collect_par_assignments(t, par_for_d_nr, result);
+                Self::collect_par_assignments(e, par_for_d_nr, result);
+            }
+            Value::Iter(_, a, b, c) => {
+                Self::collect_par_assignments(a, par_for_d_nr, result);
+                Self::collect_par_assignments(b, par_for_d_nr, result);
+                Self::collect_par_assignments(c, par_for_d_nr, result);
+            }
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::collect_par_assignments(a, par_for_d_nr, result);
+                }
+            }
+            Value::Return(v) | Value::Drop(v) | Value::Yield(v) => {
+                Self::collect_par_assignments(v, par_for_d_nr, result);
+            }
+            Value::BreakWith(_, v) | Value::TuplePut(_, _, v) => {
+                Self::collect_par_assignments(v, par_for_d_nr, result);
+            }
+            Value::Span(b) => Self::collect_par_assignments(&b.1, par_for_d_nr, result),
+            Value::ParFor(b) => {
+                Self::collect_par_assignments(&b.input, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.worker, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.threads, par_for_d_nr, result);
+                Self::collect_par_assignments(&b.body, par_for_d_nr, result);
+            }
+            _ => {}
+        }
+    }
+
+    /// Plan-06 spine step 5 — classify each `Value::Var(v)` read in the
+    /// IR tree.  A read inside the `init` arm of a `Value::Iter` (the
+    /// collection being iterated) counts as **streaming**; every other
+    /// read counts as **other** (materialising).
+    ///
+    /// Counts are accumulated into the caller's mutable refs.  The
+    /// `Set(v, …)` site that introduced `v` is intentionally NOT a
+    /// read (Set's first field is a write target, not a read).
+    fn classify_var_uses(val: &Value, v: u16, streaming: &mut usize, other: &mut usize) {
+        match val {
+            Value::Var(u) if *u == v => {
+                *other += 1;
+            }
+            Value::Var(_) => {}
+            Value::Iter(_, init, next, extra) => {
+                // Iter's init is the iterable expression.  A bare
+                // `Var(v)` in init means `for x in v { … }` — count
+                // as streaming and don't recurse into the var read.
+                if let Value::Var(u) = init.as_ref()
+                    && *u == v
+                {
+                    *streaming += 1;
+                } else {
+                    Self::classify_var_uses(init, v, streaming, other);
+                }
+                Self::classify_var_uses(next, v, streaming, other);
+                Self::classify_var_uses(extra, v, streaming, other);
+            }
+            Value::Set(_, inner) => Self::classify_var_uses(inner, v, streaming, other),
+            Value::Call(_, args) | Value::CallRef(_, args) => {
+                for a in args {
+                    Self::classify_var_uses(a, v, streaming, other);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &bl.operators {
+                    Self::classify_var_uses(op, v, streaming, other);
+                }
+            }
+            Value::Insert(ops) | Value::Tuple(ops) | Value::Parallel(ops) => {
+                for op in ops {
+                    Self::classify_var_uses(op, v, streaming, other);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::classify_var_uses(c, v, streaming, other);
+                Self::classify_var_uses(t, v, streaming, other);
+                Self::classify_var_uses(e, v, streaming, other);
+            }
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                Self::classify_var_uses(inner, v, streaming, other);
+            }
+            Value::BreakWith(_, inner) | Value::TuplePut(_, _, inner) => {
+                Self::classify_var_uses(inner, v, streaming, other);
+            }
+            Value::Span(b) => Self::classify_var_uses(&b.1, v, streaming, other),
+            Value::ParFor(b) => {
+                // The input position is streaming-equivalent (par
+                // dispatcher iterates).  worker/threads/body are
+                // ordinary expression contexts.
+                if let Value::Var(u) = &b.input
+                    && *u == v
+                {
+                    *streaming += 1;
+                } else {
+                    Self::classify_var_uses(&b.input, v, streaming, other);
+                }
+                Self::classify_var_uses(&b.worker, v, streaming, other);
+                Self::classify_var_uses(&b.threads, v, streaming, other);
+                Self::classify_var_uses(&b.body, v, streaming, other);
+            }
+            _ => {}
         }
     }
 
@@ -3227,6 +3923,7 @@ fn collect_vars_in(val: &Value, result: &mut HashSet<u16>) {
             collect_vars_in(b, result);
             collect_vars_in(c, result);
         }
+        Value::Span(b) => collect_vars_in(&b.1, result),
         _ => {}
     }
 }
@@ -3334,6 +4031,7 @@ fn find_written_vars(
             find_written_vars(next, data, written, callee_cache);
             find_written_vars(extra, data, written, callee_cache);
         }
+        Value::Span(b) => find_written_vars(&b.1, data, written, callee_cache),
         _ => {}
     }
 }
@@ -3420,6 +4118,7 @@ fn find_field_written_vars(code: &Value, data: &Data, written: &mut HashSet<u16>
             find_field_written_vars(next, data, written);
             find_field_written_vars(extra, data, written);
         }
+        Value::Span(b) => find_field_written_vars(&b.1, data, written),
         _ => {}
     }
 }

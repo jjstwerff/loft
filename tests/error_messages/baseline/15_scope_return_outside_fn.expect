@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Syntax error: unexpected 'return' at <cases>/15_scope_return_outside_fn.loft:1:7
+  |
+   1 | return 5;
+     |       ^
+==== stderr ====

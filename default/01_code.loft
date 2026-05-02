@@ -144,6 +144,7 @@ fn OpAbsInt(v1: integer) -> integer;
 pub fn abs(both: integer) -> integer {
   OpAbsInt(both)
 }
+#pure
 
 fn OpMinSingleInt(v1: integer) -> integer;
 #rust"ops::op_negate_int(@v1)"
@@ -217,6 +218,7 @@ fn OpAbsSingle(v1: single) -> single;
 pub fn abs(both: single) -> single {
   OpAbsSingle(both)
 }
+#pure
 
 fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
@@ -242,53 +244,63 @@ fn OpMathFuncSingle(fn_id: const i8, v1: single) -> single;
 pub fn cos(both: single) -> single {
   OpMathFuncSingle(0, both)
 }
+#pure
 // Sine. Use for circular motion: y = r * sin(angle).
 
 pub fn sin(both: single) -> single {
   OpMathFuncSingle(1, both)
 }
+#pure
 // Tangent. Use for slopes and perspective projection.
 
 pub fn tan(both: single) -> single {
   OpMathFuncSingle(2, both)
 }
+#pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
 pub fn acos(both: single) -> single {
   OpMathFuncSingle(3, both)
 }
+#pure
 // Arc sine. Returns the angle whose sine is v.
 
 pub fn asin(both: single) -> single {
   OpMathFuncSingle(4, both)
 }
+#pure
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
 
 pub fn atan(both: single) -> single {
   OpMathFuncSingle(5, both)
 }
+#pure
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
 
 pub fn ceil(both: single) -> single {
   OpMathFuncSingle(6, both)
 }
+#pure
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
 
 pub fn floor(both: single) -> single {
   OpMathFuncSingle(7, both)
 }
+#pure
 // Round to the nearest integer value (half rounds away from zero).
 
 pub fn round(both: single) -> single {
   OpMathFuncSingle(8, both)
 }
+#pure
 // Square root. Use for distances and normalization.
 
 pub fn sqrt(both: single) -> single {
   OpMathFuncSingle(9, both)
 }
+#pure
 
 fn OpMathFunc2Single(fn_id: const i8, v1: single, v2: single) -> single;
 #rust"match @fn_id {{ 0 => @v1.atan2(@v2), 1 => @v1.log(@v2), _ => f32::NAN }}"
@@ -297,12 +309,14 @@ fn OpMathFunc2Single(fn_id: const i8, v1: single, v2: single) -> single;
 pub fn atan2(both: single, v2: single) -> single {
   OpMathFunc2Single(0, both, v2)
 }
+#pure
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
 pub fn log(both: single, v2: single) -> single {
   OpMathFunc2Single(1, both, v2)
 }
+#pure
 
 fn OpPowSingle(v1: single, v2: single) -> single;
 #rust"@v1.powf(@v2)"
@@ -311,6 +325,7 @@ fn OpPowSingle(v1: single, v2: single) -> single;
 pub fn pow(both: single, v2: single) -> single {
   OpPowSingle(both, v2)
 }
+#pure
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
 #rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_001f32"
@@ -338,6 +353,7 @@ fn OpAbsFloat(v1: float) -> float;
 pub fn abs(both: float) -> float {
   OpAbsFloat(both)
 }
+#pure
 
 fn OpMathPiFloat() -> float;
 #rust"std::f64::consts::PI"
@@ -353,53 +369,63 @@ fn OpMathFuncFloat(fn_id: const i8, v1: float) -> float;
 pub fn cos(both: float) -> float {
   OpMathFuncFloat(0, both)
 }
+#pure
 // Sine. Use for circular motion: y = r * sin(angle).
 
 pub fn sin(both: float) -> float {
   OpMathFuncFloat(1, both)
 }
+#pure
 // Tangent. Use for slopes and perspective projection.
 
 pub fn tan(both: float) -> float {
   OpMathFuncFloat(2, both)
 }
+#pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
 pub fn acos(both: float) -> float {
   OpMathFuncFloat(3, both)
 }
+#pure
 // Arc sine. Returns the angle whose sine is v.
 
 pub fn asin(both: float) -> float {
   OpMathFuncFloat(4, both)
 }
+#pure
 // Arc tangent of a single value. Returns angle in (-PI/2, PI/2).
 
 pub fn atan(both: float) -> float {
   OpMathFuncFloat(5, both)
 }
+#pure
 // Round up to the nearest integer value.
 // Use to compute required buffer sizes from fractional counts.
 
 pub fn ceil(both: float) -> float {
   OpMathFuncFloat(6, both)
 }
+#pure
 // Round down to the nearest integer value.
 // Use to convert a float position to a tile index.
 
 pub fn floor(both: float) -> float {
   OpMathFuncFloat(7, both)
 }
+#pure
 // Round to the nearest integer value (half rounds away from zero).
 
 pub fn round(both: float) -> float {
   OpMathFuncFloat(8, both)
 }
+#pure
 // Square root. Use for distances and normalization.
 
 pub fn sqrt(both: float) -> float {
   OpMathFuncFloat(9, both)
 }
+#pure
 
 fn OpMathFunc2Float(fn_id: const i8, v1: float, v2: float) -> float;
 #rust"match @fn_id {{ 0 => @v1.atan2(@v2), 1 => @v1.log(@v2), _ => f64::NAN }}"
@@ -408,12 +434,14 @@ fn OpMathFunc2Float(fn_id: const i8, v1: float, v2: float) -> float;
 pub fn atan2(both: float, v2: float) -> float {
   OpMathFunc2Float(0, both, v2)
 }
+#pure
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
 pub fn log(both: float, v2: float) -> float {
   OpMathFunc2Float(1, both, v2)
 }
+#pure
 
 fn OpPowFloat(v1: float, v2: float) -> float;
 #rust"@v1.powf(@v2)"
@@ -422,43 +450,52 @@ fn OpPowFloat(v1: float, v2: float) -> float;
 pub fn pow(both: float, v2: float) -> float {
   OpPowFloat(both, v2)
 }
+#pure
 // --- exp / ln / log2 / log10 ---
 // Raises E (2.71828…) to the power v. Use for exponential growth models.
 
 pub fn exp(both: single) -> single {
   pow(E as single, both)
 }
+#pure
 
 pub fn exp(both: float) -> float {
   pow(E, both)
 }
+#pure
 // Natural logarithm (base E). Use for growth rates and information entropy.
 
 pub fn ln(both: single) -> single {
   log(both, E as single)
 }
+#pure
 
 pub fn ln(both: float) -> float {
   log(both, E)
 }
+#pure
 // Base-2 logarithm. Use for bit-count calculations and information theory.
 
 pub fn log2(both: single) -> single {
   log(both, 2.0f)
 }
+#pure
 
 pub fn log2(both: float) -> float {
   log(both, 2.0)
 }
+#pure
 // Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
 
 pub fn log10(both: single) -> single {
   log(both, 10.0f)
 }
+#pure
 
 pub fn log10(both: float) -> float {
   log(both, 10.0)
 }
+#pure
 
 fn OpMinSingleFloat(v1: float) -> float;
 #rust"-@v1"
@@ -501,6 +538,7 @@ pub fn min(both: integer, b: integer) -> integer {
     b
   }
 }
+#pure
 // Largest of two integer values.
 
 pub fn max(both: integer, b: integer) -> integer {
@@ -513,11 +551,13 @@ pub fn max(both: integer, b: integer) -> integer {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
   min(max(both, lo), hi)
 }
+#pure
 
 // Smallest of two single-precision float values.
 
@@ -531,6 +571,7 @@ pub fn min(both: single, b: single) -> single {
     b
   }
 }
+#pure
 // Largest of two single-precision float values.
 
 pub fn max(both: single, b: single) -> single {
@@ -543,11 +584,13 @@ pub fn max(both: single, b: single) -> single {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: single, lo: single, hi: single) -> single {
   min(max(both, lo), hi)
 }
+#pure
 // Smallest of two double-precision float values.
 
 pub fn min(both: float, b: float) -> float {
@@ -560,6 +603,7 @@ pub fn min(both: float, b: float) -> float {
     b
   }
 }
+#pure
 // Largest of two double-precision float values.
 
 pub fn max(both: float, b: float) -> float {
@@ -572,11 +616,13 @@ pub fn max(both: float, b: float) -> float {
     b
   }
 }
+#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 
 pub fn clamp(both: float, lo: float, hi: float) -> float {
   min(max(both, lo), hi)
 }
+#pure
 // --- Text ---
 // Functions for working with text (UTF-8 strings) and character values.
 // Read the value of a variable and put a reference to it on the stack
@@ -593,6 +639,7 @@ fn OpLengthText(v1: text) -> integer;
 pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
+#pure
 
 fn OpSizeText(v1: text) -> integer;
 #rust"@v1.chars().count() as i64"
@@ -600,12 +647,14 @@ fn OpSizeText(v1: text) -> integer;
 pub fn size(both: text) -> integer {
   OpSizeText(both)
 }
+#pure
 
 fn OpLengthCharacter(v1: character) -> integer;
 // Byte length of the character's UTF-8 encoding (1–4).
 pub fn len(both: character) -> integer {
   OpLengthCharacter(both)
 }
+#pure
 
 fn OpConvBoolFromText(v1: text) -> boolean;
 #rust"@v1 != crate::state::STRING_NULL"
@@ -706,7 +755,15 @@ fn OpNeRef(v1: reference, v2: reference) -> boolean;
 fn OpGetRef(v1: reference, fld: const u16) -> reference[v1];
 #rust"stores.get_ref(&@v1, u32::from(@fld))"
 fn OpSetRef(v1: reference, fld: const u16, val: reference);
-#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val.rec);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), v.rec);}}"
+// Plan-06 phase 4d.C step 2 — full 12-byte DbRef store/load.  Used by
+// the closure half of `Type::Function = (u32, DbRef)` slots when stored
+// in vector elements / struct fields.  Layout: u32 store_nr | u32 rec |
+// u32 pos.  Null is encoded as rec == 0 (other words irrelevant).
+fn OpSetDbRef(v1: reference, fld: const u16, val: reference);
+#rust"{{let db = @v1; let r = @val; let off = db.pos + u32::from(@fld); let store = stores.store_mut(&db); store.set_u32_raw(db.rec, off, u32::from(r.store_nr)); store.set_u32_raw(db.rec, off + 4, r.rec); store.set_u32_raw(db.rec, off + 8, r.pos);}}"
+fn OpGetDbRef(v1: reference, fld: const u16) -> reference;
+#rust"{{let db = @v1; let store = stores.store(&db); let off = db.pos + u32::from(@fld); let store_nr = store.get_u32_raw(db.rec, off) as u16; let rec = store.get_u32_raw(db.rec, off + 4); let pos = store.get_u32_raw(db.rec, off + 8); DbRef {{ store_nr, rec, pos }}}}"
 // Get a direct field reference for a structure: vector, index, hash or spacial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
@@ -726,23 +783,23 @@ fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
 #rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), 0); if r < 0 {{ 255u8 }} else {{ r as u8 }}}}"
 fn OpSetEnum(v1: reference, fld: const u16, val: enumerate);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(@val));}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), 0, i32::from(v));}}"
 fn OpGetShort(v1: reference, fld: const u16, min: const i16) -> integer;
 #rust"{{let db = @v1; i64::from(stores.store(&db).get_short(db.rec, db.pos + u32::from(@fld), i32::from(@min)))}}"
 fn OpGetText(v1: reference, fld: const u16) -> text[v1];
 #rust"{{let db = @v1; let store = stores.store(&db); Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(@fld))))}}"
 fn OpSetInt(v1: reference, fld: const u16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_int(db.rec, db.pos + u32::from(@fld), v);}}"
 fn OpSetCharacter(v1: reference, fld: const u16, val: character);
-#rust"{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), @val as u32);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), v as u32);}}"
 fn OpSetSingle(v1: reference, fld: const u16, val: single);
-#rust"{{let db = @v1; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_single(db.rec, db.pos + u32::from(@fld), v);}}"
 fn OpSetFloat(v1: reference, fld: const u16, val: float);
-#rust"{{let db = @v1; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), @val);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_float(db.rec, db.pos + u32::from(@fld), v);}}"
 fn OpSetByte(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min), v as i32);}}"
 fn OpSetShort(v1: reference, fld: const u16, min: const i16, val: integer);
-#rust"{{let db = @v1; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), @val as i32);}}"
+#rust"{{let db = @v1; let v = @val; stores.store_mut(&db).set_short(db.rec, db.pos + u32::from(@fld), i32::from(@min), v as i32);}}"
 // 4-byte integer field read/write (post-2c `integer size(4)` subtypes).
 // Raw i32 storage with i32::MIN as the null sentinel; the stack value
 // stays i64 (widen on load, narrow on store).
@@ -779,6 +836,18 @@ fn OpLengthVector(r: vector) -> integer;
 pub fn len(both: vector) -> integer {
   OpLengthVector(both)
 }
+#pure
+
+// sorted<T[key]> shares vector's length-prefixed allocation layout
+// (length word at offset 4 of the backing record), so the runtime
+// helper is identical — only the parser-side type tag differs.
+fn OpLengthSorted(r: sorted) -> integer;
+#rust"i64::from(vector::length_vector(&@r, &s.database.allocations))"
+// Number of elements in a sorted collection.
+pub fn len(both: sorted) -> integer {
+  OpLengthSorted(both)
+}
+#pure
 
 fn OpClearVector(r: vector);
 #rust"vector::clear_vector(&@r, &mut s.database.allocations);"
@@ -786,6 +855,7 @@ fn OpClearVector(r: vector);
 pub fn clear(both: vector) {
   OpClearVector(both)
 }
+#impure(parent_write)
 
 // This returns the position inside the vector of a record or a value, get the actual value with fld=0
 fn OpGetVector(r: vector, size: const u16, index: integer) -> reference[r];
@@ -795,25 +865,37 @@ fn OpVectorRef(r: vector, index: integer) -> reference[r];
 #rust"stores.get_ref(&vector::get_vector(&@r, 4, @index, &s.database.allocations), 0)"
 fn OpCastVectorFromText(val: text, db_tp: const u16) -> vector;
 #rust"s.db_from_text(@val, @db_tp)"
+// Plan-06 phase 5a: collection-mutation opcodes are #impure(parent_write).
+// par-safety analyser rejects calls to these from worker fns when the
+// first arg (the collection) is non-local (D8 R1 — full check still
+// requires "is first arg local?" analysis; today blanket-rejected).
 fn OpRemoveVector(r: vector, size: const u16, index: integer) -> boolean;
 #rust"vector::remove_vector(&@r, u32::from(@size), @index, &mut s.database.allocations)"
+#impure(parent_write)
 // Insert space into a vector, no data written
 fn OpInsertVector(r: vector, size: const u16, index: integer, db_tp: const u16) -> reference[r];
+#impure(parent_write)
 // Claim space for a new record for the given structure
 fn OpNewRecord(data: reference, parent_tp: const u16, fld: const u16) -> reference[data];
+#impure(parent_write)
 // Write the new record into the given structure (when not already done)
 fn OpFinishRecord(data: reference, rec: reference, parent_tp: const u16, fld: const u16);
+#impure(parent_write)
 // Add all elements of another vector with the same type
 fn OpAppendVector(r: vector, other: vector, tp: const u16);
 #rust"s.database.vector_add(&@r, &@other, @tp);"
+#impure(parent_write)
 // Get a record from a structure. This operator also reads a dynamic key from stack (not shown here)
 fn OpGetRecord(data: reference, db_tp: const u16, no_keys: const u8) -> reference[data];
 fn OpValidate(data: reference, db_tp: const u16);
 // These types should eventually become unnecessary because of the unified internal database API
 type hash size(4);
 fn OpHashAdd(data: reference, rec: reference, tp: const u16);
+#impure(parent_write)
 fn OpHashFind(data: reference, tp: const u16) -> reference[data];
+#pure
 fn OpHashRemove(data: reference, rec: reference, tp: const u16);
+#impure(parent_write)
 // C60 Step 3a-part2: iterate a hash in ascending key order.
 // Returns a fresh vector<reference<T>> with the hash's records sorted
 // by key field(s).  The parser desugars `for e in h { … }` into a
@@ -821,7 +903,26 @@ fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 // id via `sizeof`-style introspection (not yet exposed).  Inefficient
 // by design — walks + sorts all records per call.  See CAVEATS.md C60.
 pub fn hash_sorted(h: reference, tp: integer) -> reference;
+#pure
 type index size(4);
+
+// P192: hash<T[key]> bucket-array walk.  No const args needed —
+// the bucket array's size is read from the data record itself.
+fn OpLengthHash(r: hash) -> integer;
+#rust"i64::from(hash::count(&@r, &s.database.allocations))"
+// Number of elements in a hash collection.
+pub fn len(both: hash) -> integer {
+  OpLengthHash(both)
+}
+#pure
+
+// P192: index<T[key]> red-black tree walk.  `fields` is the
+// per-record bookkeeping byte offset (database.fields(tp));
+// the parser fills this constant when generating `len(ix)` for
+// `ix: index<T[key]>` — see parser/mod.rs `call()` special-case.
+fn OpLengthIndex(r: index, fields: const u16) -> integer;
+#rust"i64::from(tree::count(&@r, @fields, &s.database.allocations))"
+
 // type spacial;
 fn OpEqBool(v1: boolean, v2: boolean) -> boolean;
 #rust"@v1 == @v2"
@@ -833,17 +934,28 @@ fn OpPanic(message: text);
 // Panics with message if test is false. Use to verify invariants during development.
 // In production mode (--production), logs an error instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
+// Plan-06 phase 5a: #impure(host_io) — assertion failures write to
+// log/stderr (host bridges serialise), so par workers may call assert.
 pub fn assert(test: boolean, message: text, file: text, line: integer);
+#impure(host_io)
 // Immediately terminates execution with message. Use for unrecoverable error states.
 // In production mode (--production), logs a fatal entry instead of aborting.
 // The file and line are injected by the compiler; do not pass them manually.
 pub fn panic(message: text, file: text, line: integer);
+#impure(host_io)
 // Write a structured log record at the chosen severity.
 // The file and line are injected by the compiler; do not pass them manually.
+// Plan-06 phase 5a: log_* are #impure(host_io) — observable side
+// effect (writes to log sink) but the host serialises calls across
+// par workers, so they're par-safe.
 pub fn log_info(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_warn(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_error(message: text, file: text, line: integer);
+#impure(host_io)
 pub fn log_fatal(message: text, file: text, line: integer);
+#impure(host_io)
 fn OpPrint(v1: text);
 #rust"#[cfg(all(target_arch = \"wasm32\", not(feature = \"wasm\")))]\ncrate::loft_host_print(@v1.as_ptr(), @v1.len());\n#[cfg(not(target_arch = \"wasm32\"))]\nprint!(\"{{}}\", @v1);\n#[cfg(feature = \"wasm\")]\ncrate::wasm::output_push(@v1);"
 // Writes v to standard output without a newline.
@@ -851,11 +963,13 @@ fn OpPrint(v1: text);
 pub fn print(v1: text) {
   OpPrint(v1);
 }
+#impure(host_io)
 // Writes v followed by a newline. The standard choice for line-oriented output.
 
 pub fn println(v1: text) {
   OpPrint("{v1}\n");
 }
+#impure(host_io)
 
 type keys_definition;
 fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> integer;
@@ -916,10 +1030,16 @@ fn OpClearStackText(pos: const u16);
 // Read the lock state of the store containing a reference.
 // Returns true when the store is locked against writes.
 fn get_store_lock(r: reference) -> boolean;
+#pure
 // Lock the store containing a reference, preventing further writes.
 // Only `true` is accepted from loft code via d#lock = true.
 // A non-const variable may also use d#lock = false to unlock.
+// Plan-06 phase 5b': #pure from a par-safety standpoint — workers
+// receive their own cloned stores, and (un)locking a worker-local
+// store cannot affect parent state.  Compiler-generated `const`
+// wrappers call this around every `const` ref param.
 fn set_store_lock(r: reference, locked: boolean);
+#pure
 // Yield control back to the host frame loop.  Sets the interpreter's
 // `frame_yield` flag, which makes `state.execute_argv` return after
 // the current opcode.  The host then drives the next frame: in WASM
@@ -931,23 +1051,116 @@ fn set_store_lock(r: reference, locked: boolean);
 // `gl_swap_buffers` sets when running with real graphics.
 fn yield_frame();
 // --- Parallel ---
-// Internal: run a loft function over every element of a vector in parallel.
-// Not part of the public API — use the `par(b=worker(a), N)` for-loop clause instead.
-fn parallel_for_int(func: text, input: reference, element_size: integer, threads: integer) -> reference;
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.
 // Raw 5-arg internal signature; not callable from user code.
 fn parallel_for(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
+// Plan-06 phase 5a (DESIGN.md D8.1): #impure(par_call) — par-safety
+// analyser allows nested calls when the inner worker fn is itself
+// par-safe (D8 R2 / D2.1.1 recursive Arc promotion).
+#impure(par_call)
 // Internal: lightweight parallel map — borrows stores read-only instead of deep-copying.
 // The compiler automatically selects this when the worker qualifies (no recursive store
 // allocation, no text return).  Same signature as parallel_for + pool_stores_per_worker.
 fn parallel_for_light(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
-// Internal: read element idx from a parallel_for result reference.
-// Emitted by the compiler for the `par(...)` syntax; do not call directly.
-fn parallel_get_int(r: reference, idx: integer) -> integer;
-fn parallel_get_long(r: reference, idx: integer) -> integer;
-fn parallel_get_float(r: reference, idx: integer) -> float;
-fn parallel_get_bool(r: reference, idx: integer) -> boolean;
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 3 — `Stitch::Discard` runtime entry.
+// Internal: workers run, results dropped, no result vector allocated.
+// The compiler emits a call to this fn when a fused for-par body never
+// references the result (`for x in input par(_=fn(x), N) { }` or
+// `for x in input par(r=fn(x), N) { /* no use of r */ }`).
+// Same arg layout as parallel_for; void return.  Not callable from
+// user code — this is an IR-only entry the codegen produces.
+fn parallel_discard(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer);
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
+// Internal: workers run, each row's u64-encoded return value is pushed
+// onto an internal per-call buffer (`stores.par_buffer_stack`).  The
+// row count is returned as `integer` (i64) — `Type::Integer` slots are
+// 8 bytes on the operand stack regardless of narrow spec, matching
+// `_par_len_N`'s declared `I32` width via the codegen's
+// `OpPutInt` (8B) for any Integer slot.  Step 8b's parser rewrite is
+// the first user; until then this is exercised only by Rust unit
+// tests.  Same arg layout as parallel_for.  Not callable from user
+// code — IR-only entry the codegen produces.
+fn parallel_queue(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+#impure(par_call)
+// Step 8a — read one row's u64 result from the active queue buffer.
+// `idx` is the input row index.  Returns the worker's return value
+// re-interpreted as i64 (high bits are zero for narrow primitives).
+fn parallel_buf_get(idx: integer) -> integer;
+// Step 8a — pop the active queue buffer.  Called after the for-par
+// body loop finishes.
+fn parallel_buf_drop();
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 8c — text-return Queue runtime entry.
+// Same arg layout as parallel_for; workers return owned Strings
+// collected via run_parallel_text.  Result Vec<String> is pushed onto
+// stores.par_text_buffer_stack; the row count is returned as
+// `integer` (i64) — see parallel_queue's note about `_par_len_N`'s
+// 8-byte slot width.  Not callable from user code — IR-only entry
+// the fused for-par desugar emits.
+fn parallel_queue_text(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Step 8c — read one text from the active text-queue buffer.  Clones
+// the String into stores.scratch following the standard text-return
+// convention.
+fn parallel_buf_get_text(idx: integer) -> text;
+// Step 8c — pop the active text-queue buffer.
+fn parallel_buf_drop_text();
+#impure(par_call)
+// Plan-06 PRIORITY.md spine step 8d.1 — reference-return Queue runtime
+// entry.  Same arg layout as parallel_for; workers return a DbRef
+// into their own output store, which run_parallel_queue_ref adopts
+// into the parent + rebases via Stores::adopt_worker_excess +
+// rebase_walk_record.  The (refs, adopted_stores) pair is pushed onto
+// stores.par_ref_buffer_stack; the row count is returned for use as
+// a loop bound.  Not callable from user code — IR-only entry the
+// fused for-par desugar emits.
+fn parallel_queue_ref(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Step 8d.1 — read one rebased DbRef from the active par-ref buffer.
+fn parallel_buf_get_ref(idx: integer) -> reference;
+// Step 8d.1 — pop the active par-ref buffer; free every adopted
+// store.
+fn parallel_buf_drop_ref();
+#impure(par_call)
+// Plan-06 ARC.md A3 — narrow-primitive Queue runtime entry.  Same
+// arg layout as parallel_for; workers return a 1, 2, or 4-byte value
+// (Boolean, Enum-no-payload, Single, Character, narrow Integer).
+// Result is packed into a Vec<u8> with stride = return_size and
+// pushed onto stores.par_narrow_buffer_stack; the row count is
+// returned for use as a loop bound.  Not callable from user code —
+// IR-only entry the fused for-par desugar emits.
+fn parallel_queue_narrow(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Plan-06 ARC.md A3 — read one narrow row.  return_size is the
+// per-row stride (1, 2, or 4); signed selects sign-extension.
+fn parallel_buf_get_narrow(idx: integer, return_size: integer, signed: boolean) -> integer;
+// Plan-06 ARC.md A3 — pop the active narrow-queue buffer.
+fn parallel_buf_drop_narrow();
+#impure(par_call)
+// Plan-06 ARC.md A6.b — fn-ref-return Queue runtime entry.  Same
+// arg layout as parallel_for; workers return 20-byte fn-ref blobs
+// (8B i64 d_nr + 12B closure DbRef).  run_parallel_queue_fn writes
+// each row's 20 bytes directly into a packed Vec<u8> via
+// State::execute_at_raw_to.  Result buffer is pushed onto
+// stores.par_fn_buffer_stack; the row count is returned for use
+// as a loop bound.  Not callable from user code — IR-only entry
+// the fused for-par desugar emits.
+fn parallel_queue_fn(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+// Plan-06 ARC.md A6.b — read one 20-byte fn-ref blob from the
+// active fn-buffer.  Declared with a `fn(integer) -> integer`
+// return type so the codegen tracker advances by 20 bytes
+// (`variables::size(Type::Function, Argument) = 20`) — matching
+// the runtime push via `put_stack::<[u8; 20]>`.  The specific
+// signature is arbitrary; the parser overrides the call's return
+// type with the worker's actual fn-ref signature when emitting
+// `Set(b_var, Call(buf_get_fn, [idx]))` at the top of each fused
+// for-par body iteration.  Today only `par_struct_to_fn_t4`
+// exercises this; future fn-ref-return canaries with different
+// signatures route through the same buffer + getter without
+// changing this decl.
+fn parallel_buf_get_fn(idx: integer) -> fn(integer) -> integer;
+// Plan-06 ARC.md A6.b — pop the active fn-queue buffer.
+fn parallel_buf_drop_fn();
 // A15: parallel {} structured concurrency opcodes (replaced dead si_* superinstructions)
 fn OpParallelBegin(n_arms: const u8);
 fn OpParallelArm(offset: const u16);
@@ -961,18 +1174,21 @@ fn __add_int(a: integer, b: integer) -> integer { a + b }
 
 // Sum of all integer elements. Returns 0 for an empty vector.
 pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
+#pure
 // Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
 pub fn min_of<T: Ordered>(v: vector<T>) -> T {
   result = v[0];
   for i in 1..v.len() { if v[i] < result { result = v[i] } };
   result
 }
+#pure
 // Largest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
 pub fn max_of<T: Ordered>(v: vector<T>) -> T {
   result = v[0];
   for i in 1..v.len() { if result < v[i] { result = v[i] } };
   result
 }
+#pure
 // Sum of vector elements with caller-supplied identity.  Works on any Addable type.
 // Example: sum([10, 20, 12], 0) == 42
 pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
@@ -980,6 +1196,7 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
   for i in 0..v.len() { result = result + v[i] };
   result
 }
+#pure
 
 // --- Field iteration support types ---
 

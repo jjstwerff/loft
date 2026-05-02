@@ -1,0 +1,188 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# Phase 6 — Concrete type-mismatch messages
+
+Status: open
+
+## Goal
+
+Every type error names **both sides**, the **operation**, and (for
+function calls) the **argument index**.  Today's messages use
+generic phrasing like "type mismatch" or "wrong arg type"; phase 6
+rewrites them to:
+
+```
+error: cannot assign vector<i32> to variable of type text
+  --> game.loft:42:9
+   |
+42 |     name = scores
+   |     ^^^^^^^^^^^^^^
+   = note: 'name' was declared as text on line 8
+```
+
+```
+error: argument 2 of fn 'fight' has wrong type
+  --> game.loft:88:14
+   |
+88 |     fight(player, 100)
+   |                   ^^^
+   = note: expected reference<Enemy>, got integer
+   = note: 'fight' is defined at battle.loft:12
+```
+
+This is purely a rendering / message-construction change — spans
+(phase 1), pretty rendering (phase 2), and note lines (phase 5)
+do all the heavy lifting.  Phase 6 is the largest "polish" patch:
+many small message rewrites, each with a fixture.
+
+## Decision 06.A — message templates
+
+Every type error obeys the template:
+
+```
+<verb> <expr-summary> <preposition> <expected> [from <found>]
+```
+
+Concrete templates per site:
+
+| Site | Template |
+|---|---|
+| Assignment | `cannot assign <found-type> to variable of type <expected-type>` |
+| Function arg | `argument <N> of fn '<name>' has wrong type` (+ note: `expected <T>, got <U>`) |
+| Operator | `operator '<op>' cannot apply to <lhs-type> and <rhs-type>` |
+| Field access | `type <T> has no field '<name>'` (suggestion via phase 5) |
+| Method call | `type <T> has no method '<name>'` (suggestion via phase 5) |
+| Iterator | `cannot iterate over <found-type>; expected vector / hash / sorted / index / text` |
+| Match arm | `cannot match <expr-type> against pattern of type <pattern-type>` |
+| Return | `cannot return <found-type> from fn '<name>' declared to return <expected>` |
+| Struct literal | `field '<f>' of struct <S>: expected <T>, got <U>` (per field, not whole struct) |
+| Format spec | `format spec '{:<spec>}' is not valid for type <T>` |
+
+Note lines add the "where was the expected type declared" pointer
+when cheap (we already have the def's `Position`).
+
+## Decision 06.B — type rendering
+
+`Type` enum has a `Display` impl today (`src/data.rs`).  Phase 6
+audits it for legibility:
+
+| Type | Today | Want |
+|---|---|---|
+| `Type::Int` | `Int` | `integer` |
+| `Type::Long` | (removed in plan-01) | n/a |
+| `Type::Single` | `Single` | `single` |
+| `Type::Float` | `Float` | `float` |
+| `Type::Boolean` | `Boolean` | `boolean` |
+| `Type::Text` | `Text` | `text` |
+| `Type::Vector(Int, _)` | `Vector(Int, _)` | `vector<i32>` (uses size annotation) |
+| `Type::Hash(K, V, _)` | `Hash(K, V, _)` | `hash<V[K]>` |
+| `Type::Sorted(K, V, _)` | similar | `sorted<V[K]>` |
+| `Type::Reference(T, _)` | `Reference(T, _)` | `reference<T>` |
+| `Type::Tuple(elems)` | debug repr | `(T, U, V)` |
+| `Type::Function(args, ret)` | debug repr | `fn(T, U) -> V` |
+
+This matches loft surface syntax — what the user writes is what
+they see in errors.  Phase 6 renames `Display` to a new
+`fn render_user(&self) -> String`, leaves `Debug` untouched (still
+useful for IR dumps).
+
+### Decision 06.B-followup — a single source of truth
+
+`render_user` lives in `src/data.rs` next to `Type`.  Every
+diagnostic site consumes it, never the `Debug` impl.  The
+formatter (`src/formatter.rs`) and the documentation generator
+(`src/gendoc.rs`) already render types in surface syntax — phase 6
+makes them call `render_user` so all three (errors, formatter,
+docs) share one implementation.
+
+## Steps
+
+### 6a — `Type::render_user`
+
+New method.  Covers every variant.  Unit tests in `src/data.rs`
+under `#[cfg(test)]` cover each variant.  Formatter and gendoc
+switch over.
+
+### 6b — Site rewrite, batch 1: assignments + return
+
+Sites in `parser/expressions.rs` (assignment) and
+`parser/control.rs` (return).  Rewrite ~6 messages per file.  Each
+rewrite is a one-line message change plus a `note:` entry pointing
+at the variable / fn declaration.
+
+`tests/error_messages/baseline_pretty/`: cases 5, 11 regenerated.
+
+### 6c — Site rewrite, batch 2: function calls + struct literals
+
+Sites in `parser/control.rs::parse_call` and
+`parser/objects.rs::parse_struct_literal`.  These are the
+bulk-message sites — most user-visible type errors fire here.
+
+Cases 6, 31, 33, 34 regenerated.
+
+### 6d — Site rewrite, batch 3: operators + iterators
+
+Sites in `parser/operators.rs` and `parser/collections.rs`.
+
+Cases 32 regenerated.  (Case 32 = `for x in 5 { … }`.)
+
+### 6e — Site rewrite, batch 4: match + format
+
+Sites in `parser/control.rs::parse_match` and the format-string
+type-check (lexer hands off to expression parsing for
+`f"{x:spec}"`).
+
+Cases 30, 40 regenerated.
+
+### 6f — Test pass
+
+After each batch, `cargo test error_messages` re-runs.  No
+unrelated test should churn — phase 6 only touches messages, not
+control flow or types.  Any non-`error_messages/` test that diffs
+indicates a hidden coupling (e.g. a test grepping for "type
+mismatch") and is patched in the same batch.
+
+`make bench` re-run after batch 4: zero expected delta — these are
+diagnostic strings, no runtime change.  Bound: ≤ 0.5 % drift.
+
+## Atomic landing sequence
+
+| # | Step | Test |
+|---|---|---|
+| 6.1 | Add `Type::render_user(&self) -> String` covering every variant; `#[deny(unreachable_patterns)]` on the match | Unit test per variant: `Type::Int.render_user() == "integer"`, `Type::Vector(Int, sz).render_user() == "vector<i32>"`, etc.  One assertion per variant — exhaustive |
+| 6.2 | Switch `formatter.rs` to `render_user` | `tests/format.rs` green; if any test diffs, the diff is "Int" → "integer" style and is updated in the same commit |
+| 6.3 | Switch `gendoc.rs` to `render_user` | `tests/doc_hygiene.rs` green; gendoc HTML diff is the same "Int" → "integer" style |
+| 6.4 | Rewrite assignment-mismatch message + "declared on line N" note | Case 5 fixture: `.expect` regen shows `cannot assign vector<i32> to variable of type text` + decl note |
+| 6.5 | Rewrite return-mismatch message | New synthetic fixture: `fn foo() -> integer { return "x" }` → `cannot return text from fn 'foo' declared to return integer` |
+| 6.6 | Rewrite call-arg-mismatch (arg index + decl note) | Case 6 fixture: `argument 2 of fn 'foo' has wrong type` + `expected …, got …` + decl note |
+| 6.7 | Rewrite struct-literal field-mismatch (per-field, not whole struct) | Case 33: missing field message names the field; case 34: extra field message names it; both regenerated |
+| 6.8 | Rewrite operator-type-mismatch | New fixture: `"x" / 5` → `operator '/' cannot apply to text and integer` |
+| 6.9 | Rewrite iterator-not-iterable | Case 32 fixture: `cannot iterate over integer; expected vector / hash / sorted / index / text` |
+| 6.10 | Rewrite match-arm-type-mismatch | Case 30 fixture |
+| 6.11 | Rewrite format-spec-type-mismatch | Case 40 fixture: `format spec '{:int}' is not valid for type text` |
+| 6.12 | Audit non-`error_messages` tests for hidden "type mismatch" greps | Each batch's PR runs `cargo test`; any churn outside `tests/error_messages/` is fixed in the same PR or rolled back |
+| 6.13 | Re-run `make bench`; expect ≤ 0.5 % drift | Bench gate |
+
+## Acceptance
+
+- `Type::render_user` covers every variant; formatter and gendoc
+  switched over.
+- Every site listed in 06.A's table emits the new message shape.
+- All 9 type-error baseline cases (5, 6, 11, 30-34, 40)
+  regenerated.
+- Zero non-`error_messages` tests changed by phase 6 (any change
+  is a hidden coupling and gets a fix in the same PR).
+- `make ci` green.
+- `make bench` ≤ 0.5 % drift vs phase 5.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Massive fixture churn obscures the actual content of each PR | Batch 1-4 are separate commits; each commit's diff shows only the message rewrite + the matching `.expect` regen.  Reviewer (phase 7's checklist) reads them per-batch. |
+| `Type::render_user` and `Display` drift (someone adds a variant only to one) | `#[deny(unreachable_patterns)]` on the match in `render_user` plus a test that exhaustively matches every variant.  Same trick as `src/data.rs` already uses for `op_code` checks. |
+| Hidden test couplings to old message phrasing | Phase 0's baseline corpus and phase 1's grep audit list every test that asserts on diagnostic text.  Any other coupling surfaces in batch 1 and is fixed before batch 2. |
+| Localisation gets harder if messages become longer | Plan-07's out-of-scope statement excludes localisation; that's a future plan.  English-only stays. |

@@ -1,0 +1,5 @@
+fn main() {
+  big = 10000000000;
+  small = big as i32;
+  print("small={small}");
+}

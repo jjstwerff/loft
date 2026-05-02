@@ -1,0 +1,19 @@
+==== exit: 1 ====
+==== stdout ====
+Error: cannot iterate over integer; expected vector, sorted, index, hash, text, or range at <cases>/32_iter_wrong_collection_type.loft:2:15
+  |
+   2 |   for x in 5 {
+     |               ^
+Error: Need an iterable expression in a for statement at <cases>/32_iter_wrong_collection_type.loft:2:15
+  |
+   2 |   for x in 5 {
+     |               ^
+Error: Expect token ; at <cases>/32_iter_wrong_collection_type.loft:2:15
+  |
+   2 |   for x in 5 {
+     |               ^
+Warning: Variable x is never read at <cases>/32_iter_wrong_collection_type.loft:2:15
+  |
+   2 |   for x in 5 {
+     |               ^
+==== stderr ====

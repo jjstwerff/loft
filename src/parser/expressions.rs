@@ -3,6 +3,27 @@
 
 use super::{Level, Parser, Parts, Type, Value, diagnostic_format, v_block, v_if, v_loop, v_set};
 
+/// P194 helper — extract the host reference and base position from
+/// the leftmost `OpGet*` leaf of a tuple-typed field read.  Returns
+/// `(host_ref, first_element_position)` where `first_element_position`
+/// equals `host_field_pos + element_offset[0]`.  For nested-tuple
+/// reads, recurses into the inner `Value::Tuple`.
+fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
+    // Plan-07 phase 1: unspan() so wraps on `.` (step 1.12) don't
+    // hide the field-read shape of the tuple-LHS.
+    match v.unspan() {
+        Value::Call(_, args) if args.len() >= 2 => {
+            if let Value::Int(p) = &args[1] {
+                Some((args[0].clone(), *p))
+            } else {
+                None
+            }
+        }
+        Value::Tuple(inner) if !inner.is_empty() => leaf_tuple_lhs(&inner[0]),
+        _ => None,
+    }
+}
+
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
@@ -43,6 +64,16 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
             elems.iter().any(|a| inline_ref_set_in(a, r, depth + 1))
         }
         Value::TuplePut(_, _, inner) => inline_ref_set_in(inner, r, depth + 1),
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => inline_ref_set_in(&b.1, r, depth + 1),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            inline_ref_set_in(&b.input, r, depth + 1)
+                || inline_ref_set_in(&b.worker, r, depth + 1)
+                || inline_ref_set_in(&b.threads, r, depth + 1)
+                || inline_ref_set_in(&b.body, r, depth + 1)
+        }
         // Leaf variants — cannot contain a Set node.
         Value::Null
         | Value::Int(_)
@@ -60,6 +91,85 @@ fn inline_ref_set_in(val: &Value, r: u16, depth: usize) -> bool {
         | Value::Keys(_)
         | Value::TupleGet(_, _)
         | Value::FnRef(_, _, _) => false,
+        // Phase 09 phase 00 step 0.7 — RawExpr is codegen-internal.
+        Value::RawExpr(_) => false,
+    }
+}
+
+/// Recursively replace every occurrence of `from` in `into` with a clone
+/// of `to`.  Used by the `field += elem` keyed-collection branch to
+/// retarget a struct-literal's field-init steps from the LHS field
+/// expression onto a freshly-allocated element variable.
+pub(crate) fn substitute_value(into: &mut Value, from: &Value, to: &Value) {
+    if into == from {
+        *into = to.clone();
+        return;
+    }
+    match into {
+        Value::Call(_, args) | Value::CallRef(_, args) => {
+            for a in args {
+                substitute_value(a, from, to);
+            }
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for s in &mut bl.operators {
+                substitute_value(s, from, to);
+            }
+        }
+        Value::Insert(steps) => {
+            for s in steps {
+                substitute_value(s, from, to);
+            }
+        }
+        Value::If(c, t, e) => {
+            substitute_value(c, from, to);
+            substitute_value(t, from, to);
+            substitute_value(e, from, to);
+        }
+        Value::Set(_, v)
+        | Value::Return(v)
+        | Value::Drop(v)
+        | Value::Yield(v)
+        | Value::BreakWith(_, v)
+        | Value::TuplePut(_, _, v) => substitute_value(v, from, to),
+        Value::Iter(_, a, b, c) => {
+            substitute_value(a, from, to);
+            substitute_value(b, from, to);
+            substitute_value(c, from, to);
+        }
+        Value::Tuple(vs) | Value::Parallel(vs) => {
+            for v in vs {
+                substitute_value(v, from, to);
+            }
+        }
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => substitute_value(&mut b.1, from, to),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            substitute_value(&mut b.input, from, to);
+            substitute_value(&mut b.worker, from, to);
+            substitute_value(&mut b.threads, from, to);
+            substitute_value(&mut b.body, from, to);
+        }
+        // Leaf variants.
+        Value::Null
+        | Value::Int(_)
+        | Value::Enum(_, _)
+        | Value::Boolean(_)
+        | Value::Float(_)
+        | Value::Long(_)
+        | Value::Single(_)
+        | Value::Text(_)
+        | Value::Var(_)
+        | Value::Line(_)
+        | Value::Break(_)
+        | Value::Continue(_)
+        | Value::Keys(_)
+        | Value::TupleGet(_, _)
+        | Value::FnRef(_, _, _) => {}
+        // Phase 09 phase 00 step 0.7 — codegen-internal.
+        Value::RawExpr(_) => {}
     }
 }
 
@@ -457,7 +567,7 @@ use a separate collection or add after the loop"
         if self.first_pass {
             return false;
         }
-        let Value::Call(lock_nr, lock_args) = to else {
+        let Value::Call(lock_nr, lock_args) = to.unspan() else {
             return false;
         };
         if self.data.def(*lock_nr).name != "n_get_store_lock" {
@@ -543,6 +653,49 @@ use a separate collection or add after the loop"
             self.materialize_iterator(code, &s_type, to, &lhs_parent_tp, var_nr, op);
             return Type::Void;
         }
+        // P188 — local-var collection `+= elem` for vector/sorted/hash/
+        // index/spacial.  Routes the singleton element through
+        // OpNewRecord + OpFinishRecord (per-kind dispatch via
+        // record_finish: vector_finish / hash::add / sorted_finish /
+        // tree::add / ordered_finish).  Returns Type::Void before
+        // change_var fires the "cannot change type from sorted<…> to T"
+        // diagnostic that would otherwise reject this shape.
+        if op == "+="
+            && var_nr != u16::MAX
+            && matches!(
+                f_type,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+        {
+            let elm_tp = f_type.content();
+            if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
+                if !self.first_pass {
+                    let elm = self.unique_elm_var(f_type, &elm_tp, var_nr);
+                    let mut scalar = code.clone();
+                    // Mirror of the field-+= retarget at line ~755:
+                    // a struct-literal RHS pre-parses with the LHS local
+                    // (`Var(var_nr)`) as its target.  After allocating a
+                    // fresh element via new_record, retarget the inits
+                    // onto `Var(elm)` so the writes land in the new
+                    // record instead of the local-var's storage.
+                    substitute_value(&mut scalar, &Value::Var(var_nr), &Value::Var(elm));
+                    let ls = self.new_record(
+                        &mut Value::Var(var_nr),
+                        f_type,
+                        elm,
+                        var_nr,
+                        &[scalar],
+                        &elm_tp,
+                    );
+                    *code = Value::Insert(ls);
+                }
+                return Type::Void;
+            }
+        }
         // C54.A incremental 2a — if the variable carries an annotated
         // target type `: Long` with a narrower `Integer` RHS
         // (e.g. `x: u32 = 100` where `u32` promoted to Long), run
@@ -590,6 +743,17 @@ use a separate collection or add after the loop"
         if var_nr != u16::MAX && self.create_vector(code, f_type, op, var_nr) {
             return Type::Void;
         }
+        // P193: rewrite `local: keyed_collection<T> = []` to
+        // `Set(v, Null)` so codegen's gen_set_first_keyed_null fires
+        // at the declaration site (not lazily on first write).
+        // Falls through to the standard assign path which emits
+        // Set(v, code) — codegen then takes the Null arm.
+        if var_nr != u16::MAX && !self.first_pass && self.create_keyed(code, f_type, op, var_nr) {
+            // Don't return here — let the standard pipeline emit
+            // Set(v, Null) so codegen sees it.  No further special-
+            // case handling needed: the rest of the pipeline tolerates
+            // `code == Value::Null`.
+        }
         // vector-typed field whole-replacement.
         // `s.v = fresh` (RHS is a vector variable/expr) used to silently drop
         // the assignment because towards_set's vector branch returned bare
@@ -626,7 +790,11 @@ use a separate collection or add after the loop"
                 // `s.v = s.v` is a no-op; don't
                 // emit a clear (which would wipe the field) + append (which
                 // would then see an empty source).
-                if *code == *to {
+                // Plan-07 phase 1: compare via unspan() so the same
+                // expression wrapped at two different source positions
+                // (LHS `s.v` at one column, RHS `s.v` at another) still
+                // compares equal.
+                if *code.unspan() == *to.unspan() {
                     *code = Value::Insert(Vec::new());
                     return Type::Void;
                 }
@@ -671,7 +839,10 @@ use a separate collection or add after the loop"
             )]);
             return Type::Void;
         }
-        // Scalar `field += elem` where field is a vector field (var_nr == u16::MAX).
+        // Scalar `field += elem` where field is a vector field (var_nr == u16::MAX)
+        // and the RHS is a single expression (variable, function call) — NOT
+        // a struct literal.  Struct-literal RHS is handled by the keyed-
+        // collection branch below, which also covers vectors.
         if !self.first_pass
             && var_nr == u16::MAX
             && op == "+="
@@ -692,6 +863,54 @@ use a separate collection or add after the loop"
             );
             *code = Value::Insert(ls);
             return Type::Void;
+        }
+        // P192 follow-up: `field += elem` for keyed-collection fields
+        // (hash/sorted/index/spacial<T[key]>) AND vector fields when
+        // the RHS is a struct literal (Value::Insert).  Without this,
+        // `db.h += Score{...}` emitted raw `OpSetText` / `OpSetInt`
+        // writes targeting the field itself — which for hash/index
+        // fields overwrote the root pointer (4-byte ref) and for
+        // vector fields wrote into the length-prefix word.  The
+        // pre-parsed struct-literal steps target `to` (the LHS field
+        // expression); after allocating a new element via
+        // `new_record_field_op`, walk the steps and substitute `to`
+        // → `Var(elm)` so each field write lands in the new record.
+        if !self.first_pass
+            && var_nr == u16::MAX
+            && op == "+="
+            && self.is_field(to)
+            && matches!(
+                f_type,
+                Type::Vector(_, _)
+                    | Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Spacial(_, _, _)
+            )
+            && matches!(code, Value::Insert(_))
+        {
+            let elm_tp = f_type.content();
+            // Only fire for single-element append (RHS type matches the
+            // collection's element type — e.g. `Score{}` for `hash<Score>`).
+            // Multi-element append (RHS is a vector literal of element-typed
+            // values like `[1, 2, 3]` for `vector<i32>`) keeps its
+            // pre-existing handling further down (OpAppendVector / direct
+            // bulk inits).
+            if !elm_tp.is_unknown() && elm_tp.is_equal(&s_type) {
+                let elm = self.unique_elm_var(&lhs_parent_tp, &elm_tp, u16::MAX);
+                let mut scalar = code.clone();
+                substitute_value(&mut scalar, to, &Value::Var(elm));
+                let ls = self.new_record(
+                    &mut to.clone(),
+                    &lhs_parent_tp,
+                    elm,
+                    u16::MAX,
+                    &[scalar],
+                    &elm_tp,
+                );
+                *code = Value::Insert(ls);
+                return Type::Void;
+            }
         }
         // route the RHS of a simple assignment through `convert()`
         // so it picks up the same widening-with-explicit-narrowing policy
@@ -765,9 +984,9 @@ use a separate collection or add after the loop"
         // emit field constraint check after assignment to a constrained field.
         if !self.first_pass
             && let Type::Reference(struct_dnr, _) = &parent_tp
-            && let Value::Call(_, to_args) = to
+            && let Value::Call(_, to_args) = to.unspan()
             && to_args.len() >= 2
-            && let Value::Int(field_offset) = &to_args[1]
+            && let Value::Int(field_offset) = to_args[1].unspan()
         {
             let sd = *struct_dnr;
             let off = *field_offset;
@@ -838,9 +1057,42 @@ use a separate collection or add after the loop"
             }
         }
         // T1.2: LHS tuple destructuring — (a, b) = expr
-        if let Value::Tuple(vars) = code
+        // P194: tuple-typed field reassignment — `p.v = (...)` where
+        // v is a tuple-typed field.  `get_val::Type::Tuple` returns
+        // `Value::Tuple([reads])` for a tuple field read; the reads
+        // are `OpGet*(host_ref, base_pos + element_offset[i])`.  When
+        // the LHS shape is "tuple of reads (not all Var)" AND f_type
+        // is `Type::Tuple`, route to `emit_tuple_set_ops` instead of
+        // the destructuring branch.
+        if let Value::Tuple(vars) = code.unspan()
             && self.lexer.has_token("=")
         {
+            if let Type::Tuple(elems) = &f_type
+                && !vars.is_empty()
+                && !vars.iter().all(|v| matches!(v, Value::Var(_)))
+                && let Some((host_ref, first_pos)) = leaf_tuple_lhs(&vars[0])
+            {
+                let elems_vec = elems.clone();
+                let tuple_d_nr = self.data.tuple_def(&mut self.lexer, &elems_vec);
+                let offsets: Vec<u16> = crate::data::stored_tuple_offsets_for_def(
+                    &self.data,
+                    &self.database,
+                    tuple_d_nr,
+                    elems_vec.len(),
+                )
+                .unwrap_or_else(|| {
+                    crate::data::element_offsets(&elems_vec)
+                        .into_iter()
+                        .map(|x| x as u16)
+                        .collect()
+                });
+                let host_field_pos = (first_pos as u16).saturating_sub(offsets[0]);
+                let mut rhs = Value::Null;
+                let _rhs_type = self.expression(&mut rhs);
+                let ops = self.emit_tuple_set_ops(&host_ref, host_field_pos, &elems_vec, rhs);
+                *code = crate::data::v_block(ops, Type::Void, "tuple_field_set_via_assign");
+                return Type::Void;
+            }
             let var_nrs: Vec<u16> = vars
                 .iter()
                 .filter_map(|v| {
@@ -897,7 +1149,9 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         // T1.4-fix-a: tuple element assignment t.0 = expr.
-        if let Value::TupleGet(var_nr, idx) = code {
+        // Plan-07 phase 1: unspan() so the wrap on `.` (step 1.12)
+        // does not hide the TupleGet shape.
+        if let Value::TupleGet(var_nr, idx) = code.unspan() {
             let var_nr = *var_nr;
             let idx = *idx;
             if self.lexer.has_token("=") {
@@ -1097,10 +1351,11 @@ use a separate collection or add after the loop"
     }
 
     pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type) {
-        if let Value::Call(_, vars) = to
+        if let Value::Call(_, vars) = to.unspan()
             && vars.len() > 1
-            && let Value::Int(pos) = vars[1]
+            && let Value::Int(pos) = vars[1].unspan()
         {
+            let pos = *pos;
             let d_nr = self.data.type_def_nr(parent_tp);
             if d_nr != u32::MAX {
                 let known = self.data.def(d_nr).known_type;

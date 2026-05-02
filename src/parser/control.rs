@@ -2278,6 +2278,19 @@ impl Parser {
             if let Type::Enum(nr, true, _) = t {
                 t = Type::Reference(nr, vec![]);
             }
+            // P189b: vector elements that are tuples live as inline bytes
+            // in the vector record.  Iteration yields a 12-byte DbRef
+            // pointing at those bytes; treat the loop var as a reference
+            // to the synthetic `__tuple<...>` struct so per-element loads
+            // happen through `OpVarRef` + `OpGet*(offset)` rather than the
+            // stack-tuple `OpTupleGet` which would read DbRef bytes as
+            // garbage integers.  parse_part recognises the def-name prefix
+            // `__tuple<` and routes `.0` / `.1` to TupleGet IR.
+            if let Type::Tuple(ref elems) = t {
+                let elems_clone = elems.clone();
+                let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
+                t = Type::Reference(tuple_d, vec![]);
+            }
             for d in dep {
                 t = t.depending(*d);
             }
@@ -2578,7 +2591,17 @@ impl Parser {
             }
             self.lexer.token(")");
         }
-        self.parse_call_diagnostic(val, name, &list, &types, &call_pos)
+        let ret = self.parse_call_diagnostic(val, name, &list, &types, &call_pos);
+        // Plan-07 phase 1, step 1.13 — wrap intrinsic-keyword calls
+        // (`assert(...)`, `panic(...)`) at the `(` token so runtime
+        // failure inside `n_panic` / `n_assert` carries the call site
+        // position into `state.source_spans`.  Mirrors the wrap in
+        // `parse_call` for the regular fn-call dispatch path.
+        if !self.first_pass && matches!(val, Value::Call(_, _) | Value::CallRef(_, _)) {
+            let inner = std::mem::replace(val, Value::Null);
+            *val = Value::with_span(call_pos, inner);
+        }
+        ret
     }
 
     /// Extract the assert condition expression from the source line.
@@ -2865,7 +2888,17 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos)
+        let ret = self.dispatch_call(val, source, name, &list, &types, &named_args, &call_pos);
+        // Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
+        // at the `(` token position so runtime errors inside the call
+        // (panic, divide-by-zero in callee, etc.) can be reported with
+        // the call site's source location.  Skip on first pass and skip
+        // when dispatch left val unchanged (e.g. early-return paths).
+        if !self.first_pass && matches!(val, Value::Call(_, _) | Value::CallRef(_, _)) {
+            let inner = std::mem::replace(val, Value::Null);
+            *val = Value::with_span(call_pos, inner);
+        }
+        ret
     }
 
     /// Dispatch a parsed call to the appropriate handler: diagnostics, special

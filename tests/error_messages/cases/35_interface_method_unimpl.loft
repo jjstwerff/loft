@@ -1,0 +1,8 @@
+interface Drawable {
+  fn draw(self: Self) -> text
+}
+struct Box { w: integer }
+fn show<T: Drawable>(x: T) -> text { x.draw() }
+fn main() {
+  print("{show(Box { w: 10 })}");
+}

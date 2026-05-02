@@ -65,7 +65,7 @@ impl Parser {
         // a next()-based advance. Detect: the call target returns Iterator.
         if let Type::Iterator(inner, _) = is_type
             && !self.first_pass
-            && let Value::Call(d_nr, _) = code
+            && let Value::Call(d_nr, _) = code.unspan()
             && matches!(self.data.def(*d_nr).returned, Type::Iterator(_, _))
         {
             let gen_var = self.create_unique("__gen", is_type);
@@ -119,6 +119,15 @@ impl Parser {
                         if self.database.is_linked(db_tp) {
                             ref_expr = self.cl("OpVectorRef", &[code.clone(), i.clone()]);
                         }
+                    } else if matches!(*vtp.clone(), Type::Tuple(_)) {
+                        // P189b: vector-of-tuple — keep ref_expr as the
+                        // raw `OpGetVector` DbRef.  The loop var is typed
+                        // `Reference(__tuple<…>)` (see for_type) so codegen
+                        // reads elements via `OpVarRef` + `OpGet*(offset)`
+                        // per element type.  Without this skip,
+                        // `get_val(Tuple, …)` falls through the field-
+                        // type dispatch and errors with "Field access
+                        // not supported on type tuple([…])".
                     } else {
                         // route through `get_val` with the full
                         // element Type — preserves `IntegerSpec.forced_size`
@@ -131,6 +140,11 @@ impl Parser {
                         ref_expr = self.get_val(vtp, false, 0, ref_expr, u32::MAX);
                     }
                     let mut tp = *vtp.clone();
+                    if matches!(tp, Type::Tuple(_)) {
+                        // keep block type aligned with for_type's RefVar(Tuple)
+                        // — the next-expression yields a 12-byte DbRef.
+                        tp = Type::RefVar(Box::new(tp));
+                    }
                     for d in dep {
                         tp = tp.depending(*d);
                     }
@@ -152,11 +166,18 @@ impl Parser {
                     } else {
                         self.op("Add", i.clone(), Value::Int(1), I32.clone())
                     };
-                    let next = v_block(
-                        vec![v_set(iter_var, step), ref_expr],
-                        *vtp.clone(),
-                        "iter next",
-                    );
+                    // P189b: keep block type aligned with for_type's
+                    // Reference(__tuple<…>) — the next-expression yields
+                    // a 12-byte DbRef into vector storage.
+                    let block_tp = if let Type::Tuple(ref elems) = *vtp.clone() {
+                        let elems_clone = elems.clone();
+                        let tuple_d = self.data.tuple_def(&mut self.lexer, &elems_clone);
+                        Type::Reference(tuple_d, vec![])
+                    } else {
+                        *vtp.clone()
+                    };
+                    let next =
+                        v_block(vec![v_set(iter_var, step), ref_expr], block_tp, "iter next");
                     self.vars
                         .set_loop(0, self.data.def(vec_tp).known_type, code);
                     if reverse {
@@ -237,10 +258,15 @@ impl Parser {
                     if self.first_pass {
                         return Value::Null;
                     }
+                    // Plan-07 phase 6 (partial) — name the offending type
+                    // and the iterables loft accepts, so the user knows
+                    // what to substitute.  Old wording "Unknown iterator
+                    // type T" left users guessing whether T was the issue
+                    // or the syntax.
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "Unknown iterator type {}",
+                        "cannot iterate over {}; expected vector, sorted, index, hash, text, or range",
                         is_type.name(&self.data)
                     );
                 }
@@ -269,7 +295,7 @@ impl Parser {
                 );
                 return Some(Value::Null);
             }
-            if let Value::Call(get_nr, get_args) = to
+            if let Value::Call(get_nr, get_args) = to.unspan()
                 && self.data.def(*get_nr).name == "OpGetRecord"
                 && let Some(Value::Int(db_tp_val)) = get_args.get(1)
                 && (*db_tp_val as usize) < self.database.types.len()
@@ -315,7 +341,7 @@ impl Parser {
                 | Type::Index(_, _, _)
                 | Type::Spacial(_, _, _)
         ) {
-            if let Value::Var(nr) = to {
+            if let Value::Var(nr) = to.unspan() {
                 if !self.first_pass && self.vars.is_const_param(*nr) {
                     diagnostic!(
                         self.lexer,
@@ -339,7 +365,7 @@ impl Parser {
         if let Type::RefVar(tp) = f_type
             && matches!(**tp, Type::Vector(_, _) | Type::Sorted(_, _, _))
         {
-            if let Value::Var(nr) = to {
+            if let Value::Var(nr) = to.unspan() {
                 if self.vars.uses(*nr) > 0 {
                     return val.clone();
                 }
@@ -348,8 +374,8 @@ impl Parser {
             }
         }
         if *f_type == Type::Boolean
-            && let Value::Call(_, a) = &to
-            && let Value::Call(_, args) = &a[0]
+            && let Value::Call(_, a) = to.unspan()
+            && let Value::Call(_, args) = a[0].unspan()
         {
             let conv = Value::If(
                 Box::new(val.clone()),
@@ -362,11 +388,11 @@ impl Parser {
             );
         }
         let code = self.compute_op_code(op, to, val, f_type);
-        if let Value::Call(d_nr, args) = &to {
+        if let Value::Call(d_nr, args) = to.unspan() {
             let name = self.data.def(*d_nr).name.clone();
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
-        } else if let Value::Var(nr) = to {
+        } else if let Value::Var(nr) = to.unspan() {
             if !self.first_pass && self.vars.is_const_param(*nr) {
                 diagnostic!(
                     self.lexer,
@@ -1025,13 +1051,43 @@ use #count instead"
                 && kw == "par"
             {
                 self.lexer.has_identifier(); // consume "par"
+                // Plan-06 phase 4d.B — par-over-keyed-collection
+                // desugar.  When the input is sorted/hash/index/
+                // spacial, the par dispatcher's flat-vector iteration
+                // doesn't know how to walk the tree/hashmap layout.
+                // Pre-materialise into a `vector<reference<T>>` and
+                // re-route par() to use the materialised vector.
+                if matches!(
+                    in_type,
+                    Type::Sorted(_, _, _)
+                        | Type::Hash(_, _, _)
+                        | Type::Index(_, _, _)
+                        | Type::Spacial(_, _, _)
+                ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
+                    self.materialise_keyed_for_par(&in_type, &expr)
+                {
+                    let combined_fill = if fill == Value::Null {
+                        mat_fill_ir
+                    } else {
+                        v_block(vec![fill, mat_fill_ir], Type::Void, "Combined par fill")
+                    };
+                    self.parse_parallel_for_loop(
+                        code,
+                        &id,
+                        &mat_in_type,
+                        &Value::Var(mat_var),
+                        combined_fill,
+                        loop_nr,
+                    );
+                    return;
+                }
                 self.parse_parallel_for_loop(code, &id, &in_type, &expr, fill, loop_nr);
                 return;
             }
             // CO1.5: detect coroutine for-loop before parse_for_iter_setup consumes expr.
             let is_coroutine_loop = matches!(&in_type, Type::Iterator(_, _))
                 && !self.first_pass
-                && matches!(&expr, Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
+                && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned, Type::Iterator(_, _)));
             let (_iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
             let var_tp = self.for_type(&in_type);
@@ -1103,6 +1159,126 @@ use #count instead"
         } else {
             diagnostic!(self.lexer, Level::Error, "Expect variable after for");
         }
+    }
+
+    /// Plan-06 phase 4d.B — materialise a keyed-collection input
+    /// (`sorted/hash/index/spacial<T[key]>`) into a temporary
+    /// `vector<reference<T>>` so the par dispatcher's flat-vector
+    /// path can iterate it.  Returns `(fill_ir, mat_var, mat_in_type)`
+    /// or None if the source can't be unwrapped.  Mirrors the IR
+    /// shape that the parser emits for the manual workaround
+    /// `refs += [s]`: OpPreAllocVector + OpNewRecord + OpCopyRecord
+    /// + OpFinishRecord per loop iteration.
+    pub(crate) fn materialise_keyed_for_par(
+        &mut self,
+        in_type: &Type,
+        source_expr: &Value,
+    ) -> Option<(Value, u16, Type)> {
+        let (content_d, dep) = match in_type {
+            Type::Sorted(c, _, dep)
+            | Type::Hash(c, _, dep)
+            | Type::Index(c, _, dep)
+            | Type::Spacial(c, _, dep) => (*c, dep.clone()),
+            _ => return None,
+        };
+        let elem_ref_tp = Type::Reference(content_d, dep);
+        let vec_ref_tp = Type::Vector(Box::new(elem_ref_tp.clone()), Vec::new());
+        let mat_var = self.create_unique("__par_mat", &vec_ref_tp);
+        self.vars.defined(mat_var);
+        // Register the wrapper struct EARLY (both passes) so the
+        // typedef pass between pass 1 and pass 2 runs fill_database
+        // and assigns a real `known_type`.
+        let _ = self.data.vector_def(&mut self.lexer, &elem_ref_tp);
+        if self.first_pass {
+            return Some((Value::Null, mat_var, vec_ref_tp));
+        }
+        // Allocate the backing store for __par_mat.
+        let db_setup = self.vector_db(&elem_ref_tp, mat_var);
+        let iter_idx = self.create_unique("__par_mat_idx", &I32);
+        self.vars.defined(iter_idx);
+        let elm_var = self.create_unique("__par_mat_e", &elem_ref_tp);
+        self.vars.defined(elm_var);
+        // Drive the keyed-collection iterator via iterator() — same
+        // helper that powers `for x in sorted_items`.
+        let mut create_iter = source_expr.clone();
+        let it_marker = Type::Iterator(Box::new(elem_ref_tp.clone()), Box::new(Type::Null));
+        let iter_next = self.iterator(&mut create_iter, in_type, &it_marker, iter_idx, None);
+        if iter_next == Value::Null {
+            return None;
+        }
+        // Build the per-element append IR.  Mirrors the manual case
+        // `refs += [s]` which lowers to:
+        //   OpPreAllocVector(refs, 1, elem_size)
+        //   tmp = OpNewRecord(refs, vec_tp, u16::MAX)
+        //   OpCopyRecord(elm_var, tmp, content_tp)
+        //   OpFinishRecord(refs, tmp, vec_tp, u16::MAX)
+        let content_known = self.data.def(content_d).known_type;
+        let elem_size = if content_known == u16::MAX {
+            8
+        } else {
+            i32::from(self.database.size(content_known))
+        };
+        let vec_known = i32::from(self.vector_of(&elem_ref_tp));
+        let prealloc = self.cl(
+            "OpPreAllocVector",
+            &[Value::Var(mat_var), Value::Int(1), Value::Int(elem_size)],
+        );
+        let tmp_var = self.create_unique("__par_mat_t", &elem_ref_tp);
+        self.vars.defined(tmp_var);
+        let new_rec = self.cl(
+            "OpNewRecord",
+            &[
+                Value::Var(mat_var),
+                Value::Int(vec_known),
+                Value::Int(i32::from(u16::MAX)),
+            ],
+        );
+        let copy_rec = self.cl(
+            "OpCopyRecord",
+            &[
+                Value::Var(elm_var),
+                Value::Var(tmp_var),
+                Value::Int(i32::from(content_known)),
+            ],
+        );
+        let finish_rec = self.cl(
+            "OpFinishRecord",
+            &[
+                Value::Var(mat_var),
+                Value::Var(tmp_var),
+                Value::Int(vec_known),
+                Value::Int(i32::from(u16::MAX)),
+            ],
+        );
+        let body = Value::Insert(vec![
+            prealloc,
+            v_set(tmp_var, new_rec),
+            copy_rec,
+            finish_rec,
+        ]);
+        // Loop body: read next via iter_next into elm_var, break on
+        // null, otherwise append (body).
+        let for_next = v_set(elm_var, iter_next);
+        let mut lp = vec![for_next];
+        let mut test_for = Value::Var(elm_var);
+        self.convert(&mut test_for, &elem_ref_tp, &Type::Boolean);
+        test_for = self.cl("OpNot", &[test_for]);
+        lp.push(v_if(
+            test_for,
+            v_block(vec![Value::Break(0)], Type::Void, "break"),
+            Value::Null,
+        ));
+        lp.push(body);
+        // Assemble the materialisation Block.
+        let mut for_steps: Vec<Value> = Vec::new();
+        for s in &db_setup {
+            for_steps.push(s.clone());
+        }
+        for_steps.push(create_iter);
+        for_steps.push(v_loop(lp, "Materialise par input"));
+        let fill_ir = v_block(for_steps, Type::Void, "Materialise par");
+        let mat_in_type = vec_ref_tp.depending(mat_var);
+        Some((fill_ir, mat_var, mat_in_type))
     }
 
     // Desugar `for a in vec par(b = worker(a), N) { body }` into an
@@ -1186,6 +1362,33 @@ use #count instead"
         let (fn_d_nr, ret_type, extra_vals, _extra_types) =
             self.parse_parallel_worker(elem_var, &elem_tp);
 
+        // Plan-06 phase 5b' — par-safety DEEP check at ERROR level.
+        // Recurses through user-fn callees until it hits a direct
+        // call to a `Purity::Impure(ParentWrite)` stdlib fn, or
+        // until every path bottoms out in pure/host_io/prng/io/
+        // par_call/native primitives.  Unannotated declared-only
+        // natives (Op*, n_*) are treated as safe — they're C-level
+        // primitives, and the ones that DO write to parent state
+        // are explicitly tagged in `default/01_code.loft`.
+        //
+        // Emits Level::Error: writes from a worker to parent state
+        // silently vanish at thread join (D2.0).  The error gives
+        // the full reachability chain so the user can see exactly
+        // which helper introduces the offending call.
+        if !self.first_pass
+            && fn_d_nr != u32::MAX
+            && let Some(chain) = crate::scopes::worker_calls_parent_write_deep(&self.data, fn_d_nr)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "par() worker reaches a parent-write callee: {}.  \
+                     Worker writes to non-local state silently vanish at thread join \
+                     (plan-06 D2.0).  Return the value instead.",
+                chain
+            );
+        }
+
         // Comma separating worker from thread count.
         self.lexer.token(",");
         let mut threads_expr = Value::Null;
@@ -1198,11 +1401,41 @@ use #count instead"
         // return_size = -1 signals reference (struct) mode.
         let return_size: i32 = if matches!(&ret_type, Type::Text(_)) {
             0 // sentinel: text mode — workers collect Strings, main thread stores refs
-        } else if matches!(&ret_type, Type::Reference(_, _)) {
-            -1 // sentinel: reference mode — workers return DbRef, main deep-copies
+        } else if matches!(
+            &ret_type,
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        ) {
+            // Reference mode — workers return a DbRef into their own
+            // store; main deep-copies via copy_from_worker.  Plan-06
+            // phase 1 G1: struct-enum returns (Enum variants with
+            // payload, e.g. `Verdict::Pass{score}`) are heap-typed
+            // (`heap_def_nr().is_some()`) so they share the ref path
+            // verbatim.  This closes the size-8 gate for variant payloads.
+            // Plan-06 phase 1 G6: vector<T> returns also route here —
+            // the worker constructs the vector in its own output
+            // store and the main thread deep-copies it via the same
+            // copy_from_worker mechanism.
+            // Plan-06 ARC.md A6.d: keyed collections (Sorted / Hash /
+            // Index / Spacial) are stored as DbRefs to their backing
+            // records and route through the same ref path; the rebase
+            // walk in `data::owned_elements` already enumerates their
+            // internal owned-DbRef fields.
+            -1
         } else {
             let sz = i32::from(var_size(&ret_type, &Context::Argument));
-            if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || sz > 8) {
+            // Plan-06 phase 1 G4 — accept Type::Function returns
+            // (size 20 = 8B d_nr + 12B closure DbRef).  Workers
+            // write the 20-byte fn-ref into per-worker output
+            // slots; main thread copies bytes back via the
+            // execute_at_raw_to path in run_parallel_direct.
+            let is_fn_ref = matches!(&ret_type, Type::Function(_, _, _));
+            if !self.first_pass && fn_d_nr != u32::MAX && (sz == 0 || (sz > 8 && !is_fn_ref)) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -1217,12 +1450,35 @@ use #count instead"
         // which is wrong for inline vector element storage.
         let elem_size = {
             let elm_td = self.data.type_elm(&elem_tp);
-            let known = self.data.def(elm_td).known_type;
-            let db_size = i32::from(self.database.size(known));
-            if db_size > 0 {
-                db_size
+            // Plan-06 phase 1 G2.1 — narrow-integer vector inputs
+            // (vector<u8>, vector<i32>) store one element per
+            // forced_size byte slot.  IntegerSpec::vector_narrow_width()
+            // returns 1/2/4 for u8/i16/i32 and matches the iterator
+            // dispatch in collections.rs:105-113 for non-par for loops.
+            // Without this, var_size() returned 8 for any Integer
+            // and par read garbage at row_idx*8 instead of row_idx*4.
+            if let Type::Integer(spec) = &elem_tp
+                && let Some(n) = spec.vector_narrow_width()
+            {
+                i32::from(n)
+            } else if matches!(&elem_tp, Type::Function(_, _, _)) {
+                // Plan-06 phase 4d.A.2 — fn-ref vector storage is
+                // 4-byte i32 d_nr (matches `data::element_size(Type::Function)`).
+                // The known_type / db_size lookup below would return
+                // var_size(.., Argument) = 20 (the wide stack-slot
+                // width for fn-refs), which is wrong for vector
+                // stride.  Hard-code 4 here so par steps through the
+                // vector in 4-byte increments matching `OpSetInt4`'s
+                // narrow writes.
+                4
             } else {
-                i32::from(var_size(&elem_tp, &Context::Argument))
+                let known = self.data.def(elm_td).known_type;
+                let db_size = i32::from(self.database.size(known));
+                if db_size > 0 {
+                    db_size
+                } else {
+                    i32::from(var_size(&elem_tp, &Context::Argument))
+                }
             }
         };
 
@@ -1266,9 +1522,101 @@ use #count instead"
         let results_ref_type = Type::Reference(ref_d_nr, Vec::new());
         let par_for_d_nr = self.data.def_nr("n_parallel_for");
 
-        // Create result-reference variable.
-        let results_var = self.create_unique("par_results", &results_ref_type);
-        self.vars.defined(results_var);
+        // Plan-06 PRIORITY.md spine step 8c — compute the queue gate
+        // up front so we can avoid declaring a `par_results` slot for
+        // the streaming queue path.  In 8b/c that slot was created
+        // and `defined()` unconditionally; on the queue path nothing
+        // ever wrote to it, so scope-analysis + `generate_block`'s
+        // eval-stack residue check emitted a phantom `OpFreeStack(8)`
+        // at the par-block tail.  The discard underflowed below the
+        // function frame, corrupted `Return discard`'s wraparound,
+        // and SIGSEGV'd on the resulting bogus `code_pos`.  Skipping
+        // the slot keeps the codegen tracker honest.
+        //
+        // The buf_get / buf_drop d_nrs are looked up once here; the
+        // dispatch site below clones from these.
+        let queue_d_nr = self.data.def_nr("n_parallel_queue");
+        let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
+        let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
+        let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
+        let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
+        let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
+        let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
+        let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
+        let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
+        let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
+        let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
+        let early_is_primitive_return = !matches!(
+            ret_type,
+            Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Function(_, _, _)
+                | Type::Vector(_, _)
+                | Type::Unknown(_)
+        );
+        let early_ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
+            &Type::Integer(*spec),
+            &Context::Argument,
+        )) == 8);
+        let early_route_int_queue = early_is_primitive_return
+            && fn_d_nr != u32::MAX
+            && early_ret_size_8
+            && queue_d_nr != u32::MAX
+            && buf_get_d_nr != u32::MAX
+            && buf_drop_d_nr != u32::MAX;
+        let early_route_text_queue = matches!(ret_type, Type::Text(_))
+            && fn_d_nr != u32::MAX
+            && queue_text_d_nr != u32::MAX
+            && buf_get_text_d_nr != u32::MAX
+            && buf_drop_text_d_nr != u32::MAX;
+        // 8d.3: route Reference + struct-enum-payload + Vector
+        // returns through Queue.  All three share the adopt-and-
+        // rebase contract; the per-thread reserved-slot-range
+        // allocator (8d.3 in `run_parallel_queue_ref`) ensures
+        // worker-written DbRefs already live in parent namespace
+        // so cross-worker collision is eliminated.
+        let early_route_ref_queue = matches!(
+            ret_type,
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        ) && fn_d_nr != u32::MAX
+            && queue_ref_d_nr != u32::MAX
+            && buf_get_ref_d_nr != u32::MAX
+            && buf_drop_ref_d_nr != u32::MAX;
+        // ARC.md A6.b — fn-ref returns route through a packed-buffer
+        // queue (par_fn_buffer_stack) instead of the heap result
+        // vector.  See run_parallel_queue_fn for the runtime; the
+        // body substitution diverges below to emit
+        // `Set(b_var, Call(buf_get_fn, [idx]))` per iteration
+        // instead of inline-expanding b_var via replace_var_in_ir.
+        let early_route_fn_queue = matches!(ret_type, Type::Function(_, _, _))
+            && fn_d_nr != u32::MAX
+            && queue_fn_d_nr != u32::MAX
+            && buf_get_fn_d_nr != u32::MAX
+            && buf_drop_fn_d_nr != u32::MAX;
+        let early_route_through_queue = early_route_int_queue
+            || early_route_text_queue
+            || early_route_ref_queue
+            || early_route_fn_queue;
+
+        // Create result-reference variable — only on the materialised
+        // path.  The queue path stores results in
+        // `Stores::par_buffer_stack` / `_text_buffer_stack` and never
+        // touches a heap result vector.
+        let results_var = if early_route_through_queue {
+            None
+        } else {
+            let v = self.create_unique("par_results", &results_ref_type);
+            self.vars.defined(v);
+            Some(v)
+        };
 
         // Create index variable (b#index).
         let idx_var = self.create_var(&format!("{result_name}#index"), &I32);
@@ -1344,10 +1692,61 @@ use #count instead"
             return;
         }
 
+        // Plan-06 PRIORITY.md spine step 3 (Discard detection) — when the
+        // body never references the worker's result name (`b_var`) and
+        // never references the loop variable (`elem_var`), the user
+        // doesn't need a materialised result vector.  Lower to a direct
+        // call into `n_parallel_discard` (spine step 2 / 3b) which runs
+        // workers, drops results, allocates no result vector.
+        //
+        // Tighter conditions surface in steps 4 (Queue) and 9 (Reduce);
+        // until then, only the empty-body case routes here.  Body shapes
+        // like `{ log("done"); }` (uses neither r nor x) also qualify
+        // but are gated behind a per-Var walk in a later step.
+        let body_is_empty = matches!(&block, Value::Null)
+            || matches!(&block, Value::Block(bl) if bl.operators.is_empty())
+            || matches!(&block, Value::Insert(ops) if ops.is_empty());
+        let discard_d_nr = self.data.def_nr("n_parallel_discard");
+        if !self.first_pass && body_is_empty && discard_d_nr != u32::MAX && extra_args.is_empty() {
+            // Build a Discard call with the same arg layout as
+            // n_parallel_for (so the native fn pops in the same order).
+            // The body and per-element accessor (b/a inline aliases)
+            // are not needed — workers run, results dropped.
+            let n_extra_v = Value::Int(0);
+            let pf_args = vec![
+                vec_expr.clone(),
+                Value::Int(elem_size),
+                Value::Int(return_size),
+                threads_expr,
+                Value::Int(fn_d_nr as i32),
+                n_extra_v,
+            ];
+            *code = v_block(
+                vec![fill, Value::Call(discard_d_nr, pf_args)],
+                Type::Void,
+                "par_discard",
+            );
+            // Loop-counter accounting from the empty body.
+            let _ = count;
+            return;
+        }
+
         // A14.5/A14.6: auto-select light path for eligible workers.
+        // Heap-typed returns (Reference, struct-enum, Text, Unknown) need the
+        // heavy path's deep-copy machinery — the light path's `execute_at_raw`
+        // memcpy only handles inline returns ≤ 8 bytes.
+        // Plan-06 phase 1 G4 — fn-ref returns (Type::Function, 20 bytes)
+        // also need the heavy path's per-worker output slot mechanism;
+        // the light path writes via 8-byte execute_at_raw and would
+        // truncate the closure DbRef.
         let is_primitive_return = !matches!(
             ret_type,
-            Type::Text(_) | Type::Reference(_, _) | Type::Unknown(_)
+            Type::Text(_)
+                | Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Function(_, _, _)
+                | Type::Vector(_, _)
+                | Type::Unknown(_)
         );
         let light_m = if is_primitive_return && fn_d_nr != u32::MAX {
             self.check_light_eligible(fn_d_nr)
@@ -1375,10 +1774,111 @@ use #count instead"
         let _ = light_m;
         pf_args.extend(extra_args);
         pf_args.push(Value::Int(n_extra as i32));
-        let pf_call = Value::Call(actual_par_d_nr, pf_args);
 
-        // len(input_vec) — compute once before the loop.
-        let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
+        // Plan-06 PRIORITY.md spine step 8 — primitive 8-byte integer
+        // returns dispatch through the streaming Queue path (8a's
+        // `n_parallel_queue` + `n_parallel_buf_get`/`_drop`) instead
+        // of allocating a heap result vector.
+        //
+        // After 8b' (this commit) `run_parallel_queue` mirrors
+        // `run_parallel_direct`'s input-kind dispatch (DbRef, text,
+        // primitive, wide-inline / tuple / fn-ref), so the parser
+        // gate no longer needs to filter by input kind — every
+        // `is_primitive_return` worker now routes correctly.
+        //
+        // Gating today:
+        //   - `is_primitive_return` (no Text/Reference/Enum-payload/
+        //     Function/Vector/Unknown — handled by 8c/8d).
+        //   - `Type::Integer(_)` with full 8-byte width.  Narrow
+        //     integer widths (u8, i32, etc.) and other primitive
+        //     return types (bool, single, character, enum-no-
+        //     payload, tuple) need per-size buf_get variants to
+        //     mask the high bits and land cleanly into the body's
+        //     b_var slot.  Deferred to a future per-size sub-step.
+        //   - `fn_d_nr` resolved (partial-parse failures fall
+        //     through to the legacy path).
+        //   - `n_parallel_queue` / `_buf_get` / `_buf_drop`
+        //     registered (defensively, so a stripped stdlib still
+        //     parses).
+        //
+        // Trade-off: workers eligible for the light path
+        // (`light_m.is_some()`) skip its per-thread pool optimisation
+        // when routed through Queue.  A later sub-step combines
+        // light + queue once the architecture stabilises.
+        let queue_d_nr = self.data.def_nr("n_parallel_queue");
+        let buf_get_d_nr = self.data.def_nr("n_parallel_buf_get");
+        let buf_drop_d_nr = self.data.def_nr("n_parallel_buf_drop");
+        let queue_text_d_nr = self.data.def_nr("n_parallel_queue_text");
+        let buf_get_text_d_nr = self.data.def_nr("n_parallel_buf_get_text");
+        let buf_drop_text_d_nr = self.data.def_nr("n_parallel_buf_drop_text");
+        let queue_ref_d_nr = self.data.def_nr("n_parallel_queue_ref");
+        let buf_get_ref_d_nr = self.data.def_nr("n_parallel_buf_get_ref");
+        let buf_drop_ref_d_nr = self.data.def_nr("n_parallel_buf_drop_ref");
+        let queue_fn_d_nr = self.data.def_nr("n_parallel_queue_fn");
+        let buf_get_fn_d_nr = self.data.def_nr("n_parallel_buf_get_fn");
+        let buf_drop_fn_d_nr = self.data.def_nr("n_parallel_buf_drop_fn");
+        let ret_size_8 = matches!(ret_type, Type::Integer(spec) if u32::from(crate::variables::size(
+            &Type::Integer(*spec),
+            &Context::Argument,
+        )) == 8);
+        // 8b: integer-i64 returns route through `n_parallel_queue` +
+        // `par_buffer_stack`.
+        // 8c: text returns route through `n_parallel_queue_text` +
+        // `par_text_buffer_stack` (sibling stack — keeps the per-row
+        // read path tight by avoiding an enum match per element).
+        // 8d.2: reference / struct-enum-payload returns route through
+        // `n_parallel_queue_ref` + `par_ref_buffer_stack` — workers
+        // return DbRefs into their own output stores, the dispatcher
+        // adopts those stores into the parent and rebases the DbRefs
+        // via `Stores::adopt_worker_excess` + `rebase_walk_record`.
+        // Vector returns stay on the legacy materialised path for
+        // now — they're treated as a Reference but the
+        // `parallel_execute_and_collect` branch picks the heap-vector
+        // ownership invariants and matches its element-stride
+        // accounting differently; 8d.3 generalises Queue dispatch
+        // to vector returns.
+        // ARC.md A6.b: fn-ref returns route through `n_parallel_queue_fn`
+        // + `par_fn_buffer_stack` (packed Vec<u8>, 20 bytes per row).
+        // The body substitution diverges: instead of inline-expanding
+        // b_var via `replace_var_in_ir`, b_var is kept as a real
+        // variable and `Set(b_var, Call(buf_get_fn, [idx]))` is emitted
+        // at the top of each iteration body.  This works around the
+        // `replace_var_in_ir` limitation that doesn't substitute the
+        // u16 fn-ref var index inside `Value::CallRef`.
+        let route_int_queue = is_primitive_return
+            && fn_d_nr != u32::MAX
+            && ret_size_8
+            && queue_d_nr != u32::MAX
+            && buf_get_d_nr != u32::MAX
+            && buf_drop_d_nr != u32::MAX;
+        let route_text_queue = matches!(ret_type, Type::Text(_))
+            && fn_d_nr != u32::MAX
+            && queue_text_d_nr != u32::MAX
+            && buf_get_text_d_nr != u32::MAX
+            && buf_drop_text_d_nr != u32::MAX;
+        // Late-gate matches early-gate (see comment above).
+        // ARC.md A6.d: keyed-collection returns share the ref path
+        // (DbRef to backing record + type-driven rebase walk).
+        let route_ref_queue = matches!(
+            ret_type,
+            Type::Reference(_, _)
+                | Type::Enum(_, true, _)
+                | Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Hash(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Spacial(_, _, _)
+        ) && fn_d_nr != u32::MAX
+            && queue_ref_d_nr != u32::MAX
+            && buf_get_ref_d_nr != u32::MAX
+            && buf_drop_ref_d_nr != u32::MAX;
+        let route_fn_queue = matches!(ret_type, Type::Function(_, _, _))
+            && fn_d_nr != u32::MAX
+            && queue_fn_d_nr != u32::MAX
+            && buf_get_fn_d_nr != u32::MAX
+            && buf_drop_fn_d_nr != u32::MAX;
+        let route_through_queue =
+            route_int_queue || route_text_queue || route_ref_queue || route_fn_queue;
 
         let stop_cond = self.cl("OpLeInt", &[Value::Var(len_var), Value::Var(idx_var)]);
         let stop = v_if(
@@ -1387,39 +1887,63 @@ use #count instead"
             Value::Null,
         );
 
-        // Use OpGetVector + get_field to extract the element from the result
-        // vector. This works for all return types (int, long, float, bool, text)
-        // without per-type getter functions.
-        let result_elem_size = match return_size {
-            0 => 4, // text: 4-byte string pointer per element
-            -1 => {
-                // reference: inline struct size from the database
-                let ret_td = self.data.type_def_nr(ret_type);
-                let known = self.data.def(ret_td).known_type;
-                i32::from(self.database.size(known))
-            }
-            other => other,
-        };
-        let get_vec = self.cl(
-            "OpGetVector",
-            &[
-                Value::Var(results_var),
-                Value::Int(result_elem_size),
-                Value::Var(idx_var),
-            ],
-        );
-        let get_call = if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
-            // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
-            // skip the type-based field access to avoid crashing on Unknown type.
-            get_vec
+        // Build the body's `b` accessor.  For the queue paths it's
+        // `n_parallel_buf_get[_text/_ref/_fn](idx)`; for the materialised
+        // path it's `OpGetVector + get_field` indexing the heap
+        // result vector.
+        let get_call = if route_int_queue {
+            Value::Call(buf_get_d_nr, vec![Value::Var(idx_var)])
+        } else if route_text_queue {
+            Value::Call(buf_get_text_d_nr, vec![Value::Var(idx_var)])
+        } else if route_ref_queue {
+            // 8d.2: returns a rebased DbRef (12 bytes) — body field
+            // accesses route through the standard OpGetField path,
+            // same as Var(struct_var).foo.
+            Value::Call(buf_get_ref_d_nr, vec![Value::Var(idx_var)])
+        } else if route_fn_queue {
+            // ARC.md A6.b: returns a 20-byte fn-ref blob.  Used as
+            // the RHS of `Set(b_var, ...)` below — NOT inline-substituted
+            // via `replace_var_in_ir` because the body's `f(10)`
+            // parses as `CallRef(b_var, [Int(10)])` and `replace_var_in_ir`
+            // doesn't substitute the u16 fn-ref var index inside CallRef.
+            Value::Call(buf_get_fn_d_nr, vec![Value::Var(idx_var)])
         } else {
-            let vec_tp = self.data.type_def_nr(ret_type);
-            if vec_tp == u32::MAX {
-                // Unsupported return type (e.g. iterator<T> in first pass before S23
-                // diagnostic fires): fall back to raw vector access to prevent crash.
+            // Use OpGetVector + get_field to extract the element from the result
+            // vector. This works for all return types (int, long, float, bool, text)
+            // without per-type getter functions.
+            let result_elem_size = match return_size {
+                0 => 4, // text: 4-byte string pointer per element
+                -1 => {
+                    // reference: inline struct size from the database
+                    let ret_td = self.data.type_def_nr(ret_type);
+                    let known = self.data.def(ret_td).known_type;
+                    i32::from(self.database.size(known))
+                }
+                other => other,
+            };
+            let get_vec = self.cl(
+                "OpGetVector",
+                &[
+                    Value::Var(results_var.expect(
+                        "materialised path requires results_var; queue gate let it slip through",
+                    )),
+                    Value::Int(result_elem_size),
+                    Value::Var(idx_var),
+                ],
+            );
+            if matches!(ret_type, Type::Reference(_, _)) || fn_d_nr == u32::MAX {
+                // fn_d_nr == u32::MAX: worker was rejected (e.g. S23 generator check);
+                // skip the type-based field access to avoid crashing on Unknown type.
                 get_vec
             } else {
-                self.get_field(vec_tp, usize::MAX, get_vec)
+                let vec_tp = self.data.type_def_nr(ret_type);
+                if vec_tp == u32::MAX {
+                    // Unsupported return type (e.g. iterator<T> in first pass before S23
+                    // diagnostic fires): fall back to raw vector access to prevent crash.
+                    get_vec
+                } else {
+                    self.get_field(vec_tp, usize::MAX, get_vec)
+                }
             }
         };
         // Plan-04 B.3 follow-up v2 (b3-par-inline.md): rewrite every
@@ -1429,7 +1953,34 @@ use #count instead"
         // is emitted; the body references ARE the reads.  Under the B.3
         // atomic bundle's slot-aware `OpPut*` dispatch this eliminates
         // the type-width mismatch and the stack drift.
-        replace_var_in_ir(&mut block, b_var, &get_call);
+        //
+        // ARC.md A6.b: fn-ref returns diverge — `f(10)` parses as
+        // `CallRef(b_var, [Int(10)])` and `replace_var_in_ir`
+        // (src/parser/collections.rs:replace_var_in_ir) walks
+        // `CallRef(_, args)` into `args` but doesn't substitute the
+        // first u16 (the fn-ref var index).  Inline substitution
+        // would leave b_var as a dangling reference.  Instead, keep
+        // b_var as a real variable with a 20-byte slot, and prepend
+        // `Set(b_var, Call(buf_get_fn, [idx]))` to the body so each
+        // iteration's CallRef reads the fresh fn-ref blob.
+        if route_fn_queue {
+            // Mark b_var as in_use so the slot allocator reserves
+            // a 20-byte slot.  The body's `f(10)` (CallRef) uses
+            // b_var implicitly through the u16 var index, which
+            // doesn't increment the standard use-count tracker.
+            self.vars.in_use(b_var, true);
+            let init = v_set(b_var, get_call.clone());
+            // Prepend init to the body block.  If the body is not
+            // already a Block, wrap it in one.
+            if let Value::Block(ref mut bl) = block {
+                bl.operators.insert(0, init);
+            } else {
+                let inner = std::mem::replace(&mut block, Value::Null);
+                block = v_block(vec![init, inner], Type::Void, "fn-queue body");
+            }
+        } else {
+            replace_var_in_ir(&mut block, b_var, &get_call);
+        }
 
         // apply the same inline-alias treatment to the outer
         // iterator variable `a`.  The desugared loop increments `idx`;
@@ -1477,11 +2028,74 @@ use #count instead"
         if fill != Value::Null {
             for_steps.push(fill);
         }
-        for_steps.push(v_set(len_var, len_call));
-        for_steps.push(v_set(results_var, pf_call));
-        for_steps.push(v_set(idx_var, Value::Int(0)));
-        for_steps.push(v_loop(lp, "Parallel for loop"));
-        *code = v_block(for_steps, Type::Void, "Parallel for block");
+        if route_through_queue {
+            // Queue path: `n_parallel_queue[_text]` returns the row
+            // count directly, doubling as `par_len` and saving the
+            // `OpLengthVector(input)` call.  The result heap vector
+            // (`results_var`) is never allocated; per-iteration reads
+            // come from `stores.par_buffer_stack` (int),
+            // `par_text_buffer_stack` (text), or
+            // `par_ref_buffer_stack` (ref).  After the loop, pop
+            // the buffer with `n_parallel_buf_drop[_text/_ref]()` so
+            // the next par-call doesn't see a stale buffer
+            // underneath; the ref drop also frees adopted worker
+            // stores.
+            let (call_d_nr, drop_d_nr, label_loop, label_block) = if route_text_queue {
+                (
+                    queue_text_d_nr,
+                    buf_drop_text_d_nr,
+                    "Parallel for loop (queue text)",
+                    "Parallel for block (queue text)",
+                )
+            } else if route_ref_queue {
+                (
+                    queue_ref_d_nr,
+                    buf_drop_ref_d_nr,
+                    "Parallel for loop (queue ref)",
+                    "Parallel for block (queue ref)",
+                )
+            } else if route_fn_queue {
+                (
+                    queue_fn_d_nr,
+                    buf_drop_fn_d_nr,
+                    "Parallel for loop (queue fn)",
+                    "Parallel for block (queue fn)",
+                )
+            } else {
+                (
+                    queue_d_nr,
+                    buf_drop_d_nr,
+                    "Parallel for loop (queue)",
+                    "Parallel for block (queue)",
+                )
+            };
+            let queue_call = Value::Call(call_d_nr, pf_args);
+            for_steps.push(v_set(len_var, queue_call));
+            for_steps.push(v_set(idx_var, Value::Int(0)));
+            for_steps.push(v_loop(lp, label_loop));
+            for_steps.push(Value::Call(drop_d_nr, Vec::new()));
+            *code = v_block(for_steps, Type::Void, label_block);
+        } else {
+            // Materialised path (text / ref / fn-ref / vector / non-
+            // integer primitives).  Allocates a heap result vector
+            // and indexes it via `OpGetVector`.  Step 8c/8d/8b' will
+            // route the remaining cases through Queue; step 8e then
+            // retires `parallel_execute_and_collect` and the
+            // `Stitch::Concat` arm.
+            let pf_call = Value::Call(actual_par_d_nr, pf_args);
+            // len(input_vec) — compute once before the loop.
+            let len_call = self.cl("OpLengthVector", std::slice::from_ref(vec_expr));
+            for_steps.push(v_set(len_var, len_call));
+            for_steps.push(v_set(
+                results_var.expect(
+                    "materialised path requires results_var; queue gate let it slip through",
+                ),
+                pf_call,
+            ));
+            for_steps.push(v_set(idx_var, Value::Int(0)));
+            for_steps.push(v_loop(lp, "Parallel for loop"));
+            *code = v_block(for_steps, Type::Void, "Parallel for block");
+        }
     }
 
     // Consume the remaining `par(...)` tokens and then the body block so the
@@ -2299,5 +2913,18 @@ fn replace_var_in_ir(val: &mut Value, target: u16, replacement: &Value) {
             replace_var_in_ir(b, target, replacement);
             replace_var_in_ir(c, target, replacement);
         }
+        // Plan-07 phase 1 — Span is transparent; recurse into the
+        // wrapped node.
+        Value::Span(b) => replace_var_in_ir(&mut b.1, target, replacement),
+        // Plan-06 spine step 3 — recurse into all child Values.
+        Value::ParFor(b) => {
+            replace_var_in_ir(&mut b.input, target, replacement);
+            replace_var_in_ir(&mut b.worker, target, replacement);
+            replace_var_in_ir(&mut b.threads, target, replacement);
+            replace_var_in_ir(&mut b.body, target, replacement);
+        }
+        // Phase 09 phase 00 step 0.7 — RawExpr is a codegen-internal
+        // synthetic value; the parser walker never produces or sees it.
+        Value::RawExpr(_) => {}
     }
 }

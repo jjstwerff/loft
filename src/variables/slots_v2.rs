@@ -214,6 +214,7 @@ fn walk_node(val: &crate::data::Value, function: &Function, w: &mut WalkState) {
             walk_node(n, function, w);
             walk_node(e, function, w);
         }
+        Value::Span(b) => walk_node(&b.1, function, w),
         _ => {}
     }
 }
@@ -305,6 +306,7 @@ fn apply_var_size(val: &mut crate::data::Value, sizes: &HashMap<u16, u16>) {
             apply_var_size(n, sizes);
             apply_var_size(e, sizes);
         }
+        Value::Span(b) => apply_var_size(&mut b.1, sizes),
         _ => {}
     }
 }

@@ -194,6 +194,180 @@ LOFT_IR=distance LOFT_LOG=full loft myprog.loft 2>trace.txt
 
 ---
 
+## Fast iteration loop — `make iter`
+
+For day-to-day "fix one bug, run one test" cycles:
+
+```
+make iter TEST=p197                        # all p197* tests
+make iter TEST=p194 TFILE=issues           # only p194* in tests/issues.rs
+make iter TEST=introspect TFILE=exit_codes # only introspect* in tests/exit_codes.rs
+```
+
+`make iter` runs `cargo test` filtered to `$(TEST)`, optionally
+restricted to one test binary via `$(TFILE)`.  Defaults to the
+**dev profile**, which is specifically tuned in `Cargo.toml`:
+
+- `[profile.dev]` `opt-level = 1` (basic inlining)
+- `[profile.dev.package.loft]` `debug-assertions = false`
+  (skips the hot-path `Store::addr` / `keys::store` guards that
+  add ~270x overhead to interpreter-heavy tests)
+
+Measured here:
+
+| Scenario | Dev profile | Release profile |
+|---|---|---|
+| Warm cache, no source change | ~0.3s | ~0.3s |
+| Single-file edit, incremental rebuild | **~2.4s** | ~26.8s |
+| Cold rebuild after `make clean` | ~30s | ~60s |
+
+For most edits, dev profile is **~11x faster** on the inner
+debug loop.  Tests that depend on release-only behaviour
+(parallel timing windows, perf assertions) take `PROFILE=release`:
+
+```
+make iter TEST=par_throughput PROFILE=release
+```
+
+Sharing cache with `make test` / `make ci` (both release) means
+switching profiles forces a one-time rebuild.  Within a single
+debugging session, pick one and stay on it.
+
+`make iter` cleans `tests/dumps/` and `tests/generated/` before
+running — they pin per-test codegen output, and stale fixtures
+across profile/test-set changes can produce bogus errors
+(e.g. `attempt to add with overflow` from u16::MAX placeholder
+positions).  This mirrors what `make test` already does.
+
+### `mold` linker (committed default on Linux)
+
+`.cargo/config.toml` activates `mold` on `x86_64-unknown-linux-gnu`.
+Linker time is a small fraction of the rebuild (LLVM codegen
+dominates), so the direct speedup is modest (~1s).  The bigger
+win is a **unified cache**: every `cargo` invocation from this
+checkout uses the same `RUSTFLAGS`, so alternating between
+`cargo build`, `cargo test`, and `make iter` shares one cache
+key.  Without this pin, ad-hoc `RUSTFLAGS=...` overrides force
+rebuilds.
+
+First-time setup on Linux x64: `sudo apt-get install mold`.
+The CI workflow installs mold on its ubuntu runner.  macOS and
+Windows ignore the config (different target triples) and use
+their platform-native linkers.
+
+---
+
+## Introspection CLI (`--introspect`)
+
+`loft --introspect <file>` packages the dump primitives behind one
+flag, dumping bytecode + generated Rust + slot tables + per-fn type
+tables to stdout (or per-section files).  No env vars, no test
+harness.  Use it when you want to inspect compile-time state without
+running the program.
+
+### Sections
+
+| Flag | Output | When to use |
+|------|--------|-------------|
+| `--show-bytecode` | Bytecode disassembly per fn | Codegen bugs, "is the right opcode emitted?" |
+| `--show-rust` | Generated Rust (`--native-emit` shape) | Native-codegen bugs, rustc errors |
+| `--show-slots` | Stack-slot table per fn (name, type, scope, slot, live interval) | Slot conflicts, lifetime bugs |
+| `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
+
+Combine flags freely; they emit in fixed order.  No flags = all
+four sections.  `--all-fns` includes the default/* stdlib.  `--fn
+<name>` filters to one function.
+
+### `--show-types` for dep-tracking bugs
+
+The `--show-types` section renders each variable's full type via
+`Type::show()`, including the dependency suffix (`text["a"]` =
+text borrowed from `a`).  Designed to surface dep-propagation
+bugs at a glance — exactly the shape that hid P197 (a `text`
+element from a tuple struct field that should have carried the
+host as a dep but didn't).
+
+```
+fn n_first -> text["a"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0         a                        ref(A)
+  1    arg  s                        &text
+```
+
+Compare the function's return-type deps against what you expect.
+If a returned `text` should track a host but the table shows
+plain `text` (no `[host]` suffix), the dep was lost in
+`get_val::Type::Tuple`, `field()`'s `t.depending(*nr)`, or
+`Type::depending`'s recursion.
+
+#### `--trace` — per-expression tape
+
+Add `--trace` to surface the type at *every* chaining step, not
+just the final variable.  Critical for nested expressions where
+one intermediate step might lose a dep:
+
+```
+$ loft --introspect --show-types --trace foo.loft
+
+fn n_first -> text["a"]:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  a                        ref(A)
+
+  trace (per-expression types):
+    4:7        ref(A)["a"]
+    4:9        (text["a"], text["a"])  ← `.v` step
+    5:2        text["a"]                ← `.0` step
+```
+
+The two-step tape makes the dep flow visible: `a` → `a.v` →
+`a.v.0`, with each step carrying `["a"]`.  Before the P197 fix,
+the `.v` step would have rendered `(text, text)` (no `["a"]`)
+and the regression would have been obvious without reading any
+code.
+
+Implemented as a `Parser::trace_types` flag; `parse_part` calls
+`record_type_trace(&t)` after each `.field`/`.tuple_idx`/`[idx]`/
+`(args)` chaining step.  Position is the lexer's char-offset
+within the line (so `5:2` means line 5, byte 2 of the source).
+
+### `--diff <baseline>`: did my parser tweak change anything?
+
+Capture once, edit, re-run with `--diff`.  Mirrors `diff -u`'s
+exit codes (0 identical, 1 differs).
+
+```bash
+loft --introspect --show-bytecode myprog.loft > before.bc
+# edit the parser
+loft --introspect --show-bytecode --diff before.bc myprog.loft
+```
+
+Per-section `--*-out` redirects still write to their files;
+`--diff` only covers stdout-bound sections.
+
+### Native-codegen source map
+
+The `--show-rust` (and any `--native` compilation) emits
+`// loft:<file>:<line>` comments above each function header and
+each statement.  `rustc` errors on `/tmp/loft_native.rs:1450` map
+back to a .loft line by reading the nearest preceding comment.
+
+```rust
+// loft:/tmp/myprog.loft:7
+fn n_first(stores: &mut Stores, mut var_a: DbRef) -> Str {
+  ...
+  // loft:/tmp/myprog.loft:8
+  return Str::new(...)
+}
+```
+
+When rustc reports a borrow-check error or type mismatch, scroll
+upward in the generated file from the error line to the nearest
+`// loft:` comment — that's the source line under suspicion.
+
+---
+
 ## Debugging a Parse Error or Wrong IR
 
 1. Add `LOFT_LOG=static` and run the failing test.

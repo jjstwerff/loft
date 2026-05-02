@@ -809,6 +809,12 @@ impl Parser {
             self.last_closure_work_var = u16::MAX;
             if !self.first_pass {
                 self.check_ref_mutations(&arguments);
+                // Plan-06 PRIORITY.md spine step 5 — analyse each
+                // `let r = parallel_for(...)` site for materialising
+                // uses of r and emit a deprecation warning pointing
+                // users at the streaming form (fused for-par) or
+                // explicit `par_to_vec(...)` (planned phase 11).
+                self.check_par_result_singlepass();
             }
         }
         if !self.first_pass {
@@ -870,6 +876,54 @@ impl Parser {
                 } else {
                     diagnostic!(self.lexer, Level::Error, "Expect rust next string");
                 }
+            } else if id == Some("pure".to_string()) {
+                // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
+                // declares "no observable side effects, no
+                // parent-store writes".  Always par-safe.
+                self.data.definitions[self.context as usize].purity = crate::data::Purity::Pure;
+            } else if id == Some("impure".to_string()) {
+                // Plan-06 phase 5a (DESIGN.md D8.1):
+                // `#impure(category)` classifies the side effect.
+                // Five categories: host_io, prng, io, parent_write,
+                // par_call.
+                if !self.lexer.has_token("(") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect '(' after #impure — use #impure(host_io|prng|io|parent_write|par_call)"
+                    );
+                    self.lexer.revert(link);
+                    break;
+                }
+                let category = self.lexer.has_identifier();
+                let cat = match category.as_deref() {
+                    Some("host_io") => crate::data::ImpureCategory::HostIo,
+                    Some("prng") => crate::data::ImpureCategory::Prng,
+                    Some("io") => crate::data::ImpureCategory::Io,
+                    Some("parent_write") => crate::data::ImpureCategory::ParentWrite,
+                    Some("par_call") => crate::data::ImpureCategory::ParCall,
+                    other => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "Unknown #impure category {:?} — expected host_io|prng|io|parent_write|par_call",
+                            other.unwrap_or("(missing)")
+                        );
+                        self.lexer.revert(link);
+                        break;
+                    }
+                };
+                if !self.lexer.has_token(")") {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect ')' after #impure category"
+                    );
+                    self.lexer.revert(link);
+                    break;
+                }
+                self.data.definitions[self.context as usize].purity =
+                    crate::data::Purity::Impure(cat);
             } else {
                 // Not a recognised annotation — put the `#` back and stop.
                 self.lexer.revert(link);
@@ -1151,6 +1205,16 @@ impl Parser {
                 );
                 return types.into_iter().next();
             }
+            // Plan-06 phase 4d: register the synthetic `__tuple<…>`
+            // struct as soon as the tuple type appears in a type
+            // position (struct-field declaration, parameter, return
+            // type, …).  Without this, `fill_database` later sees
+            // `Type::Tuple` with `type_elm == u32::MAX` and silently
+            // skips registering the host struct's tuple field —
+            // leaving `database.position("v")` as `u16::MAX` when
+            // codegen needs the host field offset.  Mirrors the
+            // `sub_type` tuple arm below.  Idempotent.
+            self.data.tuple_def(&mut self.lexer, &types);
             Some(Type::Tuple(types))
         } else if self.lexer.has_token("fn") {
             Some(self.parse_fn_type(on_d))
@@ -1162,6 +1226,84 @@ impl Parser {
     }
 
     pub(crate) fn sub_type(&mut self, on_d: u32, type_name: &str, link: Link) -> Option<Type> {
+        // Plan-06 phase 4d.A — accept tuple as the inner type of
+        // `vector<(T1, T2, ...)>` (and reserve the same shape for
+        // `iterator<(T1, T2)>` once that lands).  Without this, the
+        // identifier-only check below would reject `(` and the parser
+        // would mis-parse the rest of `<(...)>` as a less-than
+        // expression on a bare `vector` type.
+        if self.lexer.peek_token("(") {
+            let tp = self.parse_type_full(on_d, false)?;
+            // P189: register a synthetic tuple struct so the rest of
+            // the type system (fill_database, type_def_nr, vector_of)
+            // can treat the tuple identically to a named struct.
+            // Idempotent — the same tuple shape resolves to the same
+            // def_nr across the program.
+            if let Type::Tuple(types) = &tp {
+                self.data.tuple_def(&mut self.lexer, types);
+            }
+            return Some(match type_name {
+                "vector" => {
+                    self.lexer.closing_angle();
+                    Type::Vector(Box::new(tp), Vec::new())
+                }
+                "iterator" => {
+                    self.lexer.closing_angle();
+                    Type::Iterator(Box::new(tp), Box::new(Type::Null))
+                }
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "{type_name}<(...)> not supported — tuple element types only \
+                         allowed on vector / iterator"
+                    );
+                    self.lexer.has_closing_angle();
+                    Type::Unknown(0)
+                }
+            });
+        }
+        // Plan-06 phase 4d.A.2 — recognise `fn` as a type-keyword inside
+        // `vector<...>` and `iterator<...>`.  Before this, the parser
+        // saw `vector<fn(integer) -> integer>`, sub_type's
+        // identifier-only check rejected `fn`, the lexer reverted
+        // past `<`, and the caller's annotation parser
+        // (`parse_assign:1009`) entered a tight retry loop on the
+        // unconsumed `<` — `loft --dump file.loft` hung at 100% CPU.
+        //
+        // Storage uses 4-byte i32 d_nr — `data::type_def_nr` and
+        // `type_elm` route Type::Function to `i32`'s def_nr, and
+        // `parser/vectors::get_type` returns `database.int(0, false)`
+        // so vector elements are written as raw 4-byte d_nrs (the same
+        // path `vector<i32>` uses).  At read-back time, the par
+        // dispatcher's `read_tuple_at_wide` (with a single-element
+        // `[Type::Function]` shape) inflates each row's 4 bytes into
+        // the worker's 20-byte fn-ref slot ([8B i64 d_nr][12B null
+        // closure DbRef]).
+        if self.lexer.peek_token("fn") {
+            self.lexer.token("fn");
+            let tp = self.parse_fn_type(on_d);
+            return Some(match type_name {
+                "vector" => {
+                    self.lexer.closing_angle();
+                    Type::Vector(Box::new(tp), Vec::new())
+                }
+                "iterator" => {
+                    self.lexer.closing_angle();
+                    Type::Iterator(Box::new(tp), Box::new(Type::Null))
+                }
+                _ => {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "{type_name}<fn(...)> not supported — fn-ref element types \
+                         only allowed on vector / iterator"
+                    );
+                    self.lexer.has_closing_angle();
+                    Type::Unknown(0)
+                }
+            });
+        }
         if let Some(sub_name) = self.lexer.has_identifier() {
             // before trying to resolve the element type, fail fast if the
             // identifier shadows a non-type definition (constant, function).
@@ -1702,21 +1844,15 @@ impl Parser {
                     }
                 }
             } else if let Some(tp) = self.parse_type_full(d_nr, false) {
-                // T1.11a: tuple-typed struct fields are not allowed because tuples are
-                // stack-only values that cannot be stored in heap-allocated records.
-                if matches!(tp, Type::Tuple(_)) {
-                    if !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "struct field cannot have a tuple type — tuples are stack-only values"
-                        );
-                    }
-                    defined = true; // suppress the generic "needs type" fallback error
-                } else {
-                    defined = true;
-                    a_type = tp;
-                }
+                // Plan-06 phase 4d: tuple-typed struct fields are now
+                // accepted.  Storage layout uses the synthetic
+                // `__tuple<…>` struct's positions (registered via
+                // `tuple_def`); set/get codegen routes element access
+                // through the same OpInt variants used for ordinary
+                // struct fields.  See `parser/mod.rs::set_field_check`
+                // and `get_val` for the per-element write/read paths.
+                defined = true;
+                a_type = tp;
                 break;
             } else {
                 break;

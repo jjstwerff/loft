@@ -6,4 +6,7 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+p4d_a2_par_vector_fn_ref_single	p4dA2 — same hang as the full canary (3 elements).  Confirmed via timeout 15s exit 143.  The bug is in par-dispatch with vector<fn-ref> input — consistent with the design's phase 2B path.
+p4d_a2_vector_fn_ref_for_loop	p4dA2 — parse fails identically to V1 (`Expect token ; at line 4:18` — the `(` in `fn(integer)`).  Suggests the parser only accepts vector<fn(...)> declaration syntax in specific contexts (canary's `for f in fs par(...)` clause).  Keeping ignored while investigating the parser path.
+p4d_a2_vector_fn_ref_index_access	p4dA2 — parse fails with 'Expect token ;' at the vector<fn(...)> declaration when the body uses index access (`f = fs[0]`) instead of `for f in fs par(...)`.  Keeping ignored while diagnosing.
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

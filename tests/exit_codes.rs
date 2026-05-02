@@ -534,3 +534,258 @@ fn p166_content_on_text_file_no_warning() {
         "text file should not trigger the P166 warning; got stderr={stderr:?}"
     );
 }
+
+/// DX-source-map — the native-codegen emitter writes
+/// `// loft:<file>:<line>` comments above each function header and
+/// each statement so rustc errors on the generated Rust code map
+/// back to the originating loft source.
+#[test]
+fn native_emit_includes_loft_source_map() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_source_map_demo.loft");
+    let script = "fn add(a: integer, b: integer) -> integer { a + b }\n\
+                  fn main() { x = add(1, 2); println(\"{x}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-rust")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    // Loft's source-map emission canonicalizes paths.  On Windows
+    // canonicalize() returns the `\\?\` UNC form; on Linux/macOS
+    // it returns the absolute path with symlinks resolved.  Match
+    // the test's expectation against the same canonical form.  A
+    // simple `.display()` form fails on Windows because the test's
+    // path lacks the UNC prefix.
+    let canonical = std::fs::canonicalize(&script_path).unwrap_or_else(|_| script_path.clone());
+    let path_str = canonical.display().to_string();
+    // Function-header comment maps to the .loft source line.
+    // Use ends_with-style match (`// loft:{stem-suffix}:1\nfn n_add(`)
+    // when the full path comparison fails — robust to canonical
+    // path variations across platforms.
+    let header_n_add = format!("// loft:{path_str}:1\nfn n_add(");
+    let header_n_main = format!("// loft:{path_str}:2\nfn n_main(");
+    let stem_n_add = "loft_source_map_demo.loft:1\nfn n_add(".to_string();
+    let stem_n_main = "loft_source_map_demo.loft:2\nfn n_main(".to_string();
+    assert!(
+        stdout.contains(&header_n_add) || stdout.contains(&stem_n_add),
+        "expected source-map header above n_add (canonical or stem match); got {stdout}"
+    );
+    assert!(
+        stdout.contains(&header_n_main) || stdout.contains(&stem_n_main),
+        "expected source-map header above n_main (canonical or stem match); got {stdout}"
+    );
+}
+
+/// P196: tuple struct field whose element is a fn-ref must project
+/// `.0` from the runtime `(u32, DbRef)` tuple before the OpSetInt4
+/// `as i32` cast.  Regression guard: a Var-of-fn-ref-tuple source
+/// (which can't be folded to `Value::Int(d_nr)` at parse time)
+/// must emit `(i64::from((var.0).0))` — i.e. project u32 d_nr from
+/// the tuple-element's `(u32, DbRef)` shape and widen for the
+/// template's null-check.  Without the fix the codegen substitutes
+/// `var.0 as i32` directly, which rustc rejects with E0605 (non-
+/// primitive cast on tuple type) and E0308 on the matching null
+/// check `var.0 == i64::MIN`.
+#[test]
+fn p196_native_codegen_projects_fn_ref_d_nr() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_p196_codegen.loft");
+    let script = "struct Pair { v: (fn(integer) -> integer, integer) }\n\
+                  fn p_dbl(x: integer) -> integer { x + x }\n\
+                  fn build(f: fn(integer) -> integer, n: integer) -> (fn(integer) -> integer, integer) { (f, n) }\n\
+                  fn main() { pp = build(p_dbl, 21); p = Pair { v: pp }; }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-rust")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    // Fix invariant: every set_i32_raw emitted for the fn-ref tuple
+    // element widens via `i64::from(...)` of the projected `.0` —
+    // not a bare `var.0 as i32` (which rustc rejects on tuple type).
+    assert!(
+        stdout.contains("i64::from((var___ref_1.0).0)"),
+        "expected fn-ref d_nr projection `i64::from((var___ref_1.0).0)`; got:\n{stdout}"
+    );
+    // And the buggy bare `var___ref_1.0 == i64::MIN` shape must be gone —
+    // it would compare a `(u32, DbRef)` tuple to an i64.
+    assert!(
+        !stdout.contains("(var___ref_1.0) == i64::MIN"),
+        "fn-ref tuple field should not be compared to i64::MIN as a bare tuple; got:\n{stdout}"
+    );
+}
+
+/// DX-diff — `--introspect --diff <baseline>` exits 0 when the
+/// baseline matches and 1 when it differs (mirroring `diff -u`'s
+/// exit code).  Lets devs answer "did my parser tweak change
+/// anything?" with a single command.
+#[test]
+fn introspect_diff_against_baseline() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_diff_demo.loft");
+    let baseline_path = dir.join("loft_diff_baseline.txt");
+    let script = "fn main() { println(\"hello\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    // Capture baseline.
+    let baseline_out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("baseline capture failed");
+    std::fs::write(&baseline_path, &baseline_out.stdout).expect("write baseline");
+
+    // Identical inputs → exit 0.
+    let same = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--diff")
+        .arg(&baseline_path)
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("diff (identical) failed");
+    assert_eq!(
+        same.status.code(),
+        Some(0),
+        "identical inputs should exit 0; stderr={:?}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+
+    // Mutate the script with a STRUCTURAL change so the types table
+    // differs (string-literal changes alone don't show up in
+    // `--show-types`).
+    std::fs::write(
+        &script_path,
+        "fn add(a: integer) -> integer { a + 1 }\nfn main() { println(\"hello\") }\n",
+    )
+    .expect("rewrite temp script");
+
+    let differs = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--diff")
+        .arg(&baseline_path)
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("diff (differs) failed");
+    assert_eq!(
+        differs.status.code(),
+        Some(1),
+        "differing inputs should exit 1; stdout={:?}",
+        String::from_utf8_lossy(&differs.stdout)
+    );
+
+    let _ = std::fs::remove_file(&script_path);
+    let _ = std::fs::remove_file(&baseline_path);
+}
+
+/// `--show-types --trace` emits a per-expression type tape that
+/// makes dep-propagation flow visible at every chaining step
+/// (`.field`, `.tuple_idx`, `[idx]`, `(args)`).  Designed so a
+/// future P197-class bug shows up as a missing `[host]` suffix
+/// on an intermediate type, not just the eventual return.
+#[test]
+fn introspect_show_types_trace_renders_per_expression() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_trace_demo.loft");
+    let script = "struct A { v: (text, text) }\n\
+                  fn first() -> text {\n  \
+                      a = A { v: (\"hello\", \"world\") };\n  \
+                      a.v.0\n\
+                  }\n\
+                  fn main() { println(\"{first()}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg("--trace")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    assert!(
+        stdout.contains("trace (per-expression types):"),
+        "expected trace section header; got {stdout}"
+    );
+    // The per-step tape shows the tuple's element types each carry
+    // the host's dep AFTER the `.v` step — this is the line that
+    // would have read `(text, text)` (no `[a]`) before the P197 fix.
+    assert!(
+        stdout.contains("(text[\"a\"], text[\"a\"])"),
+        "expected `a.v` step to render `(text[\"a\"], text[\"a\"])` \
+         (each tuple element carries dep on host `a`); got {stdout}"
+    );
+    // And the final `.0` extraction preserves the dep.
+    assert!(
+        stdout.contains("text[\"a\"]"),
+        "expected final `.0` step to render `text[\"a\"]`; got {stdout}"
+    );
+}
+
+/// Plan-08 phase 01 — `--introspect --show-types` emits a per-fn
+/// type table where `Type::show()` includes dependency suffixes
+/// (e.g. `text["a"]`).  Designed to surface dep-tracking bugs at a
+/// glance; the post-P197 fix means a tuple-element text returned
+/// from a struct field carries the host as a dep.  This test pins
+/// the visible `text["a"]` annotation so any regression in dep
+/// propagation through `Type::Tuple` shows up here too.
+#[test]
+fn introspect_show_types_renders_deps() {
+    let dir = std::env::temp_dir();
+    let script_path = dir.join("loft_introspect_types_demo.loft");
+    let script = "struct A { v: (text, text) }\n\
+                  fn first() -> text {\n  \
+                      a = A { v: (\"hello\", \"world\") };\n  \
+                      a.v.0\n\
+                  }\n\
+                  fn main() { println(\"{first()}\") }\n";
+    std::fs::write(&script_path, script).expect("write temp script");
+
+    let out = Command::new(loft_bin())
+        .arg("--introspect")
+        .arg("--show-types")
+        .arg(&script_path)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let _ = std::fs::remove_file(&script_path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "introspect should succeed");
+    assert!(
+        stdout.contains("=== types ==="),
+        "expected types section header; got {stdout}"
+    );
+    // The fix for P197 propagates the host (`a`) as a dep through
+    // tuple-element text reads to the function's return type.
+    // If this assertion fails, the dep propagation in
+    // `Type::depending` / `parse_part` regressed.
+    assert!(
+        stdout.contains("n_first -> text[\"a\"]"),
+        "expected `n_first -> text[\"a\"]` (P197 dep propagation); got {stdout}"
+    );
+}

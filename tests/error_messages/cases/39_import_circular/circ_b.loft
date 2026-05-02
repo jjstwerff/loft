@@ -1,0 +1,4 @@
+use main::*;
+fn helper() {
+  print("from circ_b");
+}

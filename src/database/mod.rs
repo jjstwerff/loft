@@ -38,8 +38,9 @@ use std::time::Instant;
 pub type Call = fn(&mut Stores, &mut DbRef);
 
 /// Context injected into `Stores` by `State::execute()` so that native
-/// functions such as `n_parallel_for_int` can access the interpreter's
-/// bytecode, text segment, library, and compiled data for spawning workers.
+/// functions such as `n_parallel_for` / `n_parallel_for_light` can access
+/// the interpreter's bytecode, text segment, library, and compiled data
+/// for spawning workers.
 ///
 /// All raw pointers are valid for the duration of the `execute()` call
 /// that set them.
@@ -115,6 +116,13 @@ pub enum Parts {
     Hash(u16, Vec<u16>), // A hash table, listing the field numbers that define its key
     Index(u16, Vec<(u16, bool)>, u16), // An index to a table, listing the key fields and the left field-nr
     Spacial(u16, Vec<u16>),            // A spacial index with the listed coordinate fields as a key
+    // Plan-06 phase 4d.C step 2: 12-byte stored DbRef pointer (store_nr
+    // u16 padded to u32 + rec u32 + pos u32).  Distinct from `Vector`
+    // / `Hash` / etc. which all store a 4-byte rec pointer; this
+    // variant preserves the FULL DbRef so the closure half of a
+    // fn-ref struct field can round-trip through storage.
+    // No element type — DbRef bytes are opaque at this layer.
+    DbRef,
 }
 
 impl PartialEq for Content {
@@ -183,6 +191,69 @@ pub struct Stores {
     /// Set by `State::execute()` to allow native functions to access the
     /// interpreter's bytecode, library, and compiled data during execution.
     pub parallel_ctx: Option<Box<ParallelCtx>>,
+    /// Plan-06 PRIORITY.md spine step 8a — stack of per-call result
+    /// buffers populated by `n_parallel_queue` and consumed by
+    /// `n_parallel_buf_get` / drained by `n_parallel_buf_drop`.  Each
+    /// `Vec<u64>` holds one row's u64-encoded worker return value per
+    /// element (in input order).  A stack — not a single buffer — is
+    /// needed for nested fused for-par: an inner `par()` inside an
+    /// outer par body pushes its own buffer; the outer keeps its
+    /// buffer underneath.
+    ///
+    /// Step 8b is the first parser-side consumer; until then, the
+    /// only writer is the `n_parallel_queue` native fn (exercised by
+    /// Rust unit tests in `tests/threading.rs`).
+    pub par_buffer_stack: Vec<Vec<u64>>,
+    /// Plan-06 PRIORITY.md spine step 8c — sibling stack for text-
+    /// returning par workers.  `n_parallel_queue_text` populates;
+    /// `n_parallel_buf_get_text` reads (cloning into `scratch` for
+    /// the standard text-return convention); `n_parallel_buf_drop_text`
+    /// pops.  A separate stack from `par_buffer_stack` because text
+    /// results are owned `String`s, not u64-encoded primitives —
+    /// keeping the per-row read path tight (no enum match per
+    /// element) is worth the duplication.
+    pub par_text_buffer_stack: Vec<Vec<String>>,
+    /// Plan-06 PRIORITY.md spine step 8d.1 — sibling stack for
+    /// reference / struct-enum-payload / vector-returning par
+    /// workers.  Each entry is `(refs, adopted_store_nrs)`:
+    /// - `refs` — rebased `DbRef`s in input-row order, valid in the
+    ///   parent's namespace after `Stores::adopt_worker_excess` +
+    ///   `rebase_walk_record` (8d.0's `run_parallel_queue_ref`).
+    /// - `adopted_store_nrs` — parent-side store_nrs that the queue
+    ///   adopted from worker output stores.  `n_parallel_buf_drop_ref`
+    ///   frees these at the body-tail to release the worker memory.
+    ///
+    /// Separate from `par_buffer_stack` and `par_text_buffer_stack`
+    /// because ref returns own additional state (the adopted-store
+    /// list) — keeping the per-row read path tight (no enum match
+    /// per element) is worth the duplication.
+    pub par_ref_buffer_stack: Vec<(Vec<DbRef>, Vec<u16>)>,
+    /// Plan-06 ARC.md A3 — sibling stack for narrow-primitive
+    /// (1, 2, or 4-byte) returning par workers.  `n_parallel_queue_narrow`
+    /// populates a flat `Vec<u8>` of `n_rows * stride` bytes (little
+    /// endian, packed); `n_parallel_buf_get_narrow` reads one row,
+    /// sign-extending if signed.  `n_parallel_buf_drop_narrow` pops.
+    /// 8-byte ints + Float keep using `par_buffer_stack` (their bit
+    /// pattern fits in `u64`).
+    ///
+    /// Each entry is `(bytes, stride)`: stride is 1, 2, or 4.
+    pub par_narrow_buffer_stack: Vec<(Vec<u8>, u8)>,
+    /// Plan-06 ARC.md A6.b — sibling stack for fn-ref-returning par
+    /// workers.  Each entry is a packed `Vec<u8>` of `n_rows * 20`
+    /// bytes — one fn-ref per row in Rust's reordered `DbRef` layout
+    /// (8B i64 d_nr + 12B closure DbRef where DbRef is rec u32 +
+    /// pos u32 + store_nr u16 + 2B padding).  Workers write each
+    /// row directly via `State::execute_at_raw_to`; readers pull
+    /// 20 bytes via `n_parallel_buf_get_fn` and push them onto the
+    /// operand stack as a fn-ref blob.
+    ///
+    /// Separate from `par_buffer_stack` (8-byte rows),
+    /// `par_text_buffer_stack` (Vec<String>),
+    /// `par_ref_buffer_stack` ((Vec<DbRef>, Vec<u16>)), and
+    /// `par_narrow_buffer_stack` ((Vec<u8>, u8)) — fn-ref returns
+    /// have a fixed 20-byte stride so no per-call width field is
+    /// needed.
+    pub par_fn_buffer_stack: Vec<Vec<u8>>,
     /// Shared runtime logger.  Set by `main.rs` after the State is created.
     /// Cloned (Arc clone) into worker Stores so all threads share a single logger.
     pub logger: Option<Arc<Mutex<crate::logger::Logger>>>,
@@ -202,6 +273,44 @@ pub struct Stores {
     /// allocator leaves.  Enabled by `LOFT_LOG=poison_free` via
     /// `execute_log_impl` (or anywhere else that wires it).
     pub poison_free: bool,
+    /// Plan-06 spine 8d.2: when true, `database_named`'s slot allocator
+    /// skips `find_free_slot` and always pushes a new store at the end
+    /// of `allocations`.  Set on workers spawned by
+    /// `run_parallel_queue_ref` so each worker-created Result record
+    /// lands at an index ≥ `parent_store_count`, where
+    /// `adopt_worker_excess` can move it into the parent's namespace.
+    /// Without this flag, workers reuse their own freed slots (S29) —
+    /// each `transform()` call's local Result store gets freed at fn
+    /// return and the next call picks the same slot, so the per-row
+    /// `DbRef`s collected in the batch end up aliasing the LAST call's
+    /// data.  Other dispatch paths (run_parallel_direct / _text / _int
+    /// / _discard / the legacy run_parallel_ref consumed by
+    /// `parallel_execute_and_collect`) leave this `false` because they
+    /// don't rely on adoption — `copy_from_worker` reads through the
+    /// graft swap regardless of slot reuse.
+    pub disable_slot_reuse: bool,
+    /// Plan-06 ARC.md A2 — shared atomic dispenser of parent-namespace
+    /// slot indices for `run_parallel_queue_ref` workers.  When
+    /// `disable_slot_reuse == true` AND this is `Some`, every
+    /// `database_named` call in worker context dispenses a unique index
+    /// from the shared atomic counter, extends the worker's own
+    /// `allocations` vec to that index, and records the index in
+    /// `worker_allocated_indices`.  After thread join the dispatcher
+    /// grows parent's `allocations` to fit and swaps each recorded
+    /// slot back into parent at the recorded index.
+    ///
+    /// Replaces the 8d.3 fixed-range design (`worker_slot_offset` /
+    /// `worker_slot_limit` + 16-slot cap) which panicked on workers
+    /// that allocated more than `SLOTS_PER_THREAD` stores.  Per-thread
+    /// indices remain disjoint because the atomic dispenses globally
+    /// unique values; growth is unbounded.
+    pub worker_slot_dispenser: Option<Arc<std::sync::atomic::AtomicU16>>,
+    /// ARC.md A2 — per-worker list of parent-namespace indices the
+    /// worker allocated via the shared dispenser.  The dispatcher
+    /// iterates this Vec to swap each worker-owned slot back into
+    /// parent at the recorded index after thread join (replacing
+    /// 8d.3's `[off, off+SLOTS_PER_THREAD)` linear scan).
+    pub worker_allocated_indices: Vec<u16>,
     /// When true, assert() reports results (pass/fail) to `assert_results`
     /// instead of panicking on failure.  Used by the WASM playground.
     pub report_asserts: bool,
@@ -266,11 +375,19 @@ impl Clone for Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: self.logger.clone(),
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: self.poison_free,
+            disable_slot_reuse: self.disable_slot_reuse,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
@@ -330,6 +447,376 @@ impl std::ops::Deref for WorkerStores {
     }
 }
 
+impl std::ops::DerefMut for WorkerStores {
+    fn deref_mut(&mut self) -> &mut Stores {
+        &mut self.stores
+    }
+}
+
+/// Plan-06 phase 1 — marker telling the parent which slot in this
+/// worker's `WorkerStores.allocations` to extract after join.
+///
+/// The output slot is a regular `Store` inside the worker's allocations
+/// table, written via ordinary `OpSet*` opcodes addressed by a normal
+/// `DbRef`.  After the worker thread joins, the parent calls
+/// `WorkerStores::take_slot(slot.store_nr)` to extract the inner Store
+/// and `Stores::adopt_store(store)` to install it into the parent's
+/// allocations.  See plan-06 DESIGN.md D2.1 for the rationale.
+///
+/// Just a `u16`; no Drop logic.  The worker's `WorkerStores` owns the
+/// underlying Store until `take_slot` extracts it.  If the worker
+/// panics, the `WorkerStores` is dropped and the slot's Store is
+/// freed via `Store::Drop`.
+#[derive(Debug, Clone, Copy)]
+pub struct WorkerOutputSlot {
+    pub store_nr: u16,
+}
+
+impl WorkerStores {
+    /// Append a fresh empty Store to `allocations` and return the
+    /// new slot's index as a `WorkerOutputSlot` marker.
+    ///
+    /// Called by the parallel dispatcher right after `clone_for_worker`,
+    /// before handing the `WorkerStores` to the worker thread.  The
+    /// worker writes its result into the slot via ordinary `OpSet*`
+    /// opcodes addressed by a `DbRef { store_nr: slot.store_nr, .. }`.
+    ///
+    /// `slot_words` is the requested capacity in 8-byte words; the
+    /// minimum is one word so the underlying allocator never sees zero.
+    pub fn add_output_slot(&mut self, slot_words: u32) -> WorkerOutputSlot {
+        let store_nr = self.stores.allocations.len() as u16;
+        let mut store = Store::new(slot_words.max(1));
+        // Worker output slots are writable (free=true→false handled by
+        // the worker's first claim).  Mark non-free so debug invariants
+        // don't think this is a freed slot.
+        store.free = false;
+        store.ref_count = 1;
+        self.stores.allocations.push(store);
+        if store_nr >= self.stores.max {
+            self.stores.max = store_nr + 1;
+        }
+        WorkerOutputSlot { store_nr }
+    }
+
+    /// Move the inner `Store` out of the slot, replacing it with a
+    /// freed sentinel so the worker's `Drop` is a no-op for the
+    /// extracted slot.
+    ///
+    /// Called by the parent thread after the worker joins.  The
+    /// returned `Store` retains its bytes — installation into the
+    /// parent's allocations table happens via `Stores::adopt_store`.
+    ///
+    /// # Panics
+    /// Panics if `slot_nr` is out of range or has already been taken
+    /// (sentinel-replaced) — both indicate dispatcher bugs.
+    pub fn take_slot(&mut self, slot_nr: u16) -> Store {
+        let pos = slot_nr as usize;
+        assert!(
+            pos < self.stores.allocations.len(),
+            "take_slot: slot {slot_nr} out of range",
+        );
+        let sentinel = crate::store::Store::new_freed_sentinel();
+        std::mem::replace(&mut self.stores.allocations[pos], sentinel)
+    }
+
+    /// Plan-06 phase 2 — extract every worker-allocated Store
+    /// (those at index ≥ `parent_store_count`) for adoption by the
+    /// parent.  Returns `(worker_local_store_nr, Store)` pairs in
+    /// ascending store_nr order.
+    ///
+    /// Each returned slot is sentinel-replaced in the worker's
+    /// allocations table, so the worker's `Drop` won't double-free
+    /// adopted stores.  Slots that were freed by the worker during
+    /// execution (free=true) are skipped.
+    ///
+    /// `parent_store_count` is the number of stores the parent had
+    /// before the worker ran — these are clones of parent stores
+    /// (the worker only read them) and must NOT be adopted.
+    ///
+    /// Used by the parent's stitch logic in conjunction with
+    /// `Stores::adopt_store` and the `StoreRebase` rebase map (see
+    /// `src/parallel.rs::StoreRebase`).
+    pub fn take_all_owned(&mut self, parent_store_count: u16) -> Vec<(u16, Store)> {
+        let mut out = Vec::new();
+        let total = self.stores.allocations.len();
+        for nr in (parent_store_count as usize)..total {
+            if self.stores.allocations[nr].free {
+                continue;
+            }
+            let sentinel = crate::store::Store::new_freed_sentinel();
+            let s = std::mem::replace(&mut self.stores.allocations[nr], sentinel);
+            out.push((nr as u16, s));
+        }
+        out
+    }
+}
+
+impl Stores {
+    /// Install an externally-allocated `Store` into this `Stores`'
+    /// allocations table.  Returns the parent-side `store_nr`.
+    ///
+    /// Used by the parent thread after `WorkerStores::take_slot`
+    /// extracts a worker's output slot.  The `Store` keeps its bytes
+    /// — no memcpy, no claim translation.  Phase 2's rebase walk
+    /// rewrites cross-store DbRefs after every worker's slot is
+    /// adopted.
+    ///
+    /// Reuses a free slot if one is available below `max`; otherwise
+    /// pushes a new slot at the end.
+    pub fn adopt_store(&mut self, store: Store) -> u16 {
+        // Inline the free-slot scan rather than calling allocation.rs's
+        // private `find_free_slot` — keeping mod.rs from depending on
+        // that private helper avoids cross-file plumbing for one
+        // 5-line scan.
+        let mut chosen: Option<u16> = None;
+        for (wi, &word) in self.free_bits.iter().enumerate() {
+            if word != 0 {
+                let bit = word.trailing_zeros() as u16;
+                let slot = wi as u16 * 64 + bit;
+                if slot < self.max {
+                    chosen = Some(slot);
+                    break;
+                }
+            }
+        }
+        let store_nr = if let Some(slot) = chosen {
+            self.allocations[slot as usize] = store;
+            slot
+        } else {
+            self.allocations.push(store);
+            (self.allocations.len() - 1) as u16
+        };
+        if store_nr >= self.max {
+            self.max = store_nr + 1;
+        }
+        // Clear the free bit (slot is now active).
+        let wi = store_nr as usize / 64;
+        let bi = store_nr as usize % 64;
+        if wi < self.free_bits.len() {
+            self.free_bits[wi] &= !(1u64 << bi);
+        }
+        store_nr
+    }
+
+    /// Plan-06 phase 2b prereq — adopt all stores a worker allocated
+    /// beyond `parent_store_count` and build a `StoreRebase` mapping
+    /// worker-local `store_nr` → parent-side `store_nr` for each.
+    ///
+    /// `clone_for_worker` clones every parent allocation into the
+    /// worker (so worker's `allocations[0..parent_store_count]` are
+    /// read-only copies); any store the worker creates above that
+    /// index is genuinely new.  This helper takes those new stores
+    /// (replacing each with a freed sentinel so the worker's drop is
+    /// a no-op for that slot) and adopts them into `self`.
+    ///
+    /// Returns the per-worker rebase map.  The caller uses
+    /// `rebase.translate(db_ref)` to convert any worker-handed-out
+    /// `DbRef` into a parent-side reference, and
+    /// `rebase_walk_record(...)` to translate inner DbRef fields
+    /// inside an adopted record.
+    ///
+    /// Currently dead code at the call-site level (no production
+    /// caller wires it yet); 2b's `copy_from_worker_rebase` is the
+    /// first consumer.  Self-tested in
+    /// `tests/parallel_rebase.rs::adopt_worker_excess_*`.
+    #[allow(dead_code)]
+    pub fn adopt_worker_excess(
+        &mut self,
+        worker: &mut Stores,
+        parent_store_count: u16,
+    ) -> crate::parallel::StoreRebase {
+        let mut rebase = crate::parallel::StoreRebase::with_parent_count(parent_store_count);
+        let total = worker.allocations.len();
+        for nr in (parent_store_count as usize)..total {
+            if worker.allocations[nr].free {
+                continue;
+            }
+            let sentinel = crate::store::Store::new_freed_sentinel();
+            let s = std::mem::replace(&mut worker.allocations[nr], sentinel);
+            let parent_nr = self.adopt_store(s);
+            rebase.add(nr as u16, parent_nr);
+        }
+        rebase
+    }
+
+    /// ARC.md A2 — create a shared atomic dispenser for
+    /// `run_parallel_queue_ref` workers.  The first dispensed index is
+    /// `self.allocations.len() + 1` — the `+1` skips over the index
+    /// each worker's stack store occupies in its own clone (every
+    /// worker's `prog.new_state(ws)` push-at-ends a 1000-byte stack
+    /// store at `parent_len`, so dispensing `parent_len` would try to
+    /// reinitialise that stack as a user-data slot).
+    ///
+    /// Workers extend their own `allocations` clone to fit each
+    /// dispensed index (filling skipped indices with empty
+    /// `Store::new(100)` placeholders) and record the index in
+    /// `worker_allocated_indices`; cross-worker collisions are
+    /// impossible because the atomic dispenses globally-unique values.
+    ///
+    /// Replaces 8d.3's `reserve_worker_slots` / `release_worker_slots`
+    /// pair (which pre-pushed `n_threads * SLOTS_PER_THREAD` fresh
+    /// stores into parent and reclaimed the unused tail post-dispatch).
+    /// The new design grows parent only after threads join, so we
+    /// pay for exactly the slots workers actually allocated.
+    pub fn make_worker_slot_dispenser(&self) -> Arc<std::sync::atomic::AtomicU16> {
+        Arc::new(std::sync::atomic::AtomicU16::new(
+            (self.allocations.len() as u16).saturating_add(1),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod worker_output_slot_tests {
+    use super::{Stores, WorkerStores};
+
+    #[test]
+    fn add_output_slot_returns_next_index() {
+        let s = Stores::new();
+        let initial = s.allocations.len();
+        let mut ws = WorkerStores::new(s);
+        let slot = ws.add_output_slot(64);
+        assert_eq!(slot.store_nr as usize, initial);
+        assert!(ws.stores.allocations[slot.store_nr as usize].capacity_words() >= 64);
+    }
+
+    #[test]
+    fn add_output_slot_minimum_one_word() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let slot = ws.add_output_slot(0);
+        assert!(ws.stores.allocations[slot.store_nr as usize].capacity_words() >= 1);
+    }
+
+    #[test]
+    fn take_slot_returns_owned_store_and_leaves_sentinel() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let slot = ws.add_output_slot(32);
+        let pos = slot.store_nr as usize;
+        let cap = ws.stores.allocations[pos].capacity_words();
+        let taken = ws.take_slot(slot.store_nr);
+        assert_eq!(taken.capacity_words(), cap);
+        // Sentinel left behind has tiny capacity (Store::new_freed_sentinel = 4 words)
+        // and is marked free.
+        assert!(ws.stores.allocations[pos].free);
+    }
+
+    #[test]
+    fn adopt_store_pushes_to_parent_allocations() {
+        let mut parent = Stores::new();
+        let initial_len = parent.allocations.len();
+        let mut donor = WorkerStores::new(Stores::new());
+        let slot = donor.add_output_slot(16);
+        let store = donor.take_slot(slot.store_nr);
+        let nr = parent.adopt_store(store);
+        assert!((nr as usize) < parent.allocations.len() || (nr as usize) == initial_len);
+        assert!(!parent.allocations[nr as usize].free);
+    }
+
+    #[test]
+    #[should_panic(expected = "take_slot: slot")]
+    fn take_slot_out_of_range_panics() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let _ = ws.take_slot(9999);
+    }
+
+    #[test]
+    fn take_all_owned_skips_parent_clone_slots() {
+        // Parent has 2 stores; worker will get 2 clones + add 1 output.
+        let mut parent = Stores::new();
+        parent.allocations.push(crate::store::Store::new(8));
+        parent.allocations.push(crate::store::Store::new(8));
+        parent.max = 2;
+        let parent_count = parent.allocations.len() as u16;
+
+        // Build a synthetic worker view with 2 cloned slots + 1 output.
+        let mut ws_inner = Stores::new();
+        ws_inner.allocations.push(crate::store::Store::new(8));
+        ws_inner.allocations.push(crate::store::Store::new(8));
+        ws_inner.max = 2;
+        let mut ws = WorkerStores::new(ws_inner);
+        let _slot = ws.add_output_slot(16);
+
+        let owned = ws.take_all_owned(parent_count);
+        assert_eq!(owned.len(), 1, "only worker-allocated slot is adopted");
+        assert_eq!(owned[0].0, 2, "adopted slot is at parent_count");
+    }
+
+    #[test]
+    fn take_all_owned_returns_multiple_in_order() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let _s0 = ws.add_output_slot(8);
+        let _s1 = ws.add_output_slot(16);
+        let _s2 = ws.add_output_slot(32);
+        let owned = ws.take_all_owned(0);
+        assert_eq!(owned.len(), 3);
+        assert_eq!(owned[0].0, 0);
+        assert_eq!(owned[1].0, 1);
+        assert_eq!(owned[2].0, 2);
+    }
+
+    #[test]
+    fn take_all_owned_skips_freed_slots() {
+        let mut ws = WorkerStores::new(Stores::new());
+        let s0 = ws.add_output_slot(8);
+        let _s1 = ws.add_output_slot(16);
+        // Mark s0 as freed.
+        ws.stores.allocations[s0.store_nr as usize].free = true;
+        let owned = ws.take_all_owned(0);
+        assert_eq!(owned.len(), 1, "freed slot skipped");
+        assert_eq!(owned[0].0, 1);
+    }
+}
+
+#[cfg(test)]
+mod store_rebase_tests {
+    use super::DbRef;
+    use crate::parallel::StoreRebase;
+
+    #[test]
+    fn translate_passes_through_unmapped() {
+        let r = StoreRebase::new();
+        let db = DbRef {
+            store_nr: 5,
+            rec: 10,
+            pos: 8,
+        };
+        let out = r.translate(&db);
+        assert_eq!(out.store_nr, 5);
+        assert_eq!(out.rec, 10);
+        assert_eq!(out.pos, 8);
+    }
+
+    #[test]
+    fn translate_rewrites_mapped() {
+        let mut r = StoreRebase::new();
+        r.add(2, 7);
+        let db = DbRef {
+            store_nr: 2,
+            rec: 1,
+            pos: 4,
+        };
+        let out = r.translate(&db);
+        assert_eq!(out.store_nr, 7, "store_nr translated");
+        assert_eq!(out.rec, 1, "rec preserved");
+        assert_eq!(out.pos, 4, "pos preserved");
+    }
+
+    #[test]
+    fn multiple_translations_disjoint() {
+        let mut r = StoreRebase::new();
+        r.add(2, 7);
+        r.add(3, 8);
+        r.add(4, 9);
+        for (worker_nr, expected_parent) in [(2, 7), (3, 8), (4, 9)] {
+            let db = DbRef {
+                store_nr: worker_nr,
+                rec: 0,
+                pos: 0,
+            };
+            assert_eq!(r.translate(&db).store_nr, expected_parent);
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl Stores {
     #[must_use]
@@ -346,11 +833,19 @@ impl Stores {
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
             parallel_ctx: None,
+            par_buffer_stack: Vec::new(),
+            par_text_buffer_stack: Vec::new(),
+            par_ref_buffer_stack: Vec::new(),
+            par_narrow_buffer_stack: Vec::new(),
+            par_fn_buffer_stack: Vec::new(),
             logger: None,
             had_fatal: false,
             source_dir: String::new(),
             frame_yield: false,
             poison_free: false,
+            disable_slot_reuse: false,
+            worker_slot_dispenser: None,
+            worker_allocated_indices: Vec::new(),
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),

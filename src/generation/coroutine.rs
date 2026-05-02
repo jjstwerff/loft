@@ -195,13 +195,13 @@ fn emit_factory_fn(
     {
         return Ok(());
     }
-    write!(w, "fn {fn_name}(stores: &mut Stores")?;
+    write!(w, "fn {fn_name}(cell: &std::cell::UnsafeCell<Stores>")?;
     for attr in attrs {
         let arg_tp = rust_type(&attr.typedef, &Context::Argument);
         write!(w, ", var_{}: {arg_tp}", sanitize(&attr.name))?;
     }
     writeln!(w, ") -> Box<dyn loft::codegen_runtime::LoftCoroutine> {{")?;
-    writeln!(w, "    let _ = stores;")?;
+    writeln!(w, "    let _ = cell;")?;
     writeln!(w, "    Box::new({struct_name} {{")?;
     writeln!(w, "        state: 0,")?;
     for attr in attrs {
@@ -229,7 +229,9 @@ impl Output<'_> {
     fn gen_inner_factory(&mut self, init: &Value) -> std::io::Result<String> {
         if let Value::Call(d_nr, args) = init {
             let fn_name = self.data.def(*d_nr).name.clone();
-            let mut buf = format!("{fn_name}(stores");
+            // P199 — the factory now takes `&UnsafeCell<Stores>`; pass the
+            // caller's `cell` binding instead of `stores`.
+            let mut buf = format!("{fn_name}(cell");
             for arg in args {
                 buf += ", ";
                 buf += &self.generate_expr_buf(arg)?;
@@ -254,6 +256,17 @@ impl Output<'_> {
             w,
             "    fn next_i64(&mut self, stores: &mut Stores) -> i64 {{"
         )?;
+        // P199 — coroutine state-machine bodies call user fns that take
+        // `&UnsafeCell<Stores>` (the new ABI).  The `LoftCoroutine` trait
+        // method still receives `&mut Stores`; derive a `cell` view via
+        // the safe `repr(transparent)` cast so generated user-fn calls
+        // inside the body have `cell` in scope.
+        writeln!(
+            w,
+            "        let cell: &std::cell::UnsafeCell<Stores> = unsafe \
+             {{ &*(stores as *mut Stores as *const std::cell::UnsafeCell<Stores>) }};"
+        )?;
+        writeln!(w, "        let _ = &cell;")?;
         // N8b.3: wrap in `loop {}` so yield-from states can `continue` to the
         // next state immediately after sub-generator exhaustion.
         if has_yf {
@@ -369,7 +382,7 @@ impl Output<'_> {
             writeln!(w, "}}")?;
             writeln!(
                 w,
-                "fn {fn_name}(_stores: &mut Stores) -> Box<dyn loft::codegen_runtime::LoftCoroutine> \
+                "fn {fn_name}(_cell: &std::cell::UnsafeCell<Stores>) -> Box<dyn loft::codegen_runtime::LoftCoroutine> \
                  {{ Box::new({struct_name} {{}}) }}\n"
             )?;
             return Ok(());
@@ -415,12 +428,17 @@ impl Output<'_> {
         attrs: &[crate::data::Attribute],
         segments: &[YieldSegment],
     ) -> std::io::Result<()> {
-        write!(w, "fn {fn_name}(stores: &mut Stores")?;
+        write!(w, "fn {fn_name}(cell: &std::cell::UnsafeCell<Stores>")?;
         for attr in attrs {
             let arg_tp = rust_type(&attr.typedef, &Context::Argument);
             write!(w, ", var_{}: {arg_tp}", sanitize(&attr.name))?;
         }
         writeln!(w, ") -> Box<dyn loft::codegen_runtime::LoftCoroutine> {{")?;
+        writeln!(
+            w,
+            "    let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+        )?;
+        writeln!(w, "    let _ = &stores;")?;
         // Declare local copies of params for use in the body.
         for attr in attrs {
             let aname = sanitize(&attr.name);

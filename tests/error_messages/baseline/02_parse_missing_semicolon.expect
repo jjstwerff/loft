@@ -1,0 +1,7 @@
+==== exit: 1 ====
+==== stdout ====
+Error: Expect token ; at <cases>/02_parse_missing_semicolon.loft:3:4
+  |
+   3 |   y = 2
+     |    ^
+==== stderr ====

@@ -26,6 +26,15 @@
 #   make all        Format source + build the native binary.
 #   make test       Full test suite (fmt + clippy + tests). ~1-2 minutes.
 #   make quick      Same tests without the clippy/fmt gate. Faster iteration.
+#   make iter TEST=<filter> [TFILE=<binary>] [PROFILE=release]
+#                   Run only tests matching <filter>.  Defaults to the
+#                   dev profile — incremental rebuild ~2-3s vs ~25s
+#                   for release (the project's Cargo.toml turns off
+#                   debug-assertions on the loft package, so dev runs
+#                   loft programs at near-release speed).  Add
+#                   PROFILE=release when you specifically need
+#                   release behaviour or want to share cache with
+#                   `make test` / `make ci`.
 #   make ci         Mirror of .github/workflows/ci.yml — fmt, clippy
 #                   (deny warnings), build --all-targets, build
 #                   --no-default-features, nextest run --profile ci.
@@ -156,6 +165,49 @@ test: clippy rebuild-native-cdylibs
 
 quick: rebuild-native-cdylibs
 	RUST_BACKTRACE=1 cargo test --release -- --nocapture --test-threads=1 > result.txt 2>&1
+
+# make iter TEST=<filter> [TFILE=<test_binary>] [PROFILE=release]
+#
+# Fast single-test iteration loop.  Defaults to the dev profile (which is
+# specially tuned in Cargo.toml: opt-level=1 plus
+# debug-assertions=false on the loft package).  Measured here:
+#
+#   incremental rebuild after touching one file:
+#     dev profile     ~2.4s
+#     release profile ~26.8s
+#
+# That's ~11x faster wall-time on the inner debug loop.  Pass
+# `PROFILE=release` if you specifically need release behaviour
+# (e.g. timing-sensitive parallel tests, or to share cache with
+# `make test` / `make ci`).
+#
+# Cleans tests/dumps/ and tests/generated/ first — these are written
+# by every test run and pin codegen output for the LAST run; if you
+# alternate profiles or run a different subset, stale fixtures can
+# trigger bogus errors (e.g. `attempt to add with overflow` from
+# u16::MAX placeholder positions).  `make test` / `make ci` already
+# clean them; this matches that behaviour.
+#
+# TFILE optionally restricts to one test binary — e.g. TFILE=issues
+# skips every other test crate's rebuild + run.
+#
+# Examples:
+#   make iter TEST=p197                        # dev profile, all p197*
+#   make iter TEST=p194 TFILE=issues           # dev profile, only issues.rs
+#   make iter TEST=p197 PROFILE=release        # release profile
+#   make iter TEST=introspect TFILE=exit_codes # exit_codes.rs only
+iter:
+	@if [ -z "$(TEST)" ]; then \
+		echo "Usage: make iter TEST=<filter> [TFILE=<test_binary>] [PROFILE=release]"; \
+		echo "Examples:"; \
+		echo "  make iter TEST=p197"; \
+		echo "  make iter TEST=p194 TFILE=issues"; \
+		exit 1; \
+	fi
+	@-rm -f tests/generated/* tests/dumps/*.txt 2>/dev/null
+	@TFILE_ARG=$$([ -n "$(TFILE)" ] && echo "--test $(TFILE)" || echo ""); \
+	PROFILE_ARG=$$([ "$(PROFILE)" = "release" ] && echo "--release" || echo ""); \
+	RUST_BACKTRACE=1 cargo test $$PROFILE_ARG $$TFILE_ARG -- $(TEST) --nocapture
 
 profile:
 	RUSTFLAGS=-g cargo build --release >result.txt 2>&1

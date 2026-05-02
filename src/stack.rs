@@ -69,6 +69,7 @@ impl<'a> Stack<'a> {
                     self.size_code(ops.last().unwrap())
                 }
             }
+            Value::Span(b) => self.size_code(&b.1),
             _ => 0,
         }
     }

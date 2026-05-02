@@ -58,7 +58,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Character);
             data.definitions[d_nr as usize].known_type = 6;
         }
-        "radix" | "hash" | "reference" | "index" => {
+        "radix" | "hash" | "reference" | "index" | "sorted" | "spacial" => {
             data.set_returned(d_nr, Type::Reference(d_nr, Vec::new()));
         }
         "keys_definition" => {
@@ -118,6 +118,8 @@ pub fn actual_types_deferred(
                 let name = &data.def(d).name;
                 let msg = if name == "string" {
                     "Undefined type 'string' — did you mean 'text'?".to_string()
+                } else if let Some(s) = data.suggest_type_name(name) {
+                    format!("Undefined type {name} — did you mean '{s}'?")
                 } else {
                     format!("Undefined type {name}")
                 };
@@ -268,6 +270,62 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
             fill_database(data, database, d_nr);
         }
     }
+    // P191 — pre-register database types for local-var keyed
+    // collections (index/hash/spacial) so their bookkeeping fields
+    // get appended to the content struct BEFORE database.finish()
+    // runs finish_type to assign positions.
+    //
+    // Only Index appends bookkeeping fields (#left/#right/#color)
+    // to the content struct; Hash/Spacial just create an entry in
+    // self.types without struct mutation.  But registering all three
+    // here keeps the codepath uniform with what gen_set_first_keyed_null
+    // would do later — and is idempotent (database.{index,hash,spacial}
+    // dedup on name).
+    //
+    // Sorted is NOT in this loop — sorted doesn't append bookkeeping
+    // fields, and P190's on-demand registration in get_type already
+    // handles it.  Adding Sorted here would be a no-op anyway.
+    //
+    // **Critical timing**: this runs at the end of fill_all, which
+    // runs at the end of EACH parse_file call.  At end of first-pass
+    // parse_file, function variables are populated by parse_code (line
+    // 804 of definitions.rs, called in both passes).  So the registration
+    // happens BEFORE second-pass body parsing, which means
+    // database.position() lookups during second-pass IR construction
+    // see the post-bookkeeping struct layout.  Without this timing,
+    // bookkeeping fields appended later (by gen_set_first_keyed_null
+    // at codegen) stay at position 0 because finish_type only runs
+    // for types with size == u16::MAX.
+    for d_nr in start_def..data.definitions() {
+        if !matches!(data.def_type(d_nr), DefType::Function) {
+            continue;
+        }
+        let var_count = data.def(d_nr).variables.count();
+        for v in 0..var_count {
+            let tp = data.def(d_nr).variables.tp(v).clone();
+            match tp {
+                Type::Hash(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.hash(c_tp, &key);
+                    }
+                }
+                Type::Index(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.index(c_tp, &key);
+                    }
+                }
+                Type::Spacial(c, key, _) => {
+                    let c_tp = data.def(c).known_type;
+                    if c_tp != u16::MAX {
+                        database.spacial(c_tp, &key);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Check if struct `d_nr` contains itself as a value type (not reference) field,
@@ -409,10 +467,48 @@ fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     database.spacial(c_tp, &key_fields)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
+                Type::Function(_, _, _) => {
+                    // Plan-06 phase 4d: storage holds the 4-byte i32 d_nr
+                    // only; the 12-byte closure half of a 20-byte stack
+                    // fn-ref slot is NOT stored.  Mirrors the vector
+                    // `get_type` path so `vector<fn(...)>` and a plain
+                    // `f: fn(...) -> ...` struct field share storage
+                    // layout.  The corresponding parser get/set arms in
+                    // `parser/mod.rs::get_val` / `set_field_check` use
+                    // `OpGetInt4` / `OpSetInt4` to match this width.
+                    database.int(0, false)
+                }
+                Type::Tuple(_) => {
+                    // Plan-06 phase 4d: tuple struct fields inline the
+                    // synthetic `__tuple<…>` struct's bytes.  The
+                    // synthetic struct is registered eagerly by
+                    // `parse_type_full`, but its database-side layout
+                    // is built by `fill_database` on the synthetic
+                    // def itself — recurse first so its `known_type`
+                    // is non-`u16::MAX` when we register the host
+                    // struct's tuple field below.  Mirrors the
+                    // vector / sorted / hash / index recursion above.
+                    let mut c_tp = data.def(t_nr).known_type;
+                    if c_tp == u16::MAX {
+                        fill_database(data, database, t_nr);
+                        c_tp = data.def(t_nr).known_type;
+                    }
+                    c_tp
+                }
                 _ => data.def(t_nr).known_type,
             };
             database.field(s_type, &data.attr_name(d_nr, a_nr), tp);
         }
+    }
+    // Propagate Data-side LinkedFieldGroups (currently: tuple element
+    // groups registered by `tuple_def`) to the Database-side Type so
+    // `Stores::finish_type` can place them atomically via
+    // `calculate_positions_with_groups`.  Index bookkeeping groups
+    // are added directly on the Database side by `Stores::index`, so
+    // they don't need this copy.
+    let groups = data.def(d_nr).field_groups.clone();
+    if !groups.is_empty() {
+        database.types[s_type as usize].field_groups.extend(groups);
     }
 }
 

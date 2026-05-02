@@ -22,6 +22,92 @@ use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
 
+// ============================================================
+// Plan 09 phase 01 — Cell/Stores ABI consolidation
+// ============================================================
+
+/// ABI of a runtime helper function defined in this module.
+///
+/// `Cell`: takes `cell: &UnsafeCell<Stores>` and derives a `&mut Stores`
+/// at entry (the post-P199.A ABI used by all runtime fns that need
+/// store access).
+///
+/// `None`: takes no implicit Stores parameter at all.  For pure helpers
+/// whose body never touches `Stores` (e.g. clock reads, constant
+/// returns, thread-local RNG access).  The codegen emits `fn_name(args)`
+/// with no leading `cell` argument.  Strictly better than `Cell` for
+/// these fns: zero unused parameter, zero borrow churn.
+///
+/// Phase 01 retired the `LegacyStores` variant in step 1.7 — every
+/// runtime fn now uses either `Cell` or `None`.  Earlier drafts of this
+/// module had a `LegacyStores` variant for pre-P199.A `&mut Stores`
+/// helpers; phase 01 migrated all 11 entries to `Cell` (8) or `None` (3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Abi {
+    Cell,
+    None,
+}
+
+/// Single source of truth for runtime-helper ABI tags.  Replaces the
+/// twin hardcoded `LEGACY_STORES_FNS` constants that lived in
+/// `src/generation/calls.rs` and `src/generation/dispatch.rs`, plus the
+/// `CODEGEN_RUNTIME_FNS: &[&str]` list in `src/generation/mod.rs` that
+/// drove "skip stub generation" for runtime fns.
+///
+/// Each entry must have a corresponding `pub fn <name>(...)` defined
+/// elsewhere in this file with the matching ABI signature.  Adding a
+/// new runtime fn to this registry is sufficient — `output_call_user_fn`
+/// and the arg-hoist path consult `abi_of(name)` and pick `cell` vs
+/// `stores` automatically.
+pub struct RuntimeFn {
+    pub name: &'static str,
+    pub abi: Abi,
+}
+
+#[rustfmt::skip]
+pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
+    RuntimeFn { name: "n_now",                      abi: Abi::None },
+    RuntimeFn { name: "n_ticks",                    abi: Abi::Cell },
+    RuntimeFn { name: "n_get_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_set_store_lock",           abi: Abi::Cell },
+    RuntimeFn { name: "n_rand",                     abi: Abi::None },
+    RuntimeFn { name: "n_rand_indices",             abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_native",        abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_text_native",   abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_for_ref_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_native",      abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_queue_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_native",    abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_get_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_native",     abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_text_native", abi: Abi::Cell },
+    RuntimeFn { name: "n_parallel_buf_drop_ref_native",  abi: Abi::Cell },
+    RuntimeFn { name: "n_path_sep",                   abi: Abi::None },
+    RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
+    RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
+];
+
+/// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
+/// unknown names — user-defined functions and Op stubs default to the
+/// post-P199.A cell ABI.
+#[must_use]
+pub fn abi_of(name: &str) -> Abi {
+    CODEGEN_RUNTIME_FNS
+        .iter()
+        .find(|f| f.name == name)
+        .map_or(Abi::Cell, |f| f.abi)
+}
+
+/// True if `name` is a runtime helper defined in this module.  Used by
+/// `output_function` to skip stub generation (the real implementation
+/// is imported via `use loft::codegen_runtime::*`).
+#[must_use]
+pub fn is_codegen_runtime_fn(name: &str) -> bool {
+    CODEGEN_RUNTIME_FNS.iter().any(|f| f.name == name)
+}
+
 /// Convert a DbRef to a loft_ffi::LoftRef for passing to native C-ABI functions.
 /// Both types have identical layout (u16 + u32 + u32).
 #[must_use]
@@ -46,7 +132,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// passed by value (`DbRef`).  The function allocates into the store referenced by
 /// `db`, then returns the updated `DbRef`.
 /// Bytecode equivalent: `OpDatabase` in `src/state/io.rs:319`.
-pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
+pub fn OpDatabase(cell: &std::cell::UnsafeCell<Stores>, mut db: DbRef, db_tp: i32) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
     let size = stores.size(db_tp);
     if db.store_nr == u16::MAX {
@@ -66,7 +153,13 @@ pub fn OpDatabase(stores: &mut Stores, mut db: DbRef, db_tp: i32) -> DbRef {
 /// Create a new record element inside a vector/sorted/index collection.
 /// Returns a `DbRef` pointing to the new element with default field values.
 /// Bytecode equivalent: `OpNewRecord` in `src/state/io.rs:336`.
-pub fn OpNewRecord(stores: &mut Stores, data: DbRef, parent_tp: i32, fld: i32) -> DbRef {
+pub fn OpNewRecord(
+    cell: &std::cell::UnsafeCell<Stores>,
+    data: DbRef,
+    parent_tp: i32,
+    fld: i32,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let parent_tp = parent_tp as u16;
     let fld = fld as u16;
     let new_value = stores.record_new(&data, parent_tp, fld);
@@ -84,7 +177,14 @@ pub fn OpNewRecord(stores: &mut Stores, data: DbRef, parent_tp: i32, fld: i32) -
 /// Finalize a record after its fields have been assigned.
 /// For sorted/index collections this inserts the record at the correct position.
 /// Bytecode equivalent: `OpFinishRecord` in `src/state/io.rs:772`.
-pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp: i32, fld: i32) {
+pub fn OpFinishRecord(
+    cell: &std::cell::UnsafeCell<Stores>,
+    data: DbRef,
+    record: DbRef,
+    parent_tp: i32,
+    fld: i32,
+) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.record_finish(&data, &record, parent_tp as u16, fld as u16);
 }
 
@@ -92,7 +192,8 @@ pub fn OpFinishRecord(stores: &mut Stores, data: DbRef, record: DbRef, parent_tp
 /// Bytecode equivalent: `OpFreeRef` in `src/state/io.rs:262`.
 /// The `name` argument is the loft variable name (e.g. `"var_p"`); it appears in
 /// `LOFT_STORE_LOG` output for diagnosing LIFO store-free order violations.
-pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
+pub fn OpFreeRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef, name: &str) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if db.store_nr == u16::MAX {
         return;
     }
@@ -123,7 +224,12 @@ pub fn OpFreeRef(stores: &mut Stores, db: DbRef, name: &str) {
 /// scope (adoption vs. fresh-store is a runtime choice the caller's
 /// compiler cannot resolve statically).  Bytecode equivalent:
 /// `OpFreeRefIfDistinct` in `src/fill.rs`.
-pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbRef) {
+pub fn OpFreeRefIfDistinct(
+    cell: &std::cell::UnsafeCell<Stores>,
+    placeholder: DbRef,
+    witness: DbRef,
+) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if placeholder.store_nr != witness.store_nr {
         stores.free(&placeholder);
     }
@@ -132,12 +238,13 @@ pub fn OpFreeRefIfDistinct(stores: &mut Stores, placeholder: DbRef, witness: DbR
 /// Format a database record as text and append it to the output string.
 /// Bytecode equivalent: `OpFormatDatabase` in `src/state/io.rs:278`.
 pub fn OpFormatDatabase(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     output: &mut String,
     record: DbRef,
     db_tp: i32,
     db_format: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let mut s = String::new();
     ShowDb {
         stores,
@@ -155,11 +262,12 @@ pub fn OpFormatDatabase(
 /// Look up a record in a collection by key values.
 /// Bytecode equivalent: `OpGetRecord` in `src/state/io.rs:353`.
 pub fn OpGetRecord(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     db_tp: i32,
     key: &[crate::keys::Content],
 ) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if data.rec == 0 {
         DbRef {
             store_nr: data.store_nr,
@@ -212,7 +320,8 @@ pub fn OpGetTextSub(text: &str, from: i64, till: i64) -> &str {
 /// Return the byte size of a database record's type.
 /// Bytecode equivalent: `OpSizeofRef` in `src/state/io.rs:290`.
 #[must_use]
-pub fn OpSizeofRef(stores: &Stores, db: DbRef) -> i64 {
+pub fn OpSizeofRef(cell: &std::cell::UnsafeCell<Stores>, db: DbRef) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if db.rec == 0 {
         0
     } else {
@@ -269,7 +378,8 @@ pub fn i_json_errors(stores: &mut Stores) -> Str {
 /// Deep-copy a database record: copies the raw bytes and duplicates
 /// all owned sub-structures (text fields, vectors, etc.).
 /// Bytecode equivalent: `State::copy_record` in `src/state/io.rs:697`.
-pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
+pub fn OpCopyRecord(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, to: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     // mirror `state/io.rs::copy_record`'s tag handling and
     // cleanup.  The bytecode form masks the high bit of `tp` before
     // indexing into `stores.types` (0x8000 marks "free source after
@@ -300,7 +410,8 @@ pub fn OpCopyRecord(stores: &mut Stores, data: DbRef, to: DbRef, tp: i32) {
 
 /// Sort a vector in-place using the element type's natural ordering.
 /// Bytecode equivalent: `sort_vector` in `src/fill.rs:1835`.
-pub fn OpSortVector(stores: &mut Stores, data: DbRef, db_tp: i32) {
+pub fn OpSortVector(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, db_tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let db_tp = db_tp as u16;
     let elem_size = stores.size(db_tp);
     let is_float = db_tp == 2 || db_tp == 3;
@@ -311,12 +422,13 @@ pub fn OpSortVector(stores: &mut Stores, data: DbRef, db_tp: i32) {
 /// Returns a `DbRef` pointing to the newly inserted element.
 /// Bytecode equivalent: `State::insert_vector` in `src/state/io.rs:819`.
 pub fn OpInsertVector(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     size: i32,
     index: i64,
     db_tp: i32,
 ) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let new_value = vector::insert_vector(&data, size as u32, index, &mut stores.allocations);
     stores.set_default_value(db_tp as u16, &new_value);
     new_value
@@ -326,7 +438,7 @@ pub fn OpInsertVector(
 /// Returns 0 for the null character sentinel.
 /// Bytecode equivalent: `State::length_character` in `src/state/text.rs:54`.
 #[must_use]
-pub fn OpLengthCharacter(_stores: &mut Stores, c: i32) -> i64 {
+pub fn OpLengthCharacter(_cell: &std::cell::UnsafeCell<Stores>, c: i32) -> i64 {
     let ch = ops::to_char(c);
     if ch == '\0' {
         0
@@ -366,7 +478,7 @@ fn iter_ref(data: &DbRef, rec: u32, pos: u16) -> DbRef {
 /// Bytecode equivalent: `State::iterate` in `src/state/io.rs`.
 #[must_use]
 pub fn OpIterate(
-    stores: &Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     data: DbRef,
     on: i32,
     arg: i32,
@@ -374,6 +486,7 @@ pub fn OpIterate(
     from: &[Content],
     till: &[Content],
 ) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if data.rec == 0 {
         return pack_iter(u32::MAX, u32::MAX);
     }
@@ -453,7 +566,14 @@ pub fn OpIterate(
 /// `on` and `arg` must match the corresponding `OpIterate` call.
 ///
 /// Bytecode equivalent: `State::step` in `src/state/io.rs`.
-pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -> DbRef {
+pub fn OpStep(
+    cell: &std::cell::UnsafeCell<Stores>,
+    iter: &mut i64,
+    data: DbRef,
+    on: i32,
+    arg: i32,
+) -> DbRef {
+    let stores: &Stores = unsafe { &*cell.get() };
     let mut cur = (*iter as u64) as u32;
     let mut finish = ((*iter as u64) >> 32) as u32;
 
@@ -549,7 +669,8 @@ pub fn OpStep(stores: &Stores, iter: &mut i64, data: DbRef, on: i32, arg: i32) -
 /// If the file cannot be opened or read, `content` is cleared.
 /// Bytecode equivalent: `State::get_file_text` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
+pub fn OpGetFileText(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, content: &mut String) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -569,7 +690,7 @@ pub fn OpGetFileText(stores: &mut Stores, file: DbRef, content: &mut String) {
 
 /// WASM stub: file I/O not available; clears content.
 #[cfg(feature = "wasm")]
-pub fn OpGetFileText(_stores: &mut Stores, _file: DbRef, content: &mut String) {
+pub fn OpGetFileText(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, content: &mut String) {
     content.clear();
 }
 
@@ -578,7 +699,8 @@ pub fn OpGetFileText(_stores: &mut Stores, _file: DbRef, content: &mut String) {
 /// read/write applies the seek after opening.
 /// Bytecode equivalent: `State::seek_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
+pub fn OpSeekFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, pos: i64) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -596,13 +718,14 @@ pub fn OpSeekFile(stores: &mut Stores, file: DbRef, pos: i64) {
 
 /// WASM stub: file I/O not available.
 #[cfg(feature = "wasm")]
-pub fn OpSeekFile(_stores: &mut Stores, _file: DbRef, _pos: i64) {}
+pub fn OpSeekFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _pos: i64) {}
 
 /// Return the byte size of the file, or `i64::MIN` if the size cannot be determined.
 /// Bytecode equivalent: `State::size_file` in `src/state/io.rs`.
 #[must_use]
 #[cfg(not(feature = "wasm"))]
-pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
+pub fn OpSizeFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef) -> i64 {
+    let stores: &Stores = unsafe { &*cell.get() };
     if file.rec == 0 {
         return i64::MIN;
     }
@@ -622,7 +745,7 @@ pub fn OpSizeFile(stores: &Stores, file: DbRef) -> i64 {
 /// WASM stub: file I/O not available; always returns `i64::MIN`.
 #[must_use]
 #[cfg(feature = "wasm")]
-pub fn OpSizeFile(_stores: &Stores, _file: DbRef) -> i64 {
+pub fn OpSizeFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef) -> i64 {
     i64::MIN
 }
 
@@ -630,7 +753,8 @@ pub fn OpSizeFile(_stores: &Stores, _file: DbRef) -> i64 {
 /// Returns `true` on success, `false` on failure.
 /// Bytecode equivalent: `State::truncate_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
+pub fn OpTruncateFile(cell: &std::cell::UnsafeCell<Stores>, file: DbRef, size: i64) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return false;
     }
@@ -663,7 +787,7 @@ pub fn OpTruncateFile(stores: &mut Stores, file: DbRef, size: i64) -> bool {
 
 /// WASM stub: file I/O not available; always returns `false`.
 #[cfg(feature = "wasm")]
-pub fn OpTruncateFile(_stores: &mut Stores, _file: DbRef, _size: i64) -> bool {
+pub fn OpTruncateFile(_cell: &std::cell::UnsafeCell<Stores>, _file: DbRef, _size: i64) -> bool {
     false
 }
 
@@ -1118,7 +1242,13 @@ impl FileVal for DbRef {
 /// Write a value to a loft `File` record.
 /// Bytecode equivalent: `State::write_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
-pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db_tp: i32) {
+pub fn OpWriteFile<T: FileVal>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    file: DbRef,
+    val: &mut T,
+    db_tp: i32,
+) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -1156,18 +1286,25 @@ pub fn OpWriteFile<T: FileVal>(stores: &mut Stores, file: DbRef, val: &mut T, db
 
 /// WASM stub: file write not available.
 #[cfg(feature = "wasm")]
-pub fn OpWriteFile<T: FileVal>(_stores: &mut Stores, _file: DbRef, _val: &mut T, _db_tp: i32) {}
+pub fn OpWriteFile<T: FileVal>(
+    _cell: &std::cell::UnsafeCell<Stores>,
+    _file: DbRef,
+    _val: &mut T,
+    _db_tp: i32,
+) {
+}
 
 /// Read bytes from a loft `File` record into `val`.
 /// Bytecode equivalent: `State::read_file` in `src/state/io.rs`.
 #[cfg(not(feature = "wasm"))]
 pub fn OpReadFile<T: FileVal>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     file: DbRef,
     val: &mut T,
     bytes: i64,
     db_tp: i32,
 ) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if file.rec == 0 {
         return;
     }
@@ -1214,7 +1351,7 @@ pub fn OpReadFile<T: FileVal>(
 /// WASM stub: file read not available.
 #[cfg(feature = "wasm")]
 pub fn OpReadFile<T: FileVal>(
-    _stores: &mut Stores,
+    _cell: &std::cell::UnsafeCell<Stores>,
     _file: DbRef,
     _val: &mut T,
     _bytes: i64,
@@ -1293,7 +1430,14 @@ impl IterState for i64 {
 /// # Panics
 /// Panics if `data.store_nr == u16::MAX` (coroutine `DbRef`) — the compiler is
 /// expected to reject `e#remove` on generator iterators before this is reached.
-pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, on: i32, arg: i32) {
+pub fn OpRemove<S: IterState>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    state: &mut S,
+    data: DbRef,
+    on: i32,
+    arg: i32,
+) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     // Defense-in-depth: coroutine DbRefs (store_nr == u16::MAX) must not reach remove().
     // The compiler already rejects e#remove on generator iterators (CO1.5c / S24).
     assert!(
@@ -1372,7 +1516,8 @@ pub fn OpRemove<S: IterState>(stores: &mut Stores, state: &mut S, data: DbRef, o
 /// Remove a record from a hash or index collection.
 ///
 /// Bytecode equivalent: `State::hash_remove` in `src/state/io.rs`.
-pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
+pub fn OpHashRemove(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, rec: DbRef, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if rec.rec != 0 {
         stores.remove(&data, &rec, tp as u16);
     }
@@ -1381,7 +1526,8 @@ pub fn OpHashRemove(stores: &mut Stores, data: DbRef, rec: DbRef, tp: i32) {
 /// Append `count - 1` copies of the last element of `data`, expanding the vector.
 ///
 /// Bytecode equivalent: `State::append_copy` in `src/state/io.rs`.
-pub fn OpAppendCopy(stores: &mut Stores, data: DbRef, count: i64, tp: i32) {
+pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i64, tp: i32) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let ctp = stores.content(tp as u16);
     let size = u32::from(stores.size(ctp));
     let length = vector::length_vector(&data, &stores.allocations);
@@ -1444,8 +1590,11 @@ fn fake_clock_env(var: &str) -> Option<i64> {
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
 /// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
+///
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI
+/// (`Abi::None`).  Body doesn't touch `Stores` — wall-clock read only.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
         return fake;
     }
@@ -1456,7 +1605,7 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     crate::wasm::host_time_now()
 }
 
@@ -1464,7 +1613,7 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// returns 0 because no host time bridge exists.  Mirror of the
 /// `n_ticks` fallback below for the same target.
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-pub fn n_now(_stores: &mut Stores) -> i64 {
+pub fn n_now() -> i64 {
     0
 }
 
@@ -1473,7 +1622,8 @@ pub fn n_now(_stores: &mut Stores) -> i64 {
 /// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn n_ticks(stores: &mut Stores) -> i64 {
+pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
         return fake;
     }
@@ -1484,19 +1634,22 @@ pub fn n_ticks(stores: &mut Stores) -> i64 {
 /// target_arch, not the `wasm` feature — the `--html` build (wasm32,
 /// no `wasm` feature) returns 0 because no host time bridge exists.
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-pub fn n_ticks(stores: &mut Stores) -> i64 {
+pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-pub fn n_ticks(_stores: &mut Stores) -> i64 {
+pub fn n_ticks(_cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     0
 }
 
 /// Return the platform path separator as a loft character (`i32`).
 /// Returns `'/'` (47) on Unix and `'\\'` (92) on Windows.
 /// Bytecode equivalent: `n_path_sep` in `src/native.rs`.
-pub fn n_path_sep(_stores: &mut Stores) -> i32 {
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
+/// returns a compile-time platform constant, never touches `Stores`.
+pub fn n_path_sep() -> i32 {
     crate::platform::sep() as i32
 }
 
@@ -1505,19 +1658,22 @@ pub fn n_path_sep(_stores: &mut Stores) -> i32 {
 /// path calls this with the hash's type id as a compile-time constant
 /// and iterates the result via Ordered (on=3).  Bytecode equivalent:
 /// `n_hash_sorted` in `src/native.rs`.
-pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i64) -> DbRef {
+pub fn n_hash_sorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_hash_sorted_vec(&h, tp as u16)
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
 /// Bytecode equivalent: `n_get_store_lock` in `src/native.rs`.
-pub fn n_get_store_lock(stores: &mut Stores, r: DbRef) -> bool {
+pub fn n_get_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.is_store_locked(&r)
 }
 
 /// Lock or unlock the store that owns the record pointed to by `r`.
 /// Bytecode equivalent: `n_set_store_lock` in `src/native.rs`.
-pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
+pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: bool) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if locked {
         stores.lock_store(&r);
     } else {
@@ -1528,14 +1684,17 @@ pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
 /// Return a random integer in `[lo, hi]` (inclusive).
 /// Returns `i64::MIN` (null) when `lo > hi`.
 /// Bytecode equivalent: `n_rand` in `src/native.rs`.
-pub fn n_rand(_stores: &mut Stores, lo: i64, hi: i64) -> i64 {
+/// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI — body
+/// uses thread-local RNG state, not `Stores`.
+pub fn n_rand(lo: i64, hi: i64) -> i64 {
     cr_rand_int(lo, hi)
 }
 
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
+pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let count = if n == i64::MIN || n <= 0 {
         0usize
     } else {
@@ -1578,57 +1737,41 @@ pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
 ///   `header_rec`, `pos=4` → `i32` pointing to `vec_rec`
 ///   `vec_rec`, `pos=4`    → element count (`n`)
 ///   `vec_rec`, `pos=8+i*S` → element `i`  (`S` = 4 int / 8 long+float / 1 bool bytes)
-pub fn n_parallel_for_native<F>(
-    stores: &mut Stores,
-    input: DbRef,
-    elem_size: i32,
-    return_size: i32,
-    _threads: i32,
-    mut worker: F,
-) -> DbRef
-where
-    F: FnMut(&mut Stores, DbRef) -> i64,
-{
-    let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let return_sz = return_size.clamp(1, 8) as u32;
+///
+/// Runs workers in parallel via the shared `parallel::parallel_workers`
+/// template (rayon work-stealing pool, plan-06 phase 1.5), mirroring the
+/// interp path's `run_parallel_direct` in `src/parallel.rs` (post-phase-3c).
+/// Plan-06 phase 3b.1 — shared prologue for the native par result store.
+///
+/// Allocates a result store (`stores.null()`), reserves the vector body
+/// (`n * elem_size` bytes) plus its 1-word header record, and returns the
+/// triple (result_db, vec_rec, header_rec) the three native par variants
+/// all need.  Replaces ~7 lines of identical boilerplate at the top of
+/// each `n_parallel_for_*_native`.
+fn alloc_par_result(stores: &mut Stores, n: usize, elem_size: u32) -> (DbRef, u32, u32) {
     let result_db = stores.null();
-    let vec_words = ((n as u32) * return_sz + 15) / 8;
+    let vec_words = ((n as u32) * elem_size + 15) / 8;
     let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
     let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    // Collect results.
-    let mut fld = 8u32;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
-            }
-        };
-        let val = worker(stores, elm);
-        let store = stores.store_mut(&result_db);
-        match return_sz {
-            8 => {
-                store.set_long(vec_rec, fld, val);
-            }
-            1 => {
-                store.set_byte(vec_rec, fld, 0, val as i32);
-            }
-            _ => {
-                store.set_i32_raw(vec_rec, fld, val as i32);
-            }
-        }
-        fld += return_sz;
-    }
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
+    (result_db, vec_cr.rec, header_cr.rec)
+}
+
+/// Plan-06 phase 3b.1 — shared epilogue for the native par result store.
+///
+/// Writes the vector length into `vec_rec[4]`, points the header record's
+/// pos=4 slot at `vec_rec`, and returns the canonical `DbRef { …, pos: 4 }`
+/// every par caller expects.  Replaces ~10 lines of identical boilerplate
+/// at the bottom of each `n_parallel_for_*_native`.
+fn finalize_par_result(
+    stores: &mut Stores,
+    result_db: DbRef,
+    n: usize,
+    vec_rec: u32,
+    header_rec: u32,
+) -> DbRef {
+    let store = stores.store_mut(&result_db);
+    store.set_u32_raw(vec_rec, 4, n as u32);
+    store.set_u32_raw(header_rec, 4, vec_rec);
     DbRef {
         store_nr: result_db.store_nr,
         rec: header_rec,
@@ -1636,52 +1779,369 @@ where
     }
 }
 
+/// Plan-09 phase 09: shape-trait-driven parallel-for runtime.
+///
+/// The three native par variants (scalar / text / heap-ref) share an
+/// allocate-→-dispatch-workers-→-merge-→-finalise skeleton.  This
+/// trait factors the per-shape pieces — return-element width, worker
+/// dispatcher, merge logic — out of the public fns so each public fn
+/// reduces to a thin wrapper around the generic core.
+///
+/// The trait spans more variation than a single closure return type:
+/// `TextShape` runs workers via per-worker store slots that intern
+/// strings via `set_str`; `RefShape` carries each worker's `Stores`
+/// back so the parent can deep-copy structs across the worker/parent
+/// boundary.  `Self::Batches` therefore varies per shape, and the
+/// merge-into-result-store step lives on the trait too.
+trait ParShape {
+    /// Closure return type passed back from each worker invocation.
+    type WorkerOut: Send;
+    /// Shape-specific value carried from the worker phase into the
+    /// merge phase (`Vec<i64>` for scalar, `Vec<String>` for text,
+    /// `Vec<(Vec<(usize, DbRef)>, Stores)>` for ref).
+    type Batches;
+
+    /// Element width in the result vector (the third arg to
+    /// `alloc_par_result`).  4 for text, struct-size for ref,
+    /// `return_size.clamp(1, 8)` for scalar.
+    fn return_sz(&self) -> u32;
+
+    /// Run workers in parallel and gather their outputs.  Wraps the
+    /// shape's existing `run_native_workers_*` helper.
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> Self::WorkerOut + Send + Sync,
+        Self: Sized;
+
+    /// Write `batches` into the result vector at `vec_rec`,
+    /// starting at byte offset 8.  Per-shape: scalar writes
+    /// long/i32/byte; text interns + writes a 4-byte s_pos; ref
+    /// deep-copies via `copy_from_worker[_unowned]`.
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Self::Batches,
+    );
+}
+
+struct ScalarShape {
+    return_size: i32,
+}
+
+impl ParShape for ScalarShape {
+    type WorkerOut = i64;
+    type Batches = Vec<i64>;
+
+    fn return_sz(&self) -> u32 {
+        self.return_size.clamp(1, 8) as u32
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+    {
+        run_native_workers_primitive(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Vec<i64>,
+    ) {
+        let return_sz = self.return_sz();
+        let mut fld = 8u32;
+        for &val in &batches {
+            let store = stores.store_mut(result_db);
+            match return_sz {
+                8 => {
+                    store.set_long(vec_rec, fld, val);
+                }
+                1 => {
+                    store.set_byte(vec_rec, fld, 0, val as i32);
+                }
+                _ => {
+                    store.set_i32_raw(vec_rec, fld, val as i32);
+                }
+            }
+            fld += return_sz;
+        }
+    }
+}
+
+struct TextShape;
+
+impl ParShape for TextShape {
+    type WorkerOut = String;
+    type Batches = Vec<String>;
+
+    fn return_sz(&self) -> u32 {
+        4
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
+    {
+        run_native_workers_text(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Vec<String>,
+    ) {
+        for (i, s) in batches.iter().enumerate() {
+            let store = stores.store_mut(result_db);
+            let s_pos = store.set_str(s);
+            store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
+        }
+    }
+}
+
+struct RefShape {
+    struct_size: i32,
+    known_type: i32,
+}
+
+impl ParShape for RefShape {
+    type WorkerOut = DbRef;
+    type Batches = Vec<(Vec<(usize, DbRef)>, Stores)>;
+
+    fn return_sz(&self) -> u32 {
+        self.struct_size as u32
+    }
+
+    fn run_workers<F>(
+        stores: &Stores,
+        input: &DbRef,
+        elem_size: i32,
+        threads: i32,
+        n: usize,
+        worker: &F,
+    ) -> Self::Batches
+    where
+        F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
+    {
+        run_native_workers_ref(stores, input, elem_size, threads, n, worker)
+    }
+
+    fn store_results(
+        &self,
+        stores: &mut Stores,
+        result_db: &DbRef,
+        vec_rec: u32,
+        batches: Self::Batches,
+    ) {
+        let sz = self.return_sz();
+        let kt = self.known_type as u16;
+        // Phase 2 step 2b: cheap path for self-contained structs.
+        let unowned = !stores.has_owned_sub_fields(kt);
+        for (batch, mut worker_stores) in batches {
+            for (i, src_ref) in batch {
+                let dest = DbRef {
+                    store_nr: result_db.store_nr,
+                    rec: vec_rec,
+                    pos: 8 + (i as u32) * sz,
+                };
+                if unowned {
+                    stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
+                } else {
+                    stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
+                }
+            }
+        }
+    }
+}
+
+/// Generic parallel-for core — consumed by the three public
+/// `n_parallel_for_*_native` wrappers below.  Replaces the
+/// allocate-→-dispatch-→-merge-→-finalise body each variant used
+/// to inline.
+fn n_parallel_for_native_core<S, F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    threads: i32,
+    shape: &S,
+    worker: F,
+) -> DbRef
+where
+    S: ParShape,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> S::WorkerOut + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let return_sz = shape.return_sz();
+    let (result_db, vec_rec, header_rec) = alloc_par_result(stores, n, return_sz);
+    let batches = S::run_workers(stores, &input, elem_size, threads, n, &worker);
+    shape.store_results(stores, &result_db, vec_rec, batches);
+    finalize_par_result(stores, result_db, n, vec_rec, header_rec)
+}
+
+pub fn n_parallel_for_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    return_size: i32,
+    threads: i32,
+    worker: F,
+) -> DbRef
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+{
+    n_parallel_for_native_core(
+        cell,
+        input,
+        elem_size,
+        threads,
+        &ScalarShape { return_size },
+        worker,
+    )
+}
+
+/// Parallel worker dispatcher for native primitive-return par.
+/// Mirrors `src/parallel.rs::run_parallel_raw` but takes a Rust closure
+/// instead of a bytecode fn pos.  Each thread gets its own `Stores` clone
+/// via `clone_for_worker`; per-thread results merge on the main thread.
+fn run_native_workers_primitive<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<i64>
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut local: Vec<i64> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let elm =
+                vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
+            // P199 — generated worker closures take `&UnsafeCell<Stores>`
+            // (the new ABI).  Cast `&mut ws.stores` to `&UnsafeCell<Stores>`
+            // via the `repr(transparent)` layout guarantee.
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+            local.push(worker(cell, elm));
+        }
+        (start, local)
+    });
+    crate::parallel::merge_batches(batches, n, 0i64)
+}
+
 /// Text-returning variant of `n_parallel_for_native`.  The worker closure returns
 /// an owned `String`; each result is stored in the result store via `set_str` and
 /// the 4-byte text position is written into the result vector.
+///
+/// Same parallelization shape as `n_parallel_for_native` — uses the
+/// shared `parallel::parallel_workers` template.  Each worker
+/// accumulates `Vec<String>`; main-thread re-sequences and writes
+/// strings into the result store via `set_str` after join.
 pub fn n_parallel_for_text_native<F>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
     elem_size: i32,
     _return_size: i32,
-    _threads: i32,
-    mut worker: F,
+    threads: i32,
+    worker: F,
 ) -> DbRef
 where
-    F: FnMut(&mut Stores, DbRef) -> String,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
 {
-    let n = vector::length_vector(&input, &stores.allocations) as usize;
-    let result_db = stores.null();
-    let vec_words = ((n as u32) * 4 + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
-            }
-        };
-        let s = worker(stores, elm);
-        let store = stores.store_mut(&result_db);
-        let s_pos = store.set_str(&s);
-        store.set_u32_raw(vec_rec, 8 + (i as u32) * 4, s_pos);
+    n_parallel_for_native_core(cell, input, elem_size, threads, &TextShape, worker)
+}
+
+/// Parallel worker dispatcher for native text-return par.
+///
+/// Plan-06 phase 1b: each worker reserves a per-worker output Store
+/// slot holding a `row_count`-entry s_pos array; the slot's store
+/// also interns the worker's text-bytes via `set_str`.  After join,
+/// the parent reads each adopted slot's s_pos array, retrieves the
+/// strings via `get_str`, and copies them into the caller's
+/// `Vec<String>`.  Replaces the prior per-thread `Vec<String>` heap
+/// accumulator — text results now flow through the same store-typed
+/// pipeline as every other field write.
+fn run_native_workers_text<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<String>
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
     }
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    let batches = crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let row_count = end - start;
+        let array_words = (row_count * 4).div_ceil(8).max(1) as u32;
+        let slot = ws.add_output_slot(array_words);
+        let array_rec = ws.stores.allocations[slot.store_nr as usize].claim(array_words);
+        for (local_idx, row_idx) in (start..end).enumerate() {
+            let elm = vector::get_vector(
+                &input_t,
+                elem_size as u32,
+                row_idx as i64,
+                &ws.stores.allocations,
+            );
+            // P199 — see run_native_workers_primitive comment.
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+            let s = worker(cell, elm);
+            let slot_store = &mut ws.stores.allocations[slot.store_nr as usize];
+            let s_pos = slot_store.set_str(&s);
+            slot_store.set_u32_raw(array_rec, (local_idx as u32) * 4, s_pos);
+        }
+        (start, row_count, slot.store_nr, array_rec, ws.stores)
+    });
+    let mut results = vec![String::new(); n];
+    for (start, count, slot_nr, array_rec, worker_stores) in batches {
+        let slot_store = &worker_stores.allocations[slot_nr as usize];
+        for local_idx in 0..count {
+            let s_pos = slot_store.get_u32_raw(array_rec, (local_idx as u32) * 4);
+            results[start + local_idx] = slot_store.get_str(s_pos).to_string();
+        }
     }
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
+    results
 }
 
 /// Reference/struct-returning variant of `n_parallel_for_native`.  The worker closure
@@ -1691,117 +2151,310 @@ where
 ///
 /// `struct_size` is the inline byte size of the struct (from `stores.size(known_type)`).
 /// `known_type` is the struct's type id for `copy_block` / `copy_claims`.
+///
+/// Workers run in parallel via the shared `parallel::parallel_workers`
+/// template (rayon work-stealing pool); each worker returns its
+/// `Vec<(idx, src_ref)>` batch plus its `WorkerStores`, and the main
+/// thread deep-copies each struct into the result vector via
+/// `copy_from_worker`'s graft machinery (or `copy_from_worker_unowned`
+/// for owned-free struct/variant payloads — plan-06 phase 2b refinement).
+/// Mirrors how `src/native.rs` wires `run_parallel_ref` for the
+/// interpreter path.
 pub fn n_parallel_for_ref_native<F>(
-    stores: &mut Stores,
+    cell: &std::cell::UnsafeCell<Stores>,
     input: DbRef,
     elem_size: i32,
     struct_size: i32,
     known_type: i32,
-    _threads: i32,
-    mut worker: F,
+    threads: i32,
+    worker: F,
 ) -> DbRef
 where
-    F: FnMut(&mut Stores, DbRef) -> DbRef,
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
 {
+    n_parallel_for_native_core(
+        cell,
+        input,
+        elem_size,
+        threads,
+        &RefShape {
+            struct_size,
+            known_type,
+        },
+        worker,
+    )
+}
+
+/// Parallel worker dispatcher for native struct/reference-return par.
+/// Each thread accumulates `(row_idx, struct_ref_in_worker_store)` pairs
+/// and returns its batch plus its full `Stores` clone.  The caller uses
+/// `Stores::copy_from_worker` to deep-copy each struct into the result
+/// vector across the worker / parent store boundary.
+fn run_native_workers_ref<F>(
+    stores: &Stores,
+    input: &DbRef,
+    elem_size: i32,
+    n_threads: i32,
+    n: usize,
+    worker: &F,
+) -> Vec<(Vec<(usize, DbRef)>, Stores)>
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
+{
+    if n == 0 {
+        return Vec::new();
+    }
+    let input_t = *input;
+    let n_threads = n_threads.max(1) as usize;
+    crate::parallel::parallel_workers(stores, n_threads, n, |start, end, mut ws| {
+        let mut batch: Vec<(usize, DbRef)> = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let elm =
+                vector::get_vector(&input_t, elem_size as u32, row_idx as i64, &ws.allocations);
+            // P199 — see run_native_workers_primitive comment.
+            let cell: &std::cell::UnsafeCell<Stores> =
+                unsafe { &*(&raw mut ws.stores as *const std::cell::UnsafeCell<Stores>) };
+            let r = worker(cell, elm);
+            batch.push((row_idx, r));
+        }
+        (batch, ws.stores)
+    })
+}
+
+// ── Plan-09 phase 06: parallel-queue runtime (P202 close) ──────────────────
+//
+// Mirror of the interpreter's `n_parallel_queue*` family in
+// `src/native.rs`, adapted to the native ABI: takes a Rust closure
+// instead of a bytecode worker fn.  Workers run via the same
+// `run_native_workers_*` helpers used by `n_parallel_for_*_native`;
+// the difference is in the merge phase — instead of writing into a
+// result vector, results are pushed onto `stores.par_*_buffer_stack`
+// and the row count is returned for use as a loop bound.
+//
+// The accompanying `n_parallel_buf_get_*_native` / `_drop_*_native`
+// fns provide the per-row read + cleanup that loft's fused for-par
+// desugars into.
+
+/// Plan-06 spine step 8a (native variant) — scalar-return Queue
+/// runtime entry.  Runs workers, packs their `i64` returns into a
+/// `Vec<u64>`, pushes onto `par_buffer_stack`, and returns the row
+/// count.  Each worker's i64 return is bit-cast to u64 (matching
+/// the interpreter's storage convention).
+pub fn n_parallel_queue_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> i64 + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let results = run_native_workers_primitive(stores, &input, elem_size, threads, n, &worker);
+    let buf: Vec<u64> = results.into_iter().map(|v| v as u64).collect();
+    stores.par_buffer_stack.push(buf);
+    n as i64
+}
+
+/// Plan-06 spine step 8c (native variant) — text-return Queue.
+/// Workers' `String` returns are pushed verbatim onto
+/// `par_text_buffer_stack`.  `n_parallel_buf_get_text_native` reads
+/// them back through `stores.scratch` (lifetime-stabilising the
+/// `&str` returned to the caller).
+pub fn n_parallel_queue_text_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    _return_size: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> String + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let n = vector::length_vector(&input, &stores.allocations) as usize;
+    let strings = run_native_workers_text(stores, &input, elem_size, threads, n, &worker);
+    stores.par_text_buffer_stack.push(strings);
+    n as i64
+}
+
+/// Plan-06 spine step 8d.1 (native variant) — heap-ref-return Queue.
+/// Allocates a single result store, deep-copies each worker-side
+/// struct return into a row-indexed slot, and pushes
+/// `(row_refs, [result_store_nr])` onto `par_ref_buffer_stack`.  The
+/// adopted-store list lets `n_parallel_buf_drop_ref_native` free the
+/// result store when the loop body completes.
+///
+/// Simpler than the interpreter's adoption-via-rebase machinery:
+/// each row is a record at offset `i * struct_size` inside one
+/// owned store, instead of a per-worker store with rebase translation.
+/// The cost: one `copy_from_worker[_unowned]` per row.  The benefit:
+/// no `worker_allocated_indices` / `StoreRebase` / dispenser plumbing
+/// in the native path.
+pub fn n_parallel_queue_ref_native<F>(
+    cell: &std::cell::UnsafeCell<Stores>,
+    input: DbRef,
+    elem_size: i32,
+    struct_size: i32,
+    known_type: i32,
+    threads: i32,
+    worker: F,
+) -> i64
+where
+    F: Fn(&std::cell::UnsafeCell<Stores>, DbRef) -> DbRef + Send + Sync,
+{
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let n = vector::length_vector(&input, &stores.allocations) as usize;
     let sz = struct_size as u32;
     let kt = known_type as u16;
+
+    if n == 0 {
+        stores.par_ref_buffer_stack.push((Vec::new(), Vec::new()));
+        return 0;
+    }
+
     let result_db = stores.null();
-    let vec_words = ((n as u32) * sz + 15) / 8;
-    let vec_cr = stores.claim(&result_db, vec_words.max(1));
-    let vec_rec = vec_cr.rec;
-    let header_cr = stores.claim(&result_db, 1);
-    let header_rec = header_cr.rec;
-    for i in 0..n {
-        let elm = {
-            let v_rec =
-                crate::keys::store(&input, &stores.allocations).get_u32_raw(input.rec, input.pos);
-            DbRef {
-                store_nr: input.store_nr,
-                rec: v_rec,
-                pos: 8 + (i as u32) * (elem_size as u32),
+    let total_words = ((n as u32) * sz).div_ceil(8).max(1);
+    let result_cr = stores.claim(&result_db, total_words);
+    let result_store_nr = result_db.store_nr;
+    let result_rec = result_cr.rec;
+
+    let batches = run_native_workers_ref(stores, &input, elem_size, threads, n, &worker);
+
+    let unowned = !stores.has_owned_sub_fields(kt);
+    let mut refs: Vec<DbRef> = vec![
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 8
+        };
+        n
+    ];
+    for (batch, mut worker_stores) in batches {
+        for (i, src_ref) in batch {
+            let dest = DbRef {
+                store_nr: result_store_nr,
+                rec: result_rec,
+                pos: (i as u32) * sz,
+            };
+            if unowned {
+                stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);
+            } else {
+                stores.copy_from_worker(&src_ref, &dest, &mut worker_stores, kt);
             }
+            refs[i] = dest;
+        }
+    }
+
+    stores
+        .par_ref_buffer_stack
+        .push((refs, vec![result_store_nr]));
+    n as i64
+}
+
+/// Read a row from the active scalar par-buffer.  The buffer is a
+/// `Vec<u64>` (workers' bit-cast returns); narrow returns leave the
+/// high bits zero.  Caller masks to the actual return width.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is empty (no active scalar queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let buf = stores
+        .par_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_native: par_buffer_stack is empty");
+    buf[idx as usize] as i64
+}
+
+/// Read a row from the active text par-buffer.  Stages the `String`
+/// into `stores.scratch` so the returned `Str` borrow remains valid
+/// across the call (mirrors the interpreter's text-return convention).
+///
+/// # Panics
+/// Panics if `par_text_buffer_stack` is empty (no active text queue)
+/// or if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_text_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> Str {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let s_owned = {
+        let buf = stores
+            .par_text_buffer_stack
+            .last()
+            .expect("n_parallel_buf_get_text_native: par_text_buffer_stack is empty");
+        buf[idx as usize].clone()
+    };
+    stores.scratch.push(s_owned);
+    Str::new(stores.scratch.last().unwrap())
+}
+
+/// Read a row from the active ref par-buffer.  Returns the per-row
+/// `DbRef` pointing into the result store this queue allocated.  The
+/// caller's field reads go through that store; the store stays
+/// adopted until `n_parallel_buf_drop_ref_native` fires.
+///
+/// # Panics
+/// Panics if `par_ref_buffer_stack` is empty (no active ref queue) or
+/// if `idx` is out of range — both indicate a parser-side bug.
+pub fn n_parallel_buf_get_ref_native(cell: &std::cell::UnsafeCell<Stores>, idx: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let (refs, _) = stores
+        .par_ref_buffer_stack
+        .last()
+        .expect("n_parallel_buf_get_ref_native: par_ref_buffer_stack is empty");
+    refs[idx as usize]
+}
+
+/// Pop the active scalar par-buffer.  Called after the loop body
+/// completes.
+///
+/// # Panics
+/// Panics if `par_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue).
+pub fn n_parallel_buf_drop_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_native: par_buffer_stack is already empty");
+}
+
+/// Pop the active text par-buffer.
+///
+/// # Panics
+/// Panics if `par_text_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue_text).
+pub fn n_parallel_buf_drop_text_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores
+        .par_text_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_text_native: par_text_buffer_stack is already empty");
+}
+
+/// Pop the active ref par-buffer + free its adopted result store.
+///
+/// # Panics
+/// Panics if `par_ref_buffer_stack` is already empty — indicates a
+/// parser-side bug (drop emitted without a matching queue_ref).
+pub fn n_parallel_buf_drop_ref_native(cell: &std::cell::UnsafeCell<Stores>) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    let (_refs, adopted) = stores
+        .par_ref_buffer_stack
+        .pop()
+        .expect("n_parallel_buf_drop_ref_native: par_ref_buffer_stack is already empty");
+    for store_nr in adopted {
+        let synthetic = DbRef {
+            store_nr,
+            rec: 0,
+            pos: 0,
         };
-        let src_ref = worker(stores, elm);
-        let dest = DbRef {
-            store_nr: result_db.store_nr,
-            rec: vec_rec,
-            pos: 8 + (i as u32) * sz,
-        };
-        stores.copy_block(&src_ref, &dest, sz);
-        stores.copy_claims(&src_ref, &dest, kt);
+        stores.free_named(&synthetic, "par_buf_drop_ref");
     }
-    {
-        let store = stores.store_mut(&result_db);
-        store.set_u32_raw(vec_rec, 4, n as u32);
-        store.set_u32_raw(header_rec, 4, vec_rec);
-    }
-    DbRef {
-        store_nr: result_db.store_nr,
-        rec: header_rec,
-        pos: 4,
-    }
-}
-
-/// Read a struct/reference result element from a `n_parallel_for_ref_native` result vector.
-/// Returns a `DbRef` pointing to the inline struct data at the given index.
-pub fn n_parallel_get_ref(stores: &mut Stores, r: DbRef, idx: i32, struct_size: i32) -> DbRef {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    DbRef {
-        store_nr: r.store_nr,
-        rec: v_rec,
-        pos: 8 + (idx as u32) * (struct_size as u32),
-    }
-}
-
-/// Read an integer result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_int(stores: &mut Stores, r: DbRef, idx: i32) -> i32 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_i32_raw(v_rec, 8 + (idx as u32) * 4)
-}
-
-/// Read a long result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_long(stores: &mut Stores, r: DbRef, idx: i32) -> i64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_long(v_rec, 8 + (idx as u32) * 8)
-}
-
-/// Read a float result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_float(stores: &mut Stores, r: DbRef, idx: i32) -> f64 {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    let bits = stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_long(v_rec, 8 + (idx as u32) * 8);
-    f64::from_bits(bits as u64)
-}
-
-/// Read a boolean result element from a `n_parallel_for_native` result vector.
-pub fn n_parallel_get_bool(stores: &mut Stores, r: DbRef, idx: i32) -> bool {
-    let v_rec = crate::keys::store(&r, &stores.allocations).get_u32_raw(r.rec, r.pos);
-    stores
-        .store(&DbRef {
-            store_nr: r.store_nr,
-            rec: v_rec,
-            pos: 0,
-        })
-        .get_byte(v_rec, 8 + idx as u32, 0)
-        != 0
 }
 
 // ── N8b.1: Native coroutine runtime ─────────────────────────────────────────
@@ -1957,7 +2610,8 @@ pub fn fs_mkdir_all(path: &str) -> bool {
 /// Called in generated native code when `OpStoreClosure` appears in the IR,
 /// immediately before the fn-ref variable is stored.
 /// The closure is later retrieved by `OpGetClosure` in the match-dispatch arm.
-pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
+pub fn OpStoreClosure(cell: &std::cell::UnsafeCell<Stores>, d_nr: u32, closure: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.closure_map.insert(d_nr, closure);
 }
 
@@ -1965,7 +2619,8 @@ pub fn OpStoreClosure(stores: &mut Stores, d_nr: u32, closure: DbRef) {
 /// Called in generated native code inside match-dispatch arms for closure-capturing lambdas.
 /// Returns a null DbRef if no closure was registered for `d_nr`.
 #[must_use]
-pub fn OpGetClosure(stores: &Stores, d_nr: u32) -> DbRef {
+pub fn OpGetClosure(cell: &std::cell::UnsafeCell<Stores>, d_nr: u32) -> DbRef {
+    let stores: &Stores = unsafe { &*cell.get() };
     stores.closure_map.get(&d_nr).copied().unwrap_or(DbRef {
         store_nr: 0,
         rec: 0,
@@ -2010,7 +2665,8 @@ impl Drop for CallGuard {
 /// Native implementation of `stack_trace()`.
 /// Reads the thread-local shadow call stack and builds `vector<StackFrame>`
 /// using the same stores API as the interpreter implementation in `native.rs`.
-pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
+pub fn n_stack_trace(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let snapshot: Vec<(&str, &str, u32)> = CALL_STACK.with(|s| s.borrow().clone());
 
     let sf_elm = stores.name("StackFrame");

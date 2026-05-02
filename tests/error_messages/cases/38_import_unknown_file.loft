@@ -1,0 +1,4 @@
+use nonexistent_module::*;
+fn main() {
+  print("hi");
+}
