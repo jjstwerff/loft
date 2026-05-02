@@ -72,16 +72,16 @@ pub struct RuntimeFn {
 
 pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_now",                     abi: Abi::None },
-    RuntimeFn { name: "n_ticks",                   abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_get_store_lock",          abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_set_store_lock",          abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_ticks",                   abi: Abi::Cell },
+    RuntimeFn { name: "n_get_store_lock",          abi: Abi::Cell },
+    RuntimeFn { name: "n_set_store_lock",          abi: Abi::Cell },
     RuntimeFn { name: "n_rand",                    abi: Abi::None },
-    RuntimeFn { name: "n_rand_indices",            abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_rand_indices",            abi: Abi::Cell },
     RuntimeFn { name: "n_parallel_for_native",     abi: Abi::LegacyStores },
     RuntimeFn { name: "n_parallel_for_ref_native", abi: Abi::LegacyStores },
     RuntimeFn { name: "n_path_sep",                abi: Abi::None },
-    RuntimeFn { name: "n_stack_trace",             abi: Abi::LegacyStores },
-    RuntimeFn { name: "n_hash_sorted",             abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_stack_trace",             abi: Abi::Cell },
+    RuntimeFn { name: "n_hash_sorted",             abi: Abi::Cell },
 ];
 
 /// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
@@ -1580,7 +1580,8 @@ pub fn n_now() -> i64 {
 /// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn n_ticks(stores: &mut Stores) -> i64 {
+pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
         return fake;
     }
@@ -1591,12 +1592,13 @@ pub fn n_ticks(stores: &mut Stores) -> i64 {
 /// target_arch, not the `wasm` feature — the `--html` build (wasm32,
 /// no `wasm` feature) returns 0 because no host time bridge exists.
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-pub fn n_ticks(stores: &mut Stores) -> i64 {
+pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
-pub fn n_ticks(_stores: &mut Stores) -> i64 {
+pub fn n_ticks(_cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     0
 }
 
@@ -1614,19 +1616,22 @@ pub fn n_path_sep() -> i32 {
 /// path calls this with the hash's type id as a compile-time constant
 /// and iterates the result via Ordered (on=3).  Bytecode equivalent:
 /// `n_hash_sorted` in `src/native.rs`.
-pub fn n_hash_sorted(stores: &mut Stores, h: DbRef, tp: i64) -> DbRef {
+pub fn n_hash_sorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_hash_sorted_vec(&h, tp as u16)
 }
 
 /// Read the lock state of the store that owns the record pointed to by `r`.
 /// Bytecode equivalent: `n_get_store_lock` in `src/native.rs`.
-pub fn n_get_store_lock(stores: &mut Stores, r: DbRef) -> bool {
+pub fn n_get_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef) -> bool {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.is_store_locked(&r)
 }
 
 /// Lock or unlock the store that owns the record pointed to by `r`.
 /// Bytecode equivalent: `n_set_store_lock` in `src/native.rs`.
-pub fn n_set_store_lock(stores: &mut Stores, r: DbRef, locked: bool) {
+pub fn n_set_store_lock(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, locked: bool) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     if locked {
         stores.lock_store(&r);
     } else {
@@ -1646,7 +1651,8 @@ pub fn n_rand(lo: i64, hi: i64) -> i64 {
 /// Return a vector of `n` integers `[0, 1, ..., n-1]` in a random order.
 /// Returns an empty vector reference when `n <= 0`.
 /// Bytecode equivalent: `n_rand_indices` in `src/native.rs`.
-pub fn n_rand_indices(stores: &mut Stores, n: i64) -> DbRef {
+pub fn n_rand_indices(cell: &std::cell::UnsafeCell<Stores>, n: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let count = if n == i64::MIN || n <= 0 {
         0usize
     } else {
@@ -2197,7 +2203,8 @@ impl Drop for CallGuard {
 /// Native implementation of `stack_trace()`.
 /// Reads the thread-local shadow call stack and builds `vector<StackFrame>`
 /// using the same stores API as the interpreter implementation in `native.rs`.
-pub fn n_stack_trace(stores: &mut Stores) -> DbRef {
+pub fn n_stack_trace(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
     let snapshot: Vec<(&str, &str, u32)> = CALL_STACK.with(|s| s.borrow().clone());
 
     let sf_elm = stores.name("StackFrame");
