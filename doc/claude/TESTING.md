@@ -1284,6 +1284,62 @@ point of first access, before corruption propagates:
 
 All three are zero-cost in release builds.
 
+> **Note:** `[profile.dev.package.loft] debug-assertions = false` opts the
+> loft package itself out of `debug_assertions` even in dev/test builds (for
+> hot-path performance).  The boundary checks above are therefore **silent
+> on every platform** during ordinary `cargo test` runs.  Latent
+> out-of-bounds writes inside `Store` are tolerated by Linux's allocator
+> slack (16-byte chunk minimum) but caught by Windows as
+> `STATUS_HEAP_CORRUPTION (0xc0000374)` at deallocation — see the valgrind
+> section below for how to surface this on Linux without waiting for
+> Windows CI.
+
+---
+
+## Occasional valgrind pass (Linux)
+
+The loft codebase has a large `unsafe` surface in `src/store.rs`,
+`src/database/`, and `src/parallel.rs` (raw `addr`/`addr_mut`, LLRB
+free-tree rotations, claim/free splits, worker store adoption).  Linux
+runs the test suite cleanly because the system allocator over-allocates
+small chunks; latent OOB writes land in slack and don't corrupt anything
+visibly.  The same code on Windows hit `STATUS_HEAP_CORRUPTION` once the
+heap manager validated chunk metadata at deallocation.
+
+Valgrind's memcheck tool catches this class of bug instantly: every
+load/store is instrumented and OOB accesses fail loudly, regardless of
+allocator behaviour.
+
+### Recipe
+
+```bash
+# 1. Build test binaries (debug profile keeps the boundary checks for
+#    crates other than loft, but the real value is valgrind's redzones).
+cargo test --no-run
+
+# 2. Run unit + integration tests under valgrind.  Skip threading-heavy
+#    tests if they are too slow under instrumentation; valgrind is
+#    typically 5-10x slower than a normal run.
+for t in target/debug/deps/loft-*; do
+    [ -x "$t" ] || continue
+    valgrind --error-exitcode=1 --leak-check=no \
+             --track-origins=yes "$t" --test-threads=1 || exit 1
+done
+```
+
+### When to run
+
+- **Before a release** — once per release cycle.  Catches any latent
+  UB introduced since the last pass.
+- **After significant `unsafe` changes** in `Store`, `Stores`, the
+  parallel runtime, or the LLRB free-tree (`fl_*` in `src/store.rs`).
+- **When a Windows-only failure appears** with heap-corruption-style
+  symptoms (`0xc0000374`, `LdrpAllocate*`, `RtlReportFatalFailure`).
+
+Not a CI default: too slow for every PR.  Tracked as a release-blocker
+gate in [RELEASE.md](RELEASE.md) — run on the tag candidate, not on
+every push.
+
 ---
 
 ## Test Coverage Gaps

@@ -74,7 +74,8 @@ mod wasm;
 
 use crate::diagnostics::Level;
 use crate::native_utils::{
-    default_artifact_path, is_output_path, loft_lib_dir, loft_lib_dir_for, project_dir,
+    build_script_native_lib_dirs, default_artifact_path, is_output_path, loft_lib_dir,
+    loft_lib_dir_for, project_dir,
 };
 use crate::state::State;
 use crate::test_runner::run_tests;
@@ -2268,6 +2269,14 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
                             break;
                         }
                     }
+                }
+                // Propagate `-L native=` for every build-script `OUT_DIR`
+                // that bundles a native lib.  Windows-targets ships
+                // `windows.0.48.5.lib` inside its OUT_DIR; without these
+                // paths the link step fails with `LNK1181: cannot open
+                // input file 'windows.0.48.5.lib'`.
+                for out_dir in build_script_native_lib_dirs(&lib_dir) {
+                    cmd.arg("-L").arg(format!("native={}", out_dir.display()));
                 }
                 Some(deps)
             } else {

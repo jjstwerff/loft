@@ -63,6 +63,68 @@ pub(crate) fn loft_lib_dir() -> Option<std::path::PathBuf> {
     loft_lib_dir_for(None)
 }
 
+/// Walk `target/<profile>/build/*/out/` and return every directory that
+/// contains a build-script-generated native library.  These are the
+/// `OUT_DIR`s of upstream crates with build scripts that bundle static
+/// libs (e.g. `windows-targets` ships `windows.0.48.5.lib` inside its
+/// `OUT_DIR` and emits `cargo:rustc-link-search=native=$OUT_DIR`).
+///
+/// Cargo bakes those search paths into its own rustc invocations, but
+/// when loft's `--native` mode invokes rustc directly we recreate the
+/// link environment ourselves — without these `-L native=` paths the
+/// linker fails on Windows with `LNK1181: cannot open input file
+/// 'windows.0.48.5.lib'`.
+///
+/// `lib_dir` is either `target/<profile>/` or `target/<profile>/deps/`
+/// — both resolve to the same parent build root.
+pub(crate) fn build_script_native_lib_dirs(lib_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let target_profile = if lib_dir.file_name().is_some_and(|n| n == "deps") {
+        match lib_dir.parent() {
+            Some(p) => p,
+            None => return Vec::new(),
+        }
+    } else {
+        lib_dir
+    };
+    let build_root = target_profile.join("build");
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&build_root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let crate_dir = entry.path();
+        if !crate_dir.is_dir() {
+            continue;
+        }
+        let out_dir = crate_dir.join("out");
+        if !out_dir.is_dir() {
+            continue;
+        }
+        // Cheap filter: skip the OUT_DIR if it has no native libs.
+        // Avoids cluttering rustc's search path with empty dirs.
+        let has_native = std::fs::read_dir(&out_dir)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    e.file_name()
+                        .to_str()
+                        .and_then(|n| std::path::Path::new(n).extension())
+                        .is_some_and(|ext| {
+                            let e = ext.to_string_lossy();
+                            e.eq_ignore_ascii_case("lib")
+                                || e.eq_ignore_ascii_case("a")
+                                || e.eq_ignore_ascii_case("so")
+                                || e.eq_ignore_ascii_case("dylib")
+                        })
+                })
+            })
+            .unwrap_or(false);
+        if has_native {
+            out.push(out_dir);
+        }
+    }
+    out
+}
+
 /// Ensure `libloft.rlib` is at least as fresh as the newest `src/*.rs` file.
 /// If any source is newer, run `cargo build --lib` to rebuild it.
 pub(crate) fn ensure_rlib_fresh() {
