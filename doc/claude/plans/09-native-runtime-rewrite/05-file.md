@@ -58,13 +58,24 @@ conflict is structurally absent.
 
 ## Detailed steps with validation
 
-### Step 5.0 — Forwarding-emitter smoke test (deferred from phase 00)
+### Step 5.0 — Forwarding-emitter smoke test (forwarding-first recipe)
 
 **Action**: ship a no-op forwarding `OpEmitter` for `OpWriteIntFile`
 as the first commit of this phase.  The emitter does nothing more
 than call `DefaultEmitter::emit` (or directly call back into
 `Output::user_fn_call_body` / `substitute_template_body`).  Register
 it.  Re-run the byte-identical baseline gate.
+
+**Pre-flight check** (per the [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe)):
+
+```bash
+grep -n '"OpWriteIntFile" =>' src/generation/dispatch.rs
+```
+
+If this returns a hit, `OpWriteIntFile` is in dispatch.rs's
+special-case match and the forwarding pattern doesn't apply —
+the real emitter (step 5.3) must absorb whatever logic that arm
+contains.  If empty, forwarding is safe; proceed.
 
 ```rust
 // src/generation/ops/op_write_int_file.rs (forwarding stub)

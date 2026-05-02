@@ -38,6 +38,13 @@ enters `narrow_int_cast`.
 
 ## Detailed steps with validation
 
+> **Pre-flight (per [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe))**:
+> verify `OpReadIntFile` is not in `dispatch.rs::output_call_inner`'s
+> special-case match (`grep -n '"OpReadIntFile" =>' src/generation/dispatch.rs`
+> should be empty).  If empty, register a forwarding emitter first;
+> if hit, write the real emitter directly absorbing the special-case
+> logic.
+
 ### Step 8.1 — Pre-work: confirm prerequisites are in place
 
 **Action**:

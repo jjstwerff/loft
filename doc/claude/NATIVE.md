@@ -164,6 +164,44 @@ impl OpEmitter for Emitter {
 //     r.insert("OpMyOp", Box::new(super::op_my_op::Emitter));
 ```
 
+#### Forwarding-first recipe (verify before writing real emission)
+
+When adding an emitter for an Op for the first time, register a
+**forwarding emitter** first (delegate to `DefaultEmitter::emit`)
+and verify byte-identical baseline.  Only then replace the body
+with real emission logic.  This catches dispatch-path conflicts
+before any real code is written.
+
+**Pre-flight check** — does the Op have a special case in
+`dispatch.rs::output_call_inner`?
+
+```bash
+grep -n '"OpYourOp" =>' src/generation/dispatch.rs
+```
+
+- **Empty result** → forwarding is safe.  Register a forwarding
+  emitter first; the dispatch path is exercised end-to-end and
+  the byte-identical baseline confirms no logic gets bypassed.
+- **Hit** → forwarding will SKIP the special-case logic (e.g.
+  OpFreeRef's debug-name string + store_nr reset, OpDatabase's
+  `var_X = OpDatabase(...)` assignment shape).  Skip the
+  forwarding step and write the real emitter directly,
+  absorbing whatever the special-case arm does.
+
+The forwarding registration looks like (see
+`src/generation/ops/forwarding_smoke.rs` for the live example
+covering 9 Ops):
+
+```rust
+pub struct Emitter;
+
+impl OpEmitter for Emitter {
+    fn emit(&self, ctx: &mut EmitCtx<'_, '_>, args: &[Value]) -> io::Result<()> {
+        DefaultEmitter.emit(ctx, args)
+    }
+}
+```
+
 Validation:
 - `cargo test --release --test codegen_emitter` runs the byte-identical
   baseline guard + P203 regression guard.

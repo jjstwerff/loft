@@ -593,3 +593,79 @@ Pragmatic compromises (`&mut Output<'b>` in EmitCtx, `Value::RawExpr`)
 ship today and don't paint us into a corner.  The wart-budget gates
 prevent silent accretion.  The first real custom emitter (phase 05)
 is the next stress test — write a smoke test before then.
+
+## Verifying a new Op emitter (the "forwarding-first" recipe)
+
+**Recommended pattern for every phase that ships a custom emitter:**
+register a forwarding emitter for the Op name FIRST (delegate to
+`DefaultEmitter`), confirm the byte-identical baseline stays green,
+THEN swap the body for the real emission logic.
+
+This pattern surfaces dispatch-path bugs *before* any real emission
+logic is written.  Phase 00's runtime smoke test (commit
+`<smoke-commit>`) registered forwarding emitters for 9 common Ops
+and immediately found a conflict that wouldn't have been visible
+from compile-time tests alone (see "Lesson learned" below).
+
+### Recipe
+
+1. **Pick the Op name.**  Verify it's not already handled by the
+   `dispatch.rs::output_call_inner` special-case match:
+   ```bash
+   grep -n '"OpYourOp" =>' src/generation/dispatch.rs
+   ```
+   If this returns a hit, **the forwarding pattern WILL NOT WORK**
+   for this Op — the real emitter must absorb the special-case
+   logic from dispatch.rs itself, not delegate to `DefaultEmitter`.
+   See "Lesson learned" below.
+
+2. **Add the Op name** to `forwarding_smoke::FORWARDING_OP_NAMES`
+   (or, for a phase-scoped emitter, add a new list and iterate it
+   in `build_registry`).
+
+3. **Run the fast gate**:
+   ```bash
+   scripts/p09_fast_gate.sh
+   ```
+   - **Byte-identical** → dispatch path is safe; the registered
+     emitter will fire, and the trait's reborrow + `ctx.output`
+     access patterns work for this Op's call shape.  Proceed to
+     step 4.
+   - **DIFFERS** → the Op is being routed through dispatch logic
+     the forwarding emitter doesn't replicate.  Diagnose: it's
+     almost certainly in dispatch.rs's special-case match.
+     Either remove the Op from forwarding (the dispatch.rs match
+     handles it) or write a real emitter that absorbs the
+     special-case logic.
+
+4. **Replace the forwarding body with real emission logic.**  Now
+   you know the dispatch fires; whatever your emitter writes lands
+   in the right place.  Iterate on the emitter body with the fast
+   gate confirming each step.
+
+### Lesson learned (phase 00 runtime smoke test)
+
+The first attempt registered forwarding emitters for 16 Ops,
+including:
+
+- `OpDatabase`, `OpFreeRef`, `OpCopyRecord`, `OpFormatDatabase`,
+  `OpAppendText`, `OpStep`, `OpRemove` — all in dispatch.rs's
+  special-case match.
+
+The fast gate flagged byte-identical breakage AND P203 regression
+on the first run.  Diff inspection showed:
+- `OpDatabase`: special case wraps with `var_X = OpDatabase(...)`
+  assignment; forwarding emitted `OpDatabase(...)` standalone.
+- `OpFreeRef`: special case adds `; var_X.store_nr = u16::MAX`
+  reset and a debug-name string; forwarding emitted just the call.
+- `OpAppendText`: special case emits `var_X += &*("text")`
+  operator-overload form; forwarding emitted the function-call form.
+
+The fix was to prune the forwarding list to Ops *not* in the
+dispatch.rs match.  After pruning to 9 Ops (pure arithmetic + non-
+special record allocation), the gate went green.
+
+**Takeaway**: the registry-first guard at the top of
+`output_call_inner` (phase 00 step 0.6) makes forwarding unsafe
+for special-case Ops.  Future phases that retire those special
+cases must write real emitters, not forwarders, for those Ops.

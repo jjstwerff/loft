@@ -36,6 +36,12 @@ None.
 
 ## Detailed steps with validation
 
+> **Pre-flight (per [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe))**:
+> the `n_parallel_queue*` runtime fns are new — no existing
+> dispatch.rs special case to conflict with.  Register forwarding
+> emitters first as the runtime smoke test, then replace with real
+> bodies.
+
 ### Step 6.1 — Identify the queue API surface
 
 **Action**: locate the interpreter's parallel-queue opcodes.

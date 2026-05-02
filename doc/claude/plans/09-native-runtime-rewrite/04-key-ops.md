@@ -24,6 +24,13 @@ separate special cases that share most of their logic:
 
 ## Detailed steps with validation
 
+> **Pre-flight (per [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe))**:
+> `OpGetRecord` and `OpIterate` ARE in `dispatch.rs::output_call_inner`'s
+> special-case match.  Forwarding will NOT work — the emitter must
+> absorb the existing key-decode logic from those arms.  Skip the
+> forwarding-first step; write the real emitters directly while
+> diff-checking against the goldens.
+
 ### Step 4.1 — Capture key-Op emission corpus
 
 **Action**: capture goldens for representative tests:

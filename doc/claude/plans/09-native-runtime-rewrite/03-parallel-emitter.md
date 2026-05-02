@@ -31,6 +31,15 @@ emission must:
 
 ## Detailed steps with validation
 
+> **Recommended pre-step**: register a forwarding emitter for
+> `n_parallel_for` / `n_parallel_for_light` first per the
+> [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe).
+> These names are NOT currently in `dispatch.rs::output_call_inner`'s
+> special-case match (the parallel logic lives in a separate match
+> arm in the same function — verify with `grep`).  The forwarding
+> step proves dispatch fires before the real emitter writes
+> closure-shape logic.
+
 ### Step 3.1 — Capture parallel-for emission corpus
 
 **Action**: identify representative tests covering each closure

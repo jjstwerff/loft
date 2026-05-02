@@ -28,6 +28,7 @@
 #![allow(dead_code)]
 
 pub mod default;
+pub mod forwarding_smoke;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -98,10 +99,25 @@ fn registry() -> &'static std::collections::HashMap<&'static str, Box<dyn OpEmit
 }
 
 fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter>> {
-    // Custom emitters register here as future phases add them.
-    // Example (when phase 05 lands):
+    let mut r: std::collections::HashMap<&'static str, Box<dyn OpEmitter>> =
+        std::collections::HashMap::new();
+
+    // Plan 09 phase 00 runtime smoke test — register a forwarding emitter
+    // for the curated Op list in `forwarding_smoke::FORWARDING_OP_NAMES`.
+    // Each entry exercises the registry → emit_op → custom emitter
+    // dispatch path with byte-identical output.  When a future phase
+    // ships a real (non-forwarding) emitter for one of these Op names,
+    // remove the name from FORWARDING_OP_NAMES — that phase's
+    // `r.insert(name, …)` below takes priority.
+    for op_name in forwarding_smoke::FORWARDING_OP_NAMES {
+        r.insert(op_name, Box::new(forwarding_smoke::ForwardingEmitter));
+    }
+
+    // Real (non-forwarding) custom emitters register here as future
+    // phases add them.  Example (when phase 05 lands):
     //     r.insert("OpWriteIntFile", Box::new(op_write_int_file::Emitter));
-    std::collections::HashMap::new()
+
+    r
 }
 
 #[cfg(test)]

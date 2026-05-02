@@ -55,6 +55,12 @@ A 30-minute probe disambiguates between "1-line parser fix" and
 
 ## Detailed steps with validation
 
+> **Pre-flight (per [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe))**:
+> identify the offending Op via step 7.2 first.  Then check
+> `grep -n '"<OpName>" =>' src/generation/dispatch.rs` — if hit,
+> the real emitter must absorb that arm's logic; if empty, forwarding
+> is safe and step 7.5 follows the recipe.
+
 ### Step 7.1 — Confirm reproducer fails today
 
 **Action**:

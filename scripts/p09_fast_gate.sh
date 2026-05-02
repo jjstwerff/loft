@@ -148,13 +148,22 @@ if [[ -f src/generation/dispatch.rs ]]; then
     echo "  dispatch.rs op match arms: $arms (budget 26 — shrink as phases register custom emitters)"
 fi
 
-# Custom emitter registration count.  Empty during phase 00; grows as
-# phases register custom emitters (phase 05 ships the first).
+# Custom emitter registration count.  Counts both individual
+# `r.insert(...)` lines and entries in any `pub const ..._OP_NAMES`
+# list iterated over in build_registry (phase-00 forwarding smoke test
+# pattern).
 if [[ -f src/generation/ops/mod.rs ]]; then
-    # Count r.insert(...) lines inside build_registry.
-    custom_count=$(awk '/fn build_registry/,/^}/' src/generation/ops/mod.rs \
+    individual=$(awk '/fn build_registry/,/^}/' src/generation/ops/mod.rs \
         | grep -cE '^\s*r\.insert\(' || true)
-    echo "  custom emitters registered: $custom_count"
+    # Count entries in any *_OP_NAMES const list across ops/ files.
+    list_count=0
+    for f in src/generation/ops/*.rs; do
+        in_list=$(awk '/pub const [A-Z_]+_OP_NAMES.*&\[/,/^];/' "$f" 2>/dev/null \
+            | grep -cE '^\s*"Op[A-Z]' || true)
+        list_count=$((list_count + in_list))
+    done
+    total=$((individual + list_count))
+    echo "  custom emitters registered: $total ($individual individual + $list_count via lists)"
 fi
 
 if [[ $diff_status -ne 0 ]]; then
