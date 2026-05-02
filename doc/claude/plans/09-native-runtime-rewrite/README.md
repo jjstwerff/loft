@@ -223,6 +223,9 @@ mode.  Any regression aborts the commit.
 | A simplification phase regresses a non-P-issue test path | Acceptance gate runs the full test suite per commit; regressions abort. |
 | A bug-fix phase falls into the same trap as the prior attempt | Pre-work step explicitly identifies the prior failure mode and writes a regression test that catches it.  The fix doesn't ship until the regression test passes alongside the suite. |
 | Phase 07 (P205) probe shows the skip-removal alone works → emitter unnecessary | That's a positive outcome.  Phase 07 ships the 1-line parser fix and skips the emitter work. |
+| Codegen-only `Value` variants accrete (one was added in step 0.7 for fn-ref dispatch) | Wart-budget gate `tests/codegen_emitter.rs::no_unsanctioned_codegen_value_variants` — sanctioned list is `["RawExpr"]`; new entries fail.  Future codegen synthesis must use string-aware companion entry points instead of new `Value` variants. |
+| `dispatch.rs::output_call_inner` accumulates more direct-emission match arms (parallel dispatch system) | Wart-budget gate `tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded` — current budget 26; shrinks as phases register custom emitters; raising the budget requires NATIVE.md justification. |
+| First real custom emitter (phase 05+) hits unforeseen lifetime / helper-access issues | Recommendation in phase 00 scaffold doc: write a smoke-test custom emitter (~30 min) before phase 05 to surface gotchas early. |
 
 ## Related
 

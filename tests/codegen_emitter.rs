@@ -151,3 +151,127 @@ fn let_bind_on_repeat_appears_in_emission() {
          the emission shape changed intentionally."
     );
 }
+
+// ============================================================
+// Wart-budget gates (plan 09 phase 00 evaluation findings)
+// ============================================================
+
+/// Gate A: caps the size of the special-case Op match in
+/// `dispatch.rs::output_call_inner`.
+///
+/// At phase 00 completion the match has 26 hardcoded inline-emission
+/// arms — a parallel dispatch system that lives alongside the
+/// `emit_op` registry.  Plan 09's broader goal is to drain this match
+/// to zero by migrating each Op into a custom emitter (phases 03/04
+/// chip away at this).  This gate enforces the migration direction:
+/// new emissions must be registered emitters, NOT new match arms.
+///
+/// Budget: shrink this number as phases land custom emitters.
+/// **Never raise it without justification** in NATIVE.md.
+const DISPATCH_OP_ARM_BUDGET: usize = 26;
+
+#[test]
+fn dispatch_op_arm_budget_not_exceeded() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/dispatch.rs"))
+        .expect("read dispatch.rs");
+    let start = src
+        .find("fn output_call_inner")
+        .expect("output_call_inner not found in dispatch.rs");
+    // Find the closing `}` of the function body — heuristic: scan until
+    // the next `^    }$` (4-space indent + brace) line after start.
+    let after_start = &src[start..];
+    let body_end_rel = after_start
+        .match_indices("\n    }\n")
+        .next()
+        .map(|(i, _)| i)
+        .unwrap_or(after_start.len());
+    let body = &after_start[..body_end_rel];
+
+    // Count match-arm patterns: a line whose trimmed prefix begins with
+    // `"Op` and contains `=>` is an Op match arm.  This is a heuristic
+    // but resilient to the multi-pattern `"Op…" | "Op…" =>` form
+    // because each line still starts with a string literal.
+    let arms = body
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            t.starts_with("\"Op") && t.contains("=>")
+        })
+        .count();
+
+    assert!(
+        arms <= DISPATCH_OP_ARM_BUDGET,
+        "dispatch.rs::output_call_inner has {arms} Op match arms — budget is \
+         {DISPATCH_OP_ARM_BUDGET}.  New Op-specific emissions must be registered as \
+         `OpEmitter` impls in `src/generation/ops/`, not added as match arms.  \
+         If you have a justification for raising the budget, document it in \
+         doc/claude/NATIVE.md and update DISPATCH_OP_ARM_BUDGET."
+    );
+}
+
+/// Gate B: caps the set of "codegen-only" `Value` variants — IR
+/// variants that are produced exclusively by native code generation
+/// and have no parser source or runtime semantics.
+///
+/// `Value::RawExpr` (added by phase 00 step 0.7) is the sole sanctioned
+/// codegen-only variant.  Adding more is a wart: the IR loses meaning
+/// because variants exist purely as plumbing for codegen synthesis.
+/// Each codegen-only variant requires no-op default arms in every
+/// walker (parser, scopes, pre_eval, state codegen) — the cost grows
+/// linearly with each addition.
+///
+/// **Rule**: if you need to thread synthesized values through codegen,
+/// build a string-aware companion entry point rather than another
+/// `Value` variant.  Plan 09 phase 00 evaluation documented this
+/// constraint; see `doc/claude/plans/09-native-runtime-rewrite/00-scaffold.md`
+/// "Findings (post-completion)".
+const SANCTIONED_CODEGEN_VALUE_VARIANTS: &[&str] = &["RawExpr"];
+
+#[test]
+fn no_unsanctioned_codegen_value_variants() {
+    let src = std::fs::read_to_string(project_root().join("src/data.rs"))
+        .expect("read data.rs");
+    // Find the Value enum body.
+    let start = src
+        .find("pub enum Value {")
+        .expect("Value enum not found");
+    let end_rel = src[start..]
+        .match_indices("\n}")
+        .next()
+        .map(|(i, _)| i)
+        .unwrap_or(src.len() - start);
+    let body = &src[start..start + end_rel];
+
+    // Count occurrences of the "codegen-internal" / "codegen-only"
+    // marker string.  Each sanctioned variant's docstring contains
+    // exactly one occurrence.  If new variants add the marker, the
+    // count exceeds the sanctioned-list length.
+    let marker_lines = body
+        .lines()
+        .filter(|l| l.contains("codegen-internal") || l.contains("codegen-only"))
+        .count();
+
+    // Each sanctioned variant must be present in the enum.
+    for v in SANCTIONED_CODEGEN_VALUE_VARIANTS {
+        assert!(
+            body.contains(&format!("{v}(")),
+            "sanctioned codegen-only variant `{v}` not found in Value enum"
+        );
+    }
+
+    // No additional codegen-only variants allowed.  The marker may
+    // appear multiple times in a single variant's docstring (we use
+    // `<=` rather than `==` to tolerate prose mentions like
+    // "this variant is codegen-internal" appearing twice).  But
+    // adding a NEW variant with the marker bumps the count above
+    // a tolerated ceiling and breaks this gate.
+    let max_tolerated = SANCTIONED_CODEGEN_VALUE_VARIANTS.len() * 5;
+    assert!(
+        marker_lines <= max_tolerated,
+        "codegen-internal marker appears {marker_lines} times in Value enum; \
+         expected at most {max_tolerated} (sanctioned list = {SANCTIONED_CODEGEN_VALUE_VARIANTS:?}).  \
+         A new codegen-only variant likely landed.  Either remove it (preferred — use a \
+         string-aware companion entry point) or add it to SANCTIONED_CODEGEN_VALUE_VARIANTS \
+         AND document why in plan 09 phase 00's scaffold doc."
+    );
+}

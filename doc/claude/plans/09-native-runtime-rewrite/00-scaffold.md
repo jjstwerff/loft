@@ -483,3 +483,103 @@ _(future sessions: append per problem)_
 ## Implementation notes
 
 _(future sessions: append per non-obvious decision)_
+
+## Findings (post-completion, 2026-05-02)
+
+Phase 00 shipped in 6 commits across steps 0.2-0.9.  Honest
+evaluation against the broader plan-09 goals:
+
+### What works (proven)
+
+- Byte-identical emission across all 7 corpus files through 6
+  hoist commits — the `scripts/p09_fast_gate.sh` ran in <5s after
+  each step with zero drift.
+- Full `cargo test --test issues`: 540/540, no regressions.
+- Native suite: 87/93, unchanged from baseline.
+- P203 closure (let-bind-on-repeat) preserved through all hoists.
+- Every Op-emission call site (template, user-fn, dispatch.rs
+  registry guard, fn-ref dispatch) demonstrably routes through
+  `emit_op` and the registry is consulted before each call.
+
+### Three weak spots before the first real custom emitter (phase 05+)
+
+1. **The trait has never run a real custom emitter.**  The empty
+   registry means every `emit_op` call falls through to
+   `DefaultEmitter`.  Phase 05's first custom emitter will be the
+   real test of:
+   - Whether `ctx.output.generate_expr_buf(value)` can be called
+     from inside `OpEmitter::emit` without lifetime conflicts.
+   - Whether emitters need helpers beyond what `EmitCtx` exposes
+     (field width, ref flavour, generic bindings, …).
+   - Whether the trait's `io::Result<()>` return type suffices, or
+     emitters need to surface emission-type info to the caller.
+   - **Recommendation**: write a smoke-test custom emitter (~30
+     min) before phase 05 so lifetime/helper gotchas surface
+     early, not in the middle of a P-issue fix.
+
+2. **`Value::RawExpr` is a wart.**  Step 0.7 added an IR variant
+   that has no parser source and no runtime semantics — pure
+   codegen plumbing for fn-ref dispatch arg hoisting.  Five walker
+   files (`data.rs`, `parser/collections.rs`,
+   `parser/expressions.rs ×2`, `state/codegen.rs`) needed default
+   arms.  Cumulative cost grows linearly per such addition.
+   - **Rule**: no more codegen-only `Value` variants.  If a future
+     phase needs to thread synthesized values through codegen,
+     build a string-aware companion entry point rather than
+     extending `Value`.
+   - Enforced by `tests/codegen_emitter.rs::no_unsanctioned_codegen_value_variants`.
+     Sanctioned list is `["RawExpr"]`; new entries fail the gate.
+
+3. **Two-layer dispatch in `dispatch.rs::output_call_inner`.**  The
+   26-arm special-case match coexists with the registry guard.
+   Two registry lookups happen per call (one in
+   `has_custom_emitter`, one in `emit_op` — both consulting the
+   same registry).  Trivial cost, but conceptually redundant.
+   - **Migration target**: drain the 26-arm match to zero by
+     migrating each Op into a registered custom emitter.  Phases
+     03/04 chip away at this.
+   - Enforced by `tests/codegen_emitter.rs::dispatch_op_arm_budget_not_exceeded`.
+     Budget starts at 26 (current count); shrink as phases land
+     custom emitters; never raise without justification in
+     `NATIVE.md`.
+
+### Wart-budget gates added (`tests/codegen_emitter.rs`)
+
+Two gates run as part of `cargo test --test codegen_emitter` (sub-
+second total runtime):
+
+| Gate | Counts | Budget |
+|---|---|---|
+| `dispatch_op_arm_budget_not_exceeded` | match arms in `output_call_inner` whose pattern starts with `"Op...` | 26 (today) — shrink only |
+| `no_unsanctioned_codegen_value_variants` | "codegen-internal" / "codegen-only" markers in `Value` enum docstrings | tolerance ≤ 5 markers per sanctioned variant |
+
+Both fail loudly (with prose explaining how to fix) when the
+codebase drifts away from phase 00's structural commitments.
+
+### Scaling concerns for phases 01-09
+
+- **Phase 02 (param adapter)**: 10 incremental adapter extractions,
+  each must preserve byte-identical emission.  Risk: gradual drift
+  vs the baseline.  The fast gate catches it but each iteration
+  may take longer than phase 00's hoists did.
+- **Phase 03 (parallel-for emitter)**: first complex custom
+  emitter.  This is where weak spot #1 manifests — the trait
+  either holds up or needs extension.  Probable extensions:
+  helper trait methods on `EmitCtx` for closure-shape selection,
+  return-type analysis, extra-arg binding emission.
+- **Phase 05 (file emitter, P200 write)**: needs `int_width_for(value)`
+  and `int_signed_for(value)` accessors.  These don't exist yet.
+  Either add them to `EmitCtx` (forward to `Output`) or expose via
+  `ctx.output` directly.  Either way `EmitCtx`'s surface area
+  grows.
+- **Phase 07 (generic text emitter, P205)**: needs resolved
+  generic-binding info.  Whether existing `Output` state surfaces
+  enough info is unclear without trying.
+
+### Verdict
+
+The abstraction is **fit for purpose** for plan 09's phases 01-09.
+Pragmatic compromises (`&mut Output<'b>` in EmitCtx, `Value::RawExpr`)
+ship today and don't paint us into a corner.  The wart-budget gates
+prevent silent accretion.  The first real custom emitter (phase 05)
+is the next stress test — write a smoke test before then.
