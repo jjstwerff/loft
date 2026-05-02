@@ -1,0 +1,186 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+//! Plan 09 phase 03 — parallel-for emitter family.
+//!
+//! Replaces the 95-line special case in
+//! `src/generation/dispatch.rs` (the `"n_parallel_for" |
+//! "n_parallel_for_light" =>` arm) with a per-Op `OpEmitter` impl.
+//!
+//! What the emission does (unchanged from the pre-phase-03 special
+//! case):
+//!
+//! 1. Pull the worker fn def out of `vals[4]` (an i32 d_nr literal)
+//!    and read its return type.
+//! 2. Pick which native helper to call (`n_parallel_for_native`,
+//!    `n_parallel_for_ref_native`, or `n_parallel_for_text_native`)
+//!    based on whether the worker returns text, heap-typed, or scalar.
+//! 3. Synthesise extra-arg `let _ex0 = …;` bindings so the closure
+//!    can capture them.
+//! 4. Emit the parallel-helper call with a closure of the correct
+//!    shape (text / heap-ref / float / scalar).
+//! 5. Close N braces matching the let-bindings.
+//!
+//! The emitter takes over because of phase 00 step 0.6's registry-
+//! first guard at the top of `output_call_inner`: when this emitter
+//! is registered for `n_parallel_for` / `n_parallel_for_light`,
+//! dispatch routes here BEFORE the legacy match arm runs.  Phase 03
+//! deletes the legacy match arm; this file becomes the sole
+//! emission site for parallel-for codegen.
+//!
+//! Phase 06 (P202 — threading queue runtime fns) extends this
+//! family with `n_parallel_queue*` emitters that reuse the helper
+//! functions defined here.
+
+use super::{EmitCtx, OpEmitter};
+use crate::data::{Type, Value};
+use std::io;
+
+/// Closure shape for the worker — determines the conversion applied
+/// to the worker's return value before it's stored in the result vec.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ClosureShape {
+    /// Worker returns `String`; closure synthesises a write buffer.
+    Text,
+    /// Worker returns `DbRef` (heap struct / struct-enum / vector / etc.).
+    HeapRef,
+    /// Worker returns `f64` / `f32`; closure converts via `to_bits() as i64`.
+    Float,
+    /// Worker returns scalar integer / boolean; closure casts `as i64`.
+    Scalar,
+}
+
+fn closure_shape(ret: &Type) -> ClosureShape {
+    if matches!(ret, Type::Text(_)) {
+        ClosureShape::Text
+    } else if ret.heap_def_nr().is_some() {
+        ClosureShape::HeapRef
+    } else if matches!(ret, Type::Float | Type::Single) {
+        ClosureShape::Float
+    } else {
+        ClosureShape::Scalar
+    }
+}
+
+fn helper_name(shape: ClosureShape) -> &'static str {
+    match shape {
+        ClosureShape::Text => "n_parallel_for_text_native",
+        ClosureShape::HeapRef => "n_parallel_for_ref_native",
+        // Float and Scalar both use the primitive helper — they
+        // differ only in the closure body's return-value transform.
+        ClosureShape::Float | ClosureShape::Scalar => "n_parallel_for_native",
+    }
+}
+
+/// `n_parallel_for` / `n_parallel_for_light` emitter.
+///
+/// Lifts the legacy match-arm body verbatim into a custom emitter
+/// while producing byte-identical output.
+pub struct ParallelForEmitter;
+
+impl OpEmitter for ParallelForEmitter {
+    fn emit(
+        &self,
+        ctx: &mut EmitCtx<'_, '_>,
+        args: &[Value],
+    ) -> io::Result<()> {
+        // Guard: the special case requires at least 5 args with vals[4]
+        // a non-negative i32 (the worker fn's def_nr).  When violated,
+        // fall through to the default emitter — preserves pre-phase-03
+        // behaviour where the special case `if` clause didn't match.
+        let fn_d_nr = match args.get(4) {
+            Some(Value::Int(d)) if *d >= 0 => (*d).cast_unsigned(),
+            _ => {
+                return super::default::DefaultEmitter.emit(ctx, args);
+            }
+        };
+        if args.len() < 5 {
+            return super::default::DefaultEmitter.emit(ctx, args);
+        }
+
+        let worker_def = ctx.output.data.def(fn_d_nr);
+        let worker_name = worker_def.name.clone();
+        let worker_ret = worker_def.returned.clone();
+        let shape = closure_shape(&worker_ret);
+
+        // Extra context args: vals[5..len-1].  The trailing element
+        // is `n_extra` (the count); we don't read it directly because
+        // arg arithmetic gives us the same number.
+        let n_extra = if args.len() > 6 { args.len() - 6 } else { 0 };
+
+        // Emit let-bindings for extra args so they're captured by name
+        // (and not re-evaluated) inside the closure.  Each binding
+        // wraps the rest of the emission in a `{ … }` block; the
+        // matching `}` characters are emitted at the end.
+        for (i, arg) in args.iter().enumerate().skip(5).take(n_extra) {
+            write!(ctx.w, "{{ let _ex{} = ", i - 5)?;
+            ctx.output.output_code_inner(&mut *ctx.w, arg)?;
+            write!(ctx.w, "; ")?;
+        }
+
+        // Helper call: `name(cell, input, elem_size, …, threads`
+        let par_fn = helper_name(shape);
+        write!(ctx.w, "{par_fn}(cell, ")?;
+        ctx.output.output_code_inner(&mut *ctx.w, &args[0])?;
+        write!(ctx.w, ", ")?;
+        ctx.output.emit_i32_slot(&mut *ctx.w, &args[1])?;
+        write!(ctx.w, ", ")?;
+        if shape == ClosureShape::HeapRef {
+            // Ref mode: emit struct_size and known_type instead of
+            // return_size.  Both Type::Reference and the heap-allocated
+            // struct-enum (`Type::Enum(_, true, _)`) route here;
+            // `heap_def_nr()` returns the def for both.
+            let (struct_size, known_type) =
+                if let Some(d_nr) = worker_ret.heap_def_nr() {
+                    let kt = ctx.output.data.def(d_nr).known_type;
+                    (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
+                } else {
+                    (0, 0)
+                };
+            write!(ctx.w, "{struct_size}, {known_type}, ")?;
+        } else {
+            ctx.output.emit_i32_slot(&mut *ctx.w, &args[2])?;
+            write!(ctx.w, ", ")?;
+        }
+        ctx.output.emit_i32_slot(&mut *ctx.w, &args[3])?;
+
+        // Closure args: `, _ex0, _ex1, …` appended after `elm`.
+        let extras = {
+            use std::fmt::Write as _;
+            let mut s = String::new();
+            for i in 0..n_extra {
+                write!(s, ", _ex{i}").unwrap();
+            }
+            s
+        };
+
+        // Closure body — return-shape-specific.  P199 — worker
+        // closures receive `&UnsafeCell<Stores>` from the parallel-
+        // runner helpers; user-fn calls take `cell`, so the closure
+        // parameter is named `cell` and threaded through verbatim.
+        match shape {
+            ClosureShape::Text => write!(
+                ctx.w,
+                ", |cell, elm| {{ let mut _w = String::new(); {worker_name}(cell, elm{extras}, &mut _w); _w }})"
+            )?,
+            ClosureShape::HeapRef => write!(
+                ctx.w,
+                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) }})"
+            )?,
+            ClosureShape::Float => write!(
+                ctx.w,
+                ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
+            )?,
+            ClosureShape::Scalar => write!(
+                ctx.w,
+                ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
+            )?,
+        }
+
+        // Close the `{ let _ex0 = … ;` blocks opened above.
+        for _ in 0..n_extra {
+            write!(ctx.w, " }}")?;
+        }
+        Ok(())
+    }
+}

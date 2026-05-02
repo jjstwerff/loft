@@ -30,6 +30,11 @@ CORPUS=(
     tests/docs/13-file.loft
     tests/docs/19-threading.loft
     tests/docs/25-generics.loft
+    # Phase 03: parallel-for emitter validation.  22-threading
+    # exercises the n_parallel_for_native dispatch with scalar +
+    # float closure shapes — covers the bulk of the special case
+    # phase 03 retires.
+    tests/scripts/22-threading.loft
 )
 
 REPROS=(

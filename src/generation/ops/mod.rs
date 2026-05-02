@@ -29,6 +29,7 @@
 
 pub mod default;
 pub mod forwarding_smoke;
+pub mod parallel;
 
 use super::Output;
 use crate::data::{Definition, Value};
@@ -116,6 +117,14 @@ fn build_registry() -> std::collections::HashMap<&'static str, Box<dyn OpEmitter
     // Real (non-forwarding) custom emitters register here as future
     // phases add them.  Example (when phase 05 lands):
     //     r.insert("OpWriteIntFile", Box::new(op_write_int_file::Emitter));
+
+    // Phase 03 — parallel-for emitter family.  Replaces the 95-line
+    // special case in dispatch.rs::output_call_inner.  Both Op names
+    // share the same emitter (the special case treated them
+    // identically; n_parallel_for_light is a thread-count hint that
+    // doesn't change emission shape).
+    r.insert("n_parallel_for", Box::new(parallel::ParallelForEmitter));
+    r.insert("n_parallel_for_light", Box::new(parallel::ParallelForEmitter));
 
     r
 }

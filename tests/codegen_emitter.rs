@@ -32,6 +32,8 @@ const CORPUS: &[&str] = &[
     "tests/docs/13-file.loft",
     "tests/docs/19-threading.loft",
     "tests/docs/25-generics.loft",
+    // Phase 03: parallel-for emission coverage.
+    "tests/scripts/22-threading.loft",
 ];
 
 const BASELINE_DIR: &str = "/tmp/p09-baseline";
@@ -180,6 +182,32 @@ fn no_hardcoded_abi_lists_remain() {
              runtime fns to `CODEGEN_RUNTIME_FNS` in `src/codegen_runtime.rs`."
         );
     }
+}
+
+/// Phase 03 structural test: `n_parallel_for` / `n_parallel_for_light`
+/// emission moved out of dispatch.rs::output_call_inner's special-case
+/// match into the registered `ParallelForEmitter`.  Re-introducing
+/// the special case is a regression of phase 03's structural intent —
+/// new parallel variants should register custom emitters instead.
+#[test]
+fn no_parallel_special_case_in_dispatch() {
+    let src = std::fs::read_to_string(project_root().join("src/generation/dispatch.rs"))
+        .expect("read dispatch.rs");
+    // Allow doc-comment references to the historical name; only flag
+    // actual match-arm patterns `"n_parallel_for"` followed by `=>`.
+    // The deleted arm was `"n_parallel_for" | "n_parallel_for_light" =>`.
+    let has_arm = src.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with("\"n_parallel_for\"") && t.contains("=>")
+    });
+    assert!(
+        !has_arm,
+        "src/generation/dispatch.rs reintroduced an `\"n_parallel_for\" => …` \
+         match arm.  Phase 03 retired this in favour of the registered \
+         `ParallelForEmitter` in `src/generation/ops/parallel.rs` — new \
+         parallel variants should register custom emitters there, not \
+         add match arms to dispatch.rs."
+    );
 }
 
 /// Gate: the registry's `Abi` tags must be self-consistent — every

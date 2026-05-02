@@ -847,102 +847,13 @@ impl Output<'_> {
                     write!(w, ")")?;
                     return Ok(());
                 }
-            "n_parallel_for" | "n_parallel_for_light" => {
-                // Special-case: replace n_parallel_for(input, elem_sz, ret_sz, threads, fn_d_nr, extras..., n_extra)
-                // with n_parallel_for_native(..., |stores, elm| { worker_fn(stores, elm, extras...) as i64 }).
-                if vals.len() >= 5
-                    && let Value::Int(fn_d_nr) = &vals[4]
-                    && *fn_d_nr >= 0
-                {
-                    let fn_d_nr = (*fn_d_nr).cast_unsigned();
-                    let worker_def = self.data.def(fn_d_nr);
-                    let worker_name = worker_def.name.clone();
-                    let worker_ret = worker_def.returned.clone();
-                    // Extra context args: vals[5..len-1], last element is n_extra count.
-                    let n_extra = if vals.len() > 6 { vals.len() - 6 } else { 0 };
-                    // Emit let-bindings for extra args so they can be captured by the closure.
-                    for i in 0..n_extra {
-                        write!(w, "{{ let _ex{i} = ")?;
-                        self.output_code_inner(w, &vals[5 + i])?;
-                        write!(w, "; ")?;
-                    }
-                    let is_ref = worker_ret.heap_def_nr().is_some();
-                    let par_fn = if matches!(&worker_ret, Type::Text(_)) {
-                        "n_parallel_for_text_native"
-                    } else if is_ref {
-                        "n_parallel_for_ref_native"
-                    } else {
-                        "n_parallel_for_native"
-                    };
-                    write!(w, "{par_fn}(cell, ")?;
-                    self.output_code_inner(w, &vals[0])?;
-                    write!(w, ", ")?;
-                    self.emit_i32_slot(w, &vals[1])?;
-                    write!(w, ", ")?;
-                    if is_ref {
-                        // For ref mode, pass struct_size and known_type instead
-                        // of return_size.  Both Type::Reference and
-                        // Type::Enum(_, true, _) (heap-allocated struct-enum)
-                        // route through the ref path; heap_def_nr() returns
-                        // the def for both.
-                        let (struct_size, known_type) =
-                            if let Some(d_nr) = worker_ret.heap_def_nr() {
-                                let kt = self.data.def(d_nr).known_type;
-                                (i32::from(self.stores.size(kt)), i32::from(kt))
-                            } else {
-                                (0, 0)
-                            };
-                        write!(w, "{struct_size}, {known_type}, ")?;
-                    } else {
-                        self.emit_i32_slot(w, &vals[2])?;
-                        write!(w, ", ")?;
-                    }
-                    self.emit_i32_slot(w, &vals[3])?;
-                    // Build the extra arg list for the worker call inside the closure.
-                    let extras = {
-                        use std::fmt::Write;
-                        let mut s = String::new();
-                        for i in 0..n_extra {
-                            write!(s, ", _ex{i}").unwrap();
-                        }
-                        s
-                    };
-                    // Generate closure with return-type-specific conversion.
-                    // Heap-typed returns (Reference + struct-enum) all use the
-                    // ref-path closure shape; heap_def_nr() catches both.
-                    // P199 — worker closures receive `&UnsafeCell<Stores>`
-                    // from the parallel-runner helpers (cast at the worker
-                    // entry boundary in `src/codegen_runtime.rs`).  User-fn
-                    // calls take `cell`, so the closure parameter is named
-                    // `cell` and threaded through verbatim.
-                    if matches!(&worker_ret, Type::Text(_)) {
-                        write!(
-                            w,
-                            ", |cell, elm| {{ let mut _w = String::new(); {worker_name}(cell, elm{extras}, &mut _w); _w }})"
-                        )?;
-                    } else if worker_ret.heap_def_nr().is_some() {
-                        write!(
-                            w,
-                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}) }})"
-                        )?;
-                    } else if matches!(&worker_ret, Type::Float | Type::Single) {
-                        write!(
-                            w,
-                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}).to_bits() as i64 }})"
-                        )?;
-                    } else {
-                        write!(
-                            w,
-                            ", |cell, elm| {{ {worker_name}(cell, elm{extras}) as i64 }})"
-                        )?;
-                    }
-                    // Close the let-binding braces.
-                    for _ in 0..n_extra {
-                        write!(w, " }}")?;
-                    }
-                    return Ok(());
-                }
-            }
+            // Plan 09 phase 03 — `n_parallel_for` / `n_parallel_for_light`
+            // emission moved to `crate::generation::ops::parallel::ParallelForEmitter`
+            // (registered in build_registry).  The phase 00 step 0.6
+            // registry-first guard at the top of `output_call_inner`
+            // routes both names to the emitter before reaching this
+            // match.  Phase 04 / phase 06 will retire more arms here
+            // following the same pattern.
             _ => {}
         }
         if def_fn.rust.is_empty() {

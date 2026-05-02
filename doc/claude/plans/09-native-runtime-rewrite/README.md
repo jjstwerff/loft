@@ -106,7 +106,7 @@ between work phases at decision points.
 | 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | **DONE (2026-05-02)** |
 | 02 | [Param adapter](02-param-adapter.md) | — (splits dual-role `narrow_int_cast`) — **prerequisite for P200** | simplification | OPEN |
 | 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
-| 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapses 95-line `dispatch.rs:837-930`) — **prerequisite for P202** | simplification | OPEN |
+| 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapsed 95-line `dispatch.rs:850-944`) — **prerequisite for P202** | simplification | **DONE (2026-05-02)** |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | OPEN |
 | 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | OPEN |
 | 05 | [File emitters](05-file.md) | P200 (write side) | bug fix | OPEN |
