@@ -1,123 +1,122 @@
-# Plan 10 — Scope-exit emission rewrite
+# Plan 10 — Scope-exit gate simplification (deferred)
+
+> **Status: DEFERRED.**  Plan 10 was originally framed as a P203
+> fix — that framing was wrong (P203 turned out to be a template
+> double-substitution bug in `default/01_code.loft:705`, tracked
+> separately in PROBLEMS.md).  The underlying simplification —
+> pulling the multi-condition cleanup gate at `src/scopes.rs:1053`
+> apart from the dep-tracking system — still has merit, but is no
+> longer urgent.  Pick this up when another bug surfaces in the
+> gate's territory, when dep-tracking needs maintenance, or when
+> a contributor wants a focused codegen-clarity project.
 
 ## Goal
 
-Make resource cleanup (specifically OpFreeRef at scope exit)
-independent of the parser's dep-tracking system being correct.
-Today, OpFreeRef is emitted only where dep-tracking attaches a
-`__ref_*` placeholder; gaps in dep-tracking → silent resource leaks
-or wrong-cleanup-timing.  This plan replaces the precise-but-fragile
-dep-tracking emission with a mechanical scope-walk and a runtime
-no-op fast-path, then adds Drop-based safety-net for file
-resources.
+Simplify the cleanup-emission half of the dep-tracking system in
+`src/scopes.rs`.  Today, OpFreeRef emission at scope exit is gated
+by:
 
-## Why
+```rust
+let emit = (dep.is_empty() || is_work_ref) && !in_ret && !function.is_skip_free(v);
+```
 
-P203 (file handle not flushed on `{...}` block exit) is the visible
-symptom of an upstream problem: the dep-tracking analysis that
-should attach `__ref_*` to file-ref-returning calls misses some
-cases.  Plan 09's per-Op emitter pattern can fix the *shape* of
-OpFreeRef when it fires, but cannot fix "OpFreeRef doesn't fire."
+Three positive conditions, all needed.  The `dep.is_empty() || is_work_ref`
+half is an optimisation that masks emission gaps when the dep
+tracker mishandles a var.  Removing it relies on the runtime side
+already being safe to call OpFreeRef on already-freed slots —
+which it is (`src/codegen_runtime.rs:100-104`) — and lets the
+cleanup correctness no longer depend on dep-tracking precision.
 
-P204 is a related dep-tracking gap (tail-expression return discarded
-because `__ref_*` propagation through `Block` arms in `Call`
-resolution misses).  Naive fixes have repeatedly regressed other
-tests because the dep-tracking system's invariants are subtle.
+The gate becomes:
 
-The plan's central insight: **don't fix the dep-tracking system —
-remove its responsibility for cleanup-emission.**  A mechanical
-scope-walk is simpler, more reliable, and has no subtle invariants.
-Dep-tracking can still exist for non-cleanup purposes (aliasing
-analysis, closure capture, parallel isolation) but stops being the
-single point of failure for resource cleanup.
+```rust
+let emit = !in_ret && !function.is_skip_free(v);
+```
 
-## Approach
+Two conditions, both about the var's role (return vs explicitly
+suppressed), nothing about the dep-tracker's analysis.
 
-Surprise (from phase 00 survey of the actual code): **two of the
-three pieces are already in place.**
+## Why this isn't urgent
 
-1. **OpFreeRef runtime is already safe** —
-   `src/codegen_runtime.rs:98-122` already early-returns on
-   already-freed slots (line 100) and out-of-bounds store_nr
-   (line 103).  Phase 01 collapses to verification + tests.
-2. **Drop on file handles is already in place** —
-   `src/database/mod.rs:162` declares
-   `pub files: Vec<Option<std::fs::File>>`; setting a slot to
-   `None` drops the previous `Some(File)`, which flushes + closes
-   the OS handle.  Phase 03 collapses to verification + tests.
-3. **The actual fix is a small edit in `src/scopes.rs:1053`** —
-   the gate that decides whether to emit OpFreeRef per local.
-   Today: `(dep.is_empty() || is_work_ref) && !in_ret && !skip_free`.
-   After phase 02: `!in_ret && !skip_free`.  The dep gate was an
-   optimisation that masked emission gaps for cases the dep
-   tracker mishandled (P203 file ref, work-refs).
+Three reasons P-issue urgency drained out of this plan:
 
-The runtime safety + Drop semantics from pieces 1 and 2 are what
-*makes* the gate loosening in piece 3 safe.  Together: cleanup
-correctness no longer depends on the dep tracker being perfect.
+1. **P203 is solved by a different fix** (template double-sub at
+   `default/01_code.loft:705`).  The original framing — that
+   loosening the gate would close P203 — was refuted by the
+   strace-driven phase 00 diagnostic.
+2. **The runtime already handles the harder case.**  OpFreeRef
+   early-returns on `store_nr == u16::MAX`.  `Vec<Option<File>>`
+   already provides Drop on slot replacement.  The infrastructure
+   the simplification would build on is already in place — there's
+   no precondition work blocking later effort.
+3. **The current gate works.**  No known bug today is caused by
+   the gate's complexity.  Simplification is purely cognitive —
+   making the cleanup path easier to reason about for future
+   contributors.
 
-## Cadence
+## What stays in scope
 
-| Commit shape | Description |
-|---|---|
-| Survey | Phase 00 only.  Verify the three preliminary findings; trace why OpFreeRef doesn't fire for P203's file ref (which gate condition fails). |
-| Runtime safety tests | Phase 01.  Pin the existing OpFreeRef safety with regression tests; document the contract in LIFETIME.md.  No code change. |
-| Gate loosening | Phase 02.  3-line edit in `src/scopes.rs:1053` that drops the `dep.is_empty()` gate.  Closes P203.  Plus suppression-list updates for any test that regresses. |
-| Drop semantics tests | Phase 03.  Pin the existing `Vec<Option<File>>` Drop with regression tests; document the contract.  Optional (only if defence-in-depth wanted). |
-| Introspection | 02a (after the load-bearing change), 03a (retrospective). |
+- **Characterising the gate** (phase 00) — written for whoever
+  picks this up later, so they can avoid re-doing the survey work.
+- **Loosening the gate** (phase 01) — the actual simplification.
+  ~3-line edit + suppression-list audit + structural test.
+
+## What's out of scope
+
+- **Bug fixes** — not driven by any open P-issue.  If a P-issue
+  surfaces in this territory, the plan can pick it up; until then,
+  the work is purely structural.
+- **Replacing dep-tracking wholesale** — only the cleanup-emission
+  half is addressed.  Aliasing analysis, closure capture, parallel
+  isolation keep dep-tracking unchanged.
+- **Drop-based safety net** for file handles — already in place
+  via `Vec<Option<File>>`; nothing to do.
+- **Runtime no-op fast-path** for OpFreeRef — already in place
+  (lines 100, 103); nothing to do.
 
 ## Status
 
-| # | Phase | Closes | Kind | Status |
-|---|-------|--------|------|--------|
-| 00 | [Survey](00-survey.md) | — | infrastructure | OPEN |
-| 01 | [Verify runtime safety + add tests](01-runtime-noop.md) | — | verification | OPEN |
-| 02 | [Loosen the scope-exit emission gate](02-scope-walk.md) | P203 + cleanup-side of P204 | bug fix | OPEN |
-| 02a | [Introspection: after gate loosening](02a-introspect.md) | — | introspection | OPEN |
-| 03 | [Verify Drop semantics + add tests](03-drop-safety-net.md) | — (defence in depth) | verification | OPEN |
-| 03a | [Retrospective](03a-retrospective.md) | — | introspection | OPEN |
+| # | Phase | Kind | Status |
+|---|-------|------|--------|
+| 00 | [Characterise the gate](00-characterize.md) | survey | OPEN — written but no work scheduled |
+| 01 | [Simplify the gate](01-simplify-gate.md) | simplification | OPEN — deferred |
 
 Status legend: OPEN → IN PROGRESS → DONE.
 
-## Relationship to plan 09
+## Triggers to revisit
 
-Plan 09 (per-Op emitter rewrite) and this plan (scope-exit emission)
-are **complementary**:
+Pick up this plan when any of these happens:
 
-- Plan 09 fixes the *shape* of generated cleanup code (file-flavour
-  emitter knows to flush + close).
-- Plan 10 fixes *whether* cleanup gets generated at all
-  (scope-walk guarantees emission).
+- A new bug surfaces that's gated by `(dep.is_empty() ||
+  is_work_ref)` — the simplification would solve a class of
+  symptoms at once.
+- The dep-tracking system needs maintenance for unrelated reasons
+  (e.g., new aliasing analysis requirement) — bundle this
+  simplification with that work.
+- A contributor wants a small, well-defined codegen-clarity
+  project that ships net structural improvement.
 
-If plan 10 lands before plan 09's phase 05, plan 09's step 5.1b
-diagnostic gate becomes redundant — the scope-walk already
-guarantees OpFreeRef fires.  Plan 09's phase 05 simplifies to just
-the file-flavour emitter (no rerouting branch needed).
+Until one of these fires, the plan sits.
 
-If plan 09's phase 05 lands first and step 5.1b reroutes P203 to
-parser work, this plan picks up that work.
+## What plan 10 already accomplished (phase 00 history)
 
-Either order works.  Recommended: **plan 10 first** if file-related
-bugs are the priority; **plan 09 first** if codegen simplification
-is the priority.
+The first phase 00 attempt (2026-05-02) was scoped as a P203
+diagnostic gate.  It ran the strace + instrumentation diagnostics
+that identified P203's actual root cause (template double-
+substitution in `default/01_code.loft`).  That discovery is
+recorded in `PROBLEMS.md` as P203's fix path.  The diagnostic work
+remains in [00-characterize.md](00-characterize.md) under
+"Historical context — P203 diagnostic" because the trace data is
+useful evidence for whoever picks up the simplification later
+(it confirms the runtime safety + Drop infrastructure is solid).
 
-## What stays out of scope
-
-- **P204 (tail-expression return discarded)**: shares the dep-
-  tracking root cause but the symptom is in `Call` resolution, not
-  scope exit.  Plan 10's scope-walk doesn't help.  Track P204 as a
-  sibling issue (likely plan 11).
-- **Dep-tracking elimination wholesale**: only the
-  cleanup-emission half is addressed.  Other consumers (aliasing,
-  closure capture, parallel isolation) keep dep-tracking unchanged.
-
-## Acceptance gate (every commit)
+## Acceptance gate (every commit, when work resumes)
 
 ```bash
 cargo build --release --tests
 cargo test --release --test issues 2>&1 | tail -3        # 540/540
-cargo test --release --test threading 2>&1 | tail -3     # 43/43
-cargo test --release --test threading_chars 2>&1 | tail -3  # 35/35
+cargo test --release --test threading 2>&1 | tail -3
+cargo test --release --test threading_chars 2>&1 | tail -3
 cargo test --release --test native -- --test-threads=1 2>&1 \
     | grep "native result"                              # ≥ baseline
 ```
@@ -126,14 +125,15 @@ cargo test --release --test native -- --test-threads=1 2>&1 \
 
 | Risk | Mitigation |
 |---|---|
-| Scope-walk emits OpFreeRef where today's dep-tracking deliberately suppresses it (e.g., for owned-by-callee refs) | Phase 00 survey catalogues every "deliberate suppression" case; phase 02 preserves them via an explicit allow-list rather than relying on emission omission. |
-| Runtime no-op fast-path masks bugs that today manifest as visible double-frees | Add a debug-build assertion that distinguishes "already freed" from "not a ref" — only the latter is silently absorbed. |
-| Drop safety net changes timing of file flush in user-visible ways | Drop fires at slot-reclaim, which is later than scope exit.  The scope-walk in phase 02 ensures user-visible timing is correct; phase 03 only catches missed cases.  Document the timing contract clearly. |
-| Test relies on OpFreeRef NOT firing for some specific var | Survey in phase 00 + diagnostic in phase 02 should catch this; if a test fails, investigate before pushing through. |
+| Suppression list grows large under the loosened gate | Phase 00 catalogues current suppression cases; if the prediction is high, revisit before phase 01. |
+| Loosening the gate exposes a real bug today's gate masks | Acceptance gate runs full suite; regressions abort.  Treat any regression as a real bug to file separately. |
+| Plan stays deferred indefinitely | Acceptable — there's no user-visible value at risk.  The triggers above describe when the trade flips. |
 
 ## Related
 
-- [P203](../../PROBLEMS.md) — primary closure target.
-- [P204](../../PROBLEMS.md) — sibling dep-tracking issue; out of scope for this plan.
-- [Plan 09](../09-native-runtime-rewrite/README.md) — per-Op emitter rewrite; complementary.
-- [LIFETIME.md](../../LIFETIME.md) — dep tracking and scope-based freeing design.
+- [P203](../../PROBLEMS.md) — closed by template fix in
+  `default/01_code.loft`, NOT by this plan.
+- [Plan 09](../09-native-runtime-rewrite/README.md) — per-Op
+  emitter rewrite; complementary structural work.
+- [LIFETIME.md](../../LIFETIME.md) — dep tracking and scope-based
+  freeing design.

@@ -24,10 +24,15 @@ Specifically:
   Fixing one role broke the other.  No surface-level edit in the
   current code can avoid this — the call sites genuinely share the
   cast-decision code.
-- **P203** needs a context-aware `is_file_ref(target)` check at the
-  OpFreeRef emission site.  Today's emission has no clean place
-  for that helper to live; the IR's flavour information is reachable
-  but not wired through.
+- **P203** is a template double-substitution bug — `default/01_code.loft:705`'s
+  `OpConvIntFromEnum` template substitutes `@v1` twice, so a
+  side-effecting comparison like `delete(path) == FileResult.Ok`
+  evaluates `delete()` twice (first call deletes the file, second
+  returns NotFound).  Five templates have this hazard.  Plan 09's
+  **DefaultTemplateEmitter** in phase 00 step 0.7b auto-detects
+  repeated placeholders and emits a `let` binding once — closes
+  P203 + the bug class structurally.  (Direct template let-bind
+  is also viable as an interim fix; see PROBLEMS.md.)
 - **P205**'s direct fix (remove a parser-side skip) might cascade
   into other tests; the emission code can't recover because it
   lacks the type-binding info needed to emit owned-`String` vs
@@ -96,7 +101,7 @@ between work phases at decision points.
 
 | # | Phase | Closes | Kind | Status |
 |---|-------|--------|------|--------|
-| 00 | [Scaffold](00-scaffold.md) | — (infrastructure) | infra | OPEN |
+| 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultTemplateEmitter`) | infra | OPEN |
 | 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | OPEN |
 | 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | OPEN |
 | 02 | [Param adapter](02-param-adapter.md) | — (splits dual-role `narrow_int_cast`) — **prerequisite for P200** | simplification | OPEN |
@@ -104,7 +109,7 @@ between work phases at decision points.
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapses 95-line `dispatch.rs:837-930`) — **prerequisite for P202** | simplification | OPEN |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | OPEN |
 | 09 | [Parallel runtime consolidation](09-parallel-runtime-consolidation.md) | — (collapses 3 near-duplicate `n_parallel_for_*_native` fns into one generic core; **must land before phase 06**) | simplification | OPEN |
-| 05 | [File emitters](05-file.md) | P200 (write side), P203 | bug fix | OPEN |
+| 05 | [File emitters](05-file.md) | P200 (write side) | bug fix | OPEN |
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | OPEN |
 | 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | OPEN |
@@ -158,7 +163,7 @@ for the branching.
 |---|---|---|---|
 | P200 | `narrow_int_cast` dual role; fix collided with itself | Phase 02 splits the cast into per-type adapters AND extracts shared `narrow_for_int` helper that retires the dual-role; bug-fix emitters bypass it | 02 → 05 + 08 |
 | P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gives queue fns a 15-line slot in the emitter family; phase 09 collapses runtime fns so queue variants are 3-line wrappers | 03 → 09 → 06 |
-| P203 | `is_file_ref` helper has no home; OpFreeRef may not fire at all | Phase 00 adds `EmitCtx` where the helper lives; phase 05 step 5.1b verifies OpFreeRef fires (parser-side reroute if not) | 00 → 05 |
+| P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) |
 | P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 surveys corpus for all dangling-shape sites, runs probe, then either 1-line fix or per-Op emitter | 07 |
 
 Each bug-fix phase includes:

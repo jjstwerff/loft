@@ -2,12 +2,21 @@
 
 **Status:** OPEN
 
-**Closes:** **P200** (binary file `f += <int>` width mismatch — write
-side), **P203** (file handle not flushed/closed on `{...}` block
-exit).
+**Closes:** **P200** (binary file `f += <int>` width mismatch —
+write side).
 
-**Reproducers:** `tests/scripts/repro_p203.loft`,
-`tests/docs/13-file.loft`, `tests/scripts/20-binary.loft`.
+**Reproducers:** `tests/docs/13-file.loft`,
+`tests/scripts/20-binary.loft`.
+
+**Note on P203:** earlier drafts of this phase claimed to close
+P203 via a file-flavour `OpFreeRef` emitter.  Plan 10's phase 00
+diagnostic refuted that framing — P203 is a template
+double-substitution bug, closed structurally by phase 00 step
+0.7b's let-bind-on-repeat in the `DefaultTemplateEmitter` (or by
+a direct edit to the 5 affected templates in `default/01_code.loft`,
+whichever lands first).  Phase 05 now ONLY covers P200's write
+side.  The original step 5.1b (verify OpFreeRef fires) is
+removed since OpFreeRef firing was never the bug.
 
 **Depends on:** Phase 00 (scaffold) + Phase 02 (param adapter — the
 prior direct fix for P200 failed because of dual-role
@@ -35,121 +44,21 @@ serves the param path.  This phase's emitter writes the
 width-aware cast inline — bypassing both the template and
 `narrow_int_cast` — so neither role of the helper is touched.
 
-### P203 — root cause beyond the symptom
-
-The interpreter flushes file refs on scope exit; native emits
-`OpFreeRef` without distinguishing file refs (need `flush+close`)
-from heap refs (just reclaim).  Flavour info exists in the IR
-(`Type::Reference(def, …)` points to a `Definition` whose store
-kind is the file store) but the emission site doesn't currently
-walk that link.
-
 ## Prior attempts
 
 - **P200 (write)**: skip-narrow-cast-for-reading-file-blocks fix
   reverted because read-side roundtrip regressed.  Lesson: per-site
   fix is too narrow when the cast helper is shared.
-- **P203**: no prior fix attempt recorded.  The diagnostic blocker
-  is locating where flavour info should live.
 
 ## Why this works now
 
-- **For P200**: phase 02's adapter split + this phase's custom
-  emitter together mean the write-Op never enters
-  `narrow_int_cast`.  The dual-role conflict is structurally absent.
-- **For P203**: phase 00's `EmitCtx` is the home for the
-  `is_file_ref(value)` helper.  The helper walks `Type::Reference`
-  → `Definition` → store-kind tag.  Pre-work (step 5.1) verifies
-  reachability before writing the emitter.
+Phase 02's adapter split + this phase's custom emitter together
+mean the write-Op never enters `narrow_int_cast`.  The dual-role
+conflict is structurally absent.
 
 ## Detailed steps with validation
 
-### Step 5.1 — Pre-work: verify P203 flavour info is reachable
-
-**Action**: write a one-shot diagnostic script that, given a
-`Value::Var(n)` for a file ref, walks the IR to its `Definition`
-and reports whether the file-store tag is recoverable.
-
-```rust
-// tests/codegen_diagnostic.rs
-#[test]
-#[ignore]  // run manually as: cargo test --release --test codegen_diagnostic -- --ignored
-fn p203_file_flavour_is_reachable() {
-    // Compile repro_p203.loft to IR (without emit).
-    let data = parse_to_ir("tests/scripts/repro_p203.loft");
-    // Locate the OpFreeRef node for the file variable.
-    let free_ref_target = find_free_ref_in_block(&data, "f").unwrap();
-    // Try to derive store-kind from the target.
-    let kind = walk_to_store_kind(&data, &free_ref_target);
-    assert!(kind.is_some(), "file-store flavour not reachable from OpFreeRef target");
-    assert_eq!(kind.unwrap(), StoreKind::File);
-}
-```
-
-**Validation**:
-```bash
-cargo test --release --test codegen_diagnostic -- --ignored p203_file_flavour_is_reachable
-```
-
-**Outcomes**:
-- Test passes → flavour info is reachable; proceed to step 5.1b.
-- Test fails → flavour info is genuinely lost.  Do NOT write the
-  emitter; instead reroute P203 to a separate parser/IR-level fix
-  and remove P203 from this phase.
-
-### Step 5.1b — Pre-work: verify OpFreeRef fires at scope exit
-
-**Action**: even if flavour info is reachable (step 5.1), the
-emitter only runs when an OpFreeRef is *emitted*.  P203 might be
-downstream of P204's dep-tracking gap — meaning the OpFreeRef
-isn't emitted at all for file refs in some block exits.  Catch
-this before writing the emitter.
-
-**If [Plan 10](../10-scope-exit-emission/README.md) phase 02 has
-already landed**, this diagnostic is redundant — plan 10's
-mechanical scope-walk guarantees OpFreeRef fires for every local
-at every block close.  Skip step 5.1b in that case and proceed to
-step 5.2.
-
-**If plan 10 has not landed**:
-
-```rust
-// tests/codegen_diagnostic.rs
-#[test]
-#[ignore]  // run manually
-fn p203_free_ref_fires_at_block_exit_for_file_ref() {
-    // Compile repro_p203.loft to native; inspect generated code.
-    // For the file ref `f` in a block, the generated function
-    // body MUST contain an OpFreeRef call before the block's
-    // closing `}`.
-    let src = compile_to_rust("tests/scripts/repro_p203.loft");
-    // Heuristic: locate the block that opens with file_open_write
-    // and verify it contains "OpFreeRef" before its closing brace.
-    let open_pos = src.find("file_open_write").expect("file open present");
-    let block_end = find_matching_close_brace(&src, open_pos);
-    let block = &src[open_pos..block_end];
-    assert!(block.contains("OpFreeRef"),
-        "P203: OpFreeRef not emitted at block exit for file ref. \
-         This is likely upstream of codegen — parser dep-tracking \
-         (P204-adjacent) needs to attach __ref_* to the file-ref \
-         var before phase 05's emitter can help.");
-}
-```
-
-```bash
-cargo test --release --test codegen_diagnostic -- --ignored \
-    p203_free_ref_fires_at_block_exit_for_file_ref
-```
-
-**Outcomes**:
-- Test passes → emission timing is correct; phase 05's emitter
-  handles the rest.  Proceed to step 5.2.
-- Test fails → P203 is fundamentally a parser bug (OpFreeRef
-  doesn't fire).  No codegen emitter fixes it.  Reroute P203 to
-  a parser plan (sibling of P204); remove P203 from phase 05's
-  scope.  Phase 05 still ships P200 write side closure.
-
-### Step 5.2 — Pre-work: pin the prior P200 failure mode
+### Step 5.1 — Pre-work: pin the prior P200 failure mode
 
 **Action**: write a regression test that fails under the prior
 reverted fix but passes under the planned emitter.  This pins the
@@ -191,22 +100,11 @@ cargo test --release --test codegen_emitter::p200_round_trip_test_compiles_and_r
 # expect-fail until step 5.4.
 ```
 
-### Step 5.3 — Add `EmitCtx::is_file_ref(value)` helper
+### Step 5.2 — Add `EmitCtx::int_width_for` / `int_signed_for` helpers
 
 **Action**: extend `EmitCtx` (from phase 00) with:
 ```rust
 impl<'a, W: Write + ?Sized> EmitCtx<'a, W> {
-    pub fn is_file_ref(&self, v: &Value) -> bool {
-        let ty = self.value_type(v);
-        match ty {
-            Type::Reference(def_nr, _) => {
-                let def = self.data.def(def_nr);
-                def.store_kind == StoreKind::File
-            }
-            _ => false,
-        }
-    }
-
     pub fn int_width_for(&self, v: &Value) -> u8 {
         // Walk the value's resolved Type and return the width in bits.
         // u8 → 8, u16/i16 → 16, …
@@ -219,20 +117,6 @@ impl<'a, W: Write + ?Sized> EmitCtx<'a, W> {
 Add unit tests:
 ```rust
 #[test]
-fn is_file_ref_true_for_file_handle() {
-    let ctx = ctx_for("tests/scripts/repro_p203.loft");
-    let v = ctx.local("f");
-    assert!(ctx.is_file_ref(&v));
-}
-
-#[test]
-fn is_file_ref_false_for_heap_ref() {
-    let ctx = ctx_for("tests/scripts/struct_basic.loft");
-    let v = ctx.local("s");  // a struct local
-    assert!(!ctx.is_file_ref(&v));
-}
-
-#[test]
 fn int_width_for_returns_field_width() {
     let ctx = ctx_for("tests/scripts/repro_p200_widths.loft");
     assert_eq!(ctx.int_width_for(&u8_field), 8);
@@ -243,12 +127,10 @@ fn int_width_for_returns_field_width() {
 
 **Validation**:
 ```bash
-cargo test --release --test codegen_emitter::is_file_ref_true_for_file_handle
-cargo test --release --test codegen_emitter::is_file_ref_false_for_heap_ref
 cargo test --release --test codegen_emitter::int_width_for_returns_field_width
 ```
 
-### Step 5.4 — Implement `OpWriteIntFile` emitter
+### Step 5.3 — Implement `OpWriteIntFile` emitter
 
 **Action**: create `src/generation/ops/op_write_int_file.rs`:
 ```rust
@@ -293,62 +175,12 @@ for w in 8 16 32 64; do
 done
 ```
 
-### Step 5.5 — Implement `OpFreeRef` file-flavour emitter
+### Step 5.4 — Update PROBLEMS.md
 
-**Action** (only if step 5.1 passed): create
-`src/generation/ops/op_free_ref.rs`:
-```rust
-pub struct Emitter;
-
-impl OpEmitter for Emitter {
-    fn emit(&self, ctx: &mut EmitCtx<'_, dyn Write>, args: &[Value]) -> io::Result<()> {
-        let [target] = args else { panic!("OpFreeRef arity") };
-        if ctx.is_file_ref(target) {
-            write!(ctx.w,
-                "{{ stores.flush_file({0}); stores.close_file({0}); stores.free_ref({0}) }}",
-                ctx.emit(target)?)?;
-        } else {
-            crate::generation::ops::default::DefaultTemplateEmitter.emit(ctx, args)?;
-        }
-        Ok(())
-    }
-}
-```
-
-Register it.
-
-**Validation**:
-```bash
-# P203 reproducer now passes:
-cargo run --bin loft --release -- tests/scripts/repro_p203.loft
-test $? -eq 0
-
-# Heap ref free still works (regression guard):
-cargo test --release --test wrap struct
-cargo test --release --test wrap vector
-cargo test --release --test issues 2>&1 | tail -3
-
-# Specific test: write a file, exit block, re-open, assert content:
-cat > /tmp/p203_verify.loft <<'EOF'
-fn main() {
-    {
-        let f = file_open_write("/tmp/p203_verify.txt");
-        f += "hello";
-    }  // block exits — file should flush+close here
-    let g = file_open_read("/tmp/p203_verify.txt");
-    let content = g.read_text();
-    assert(content == "hello", "block-exit flushed content to disk");
-}
-EOF
-cargo run --bin loft --release -- /tmp/p203_verify.loft
-test $? -eq 0
-```
-
-### Step 5.6 — Update PROBLEMS.md
-
-**Action**: mark P200 (write side) and P203 CLOSED with "fix path:
-phase 05 of plan 09".  Reference the regression tests added in
-this phase.
+**Action**: mark P200 (write side) CLOSED with "fix path: phase 05
+of plan 09".  Reference the regression tests added in this phase.
+Note that P200's read side closes in phase 08.  P203 is closed by
+phase 00 step 0.7b (let-bind-on-repeat) — not by this phase.
 
 **Validation**: review.
 
@@ -358,23 +190,19 @@ this phase.
 cargo test --release --test codegen_emitter::p200_round_trip_test_compiles_and_runs
 cargo test --release --test wrap file
 cargo test --release --test wrap binary
-cargo test --release --test wrap struct                   # heap-ref free still works
-cargo test --release --test wrap vector
 cargo test --release --test issues 2>&1 | tail -3         # 540/540
-cargo run --bin loft --release -- tests/scripts/repro_p203.loft
-cargo run --bin loft --release -- /tmp/p203_verify.loft
 cargo test --release --test native -- --test-threads=1 2>&1 | grep "native result"
 ```
 
 ## Commit shape
 
-6-7 commits across the steps; ships as one PR.
+3-4 commits across the steps (down from 6-7 after P203 was
+removed); ships as one PR.
 
 ## Diagnosis findings
 
-_(populate during pre-work; document the failing test's IR shape,
-where flavour info lives, and how the planned fix avoids the prior
-failure mode)_
+_(populate during pre-work; document the failing test's IR shape
+and how the planned fix avoids the prior failure mode)_
 
 ## Problems encountered
 

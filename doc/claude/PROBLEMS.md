@@ -35,7 +35,7 @@ existing entry, not re-open it as a bug.
 | 202 | Native codegen for `for ... par(...)` for-loops calls `n_parallel_queue` (and `_text` / `_ref` / `_narrow` / `_fn` variants) which only exist in the bytecode interpreter — no `codegen_runtime.rs` implementation.  Reproducer: `tests/docs/19-threading.loft` → `cargo test --release --test native native_dir`.  Generated stub takes 5 args (loft signature); call site passes 6+ (with `n_extra` count); arg-count mismatch breaks rustc compile.  Distinct from P199 — purely a missing native implementation, not a borrow-conflict.  Also unblocks 19_threading + any par-queue use in native scripts.  See [P202 design](#202-native-n_parallel_queue-family-not-implemented). | Medium | Compile the loft source via the interpreter (`cargo run --bin loft --release -- --interpret file.loft`) — par-for works there.  Or use the par-for-native dispatch path by writing the worker as `n_parallel_for_native` directly (advanced — bypasses the for-par syntactic sugar). |
 | 200 | Native codegen for `f += <integer>` against a binary file (`BigEndian` / `LittleEndian` open mode) emits a value with mismatched expected width — `rustc` raises E0308 mismatched types.  Reproducer: `tests/scripts/20-binary.loft` line 67 / 128.  Passes on main, fails on `roadmap-lsp-eclipse` — regression on this branch. | Medium | Add the explicit width cast the parser warning already suggests: `f += val as i32` (or `as i8` / `as u32` etc.). |
 | 201 | `tests/html_wasm.rs` Mutex-poison cascade: when one test panics inside `build_lock().lock().unwrap()` (line 174), every subsequent html_wasm test fails with the unhelpful `called Result::unwrap() on an Err value: PoisonError { .. }` instead of the original error message.  The `--html` driver writes to a fixed `/tmp/loft_html.rs` so the lock is genuinely needed; the issue is that a poisoned lock should report the original panic, not be re-unwrapped naively. | Low (test infra) | Use `lock().unwrap_or_else(\|e\| e.into_inner())` to recover from poison; the cascade then surfaces the actual first failure instead of hiding it.  Or have `assert_wasm_rlib_fresh()` fail the test before acquiring the lock so a stale rlib doesn't poison the build serial. |
-| 203 | Native: file handle written inside a `{...}` block isn't flushed/closed on block exit.  Subsequent `delete()` panics with `tests/scripts/42-file-result.loft:22 delete existing file`.  Interpreter passes — `OpFreeRef`-driven cleanup closes the file there.  Native's `OpFreeRef(cell, var_f, …)` free-emission lacks the file-close hook the interpreter has (or scope analysis doesn't emit `OpFreeRef` for file vars in block scope).  Tracked under [Plan 10](plans/10-scope-exit-emission/README.md).  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Hoist file out of the block scope so it lives until the assert: `f = file("…"); f += "test"; assert(delete("…") == FileResult.Ok, …);` — the OpFreeRef at function exit closes the file before delete. |
+| 203 | Assertion `delete(path) == FileResult.Ok` panics with `delete existing file`.  Symptom looks like a file-flush bug; actual root cause is a template double-substitution at `default/01_code.loft:705` — `n_delete()` is evaluated twice (first call deletes the file, second call returns `NotFound`).  Fix is ~5 template let-binds in `default/01_code.loft`.  See [P203 reproducer + diagnosis](#203-native-block-scope-file-not-flushed-on-exit). | Medium | Avoid comparing side-effecting calls to enums in a single expression: bind to a local first.  `r = delete("…"); assert(r == FileResult.Ok, …);` |
 | 204 | Native: tail-expression `return inner_call()` from a struct-returning function emits `n_inner(cell, args)` as a void STATEMENT and then `return DbRef { store_nr: u16::MAX, rec: 0, pos: 8 };` (null sentinel).  The caller does `let _src = n_wrap(...); OpCopyRecord(_src, var_q, ...)` — `_src` is null, OpCopyRecord panics with "index out of bounds: the len is X but the index is 65535" at `src/database/allocation.rs:347`.  Native FAILS, interpreter PASSES (interpreter routes the result through the `__ref_*` placeholder mechanism which native skips).  Surfaces in `87_store_leaks` and `85_yield_resume` after P199 made the surrounding code compile.  See [P204 reproducer + diagnosis](#204-tail-expression-return-of-inner-helper-call-discarded). | Medium | Avoid the tail-expression pattern: bind the result first.  `fn wrap(x) -> S { y = make_y(); r = inner(x, y); r }` — naming the result `r` produces a different IR shape that native handles correctly. |
 | 205 | Native: bounded-generic dispatch `fn f<T: Trait>(x: T) -> text { x.to_label() }` returns a `Str` whose pointer references a local `String` that's dropped on function return → dangling pointer, comparison fails.  Reproducer: `tests/scripts/86-interfaces.loft:47` — `assert(if_label(if_it) == "widget", …)` fails despite `to_label` returning `"widget"`.  See [P205 reproducer + diagnosis](#205-generic-text-return-dangles-via-str-newlocal_string).  Interpreter passes via different text-return ABI. | Medium | Avoid bounded-generic functions returning `text`.  Inline the body or use a non-generic specialisation. |
 
@@ -509,13 +509,59 @@ write DOES reach the filesystem there.
    automatically once P204's `__ref_*` init is fixed.  Test with
    the P204 fix in place and re-run repro_p203 first.
 
-**Tracked under:** [Plan 10 — scope-exit emission rewrite](plans/10-scope-exit-emission/README.md).
-Plan 10's central insight is that fixing dep-tracking precisely
-has repeatedly cascaded; replacing dep-tracking-driven OpFreeRef
-emission with a mechanical scope-walk + runtime no-op fast-path
-closes P203 (and the cleanup-side of P204) without touching the
-fragile dep-tracking system.  The codegen-side emitter shape (file
-flush + close on block exit) coordinates with [Plan 09 phase 05](plans/09-native-runtime-rewrite/05-file.md).
+**Actual root cause (identified 2026-05-02 via strace + diagnostic
+phase 00 of plan 10):** the file IS created and written and closed
+correctly.  The bug is in `default/01_code.loft:705`, the
+`OpConvIntFromEnum` template:
+
+```
+#rust"if @v1 == 255 {{ i64::MIN }} else {{ i64::from(@v1) }}"
+```
+
+`@v1` is substituted **twice**.  When the assertion `delete(…) ==
+FileResult.Ok` is generated, `n_delete()` is called twice:
+1. First call: file exists → unlinks file → returns `Ok` (1)
+2. Second call: file already deleted → returns `NotFound` (2)
+
+The if-test sees the second result, returns 2, comparison `2 == 1`
+fails, panic fires.
+
+**strace evidence** (P203 cached binary):
+```
+openat("repro_p203.txt", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3
+write(3, "x", 1) = 1
+close(3) = 0                             ← OpFreeRef closed file
+unlink("repro_p203.txt") = 0             ← first n_delete() succeeded
+write(2, "thread 'main' panicked …")     ← second n_delete() returned NotFound
+```
+
+**Fix path:** five templates in `default/01_code.loft`
+double-substitute their @v1/@v2 args and need let-bind:
+- line 690 (char→int)
+- line 705 (enum→int) — P203's specific bug
+- line 707 (int→enum)
+- line 751 (ref equality)
+- line 753 (ref inequality)
+
+Pattern:
+```
+#rust"{ let _v = @v1; if _v == 255 { i64::MIN } else { i64::from(_v) } }"
+```
+
+~5 trivial template edits + regression tests for side-effect-in-
+enum-compare.  Closes a class of latent bugs (any side-effecting
+call compared to enum/null/ref produces wrong results).
+
+**Tracked separately** — too small for a multi-phase plan.
+
+The plan-10 directory was originally framed as a P203 fix, but
+that framing was wrong (its phase 00 diagnostic surfaced this
+template double-substitution bug).  Plan 10 was rescoped as a
+deferred structural simplification of the dep-tracking cleanup
+gate; it does NOT close P203.  The strace trace + diagnostic
+evidence is preserved at
+[plan 10's phase 00 characterisation](plans/10-scope-exit-emission/00-characterize.md)
+under "Historical context — P203 diagnostic".
 
 **Test:** `tests/native::native_scripts` slot `42_file_result`.
 Reproducer `tests/scripts/repro_p203.loft` (verified: panics with
