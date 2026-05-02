@@ -7,7 +7,7 @@
 //! `default/*.loft` declarations.  Plan 09 introduces a dispatch layer:
 //! every Op-emission call site routes through `emit_op(ctx, name, args)`.
 //! When no custom emitter is registered for `name`, dispatch falls through
-//! to `DefaultTemplateEmitter`, which delegates back to
+//! to `DefaultEmitter`, which delegates back to
 //! `Output::substitute_template_body` (the byte-identical extraction of
 //! the original `output_call_template` body).
 //!
@@ -61,7 +61,7 @@ pub trait OpEmitter: Send + Sync {
 /// Dispatch entry point — every Op-emission call site routes here.
 ///
 /// When `name` is registered, calls the custom emitter; otherwise falls
-/// through to `DefaultTemplateEmitter` which delegates to
+/// through to `DefaultEmitter` which delegates to
 /// `Output::substitute_template_body`.
 pub fn emit_op(
     ctx: &mut EmitCtx<'_, '_>,
@@ -71,7 +71,7 @@ pub fn emit_op(
     if let Some(emitter) = registry().get(name) {
         emitter.emit(ctx, args)
     } else {
-        default::DefaultTemplateEmitter.emit(ctx, args)
+        default::DefaultEmitter.emit(ctx, args)
     }
 }
 

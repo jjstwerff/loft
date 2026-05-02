@@ -30,7 +30,30 @@ pub(super) fn contains_op_database(val: &Value, data: &Data) -> bool {
 }
 
 impl Output<'_> {
+    /// Emit a user-defined function call (or Op-stub call without a `#rust`
+    /// template).  Public entry point — dispatches through
+    /// `emit_op` so custom emitters can override per Op.
+    /// Default emitter delegates back to [`Self::user_fn_call_body`].
     pub(super) fn output_call_user_fn(
+        &mut self,
+        w: &mut dyn Write,
+        def_fn: &Definition,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        let name = def_fn.name.clone();
+        let mut ctx = crate::generation::ops::EmitCtx {
+            w,
+            def_fn,
+            output: self,
+        };
+        crate::generation::ops::emit_op(&mut ctx, &name, vals)
+    }
+
+    /// Internal helper: emits the user-fn / Op-stub call body.  Reachable
+    /// from `crate::generation::ops::default::DefaultEmitter` when
+    /// `def_fn.rust.is_empty()`.  Behaviour is byte-identical to the
+    /// pre-phase-09 `output_call_user_fn`.
+    pub(super) fn user_fn_call_body(
         &mut self,
         w: &mut dyn Write,
         def_fn: &Definition,
