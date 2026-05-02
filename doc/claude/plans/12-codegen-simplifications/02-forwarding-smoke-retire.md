@@ -1,6 +1,6 @@
 # Phase 02 — Retire `forwarding_smoke.rs`
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
 **Closes:** dead-weight in the production registry.
 
@@ -156,5 +156,15 @@ All clean.
 
 ## Findings
 
-_(populate during steps 2.2 + 2.6 — note any Op that turned out
-to need its entry vs. could be safely removed)_
+All 9 forwarding entries were dead-weight as expected.  Step 2.2's
+grep audit found zero production code paths that needed the names
+to be in the registry; falling through to `DefaultEmitter` produced
+identical emission.
+
+The byte-identical baseline at `/tmp/p09-baseline/` was unaffected
+(forwarding emitters delegate verbatim to `DefaultEmitter`); the
+`baseline_emission_unchanged` test passed without re-capture.
+
+All gate suites stayed at their expected counts: 540/540 issues,
+43/43 threading, 35/35 threading_chars, 18 codegen_emitter (the +1
+is plan-12 phase 01's `pre_eval_walkers_unspan`).

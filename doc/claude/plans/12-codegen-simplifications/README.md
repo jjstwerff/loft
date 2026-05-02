@@ -38,7 +38,7 @@ Span-miss pattern that caused P204.  This plan addresses those.
 | # | Phase | Tier | Value | Status |
 |---|-------|------|-------|--------|
 | 01 | [Walker audit (`pre_eval.rs`)](01-walker-audit.md) | 1 | latent Span-miss bugs | DONE (2026-05-02) |
-| 02 | [Retire `forwarding_smoke.rs`](02-forwarding-smoke-retire.md) | 1 | dead-weight in registry | OPEN |
+| 02 | [Retire `forwarding_smoke.rs`](02-forwarding-smoke-retire.md) | 1 | dead-weight in registry | DONE (2026-05-02) |
 | 03 | [Migrate format/append dispatch arms](03-dispatch-format-append.md) | 2 | 12 dispatch.rs arms → custom emitters | OPEN |
 | 04 | [Migrate free/record dispatch arms](04-dispatch-free-record.md) | 2 | 10 dispatch.rs arms → custom emitters | OPEN |
 | 05 | [Split `narrow_int_cast` dual role](05-narrow-int-cast-split.md) | 2 | param vs block-tail narrowing | OPEN |
