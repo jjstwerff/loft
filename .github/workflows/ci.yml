@@ -52,12 +52,17 @@ jobs:
       # Defensive build step: some integration tests spawn
       # `target/release/loft` directly (e.g. via Command::new helpers)
       # and assume the release binary exists.  `cargo build
-      # --all-targets` builds dev profile only.  This step ensures
-      # both profiles are present before nextest runs, so tests
-      # don't race on whether `cargo run --release` has populated
-      # the cache.
-      - name: Build (release loft binary for integration tests)
-        run: cargo build --release --bin loft
+      # --all-targets` builds dev profile only.
+      #
+      # `--lib` ensures the canonical `target/release/libloft.rlib`
+      # is built (cargo only places the canonical artifact when
+      # `--lib` is explicit; `--bin loft` alone only puts the
+      # hashed version in `target/release/deps/`).  Without the
+      # canonical lib, loft's `--native` mode falls back to the
+      # deps directory and rustc can't resolve transitive deps
+      # like rand_core (E0463 on macOS/Windows).
+      - name: Build (release loft binary + lib for integration tests)
+        run: cargo build --release --lib --bin loft
 
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.

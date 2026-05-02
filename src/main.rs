@@ -2238,7 +2238,22 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
             let native_deps_dir = if let Some(lib_dir) = loft_lib_dir() {
                 cmd.arg("--extern")
                     .arg(format!("loft={}", lib_dir.join("libloft.rlib").display()));
-                let deps = lib_dir.join("deps");
+                // `loft_lib_dir()` returns either the binary's directory
+                // (when libloft.rlib lives next to the binary) or the
+                // `deps/` subdirectory (cargo's standard layout — macOS
+                // and Windows always; Linux when the canonical sibling
+                // is absent).  In the latter case `lib_dir` IS already
+                // the deps directory; appending "deps" yields an
+                // invalid `target/release/deps/deps` path that rustc
+                // can't search, leading to E0463 "can't find crate"
+                // for transitive deps like rand_core.
+                //
+                // Detect the deps-already case via the directory name.
+                let deps = if lib_dir.file_name().is_some_and(|n| n == "deps") {
+                    lib_dir.clone()
+                } else {
+                    lib_dir.join("deps")
+                };
                 cmd.arg("-L").arg(format!("dependency={}", deps.display()));
                 if let Ok(rd) = std::fs::read_dir(&deps) {
                     for e in rd.flatten() {
