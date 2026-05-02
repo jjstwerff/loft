@@ -330,9 +330,11 @@ fn p200_round_trip_test_compiles_and_runs() {
 **Validation**:
 ```bash
 cargo test --release --test codegen_emitter::p200_round_trip_test_compiles_and_runs
-# Currently this should FAIL (P200 still active) — that's the
-# regression guard before the fix ships.  Run it as ignored or
-# expect-fail until step 5.4.
+# This test is RED at this commit (P200 still active).  The fix
+# in step 5.4 makes it green.  Both commits land in the SAME
+# session — the test never sees a green main; it goes from
+# "newly added, red" → "fix landed, green" without ever shipping
+# in a red state.
 ```
 
 ### Step 5.2 — Add `EmitCtx::int_width_for` / `int_signed_for` helpers

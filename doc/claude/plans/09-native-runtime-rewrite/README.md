@@ -113,8 +113,9 @@ between work phases at decision points.
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | **DONE (2026-05-02)** |
 | 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | **DONE (2026-05-02)** |
-| 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | OPEN |
-| 08a | [Retrospective](08a-introspect.md) | — | introspection | OPEN |
+| 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | **superseded by phase 10** (decision in step 10.4) |
+| 08a | [Retrospective](08a-introspect.md) | — | introspection | **superseded by phase 10 step 10.6** |
+| 10 | [Final closure](10-final-closure.md) | **P200** + plan-09 close-out | bug fix + admin | OPEN — consolidates 05/05a/08/08a |
 
 Status legend: OPEN → IN PROGRESS → DONE.
 
@@ -181,7 +182,7 @@ Reference for "are we beating main yet?" (main is at 5/5).
 | After phase 06 (P202) — 2026-05-02 | **30/30** | 89/93 | **3/5** | -2 |
 | After phase 07 (P205) — 2026-05-02 | 30/30 | **90/93** | 3/5 | -2 |
 | After phase 05+08 (P200) — projected | 30/30 | 91/93 | 3/5 | -2 |
-| After P204 handled (plan-11 or @EXPECT_FAIL) — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
+| After P204 fixed via plan-11 — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
 
 Each row pins an acceptance floor.  The active branch must beat
 the highest unmet floor before moving on; future commits that
@@ -222,19 +223,25 @@ Each bug-fix phase includes:
 - **Custom emitters live in `src/generation/ops/<op>.rs`** — one
   file per Op with override logic.
 
-## P204 — explicitly out of scope
+## P204 — explicitly out of scope (must close via plan-11 before PR)
 
 P204 (tail-expression return discarded) is a parser/scope-analysis
 bug in `collect_hidden_ref_args`, not a codegen-template bug.  No
 emitter change closes it.
 
-**Sibling plan stub** at
+**Sibling plan** at
 [plans/11-p204-ref-propagation/README.md](../11-p204-ref-propagation/README.md)
-— created 2026-05-02 with the trigger condition + design skeleton.
-P204 has 2 sub-failures (`85_yield_resume`, `87_store_leaks`)
-that block PR-readiness against `main`'s 5/5 native pass.  Choice
-at PR time: open plan-11 properly OR add `@EXPECT_FAIL` markers
-on the 2 affected scripts.
+— must complete before PR-open.  P204's two failing native tests
+(`85_yield_resume`, `87_store_leaks`) block PR-readiness against
+`main`'s 5/5 native pass; per `feedback_no_expect_fail_on_pr_bugs.md`,
+**@EXPECT_FAIL is not an acceptable resolution** — the bug must
+be actually fixed.
+
+PR-readiness gate is therefore:
+1. Plan-09 phase 10 closes P200 → branch reaches 91/93 native.
+2. Plan-11 closes P204 → branch reaches 93/93 native.
+3. Native parity with `main` (5/5 high-level + 0 sub-failures) →
+   PR opens.
 
 ## Acceptance gate (every commit)
 
