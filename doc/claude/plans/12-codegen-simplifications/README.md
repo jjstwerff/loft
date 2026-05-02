@@ -124,8 +124,8 @@ These all apply to plan-12.
 
 ## See also
 
-- `plans/09-native-runtime-rewrite/README.md` — parent plan
+- `plans/finished/09-native-runtime-rewrite/README.md` — parent plan
   whose audit surfaced these simplifications.
-- `plans/11-p204-ref-propagation/README.md` — surfaced the
+- `plans/finished/11-p204-ref-propagation/README.md` — surfaced the
   Span-miss walker pattern that phase 01 of plan-12
   generalises.

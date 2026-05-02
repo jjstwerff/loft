@@ -686,7 +686,7 @@ fn dispatch_op_arm_budget_not_exceeded() {
 /// **Rule**: if you need to thread synthesized values through codegen,
 /// build a string-aware companion entry point rather than another
 /// `Value` variant.  Plan 09 phase 00 evaluation documented this
-/// constraint; see `doc/claude/plans/09-native-runtime-rewrite/00-scaffold.md`
+/// constraint; see `doc/claude/plans/finished/09-native-runtime-rewrite/00-scaffold.md`
 /// "Findings (post-completion)".
 const SANCTIONED_CODEGEN_VALUE_VARIANTS: &[&str] = &["RawExpr"];
 

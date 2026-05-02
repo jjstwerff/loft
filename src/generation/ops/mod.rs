@@ -20,7 +20,7 @@
 //! no Op is intercepted.  The infrastructure is in place for future phases
 //! (and external contributors) to opt in per Op.
 //!
-//! Plan reference: `doc/claude/plans/09-native-runtime-rewrite/00-scaffold.md`.
+//! Plan reference: `doc/claude/plans/finished/09-native-runtime-rewrite/00-scaffold.md`.
 
 // Phase 00 step 0.2 shipped this surface without consumers; step 0.4
 // wires the first call site (`output_call_template`).  Future phases

@@ -384,7 +384,7 @@ Either fix lives in comparison-emission code, not in
 demoted from prereq because its split of role #2 doesn't reach
 role #1.  Plan-09 phase 05 needs scope rewrite before
 implementation — see
-`doc/claude/plans/09-native-runtime-rewrite/05-file.md`
+`doc/claude/plans/finished/09-native-runtime-rewrite/05-file.md`
 § "Diagnosis findings".
 
 **Workaround:** add the cast the parser warning suggests: `f += val
@@ -906,7 +906,7 @@ baseline for the `Str::new(&var___ret_*)` pattern and fails if
 it reappears.
 
 The probe (Outcome B) is documented in
-`doc/claude/plans/09-native-runtime-rewrite/07-generics.md`
+`doc/claude/plans/finished/09-native-runtime-rewrite/07-generics.md`
 § "Implementation notes — Why not fix `text_return` parser-side."
 
 **Symptom (historical):** `cargo test --release --test native native_scripts`
@@ -1059,7 +1059,7 @@ transformation isn't complete enough for the bounded-generic case.
 Phase 07 needs a custom emitter (Outcome B path) that emits owned
 `String` from the Op directly, bypassing the buffer indirection
 `text_return` was trying to create.  See
-`doc/claude/plans/09-native-runtime-rewrite/07-generics.md` step
+`doc/claude/plans/finished/09-native-runtime-rewrite/07-generics.md` step
 7.5 for the emitter-implementation plan.
 
 ## Web Services

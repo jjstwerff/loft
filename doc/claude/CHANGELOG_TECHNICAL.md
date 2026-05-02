@@ -156,7 +156,7 @@ Commit `8cf0676`.
 Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
 introspection retroactively covers the simplification cluster.
 
-Findings populate `doc/claude/plans/09-native-runtime-rewrite/00a-introspect.md`:
+Findings populate `doc/claude/plans/finished/09-native-runtime-rewrite/00a-introspect.md`:
 
 - **Effort vs estimate**: phase 00 landed in 6 commits (under
   7-9 budget) + 4 follow-on infrastructure commits (smoke test,
