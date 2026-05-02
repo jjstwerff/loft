@@ -138,21 +138,27 @@ introspection means earlier escape hatches.
 ## Dependency chain — what unblocks what
 
 ```
-00 scaffold ──→ 00a introspection (DONE 2026-05-02)
-  ├─→ 01 ABI consolidation (independent simplification)
+00 scaffold (DONE) ──→ 00a introspection (DONE 2026-05-02)
+  ├─→ 01 ABI consolidation (DONE)
   ├─→ 02 param adapter (DEMOTED — no longer P200 prereq; optional)
-  ├─→ 03 parallel emitter ───┐
-  │                          └─→ 09 parallel runtime ──→ 06 threading (P202)
-  ├─→ 04 key ops (independent)
-  ├─→ 05 file (P200) — plan misaligned, needs rewrite
+  ├─→ 03 parallel emitter (DONE) ───┐
+  │                                 └─→ 09 parallel runtime (DONE) ──→ 06 threading (DONE — P202 closed)
+  ├─→ 04 key ops (DONE)
+  ├─→ 05 file (P200) — plan rewritten 2026-05-02 (read-side comparison emission)
+  ├─→ 05a introspection — trigger revised: fire after first framework bug fix
   ├─→ 07 generics (P205) — Outcome B confirmed (custom emitter required)
   └─→ 08 binary (P200 read closure) — depends on 05 outcome
+
+P204 — out of plan-09 scope; sibling stub at plans/11-p204-ref-propagation/
 ```
 
-Phase 09 is sequenced **between 03 and 06** because phase 06 will
-otherwise multiply the duplication that phase 09 retires.  Phase
-04 and phase 05 are independent of phase 09 (don't touch parallel
-runtime fns).
+Phase 09 was sequenced **between 03 and 06** because phase 06
+would otherwise multiply the duplication that phase 09 retires.
+That sequencing held; phase 06 SHIPPED with its runtime fns flat
+(per phase 06's "Implementation notes — trait reuse vs flat") and
+gained from phase 09's `ParShape` only indirectly (the closure-
+shape selection logic is shared via `closure_shape` /
+`queue_helper_name` in `parallel.rs`).
 
 Phase 07 (P205) used a **diagnostic probe** that revealed Outcome
 B — the `text_return` parser-side promotion is structurally
@@ -165,12 +171,28 @@ phase 05's actual P200 bug is `narrow_int_cast`'s block-tail
 role, not its param-narrowing role.  Phase 02 retains independent
 simplification value but is no longer on the critical path.
 
+## Native suite progression
+
+Reference for "are we beating main yet?" (main is at 5/5).
+
+| Milestone | native_dir | native_scripts | High-level | Gap to main |
+|---|---|---|---|---|
+| Pre-plan-09 | 29/30 | 87/93 | 2/5 | -3 |
+| After phase 06 (P202) — 2026-05-02 | **30/30** | 89/93 | **3/5** | -2 |
+| After phase 07 (P205) — projected | 30/30 | 90/93 | 3/5 | -2 |
+| After phase 05+08 (P200) — projected | 30/30 | 91/93 | 3/5 | -2 |
+| After P204 handled (plan-11 or @EXPECT_FAIL) — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
+
+Each row pins an acceptance floor.  The active branch must beat
+the highest unmet floor before moving on; future commits that
+silently shrink any milestone count are regressions.
+
 ## Why each P-issue becomes believable
 
 | P-issue | Prior blocker | What dissolves it | Phase |
 |---|---|---|---|
 | P200 | `narrow_int_cast` dual role; fix collided with itself | **Revised by 00a**: the bug is the block-tail role (comparison-emission RHS type mismatch), not param narrowing.  Phase 02 (param-narrowing split) is no longer the prerequisite.  Phase 05 needs a comparison-emission fix that matches LHS / RHS widths or drops the block-tail narrow when consumer is `==` against a fitting constant.  Plan rewrite required | 05 (rewrite) → 08 |
-| P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gives queue fns a 15-line slot in the emitter family; phase 09 collapses runtime fns so queue variants are 3-line wrappers | 03 → 09 → 06 |
+| P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gave queue fns a slot in the emitter family; phase 09 collapsed for-par runtime fns; phase 06 added 3 flat queue runtime fns (~90 LOC vs the originally-projected ~120 LOC trait + wrappers — see phase 06 § Implementation notes for the trait-reuse-vs-flat decision) | 03 → 09 → 06 **CLOSED 2026-05-02** |
 | P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) **CLOSED** |
 | P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 ran the probe (2026-05-02) → **Outcome B confirmed**: skip removal alone doesn't close the dangle (`text_return` doesn't promote the function signature for bounded-generic specialisations).  Custom emitter required | 07 |
 
@@ -204,9 +226,15 @@ Each bug-fix phase includes:
 
 P204 (tail-expression return discarded) is a parser/scope-analysis
 bug in `collect_hidden_ref_args`, not a codegen-template bug.  No
-emitter change closes it.  Track P204 separately — likely a
-sibling plan focused on the `__ref_*` propagation path through
-`Block` arms and `Call` resolution.
+emitter change closes it.
+
+**Sibling plan stub** at
+[plans/11-p204-ref-propagation/README.md](../11-p204-ref-propagation/README.md)
+— created 2026-05-02 with the trigger condition + design skeleton.
+P204 has 2 sub-failures (`85_yield_resume`, `87_store_leaks`)
+that block PR-readiness against `main`'s 5/5 native pass.  Choice
+at PR time: open plan-11 properly OR add `@EXPECT_FAIL` markers
+on the 2 affected scripts.
 
 ## Acceptance gate (every commit)
 

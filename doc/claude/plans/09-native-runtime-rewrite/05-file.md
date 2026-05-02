@@ -64,13 +64,161 @@ conflict is structurally absent.
 
 ## Detailed steps with validation
 
-### Step 5.0 — Forwarding-emitter smoke test (forwarding-first recipe)
+> **Plan rewrite (2026-05-02)**: phase 00a + the actual-error
+> survey on `20-binary.loft` showed the failing emission is on the
+> READ side (block-tail narrow vs i64 literal RHS), not the write
+> side.  The original write-side steps (forwarding emitter for
+> `OpWriteIntFile` + `int_width_for` helpers + width-aware
+> template) are kept in [§ Historical / write-side scope
+> (deferred)](#historical--write-side-scope-deferred) below for
+> reference; the active plan is the read-side steps below.  Before
+> any code, read `feedback_actual_error_survey.md` — it codifies
+> the lesson that prompted this rewrite.
+
+### Step 5.1 — Actual-error survey (per `feedback_actual_error_survey.md`)
+
+**Action**: capture the current state of all P200 failures in the
+generated Rust to confirm scope before writing any fix.
+
+```bash
+mkdir -p /tmp/p05-survey
+cargo run --bin loft --release --quiet -- \
+    --native-emit /tmp/p05-survey/20-binary.rs \
+    tests/scripts/20-binary.loft
+cargo test --release --test native -- --test-threads=1 2>&1 \
+    | grep -A20 "rustc failed for 20_binary"
+```
+
+Document per failing site:
+- Line number in the generated Rust
+- LHS expression shape (typically `(var__read_N) as <narrow>` from
+  the read block's tail)
+- RHS expression shape (typically `<int>_i64`)
+- Surrounding `n_assert` / arithmetic context
+
+**Validation**: produces a list of all (site, LHS shape, RHS
+shape) tuples.  Confirms whether the failures all share one
+shape (E0308 narrow vs i64) or split across multiple shapes.
+
+**Pre-flight**: skip this phase entirely if the survey finds
+zero E0308s — the bug may have closed transitively via another
+phase.  Surface the unexpected-pass case as a finding rather than
+a setup bug.
+
+### Step 5.2 — Identify the comparison-emission code path
+
+**Action**: locate where the comparison `==` (and its siblings
+`!=`, `<`, `<=`, `>`, `>=`) get emitted with their LHS / RHS
+types decided.  Suspected entry points:
+
+```bash
+grep -rn 'OpEqInt\|OpNeInt\|op_eq_int' src/generation/ | head -10
+grep -rn 'narrow_int_cast' src/generation/ | head -10
+grep -rn '"==" =>' src/generation/ | head -10
+```
+
+Document in "Diagnosis findings":
+- Which fn emits the LHS (block-tail) — likely
+  `src/generation/emit.rs::narrow_int_cast` based on prior P200
+  diagnosis.
+- Which fn emits the RHS literal — likely a separate path in
+  `emit.rs` or the comparison Op template.
+- Whether the comparison emitter has access to LHS type info to
+  pick a matching RHS suffix.
+
+**Validation**: identify exactly the file:line pair where the
+fix lands.  If two candidate sites exist, pick the one that
+fixes all 5 surveyed failures uniformly; document the choice.
+
+### Step 5.3 — Pin the prior failure mode via regression test
+
+**Action**: write a regression test that compiles
+`tests/scripts/20-binary.loft` under `--native` and asserts
+zero rustc errors.  Add to `tests/codegen_emitter.rs`:
+
+```rust
+#[test]
+fn p200_binary_read_compiles_under_native() {
+    let status = std::process::Command::new("cargo")
+        .args(["run", "--bin", "loft", "--release", "--",
+               "tests/scripts/20-binary.loft"])
+        .status().unwrap();
+    assert!(status.success(),
+        "P200: 20-binary native compile regressed");
+}
+```
+
+**Validation**: this test currently FAILS (that's the
+regression guard before the fix ships).  Commit it as the test
+pinning the prior failure mode.
+
+### Step 5.4 — Apply the fix
+
+**Action**: based on step 5.2's identified site, choose between:
+
+**Option A — Drop the block-tail narrow when consumer is `==`
+against a fitting constant:**
+- Modify `narrow_int_cast` (or its caller) to skip the narrow
+  when the block is consumed by a comparison whose RHS is an
+  integer literal that fits the narrow type.
+- Risk: needs context flow ("what consumes this block") — the
+  block-tail emitter today doesn't know its consumer.
+
+**Option B — Widen the constant at comparison-emission time:**
+- Modify the comparison emitter (likely an `OpEqInt` template or
+  inline emission in `emit.rs`) to inspect LHS type and emit RHS
+  as `(<lit>_<narrow>)` instead of `(<lit>_i64)`.
+- Risk: needs LHS type info at the comparison site, which may
+  also not be readily available.
+
+**Option C (fallback) — Cast both sides to a common width:**
+- Wrap the RHS in `(<lit> as <narrow>)` when LHS has narrow
+  cast.  Always works; less elegant.
+
+The choice depends on which option's required info is already
+available at the relevant emit site.  Implementation step picks
+the cleanest of the three based on step 5.2's findings.
+
+**Validation**:
+```bash
+cargo test --release --test codegen_emitter::p200_binary_read_compiles_under_native
+cargo test --release --test native -- --test-threads=1 2>&1 \
+    | grep "native result"   # 89/93 → 90+/93 (P200 sub-failure closed)
+cargo test --release --test issues 2>&1 | tail -3   # 540/540 unchanged
+scripts/p09_fast_gate.sh   # byte-identical (or refresh with intentional change)
+```
+
+### Step 5.5 — Update PROBLEMS.md + plan README
+
+**Action**: mark P200 CLOSED (read side) with "fix path: phase
+05 of plan 09 (rewritten 2026-05-02 to address read-side
+comparison emission)".  Reference the regression test added.
+Update plan-09 README to mark phase 05 DONE.  P200's separate
+"closure of all binary-write paths" remains in phase 08's scope.
+
+**Validation**: review.
+
+### Historical / write-side scope (deferred)
+
+The original phase 05 steps (kept here for reference; not on
+the active critical path) targeted a write-side
+`OpWriteIntFile` custom emitter:
+
+#### Step 5.0 (historical) — Forwarding-emitter smoke test (forwarding-first recipe)
 
 **Action**: ship a no-op forwarding `OpEmitter` for `OpWriteIntFile`
 as the first commit of this phase.  The emitter does nothing more
 than call `DefaultEmitter::emit` (or directly call back into
 `Output::user_fn_call_body` / `substitute_template_body`).  Register
 it.  Re-run the byte-identical baseline gate.
+
+**Status (2026-05-02)**: this step ALREADY SHIPPED in commit
+`a078bac` ("plan-09 phase 05: forwarding-emitter smoke test as
+step 5.0").  The forwarding emitter is registered but is a
+no-op since `OpWriteIntFile` isn't the actual fix site — the
+forwarding emitter remains as a dead-but-harmless smoke test.
+A future phase 05b (if write-side issues surface) can replace
+its body with real emission logic.
 
 **Pre-flight check** (per the [forwarding-first recipe](00-scaffold.md#verifying-a-new-op-emitter-the-forwarding-first-recipe)):
 

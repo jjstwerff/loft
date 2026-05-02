@@ -4,8 +4,26 @@
 
 **Kind:** Review (no code)
 
-**Trigger:** Phase 05 marked DONE (P200 write side + P203 either
-closed or rerouted).
+**Trigger (revised 2026-05-02):** **first framework-based bug-fix
+phase marked DONE.**  The original trigger was "Phase 05 DONE";
+phase 00a's findings revised plan ordering enough that the spirit
+of 05a (validate the diagnostic-gate + regression-test-first
+pattern) applies as soon as ANY bug-fix phase ships through the
+emitter framework.  Today phase 06 (P202 close) qualifies — and
+phase 07 (P205) is queued behind it.
+
+Recommended firing point: after BOTH phase 06 and phase 07 land,
+so the introspection has two framework-based bug-fix phases to
+compare and the lessons captured stay current rather than going
+stale waiting for phase 05's rewrite.
+
+**Original trigger** (kept for context): Phase 05 marked DONE
+(P200 write side + P203 either closed or rerouted).  P203 closed
+out-of-order in phase 00 step 0.7b; P200 (phase 05) is gated on
+plan rewrite.  Sticking strictly to "phase 05 DONE" would defer
+05a behind two unrelated bottlenecks — better to fire on the
+substantive trigger (first bug-fix phase shipped through the new
+framework).
 
 **Time budget:** 1 day max.
 

@@ -268,10 +268,98 @@ isolation contract)_
 
 ## Problems encountered
 
-_(append per problem — store isolation across threads, lifetime of
-`UnsafeCell<Stores>` shared across worker threads — see THREADING.md
-for the existing model)_
+### Reachability gap caught during validation (2026-05-02)
+
+After registering the queue emitters and runtime fns, the test
+suite re-emitted with worker-fn references inside closures (e.g.
+`|cell, elm| { n_double_score(cell, elm) as i64 }`) but rustc
+failed with E0425 "cannot find function `n_double_score`."  The
+worker fn was being referenced by name in the closure but never
+emitted into the generated Rust file.
+
+Root cause: `src/generation/mod.rs::collect_calls` walks the IR
+and pulls referenced fns into the reachable set.  It had a
+special case that detected the worker fn's d_nr inside
+`n_parallel_for` / `n_parallel_for_light` calls (since the d_nr
+arrives as an `Int` literal, not a normal `Call` node).  The
+queue family wasn't in that special case, so the worker fns
+were excluded from the reachable set even though they were
+referenced by the emitter.
+
+Fix: extended the special case to include `n_parallel_queue` /
+`_text` / `_ref` / `_narrow` / `_fn`.  Without this fix, the
+emitter pattern looks correct but rustc rejects the output —
+debug pointer is "search reachability code, not the emitter".
+
+**Lesson**: any custom emitter that synthesises a call to a
+worker fn (rather than emitting the worker's d_nr directly)
+must check that reachability sees the worker fn through one of
+its accepted paths.  Future bug-fix phases adding similar
+emitters should add a "reachability check" step to their
+acceptance criteria.
+
+### Baseline refresh needed (2026-05-02)
+
+The byte-identical baseline at `/tmp/p09-baseline/` covers
+19-threading and 22-threading; phase 06's emitter intentionally
+changes their emission shape (the queue calls now go through
+`n_parallel_queue_native(cell, …, |cell, elm| { worker(cell, elm)
+as i64 })` instead of the stub).  `cargo test --test
+codegen_emitter` flagged this with the prose "diverging files:
+[\"19-threading\", \"22-threading\"]" — exactly the gate
+working as intended.
+
+Resolution: `scripts/p09_fast_gate.sh --capture` to refresh.
+Anyone re-running the gate without refreshing will see the same
+fail until the new shape is captured.
 
 ## Implementation notes
 
-_(append per non-obvious decision)_
+### Trait reuse vs flat impls — chose flat (2026-05-02)
+
+Phase 09's plan-doc projection + this phase's step 6.4 anticipated
+either reusing `ParShape` directly or introducing a parallel
+`ParQueueShape` trait, with the queue family becoming 3 thin
+wrappers around a generic core (~3 lines per public fn).
+Implementation revealed the per-shape variation is too divergent
+for clean trait factoring:
+
+| Shape | Result destination | Storage idiom |
+|---|---|---|
+| Scalar | `stores.par_buffer_stack: Vec<Vec<u64>>` | Vec<i64> from worker → bit-cast to Vec<u64> → push |
+| Text | `stores.par_text_buffer_stack: Vec<Vec<String>>` | Vec<String> from worker → push verbatim |
+| Ref | `stores.par_ref_buffer_stack: Vec<(Vec<DbRef>, Vec<u16>)>` | Per-row deep-copy via `copy_from_worker[_unowned]` into one adopted result store |
+
+A `ParQueueShape` trait would have ~80% conditional branching in
+its `store_results` method (each shape touches a different field
+on `Stores` with a different value type), giving up trait
+abstraction to gain ~30 lines of code shared.  Net delta with a
+trait: ~120 lines (trait + 3 impls + core + 3 wrappers).  Net
+delta without: ~90 lines (3 flat fns).  Flat is smaller AND
+clearer because each fn reads top-to-bottom.
+
+**Decision**: keep queue runtime fns flat.  Phase 09's ParShape
+stays in place for the for-par family (where it actually saves
+consolidation cost) but doesn't extend to queue.
+
+This is the second time a phase-doc trait sketch turned out too
+narrow on first contact — see `feedback_phase_doc_trait_drafts.md`.
+The pattern is: **trait reuse helps when per-impl variation
+collapses cleanly; abandon trait reuse when ≥2 associated types
++ method bodies are condition-laden**.
+
+### Buf-rename emitter pattern (2026-05-02)
+
+`ParallelBufRenameEmitter` is a 5-line emitter that just appends
+`_native` to `ctx.def_fn.name` and emits the call with original
+args.  It exists only because the runtime fn name needs to be
+disambiguated from the loft-side stub (which has a `todo!()`
+body in generated Rust).  The emitter has no closure
+transformation, no extra-arg lifting, no shape selection.
+
+**Reusable pattern**: any future phase that adds a runtime fn
+with a `_native` suffix can use this emitter for plain
+pass-through calls.  Generalised name: `RenameEmitter<const
+SUFFIX: &'static str>` — but Rust doesn't yet support const
+generic strings, so the current concrete `ParallelBufRenameEmitter`
+is fine; if a third use case appears, factor at that point.
