@@ -96,16 +96,38 @@ fn collect_cases() -> Vec<Case> {
 ///     literal because the user-visible loft source line IS part
 ///     of the contract.
 fn normalise(raw: &str, case_name: &str, entry: &Path) -> String {
+    // Windows: `std::fs::canonicalize` returns `\\?\C:\...` UNC paths,
+    // and loft's parser canonicalises the script path internally.  Strip
+    // the UNC prefix first so the absolute-path substitutions below
+    // match cleanly.
+    let mut s = raw.replace(r"\\?\", "");
     let entry_abs = entry.to_string_lossy().to_string();
     let entry_rel = format!("<cases>/{case_name}.loft");
     let workspace = workspace_root().to_string_lossy().to_string();
-    let mut s = raw.replace(&entry_abs, &entry_rel);
-    s = s.replace(&workspace, "<workspace>");
+    // `cases_dir()` is built by joining CARGO_MANIFEST_DIR (native
+    // separator) with a `tests/...` literal (forward slashes), so on
+    // Windows `entry_abs` has mixed separators and won't substring-
+    // match the all-backslash output loft emits.  Replace all three
+    // forms (native, all-backslash, all-forward) to cover both
+    // platforms uniformly.
+    let replace_path_forms = |s: &mut String, abs: &str, rel: &str| {
+        let back = abs.replace('/', "\\");
+        let fwd = abs.replace('\\', "/");
+        *s = s.replace(abs, rel);
+        if back != abs {
+            *s = s.replace(&back, rel);
+        }
+        if fwd != abs {
+            *s = s.replace(&fwd, rel);
+        }
+    };
+    replace_path_forms(&mut s, &entry_abs, &entry_rel);
+    replace_path_forms(&mut s, &workspace, "<workspace>");
     // Also catch the directory form for multi-file cases.
     if let Some(parent) = entry.parent() {
         let parent_abs = parent.to_string_lossy().to_string();
         if parent_abs != workspace {
-            s = s.replace(&parent_abs, &format!("<cases>/{case_name}"));
+            replace_path_forms(&mut s, &parent_abs, &format!("<cases>/{case_name}"));
         }
     }
     // Native scratch dir (only present if a case slips into native mode).

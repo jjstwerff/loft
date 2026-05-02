@@ -572,8 +572,8 @@ fn native_emit_includes_loft_source_map() {
     // path variations across platforms.
     let header_n_add = format!("// loft:{path_str}:1\nfn n_add(");
     let header_n_main = format!("// loft:{path_str}:2\nfn n_main(");
-    let stem_n_add = format!("loft_source_map_demo.loft:1\nfn n_add(");
-    let stem_n_main = format!("loft_source_map_demo.loft:2\nfn n_main(");
+    let stem_n_add = "loft_source_map_demo.loft:1\nfn n_add(".to_string();
+    let stem_n_main = "loft_source_map_demo.loft:2\nfn n_main(".to_string();
     assert!(
         stdout.contains(&header_n_add) || stdout.contains(&stem_n_add),
         "expected source-map header above n_add (canonical or stem match); got {stdout}"
