@@ -162,8 +162,33 @@ impl Output<'_> {
 
     /// Use this to inline a `#rust` template operator by substituting `@param` placeholders
     /// with generated argument expressions.
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// Phase 09 phase 00 step 0.3: this public entry point is the
+    /// stable name every existing call site uses.  The substitution
+    /// body lives in [`Self::substitute_template_body`] so future
+    /// dispatch (step 0.4 — route through `emit_op`) can call back
+    /// into it via `DefaultTemplateEmitter`.  Until step 0.4 lands,
+    /// this method is byte-identical to the pre-extraction version.
     pub(super) fn output_call_template(
+        &mut self,
+        w: &mut dyn Write,
+        def_fn: &Definition,
+        vals: &[Value],
+    ) -> std::io::Result<()> {
+        self.substitute_template_body(w, def_fn, vals)
+    }
+
+    /// Internal helper holding the actual `#rust` template substitution
+    /// logic.  Reachable by name from [`Self::output_call_template`] (the
+    /// pre-step-0.4 caller) and from
+    /// `crate::generation::ops::default::DefaultTemplateEmitter` (the
+    /// post-step-0.4 fall-through).
+    ///
+    /// Behaviour exactly matches the pre-phase-09 `output_call_template`.
+    /// The byte-identical golden corpus at `/tmp/p09-baseline/*.rs` is
+    /// the regression oracle.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn substitute_template_body(
         &mut self,
         w: &mut dyn Write,
         def_fn: &Definition,
