@@ -78,6 +78,13 @@ jobs:
         with:
           components: clippy
 
+      # `.cargo/config.toml` activates mold on x86_64-unknown-linux-gnu
+      # for build-script + proc-macro linking.  The clippy job needs
+      # this even though it doesn't link the final binary — cargo
+      # still compiles + links build scripts.
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -121,6 +128,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      # `.cargo/config.toml` activates mold for native x86_64 builds
+      # (the wasm target is unaffected, but the gallery job also
+      # builds loft-native for the Brick Buster HTML pipeline).
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
 
       - name: Install wasm-pack
         run: |
