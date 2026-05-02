@@ -1,16 +1,46 @@
 # Phase 02 — Parameter adaptation
 
-**Status:** OPEN
+**Status:** OPEN — **demoted by phase 00a (2026-05-02): no longer
+a P200 prerequisite.**  See "Status reassessment" block below.
 
-**Kind:** Simplification — **prerequisite for phase 05 (P200 write
-side) and phase 08 (P200 read side).**  Without this, the dual-role
-`narrow_int_cast` keeps biting; previous direct fixes failed
-because they tried to surgery the cast inside its tangled call
-sites.  Pulling param adaptation into per-type adapters removes the
-shared cast-decision code and lets each Op's emitter do the right
-thing locally.
+**Kind:** Simplification (formerly: "prerequisite for phase 05 +
+phase 08").  Phase 00a's introspection found that phase 05's
+actual P200 bug is `narrow_int_cast`'s **block-tail role**
+(comparison-emission RHS type), not the **param-narrowing role**
+that phase 02 splits.  Phase 02 is now a pure simplification
+without bug-fix dependency — its line-count and code-clarity
+payoff still stands, but its priority drops.
 
 **Depends on:** Phase 00.
+
+## Status reassessment (2026-05-02)
+
+Phase 02 was sequenced as "prerequisite for phase 05 (P200 write
+side) and phase 08 (P200 read side)" on the assumption that the
+P200 fix would touch parameter narrowing.  Inspection of today's
+`--native-emit` output for `tests/scripts/20-binary.loft` (during
+phase 05's pre-flight) showed the failing sites are read-side
+comparison emission:
+
+```rust
+let mut var__read_3: i64 = i64::MIN as i64;
+OpReadFile(cell, var_f, &mut var__read_3, 1_i64, 11_i32);
+(var__read_3) as u8     // ← block-tail narrow (role #1)
+}) == (0_i64)           // ← E0308: u8 vs i64
+```
+
+The `as u8` is `narrow_int_cast`'s block-tail role.  Phase 02
+splits the **param-narrowing role** (role #2 — the
+`#rust"…@arg…"` substitution path).  Splitting role #2 doesn't
+change role #1's emission, so phase 02 is no longer load-bearing
+for P200.
+
+**Decision** (phase 00a): defer phase 02 until phase 05 lands and
+we know whether the read-side fix exposes any phase-02-shaped
+follow-up.  The simplification's own merits (~125 lines of
+stacked `if matches!()` to per-type adapters, easier reasoning
+for phase 06+ emitters) still apply — but it ranks below the
+bug-fix phases on critical path.
 
 ## What's tangled today
 

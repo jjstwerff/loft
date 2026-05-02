@@ -102,9 +102,9 @@ between work phases at decision points.
 | # | Phase | Closes | Kind | Status |
 |---|-------|--------|------|--------|
 | 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultEmitter`) | infra | **DONE (2026-05-02)** |
-| 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | OPEN |
+| 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | **DONE (2026-05-02)** |
 | 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | **DONE (2026-05-02)** |
-| 02 | [Param adapter](02-param-adapter.md) | — (splits dual-role `narrow_int_cast`) — **prerequisite for P200** | simplification | OPEN |
+| 02 | [Param adapter](02-param-adapter.md) | — (splits param-narrowing role of `narrow_int_cast`) | simplification | OPEN — **demoted by 00a (no longer P200 prereq)** |
 | 02a | [Introspection: after param adapter](02a-introspect.md) | — | introspection | OPEN |
 | 03 | [Parallel-for emitter](03-parallel-emitter.md) | — (collapsed 95-line `dispatch.rs:850-944`) — **prerequisite for P202** | simplification | **DONE (2026-05-02)** |
 | 04 | [Key-keyed Op emitter](04-key-ops.md) | — (consolidates `OpGetRecord` / `OpIterate`) | simplification | **DONE (2026-05-02)** |
@@ -138,33 +138,41 @@ introspection means earlier escape hatches.
 ## Dependency chain — what unblocks what
 
 ```
-00 scaffold
+00 scaffold ──→ 00a introspection (DONE 2026-05-02)
   ├─→ 01 ABI consolidation (independent simplification)
-  ├─→ 02 param adapter ──────────→ 05 file (P200 write + P203)
-  │                              └─→ 08 binary (P200 read)
+  ├─→ 02 param adapter (DEMOTED — no longer P200 prereq; optional)
   ├─→ 03 parallel emitter ───┐
   │                          └─→ 09 parallel runtime ──→ 06 threading (P202)
   ├─→ 04 key ops (independent)
-  └─→ 07 generics (P205) — needs scaffold + 02 only if probe cascades
+  ├─→ 05 file (P200) — plan misaligned, needs rewrite
+  ├─→ 07 generics (P205) — Outcome B confirmed (custom emitter required)
+  └─→ 08 binary (P200 read closure) — depends on 05 outcome
 ```
 
 Phase 09 is sequenced **between 03 and 06** because phase 06 will
-otherwise multiply the duplication that phase 09 retires.  Phases
-04 and 05 can run in parallel with 09 since they don't touch the
-parallel runtime fns.
+otherwise multiply the duplication that phase 09 retires.  Phase
+04 and phase 05 are independent of phase 09 (don't touch parallel
+runtime fns).
 
-Phase 07 (P205) has a **diagnostic probe** that may short-circuit
-to a 1-line parser fix without needing the emitter — see phase 07
-for the branching.
+Phase 07 (P205) used a **diagnostic probe** that revealed Outcome
+B — the `text_return` parser-side promotion is structurally
+incomplete for bounded-generic specialisations (the `Str::new(&local)`
+dangle persists even after the skip is removed).  Phase 07 needs
+a custom emitter that emits owned `String` for the affected sites.
+
+Phase 02's prereq role to phase 05 was demoted by **phase 00a**:
+phase 05's actual P200 bug is `narrow_int_cast`'s block-tail
+role, not its param-narrowing role.  Phase 02 retains independent
+simplification value but is no longer on the critical path.
 
 ## Why each P-issue becomes believable
 
 | P-issue | Prior blocker | What dissolves it | Phase |
 |---|---|---|---|
-| P200 | `narrow_int_cast` dual role; fix collided with itself | Phase 02 splits the cast into per-type adapters AND extracts shared `narrow_for_int` helper that retires the dual-role; bug-fix emitters bypass it | 02 → 05 + 08 |
+| P200 | `narrow_int_cast` dual role; fix collided with itself | **Revised by 00a**: the bug is the block-tail role (comparison-emission RHS type mismatch), not param narrowing.  Phase 02 (param-narrowing split) is no longer the prerequisite.  Phase 05 needs a comparison-emission fix that matches LHS / RHS widths or drops the block-tail narrow when consumer is `==` against a fitting constant.  Plan rewrite required | 05 (rewrite) → 08 |
 | P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gives queue fns a 15-line slot in the emitter family; phase 09 collapses runtime fns so queue variants are 3-line wrappers | 03 → 09 → 06 |
-| P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) |
-| P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 surveys corpus for all dangling-shape sites, runs probe, then either 1-line fix or per-Op emitter | 07 |
+| P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) **CLOSED** |
+| P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 ran the probe (2026-05-02) → **Outcome B confirmed**: skip removal alone doesn't close the dangle (`text_return` doesn't promote the function signature for bounded-generic specialisations).  Custom emitter required | 07 |
 
 Each bug-fix phase includes:
 
