@@ -101,7 +101,7 @@ between work phases at decision points.
 
 | # | Phase | Closes | Kind | Status |
 |---|-------|--------|------|--------|
-| 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultTemplateEmitter`) | infra | OPEN |
+| 00 | [Scaffold](00-scaffold.md) | P203 (structural — let-bind-on-repeat in `DefaultEmitter`) | infra | **DONE (2026-05-02)** |
 | 00a | [Introspection: after scaffold](00a-introspect.md) | — | introspection | OPEN |
 | 01 | [ABI consolidation](01-abi-consolidation.md) | — (deletes `LEGACY_STORES_FNS` hardcoded list) | simplification | OPEN |
 | 02 | [Param adapter](02-param-adapter.md) | — (splits dual-role `narrow_int_cast`) — **prerequisite for P200** | simplification | OPEN |
