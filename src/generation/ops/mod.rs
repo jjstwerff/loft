@@ -261,20 +261,26 @@ mod tests {
     #[test]
     fn registry_count_matches_sanctioned_set() {
         let count = registry().len();
-        // Phase 00 ships an empty registry.  Future phases bump this.
+        // Phase 00 shipped an empty registry; subsequent phases
+        // populated it.  After plan-09 + plan-11 close (P200/P202/
+        // P203/P204/P205): 9 forwarding-smoke names + ParallelFor×2 +
+        // key_ops×2 + ParallelQueue×3 + ParallelBufRename×6 +
+        // IntCompare×4, with 2 overlaps (OpEqInt/OpLtInt overwritten
+        // by IntCompare) → ~24.  Cap at 30 with headroom for plan-12.
         assert!(
-            count <= 16,
+            count <= 30,
             "registry has {count} custom emitters — bump the cap if \
              this is intentional and document in plan 09 status table"
         );
     }
 
     /// Verify `has_custom_emitter` returns false for unregistered
-    /// names (today: every name).  When phase 05+ register emitters,
-    /// this test's expectations narrow.
+    /// names.  Uses a synthetic name guaranteed not to be in the
+    /// registry (real Op names like `OpAddInt` are forwarded via
+    /// phase 00's runtime smoke test, so they ARE registered).
     #[test]
     fn has_custom_emitter_returns_false_for_unregistered() {
         assert!(!has_custom_emitter("ThisOpDoesNotExist"));
-        assert!(!has_custom_emitter("OpAddInt")); // common Op, not custom-overridden
+        assert!(!has_custom_emitter("OpSyntheticUnregisteredForTest"));
     }
 }
