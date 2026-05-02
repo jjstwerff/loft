@@ -185,14 +185,35 @@ impl Output<'_> {
                             && !self.data.def(*d).name.starts_with("Op")
                     );
                     let wrap_text = returns_text && !inner_already_str;
+                    // P205 (plan-09 phase 07): if the function returns
+                    // Type::Text but has no `Type::RefVar(Type::Text(_))`
+                    // attribute (no proper work buffer set up by
+                    // `text_return`), `Str::new(<local_String>)` would
+                    // dangle.  Route through `stores.scratch` instead so
+                    // the value's backing String lives as long as `stores`.
+                    // Note: text_return doesn't set the `hidden` flag (only
+                    // ref_return does), so we don't filter on `a.hidden`.
+                    let needs_p205_scratch = wrap_text && {
+                        let def = self.data.def(self.def_nr);
+                        !def.attributes.iter().any(|a| {
+                            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                        })
+                    };
                     write!(w, "return ")?;
-                    if wrap_text {
+                    if needs_p205_scratch {
+                        write!(w, "{{ stores.scratch.push((")?;
+                    } else if wrap_text {
                         write!(w, "Str::new(")?;
                     } else if narrow.is_some() {
                         write!(w, "(")?;
                     }
                     self.output_code_inner(w, val)?;
-                    if wrap_text {
+                    if needs_p205_scratch {
+                        write!(
+                            w,
+                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                        )?;
+                    } else if wrap_text {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow {
                         write!(w, ") as {cast}")?;
@@ -881,8 +902,33 @@ impl Output<'_> {
                     } else {
                         None
                     };
+                    // P205 (plan-09 phase 07): when this function returns
+                    // Type::Text but has NO `Type::RefVar(Type::Text(_))`
+                    // attribute (i.e. text_return didn't add a proper
+                    // work buffer — happens for bounded-generic
+                    // specialisations and a few other text-return paths),
+                    // a plain `Str::new(<value>)` wrap captures a borrow
+                    // into a local String that drops at function return,
+                    // dangling the returned `Str`'s raw pointer.  Route
+                    // through `stores.scratch` instead so the value's
+                    // backing String lives as long as `stores` does.
+                    // Note: text_return doesn't set the `hidden` flag (only
+                    // ref_return does), so we don't filter on `a.hidden`.
+                    let needs_p205_scratch = wrap_result && {
+                        let def = self.data.def(self.def_nr);
+                        matches!(def.returned, Type::Text(_))
+                            && !def.attributes.iter().any(|a| {
+                                matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+                            })
+                    };
                     if is_tail_capture_call {
                         write!(w, "let __native_tail_ret: DbRef = ")?;
+                    } else if needs_p205_scratch {
+                        // Move the String into stores.scratch, then return
+                        // a Str pointing into the scratch entry.  The
+                        // `(value).to_string()` coerces &str / String /
+                        // Str all into an owned String.
+                        write!(w, "{{ stores.scratch.push((")?;
                     } else if wrap_result {
                         write!(w, "Str::new(")?;
                     } else if narrow_cast.is_some() {
@@ -891,7 +937,12 @@ impl Output<'_> {
                     self.indent += 1;
                     self.output_code_with_subst(w, v, &pre_evals)?;
                     self.indent -= 1;
-                    if wrap_result {
+                    if needs_p205_scratch {
+                        write!(
+                            w,
+                            ").to_string()); Str::new(stores.scratch.last().unwrap()) }}"
+                        )?;
+                    } else if wrap_result {
                         write!(w, ")")?;
                     } else if let Some(cast) = narrow_cast {
                         write!(w, ") as {cast}")?;

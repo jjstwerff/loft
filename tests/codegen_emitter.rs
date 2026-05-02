@@ -365,6 +365,78 @@ fn p202_parallel_queue_emitter_registered() {
     }
 }
 
+/// Phase 07 regression test: the P205 reproducer must compile +
+/// run cleanly under native.  Pins the dangling-Str fix —
+/// without phase 07's emit-time scratch routing, the generic-text-
+/// return path emits `Str::new(&local_String)` whose pointer
+/// dies at function return, and the assert in
+/// `tests/scripts/repro_p205.loft:18` fails at runtime.
+#[test]
+fn p205_repro_passes_under_native() {
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "loft",
+            "--release",
+            "--quiet",
+            "--",
+            "tests/scripts/repro_p205.loft",
+        ])
+        .current_dir(project_root())
+        .status()
+        .expect("run repro_p205 under native");
+    assert!(
+        status.success(),
+        "P205: bounded-generic text return reproducer failed under native — \
+         the dangling Str::new(&local_String) fix in src/generation/emit.rs \
+         (Value::Return wrap_text path + wrap_result block path) regressed."
+    );
+}
+
+/// Phase 07 structural test: the dangling shape `Str::new(&_local_*)`
+/// must NOT appear in any generated Rust for the doc-test corpus.
+/// If it reappears, the P205 fix has regressed and bounded-generic
+/// text returns are dangling pointers again.
+#[test]
+fn p205_no_str_new_of_local_in_corpus() {
+    if !baseline_present() {
+        eprintln!("skipping p205_no_str_new_of_local_in_corpus — baseline absent");
+        return;
+    }
+    let baseline = std::path::Path::new(BASELINE_DIR);
+    let mut offenders: Vec<String> = Vec::new();
+    for test in CORPUS {
+        let name = std::path::Path::new(test)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(test);
+        let path = baseline.join(format!("{name}.rs"));
+        let src = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        // The dangle pattern is `Str::new(&var___ret_<digit>` (or any
+        // local String-typed binding the generic-text-return code
+        // synthesises).  Phase 07's fix routes those through
+        // `stores.scratch.last().unwrap()` instead, so no `Str::new(&var_`
+        // borrow-of-local should remain.
+        for (i, line) in src.lines().enumerate() {
+            if line.contains("Str::new(&var___ret_") {
+                offenders.push(format!("{name}.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "P205 regression: generated code reintroduced `Str::new(&var___ret_*)` \
+         dangling-pointer pattern.  Phase 07's fix routes generic-text-returns \
+         through `stores.scratch` to escape this; reintroducing the borrow-of-local \
+         shape is a regression.\n\nOffenders:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// Gate: the registry's `Abi` tags must be self-consistent — every
 /// entry's `abi_of(name)` lookup must return the entry's own tag.
 /// Trivially true when the registry is well-formed; catches a typo

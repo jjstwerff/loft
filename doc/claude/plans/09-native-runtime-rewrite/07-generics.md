@@ -1,6 +1,6 @@
 # Phase 07 — Generic text emitter
 
-**Status:** OPEN
+**Status:** DONE (2026-05-02)
 
 **Closes:** **P205** (bounded-generic text return emits
 `Str::new(&local_String)` — dangling pointer).
@@ -318,8 +318,117 @@ specific tests that broke and what they relied on)_
 
 ## Problems encountered
 
-_(append per problem)_
+### Two emission sites, not one (2026-05-02)
+
+The plan-doc anticipated registering an `OpReturnGenericText` emitter
+for "the dangling Op."  Implementation revealed the dangle isn't
+emitted by a single Op — it's emitted by `src/generation/emit.rs`'s
+return-handling code at TWO sites:
+
+1. **`Value::Return(val)` emission** (`emit.rs:155-200`).  When the
+   function returns Type::Text and the return value is a Var (not
+   a Call returning Str), the code wraps with `Str::new(<value>)`.
+2. **Block-tail wrap_result emission** (`emit.rs:884-905`).  When the
+   block's return expression is a text value, same `Str::new(<value>)`
+   wrapping.
+
+Both sites fired for the P205 case — the actual dangling depended
+on which path the IR took for a given test.  Fix had to go in
+both places.
+
+### `text_return` doesn't set `hidden=true` (2026-05-02)
+
+Initial fix detection used `a.hidden && Type::RefVar(Type::Text(_))`.
+This filtered out EVERY text-returning function because
+`text_return`'s `add_attribute` call (`parser/control.rs:2358`)
+doesn't set `hidden=true` (only `ref_return` does, at line 2452).
+Fix: drop the `hidden` filter — just check for `Type::RefVar(Type::Text(_))`
+attribute presence.  Documented in the emit.rs comment so future
+maintainers don't re-add the filter.
 
 ## Implementation notes
 
-_(append per non-obvious decision)_
+### Emit-time scratch routing (2026-05-02)
+
+Instead of writing a custom `OpEmitter` (the original phase-doc
+plan), the fix patches the return-emission code paths directly.
+Two new branches in `Value::Return` (line 188+) and the
+block-tail wrap_result code (line 887+):
+
+```rust
+let needs_p205_scratch = wrap_text /* or wrap_result */ && {
+    let def = self.data.def(self.def_nr);
+    matches!(def.returned, Type::Text(_))
+        && !def.attributes.iter().any(|a| {
+            matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_)))
+        })
+};
+if needs_p205_scratch {
+    write!(w, "{{ stores.scratch.push((")?;
+    // emit value
+    write!(w, ").to_string()); Str::new(stores.scratch.last().unwrap()) }}")?;
+}
+```
+
+The detection: if the function returns `Type::Text` but has NO
+`Type::RefVar(Type::Text(_))` attribute (= `text_return` didn't
+set up a proper work buffer for it), then `Str::new(<value>)`
+would borrow into a dropping local.  Route through `stores.scratch`
+instead — the scratch entry lives as long as `stores`, so the
+returned `Str` pointer stays valid for the caller's use.
+
+The `(value).to_string()` coerces &str / String / Str all into
+an owned String for the scratch push.
+
+**Why not a custom emitter**: the dangle isn't tied to a single
+Op — it's emit.rs's choice to wrap with `Str::new(...)` for
+text-returning functions.  Two emit sites needed the fix; an
+`OpEmitter` would have to intercept all text-Op calls inside
+those functions, which is much more invasive than 4 lines per
+emit site.
+
+**Why not fix `text_return` parser-side**: phase 07's probe
+(2026-05-02 attempt 1) tried this — removing the `DefType::Generic`
+gate at `parser/control.rs:375`.  Result: text_return ran but
+didn't promote any work buffer because the bounded-generic
+specialisation has no local text variables to promote.  The
+function signature still returned `Str` and the body still
+borrowed from a local String.  Outcome B confirmed.
+
+### Over-eager firing on inner functions (2026-05-02)
+
+The fix fires for any text-returning function without a
+`Type::RefVar(Type::Text(_))` attribute.  This includes some
+functions that wouldn't actually dangle today — e.g.
+`p205_to_label` returns `self.p205_name` which fetches a `&str`
+from the store (long-lived).  For those, the scratch routing
+produces correct (but slower-by-one-clone) code.
+
+This is acceptable because:
+- The clone happens once per call, not per inner operation.
+- Scratch entries are cheap pushes onto a Vec<String>.
+- The pattern is consistent across all text-returning fns
+  without a work buffer — easier to reason about than a
+  conditional behaviour.
+
+If profiling later shows scratch routing is a hot path, narrow
+the detection to "function returns Type::Text AND its return
+expression's source is a local String binding."  Today's scope
+is a correctness fix; performance optimization deferred.
+
+### Why `stores.scratch` (not `Box::leak` or thread-local) (2026-05-02)
+
+Three options considered for the long-lived String storage:
+
+1. **`Box::leak(String::into_boxed_str())`** — `'static &str` lifetime.
+   Memory leak per call.  Avoided.
+2. **Thread-local `Vec<String>`** — clean lifetime, but adds a new
+   global state surface to the runtime.
+3. **`stores.scratch`** — already exists for
+   `n_parallel_buf_get_text_native`.  Lives as long as `stores`.
+   No new surface area.
+
+Picked option 3 — reuses existing infrastructure.  The growth
+concern (unbounded scratch) applies to all three options that
+don't free; option 3 is at least co-located with other
+similar-lifetime data.

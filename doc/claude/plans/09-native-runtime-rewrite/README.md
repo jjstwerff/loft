@@ -112,7 +112,7 @@ between work phases at decision points.
 | 05 | [File emitters](05-file.md) | P200 (write side) | bug fix | OPEN — **plan misaligned, needs rewrite** (see phase 05 doc § Diagnosis findings) |
 | 05a | [Introspection: after first bug fix](05a-introspect.md) | — | introspection | OPEN |
 | 06 | [Threading queue runtime fns](06-threading.md) | P202 | bug fix | **DONE (2026-05-02)** |
-| 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | OPEN — Outcome B confirmed (custom emitter required) |
+| 07 | [Generic text emitter](07-generics.md) | P205 | bug fix | **DONE (2026-05-02)** |
 | 08 | [Binary read emitter](08-binary.md) | P200 (read side, full closure) | bug fix | OPEN |
 | 08a | [Retrospective](08a-introspect.md) | — | introspection | OPEN |
 
@@ -179,7 +179,7 @@ Reference for "are we beating main yet?" (main is at 5/5).
 |---|---|---|---|---|
 | Pre-plan-09 | 29/30 | 87/93 | 2/5 | -3 |
 | After phase 06 (P202) — 2026-05-02 | **30/30** | 89/93 | **3/5** | -2 |
-| After phase 07 (P205) — projected | 30/30 | 90/93 | 3/5 | -2 |
+| After phase 07 (P205) — 2026-05-02 | 30/30 | **90/93** | 3/5 | -2 |
 | After phase 05+08 (P200) — projected | 30/30 | 91/93 | 3/5 | -2 |
 | After P204 handled (plan-11 or @EXPECT_FAIL) — projected | 30/30 | 93/93 | **5/5** | 0 (PR-ready) |
 
@@ -194,7 +194,7 @@ silently shrink any milestone count are regressions.
 | P200 | `narrow_int_cast` dual role; fix collided with itself | **Revised by 00a**: the bug is the block-tail role (comparison-emission RHS type mismatch), not param narrowing.  Phase 02 (param-narrowing split) is no longer the prerequisite.  Phase 05 needs a comparison-emission fix that matches LHS / RHS widths or drops the block-tail narrow when consumer is `==` against a fitting constant.  Plan rewrite required | 05 (rewrite) → 08 |
 | P202 | Adding queue fns duplicates 95-line parallel-for case | Phase 03 gave queue fns a slot in the emitter family; phase 09 collapsed for-par runtime fns; phase 06 added 3 flat queue runtime fns (~90 LOC vs the originally-projected ~120 LOC trait + wrappers — see phase 06 § Implementation notes for the trait-reuse-vs-flat decision) | 03 → 09 → 06 **CLOSED 2026-05-02** |
 | P203 | Template double-substitution: `OpConvIntFromEnum` substitutes `@v1` twice, so `delete(path) == FileResult.Ok` calls `delete()` twice (first deletes file, second returns NotFound) | Phase 00 step 0.7b adds let-bind-on-repeat to `DefaultTemplateEmitter` — auto-detects repeated placeholders and binds once.  Closes the bug class for all 5 affected templates simultaneously | 00 (step 0.7b) **CLOSED** |
-| P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 ran the probe (2026-05-02) → **Outcome B confirmed**: skip removal alone doesn't close the dangle (`text_return` doesn't promote the function signature for bounded-generic specialisations).  Custom emitter required | 07 |
+| P205 | Direct skip-removal might cascade; template lacks type-binding info; sibling Ops may share the dangle | Phase 07 ran the probe (2026-05-02) → Outcome B confirmed.  Implementation revealed the dangle is at TWO emit.rs sites (Value::Return wrap + block-tail wrap_result), not a single Op.  Fix: detect "function returns Type::Text but has no `Type::RefVar(Type::Text(_))` attribute" and route the value through `stores.scratch` so the backing String lives as long as `stores` | 07 **CLOSED 2026-05-02** |
 
 Each bug-fix phase includes:
 
