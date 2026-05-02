@@ -125,11 +125,24 @@ fn baseline_emission_unchanged() {
 /// guards against regression.
 #[test]
 fn p203_reproducer_passes_under_native() {
-    let status = Command::new(loft_binary())
-        .arg("tests/scripts/repro_p203.loft")
+    // Use `cargo run --bin loft --release` rather than
+    // Command::new("target/release/loft") so the binary is auto-
+    // built if missing.  Robust to CI workflows that only build
+    // dev profile (`cargo build --all-targets`).  Same pattern as
+    // the p200/p204/p205 reproducer tests below.
+    let status = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "loft",
+            "--release",
+            "--quiet",
+            "--",
+            "tests/scripts/repro_p203.loft",
+        ])
         .current_dir(project_root())
         .status()
-        .expect("failed to spawn loft binary — run `cargo build --release` first");
+        .expect("failed to spawn cargo run for loft binary");
     assert!(
         status.success(),
         "P203 reproducer failed under native (exit {}) — \

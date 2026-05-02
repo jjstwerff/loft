@@ -49,6 +49,16 @@ jobs:
       - name: Build
         run: cargo build --all-targets
 
+      # Defensive build step: some integration tests spawn
+      # `target/release/loft` directly (e.g. via Command::new helpers)
+      # and assume the release binary exists.  `cargo build
+      # --all-targets` builds dev profile only.  This step ensures
+      # both profiles are present before nextest runs, so tests
+      # don't race on whether `cargo run --release` has populated
+      # the cache.
+      - name: Build (release loft binary for integration tests)
+        run: cargo build --release --bin loft
+
       # no-default-features check only needs to run on one OS — ubuntu
       # covers it at a fraction of the Windows job's time.
       - name: Build (no default features)
