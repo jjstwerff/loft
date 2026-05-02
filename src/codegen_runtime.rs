@@ -22,6 +22,77 @@ use crate::keys::{Content, DbRef, Key, Str};
 use crate::ops;
 use crate::tree;
 
+// ============================================================
+// Plan 09 phase 01 — Cell/Stores ABI consolidation
+// ============================================================
+
+/// ABI of a runtime helper function defined in this module.
+///
+/// `Cell`: takes `cell: &UnsafeCell<Stores>` and derives a `&mut Stores`
+/// at entry (the post-P199.A ABI used by all new runtime fns).
+///
+/// `LegacyStores`: takes `stores: &mut Stores` directly.  Pre-P199.A
+/// helpers that haven't been migrated yet.  Their call sites in
+/// generated code emit `stores` (the local binding derived from `cell`)
+/// instead of `cell` itself.  Phase 01 migrates entries to `Cell` one
+/// by one; when no `LegacyStores` entry remains the enum can collapse
+/// to unit and the ABI selection logic can be removed.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Abi {
+    Cell,
+    LegacyStores,
+}
+
+/// Single source of truth for runtime-helper ABI tags.  Replaces the
+/// twin hardcoded `LEGACY_STORES_FNS` constants that lived in
+/// `src/generation/calls.rs` and `src/generation/dispatch.rs`, plus the
+/// `CODEGEN_RUNTIME_FNS: &[&str]` list in `src/generation/mod.rs` that
+/// drove "skip stub generation" for runtime fns.
+///
+/// Each entry must have a corresponding `pub fn <name>(...)` defined
+/// elsewhere in this file with the matching ABI signature.  Adding a
+/// new runtime fn to this registry is sufficient — `output_call_user_fn`
+/// and the arg-hoist path consult `abi_of(name)` and pick `cell` vs
+/// `stores` automatically.
+pub struct RuntimeFn {
+    pub name: &'static str,
+    pub abi: Abi,
+}
+
+pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
+    RuntimeFn { name: "n_now",                     abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_ticks",                   abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_get_store_lock",          abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_set_store_lock",          abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_rand",                    abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_rand_indices",            abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_parallel_for_native",     abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_parallel_for_ref_native", abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_path_sep",                abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_stack_trace",             abi: Abi::LegacyStores },
+    RuntimeFn { name: "n_hash_sorted",             abi: Abi::LegacyStores },
+];
+
+/// Look up the ABI of a runtime helper.  Returns `Abi::Cell` for
+/// unknown names — user-defined functions and Op stubs default to the
+/// post-P199.A cell ABI.
+#[must_use]
+pub fn abi_of(name: &str) -> Abi {
+    CODEGEN_RUNTIME_FNS
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.abi)
+        .unwrap_or(Abi::Cell)
+}
+
+/// True if `name` is a runtime helper defined in this module.  Used by
+/// `output_function` to skip stub generation (the real implementation
+/// is imported via `use loft::codegen_runtime::*`).
+#[must_use]
+pub fn is_codegen_runtime_fn(name: &str) -> bool {
+    CODEGEN_RUNTIME_FNS.iter().any(|f| f.name == name)
+}
+
 /// Convert a DbRef to a loft_ffi::LoftRef for passing to native C-ABI functions.
 /// Both types have identical layout (u16 + u32 + u32).
 #[must_use]

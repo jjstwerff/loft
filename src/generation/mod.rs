@@ -1591,29 +1591,17 @@ extern crate loft;"
     /// Use this to emit one loft function as a Rust function.
     /// Every loft function receives `stores: &mut Stores` as its first implicit argument.
     fn output_function(&mut self, w: &mut dyn Write, def_nr: u32) -> std::io::Result<()> {
-        // Functions implemented in codegen_runtime (imported via `use loft::codegen_runtime::*`).
-        // Emitting a stub would shadow the real implementation.
-        const CODEGEN_RUNTIME_FNS: &[&str] = &[
-            "n_now",
-            "n_ticks",
-            "n_get_store_lock",
-            "n_set_store_lock",
-            "n_rand",
-            "n_rand_indices",
-            "n_parallel_for_native",
-            "n_parallel_for_ref_native",
-            "n_path_sep",
-            "n_stack_trace",
-            "n_hash_sorted",
-        ];
         self.start_fn(def_nr);
         let def = self.data.def(def_nr);
         // Skip Op functions with no callable body.
         if def.name.starts_with("Op") && def.code == Value::Null {
             return Ok(());
         }
-        // Skip functions implemented in codegen_runtime.
-        if def.code == Value::Null && CODEGEN_RUNTIME_FNS.contains(&def.name.as_str()) {
+        // Skip functions implemented in codegen_runtime — emitting a stub
+        // would shadow the real implementation.  Plan 09 phase 01
+        // consolidated the hardcoded list into the registry in
+        // `src/codegen_runtime.rs::CODEGEN_RUNTIME_FNS`.
+        if def.code == Value::Null && crate::codegen_runtime::is_codegen_runtime_fn(&def.name) {
             return Ok(());
         }
         // N8b.1: generator functions (returning iterator<T>) are emitted as state machines.

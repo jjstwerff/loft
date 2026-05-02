@@ -66,25 +66,15 @@ impl Output<'_> {
         }
         // P199 — user-defined functions, generated stubs, AND Op stubs in
         // `src/codegen_runtime.rs` all take `&UnsafeCell<Stores>` (Track 1).
-        // Only a small fixed list of `n_*` helpers keep the legacy
-        // `&mut Stores` ABI — they're called via the special path that
-        // passes the local `stores` binding (derived from `cell` in the
-        // function entry prelude).
-        const LEGACY_STORES_FNS: &[&str] = &[
-            "n_now",
-            "n_ticks",
-            "n_get_store_lock",
-            "n_set_store_lock",
-            "n_rand",
-            "n_rand_indices",
-            "n_parallel_for_native",
-            "n_parallel_for_ref_native",
-            "n_path_sep",
-            "n_stack_trace",
-            "n_hash_sorted",
-        ];
-        let is_legacy_stores_fn =
-            def_fn.code == Value::Null && LEGACY_STORES_FNS.contains(&def_fn.name.as_str());
+        // A small set of pre-P199.A `n_*` helpers still use the legacy
+        // `&mut Stores` ABI — `abi_of(name)` consults the registry in
+        // `src/codegen_runtime.rs` to pick `cell` (default) vs `stores`
+        // (legacy) for each callee.  Plan 09 phase 01 replaced the
+        // hardcoded duplicate lists in calls.rs + dispatch.rs with this
+        // single registry lookup.
+        let is_legacy_stores_fn = def_fn.code == Value::Null
+            && crate::codegen_runtime::abi_of(&def_fn.name)
+                == crate::codegen_runtime::Abi::LegacyStores;
         let stores_arg = if is_legacy_stores_fn { "stores" } else { "cell" };
         write!(w, "{}({stores_arg}", def_fn.name)?;
         for (idx, v) in vals.iter().enumerate() {

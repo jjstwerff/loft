@@ -153,6 +153,55 @@ fn let_bind_on_repeat_appears_in_emission() {
 }
 
 // ============================================================
+// Phase 01 ABI consolidation gates
+// ============================================================
+
+/// Gate: the duplicate hardcoded `LEGACY_STORES_FNS` lists that lived
+/// in `src/generation/calls.rs` and `src/generation/dispatch.rs` must
+/// stay deleted.  Plan 09 phase 01 replaced them with a single
+/// `crate::codegen_runtime::abi_of(name)` lookup.
+///
+/// If a future change re-introduces `LEGACY_STORES_FNS` (the typical
+/// quick fix when adding a new legacy-ABI runtime fn), this test
+/// fails — the right answer is to add the entry to
+/// `CODEGEN_RUNTIME_FNS` in `src/codegen_runtime.rs` instead.
+#[test]
+fn no_hardcoded_abi_lists_remain() {
+    for path in &["src/generation/calls.rs", "src/generation/dispatch.rs"] {
+        let src =
+            std::fs::read_to_string(project_root().join(path)).expect("read source file");
+        // Allow doc-comment references to the historical name; only flag
+        // actual `const LEGACY_STORES_FNS` declarations.
+        assert!(
+            !src.contains("const LEGACY_STORES_FNS"),
+            "{path} reintroduced `const LEGACY_STORES_FNS` — \
+             plan 09 phase 01 retired this in favour of \
+             `crate::codegen_runtime::abi_of(name)`.  Add new legacy-ABI \
+             runtime fns to `CODEGEN_RUNTIME_FNS` in `src/codegen_runtime.rs`."
+        );
+    }
+}
+
+/// Gate: the registry's `Abi` tags must be self-consistent — every
+/// entry's `abi_of(name)` lookup must return the entry's own tag.
+/// Trivially true when the registry is well-formed; catches a typo
+/// where two entries with the same name disagree on ABI.
+#[test]
+fn abi_of_handles_all_runtime_fns() {
+    use loft::codegen_runtime::{Abi, CODEGEN_RUNTIME_FNS, abi_of};
+    for fn_def in CODEGEN_RUNTIME_FNS {
+        assert_eq!(
+            abi_of(fn_def.name),
+            fn_def.abi,
+            "abi_of disagrees with registry for `{}`",
+            fn_def.name
+        );
+    }
+    // Unknown name → Cell (user-fn / Op-stub default).
+    assert_eq!(abi_of("nonexistent_fn_for_test"), Abi::Cell);
+}
+
+// ============================================================
 // Wart-budget gates (plan 09 phase 00 evaluation findings)
 // ============================================================
 
