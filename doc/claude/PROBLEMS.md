@@ -295,8 +295,11 @@ without a width cast writes 8 bytes; for binary files
 `as u8` / `as u16` / `as u32`."*  Native codegen still emits a
 mismatched-width Rust expression that rustc rejects.
 
-**Branch state (2026-04-29):** passes on `main`, fails on
-`roadmap-lsp-eclipse`.  Regression on this branch.
+**Branch state (2026-05-02):** passes on `main`, fails on
+`roadmap-lsp-eclipse`.  Plan-09 phase 00a re-surveyed the
+emission and confirmed the root cause is read-side comparison
+emission (block-tail role of `narrow_int_cast`), not the write-
+side template — see "Plan-09 phase 00a finding" block below.
 
 **Root cause:** the parser emits `Insert([Set(_wf, val), OpWriteFile(file, &_wf, db_tp)])` (`src/parser/objects.rs::write_to_file:431-505`) for `f += val`.  When `val` is `Type::Integer(...)` without a width cast, `db_tp` is the full 8-byte integer type.  Native codegen emits `OpWriteFile<T: FileVal>(cell, file, &mut _wf, db_tp)` with `T = i64`.  The READ counterpart emits a `(_ret) as <narrow>` cast at block-end (in `src/generation/emit.rs:845-849`'s `narrow_int_cast` branch) when `bl.result` is a narrow integer subtype — but in this script the loft `f += <int>` writes 8 bytes with NO narrow cast (so `bl.result` should be plain `Type::Integer`), yet `narrow_int_cast` returns `Some("u8")` because the FILE-level type metadata mislabels the read as `integer(0, 255)`.
 
@@ -308,6 +311,42 @@ mismatched-width Rust expression that rustc rejects.
    - OR teach native codegen to widen the read result back to i64 at consumer boundaries, matching the interpreter's handling.
 
 **Concrete first-30-min path:** read `/tmp/loft_native_20_binary.rs:520-540`, identify block name + `bl.result` type, then choose option (a) for the simpler fix.
+
+**Plan-09 phase 00a finding (2026-05-02):**
+
+The original phase 05 plan was scoped against the symptom
+description (write-side template hard-coding `i32`).  Phase 05
+step 5.0's `--native-emit` pre-flight survey showed all five
+failing sites in `tests/scripts/20-binary.loft` are read-side
+comparisons of the shape:
+
+```rust
+{({ //reading file_4: integer(0, 255)
+    let mut var__read_3: i64 = i64::MIN as i64;
+    OpReadFile(cell, var_f, &mut var__read_3, 1_i64, 11_i32);
+    (var__read_3) as u8     // ← block-tail narrow
+}) == (0_i64)               // ← E0308: u8 vs i64
+}
+```
+
+The block-tail `as u8` is `narrow_int_cast`'s role #1 (block-tail
+coercion).  The phase 05 plan was writing a fix for role #2 (param
+narrowing), which is not what's biting.  Two candidate fix sites:
+
+1. **Drop the block-tail narrow** when the consumer is `==` against
+   a constant whose value range fits the narrow type — let the
+   comparison happen at i64 width.
+2. **Widen the constant** at comparison-emission time to match the
+   block-tail's narrowed type (`(... as u8) == (0u8)`).  Site:
+   wherever `==` is emitted with an integer literal RHS.
+
+Either fix lives in comparison-emission code, not in
+`OpWriteIntFile`'s template.  Phase 02 (param adapter) was
+demoted from prereq because its split of role #2 doesn't reach
+role #1.  Plan-09 phase 05 needs scope rewrite before
+implementation — see
+`doc/claude/plans/09-native-runtime-rewrite/05-file.md`
+§ "Diagnosis findings".
 
 **Workaround:** add the cast the parser warning suggests: `f += val
 as i32` (or whatever width matches the binary record format).
@@ -852,6 +891,37 @@ specialised generics.
 **Test:** `tests/native::native_scripts` slot `86_interfaces`.
 Reproducer `tests/scripts/repro_p205.loft` (verified: interpreter
 PASSES, native panics with assert message).
+
+**Plan-09 phase 07 probe outcome (2026-05-02):**
+
+Phase 07's diagnostic probe (step 7.3) tested whether removing
+the `DefType::Generic` skip at `src/parser/control.rs:375` would
+close the dangle on its own.  Result: **Outcome B confirmed** —
+the skip removal makes `text_return` run for generics, but the
+dangling pattern persists:
+
+```rust
+fn t_6P205_S_p205_label(cell: &..., mut var_p205_x: DbRef) -> Str {
+    let mut var___ret_1: String =
+        t_6P205_S_p205_to_label(cell, var_p205_x).to_string();
+    return Str::new(&var___ret_1)   // ← var___ret_1 dropped at return
+}
+```
+
+Diagnosis: `text_return`'s shape is a buffer-promotion that
+expects to convert `-> text` returns into `-> ()` with a
+`&mut String` write-buffer parameter.  For the bounded-generic
+specialisation it only created the `var___ret_1: String` local
+without changing the function signature — so the function still
+returns `Str` and the local dangles.
+
+**Conclusion:** the bug is NOT the skip itself; `text_return`'s
+transformation isn't complete enough for the bounded-generic case.
+Phase 07 needs a custom emitter (Outcome B path) that emits owned
+`String` from the Op directly, bypassing the buffer indirection
+`text_return` was trying to create.  See
+`doc/claude/plans/09-native-runtime-rewrite/07-generics.md` step
+7.5 for the emitter-implementation plan.
 
 ## Web Services
 

@@ -9,6 +9,101 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### plan-09 phase 00a: introspection findings + downstream updates
+
+Fired late (after phases 00, 01, 03, 04, 09 all shipped) so the
+introspection retroactively covers the simplification cluster.
+
+Findings populate `doc/claude/plans/09-native-runtime-rewrite/00a-introspect.md`:
+
+- **Effort vs estimate**: phase 00 landed in 6 commits (under
+  7-9 budget) + 4 follow-on infrastructure commits (smoke test,
+  evaluation gates, CI cleanup, fmt followup).  Future plans
+  should budget post-step infrastructure explicitly.
+- **EmitCtx surface area**: 3 planned helpers (`w` / `def_fn` /
+  `output`) + 2 surfaced during phase 03 (`emit(v)`,
+  `emit_i32_slot(v)`).  Phase 05's int-width helpers not added
+  yet — phase 05 itself is misaligned (see below).
+- **dispatch.rs op match arms**: 26 → 24 (phase 03 retired
+  `n_parallel_for`; phase 04 retired `OpGetRecord` + `OpIterate`).
+  Wart-budget gate `dispatch_op_arm_budget_not_exceeded` enforces
+  shrink-only.
+- **`Value::RawExpr` wart**: accepted with budget gate; future
+  codegen synthesis must avoid extending it.
+- **Byte-identical contract**: held across all 6 hoist commits +
+  every subsequent simplification phase.
+- **Two surprises caught and fixed**:
+  - Forwarding-first recipe trap (initial 16-Op forwarding list
+    included Ops in dispatch.rs special-case match) — caught by
+    fast gate, list pruned to 9, recipe documented in NATIVE.md
+    + phase 00 findings.  Phase 03/04 used the recipe as planned
+    pre-flight.
+  - Phase 09's `ParShape` sketch was too narrow (single `WorkerOut`
+    type would have erased text's per-worker slot mechanism and
+    ref's cross-store deep-copy capability) — implementation
+    extended trait with `Self::Batches` second associated type +
+    `store_results` method.
+
+Hidden assumptions surfaced (drove downstream doc updates):
+
+1. **Phase 05's WRITE-side scope was wrong** — actual P200 bug is
+   READ-side block-tail comparison-emission (`(_var as u8) ==
+   (0_i64)` E0308), not the `f += val` template.  Plan rewrite
+   required.  Documented in 05-file.md § Diagnosis findings;
+   PROBLEMS.md P200 entry updated with the surveyed shape.
+2. **Phase 02 demoted from "P200 prerequisite" to "optional
+   simplification"** — phase 02 splits `narrow_int_cast`'s
+   param-narrowing role (role #2); phase 05's actual bug is the
+   block-tail role (role #1).  02-param-adapter.md now carries a
+   "Status reassessment" block.
+3. **Pre-existing CI breakage accreted** across phases 00-04 — 1
+   fmt drift (hand-aligned `RuntimeFn` table from phase 01 step
+   1.7) + 5 clippy errors (`map().unwrap_or()`, `borrow as raw
+   pointer` ×3, lifetime elision, `let _stub = …` patterns,
+   unused `Write` import).  Closed in commits f4d288a +
+   97d17cc.  CI gate memory updated to "before each commit on
+   hot-path edits."
+
+Decision: **Continue with updated plans** (per the introspection's
+decision criteria table — "2-3 surprises that updated downstream
+phases").
+
+Memory entries saved (durable beyond plan-09):
+
+- `feedback_forwarding_first_recipe.md` — pre-flight pattern.
+- `feedback_phase_doc_trait_drafts.md` — trait sketches in plan
+  docs are drafts; expect to extend on first contact.
+- `feedback_actual_error_survey.md` — bug-fix phases need
+  `--native-emit` survey BEFORE writing implementation steps.
+
+### plan-09 CI cleanup: fmt + clippy + no-default-features green
+
+Pre-existing breakage that accumulated across phases 00-04:
+
+- `cargo fmt --check` rejected the hand-aligned `RuntimeFn` table
+  in `src/codegen_runtime.rs` introduced by phase 01 step 1.7
+  (commit `2005f6e`).  Resolution: `#[rustfmt::skip]` on the
+  const preserves the alignment.  Rest of the file (and 9 other
+  files) reformatted to `cargo fmt` defaults.
+- `cargo clippy --tests --release -- -D warnings` failed with 5
+  errors (lib) / 9 (lib + tests).  All fixed:
+  - `src/generation/ops/mod.rs:178` unused `Write` import — removed.
+  - `src/generation/ops/mod.rs:54` explicit lifetimes on
+    `EmitCtx<'a, 'b>` — elided to `EmitCtx<'_, '_>`.
+  - `src/generation/ops/mod.rs:216-218` `let _stub = StubEmitter`
+    pattern (binding to `_`-prefixed without side-effect) —
+    rewritten as `let _: &dyn OpEmitter = &StubEmitter` (also
+    strengthens the trait-impl-able assertion).
+  - `src/codegen_runtime.rs:88` `.map(...).unwrap_or(...)` —
+    collapsed to `.map_or(default, fn)`.
+  - `src/codegen_runtime.rs:2049/2120/2209` `&mut ws.stores as *mut`
+    borrow-as-raw-pointer — rewritten as `&raw mut ws.stores`
+    (modern reference-to-raw idiom; clearer + clippy-clean).
+
+Verified: fmt + clippy + no-default-features all clean; behavioural
+baselines preserved (codegen_emitter 10/10, threading 43/43,
+threading_chars 35/35, issues 540/540).
+
 ### plan-09 phase 09: parallel runtime consolidation
 
 `src/codegen_runtime.rs`'s three `n_parallel_for_*_native` public
